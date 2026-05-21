@@ -799,10 +799,19 @@ export class LeanEngineComponent implements OnInit {
         end_ms_utc: endResolution.session_open_ms_utc,
         data_policy: this.composeDataPolicy(),
       });
+      // A "clean" run with the benign benchmark-unavailable bucket
+      // populated produced trades and STATISTICS:: but LEAN's
+      // post-strategy housekeeping (default SPY benchmark) failed.
+      // Surface that to the operator inline so alpha/beta zeros in the
+      // stats panel aren't read as a strategy result.
+      const benchmarkMissing =
+        (response.lean_errors?.benchmark_unavailable?.length ?? 0) > 0;
       this.setRunStatus(
         response.is_clean ? "completed" : "failed",
         response.is_clean
-          ? `LEAN run finished cleanly (run id ${response.run_id}).`
+          ? benchmarkMissing
+            ? `LEAN run finished cleanly (run id ${response.run_id}). Note: SPY benchmark was unavailable, so alpha/beta in stats are zero.`
+            : `LEAN run finished cleanly (run id ${response.run_id}).`
           : `LEAN run finished with errors (exit ${response.exit_code}).`,
       );
     } catch (err: unknown) {

@@ -12,10 +12,18 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from app.models.responses import (
+    LeanPortfolioStatsResponse,
+    LeanRuntimeStatsResponse,
+    LeanStatisticsResponse,
+    LeanTradeStatsResponse,
+)
 
 if TYPE_CHECKING:
     from app.lean_sidecar.manifest import RunManifest
@@ -264,6 +272,237 @@ def _brokerage_policy_from_manifest(
     return None
 
 
+def _parse_pct(raw: Any) -> float:
+    """Parse a LEAN STATISTICS percent string like ``"12.345%"`` → ``0.12345``.
+
+    Returns 0.0 on missing / unparseable input. LEAN emits these as
+    locale-free strings with a trailing ``%``; bare numbers (no ``%``)
+    are interpreted as already-fractional (e.g. ``"0.05"`` → ``0.05``).
+    """
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip()
+    if not s:
+        return 0.0
+    try:
+        if s.endswith("%"):
+            return float(s[:-1].replace(",", "").strip()) / 100.0
+        return float(s.replace(",", "").strip())
+    except ValueError:
+        return 0.0
+
+
+def _parse_dollar(raw: Any) -> float:
+    """Parse a LEAN STATISTICS dollar string like ``"$95,343.16"`` → ``95343.16``.
+
+    Returns 0.0 on missing / unparseable input. Handles a leading ``$``
+    and embedded commas.
+    """
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip()
+    if not s:
+        return 0.0
+    s = s.replace("$", "").replace(",", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _parse_ratio(raw: Any) -> float:
+    """Parse a LEAN STATISTICS ratio string like ``"-1.072"`` → ``-1.072``.
+
+    Returns 0.0 on missing / unparseable input. Tolerates a trailing
+    ``%`` defensively in case LEAN evolves a field's formatting.
+    """
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip().replace(",", "")
+    if not s:
+        return 0.0
+    if s.endswith("%"):
+        s = s[:-1].strip()
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _parse_int(raw: Any) -> int:
+    """Parse an integer-shaped LEAN STATISTICS value. Returns 0 on failure."""
+    if raw is None:
+        return 0
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    s = str(raw).strip().replace(",", "")
+    if not s:
+        return 0
+    try:
+        return int(float(s))
+    except ValueError:
+        return 0
+
+
+def _format_ms_iso(ms_utc: int) -> str:
+    """``int64 ms UTC`` → ``"YYYY-MM-DD HH:MM:SS"`` for LEAN trade-stat boundaries.
+
+    This is a display-only string in a stat row consumed by the frontend.
+    The canonical wire/storage timestamp on every order/equity payload
+    stays ``int64 ms UTC`` per ``.claude/rules/numerical-rigor.md``.
+    """
+    return datetime.fromtimestamp(ms_utc / 1000.0, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_duration_seconds(total_seconds: float) -> str:
+    """Format an average trade duration as ``"H:MM:SS"`` (matches LEAN TS.cs)."""
+    if total_seconds <= 0:
+        return "0:00:00"
+    total = round(total_seconds)
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    seconds = total % 60
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+
+# Mapping from LEAN STATISTICS:: key → (portfolio-stat attr, parser).
+# Keep alphabetical-ish by attr name for grep. Keys are exactly the
+# strings LEAN emits — case-sensitive.
+_PORTFOLIO_STAT_MAPPING: list[tuple[str, str, Any]] = [
+    ("Net Profit", "total_net_profit", _parse_pct),
+    ("Compounding Annual Return", "compounding_annual_return", _parse_pct),
+    ("Sharpe Ratio", "sharpe_ratio", _parse_ratio),
+    ("Sortino Ratio", "sortino_ratio", _parse_ratio),
+    ("Probabilistic Sharpe Ratio", "probabilistic_sharpe_ratio", _parse_pct),
+    ("Drawdown", "drawdown", _parse_pct),
+    ("Drawdown Recovery", "drawdown_recovery", _parse_int),
+    ("Alpha", "alpha", _parse_ratio),
+    ("Beta", "beta", _parse_ratio),
+    ("Information Ratio", "information_ratio", _parse_ratio),
+    ("Tracking Error", "tracking_error", _parse_pct),
+    ("Treynor Ratio", "treynor_ratio", _parse_ratio),
+    ("Annual Standard Deviation", "annual_standard_deviation", _parse_pct),
+    ("Annual Variance", "annual_variance", _parse_ratio),
+    ("Win Rate", "win_rate", _parse_pct),
+    ("Loss Rate", "loss_rate", _parse_pct),
+    ("Expectancy", "expectancy", _parse_ratio),
+    ("Profit-Loss Ratio", "profit_loss_ratio", _parse_ratio),
+    ("Portfolio Turnover", "portfolio_turnover", _parse_pct),
+]
+
+
+def _normalized_to_lean_statistics_response(
+    normalized_statistics: Mapping[str, Any],
+    paired_trades: Sequence[PairedTrade],
+    starting_cash: float,
+    total_fees: float,
+) -> LeanStatisticsResponse:
+    """Build the canonical ``LeanStatisticsResponse`` from a LEAN sidecar run.
+
+    The shape (``{portfolio, trade, runtime}``) matches the engine
+    path's emission so the frontend's ``LeanStatistics`` interface
+    renders both runs identically. LEAN's raw ``STATISTICS::`` block
+    is a flat string-keyed dict; this helper applies typed parsing
+    and computes trade-level aggregates from the paired-trade list
+    (the order-event reconstruction the persistence layer already
+    performs).
+
+    Fields LEAN does not surface in ``STATISTICS::`` (VaR 99/95,
+    average_win_rate, average_loss_rate) default to 0.0 — they are
+    populated only on the engine path which computes them directly
+    from daily-perf series.
+
+    NOTE: ``trade.sharpe_ratio`` / ``trade.sortino_ratio`` cannot be
+    reproduced from sidecar paired trades because LEAN doesn't pass
+    through the per-trade ``pnl_pct`` series. They stay 0 here; the
+    engine path computes them directly from ``TradeRecord.pnl_pct``.
+    """
+    port = LeanPortfolioStatsResponse()
+    trade = LeanTradeStatsResponse()
+    runtime = LeanRuntimeStatsResponse()
+
+    # ─── Portfolio statistics from LEAN's STATISTICS:: dict ─────────
+    for key, attr, parser in _PORTFOLIO_STAT_MAPPING:
+        if key in normalized_statistics:
+            setattr(port, attr, parser(normalized_statistics[key]))
+
+    port.start_equity = starting_cash
+    port.end_equity = starting_cash + sum(t.pnl for t in paired_trades)
+
+    # ─── Trade statistics computed from paired trades ───────────────
+    n_trades = len(paired_trades)
+    trade.total_number_of_trades = n_trades
+    trade.total_fees = total_fees
+
+    if paired_trades:
+        pnls = [t.pnl for t in paired_trades]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+
+        trade.number_of_winning_trades = len(wins)
+        trade.number_of_losing_trades = len(losses)
+        trade.total_profit_loss = sum(pnls)
+        trade.total_profit = sum(wins) if wins else 0.0
+        trade.total_loss = sum(losses) if losses else 0.0
+        trade.largest_profit = max(wins) if wins else 0.0
+        trade.largest_loss = min(losses) if losses else 0.0
+        trade.average_profit_loss = trade.total_profit_loss / n_trades
+        trade.average_profit = (trade.total_profit / len(wins)) if wins else 0.0
+        trade.average_loss = (trade.total_loss / len(losses)) if losses else 0.0
+
+        if trade.total_loss != 0:
+            trade.profit_factor = abs(trade.total_profit / trade.total_loss)
+        if port.drawdown > 1e-12:
+            trade.profit_to_max_drawdown_ratio = port.total_net_profit / port.drawdown
+
+        # Max consecutive wins/losses
+        max_w = cur_w = max_l = cur_l = 0
+        for p in pnls:
+            if p > 0:
+                cur_w += 1
+                cur_l = 0
+                max_w = max(max_w, cur_w)
+            elif p < 0:
+                cur_l += 1
+                cur_w = 0
+                max_l = max(max_l, cur_l)
+            else:
+                cur_w = 0
+                cur_l = 0
+        trade.max_consecutive_winning_trades = max_w
+        trade.max_consecutive_losing_trades = max_l
+
+        first = paired_trades[0]
+        last = paired_trades[-1]
+        trade.start_date_time = _format_ms_iso(first.entry_ms_utc)
+        trade.end_date_time = _format_ms_iso(last.exit_ms_utc)
+
+        all_durations = [(t.exit_ms_utc - t.entry_ms_utc) / 1000.0 for t in paired_trades]
+        win_durations = [(t.exit_ms_utc - t.entry_ms_utc) / 1000.0 for t in paired_trades if t.pnl > 0]
+        loss_durations = [(t.exit_ms_utc - t.entry_ms_utc) / 1000.0 for t in paired_trades if t.pnl < 0]
+        if all_durations:
+            trade.average_trade_duration = _format_duration_seconds(sum(all_durations) / len(all_durations))
+        if win_durations:
+            trade.average_winning_trade_duration = _format_duration_seconds(sum(win_durations) / len(win_durations))
+        if loss_durations:
+            trade.average_losing_trade_duration = _format_duration_seconds(sum(loss_durations) / len(loss_durations))
+
+    # ─── Runtime statistics ─────────────────────────────────────────
+    runtime.equity = port.end_equity
+    runtime.fees = total_fees
+    runtime.net_profit = port.end_equity - starting_cash
+    runtime.total_return = port.total_net_profit
+    runtime.total_orders = n_trades
+
+    return LeanStatisticsResponse(portfolio=port, trade=trade, runtime=runtime)
+
+
 def build_persist_payload(
     workspace_path: Path,
     run_id: str,
@@ -301,6 +540,11 @@ def build_persist_payload(
     result_path = workspace_path / "normalized" / "result.json"
 
     if not result_path.exists():
+        logger.warning(
+            "LEAN run %s has no normalized/result.json at %s; persisting zero-trade row",
+            run_id,
+            result_path,
+        )
         return _failed_run_payload(
             run_id=run_id,
             starting_cash=starting_cash,
@@ -378,12 +622,19 @@ def build_persist_payload(
             }
             for t in paired_trades
         ],
-        "lean_statistics": {
-            "statistics": normalized.statistics,
-            "runtime_statistics": normalized.runtime_statistics,
-            "parser_version": normalized.parser_version,
-            "workspace_path": str(workspace_path),
-        },
+        # The frontend's LeanStatistics interface expects the canonical
+        # ``{portfolio, trade, runtime}`` shape emitted by the engine
+        # path. Previously the sidecar wrote a flat dict of LEAN's
+        # STATISTICS:: strings here, which crashed the LEAN-stats
+        # dashboard on history-click (undefined ``.portfolio``). The
+        # helper below applies typed parsing + paired-trade aggregation
+        # so both engines persist the same shape.
+        "lean_statistics": _normalized_to_lean_statistics_response(
+            normalized_statistics=normalized.statistics,
+            paired_trades=paired_trades,
+            starting_cash=starting_cash,
+            total_fees=total_fees,
+        ).model_dump(mode="json"),
         # PR B P1 fix — forward the manifest's brokerage/data_policy so the
         # .NET row is the truthful record. ``commission_per_order`` stays at
         # 0 for LEAN: LEAN charges per-fill (captured in ``total_fees``),
@@ -425,10 +676,15 @@ def _failed_run_payload(
         "final_equity": starting_cash,
         "win_rate": 0.0,
         "trades": [],
-        "lean_statistics": {
-            "error": error,
-            "workspace_path": str(workspace_path),
-        },
+        # Canonical shape with all-zero defaults — ``total_trades=0``
+        # elsewhere in the payload already conveys the failure. The
+        # frontend's defensive guard accepts this shape and renders an
+        # empty dashboard rather than crashing on a flat error dict.
+        # The diagnostic ``error`` string previously stashed here is
+        # now only surfaced via ``logger.warning`` at the call site so
+        # the .NET row's ``lean_statistics`` column always has the
+        # canonical shape.
+        "lean_statistics": LeanStatisticsResponse().model_dump(mode="json"),
         # Even on failed runs we forward the manifest fields if available;
         # the .NET service preserves NULL when the manifest is unavailable
         # rather than fabricating ``algorithm_default``.

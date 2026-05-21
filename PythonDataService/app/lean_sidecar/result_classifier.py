@@ -32,10 +32,22 @@ _ERROR_PREFIX = re.compile(r"ERROR::|Runtime Error:")
 # Categories worth distinguishing for "clean run" judgements. They are
 # named so the API consumer can branch on them without parsing free
 # text. Anything we can't bucket lands in ``other``.
+#
+# ``benchmark_unavailable`` is the one non-gating category: LEAN's default
+# benchmark is SPY's daily zip, which Engine Lab does not stage. The
+# resulting ``SubscriptionDataSourceReader.InvalidSource`` + the cascading
+# ``BacktestingResultHandler.SendFinalResult`` "Sequence contains no
+# elements" from ``ReadEquityCurve`` are both *post*-strategy housekeeping
+# failures — the strategy itself produced trades and a STATISTICS:: block.
+# The fix in commit 843172ab adds ``SetBenchmark`` to the seed template,
+# but user-pasted scripts and pre-fix saved scripts still trip this; the
+# classifier acknowledges the cascade as benign so ``is_clean`` flips
+# back to True. Reconciliation runs still disqualify (alpha/beta zero).
 ErrorCategory = Literal[
     "analysis_failed",
     "failed_data_requests",
     "runtime_error",
+    "benchmark_unavailable",
     "other",
 ]
 
@@ -61,31 +73,65 @@ class ClassifiedErrors:
 
     @property
     def is_clean(self) -> bool:
-        """No errors at all in the LEAN log."""
-        return self.total == 0
+        """True when no gating-category errors are present.
+
+        ``benchmark_unavailable`` is explicitly non-gating: the SPY-zip
+        miss + equity-curve cascade are LEAN's post-strategy housekeeping
+        failing after a successful run produced trades and statistics.
+        Treating the cascade as gating mislabels working strategies as
+        "failed" in the UI. Every other category (including ``other``)
+        still gates ``is_clean``.
+        """
+        gating_total = sum(len(v) for k, v in self.by_category.items() if k != "benchmark_unavailable")
+        return gating_total == 0
 
     @property
     def is_reconciliation_grade(self) -> bool:
-        """No errors in any category that affects reconciliation.
+        """No errors in any category — including the benign benchmark cascade.
 
-        Compatibility runs may tolerate ``failed_data_requests`` (e.g.,
-        the trusted sample doesn't stage interest-rate or daily
-        benchmark data) but reconciliation cannot — any of those
-        categories failing means the run's numbers cannot be compared
-        to Engine Lab.
+        Reconciliation runs disqualify even on ``benchmark_unavailable``
+        because LEAN computes alpha/beta against the missing benchmark and
+        silently emits zeros. Comparing those zeros to a reconciled
+        reference would corrupt the report.
         """
-        return self.is_clean
+        return self.total == 0
 
 
-def _categorize(line: str) -> ErrorCategory:
-    """Bucket a single LEAN error line.
+def _categorize(block: str) -> ErrorCategory:
+    """Bucket a complete LEAN error block (header line + indented continuation).
+
+    Categorization runs on the full joined block rather than the header
+    alone because the equity-curve-cascade signal lives in the stack
+    trace's continuation lines (``ReadEquityCurve`` /
+    ``Sequence contains no elements``), not in the
+    ``BacktestingResultHandler.SendFinalResult`` header.
 
     Rules are matched in priority order; the most specific category
     wins. New rules are deliberately additive — never change an
     existing rule silently because a downstream caller's branching
     depends on the category name being stable.
+
+    The two benign SPY-benchmark patterns are checked first so they
+    take priority over the generic ``failed_data_requests`` /
+    ``analysis_failed`` rules below:
+
+    1. ``SubscriptionDataSourceReader.InvalidSource`` referencing
+       ``daily/spy.zip`` — Engine Lab does not stage LEAN's default
+       benchmark daily zip.
+    2. ``BacktestingResultHandler.SendFinalResult`` whose stack trace
+       includes ``ReadEquityCurve`` and ``Sequence contains no
+       elements`` — the cascade triggered by (1) when the
+       analyzer reads the missing benchmark series.
+
+    Any other ``daily/<symbol>.zip`` miss (QQQ, IWM, etc.) still gates
+    via ``failed_data_requests``; any other ``ResultsAnalyzer`` /
+    ``SendFinalResult`` failure still gates via ``analysis_failed``.
     """
-    low = line.lower()
+    low = block.lower()
+    if "daily/spy.zip" in low and "subscriptiondatasourcereader.invalidsource" in low:
+        return "benchmark_unavailable"
+    if "sendfinalresult" in low and "readequitycurve" in low and "sequence contains no elements" in low:
+        return "benchmark_unavailable"
     if "resultsanalyzer" in low or "sendfinalresult" in low or "equity curve" in low:
         return "analysis_failed"
     if "subscriptiondatasource" in low or "no data" in low or "file not found" in low:
@@ -106,32 +152,37 @@ def classify_lean_log(log_text: str) -> ClassifiedErrors:
     response payload.
     """
     by_category: dict[ErrorCategory, list[str]] = {}
-    current_category: ErrorCategory | None = None
+    in_block = False
     current_buffer: list[str] = []
 
     def flush() -> None:
-        if current_category is None or not current_buffer:
+        nonlocal in_block, current_buffer
+        if not in_block or not current_buffer:
             return
         joined = "\n".join(current_buffer).rstrip()
-        by_category.setdefault(current_category, []).append(joined)
+        # Categorization deliberately runs on the full block so the
+        # equity-curve-cascade signal in continuation lines reaches
+        # ``_categorize`` (see its docstring).
+        category = _categorize(joined)
+        by_category.setdefault(category, []).append(joined)
+        in_block = False
+        current_buffer = []
 
     for raw in log_text.splitlines():
         line = raw.rstrip()
         if _ERROR_PREFIX.search(line):
             flush()
-            current_category = _categorize(line)
+            in_block = True
             current_buffer = [line]
             continue
         # Continuation lines (stack-trace indent, etc.) belong to the
         # most recent error block.
-        if current_category is not None and line.startswith(("   ", "\t", "  ")):
+        if in_block and line.startswith(("   ", "\t", "  ")):
             current_buffer.append(line)
             continue
         # A non-indented, non-error line terminates the current block.
-        if current_category is not None:
+        if in_block:
             flush()
-            current_category = None
-            current_buffer = []
     flush()
 
     return ClassifiedErrors(by_category=by_category)

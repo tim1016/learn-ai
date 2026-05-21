@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.models.responses import LeanStatisticsResponse
 from app.services.lean_sidecar_persistence import (
     OpenLot,
     PairedTrade,
@@ -347,9 +348,18 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert t["exit_price"] == pytest.approx(101.0)
     assert t["pnl"] == pytest.approx(9.0)
     assert t["is_synthetic_exit"] is False
+    # The persisted ``lean_statistics`` shape now matches the engine
+    # path's ``LeanStatisticsResponse`` ({portfolio, trade, runtime}),
+    # not the raw flat dict the sidecar used to emit. The frontend's
+    # LEAN-stats dashboard reads ``.portfolio`` and crashed previously
+    # on the flat shape; see PR description for both-bugs context.
     assert "lean_statistics" in payload
-    assert payload["lean_statistics"]["statistics"]["NetProfit"] == "9.00"
-    assert payload["lean_statistics"]["parser_version"] == "phase-3a-r1"
+    stats = payload["lean_statistics"]
+    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
+    assert stats["portfolio"]["start_equity"] == pytest.approx(100_000.0)
+    assert stats["portfolio"]["end_equity"] == pytest.approx(100_009.0)
+    assert stats["trade"]["total_number_of_trades"] == 1
+    assert stats["runtime"]["total_orders"] == 1
 
 
 def test_build_persist_payload_synthesizes_mtm_for_half_open(tmp_path: Path) -> None:
@@ -415,7 +425,15 @@ def test_build_persist_payload_missing_normalized_result(tmp_path: Path) -> None
     assert payload["total_pnl"] == pytest.approx(0.0)
     assert payload["final_equity"] == pytest.approx(100_000.0)
     assert payload["trades"] == []
-    assert "error" in payload["lean_statistics"]
+    # Failed runs persist the canonical-shape-all-zeros dict, NOT the
+    # legacy ``{"error": ..., "workspace_path": ...}``. The failure
+    # signal lives in ``total_trades=0`` above; the diagnostic
+    # ``error`` string lands in the PythonDataService log instead.
+    stats = payload["lean_statistics"]
+    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
+    assert stats["portfolio"]["start_equity"] == 0.0
+    assert stats["trade"]["total_number_of_trades"] == 0
+    assert stats["runtime"]["total_orders"] == 0
 
 
 def test_build_persist_payload_empty_order_events(tmp_path: Path) -> None:
@@ -468,8 +486,10 @@ def test_build_persist_payload_corrupt_json_returns_failed_payload(tmp_path: Pat
     assert payload["lean_run_id"] == "ui_run_corrupt"
     assert payload["total_trades"] == 0
     assert payload["trades"] == []
-    assert "error" in payload["lean_statistics"]
-    assert "normalization_error" in payload["lean_statistics"]["error"]
+    # Canonical-shape failure payload — see test_build_persist_payload_missing_normalized_result.
+    stats = payload["lean_statistics"]
+    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
+    assert stats["trade"]["total_number_of_trades"] == 0
 
 
 def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path) -> None:
@@ -503,8 +523,10 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
     assert payload["lean_run_id"] == "ui_run_pyramiding"
     assert payload["total_trades"] == 0
     assert payload["trades"] == []
-    assert "error" in payload["lean_statistics"]
-    assert "normalization_error" in payload["lean_statistics"]["error"]
+    # Canonical-shape failure payload — see test_build_persist_payload_missing_normalized_result.
+    stats = payload["lean_statistics"]
+    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
+    assert stats["trade"]["total_number_of_trades"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +670,196 @@ def test_build_persist_payload_failed_run_with_manifest_still_forwards_brokerage
     assert payload["total_trades"] == 0
     assert payload["brokerage_policy"] == "algorithm_default"
     assert payload["data_policy_json"] is not None
+
+
+# ---------------------------------------------------------------------------
+# _normalized_to_lean_statistics_response tests — Bug B fix coverage
+#
+# The sidecar persistence path historically wrote a flat
+# ``{statistics, runtime_statistics, parser_version, workspace_path}``
+# dict into ``StrategyExecution.LeanStatisticsJson``. The frontend's
+# ``LeanStatistics`` interface expects the engine path's canonical
+# ``{portfolio, trade, runtime}`` shape (``LeanStatisticsResponse``).
+# This helper bridges the two so both engines persist the same shape
+# and the LEAN-stats dashboard renders without crashing.
+# ---------------------------------------------------------------------------
+
+
+def test_normalized_to_lean_statistics_response_full_mapping() -> None:
+    from app.services.lean_sidecar_persistence import _normalized_to_lean_statistics_response
+
+    # Synthetic LEAN STATISTICS:: dict covering every mapped key.
+    statistics = {
+        "Net Profit": "-4.657%",
+        "Compounding Annual Return": "-12.345%",
+        "Sharpe Ratio": "-1.072",
+        "Sortino Ratio": "-0.834",
+        "Probabilistic Sharpe Ratio": "12.5%",
+        "Drawdown": "5.234%",
+        "Drawdown Recovery": "42",
+        "Alpha": "0.123",
+        "Beta": "0.987",
+        "Information Ratio": "-0.456",
+        "Tracking Error": "8.7%",
+        "Treynor Ratio": "-4.123",
+        "Annual Standard Deviation": "15.6%",
+        "Annual Variance": "0.0243",
+        "Win Rate": "52.5%",
+        "Loss Rate": "47.5%",
+        "Expectancy": "0.123",
+        "Profit-Loss Ratio": "1.45",
+        "Portfolio Turnover": "21.4%",
+    }
+    trades = [
+        PairedTrade(
+            1,
+            1_700_000_000_000,
+            1_700_000_600_000,
+            100.0,
+            101.0,
+            10,
+            pnl=9.0,
+            signal_reason="x",
+            is_synthetic_exit=False,
+        ),
+        PairedTrade(
+            2,
+            1_700_000_700_000,
+            1_700_001_300_000,
+            100.0,
+            99.0,
+            10,
+            pnl=-11.0,
+            signal_reason="x",
+            is_synthetic_exit=False,
+        ),
+    ]
+
+    resp = _normalized_to_lean_statistics_response(
+        normalized_statistics=statistics,
+        paired_trades=trades,
+        starting_cash=100_000.0,
+        total_fees=2.0,
+    )
+
+    # Portfolio percent / ratio parsing.
+    assert resp.portfolio.total_net_profit == pytest.approx(-0.04657)
+    assert resp.portfolio.compounding_annual_return == pytest.approx(-0.12345)
+    assert resp.portfolio.sharpe_ratio == pytest.approx(-1.072)
+    assert resp.portfolio.sortino_ratio == pytest.approx(-0.834)
+    assert resp.portfolio.probabilistic_sharpe_ratio == pytest.approx(0.125)
+    assert resp.portfolio.drawdown == pytest.approx(0.05234)
+    assert resp.portfolio.drawdown_recovery == 42
+    assert resp.portfolio.alpha == pytest.approx(0.123)
+    assert resp.portfolio.beta == pytest.approx(0.987)
+    assert resp.portfolio.tracking_error == pytest.approx(0.087)
+    assert resp.portfolio.win_rate == pytest.approx(0.525)
+    assert resp.portfolio.portfolio_turnover == pytest.approx(0.214)
+    # Derived equity from paired trades.
+    assert resp.portfolio.start_equity == pytest.approx(100_000.0)
+    assert resp.portfolio.end_equity == pytest.approx(100_000.0 + 9.0 - 11.0)
+
+    # Trade-level aggregates.
+    assert resp.trade.total_number_of_trades == 2
+    assert resp.trade.number_of_winning_trades == 1
+    assert resp.trade.number_of_losing_trades == 1
+    assert resp.trade.total_profit_loss == pytest.approx(-2.0)
+    assert resp.trade.total_profit == pytest.approx(9.0)
+    assert resp.trade.total_loss == pytest.approx(-11.0)
+    assert resp.trade.profit_factor == pytest.approx(9.0 / 11.0)
+    assert resp.trade.total_fees == pytest.approx(2.0)
+    assert resp.trade.max_consecutive_winning_trades == 1
+    assert resp.trade.max_consecutive_losing_trades == 1
+
+    # Runtime stats derived from portfolio.
+    assert resp.runtime.equity == pytest.approx(resp.portfolio.end_equity)
+    assert resp.runtime.fees == pytest.approx(2.0)
+    assert resp.runtime.net_profit == pytest.approx(-2.0)
+    assert resp.runtime.total_orders == 2
+
+
+def test_normalized_to_lean_statistics_response_missing_keys() -> None:
+    """A sparse STATISTICS dict (only some keys) must not raise; absent
+    fields default to 0.0 on the response."""
+    from app.services.lean_sidecar_persistence import _normalized_to_lean_statistics_response
+
+    resp = _normalized_to_lean_statistics_response(
+        normalized_statistics={"Sharpe Ratio": "1.5"},
+        paired_trades=[],
+        starting_cash=50_000.0,
+        total_fees=0.0,
+    )
+    assert resp.portfolio.sharpe_ratio == pytest.approx(1.5)
+    assert resp.portfolio.sortino_ratio == 0.0
+    assert resp.portfolio.alpha == 0.0
+    assert resp.portfolio.beta == 0.0
+    assert resp.portfolio.start_equity == pytest.approx(50_000.0)
+    assert resp.portfolio.end_equity == pytest.approx(50_000.0)
+    assert resp.trade.total_number_of_trades == 0
+    assert resp.runtime.total_orders == 0
+
+
+def test_normalized_to_lean_statistics_response_dollar_with_commas() -> None:
+    """``_parse_dollar`` strips ``$`` and commas. While the production
+    helper only uses dollar parsing reflexively (none of the mapped
+    portfolio fields are dollar-valued in LEAN), the parser must be
+    robust to that shape for forward compatibility."""
+    from app.services.lean_sidecar_persistence import _parse_dollar
+
+    assert _parse_dollar("$95,343.16") == pytest.approx(95_343.16)
+    assert _parse_dollar("$1,000,000.00") == pytest.approx(1_000_000.0)
+    assert _parse_dollar("-$1,234.56") == pytest.approx(-1_234.56)
+    assert _parse_dollar("") == 0.0
+    assert _parse_dollar(None) == 0.0
+    assert _parse_dollar("not a number") == 0.0
+
+
+def test_normalized_to_lean_statistics_response_parses_engine_shape() -> None:
+    """``LeanStatisticsResponse.model_validate`` round-trips the helper
+    output — the dict the .NET row receives must be parseable as the
+    canonical shape, so the frontend's ``portfolio?.trade?.runtime``
+    guard passes."""
+    from app.services.lean_sidecar_persistence import _normalized_to_lean_statistics_response
+
+    resp = _normalized_to_lean_statistics_response(
+        normalized_statistics={"Net Profit": "10.0%", "Sharpe Ratio": "1.5"},
+        paired_trades=[
+            PairedTrade(1, 1, 2, 100.0, 110.0, 1, pnl=10.0, signal_reason="x", is_synthetic_exit=False),
+        ],
+        starting_cash=100_000.0,
+        total_fees=0.5,
+    )
+    dumped = resp.model_dump(mode="json")
+    reparsed = LeanStatisticsResponse.model_validate(dumped)
+    assert reparsed.portfolio.total_net_profit == pytest.approx(0.10)
+    assert reparsed.runtime.fees == pytest.approx(0.5)
+
+
+def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
+    """Smoke test for Bug B's failed-run regression: the failed payload's
+    ``lean_statistics`` must be parseable as ``LeanStatisticsResponse``
+    (canonical shape, all zeros) — not a flat ``{error, workspace_path}``."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "ui_run_failed_shape_check"
+    ws.mkdir()  # no normalized/result.json
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_failed_shape_check",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    stats = payload["lean_statistics"]
+    parsed = LeanStatisticsResponse.model_validate(stats)
+    assert parsed.portfolio.start_equity == 0.0
+    assert parsed.portfolio.end_equity == 0.0
+    assert parsed.trade.total_number_of_trades == 0
+    assert parsed.runtime.total_orders == 0
 
 
 @pytest.mark.asyncio

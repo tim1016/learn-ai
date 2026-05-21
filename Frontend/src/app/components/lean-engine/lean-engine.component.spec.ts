@@ -160,7 +160,7 @@ describe('LeanEngineComponent engine selector', () => {
         exit_code: 0,
         duration_ms: 0,
         timed_out: false,
-        lean_errors: { analysis_failed: [], failed_data_requests: [], runtime_error: [], other: [] },
+        lean_errors: { analysis_failed: [], failed_data_requests: [], runtime_error: [], benchmark_unavailable: [], other: [] },
         log_tail: '',
         manifest_path: '/m',
         workspace_root: '/w',
@@ -355,5 +355,91 @@ describe('LeanEngineComponent engine selector', () => {
 
     // 2025-07-15 09:30 EDT = 13:30 UTC.
     expect(component.composeStartMs()).toBe(Date.UTC(2025, 6, 15, 13, 30, 0));
+  });
+
+  // ─── Bug A coverage — status messaging surface for benchmark-only "errors" ──
+  //
+  // After PR fix-lean-engine-lab-ui-bugs the server's classifier flips
+  // ``is_clean`` back to True when the only errors are the benign SPY
+  // default-benchmark cascade, so the existing
+  // ``response.is_clean ? "completed" : "failed"`` mapping reports
+  // "completed" without any further frontend logic. We augment the
+  // *message* with a benchmark-missing note so the operator knows
+  // alpha/beta zeros in the stats panel are a benchmark artifact,
+  // not a strategy result.
+
+  function leanResponse(overrides: Partial<TrustedRunResponse>): TrustedRunResponse {
+    return {
+      run_id: 'rid',
+      is_clean: true,
+      exit_code: 0,
+      duration_ms: 0,
+      timed_out: false,
+      lean_errors: { analysis_failed: [], failed_data_requests: [], runtime_error: [], benchmark_unavailable: [], other: [] },
+      log_tail: '',
+      manifest_path: '/m',
+      workspace_root: '/w',
+      observations_path: '/o',
+      lean_log_path: '/l',
+      normalized_path: null,
+      normalized_parser_version: null,
+      total_order_events: null,
+      total_equity_points: null,
+      strategy_execution_id: null,
+      ...overrides,
+    };
+  }
+
+  async function runLeanWithResponse(response: TrustedRunResponse) {
+    const startTrustedRun = vi.fn().mockResolvedValue(response);
+    configureTestBed({ startTrustedRun });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    component.engine.set('lean');
+    component.leanSource.set('class MyAlgorithm: pass');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+    component.initialCash.set(100_000);
+    await component.run();
+    return component;
+  }
+
+  it('status banner surfaces the benchmark-missing note when is_clean and benchmark_unavailable is non-empty', async () => {
+    const component = await runLeanWithResponse(leanResponse({
+      run_id: 'engine_lab_spy_abc',
+      is_clean: true,
+      lean_errors: {
+        analysis_failed: [],
+        failed_data_requests: [],
+        runtime_error: [],
+        benchmark_unavailable: ['SubscriptionDataSourceReader.InvalidSource: daily/spy.zip'],
+        other: [],
+      },
+    }));
+    expect(component.runPhase()).toBe('completed');
+    expect(component.runStatusBanner()).toContain('engine_lab_spy_abc');
+    expect(component.runStatusBanner()).toContain('SPY benchmark was unavailable');
+  });
+
+  it('status banner stays terse when is_clean and no error buckets are populated', async () => {
+    const component = await runLeanWithResponse(leanResponse({
+      run_id: 'engine_lab_spy_clean',
+      is_clean: true,
+    }));
+    expect(component.runPhase()).toBe('completed');
+    expect(component.runStatusBanner()).toContain('engine_lab_spy_clean');
+    expect(component.runStatusBanner()).not.toContain('SPY benchmark was unavailable');
+  });
+
+  it('status banner reports failed and includes the exit code when is_clean is false', async () => {
+    const component = await runLeanWithResponse(leanResponse({
+      run_id: 'engine_lab_spy_fail',
+      is_clean: false,
+      exit_code: 1,
+    }));
+    expect(component.runPhase()).toBe('failed');
+    expect(component.runStatusBanner()).toContain('exit 1');
+    expect(component.runStatusBanner()).not.toContain('SPY benchmark was unavailable');
   });
 });

@@ -71,11 +71,19 @@ export interface TrustedRunRequest {
 /**
  * Classified LEAN error categories — the launcher buckets every
  * ``ERROR::`` line from LEAN's ``log.txt`` into one of these.
+ *
+ * ``benchmark_unavailable`` is the one non-gating bucket: it absorbs
+ * LEAN's default-benchmark SPY-zip miss + the post-strategy
+ * ``ReadEquityCurve`` / ``Sequence contains no elements`` cascade so a
+ * run that produced trades and a STATISTICS:: block is reported as
+ * clean. See ``PythonDataService/app/lean_sidecar/result_classifier.py``
+ * for the matching rules.
  */
 export interface LeanErrorBuckets {
   analysis_failed: string[];
   failed_data_requests: string[];
   runtime_error: string[];
+  benchmark_unavailable: string[];
   other: string[];
 }
 

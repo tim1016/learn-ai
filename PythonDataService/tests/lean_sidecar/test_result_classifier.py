@@ -28,15 +28,34 @@ ANALYSIS_FAILED_LOG = """\
 20260517 17:12:59.358 TRACE:: Engine.Main(): Analysis Complete.
 """
 
-FAILED_DATA_REQUEST_LOG = """\
+# The SPY-zip miss + ``BacktestingResultHandler.SendFinalResult`` cascade
+# below is the *benign* benchmark-unavailable pattern, NOT a real
+# data-request failure. Engine Lab doesn't stage LEAN's default benchmark
+# daily zip, so any run that doesn't call ``SetBenchmark`` trips it; the
+# strategy itself produced trades and STATISTICS::. These two log shapes
+# now route to the ``benchmark_unavailable`` bucket and ``is_clean=True``.
+BENIGN_SPY_BENCHMARK_MISS_LOG = """\
 20260517 17:12:59.263 ERROR:: SubscriptionDataSourceReader.InvalidSource(): File not found: /lean-run/data/equity/usa/daily/spy.zip
+"""
+
+BENIGN_EQUITY_CURVE_CASCADE_LOG = """\
+20260517 17:12:59.355 ERROR:: BacktestingResultHandler.SendFinalResult(): Error running backtest analysis System.InvalidOperationException: Sequence contains no elements
+   at System.Linq.ThrowHelper.ThrowNoElementsException()
+   at QuantConnect.Lean.Engine.Results.BacktestingResultHandler.ReadEquityCurve()
+"""
+
+# A real failed data request — different symbol, no equity-curve cascade.
+# This must still gate so the classifier doesn't silently swallow genuine
+# missing-data failures alongside the benign benchmark cascade.
+REAL_FAILED_DATA_REQUEST_LOG = """\
+20260517 17:12:59.263 ERROR:: SubscriptionDataSourceReader.InvalidSource(): File not found: /lean-run/data/equity/usa/daily/qqq.zip
 """
 
 RUNTIME_ERROR_LOG = """\
 20260517 17:10:18.448 ERROR:: Algorithm.Initialize() Error: Unable to locate symbol properties file
 """
 
-MIXED_LOG = ANALYSIS_FAILED_LOG + FAILED_DATA_REQUEST_LOG + RUNTIME_ERROR_LOG
+MIXED_LOG = ANALYSIS_FAILED_LOG + REAL_FAILED_DATA_REQUEST_LOG + RUNTIME_ERROR_LOG
 
 CLEAN_LOG = """\
 20260517 17:12:54.511 TRACE:: Using /lean-run/project/config.json as configuration file
@@ -55,17 +74,49 @@ class TestClassifyLeanLog:
         assert result.by_category == {}
 
     def test_analysis_failed_category(self) -> None:
+        """A ``ResultsAnalyzer`` NullReferenceException still routes to
+        ``analysis_failed`` and gates — only the specific
+        ``ReadEquityCurve`` + ``Sequence contains no elements`` cascade
+        gets absorbed by ``benchmark_unavailable``."""
         result = classify_lean_log(ANALYSIS_FAILED_LOG)
         assert "analysis_failed" in result.by_category
+        assert "benchmark_unavailable" not in result.by_category
         assert not result.is_clean
         # The classifier captures the stack-trace continuation lines.
         block = result.by_category["analysis_failed"][0]
         assert "ResultsAnalyzer" in block or "ParameterCountAnalysis" in block
 
-    def test_failed_data_requests_category(self) -> None:
-        result = classify_lean_log(FAILED_DATA_REQUEST_LOG)
+    def test_real_failed_data_request_still_gates(self) -> None:
+        """A real ``daily/<symbol>.zip`` miss (not SPY) still gates.
+
+        Regression coverage for the narrow benign-pattern rule — the
+        benchmark-unavailable bucket must NOT swallow genuine
+        data-request failures for non-benchmark symbols.
+        """
+        result = classify_lean_log(REAL_FAILED_DATA_REQUEST_LOG)
         assert "failed_data_requests" in result.by_category
+        assert "benchmark_unavailable" not in result.by_category
         assert not result.is_clean
+
+    def test_spy_benchmark_zip_miss_is_benign(self) -> None:
+        """SPY-zip miss alone routes to ``benchmark_unavailable``."""
+        result = classify_lean_log(BENIGN_SPY_BENCHMARK_MISS_LOG)
+        assert "benchmark_unavailable" in result.by_category
+        assert "failed_data_requests" not in result.by_category
+        assert result.is_clean
+        # Reconciliation still disqualifies — alpha/beta are zero
+        # without the benchmark.
+        assert not result.is_reconciliation_grade
+
+    def test_spy_benchmark_cascade_only_is_clean(self) -> None:
+        """SPY-zip miss + equity-curve cascade both route to
+        ``benchmark_unavailable`` and the run is reported clean."""
+        combined = BENIGN_SPY_BENCHMARK_MISS_LOG + BENIGN_EQUITY_CURVE_CASCADE_LOG
+        result = classify_lean_log(combined)
+        assert set(result.by_category.keys()) == {"benchmark_unavailable"}
+        assert len(result.by_category["benchmark_unavailable"]) == 2
+        assert result.is_clean
+        assert not result.is_reconciliation_grade
 
     def test_runtime_error_category(self) -> None:
         result = classify_lean_log(RUNTIME_ERROR_LOG)
