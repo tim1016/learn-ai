@@ -31,3 +31,7 @@ ib_async>=2.0,<3.0
 # operator-typed QCAlgorithm source before submission. Same version pin
 # as requirements-dev.txt so dev/CI/runtime see identical diagnostics.
 ruff>=0.8
+# asyncpg: Postgres driver for the data-lake catalog_client (Slice 1a PR-D).
+# Pinned tight because async connection-pool behaviour is sensitive to minor
+# version differences; upgrade deliberately with a matching EF migration.
+asyncpg==0.29.0

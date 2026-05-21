@@ -56,4 +56,10 @@ class Settings(BaseSettings):
     # Rate limiting (optional)
     MAX_REQUESTS_PER_MINUTE: int = 100
 
+    # Data lake (Slice 1a)
+    # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED is true
+    POSTGRES_URL: str = ""
+    DATA_LAKE_ENABLED: bool = False
+
+
 settings = Settings()
