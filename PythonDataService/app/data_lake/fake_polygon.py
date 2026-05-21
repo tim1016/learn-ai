@@ -39,7 +39,20 @@ def synth_artifact_record(identity: ArtifactIdentity) -> ArtifactRecord:
     This is enough for the Slice 1a smoke test to assert that ensure_data
     routes each artifact through the right path policy and yields a
     deterministic data_availability_hash.
+
+    NOTE (Slice 1b): minute-trade artifacts now flow through the real
+    polygon_fetcher path in ensure_data. This stub MUST NOT be called for them.
     """
+    if (
+        identity.artifact_kind == "time_series_bars"
+        and identity.resolution == "minute"
+        and identity.data_type == "trade"
+    ):
+        raise ValueError(
+            "fake_polygon.synth_artifact_record refuses minute-trade artifacts "
+            "in Slice 1b — they now flow through the real polygon_fetcher path. "
+            "If this fires, ensure_data dispatch logic is wrong."
+        )
     file_path = _path_for(identity)
     return ArtifactRecord(
         id=0,

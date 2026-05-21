@@ -122,6 +122,7 @@ class ArtifactFailure(BaseModel):
         "lease_timeout",
         "fetch_timeout",
         "unsupported_resolution",
+        "unsupported_artifact_kind",
         "internal_error",
     ]
     detail: str | None = None
