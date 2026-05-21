@@ -5,12 +5,19 @@ Slice 1b: ensure_data now dispatches minute-trade through the real pipeline,
 so tests that include minute-trade artifacts need pool management and a
 respx-mocked Polygon response. The Slice 1a assertion invariants are
 preserved; only the test infrastructure is updated.
+Slice 1c: ensure_data now performs Phase 0 metadata bootstrap (calls the LEAN
+launcher) and dispatches all artifact kinds through real implementations.
+Tests updated to mock the launcher endpoint + corp-action endpoints.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import os
+import re
 from datetime import date
+from pathlib import Path
 from uuid import UUID
 
 import asyncpg
@@ -55,6 +62,19 @@ async def pool():
     await catalog_client.close_pool()
 
 
+@pytest.fixture
+def tmp_lake(tmp_path: Path, monkeypatch):
+    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
+    write_root = tmp_path / "writer-root"
+    (write_root / "lake").mkdir(parents=True)
+    (write_root / "staging").mkdir(parents=True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
+    monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
+    return write_root
+
+
 def _spec(symbols: list[str]) -> DataRunSpec:
     return DataRunSpec(
         request_id=UUID("12345678-1234-5678-1234-567812345678"),
@@ -67,8 +87,8 @@ def _spec(symbols: list[str]) -> DataRunSpec:
 
 
 def _polygon_ok_payload(ticker: str) -> dict:
-    # 2024-05-20 09:30:00 ET (DST) = 1716212100000 ms UTC
-    bar_start_ms = 1716212100000
+    # 2024-05-20 09:30:00 ET (DST) = 1716211800000 ms UTC (09:30 ET = 13:30 UTC = 13:30 * 3600 * 1000 + epoch)
+    bar_start_ms = 1716211800000
     return {
         "ticker": ticker,
         "status": "OK",
@@ -88,10 +108,48 @@ def _polygon_ok_payload(ticker: str) -> dict:
     }
 
 
+def _launcher_response() -> dict:
+    mh = json.dumps(
+        {
+            "entries": {
+                "Equity-usa-[*]": {
+                    "exchange": "NYSE",
+                    "timezone": "America/New_York",
+                    "holidays": [],
+                    "earlyCloses": {},
+                }
+            }
+        }
+    ).encode("utf-8")
+    sp = b"SPY,equity,usd,1,0\n"
+    return {
+        "market_hours_database_b64": base64.b64encode(mh).decode("ascii"),
+        "symbol_properties_database_b64": base64.b64encode(sp).decode("ascii"),
+        "image_digest_used": "sha256:test",
+    }
+
+
+def _mock_corpus_actions_and_events() -> None:
+    """Register respx mocks for splits, dividends, ticker-events (all empty)."""
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": []})
+    )
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/dividends.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": []})
+    )
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/tickers/.*/events.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": {"events": []}})
+    )
+
+
 @respx.mock
 @pytest.mark.asyncio
-async def test_known_symbol_produces_complete_result(clean_artifacts, pool, monkeypatch):
-    monkeypatch.setenv("POLYGON_API_KEY", "test-key")
+async def test_known_symbol_produces_complete_result(clean_artifacts, pool, tmp_lake):
+    # Slice 1c: mock launcher + corp-action endpoints in addition to Polygon aggs.
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(200, json=_launcher_response())
+    )
+    _mock_corpus_actions_and_events()
     # Catch-all mock: any Polygon aggs call for SPY returns 390 bars.
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
         return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
@@ -106,8 +164,12 @@ async def test_known_symbol_produces_complete_result(clean_artifacts, pool, monk
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_unknown_symbol_produces_partial_with_failures(clean_artifacts, pool, monkeypatch):
-    monkeypatch.setenv("POLYGON_API_KEY", "test-key")
+async def test_unknown_symbol_produces_partial_with_failures(clean_artifacts, pool, tmp_lake):
+    # Slice 1c: mock launcher + corp-action endpoints.
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(200, json=_launcher_response())
+    )
+    _mock_corpus_actions_and_events()
     # UNKNOWN symbol: Polygon returns no bars → provider_no_data failure.
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/UNKNOWN/range/1/minute/.*").mock(
         return_value=httpx.Response(200, json={"ticker": "UNKNOWN", "status": "OK", "results": []})
@@ -116,15 +178,17 @@ async def test_unknown_symbol_produces_partial_with_failures(clean_artifacts, po
     result = await ensure_data(_spec(["UNKNOWN"]))
     assert result.overall_status in {"partial", "failed"}
     assert len(result.failures) > 0
-    # Slice 1b: unknown symbols fail with provider_no_data (Polygon returns empty),
-    # replacing the Slice 1a fake_polygon unknown_symbol reason.
+    # Slice 1b/1c: unknown symbols fail with provider_no_data (Polygon returns empty).
     assert any(f.reason in {"unknown_symbol", "provider_no_data"} for f in result.failures)
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_two_identical_calls_produce_same_availability_hash(clean_artifacts, pool, monkeypatch):
-    monkeypatch.setenv("POLYGON_API_KEY", "test-key")
+async def test_two_identical_calls_produce_same_availability_hash(clean_artifacts, pool, tmp_lake):
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(200, json=_launcher_response())
+    )
+    _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
         return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
     )

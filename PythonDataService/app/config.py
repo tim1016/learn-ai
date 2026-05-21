@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # The writer creates lake/ and staging/ subdirectories under this path.
     # Must be on a single filesystem so POSIX atomic rename(2) is valid.
     LEAN_DATA_WRITE_ROOT: str = "/lean-data-writer"
+    # LEAN sidecar launcher (Slice 1c Phase 0 metadata extraction).
+    # The launcher is a host process with podman access; the data-plane
+    # container calls it via HTTP to extract market-hours-database.json
+    # and symbol-properties-database.csv from the pinned LEAN image.
+    # When running inside compose on Windows/WSL2, set to
+    # http://host.containers.internal:8090. See PythonDataService/CLAUDE.md.
+    LEAN_LAUNCHER_URL: str = "http://127.0.0.1:8090"
+    LEAN_LAUNCHER_TOKEN: str = ""
 
 
 settings = Settings()
