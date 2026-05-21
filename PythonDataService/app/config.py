@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED is true
     POSTGRES_URL: str = ""
     DATA_LAKE_ENABLED: bool = False
+    # Data lake writer root (Slice 1b). Container-side path of the RW mount.
+    # The writer creates lake/ and staging/ subdirectories under this path.
+    # Must be on a single filesystem so POSIX atomic rename(2) is valid.
+    LEAN_DATA_WRITE_ROOT: str = "/lean-data-writer"
 
 
 settings = Settings()
