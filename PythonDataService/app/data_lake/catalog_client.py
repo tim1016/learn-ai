@@ -9,13 +9,15 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date
 
 import asyncpg
 
 from app.config import settings
-from app.data_lake.types import ArtifactRecord
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 
 logger = logging.getLogger(__name__)
 
@@ -111,3 +113,242 @@ async def select_coverage_minute_bars(
         )
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Slice 1b write operations
+# ---------------------------------------------------------------------------
+
+
+async def claim_minute_bar(
+    identity: ArtifactIdentity,
+    worker_id: str,
+    lease_ttl_ms: int,
+    data_contract_hash: str,
+    file_path: str,
+) -> int | None:
+    """Atomic claim for a minute-resolution time_series_bars artifact.
+
+    Returns the new row's Id when this caller is the winner; returns None when
+    a row already exists for this identity tuple (someone else has it).
+
+    Matches the partial unique index uq_data_lake_artifacts_minute_bars:
+      (Market, Symbol, TradingDate, DataType, Provider, PriceAdjustmentMode)
+       WHERE ArtifactKind='time_series_bars' AND Resolution='minute'
+    The ON CONFLICT clause repeats the partial index's WHERE predicate, per
+    Postgres' requirement for partial-index conflict targets.
+    """
+    if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
+        raise ValueError(f"claim_minute_bar called with non-minute-bar identity: {identity!r}")
+    now_ms = int(time.time() * 1000)
+    query = """
+        INSERT INTO "DataLakeArtifacts" (
+            "ArtifactKind", "Market", "Symbol", "TradingDate",
+            "Resolution", "DataType", "Provider", "ProviderParams",
+            "PriceAdjustmentMode", "DataContractHash",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "AttemptCount", "FetchedAtMs"
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, 'fetching', $12, $13, 1, $14
+        )
+        ON CONFLICT ("Market", "Symbol", "TradingDate", "DataType",
+                     "Provider", "PriceAdjustmentMode")
+            WHERE "ArtifactKind" = 'time_series_bars' AND "Resolution" = 'minute'
+        DO NOTHING
+        RETURNING "Id";
+    """
+    async with connection() as conn:
+        return await conn.fetchval(
+            query,
+            identity.artifact_kind,
+            identity.market,
+            identity.symbol,
+            identity.trading_date,
+            identity.resolution,
+            identity.data_type,
+            identity.provider,
+            "{}",  # ProviderParams (jsonb; populated by fetcher in 1c)
+            identity.price_adjustment_mode,
+            data_contract_hash,
+            file_path,
+            worker_id,
+            now_ms + lease_ttl_ms,
+            now_ms,
+        )
+
+
+async def complete_artifact(
+    artifact_id: int,
+    row_count: int,
+    first_bar_start_ms: int,
+    last_bar_start_ms: int,
+    file_size_bytes: int,
+    file_sha256: str,
+) -> None:
+    """Transition an artifact from 'fetching' → 'complete' with byte metadata.
+
+    No-op if the row is not currently 'fetching' (defensive against stale
+    callers; the sweep is the only legitimate source of late writes).
+    """
+    now_ms = int(time.time() * 1000)
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'complete',
+               "RowCount" = $2,
+               "FirstBarStartMs" = $3,
+               "LastBarStartMs" = $4,
+               "FileSizeBytes" = $5,
+               "FileSha256" = $6,
+               "CompletedAtMs" = $7,
+               "LeaseOwner" = NULL,
+               "LeaseExpiresAtMs" = NULL
+         WHERE "Id" = $1
+           AND "Status" = 'fetching';
+    """
+    async with connection() as conn:
+        await conn.execute(
+            query,
+            artifact_id,
+            row_count,
+            first_bar_start_ms,
+            last_bar_start_ms,
+            file_size_bytes,
+            file_sha256,
+            now_ms,
+        )
+
+
+async def fail_artifact(
+    artifact_id: int,
+    last_error: str,
+    error_message: str | None = None,
+) -> None:
+    """Transition an artifact to 'failed' with diagnostic info.
+
+    The row stays in the catalog as an audit record; future ensure_data calls
+    may retry it via steal_or_retry_minute_bar (Task 7).
+    """
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'failed',
+               "LastError" = $2,
+               "ErrorMessage" = $3,
+               "LeaseOwner" = NULL,
+               "LeaseExpiresAtMs" = NULL
+         WHERE "Id" = $1;
+    """
+    async with connection() as conn:
+        await conn.execute(query, artifact_id, last_error, error_message)
+
+
+async def refresh_lease(
+    artifact_id: int,
+    worker_id: str,
+    lease_ttl_ms: int,
+) -> bool:
+    """Heartbeat: extend a lease as long as the calling worker still owns it.
+
+    Returns True when the lease was updated; False when worker_id no longer
+    matches LeaseOwner (the lease may have been stolen by the sweep).
+    """
+    now_ms = int(time.time() * 1000)
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "LeaseExpiresAtMs" = $3
+         WHERE "Id" = $1
+           AND "LeaseOwner" = $2
+           AND "Status" = 'fetching';
+    """
+    async with connection() as conn:
+        result = await conn.execute(query, artifact_id, worker_id, now_ms + lease_ttl_ms)
+    # asyncpg returns "UPDATE n" — parse the row count.
+    n = int(result.rsplit(" ", 1)[-1])
+    return n > 0
+
+
+async def steal_or_retry_minute_bar(
+    artifact_id: int,
+    worker_id: str,
+    lease_ttl_ms: int,
+    max_retries: int,
+) -> bool:
+    """Reclaim an artifact whose lease expired OR retry a failed artifact.
+
+    Eligibility:
+      - Status='fetching' AND LeaseExpiresAtMs < now_ms  (lease expired), OR
+      - Status='failed' AND AttemptCount < max_retries  (retryable failure)
+
+    Returns True when the row was updated to 'fetching' under the new worker;
+    False when no eligible row exists (e.g., already complete, already
+    re-claimed by another worker, or failed beyond max_retries).
+    """
+    now_ms = int(time.time() * 1000)
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'fetching',
+               "LeaseOwner" = $2,
+               "LeaseExpiresAtMs" = $3,
+               "AttemptCount" = "AttemptCount" + 1,
+               "LastError" = NULL
+         WHERE "Id" = $1
+           AND (
+                  ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
+               OR ("Status" = 'failed' AND "AttemptCount" < $5)
+           );
+    """
+    async with connection() as conn:
+        result = await conn.execute(
+            query,
+            artifact_id,
+            worker_id,
+            now_ms + lease_ttl_ms,
+            now_ms,
+            max_retries,
+        )
+    n = int(result.rsplit(" ", 1)[-1])
+    return n > 0
+
+
+@dataclass(frozen=True)
+class PriorArtifactMetadata:
+    prior_file_path: str
+    prior_file_sha256: str
+
+
+async def refresh_complete_minute_bar(
+    artifact_id: int,
+    worker_id: str,
+    lease_ttl_ms: int,
+) -> PriorArtifactMetadata | None:
+    """Force-refresh transition: 'complete' → 'fetching' for a re-fetch.
+
+    Returns the prior file_path + file_sha256 so the caller can preserve them
+    if the new fetch fails validation. Returns None when the row isn't
+    currently 'complete' (refresh has no work to do).
+    """
+    now_ms = int(time.time() * 1000)
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'fetching',
+               "LeaseOwner" = $2,
+               "LeaseExpiresAtMs" = $3,
+               "AttemptCount" = "AttemptCount" + 1
+         WHERE "Id" = $1
+           AND "Status" = 'complete'
+        RETURNING "FilePath", "FileSha256";
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            artifact_id,
+            worker_id,
+            now_ms + lease_ttl_ms,
+        )
+    if row is None:
+        return None
+    return PriorArtifactMetadata(
+        prior_file_path=row["FilePath"],
+        prior_file_sha256=row["FileSha256"],
+    )
