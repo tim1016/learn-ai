@@ -204,6 +204,11 @@ class TestDataFolderRoundTrip:
             )
         ]
         write_lean_day_zip(tmp_path, symbol, trading_date, bars)
-        reader = LeanMinuteDataReader(tmp_path)
+        # 2025-01-09 is not a NYSE session (Carter day of mourning), so the
+        # default ``session="regular"`` filter would drop the synthetic bar
+        # before the price-scale assertion fires. This test is about wire-
+        # format fidelity, not session calendars, so opt into the unfiltered
+        # mode and keep the test independent of the holiday schedule.
+        reader = LeanMinuteDataReader(tmp_path, session="extended")
         round_tripped = reader.read_day(symbol, trading_date)
         assert int(round_tripped[0].open * PRICE_SCALE) == expected_disk_value

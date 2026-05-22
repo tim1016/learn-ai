@@ -50,6 +50,7 @@ class _PendingEntry:
 class _OpenTrade:
     entry_time: datetime  # type: ignore[name-defined]
     entry_price: Decimal
+    quantity: int
     sma_short: Decimal
     sma_long: Decimal
 
@@ -206,6 +207,7 @@ class SmaCrossoverAlgorithm(Strategy):
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
                 entry_price=event.fill_price,
+                quantity=event.fill_quantity,
                 sma_short=self._pending_entry.sma_short,
                 sma_long=self._pending_entry.sma_long,
             )
@@ -230,6 +232,7 @@ class SmaCrossoverAlgorithm(Strategy):
                     entry_price=entry.entry_price,
                     exit_time=event.time,
                     exit_price=event.fill_price,
+                    quantity=entry.quantity,
                     pnl_pts=pnl_pts,
                     pnl_pct=pnl_pct,
                     result=result,

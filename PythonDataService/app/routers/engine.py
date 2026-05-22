@@ -1371,6 +1371,12 @@ class EngineTradeResponse(BaseModel):
     entry_price: float
     exit_time: str
     exit_price: float
+    # Filled share/contract count from the engine's fill model. Required for
+    # downstream dollar-PnL persistence — without it, ``BacktestTrade.Quantity``
+    # defaults to 1 on the .NET side and the persisted PnL silently diverges
+    # from the actual run by a factor of ``quantity``. See
+    # ``.claude/rules/numerical-rigor.md`` → ``QUANTITY_MISMATCH``.
+    quantity: int
     # Per-trade indicator snapshot captured at the entry signal. Keys depend
     # on the strategy — e.g. SPY returns ``ema5``/``ema10``/``rsi``, SMA
     # crossover returns ``sma_10``/``sma_30``. The frontend renders these
@@ -1493,6 +1499,7 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
         entry_price=float(trade.entry_price),
         exit_time=_to_utc_iso(trade.exit_time),
         exit_price=float(trade.exit_price),
+        quantity=int(trade.quantity),
         indicators=indicators,
         pnl_pts=float(trade.pnl_pts),
         pnl_pct=float(trade.pnl_pct),
@@ -1843,7 +1850,18 @@ def execute_engine_backtest(
     if request.resolution == "daily":
         reader = LeanDailyDataReader(data_roots)
     else:
-        reader = LeanMinuteDataReader(data_roots)
+        # Honor the request's ``data_policy.session`` so the reader drops
+        # extended-hours bars when the operator asked for the regular session.
+        # Before this was wired, the policy value round-tripped through the
+        # response but never reached the reader, and Polygon-sourced caches
+        # (which retain pre/post-market by design) silently fed 04:00-20:00 ET
+        # bars to the consolidator. See ``.claude/rules/numerical-rigor.md``
+        # → ``DECISION_MISMATCH`` and the divergence trace at
+        # ``StrategyExecutions`` rows 41/42 (run on 2026-05-21).
+        session_mode = "regular"
+        if request.data_policy is not None:
+            session_mode = request.data_policy.session
+        reader = LeanMinuteDataReader(data_roots, session=session_mode)
     execution_config = ExecutionConfig(
         fill_mode=fill_mode,
         commission_per_order=Decimal(str(request.commission_per_order)),
@@ -2152,6 +2170,14 @@ def _save_study_sync(
         # Python engine doesn't model brokerage — record the LEAN-side
         # convention so the compare-view's soft-match treats it correctly.
         "brokeragePolicy": "algorithm_default",
+        # Dollar PnL net of commission, matching LEAN's persisted
+        # ``t.pnL`` semantics. The engine charges ``commission_per_order``
+        # on both entry and exit fills, so each round-trip incurs
+        # ``2 × commission_per_order``. Without this scaling the
+        # persisted ``BacktestTrade.PnL`` column silently disagreed with
+        # the engine's own ``net_profit`` by a factor of ``quantity``
+        # and the per-trade commission. See
+        # ``.claude/rules/numerical-rigor.md`` → ``PNL_DRIFT``.
         "trades": [
             {
                 "tradeType": "Buy",
@@ -2159,7 +2185,8 @@ def _save_study_sync(
                 "exitTimestamp": t.exit_time,
                 "entryPrice": t.entry_price,
                 "exitPrice": t.exit_price,
-                "pnL": t.pnl_pts,
+                "quantity": t.quantity,
+                "pnL": t.pnl_pts * t.quantity - 2 * commission_per_order,
                 "cumulativePnL": 0,  # not tracked per-trade in engine format
                 "signalReason": t.signal_reason,
             }

@@ -99,6 +99,7 @@ public static class StudiesApi
                     ExitTimestamp = ParseUtc(t.ExitTimestamp),
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
+                    Quantity = t.Quantity ?? 1m,
                     PnL = t.PnL,
                     CumulativePnL = t.CumulativePnL,
                     SignalReason = t.SignalReason ?? "",
@@ -255,6 +256,7 @@ public static class StudiesApi
                 ExitTimestamp = t.ExitTimestamp,
                 EntryPrice = t.EntryPrice,
                 ExitPrice = t.ExitPrice,
+                Quantity = t.Quantity,
                 PnL = t.PnL,
                 CumulativePnL = t.CumulativePnL,
                 SignalReason = t.SignalReason,
@@ -399,6 +401,11 @@ public record SaveStudyTrade
     public string ExitTimestamp { get; init; } = "";
     public decimal EntryPrice { get; init; }
     public decimal ExitPrice { get; init; }
+    // Nullable so callers that haven't been updated still validate; missing
+    // values default to 1m at the BacktestTrade construction site to keep the
+    // legacy shape compatible. Real engine runs always include the resolved
+    // fill quantity — a null at runtime is a regression worth investigating.
+    public decimal? Quantity { get; init; }
     public decimal PnL { get; init; }
     public decimal CumulativePnL { get; init; }
     public string? SignalReason { get; init; }
@@ -469,6 +476,7 @@ public record StudyTradeItem
     public DateTime ExitTimestamp { get; init; }
     public decimal EntryPrice { get; init; }
     public decimal ExitPrice { get; init; }
+    public decimal Quantity { get; init; } = 1m;
     public decimal PnL { get; init; }
     public decimal CumulativePnL { get; init; }
     public string SignalReason { get; init; } = "";

@@ -44,6 +44,7 @@ class _PendingEntry:
 class _OpenTrade:
     entry_time: datetime
     entry_price: Decimal
+    quantity: int
     entry_rsi: Decimal
 
 
@@ -169,6 +170,7 @@ class RsiMeanReversionAlgorithm(Strategy):
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
                 entry_price=event.fill_price,
+                quantity=event.fill_quantity,
                 entry_rsi=self._pending_entry.rsi,
             )
             self._pending_entry = None
@@ -191,6 +193,7 @@ class RsiMeanReversionAlgorithm(Strategy):
                     entry_price=entry.entry_price,
                     exit_time=event.time,
                     exit_price=event.fill_price,
+                    quantity=entry.quantity,
                     pnl_pts=pnl_pts,
                     pnl_pct=pnl_pct,
                     result=result,

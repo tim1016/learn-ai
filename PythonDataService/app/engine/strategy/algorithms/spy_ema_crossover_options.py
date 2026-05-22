@@ -532,6 +532,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                 entry_price=Decimal(str(round(spread.entry_net, 4))),
                 exit_time=bar.end_time,
                 exit_price=Decimal(str(round(exit_net, 4))),
+                quantity=int(self._contracts_per_trade),
                 pnl_pts=Decimal(str(round(pnl_per_contract, 4))),
                 pnl_pct=pnl_pct,
                 result=result,

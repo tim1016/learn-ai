@@ -52,6 +52,7 @@ class _OpenTrade:
 
     entry_time: datetime
     entry_price: Decimal
+    quantity: int
     orb_high: Decimal
     orb_low: Decimal
 
@@ -238,6 +239,7 @@ class SpyOpeningRangeBreakout(Strategy):
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
                 entry_price=event.fill_price,
+                quantity=event.fill_quantity,
                 orb_high=self._pending_entry.orb_high,
                 orb_low=self._pending_entry.orb_low,
             )
@@ -263,6 +265,7 @@ class SpyOpeningRangeBreakout(Strategy):
                     entry_price=entry.entry_price,
                     exit_time=exit_time,
                     exit_price=exit_price,
+                    quantity=entry.quantity,
                     pnl_pts=pnl_pts,
                     pnl_pct=pnl_pct,
                     result=result,

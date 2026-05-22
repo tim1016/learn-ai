@@ -93,6 +93,7 @@ def test_format_trade_emits_iso_timestamps_via_to_utc_iso() -> None:
         entry_price=Decimal("100.0"),
         exit_time=datetime(2025, 5, 30, 15, 30, tzinfo=et),
         exit_price=Decimal("101.0"),
+        quantity=1,
         pnl_pts=Decimal("1.0"),
         pnl_pct=Decimal("0.01"),
         result="WIN",

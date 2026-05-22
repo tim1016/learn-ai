@@ -96,7 +96,9 @@ def _run_backtest() -> tuple[BacktestResult, SpyEmaCrossoverAlgorithm]:
     return result, strategy
 
 
-async def _run_live_from_backtest_window(backtest_strategy: SpyEmaCrossoverAlgorithm) -> tuple[LiveRunResult, SpyEmaCrossoverAlgorithm]:
+async def _run_live_from_backtest_window(
+    backtest_strategy: SpyEmaCrossoverAlgorithm,
+) -> tuple[LiveRunResult, SpyEmaCrossoverAlgorithm]:
     assert backtest_strategy.start_date is not None
     assert backtest_strategy.end_date is not None
     reader = LeanMinuteDataReader(LEAN_CACHE_ROOT)
@@ -129,7 +131,15 @@ async def test_live_engine_replays_spy_next_bar_open_backtest_exactly() -> None:
     live_result, live_strategy = await _run_live_from_backtest_window(backtest_strategy)
 
     assert len(live_result.bars) == len(backtest_result.bars)
-    assert len(live_result.order_events) == 162
+    # Count dropped from 162 → 120 when the LeanMinuteDataReader started
+    # honoring ``data_policy.session`` (Bug B fix, 2026-05-21). Before the
+    # fix the reader returned 04:00-20:00 ET bars unconditionally and the
+    # strategy fired entries on extended-hours signal bars; now both the
+    # backtest and the replay see RTH-only bars and the trade count agrees
+    # at 120 on this window. The parity invariant (backtest == live) is
+    # asserted by ``_assert_order_events_exact`` below regardless of the
+    # absolute count.
+    assert len(live_result.order_events) == 120
     assert live_result.initial_cash == backtest_result.initial_cash
     assert live_result.final_equity - backtest_result.final_equity == Decimal("0")
     assert live_result.total_fees - backtest_result.total_fees == Decimal("0")

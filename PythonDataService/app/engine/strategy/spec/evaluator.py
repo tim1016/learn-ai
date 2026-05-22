@@ -73,6 +73,7 @@ class _OpenTrade:
 
     entry_time: datetime
     entry_price: Decimal
+    quantity: int = 0
     snapshot: dict[str, Decimal] = field(default_factory=dict)
 
 
@@ -413,6 +414,7 @@ class SpecAlgorithm(Strategy):
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
                 entry_price=event.fill_price,
+                quantity=event.fill_quantity,
                 snapshot=dict(self._pending_entry.snapshot),
             )
             self._pending_entry = None
@@ -448,6 +450,7 @@ class SpecAlgorithm(Strategy):
                 entry_price=entry.entry_price,
                 exit_time=event.time,
                 exit_price=event.fill_price,
+                quantity=entry.quantity,
                 pnl_pts=pnl_pts,
                 pnl_pct=pnl_pct,
                 result=result,
