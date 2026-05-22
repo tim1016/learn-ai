@@ -284,6 +284,10 @@ class BacktestEngine:
             #       strategy sees every minute bar including the session-close bar
             #       (which a passthrough consolidator would silently drop because
             #       no subsequent bar arrives to flush it).
+            #       current_time is set first so a strategy that places orders
+            #       from this hook (before the first consolidated bar) does not
+            #       hit the None-time guard in StrategyContext.set_holdings.
+            ctx.current_time = minute_bar.end_time
             strategy.on_minute_bar(minute_bar)
 
             # ----- Feed consolidators. Consolidators will invoke strategy handlers
