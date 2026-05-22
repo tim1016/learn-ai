@@ -158,6 +158,39 @@ def compare_state(
                     reason=f"{r['signal']} != {c['signal']}",
                 )
             )
+        # Enum validity check (independent of reference/candidate agreement).
+        if r["cross_state"] not in _VALID_CROSS_STATES:
+            failures.append(
+                StateFailure(
+                    row_index=i,
+                    field="cross_state",
+                    reason=(f"reference value {r['cross_state']!r} not in valid set {sorted(_VALID_CROSS_STATES)}"),
+                )
+            )
+        if c["cross_state"] not in _VALID_CROSS_STATES:
+            failures.append(
+                StateFailure(
+                    row_index=i,
+                    field="cross_state",
+                    reason=(f"candidate value {c['cross_state']!r} not in valid set {sorted(_VALID_CROSS_STATES)}"),
+                )
+            )
+        if r["signal"] not in _VALID_SIGNALS:
+            failures.append(
+                StateFailure(
+                    row_index=i,
+                    field="signal",
+                    reason=(f"reference value {r['signal']!r} not in valid set {sorted(_VALID_SIGNALS)}"),
+                )
+            )
+        if c["signal"] not in _VALID_SIGNALS:
+            failures.append(
+                StateFailure(
+                    row_index=i,
+                    field="signal",
+                    reason=(f"candidate value {c['signal']!r} not in valid set {sorted(_VALID_SIGNALS)}"),
+                )
+            )
 
     return StateParityResult(
         passed=not failures,

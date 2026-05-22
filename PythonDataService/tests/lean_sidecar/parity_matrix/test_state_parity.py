@@ -30,6 +30,7 @@ def test_identical_passes(tmp_path: Path) -> None:
     assert isinstance(r, StateParityResult)
     assert r.passed is True
     assert r.row_count == 2
+    assert r.failures == []
 
 
 def test_indicator_within_atol_passes(tmp_path: Path) -> None:
@@ -39,6 +40,7 @@ def test_indicator_within_atol_passes(tmp_path: Path) -> None:
     r = compare_state(reference=a, candidate=b)
     # Default atol=1e-9: 1e-12 drift is within tolerance.
     assert r.passed is True
+    assert r.failures == []
 
 
 def test_indicator_exceeds_atol_fails(tmp_path: Path) -> None:
@@ -108,3 +110,25 @@ def test_row_count_mismatch_fails(tmp_path: Path) -> None:
     r = compare_state(reference=a, candidate=b)
     assert r.passed is False
     assert any(f.field == "row_count" for f in r.failures)
+
+
+def test_invalid_cross_state_in_both_sides_caught(tmp_path: Path) -> None:
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    # Both sides emit the same invalid enum value — equality passes but enum is bad.
+    _write_state(a, ["1700000000000,100.5,99.1,98.7,55.2,BULLISH,HOLD"])
+    _write_state(b, ["1700000000000,100.5,99.1,98.7,55.2,BULLISH,HOLD"])
+    r = compare_state(reference=a, candidate=b)
+    assert r.passed is False
+    # Two failures expected — one for each side.
+    cross_failures = [f for f in r.failures if f.field == "cross_state"]
+    assert len(cross_failures) == 2
+
+
+def test_invalid_signal_in_both_sides_caught(tmp_path: Path) -> None:
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    _write_state(a, ["1700000000000,100.5,99.1,98.7,55.2,above,WAT"])
+    _write_state(b, ["1700000000000,100.5,99.1,98.7,55.2,above,WAT"])
+    r = compare_state(reference=a, candidate=b)
+    assert r.passed is False
+    signal_failures = [f for f in r.failures if f.field == "signal"]
+    assert len(signal_failures) == 2
