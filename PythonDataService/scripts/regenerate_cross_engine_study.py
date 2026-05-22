@@ -518,11 +518,21 @@ def regenerate_one_cell(cell: Cell) -> bool:
         eng_out = tmp_root / "engine_staged"
         eng_out.mkdir()
 
-        _stage_lean_run(cell, lean_out)
-        # Post-run completeness gate: a clean exit code is not proof the
-        # backtest covered the whole window (see _assert_lean_observations_complete).
-        _assert_lean_observations_complete(cell, lean_out / "lean")
-        engine_orders = _run_engine_live(cell, eng_out)
+        try:
+            _stage_lean_run(cell, lean_out)
+            # Post-run completeness gate: a clean exit code is not proof the
+            # backtest covered the whole window (see _assert_lean_observations_complete).
+            _assert_lean_observations_complete(cell, lean_out / "lean")
+            engine_orders = _run_engine_live(cell, eng_out)
+        except RuntimeError as exc:
+            # A LEAN failure or a truncated observation stream. Record it and
+            # return False so an --all run still reports every other cell
+            # instead of aborting the whole batch on the first bad one.
+            failure_dir = FIXTURE_ROOT / ".failed" / cell.cell_id
+            failure_dir.mkdir(parents=True, exist_ok=True)
+            (failure_dir / "error.txt").write_text(str(exc), encoding="utf-8")
+            logger.error("  staging failed: %s", exc)
+            return False
 
         report = run_cell_gates(
             pinned_lean_dir=lean_out / "lean",
