@@ -1,4 +1,7 @@
-"""Ensure the repo root is on sys.path so 'scripts.*' is importable."""
+# Ensure PythonDataService/ (the package root) is on sys.path so
+# imports of 'scripts.*' resolve when this test module runs. Redundant
+# with the root conftest.py and pytest.ini's pythonpath= setting, but
+# kept as a safety net if either is removed.
 
 from __future__ import annotations
 

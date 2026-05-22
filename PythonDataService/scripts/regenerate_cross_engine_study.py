@@ -20,6 +20,7 @@ Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.m
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -37,11 +38,14 @@ import shutil  # noqa: E402
 import tempfile  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 
+from app.lean_sidecar.cross_runner import CrossRunOrderEvent  # noqa: E402
 from app.lean_sidecar.parity_matrix.cell_runner import (  # noqa: E402
     CellRunReport,
     run_cell_gates,
 )
 from app.lean_sidecar.parity_matrix.matrix import CELLS, Cell, cell_by_id  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = REPO_ROOT / "PythonDataService" / "tests" / "fixtures" / "golden" / "cross-engine-studies"
@@ -83,7 +87,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
     raise NotImplementedError("Task 10: wire to app.lean_sidecar.runner + workspace + trusted-sample staging")
 
 
-def _run_engine_live(cell: Cell, output_dir: Path) -> list:
+def _run_engine_live(cell: Cell, output_dir: Path) -> list[CrossRunOrderEvent]:
     """Run Engine Lab via cross_runner; write outputs to output_dir/engine/.
 
     Returns the normalized order events for Gate 3.
@@ -110,6 +114,9 @@ def _write_cell_atomically(
 ) -> None:
     """Replace the committed cell directory in one rename; write
     manifest.json + attribution.md + reconciliation_pinned.json.
+
+    Requires `_build_manifest_dict` (Task 10 stub) to be implemented before
+    this function can complete end-to-end.
     """
     target = FIXTURE_ROOT / "cells" / cell.cell_id
     staging = FIXTURE_ROOT / "cells" / f".{cell.cell_id}.new"
@@ -212,25 +219,26 @@ def regenerate_one_cell(cell: Cell) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",  # Plain output matches the previous print() format
+    )
     ns = _parse_args(argv if argv is not None else sys.argv[1:])
     cells = _resolve_target_cells(ns)
     if not cells:
-        print("No cells matched the selection.", file=sys.stderr)
+        logger.error("No cells matched the selection.")
         return 2
-    print(f"Regenerating {len(cells)} cell(s): {[c.cell_id for c in cells]}")
+    logger.info("Regenerating %d cell(s): %s", len(cells), [c.cell_id for c in cells])
     failures: list[str] = []
     for c in cells:
-        print(f"--- {c.cell_id} ---")
+        logger.info("--- %s ---", c.cell_id)
         if regenerate_one_cell(c):
-            print("  passed")
+            logger.info("  passed")
         else:
             failures.append(c.cell_id)
-            print(
-                f"  FAILED — see .failed/{c.cell_id}/report.json",
-                file=sys.stderr,
-            )
+            logger.error("  FAILED — see .failed/%s/report.json", c.cell_id)
     if failures:
-        print(f"\n{len(failures)} cell(s) failed: {failures}", file=sys.stderr)
+        logger.error("\n%d cell(s) failed: %s", len(failures), failures)
         return 1
     return 0
 
