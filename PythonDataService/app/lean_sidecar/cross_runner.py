@@ -275,21 +275,29 @@ def run_engine_lab_on_workspace(
     -------
     CrossRunResult with normalized order events ready for Phase 5g.3's
     diff against the LEAN-Lab run's parsed ``order_events``."""
+    # Resolve the strategy class first: a bad class name is a caller
+    # programming error and should surface as StrategyNotFoundError
+    # regardless of workspace state (it is a pure lookup, no I/O).
+    base_class = resolve_strategy_class(strategy_class_name)
+
     # Prefer workspace_path/data (canonical workspace layout); fall back
     # to workspace_path itself for capture roots where equity/ lives at
-    # the top level (e.g. _lean_data_capture/<TICKER>/).
+    # the top level (e.g. _lean_data_capture/<TICKER>/). Either way the
+    # chosen root must actually contain the LEAN minute tree
+    # (equity/usa/minute/...) — without that check a pruned or empty
+    # workspace would silently produce a 0-bar run that looks successful.
+    _minute_subtree = Path("equity") / "usa" / "minute"
     candidate_data = workspace_path / "data"
-    if candidate_data.exists() and candidate_data.is_dir():
+    if (candidate_data / _minute_subtree).is_dir():
         data_root = candidate_data
-    elif workspace_path.exists() and workspace_path.is_dir():
+    elif (workspace_path / _minute_subtree).is_dir():
         data_root = workspace_path
     else:
         raise WorkspaceDataMissingError(
-            f"workspace data dir not found: {candidate_data} "
-            "(was the LEAN-Lab run staged? did the workspace get pruned?)"
+            f"no LEAN minute tree found under {candidate_data} or {workspace_path} "
+            f"(expected <root>/{_minute_subtree.as_posix()}); "
+            "was the LEAN-Lab run staged? did the workspace get pruned?"
         )
-
-    base_class = resolve_strategy_class(strategy_class_name)
     # Pass output_dir to the strategy constructor when provided so it
     # emits observations.csv + state.csv for the parity-matrix gates.
     if output_dir is not None and "output_dir" in inspect.signature(base_class.__init__).parameters:
