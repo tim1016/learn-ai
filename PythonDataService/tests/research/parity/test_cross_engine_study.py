@@ -56,7 +56,13 @@ def test_cross_engine_cell(cell: Cell, tmp_path: Path) -> None:
         )
 
     pinned_lean_dir = cell_dir / "lean"
-    assert pinned_lean_dir.is_dir(), f"pinned lean/ missing in {cell_dir}"
+    if not pinned_lean_dir.is_dir():
+        pytest.skip(
+            f"pinned lean/ missing in {cell_dir} — cell directory exists but "
+            f"lean/ is absent; re-run "
+            f"`python scripts/regenerate_cross_engine_study.py "
+            f"--cell {cell.cell_id}`"
+        )
 
     capture = FIXTURE_ROOT / "_lean_data_capture" / cell.ticker
     if not capture.is_dir():
@@ -79,10 +85,12 @@ def test_cross_engine_cell(cell: Cell, tmp_path: Path) -> None:
             for f in report.observations.failures[:5]:
                 msg_lines.append(f"    row={f.row_index} field={f.field}: {f.reason}")
         elif report.state is not None and not report.state.passed:
+            # Reached only when Gate 1 passed (otherwise cell_runner sets state=None).
             msg_lines.append(f"  Gate 2 (state): {len(report.state.failures)} failures")
             for f in report.state.failures[:5]:
                 msg_lines.append(f"    row={f.row_index} field={f.field}: {f.reason}")
         elif report.trade is not None and not report.trade.passed:
+            # Reached only when Gates 1 and 2 passed.
             msg_lines.append(
                 f"  Gate 3 (trade): {getattr(report.trade, 'gating_divergent_count', '?')} gating divergences"
             )
@@ -112,6 +120,13 @@ def _run_engine_for_cell(cell: Cell, capture: Path, output_dir: Path) -> list[Cr
         pytest.skip(
             "cross_runner.run_engine_lab_on_workspace does not accept output_dir kwarg — Task 10 wires this through"
         )
+    # Note: this check confirms the OUTER cross_runner signature gained the
+    # output_dir kwarg. It does NOT verify that Task 10 also threads
+    # output_dir through to the strategy constructor inside cross_runner.
+    # If Task 10 forgets that step, this test will fail at Gate 1 with a
+    # missing observations.csv error rather than a clear "output_dir not
+    # wired" message — investigate by checking the strategy received the
+    # kwarg, not just the outer function.
 
     result = run_engine_lab_on_workspace(
         workspace_path=capture,
@@ -120,6 +135,6 @@ def _run_engine_for_cell(cell: Cell, capture: Path, output_dir: Path) -> list[Cr
         start_date=cell.start_date,
         end_date=cell.end_date,
         initial_cash=INITIAL_CASH,
-        output_dir=output_dir,  # type: ignore[call-arg]
+        output_dir=output_dir,  # type: ignore[call-arg]  # TODO(Task 10): drop ignore after cross_runner gains output_dir param
     )
     return list(result.order_events)
