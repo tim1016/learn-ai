@@ -377,6 +377,9 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
         "session": "regular",
         "adjustment": "raw",
         "starting_cash": 100000,
+        # Pinned: the Engine sizes SetHoldings like LEAN (free-portfolio
+        # buffer + order fee). Gate 3 holds qty_atol=0 against this.
+        "sizing_model": "lean_set_holdings",
     }
 
     # --- state_csv_schema (matches state.csv header written by both engines) ---

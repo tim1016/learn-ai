@@ -44,6 +44,7 @@ from zoneinfo import ZoneInfo
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
 from app.engine.execution.order import OrderEvent
+from app.engine.execution.sizing import LeanSetHoldingsSizing
 from app.engine.strategy.base import Strategy
 
 _ET = ZoneInfo("America/New_York")
@@ -321,7 +322,10 @@ def run_engine_lab_on_workspace(
     cross_instance.__dict__.update(base_instance.__dict__)
 
     reader = LeanMinuteDataReader(data_root=data_root)
-    engine = BacktestEngine(data_source=reader)
+    # Cross-engine parity runs size positions like LEAN: SetHoldings reserves
+    # a free-portfolio-value buffer + the order fee. SimpleFloorSizing would
+    # buy one share more than LEAN (Gate 3 QUANTITY_MISMATCH).
+    engine = BacktestEngine(data_source=reader, sizing_model=LeanSetHoldingsSizing())
     result = engine.run(cross_instance)
 
     normalized = _normalize_order_events(result.order_events, symbol_default=symbol)

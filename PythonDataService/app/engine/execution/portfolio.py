@@ -19,6 +19,7 @@ from app.engine.execution.order import (
     OrderEvent,
     OrderType,
 )
+from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 
 
 @dataclass
@@ -49,6 +50,13 @@ class Portfolio:
     _next_order_id: int = 0
     # Last known reference price per symbol (updated on every bar).
     reference_price: dict[str, Decimal] = field(default_factory=dict)
+    # Position-sizing policy for set_holdings. Defaults to the historical
+    # plain-floor behaviour; the engine swaps in LeanSetHoldingsSizing for
+    # LEAN-pinned / cross-engine-parity runs.
+    sizing_model: SizingModel = field(default_factory=SimpleFloorSizing)
+    # Per-order fee the sizing model reserves (set from the fill model's
+    # commission by the engine; 0 leaves simple_floor unchanged).
+    order_fee: Decimal = Decimal(0)
 
     def __post_init__(self) -> None:
         self.cash = self.initial_cash
@@ -148,9 +156,11 @@ class Portfolio:
     ) -> Order | None:
         """Rebalance to a target portfolio fraction for ``symbol``.
 
-        Mirrors LEAN's ``QCAlgorithm.SetHoldings``. Uses the symbol's current
-        reference price to compute the share delta. Liquidates if the target
-        is zero.
+        Mirrors LEAN's ``QCAlgorithm.SetHoldings``. The share count comes
+        from ``self.sizing_model`` (see ``app.engine.execution.sizing``);
+        ``LeanSetHoldingsSizing`` reproduces LEAN's buffered quantity,
+        ``SimpleFloorSizing`` is the historical plain floor. Liquidates if
+        the target is zero.
         """
         target_fraction = Decimal(str(target_fraction))
         price = self.reference_price.get(symbol)
@@ -160,8 +170,12 @@ class Portfolio:
             )
         current_pos = self.get_position(symbol)
         portfolio_value = self.total_value()
-        target_value = portfolio_value * target_fraction
-        target_quantity = int(target_value / price)  # truncate toward zero
+        target_quantity = self.sizing_model.target_quantity(
+            portfolio_value=portfolio_value,
+            price=price,
+            target_fraction=target_fraction,
+            order_fee=self.order_fee,
+        )
         delta = target_quantity - current_pos.quantity
         if delta == 0:
             return None
