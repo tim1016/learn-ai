@@ -33,6 +33,7 @@ _USA_FULL_HOLIDAYS: frozenset[date] = frozenset(
         date(2024, 12, 25),  # Christmas
         # 2025
         date(2025, 1, 1),
+        date(2025, 1, 9),  # National Day of Mourning for Jimmy Carter
         date(2025, 1, 20),  # MLK Day
         date(2025, 2, 17),  # Presidents Day
         date(2025, 4, 18),  # Good Friday
