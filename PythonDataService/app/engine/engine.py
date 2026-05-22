@@ -269,6 +269,12 @@ class BacktestEngine:
                         _register_bracket_if_needed(order, event)  # type: ignore[arg-type]
                 pending_fills = still_pending
 
+            # ----- Per-minute hook — fires before consolidator dispatch so the
+            #       strategy sees every minute bar including the session-close bar
+            #       (which a passthrough consolidator would silently drop because
+            #       no subsequent bar arrives to flush it).
+            strategy.on_minute_bar(minute_bar)
+
             # ----- Feed consolidators. Consolidators will invoke strategy handlers
             #       when a bar fires. The strategy may submit orders inside those
             #       handlers; we drain those immediately below.

@@ -240,3 +240,14 @@ class Strategy(ABC):
         so the next session opens with a clean slate. Default is a
         no-op for strategies that don't opt into the session wrapper.
         """
+
+    def on_minute_bar(self, bar: TradeBar) -> None:  # pragma: no cover - override in subclass
+        """Called for every minute bar consumed by the engine, before consolidator dispatch.
+
+        LEAN-parity hook for ``OnData`` semantics at minute resolution.
+        The engine calls this for every bar emitted by the data source,
+        including the last minute bar of each session (which a 1-minute
+        passthrough consolidator would silently drop because no subsequent
+        bar arrives to flush it). Default no-op; strategies opt in by
+        overriding.
+        """

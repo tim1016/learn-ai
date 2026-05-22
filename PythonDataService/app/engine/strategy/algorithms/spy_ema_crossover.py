@@ -160,20 +160,12 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             self._state_writer.writerow(["ts_ms_utc", "close", "ema_fast", "ema_slow", "rsi", "cross_state", "signal"])
             self._state_fp.flush()  # type: ignore[union-attr]
 
-            # 1-minute passthrough consolidator — each source minute bar
-            # produces exactly one callback, recording bar consumption in
-            # observations.csv.
-            self.ctx.register_consolidator(
-                self._symbol,
-                timedelta(minutes=1),
-                self._on_minute_bar,
-            )
-
     # ------------------------------------------------------------------
-    # Minute-bar passthrough — writes to observations.csv when output_dir
-    # is configured.  Registered only when output_dir is set.
+    # on_minute_bar override — writes to observations.csv when output_dir
+    # is configured.  Called by the engine for every minute bar before
+    # consolidator dispatch, including the session-close bar.
     # ------------------------------------------------------------------
-    def _on_minute_bar(self, bar: TradeBar) -> None:
+    def on_minute_bar(self, bar: TradeBar) -> None:
         if self._observations_writer is None:
             return
         ms_utc = int(bar.end_time.timestamp() * 1000)
