@@ -164,7 +164,7 @@ class TestRouterToLauncherToLeanEndToEnd:
         assert manifest["staged_data"]["bar_zips"], "no staged bars in manifest"
 
         assert obs_r.status_code == 200
-        assert obs_r.text.startswith("ms_utc,open,high,low,close,volume")
+        assert obs_r.text.startswith("ms_utc,close")
 
         assert log_r.status_code == 200
         assert "LEAN ALGORITHMIC TRADING ENGINE" in log_r.text
