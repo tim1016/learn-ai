@@ -36,9 +36,11 @@ Trade logging:
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -81,13 +83,14 @@ class SpyEmaCrossoverAlgorithm(Strategy):
     STRATEGY_KEY = "spy_ema_crossover"
     CONSOLIDATOR_PERIOD_MIN = 15
 
-    def __init__(self, symbol: str = "SPY") -> None:
+    def __init__(self, symbol: str = "SPY", output_dir: Path | None = None) -> None:
         super().__init__()
         # The symbol is parameterized (default SPY) so the exact same
         # rule set can be re-used against other tickers like QQQ without
         # duplicating the algorithm. The SPY default keeps the LEAN
         # bit-exact parity test unchanged.
         self._symbol_name = symbol.upper()
+        self._output_dir = output_dir
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None
@@ -107,6 +110,12 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
+
+        # CSV emitter state — populated in initialize() if output_dir is set.
+        self._observations_writer: csv.writer | None = None  # type: ignore[type-arg]
+        self._observations_fp: object | None = None
+        self._state_writer: csv.writer | None = None  # type: ignore[type-arg]
+        self._state_fp: object | None = None
 
     def initialize(self) -> None:
         # LEAN-parity defaults — match the C# reference Initialize().
@@ -136,6 +145,47 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             self._symbol,
             timedelta(minutes=15),
             self._on_fifteen_minute_bar,
+        )
+
+        if self._output_dir is not None:
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            obs_path = self._output_dir / "observations.csv"
+            self._observations_fp = obs_path.open("w", encoding="utf-8", newline="")
+            self._observations_writer = csv.writer(self._observations_fp)  # type: ignore[arg-type]
+            self._observations_writer.writerow(["ms_utc", "open", "high", "low", "close", "volume"])
+            self._observations_fp.flush()  # type: ignore[union-attr]
+            state_path = self._output_dir / "state.csv"
+            self._state_fp = state_path.open("w", encoding="utf-8", newline="")
+            self._state_writer = csv.writer(self._state_fp)  # type: ignore[arg-type]
+            self._state_writer.writerow(["ts_ms_utc", "close", "ema_fast", "ema_slow", "rsi", "cross_state", "signal"])
+            self._state_fp.flush()  # type: ignore[union-attr]
+
+            # 1-minute passthrough consolidator — each source minute bar
+            # produces exactly one callback, recording bar consumption in
+            # observations.csv.
+            self.ctx.register_consolidator(
+                self._symbol,
+                timedelta(minutes=1),
+                self._on_minute_bar,
+            )
+
+    # ------------------------------------------------------------------
+    # Minute-bar passthrough — writes to observations.csv when output_dir
+    # is configured.  Registered only when output_dir is set.
+    # ------------------------------------------------------------------
+    def _on_minute_bar(self, bar: TradeBar) -> None:
+        if self._observations_writer is None:
+            return
+        ms_utc = int(bar.end_time.timestamp() * 1000)
+        self._observations_writer.writerow(
+            [
+                str(ms_utc),
+                str(bar.open),
+                str(bar.high),
+                str(bar.low),
+                str(bar.close),
+                str(bar.volume),
+            ]
         )
 
     # ------------------------------------------------------------------
@@ -253,6 +303,30 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             intended_price=float(bar.close),
         )
 
+        # Emit to state.csv when output_dir is configured.  This block is
+        # after the early-return warmup guard above, so rows are only written
+        # once all three indicators are is_ready — matching the LEAN trusted
+        # sample's OnConsolidatedBar behaviour.
+        if self._state_writer is not None:
+            if ema5_val > ema10_val:
+                cross_state = "above"
+            elif ema5_val < ema10_val:
+                cross_state = "below"
+            else:
+                cross_state = "equal"
+            ms_utc = int(bar.end_time.timestamp() * 1000)
+            self._state_writer.writerow(
+                [
+                    str(ms_utc),
+                    str(bar.close),
+                    str(ema5_val),
+                    str(ema10_val),
+                    str(rsi_val),
+                    cross_state,
+                    bar_signal,
+                ]
+            )
+
     # ------------------------------------------------------------------
     # Fill-driven trade bookkeeping.
     # ------------------------------------------------------------------
@@ -331,6 +405,12 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             assert self.ctx is not None
             self.ctx.liquidate(self._symbol)
             self._in_position = False
+        if self._observations_fp is not None:
+            self._observations_fp.close()  # type: ignore[union-attr]
+            self._observations_fp = None
+        if self._state_fp is not None:
+            self._state_fp.close()  # type: ignore[union-attr]
+            self._state_fp = None
 
     # ---- Indicator-state persistence hooks (PR1) ----
 
