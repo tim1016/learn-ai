@@ -123,6 +123,8 @@ class ArtifactFailure(BaseModel):
         "fetch_timeout",
         "unsupported_resolution",
         "unsupported_artifact_kind",
+        "corp_action_revision_mismatch",
+        "data_contract_mismatch",
         "internal_error",
     ]
     detail: str | None = None

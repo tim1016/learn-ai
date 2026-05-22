@@ -33,43 +33,20 @@ def known_symbols() -> set[str]:
 
 
 def synth_artifact_record(identity: ArtifactIdentity) -> ArtifactRecord:
-    """Build a synthetic ArtifactRecord that matches the identity tuple.
+    """Defensive boundary: every artifact kind now has a real implementation.
 
-    The file_path is computed from path_policy; sha256/row_count are stubbed.
-    This is enough for the Slice 1a smoke test to assert that ensure_data
-    routes each artifact through the right path policy and yields a
-    deterministic data_availability_hash.
+    Slice 1c wired all artifact kinds (factor_file, map_file, metadata,
+    minute-quote, daily-trade, minute-trade) through real implementations in
+    ensure_data. This stub must never be called; if it fires the dispatch logic
+    in ensure_data.py has regressed.
 
-    NOTE (Slice 1b): minute-trade artifacts now flow through the real
-    polygon_fetcher path in ensure_data. This stub MUST NOT be called for them.
+    The module remains in Slice 1c as a defensive boundary.
+    Slice 1d deletes the module entirely.
     """
-    if (
-        identity.artifact_kind == "time_series_bars"
-        and identity.resolution == "minute"
-        and identity.data_type == "trade"
-    ):
-        raise ValueError(
-            "fake_polygon.synth_artifact_record refuses minute-trade artifacts "
-            "in Slice 1b — they now flow through the real polygon_fetcher path. "
-            "If this fires, ensure_data dispatch logic is wrong."
-        )
-    file_path = _path_for(identity)
-    return ArtifactRecord(
-        id=0,
-        artifact_kind=identity.artifact_kind,
-        market=identity.market,
-        symbol=identity.symbol,
-        trading_date=identity.trading_date,
-        resolution=identity.resolution,
-        data_type=identity.data_type,
-        provider=identity.provider,
-        price_adjustment_mode=identity.price_adjustment_mode,
-        data_contract_hash=_ZERO_HASH,
-        file_path=file_path,
-        file_sha256=_ZERO_SHA,
-        row_count=390 if identity.resolution == "minute" else 1,
-        first_bar_start_ms=0,
-        last_bar_start_ms=0,
+    raise NotImplementedError(
+        "fake_polygon is retired in Slice 1c; all kinds now have real "
+        f"implementations. If this fires, ensure_data dispatch logic is wrong "
+        f"for identity: {identity!r}"
     )
 
 

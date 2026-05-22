@@ -6,11 +6,17 @@ Asserts:
   - Files exist on disk with the correct deci-cent zip payload
   - data_availability_hash is deterministic across two identical calls
   - Second call is a cache hit (fetched_artifact_count == 0)
+
+Slice 1c: Phase 0 (launcher mock) and corp-action endpoints are also mocked
+so existing tests continue to pass after the ensure_data rewrite.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import os
+import re
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -61,13 +67,53 @@ async def pool():
 
 @pytest.fixture
 def tmp_lake(tmp_path: Path, monkeypatch):
-    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
+    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
+
+    Also patches LEAN_LAUNCHER_URL and LEAN_LAUNCHER_TOKEN so Phase 0 metadata
+    bootstrap targets the respx mock rather than a real launcher process.
+    """
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setenv("POLYGON_API_KEY", "test-polygon-key")
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
+    monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
+    monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
     return write_root
+
+
+def _launcher_response() -> dict:
+    mh = json.dumps(
+        {
+            "entries": {
+                "Equity-usa-[*]": {
+                    "exchange": "NYSE",
+                    "timezone": "America/New_York",
+                    "holidays": [],
+                    "earlyCloses": {},
+                }
+            }
+        }
+    ).encode("utf-8")
+    sp = b"SPY,equity,usd,1,0\n"
+    return {
+        "market_hours_database_b64": base64.b64encode(mh).decode("ascii"),
+        "symbol_properties_database_b64": base64.b64encode(sp).decode("ascii"),
+        "image_digest_used": "sha256:test",
+    }
+
+
+def _mock_corp_actions_and_events() -> None:
+    """Register respx mocks for splits, dividends, ticker-events (all empty)."""
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": []})
+    )
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/dividends.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": []})
+    )
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/tickers/.*/events.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": {"events": []}})
+    )
 
 
 def _polygon_payload_for(start: int, count: int) -> dict:
@@ -93,10 +139,16 @@ def _polygon_payload_for(start: int, count: int) -> dict:
 
 @respx.mock
 async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, tmp_lake):
+    # Slice 1c: mock launcher + corp-action endpoints in addition to Polygon aggs.
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(200, json=_launcher_response())
+    )
+    _mock_corp_actions_and_events()
+
     # Mock Polygon for a single-day SPY fetch — 390 bars covering 09:30 → 16:00 ET.
-    # 2024-05-20 09:30:00 ET = 1716212100000 ms UTC (verified via epochconverter; ET is UTC-4 in DST).
+    # 2024-05-20 09:30:00 ET (UTC-4 DST) = 13:30 UTC = 1716211800000 ms UTC.
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_payload_for(1716212100000, 390))
+        return_value=httpx.Response(200, json=_polygon_payload_for(1716211800000, 390))
     )
 
     spec = DataRunSpec(
@@ -133,8 +185,14 @@ async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, 
 
 @respx.mock
 async def test_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake):
+    # Slice 1c: mock launcher + corp-action endpoints.
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(200, json=_launcher_response())
+    )
+    _mock_corp_actions_and_events()
+
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_payload_for(1716212100000, 390))
+        return_value=httpx.Response(200, json=_polygon_payload_for(1716211800000, 390))
     )
 
     spec = DataRunSpec(

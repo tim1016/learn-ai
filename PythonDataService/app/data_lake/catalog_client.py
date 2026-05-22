@@ -75,6 +75,159 @@ async def connection():  # type: ignore[return]
         yield conn
 
 
+async def select_complete_metadata_artifact(
+    data_contract_hash: str,
+) -> ArtifactRecord | None:
+    """Return a complete metadata artifact row by data_contract_hash, or None.
+
+    Used by ensure_data Phase 0 bootstrap when claim_metadata_artifact returns
+    None (conflict — already exists). Returns the existing complete row so the
+    caller can reuse it without calling the launcher again.
+    """
+    query = """
+        SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
+               "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
+               "DataContractHash", "FilePath",
+               COALESCE("FileSha256", '') AS file_sha256,
+               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'metadata'
+           AND "DataContractHash" = $1
+           AND "Status" = 'complete'
+         LIMIT 1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(query, data_contract_hash)
+    if row is None:
+        return None
+    return ArtifactRecord(
+        id=row["Id"],
+        artifact_kind=row["ArtifactKind"],
+        market=row["Market"],
+        symbol=row["Symbol"],
+        trading_date=row["TradingDate"],
+        resolution=row["Resolution"],
+        data_type=row["DataType"],
+        provider=row["Provider"],
+        price_adjustment_mode=row["PriceAdjustmentMode"],
+        data_contract_hash=row["DataContractHash"],
+        file_path=row["FilePath"],
+        file_sha256=row["file_sha256"],
+        row_count=row["RowCount"],
+        first_bar_start_ms=row["FirstBarStartMs"],
+        last_bar_start_ms=row["LastBarStartMs"],
+    )
+
+
+async def select_complete_corp_action_artifact(
+    identity: ArtifactIdentity,
+) -> ArtifactRecord | None:
+    """Return a complete factor_file or map_file artifact row, or None.
+
+    Used by ensure_data Pass 1 when claim_corp_action_artifact returns None
+    (conflict — already exists). Returns the existing complete row.
+    """
+    query = """
+        SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
+               "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
+               "DataContractHash", "FilePath",
+               COALESCE("FileSha256", '') AS file_sha256,
+               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = $1
+           AND "Market" = $2
+           AND "Symbol" = $3
+           AND "Provider" = $4
+           AND "PriceAdjustmentMode" = $5
+           AND "Status" = 'complete'
+         LIMIT 1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.artifact_kind,
+            identity.market,
+            identity.symbol,
+            identity.provider,
+            identity.price_adjustment_mode,
+        )
+    if row is None:
+        return None
+    return ArtifactRecord(
+        id=row["Id"],
+        artifact_kind=row["ArtifactKind"],
+        market=row["Market"],
+        symbol=row["Symbol"],
+        trading_date=row["TradingDate"],
+        resolution=row["Resolution"],
+        data_type=row["DataType"],
+        provider=row["Provider"],
+        price_adjustment_mode=row["PriceAdjustmentMode"],
+        data_contract_hash=row["DataContractHash"],
+        file_path=row["FilePath"],
+        file_sha256=row["file_sha256"],
+        row_count=row["RowCount"],
+        first_bar_start_ms=row["FirstBarStartMs"],
+        last_bar_start_ms=row["LastBarStartMs"],
+    )
+
+
+async def select_complete_aggregated_bar_artifact(
+    identity: ArtifactIdentity,
+) -> ArtifactRecord | None:
+    """Return a complete daily time_series_bars artifact row, or None.
+
+    Used by ensure_data Pass 2 when claim_aggregated_bar_artifact returns None
+    (conflict — already exists). Returns the existing complete row.
+    """
+    query = """
+        SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
+               "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
+               "DataContractHash", "FilePath",
+               COALESCE("FileSha256", '') AS file_sha256,
+               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = $1
+           AND "Market" = $2
+           AND "Symbol" = $3
+           AND "DataType" = $4
+           AND "Provider" = $5
+           AND "PriceAdjustmentMode" = $6
+           AND "Status" = 'complete'
+         LIMIT 1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.resolution,
+            identity.market,
+            identity.symbol,
+            identity.data_type,
+            identity.provider,
+            identity.price_adjustment_mode,
+        )
+    if row is None:
+        return None
+    return ArtifactRecord(
+        id=row["Id"],
+        artifact_kind=row["ArtifactKind"],
+        market=row["Market"],
+        symbol=row["Symbol"],
+        trading_date=row["TradingDate"],
+        resolution=row["Resolution"],
+        data_type=row["DataType"],
+        provider=row["Provider"],
+        price_adjustment_mode=row["PriceAdjustmentMode"],
+        data_contract_hash=row["DataContractHash"],
+        file_path=row["FilePath"],
+        file_sha256=row["file_sha256"],
+        row_count=row["RowCount"],
+        first_bar_start_ms=row["FirstBarStartMs"],
+        last_bar_start_ms=row["LastBarStartMs"],
+    )
+
+
 async def select_coverage_minute_bars(
     market: str,
     symbol: str,
