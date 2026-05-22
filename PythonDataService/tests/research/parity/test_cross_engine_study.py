@@ -9,16 +9,15 @@ Markers:
   * ``slow``               — applied to W12mo and W24mo cells (8 of 12);
                               run pre-push / on-demand.
 
-Until Task 9 (Polygon captures) and Task 11 (cell regeneration) land, all
-12 cells will skip with a "fixture missing" message. That is the intended
-state of this test until fixtures are pinned.
+Until Task 11 (cell regeneration) lands, all 12 cells will skip with a
+"fixture missing" message. That is the intended state of this test until
+fixtures are pinned.
 
 Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
 """
 
 from __future__ import annotations
 
-import inspect
 from decimal import Decimal
 from pathlib import Path
 
@@ -104,30 +103,9 @@ def _run_engine_for_cell(cell: Cell, capture: Path, output_dir: Path) -> list[Cr
     point at the shared _lean_data_capture/<TICKER>/ directory, with
     the SpyEmaCrossoverAlgorithm strategy resolved by class name.
 
-    NOTE: ``output_dir`` is the dir the strategy will write
-    observations.csv + state.csv into. The current ``cross_runner``
-    signature does NOT yet accept an ``output_dir`` kwarg — that
-    extension lands in Task 10 alongside the rest of the regen wiring.
-    Until then, this test will skip when the capture is present but the
-    cross-runner cannot pass ``output_dir`` through to the strategy.
+    ``output_dir`` is threaded to the strategy constructor so it emits
+    observations.csv + state.csv for Gate 1 and Gate 2.
     """
-    # Task 10 will extend run_engine_lab_on_workspace to accept output_dir
-    # and pass it to the strategy constructor. Until then, surface this
-    # gap as a skip so the matrix test isn't silently broken when only
-    # captures exist but Task 10 isn't done.
-    sig = inspect.signature(run_engine_lab_on_workspace)
-    if "output_dir" not in sig.parameters:
-        pytest.skip(
-            "cross_runner.run_engine_lab_on_workspace does not accept output_dir kwarg — Task 10 wires this through"
-        )
-    # Note: this check confirms the OUTER cross_runner signature gained the
-    # output_dir kwarg. It does NOT verify that Task 10 also threads
-    # output_dir through to the strategy constructor inside cross_runner.
-    # If Task 10 forgets that step, this test will fail at Gate 1 with a
-    # missing observations.csv error rather than a clear "output_dir not
-    # wired" message — investigate by checking the strategy received the
-    # kwarg, not just the outer function.
-
     result = run_engine_lab_on_workspace(
         workspace_path=capture,
         strategy_class_name=STRATEGY_CLASS_NAME,
@@ -135,6 +113,6 @@ def _run_engine_for_cell(cell: Cell, capture: Path, output_dir: Path) -> list[Cr
         start_date=cell.start_date,
         end_date=cell.end_date,
         initial_cash=INITIAL_CASH,
-        output_dir=output_dir,  # type: ignore[call-arg]  # TODO(Task 10): drop ignore after cross_runner gains output_dir param
+        output_dir=output_dir,
     )
     return list(result.order_events)
