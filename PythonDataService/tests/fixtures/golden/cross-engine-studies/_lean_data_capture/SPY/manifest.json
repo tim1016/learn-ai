@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "ticker": "SPY",
+  "source": "polygon",
+  "resolution": "minute",
+  "adjustment": "raw",
+  "start_date": "2024-06-03",
+  "end_date": "2026-04-30",
+  "captured_at_ms_utc": 1779421917519,
+  "captured_by": "Inkant Awasthi",
+  "zip_count": 484,
+  "data_contract_hash": "615fec830b501a0310389de67232497681f70933b09e72b6f931cc8745e2ebe4"
+}
