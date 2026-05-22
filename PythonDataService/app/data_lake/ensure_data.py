@@ -1339,10 +1339,36 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             # expand_required_artifacts emits a symbol's minute days before
             # its factor_file, so minute_trade_by_symbol is fully populated
             # here and supplies the dividend rows' reference prices.
+            #
+            # Gate on FULL per-symbol minute coverage. With a gap, the
+            # dividend's prior-session reference price would silently bind
+            # to an older available close (factor_files._trading_day_before
+            # only raises when there is NO prior session at all) and drift
+            # parity. Fail the factor file instead.
+            sym = identity.symbol or ""
+            expected_minute_days = sum(1 for req in required if _is_minute_trade(req) and (req.symbol or "") == sym)
+            available_minute_days = len(minute_trade_by_symbol.get(sym, []))
+            if available_minute_days != expected_minute_days:
+                failures.append(
+                    ArtifactFailure(
+                        artifact_kind=identity.artifact_kind,
+                        symbol=identity.symbol,
+                        trading_date=None,
+                        data_type=None,
+                        reason="internal_error",
+                        detail=(
+                            f"incomplete minute-trade coverage for factor-file build: "
+                            f"{available_minute_days}/{expected_minute_days} sessions for {sym}; "
+                            "reference prices would drift — fix the minute-bar failures and rerun"
+                        ),
+                        attempt_count=1,
+                    )
+                )
+                continue
             record, failure, is_reused = await _process_factor_file_artifact(
                 identity,
                 spec,
-                minute_trade_by_symbol.get(identity.symbol or "", []),
+                minute_trade_by_symbol.get(sym, []),
                 lake_root,
             )
             if record is not None:

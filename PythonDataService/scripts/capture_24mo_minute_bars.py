@@ -144,8 +144,7 @@ async def main() -> None:
         # Brief pause between tickers to respect rate limits.
         await asyncio.sleep(2)
 
-    print("\n\n=== CAPTURE SUMMARY ===")
-    print(json.dumps(summaries, indent=2))
+    logger.info("=== CAPTURE SUMMARY ===\n%s", json.dumps(summaries, indent=2))
 
 
 if __name__ == "__main__":
