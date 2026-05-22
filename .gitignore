@@ -72,3 +72,6 @@ scripts/ibkr_snapshots/**/*.arrow
 
 # Slice 1b: default host-bind dir for the data lake writer volume.
 data-lake-volume/
+
+# Cross-engine parity matrix: regen-script failure reports (runtime diagnostics).
+PythonDataService/tests/fixtures/golden/cross-engine-studies/.failed/

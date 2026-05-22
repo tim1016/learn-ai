@@ -35,9 +35,13 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.atomic import atomic_write_and_promote
 from app.data_lake.data_contract import data_contract_hash as _dch
-from app.data_lake.derived_daily import aggregate_minute_to_daily, build_daily_zip_bytes
+from app.data_lake.derived_daily import (
+    aggregate_minute_to_daily,
+    build_daily_zip_bytes,
+    rth_daily_closes,
+)
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
-from app.data_lake.factor_files import build_factor_file_bytes
+from app.data_lake.factor_files import FactorFileReferenceError, build_factor_file_bytes
 from app.data_lake.lean_metadata import LeanMetadataExtractionError, extract_lean_metadata
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.map_files import build_map_file_bytes
@@ -689,8 +693,14 @@ async def _process_minute_trade_artifact(
 async def _process_factor_file_artifact(
     identity: ArtifactIdentity,
     spec: DataRunSpec,
+    minute_trade_records: list[ArtifactRecord],
+    lake_root: Path,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, bool]:
     """Claim → fetch splits/dividends → build factor-file bytes → write → complete.
+
+    ``minute_trade_records`` are the symbol's complete minute-trade
+    artifacts from Pass 1; their RTH closes price the dividend rows
+    (LEAN throws on a zero reference price — see ``factor_files``).
 
     Returns (record, None, is_reused) on success or (None, failure, False) on error.
     """
@@ -746,14 +756,55 @@ async def _process_factor_file_artifact(
             False,
         )
 
-    payload = build_factor_file_bytes(
-        symbol=identity.symbol or "",
-        splits=splits,
-        dividends=dividends,
-        history_start=spec.start_trading_date,
-        history_end=spec.end_trading_date,
-    )
-    lake_root, staging_root = _lake_roots(spec)
+    # Reference prices for the dividend rows come from the symbol's
+    # captured minute bars (RTH closes only). A factor file with a
+    # zero/missing reference price silently truncates LEAN backtests at
+    # the first in-window dividend.
+    all_bars: list[MinuteTradeBar] = []
+    for src in sorted(minute_trade_records, key=lambda r: r.trading_date or spec.start_trading_date):
+        try:
+            all_bars.extend(_read_minute_trade_bars(src.file_path, lake_root))
+        except Exception as e:
+            await catalog_client.fail_artifact(artifact_id, "io_error", str(e))
+            return (
+                None,
+                ArtifactFailure(
+                    artifact_kind=identity.artifact_kind,
+                    symbol=identity.symbol,
+                    trading_date=None,
+                    data_type=None,
+                    reason="io_error",
+                    detail=f"failed to read minute bars for factor-file reference prices: {e}",
+                    attempt_count=1,
+                ),
+                False,
+            )
+
+    try:
+        payload = build_factor_file_bytes(
+            symbol=identity.symbol or "",
+            splits=splits,
+            dividends=dividends,
+            history_start=spec.start_trading_date,
+            history_end=spec.end_trading_date,
+            daily_closes=rth_daily_closes(all_bars),
+        )
+    except FactorFileReferenceError as e:
+        await catalog_client.fail_artifact(artifact_id, "internal_error", str(e))
+        return (
+            None,
+            ArtifactFailure(
+                artifact_kind=identity.artifact_kind,
+                symbol=identity.symbol,
+                trading_date=None,
+                data_type=None,
+                reason="internal_error",
+                detail=str(e),
+                attempt_count=1,
+            ),
+            False,
+        )
+    _, staging_root = _lake_roots(spec)
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1285,7 +1336,15 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 failures.append(failure)
 
         elif identity.artifact_kind == "factor_file":
-            record, failure, is_reused = await _process_factor_file_artifact(identity, spec)
+            # expand_required_artifacts emits a symbol's minute days before
+            # its factor_file, so minute_trade_by_symbol is fully populated
+            # here and supplies the dividend rows' reference prices.
+            record, failure, is_reused = await _process_factor_file_artifact(
+                identity,
+                spec,
+                minute_trade_by_symbol.get(identity.symbol or "", []),
+                lake_root,
+            )
             if record is not None:
                 artifacts.append(record)
                 if is_reused:

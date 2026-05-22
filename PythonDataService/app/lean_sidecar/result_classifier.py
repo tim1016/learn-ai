@@ -33,7 +33,7 @@ _ERROR_PREFIX = re.compile(r"ERROR::|Runtime Error:")
 # named so the API consumer can branch on them without parsing free
 # text. Anything we can't bucket lands in ``other``.
 #
-# ``benchmark_unavailable`` is the one non-gating category: LEAN's default
+# ``benchmark_unavailable`` is one non-gating category: LEAN's default
 # benchmark is SPY's daily zip, which Engine Lab does not stage. The
 # resulting ``SubscriptionDataSourceReader.InvalidSource`` + the cascading
 # ``BacktestingResultHandler.SendFinalResult`` "Sequence contains no
@@ -43,11 +43,29 @@ _ERROR_PREFIX = re.compile(r"ERROR::|Runtime Error:")
 # but user-pasted scripts and pre-fix saved scripts still trip this; the
 # classifier acknowledges the cascade as benign so ``is_clean`` flips
 # back to True. Reconciliation runs still disqualify (alpha/beta zero).
+#
+# ``trade_only_capture`` is a second non-gating category: our Polygon
+# captures contain only trade bars (``YYYY-MM-DD.zip``), not quote bars
+# (``YYYY-MM-DD_quote.zip``). LEAN's ``AddEquity(Resolution.Minute)``
+# automatically subscribes to both trade and quote resolutions; the
+# missing ``_quote.zip`` files produce ``InvalidSource`` errors on every
+# trading day. The trusted-sample strategy consumes only trade bars, so
+# an absent quote feed changes nothing — these are non-gating; only
+# ``is_reconciliation_grade`` disqualifies them.
+#
+# A ``Zero reference price`` dividend error is explicitly NOT benign and
+# is NOT in this category. It is thrown by LEAN's ``DividendEventProvider``
+# when a factor file carries ``reference_price=0``; it kills the data
+# subscription worker and silently truncates the backtest at the first
+# in-window dividend. It must gate (routed to ``runtime_error``). An
+# earlier revision wrongly classified it as ``trade_only_capture``,
+# masking a 6-month SPY parity run that executed only ~35 days.
 ErrorCategory = Literal[
     "analysis_failed",
     "failed_data_requests",
     "runtime_error",
     "benchmark_unavailable",
+    "trade_only_capture",
     "other",
 ]
 
@@ -75,14 +93,19 @@ class ClassifiedErrors:
     def is_clean(self) -> bool:
         """True when no gating-category errors are present.
 
-        ``benchmark_unavailable`` is explicitly non-gating: the SPY-zip
-        miss + equity-curve cascade are LEAN's post-strategy housekeeping
-        failing after a successful run produced trades and statistics.
-        Treating the cascade as gating mislabels working strategies as
-        "failed" in the UI. Every other category (including ``other``)
-        still gates ``is_clean``.
+        Non-gating categories (never gate ``is_clean``):
+
+        * ``benchmark_unavailable`` — the SPY-zip miss + equity-curve
+          cascade are LEAN's post-strategy housekeeping failing after a
+          successful run; the strategy itself produced trades and stats.
+        * ``trade_only_capture`` — quote-bar-missing errors from Polygon
+          captures that only contain trade bars; the trusted-sample
+          strategy depends only on trade data, so these are always benign.
+
+        Every other category (including ``other``) still gates.
         """
-        gating_total = sum(len(v) for k, v in self.by_category.items() if k != "benchmark_unavailable")
+        non_gating = frozenset({"benchmark_unavailable", "trade_only_capture"})
+        gating_total = sum(len(v) for k, v in self.by_category.items() if k not in non_gating)
         return gating_total == 0
 
     @property
@@ -111,27 +134,43 @@ def _categorize(block: str) -> ErrorCategory:
     existing rule silently because a downstream caller's branching
     depends on the category name being stable.
 
-    The two benign SPY-benchmark patterns are checked first so they
-    take priority over the generic ``failed_data_requests`` /
-    ``analysis_failed`` rules below:
+    The benign patterns are checked first so they take priority over
+    the generic ``failed_data_requests`` / ``analysis_failed`` rules:
 
     1. ``SubscriptionDataSourceReader.InvalidSource`` referencing
        ``daily/spy.zip`` — Engine Lab does not stage LEAN's default
-       benchmark daily zip.
+       benchmark daily zip (``benchmark_unavailable``).
     2. ``BacktestingResultHandler.SendFinalResult`` whose stack trace
        includes ``ReadEquityCurve`` and ``Sequence contains no
-       elements`` — the cascade triggered by (1) when the
-       analyzer reads the missing benchmark series.
+       elements`` — the cascade triggered by (1) (``benchmark_unavailable``).
+    3. ``SubscriptionDataSourceReader.InvalidSource`` referencing a
+       ``_quote.zip`` file — trade-bar-only Polygon captures do not
+       include quote bars; LEAN subscribes to both automatically
+       (``trade_only_capture``, non-gating).
+
+    A ``Zero reference price`` dividend error is matched before the
+    generic rules and routed to ``runtime_error``: it kills the data
+    subscription and truncates the backtest, so it must gate.
 
     Any other ``daily/<symbol>.zip`` miss (QQQ, IWM, etc.) still gates
     via ``failed_data_requests``; any other ``ResultsAnalyzer`` /
     ``SendFinalResult`` failure still gates via ``analysis_failed``.
     """
     low = block.lower()
+    # Benchmark cascade (non-gating)
     if "daily/spy.zip" in low and "subscriptiondatasourcereader.invalidsource" in low:
         return "benchmark_unavailable"
     if "sendfinalresult" in low and "readequitycurve" in low and "sequence contains no elements" in low:
         return "benchmark_unavailable"
+    # Zero reference price: a corrupt factor file (reference_price=0) makes
+    # LEAN's DividendEventProvider throw, killing the subscription worker
+    # and truncating the backtest. Gating — must never be masked.
+    if "zero reference price" in low:
+        return "runtime_error"
+    # Trade-bar-only capture: missing quote zips are benign (non-gating).
+    if "_quote.zip" in low and "subscriptiondatasourcereader.invalidsource" in low:
+        return "trade_only_capture"
+    # Gating categories
     if "resultsanalyzer" in low or "sendfinalresult" in low or "equity curve" in low:
         return "analysis_failed"
     if "subscriptiondatasource" in low or "no data" in low or "file not found" in low:
