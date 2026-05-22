@@ -48,7 +48,7 @@ class StrategySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trusted_sample: str
     trusted_sample_source_sha256: str = Field(..., pattern=r"^[a-f0-9]{64}$")
-    parameters_constants: dict[str, float]
+    parameters_constants: dict[str, int | float]
     runtime_parameters: dict[str, str | int | float]
 
 
@@ -91,7 +91,7 @@ class StateCsvSchema(BaseModel):
         return self
 
 
-_CELL_ID_RE = re.compile(r"^[A-Z]+_W(6|12|24)mo_\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}$")
+_CELL_ID_RE = re.compile(r"[A-Z]+_W(6|12|24)mo_\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}")
 
 
 class CellManifest(BaseModel):

@@ -133,3 +133,42 @@ def test_state_csv_schema_rejects_mismatched_keys() -> None:
             columns=["a", "b"],
             column_types={"a": "int64"},  # missing "b"
         )
+
+
+@pytest.mark.parametrize(
+    "cls,kwargs",
+    [
+        (
+            WindowSpec,
+            dict(
+                label="W6mo",
+                start_date="2025-11-03",
+                end_date="2026-04-30",
+                session="regular",
+                trading_days_expected=125,
+                unknown_field="x",
+            ),
+        ),
+        (
+            BrokerSpec,
+            dict(
+                brokerage_model="InteractiveBrokersBrokerage",
+                account_type="Margin",
+                fill_model="ImmediateFillModel",
+                fee_model="IbkrEquityCommissionModel",
+                unknown_field="x",
+            ),
+        ),
+        (
+            DataSpec,
+            dict(
+                lean_data_capture_ref="_lean_data_capture/SPY",
+                data_contract_hash="b" * 64,
+                unknown_field="x",
+            ),
+        ),
+    ],
+)
+def test_extra_fields_rejected(cls: type, kwargs: dict) -> None:  # type: ignore[type-arg]
+    with pytest.raises(ValidationError):
+        cls(**kwargs)
