@@ -99,7 +99,13 @@ describe("RunsCompareComponent", () => {
     const fixture = await setup();
     const el = fixture.nativeElement as HTMLElement;
 
-    expect(el.querySelector(".verdict")?.textContent?.trim()).toBe("Comparable");
+    // ``.verdict`` now contains a labelled info-icon button alongside the
+    // status text, so we query the status span directly and assert the
+    // tooltip wording is present via the button's ``title`` attribute.
+    expect(el.querySelector(".verdict > span")?.textContent?.trim()).toBe("Comparable");
+    expect(
+      el.querySelector<HTMLButtonElement>(".verdict .verdict-info")?.title,
+    ).toContain("effective trade results");
     expect(el.querySelectorAll(".claims li").length).toBe(3);
   });
 

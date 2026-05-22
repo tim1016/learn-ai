@@ -16,7 +16,13 @@
       [class.incompatible]="!d.compatible"
       role="status"
     >
-      {{ d.compatible ? "Comparable" : "Not comparable" }}
+      <span>{{ d.compatible ? "Comparable" : "Not comparable" }}</span>
+      <button
+        type="button"
+        class="verdict-info"
+        aria-label="What 'comparable' means"
+        title="Compatibility checks compare effective trade results. LEAN may report execution mode/fee policy differently because fees and fills come from LEAN's runtime model."
+      >ⓘ</button>
     </header>
 
     <ul class="claims" aria-label="Compatibility sub-claims">
@@ -67,9 +73,19 @@
       <dt>Cash</dt>
       <dd>{{ d.left.starting_cash | currency: "USD" : "symbol" : "1.0-0" }}</dd>
       <dt>Commission</dt>
-      <dd>{{ d.left.commission_per_order }}</dd>
+      <dd>
+        {{ d.left.commission_per_order }}
+        @if (d.left.commission_per_order !== d.right.commission_per_order) {
+          ↔ {{ d.right.commission_per_order }}
+        }
+      </dd>
       <dt>Fill model</dt>
-      <dd>{{ d.left.fill_mode }}</dd>
+      <dd>
+        {{ d.left.fill_mode }}
+        @if (d.left.fill_mode !== d.right.fill_mode) {
+          ↔ {{ d.right.fill_mode }}
+        }
+      </dd>
     </dl>
   </section>
 
