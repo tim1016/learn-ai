@@ -55,6 +55,19 @@ RUNTIME_ERROR_LOG = """\
 20260517 17:10:18.448 ERROR:: Algorithm.Initialize() Error: Unable to locate symbol properties file
 """
 
+# Trade-bar-only capture: LEAN subscribes to quote bars automatically; our
+# captures only include trade bars. A missing _quote.zip is benign (non-gating).
+TRADE_ONLY_QUOTE_MISS_LOG = """\
+20260522 04:07:59.306 ERROR:: SubscriptionDataSourceReader.InvalidSource(): File not found: /lean-run/data/equity/usa/minute/spy/20251103_quote.zip
+"""
+
+# A zero-reference-price dividend error is NOT benign: it kills the data
+# subscription worker and truncates the backtest. It must gate (runtime_error).
+DIVIDEND_ZERO_REF_PRICE_LOG = """\
+20260522 04:07:59.351 ERROR:: <>c__DisplayClass1_0.<CreateAndScheduleWorker>b__0(): Subscription worker task exception SPY,#0,SPY,Minute,QuoteBar,Quote,Raw,OpenInterest. System.InvalidOperationException: Zero reference price for SPY dividend at 12/22/2025 12:00:00 AM
+   at QuantConnect.Lean.Engine.DataFeeds.Enumerators.DividendEventProvider.GetEvents(NewTradableDateEventArgs eventArgs)+MoveNext()
+"""
+
 MIXED_LOG = ANALYSIS_FAILED_LOG + REAL_FAILED_DATA_REQUEST_LOG + RUNTIME_ERROR_LOG
 
 CLEAN_LOG = """\
@@ -117,6 +130,36 @@ class TestClassifyLeanLog:
         assert len(result.by_category["benchmark_unavailable"]) == 2
         assert result.is_clean
         assert not result.is_reconciliation_grade
+
+    def test_quote_zip_miss_routes_to_trade_only_capture(self) -> None:
+        """Missing _quote.zip files (trade-bar-only captures) are non-gating."""
+        result = classify_lean_log(TRADE_ONLY_QUOTE_MISS_LOG)
+        assert "trade_only_capture" in result.by_category
+        assert "failed_data_requests" not in result.by_category
+        assert result.is_clean
+        assert not result.is_reconciliation_grade
+
+    def test_zero_reference_price_dividend_error_gates(self) -> None:
+        """A zero-reference-price dividend error gates: it truncates the backtest.
+
+        Regression coverage — an earlier revision classified this as the
+        non-gating ``trade_only_capture``, masking a SPY parity run that
+        executed only ~35 of 123 trading days.
+        """
+        result = classify_lean_log(DIVIDEND_ZERO_REF_PRICE_LOG)
+        assert "runtime_error" in result.by_category
+        assert "trade_only_capture" not in result.by_category
+        assert not result.is_clean
+
+    def test_quote_miss_clean_but_dividend_error_gates(self) -> None:
+        """Quote-zip misses stay non-gating; a co-occurring zero-reference-price
+        dividend error still gates the whole run."""
+        combined = TRADE_ONLY_QUOTE_MISS_LOG * 34 + DIVIDEND_ZERO_REF_PRICE_LOG * 3
+        result = classify_lean_log(combined)
+        assert set(result.by_category.keys()) == {"trade_only_capture", "runtime_error"}
+        assert len(result.by_category["trade_only_capture"]) == 34
+        assert len(result.by_category["runtime_error"]) == 3
+        assert not result.is_clean
 
     def test_runtime_error_category(self) -> None:
         result = classify_lean_log(RUNTIME_ERROR_LOG)

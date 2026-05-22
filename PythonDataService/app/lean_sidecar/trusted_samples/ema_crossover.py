@@ -118,7 +118,7 @@ class MyAlgorithm(QCAlgorithm):
 
         obs_path = self.ObjectStore.GetFilePath("observations.csv")
         with open(obs_path, "w") as f:
-            f.write("ms_utc,close\\n")
+            f.write("ms_utc,open,high,low,close,volume\\n")
         self._obs_path = obs_path
 
         state_path = self.ObjectStore.GetFilePath("state.csv")
@@ -131,7 +131,14 @@ class MyAlgorithm(QCAlgorithm):
         if bar is None:
             return
         with open(self._obs_path, "a") as f:
-            f.write(str(_to_ms_utc(bar.EndTime)) + "," + str(bar.Close) + "\\n")
+            f.write(
+                str(_to_ms_utc(bar.EndTime)) + ","
+                + str(bar.Open) + ","
+                + str(bar.High) + ","
+                + str(bar.Low) + ","
+                + str(bar.Close) + ","
+                + str(bar.Volume) + "\\n"
+            )
 
     def OnConsolidatedBar(self, sender, bar):
         close = float(bar.Close)

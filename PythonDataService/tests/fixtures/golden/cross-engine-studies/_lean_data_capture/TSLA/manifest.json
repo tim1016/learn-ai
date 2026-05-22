@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "ticker": "TSLA",
+  "source": "polygon",
+  "resolution": "minute",
+  "adjustment": "raw",
+  "start_date": "2024-06-03",
+  "end_date": "2026-04-30",
+  "captured_at_ms_utc": 1779421917519,
+  "captured_by": "Inkant Awasthi",
+  "zip_count": 479,
+  "data_contract_hash": "2a25d5513f1e2bb821d224324346426e49c91ad55473b3f48493ad18ea10a264"
+}

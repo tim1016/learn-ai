@@ -170,10 +170,7 @@ def resolve_strategy_class(name: str) -> type[Strategy]:
             candidates[attr.__name__] = attr
     if name in candidates:
         return candidates[name]
-    raise StrategyNotFoundError(
-        f"unknown strategy class {name!r}; "
-        f"known: {sorted(candidates.keys())}"
-    )
+    raise StrategyNotFoundError(f"unknown strategy class {name!r}; known: {sorted(candidates.keys())}")
 
 
 def _instantiate_with_symbol(cls: type[Strategy], symbol: str) -> Strategy:
@@ -186,9 +183,7 @@ def _instantiate_with_symbol(cls: type[Strategy], symbol: str) -> Strategy:
     try:
         sig = inspect.signature(cls.__init__)
     except (TypeError, ValueError) as e:
-        raise StrategyIncompatibleError(
-            f"{cls.__name__}: cannot introspect constructor signature ({e})"
-        ) from e
+        raise StrategyIncompatibleError(f"{cls.__name__}: cannot introspect constructor signature ({e})") from e
     if "symbol" not in sig.parameters:
         raise StrategyIncompatibleError(
             f"{cls.__name__}: constructor does not accept a 'symbol' kwarg; "
@@ -212,9 +207,7 @@ def _normalize_order_events(
     for i, e in enumerate(order_events):
         t = e.time if e.time.tzinfo is not None else e.time.replace(tzinfo=_ET)
         ms_utc = int(t.astimezone(_UTC).timestamp() * 1000)
-        direction_str: Literal["Buy", "Sell"] = (
-            "Buy" if e.fill_quantity >= 0 else "Sell"
-        )
+        direction_str: Literal["Buy", "Sell"] = "Buy" if e.fill_quantity >= 0 else "Sell"
         normalized.append(
             CrossRunOrderEvent(
                 order_event_id=i,
@@ -239,6 +232,7 @@ def run_engine_lab_on_workspace(
     start_date: date,
     end_date: date,
     initial_cash: Decimal,
+    output_dir: Path | None = None,
 ) -> CrossRunResult:
     """Run the resolved Engine-Lab strategy against ``<workspace_path>/data``.
 
@@ -249,6 +243,10 @@ def run_engine_lab_on_workspace(
         wrote ``manifest.json`` into. The Engine-Lab data reader reads
         ``<workspace_path>/data/equity/usa/minute/<symbol>/*_trade.zip``
         (the layout the LEAN-Lab orchestrator already staged).
+        When ``<workspace_path>/data`` does not exist, ``workspace_path``
+        itself is tried as the data root (supports callers that pass the
+        Polygon capture root directly, where ``equity/…`` lives at the
+        top level rather than under ``data/``).
     strategy_class_name:
         Caller-supplied class name. Must match a ``Strategy`` subclass
         ``__name__`` under ``app.engine.strategy.algorithms`` (per D3,
@@ -266,27 +264,40 @@ def run_engine_lab_on_workspace(
         LEAN-Lab run's starting capital, pinned the same way as the
         dates so position-sizing primitives (``SetHoldings``) target
         the same dollar amount on both engines.
+    output_dir:
+        When provided, passed to the strategy constructor as
+        ``output_dir`` so the strategy emits ``observations.csv`` and
+        ``state.csv`` into that directory. Task 10 — parity-matrix
+        regeneration script needs these files for Gate 1 and Gate 2.
 
     Returns
     -------
     CrossRunResult with normalized order events ready for Phase 5g.3's
     diff against the LEAN-Lab run's parsed ``order_events``."""
-    data_root = workspace_path / "data"
-    if not data_root.exists() or not data_root.is_dir():
+    # Prefer workspace_path/data (canonical workspace layout); fall back
+    # to workspace_path itself for capture roots where equity/ lives at
+    # the top level (e.g. _lean_data_capture/<TICKER>/).
+    candidate_data = workspace_path / "data"
+    if candidate_data.exists() and candidate_data.is_dir():
+        data_root = candidate_data
+    elif workspace_path.exists() and workspace_path.is_dir():
+        data_root = workspace_path
+    else:
         raise WorkspaceDataMissingError(
-            f"workspace data dir not found: {data_root} "
+            f"workspace data dir not found: {candidate_data} "
             "(was the LEAN-Lab run staged? did the workspace get pruned?)"
         )
 
     base_class = resolve_strategy_class(strategy_class_name)
-    base_instance = _instantiate_with_symbol(base_class, symbol)
+    # Pass output_dir to the strategy constructor when provided so it
+    # emits observations.csv + state.csv for the parity-matrix gates.
+    if output_dir is not None and "output_dir" in inspect.signature(base_class.__init__).parameters:
+        base_instance: Strategy = base_class(symbol=symbol.upper(), output_dir=output_dir)
+    else:
+        base_instance = _instantiate_with_symbol(base_class, symbol)
 
-    pinned_start = datetime(
-        start_date.year, start_date.month, start_date.day, tzinfo=_ET
-    )
-    pinned_end = datetime(
-        end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=_ET
-    )
+    pinned_start = datetime(start_date.year, start_date.month, start_date.day, tzinfo=_ET)
+    pinned_end = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=_ET)
     pinned_cash = Decimal(initial_cash)
 
     # Capture the resolved class + the pinned values via closure into a
@@ -313,9 +324,7 @@ def run_engine_lab_on_workspace(
     engine = BacktestEngine(data_source=reader)
     result = engine.run(cross_instance)
 
-    normalized = _normalize_order_events(
-        result.order_events, symbol_default=symbol
-    )
+    normalized = _normalize_order_events(result.order_events, symbol_default=symbol)
     return CrossRunResult(
         strategy_class_name=strategy_class_name,
         symbol=symbol.upper(),

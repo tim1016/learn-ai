@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "ticker": "QQQ",
+  "source": "polygon",
+  "resolution": "minute",
+  "adjustment": "raw",
+  "start_date": "2024-06-03",
+  "end_date": "2026-04-30",
+  "captured_at_ms_utc": 1779421917519,
+  "captured_by": "Inkant Awasthi",
+  "zip_count": 479,
+  "data_contract_hash": "a20fe2d320b22ecd0ee60948f597c062006f42365c0be0e6babb06e27d6155c4"
+}

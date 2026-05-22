@@ -27,10 +27,16 @@ from __future__ import annotations
 import io
 import zipfile
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 
 from app.data_lake.lean_writer import MinuteTradeBar, to_deci_cent
+
+# Regular trading hours for US equities (exchange-local). A minute bar
+# whose start falls in [09:30, 16:00) belongs to the regular session;
+# 09:30 starts the 09:30–09:31 bar, 15:59 starts the last (15:59–16:00).
+_RTH_OPEN = time(9, 30)
+_RTH_CLOSE = time(16, 0)
 
 _DETERMINISTIC_ZIP_DATE_TIME: tuple[int, int, int, int, int, int] = (
     1980,
@@ -112,6 +118,23 @@ def aggregate_minute_to_daily(
         )
 
     return out
+
+
+def rth_daily_closes(bars: list[MinuteTradeBar]) -> dict[date, Decimal]:
+    """Regular-trading-hours close per session date.
+
+    Keeps only bars whose ET start falls in [09:30, 16:00) and records
+    each date's last such close. Captures may include extended-hours
+    bars (04:00–20:00); those must not contribute to the close LEAN
+    uses to price dividends (see ``factor_files``). Input must be sorted
+    ascending by ``bar_start_et``.
+    """
+    closes: dict[date, Decimal] = {}
+    for bar in bars:
+        start = bar.bar_start_et
+        if _RTH_OPEN <= start.time() < _RTH_CLOSE:
+            closes[start.date()] = bar.close
+    return closes
 
 
 def build_daily_zip_bytes(

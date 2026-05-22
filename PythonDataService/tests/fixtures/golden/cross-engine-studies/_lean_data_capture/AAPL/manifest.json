@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "ticker": "AAPL",
+  "source": "polygon",
+  "resolution": "minute",
+  "adjustment": "raw",
+  "start_date": "2024-06-03",
+  "end_date": "2026-04-30",
+  "captured_at_ms_utc": 1779421917519,
+  "captured_by": "Inkant Awasthi",
+  "zip_count": 479,
+  "data_contract_hash": "de64c0845a91510d8f5937b97caeec8b5e8204e2e488029c521b658d01ad945d"
+}

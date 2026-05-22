@@ -215,8 +215,7 @@ class TestRunEngineLabOnWorkspace:
 
         buys = [e for e in result.order_events if e.direction == "Buy"]
         assert len(buys) == 1, (
-            f"buy-and-hold must emit exactly one Buy; got {len(buys)} "
-            f"({[(e.ms_utc, e.fill_quantity) for e in buys]})"
+            f"buy-and-hold must emit exactly one Buy; got {len(buys)} ({[(e.ms_utc, e.fill_quantity) for e in buys]})"
         )
 
     def test_missing_workspace_data_raises(self, tmp_path: Path) -> None:
@@ -287,3 +286,53 @@ class TestRunEngineLabOnWorkspace:
 
         # initial_cash override round-trips into the result metadata.
         assert result.initial_cash == Decimal("50000")
+
+    def test_output_dir_threads_to_strategy_constructor(self, tmp_path: Path) -> None:
+        """output_dir kwarg is passed to the strategy constructor so
+        SpyEmaCrossoverAlgorithm emits observations.csv + state.csv.
+
+        Uses SpyEmaCrossoverAlgorithm (which accepts output_dir) against
+        a synthetic workspace with enough bars to warm up all indicators
+        (RSI needs 14 consolidated bars × 15 min = 210 minute bars).
+        """
+        artifacts_root = tmp_path / "artifacts"
+        artifacts_root.mkdir()
+        ws = resolve_workspace("cross_runner_output_dir", artifacts_root)
+        ws.ensure_layout()
+
+        # Stage enough bars for full indicator warmup:
+        # RSI(14) on 15-min bars needs 14 × 15 = 210 minute bars = ~3.5 trading days.
+        # Stage 5 consecutive trading days to be safe.
+        bars_by_date = []
+        from datetime import timedelta as _td
+
+        start = date(2025, 1, 6)
+        for i in range(5):
+            d = start + _td(days=i)
+            bars_by_date.append((d, _build_minute_bars(d, symbol="SPY")))
+        stage_minute_bars(ws, symbol="SPY", bars_by_date=bars_by_date)
+
+        output_dir = tmp_path / "strategy_out"
+        result = run_engine_lab_on_workspace(
+            ws.workspace_dir,
+            "SpyEmaCrossoverAlgorithm",
+            symbol="SPY",
+            start_date=start,
+            end_date=start + _td(days=4),
+            initial_cash=Decimal("100000"),
+            output_dir=output_dir,
+        )
+
+        # The strategy must have emitted both CSV files into output_dir.
+        assert (output_dir / "observations.csv").exists(), (
+            "output_dir was not wired to the strategy constructor: observations.csv missing from output_dir"
+        )
+        assert (output_dir / "state.csv").exists(), (
+            "output_dir was not wired to the strategy constructor: state.csv missing from output_dir"
+        )
+        # observations.csv must have a header + at least one data row.
+        obs_lines = (output_dir / "observations.csv").read_text(encoding="utf-8").splitlines()
+        assert len(obs_lines) > 1, "observations.csv has no data rows"
+        assert obs_lines[0].startswith("ms_utc"), f"unexpected header: {obs_lines[0]}"
+        # Strategy class name preserved in the result.
+        assert result.strategy_class_name == "SpyEmaCrossoverAlgorithm"

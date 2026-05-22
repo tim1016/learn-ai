@@ -2,29 +2,55 @@
 
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.1
 
-LEAN factor-file format (path_policy: factor_files/<sym>.csv under the equity/usa subtree):
-  date,price_factor,split_factor,ref_price
-  - date: YYYYMMDD
-  - price_factor: cumulative dividend back-adjustment multiplier
-  - split_factor: cumulative split-adjustment multiplier
-  - ref_price: closing price on the date (sanity-check value; we emit 0 in v1c)
+LEAN factor-file format (factor_files/<sym>.csv under the equity/usa subtree):
+  date,price_factor,split_factor,reference_price
+  - date: YYYYMMDD of the last completed trading session *before* the
+    corporate action's ex-date. LEAN applies the event on the next
+    trading day, so a row dated D produces an event on D's successor.
+  - price_factor: cumulative dividend back-adjustment multiplier.
+  - split_factor: cumulative split-adjustment multiplier.
+  - reference_price: the raw close on the row's date.
 
-V1c is intentionally minimal:
-  - We emit two anchor rows (history_start and history_end) plus one row per
-    corp-action event.
-  - Factors are cumulative back-adjustment so historical raw prices multiplied
-    by the factor give the back-adjusted view.
-  - Real LEAN-vendor parity is deferred to Slice 5 (per spec deferred list).
+The reference price is NOT optional and must be positive. LEAN's
+``DividendEventProvider`` divides the cash dividend by it; a zero or
+missing reference price raises ``InvalidOperationException: Zero
+reference price``, which kills the subscription worker and silently
+truncates the backtest at the first in-window dividend. An earlier
+revision of this module emitted ``reference_price=0`` on every row
+under the (false) belief that LEAN ignores the column — see the
+cross-engine parity-matrix incident where a 6-month SPY backtest ran
+only ~35 days.
 
-LEAN's parser is forgiving about ref_price=0; the column is used only for a
-sanity check that's bypassed when the value is non-positive.
+Math mirrors LEAN's own ``FactorFileGenerator``: walking corporate
+actions newest-to-oldest,
+
+  reference_price = close of the trading session before the ex-date
+  price_factor    = next_factor * (1 - cash_amount * split_factor / reference_price)
+
+and each split contributes ``split_from / split_to`` to the cumulative
+split factor.
+
+Only corporate actions whose ex-date falls inside [history_start,
+history_end] are emitted: a windowed capture cannot price actions
+outside its own data, and a backtest in that window never encounters
+them. If an in-window action has no positive reference close in the
+capture, the build fails loudly rather than emitting a poison row.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left
+from collections.abc import Mapping
 from datetime import date
+from decimal import Decimal
 
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
+
+_FACTOR_QUANTUM = Decimal("0.0000000001")
+
+
+class FactorFileReferenceError(ValueError):
+    """An in-window corporate action has no positive reference close."""
 
 
 def build_factor_file_bytes(
@@ -33,85 +59,117 @@ def build_factor_file_bytes(
     dividends: list[DividendEvent],
     history_start: date,
     history_end: date,
+    daily_closes: Mapping[date, Decimal],
 ) -> bytes:
     """Build the deterministic factor-file CSV body for one symbol.
 
-    All inputs must be sorted ascending by date (polygon_corp_actions returns
-    them that way). The returned bytes are ASCII CSV without a header row,
-    which is what LEAN expects.
+    ``daily_closes`` maps each regular-trading-hours session date to its
+    RTH close. It must cover the trading session before every in-window
+    corporate action; the caller derives it from the captured minute
+    bars (see ``derived_daily.rth_daily_closes``).
+
+    Splits/dividends must be sorted ascending by date (polygon_corp_actions
+    returns them that way). The returned bytes are ASCII CSV without a
+    header row, which is what LEAN expects.
+
+    Raises ``FactorFileReferenceError`` when an in-window corporate
+    action has no positive reference close in ``daily_closes``.
     """
+    closes: dict[date, Decimal] = {d: Decimal(v) for d, v in daily_closes.items()}
+    session_dates: list[date] = sorted(closes)
+
     events = _merge_events(splits, dividends)
+    in_window = [ev for ev in events if history_start <= _event_date(ev) <= history_end]
 
-    # Compute cumulative factors traversing events from oldest to newest.
-    # LEAN multiplies historical prices by the factors at the row's date to
-    # back-adjust into the present-day view.
-    cumulative_split_factor = 1.0
-    for ev in events:
-        if isinstance(ev, SplitEvent):
-            cumulative_split_factor *= ev.split_from / ev.split_to
-
-    cumulative_price_factor = 1.0
-    # Dividends back-adjust by (1 - cash_amount / ref_price); we don't have
-    # ref_price in Slice 1c, so approximate using cash_amount alone (factor
-    # < 1 for any dividend). Vendor parity is deferred.
-    for ev in events:
+    # Walk corporate actions newest-to-oldest, accumulating the cumulative
+    # price/split factors. Each event row carries the factors that apply
+    # to raw data up to and including that row's date.
+    price_factor = Decimal(1)
+    split_factor = Decimal(1)
+    event_rows: list[tuple[date, Decimal, Decimal, Decimal]] = []
+    for ev in reversed(in_window):
+        ex_date = _event_date(ev)
+        row_date = _trading_day_before(ex_date, session_dates)
+        if row_date is None:
+            raise FactorFileReferenceError(
+                f"{symbol}: corporate action ex-date {ex_date.isoformat()} has no "
+                f"prior trading session in the capture (window starts "
+                f"{history_start.isoformat()}); cannot resolve a reference price"
+            )
+        reference_price = closes[row_date]
+        if reference_price <= 0:
+            raise FactorFileReferenceError(
+                f"{symbol}: reference close on {row_date.isoformat()} is "
+                f"{reference_price}; a non-positive reference price makes LEAN's "
+                f"DividendEventProvider throw and truncates the backtest"
+            )
         if isinstance(ev, DividendEvent):
-            cumulative_price_factor *= max(0.001, 1.0 - ev.cash_amount / 500.0)
-
-    rows: list[tuple[str, float, float, float]] = []
-
-    # Anchor at history_start with the full cumulative factors (these apply
-    # to the entire pre-event window).
-    rows.append(
-        (
-            _yyyymmdd(history_start),
-            cumulative_price_factor,
-            cumulative_split_factor,
-            0.0,
-        )
-    )
-
-    # One row per event with monotonically advancing factors.
-    running_split = cumulative_split_factor
-    running_price = cumulative_price_factor
-    for ev in events:
-        if isinstance(ev, SplitEvent):
-            running_split = running_split / (ev.split_from / ev.split_to)
-            ev_date = ev.execution_date
+            cash = Decimal(str(ev.cash_amount))
+            price_factor = price_factor * (Decimal(1) - cash * split_factor / reference_price)
         else:
-            running_price = running_price / max(0.001, 1.0 - ev.cash_amount / 500.0)
-            ev_date = ev.ex_dividend_date
-        rows.append((_dash_to_compact(ev_date), running_price, running_split, 0.0))
+            split_factor = split_factor * (Decimal(str(ev.split_from)) / Decimal(str(ev.split_to)))
+        event_rows.append((row_date, price_factor, split_factor, reference_price))
+    event_rows.reverse()
 
-    # End-of-history anchor.
-    rows.append((_yyyymmdd(history_end), 1.0, 1.0, 0.0))
+    # history_start carries the fully-cumulated (oldest) factors; the row
+    # is not dividend-processed by LEAN but its reference price still
+    # must be positive, so anchor it to the nearest available close.
+    rows: list[tuple[date, Decimal, Decimal, Decimal]] = [
+        (
+            history_start,
+            price_factor,
+            split_factor,
+            _anchor_reference(history_start, closes, session_dates),
+        ),
+        *event_rows,
+        (
+            history_end,
+            Decimal(1),
+            Decimal(1),
+            _anchor_reference(history_end, closes, session_dates),
+        ),
+    ]
 
-    body_lines = [f"{d},{_f(pf)},{_f(sf)},{_f(rp)}" for d, pf, sf, rp in rows]
-    return ("\n".join(body_lines) + "\n").encode("ascii")
+    body = "\n".join(f"{_yyyymmdd(d)},{_fmt_factor(pf)},{_fmt_factor(sf)},{_fmt_price(rp)}" for d, pf, sf, rp in rows)
+    return (body + "\n").encode("ascii")
+
+
+def _event_date(ev: SplitEvent | DividendEvent) -> date:
+    raw = ev.execution_date if isinstance(ev, SplitEvent) else ev.ex_dividend_date
+    return date.fromisoformat(raw)
+
+
+def _merge_events(splits: list[SplitEvent], dividends: list[DividendEvent]) -> list[SplitEvent | DividendEvent]:
+    """Merge splits + dividends into one chronologically-sorted list."""
+    return sorted([*splits, *dividends], key=_event_date)
+
+
+def _trading_day_before(d: date, session_dates: list[date]) -> date | None:
+    """Largest session date strictly earlier than ``d``; None if none exists."""
+    idx = bisect_left(session_dates, d)
+    return session_dates[idx - 1] if idx > 0 else None
+
+
+def _anchor_reference(d: date, closes: Mapping[date, Decimal], session_dates: list[date]) -> Decimal:
+    """Reference close for an anchor row: the close on ``d``, else the
+    nearest earlier session, else the earliest session available."""
+    if d in closes:
+        return closes[d]
+    if not session_dates:
+        raise FactorFileReferenceError("daily_closes is empty; cannot anchor the factor file with a reference price")
+    idx = bisect_left(session_dates, d)
+    return closes[session_dates[idx - 1]] if idx > 0 else closes[session_dates[0]]
 
 
 def _yyyymmdd(d: date) -> str:
     return d.strftime("%Y%m%d")
 
 
-def _dash_to_compact(iso: str) -> str:
-    """'2020-08-31' -> '20200831'."""
-    return iso.replace("-", "")
+def _fmt_factor(x: Decimal) -> str:
+    """Factor formatted at 10 dp, trailing zeros stripped, fixed notation."""
+    return format(x.quantize(_FACTOR_QUANTUM).normalize(), "f")
 
 
-def _f(x: float) -> str:
-    """Format a factor — LEAN accepts standard %g; we use %g for compactness."""
-    return f"{x:g}"
-
-
-def _merge_events(splits: list[SplitEvent], dividends: list[DividendEvent]) -> list[SplitEvent | DividendEvent]:
-    """Merge into a single chronologically-sorted list.
-
-    Date keys: SplitEvent.execution_date / DividendEvent.ex_dividend_date.
-    Both are 'YYYY-MM-DD' strings; lexical sort = chronological sort.
-    """
-
-    def _date_key(ev: SplitEvent | DividendEvent) -> str:
-        return ev.execution_date if isinstance(ev, SplitEvent) else ev.ex_dividend_date
-
-    return sorted([*splits, *dividends], key=_date_key)
+def _fmt_price(x: Decimal) -> str:
+    """Reference price in fixed (non-scientific) notation."""
+    return format(x.normalize(), "f")
