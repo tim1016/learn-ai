@@ -57,6 +57,9 @@ def run_cell_gates(
     engine_output_dir: Path,
     engine_normalized_orders: list[CrossRunOrderEvent],
     trade_tolerances: CrossReconciliationTolerances | None = None,
+    # Branch-A default: matrix fixtures pin IBKR brokerage, so
+    # COMMISSION_DRIFT is gating per spec § "Gate 3". Note this
+    # inverts compare_cross_engine's own default of False.
     assert_fees: bool = True,
 ) -> CellRunReport:
     """Run the three gates in order against pinned LEAN vs live Engine output.
@@ -68,6 +71,12 @@ def run_cell_gates(
     by ``SpyEmaCrossoverAlgorithm`` with ``output_dir=engine_output_dir``.
     ``engine_normalized_orders`` is the list of fills returned by the
     Engine Lab run (from ``cross_runner.run_engine_lab_on_workspace``).
+
+    ``assert_fees`` defaults to ``True`` (Branch-A semantics) per spec
+    § "Gate 3" — matrix fixtures pin IBKR brokerage and COMMISSION_DRIFT
+    must be gating. This inverts ``compare_cross_engine``'s own default
+    of ``False``; pass ``False`` explicitly when running against
+    Branch-B fixtures.
     """
     obs = compare_observations(
         reference=pinned_lean_dir / "observations.csv",
