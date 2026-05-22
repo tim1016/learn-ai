@@ -69,6 +69,7 @@ def test_report_state_returns_none_when_open_trade() -> None:
     strat._open_trade = _OpenTrade(
         entry_time=datetime(2026, 5, 18, 14, 0, tzinfo=UTC),
         entry_price=Decimal("410"),
+        quantity=140,
         ema5=Decimal("410"),
         ema10=Decimal("409"),
         rsi=Decimal("62"),

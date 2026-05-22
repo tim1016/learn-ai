@@ -72,6 +72,7 @@ class LoggedTrade:
     entry_price: Decimal
     exit_time: datetime
     exit_price: Decimal
+    quantity: int
     pnl_pts: Decimal
     pnl_pct: Decimal
     result: str  # "WIN" or "LOSS"

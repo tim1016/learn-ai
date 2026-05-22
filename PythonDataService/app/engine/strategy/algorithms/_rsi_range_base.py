@@ -46,6 +46,7 @@ from app.engine.strategy.base import LoggedTrade, Strategy
 class _OpenTrade:
     entry_time: datetime
     entry_price: Decimal
+    quantity: int
     indicators: dict[str, Decimal]
 
 
@@ -145,6 +146,7 @@ class RsiRangeStrategy(Strategy):
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
                 entry_price=event.fill_price,
+                quantity=event.fill_quantity,
                 indicators=self._pending_entry,
             )
             self._pending_entry = None
@@ -164,6 +166,7 @@ class RsiRangeStrategy(Strategy):
                 entry_price=entry.entry_price,
                 exit_time=event.time,
                 exit_price=event.fill_price,
+                quantity=entry.quantity,
                 pnl_pts=pnl_pts,
                 pnl_pct=pnl_pct,
                 result="WIN" if pnl_pts >= 0 else "LOSS",

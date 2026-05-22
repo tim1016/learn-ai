@@ -69,6 +69,22 @@ describe("LeanScriptEditorComponent", () => {
     expect(initializeBody).not.toMatch(/SetEndDate\(\s*\d{4}\s*,/);
   });
 
+  it("seed mirrors SpyEmaCrossover strategy semantics (parity-critical markers)", () => {
+    // Regression: the editor default must produce the same trades as the
+    // python ``SpyEmaCrossover`` strategy when both run on the same
+    // window. Pinning the parity-critical markers here so the template
+    // can't silently regress to a simpler EMA-only crossover (no RSI,
+    // no gap threshold, exit-on-recross instead of time-stop).
+    // Canonical oracle: PythonDataService/app/lean_sidecar/trusted_samples/ema_crossover.py
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("TradeBarConsolidator(timedelta(minutes=15))");
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("RelativeStrengthIndex");
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("MovingAverageType.Wilders");
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("RSI_PERIOD = 14");
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("EXIT_BARS = 5");
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("GAP_MIN = 0.20");
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("self.prev_fast <= self.prev_slow");
+  });
+
   it("seed pins a constant benchmark so copied QQQ runs avoid unstaged SPY data", () => {
     // Regression: LEAN's default benchmark subscribes to SPY hour/daily
     // files even when the user-selected symbol is QQQ. The sidecar

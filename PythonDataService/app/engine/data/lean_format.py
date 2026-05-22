@@ -29,9 +29,13 @@ from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
+
+# Regular trading hours open in minutes past midnight ET. 09:30 ET = 570.
+_RTH_OPEN_MIN_ET = 9 * 60 + 30
 
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
 PRICE_SCALE = Decimal(10000)
@@ -66,6 +70,7 @@ def _write_deterministic_csv_zip(buf: io.BytesIO, csv_name: str, csv_body: str) 
     info.compress_type = zipfile.ZIP_DEFLATED
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(info, csv_body)
+
 
 # US equities are stored in Eastern Time.
 EASTERN = ZoneInfo("America/New_York")
@@ -122,6 +127,31 @@ def _parse_csv_bytes(
     return bars
 
 
+def _filter_to_rth(bars: list[TradeBar], trading_date: date) -> list[TradeBar]:
+    """Drop bars whose start time falls outside NYSE regular trading hours.
+
+    Uses :func:`app.lean_sidecar.trading_calendar.session_close_minute_et`
+    so half-days (13:00 ET close) are respected. When the date is not a
+    NYSE session at all (shouldn't happen — ``iter_dates`` only yields
+    dates with zips, but defend anyway), every bar is dropped.
+
+    Bar ``time`` is the bar start in ET. A 1-minute bar at 09:30:00 covers
+    the 09:30:00-09:31:00 window and is the first RTH bar; a 1-minute
+    bar at 15:59:00 covers the 15:59:00-16:00:00 window and is the last.
+    The comparison is therefore ``[09:30, close)`` on bar start minute.
+    """
+    # Lazy import to keep app.lean_sidecar internal to its own boundary at
+    # module-load time — the engine layer should not pay for pandas-market-
+    # calendars unless a strategy actually loads bars with session filtering.
+    from app.lean_sidecar.trading_calendar import session_close_minute_et
+
+    try:
+        close_min = session_close_minute_et(trading_date)
+    except LookupError:
+        return []
+    return [b for b in bars if _RTH_OPEN_MIN_ET <= b.time.hour * 60 + b.time.minute < close_min]
+
+
 class LeanMinuteDataReader:
     """Reads LEAN-format minute equity data from one or more directory trees.
 
@@ -144,6 +174,7 @@ class LeanMinuteDataReader:
     def __init__(
         self,
         data_root: Path | str | Sequence[Path | str],
+        session: Literal["regular", "extended"] = "regular",
     ) -> None:
         # Normalize to a list of Paths while preserving order.
         if isinstance(data_root, (str, Path)):
@@ -156,6 +187,15 @@ class LeanMinuteDataReader:
         # Preserved for backward compatibility with any code that reads the
         # ``data_root`` attribute (tests, logging). Points at the first root.
         self.data_root: Path = roots[0]
+        # When ``regular`` (the default and the LEAN ``AddEquity`` default
+        # via ``extendedMarketHours=False``), bars outside 09:30-16:00 ET
+        # are dropped at read time so downstream consolidators and strategy
+        # handlers never observe extended-hours data. ``extended`` returns
+        # every bar present in the zip — required for any strategy that
+        # explicitly opts into pre/post-market signals. The on-disk cache
+        # (``polygon_export.py``) stores the full session so both modes can
+        # be served from the same files without reseeding.
+        self.session: Literal["regular", "extended"] = session
 
     def _symbol_dir(self, root: Path, symbol: str) -> Path:
         return root / "equity" / "usa" / "minute" / symbol.lower()
@@ -184,7 +224,13 @@ class LeanMinuteDataReader:
             current += one_day
 
     def read_day(self, symbol: str, trading_date: date) -> list[TradeBar]:
-        """Read all minute bars for a single trading day."""
+        """Read all minute bars for a single trading day.
+
+        When this reader was constructed with ``session="regular"`` (the
+        default), bars whose start time falls outside 09:30 ET to the
+        NYSE session close are filtered out. Half-day sessions are
+        respected via :func:`session_close_minute_et`.
+        """
         zip_path = self._zip_path(symbol, trading_date)
         if not zip_path.exists():
             return []
@@ -195,7 +241,10 @@ class LeanMinuteDataReader:
             names = zf.namelist()
             name = expected if expected in names else names[0]
             with zf.open(name) as f:
-                return _parse_csv_bytes(f.read(), symbol.upper(), trading_date)
+                bars = _parse_csv_bytes(f.read(), symbol.upper(), trading_date)
+        if self.session == "extended":
+            return bars
+        return _filter_to_rth(bars, trading_date)
 
     def iter_bars(
         self,

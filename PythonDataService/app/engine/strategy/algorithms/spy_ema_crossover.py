@@ -71,6 +71,7 @@ class _OpenTrade:
 
     entry_time: datetime
     entry_price: Decimal
+    quantity: int
     ema5: Decimal
     ema10: Decimal
     rsi: Decimal
@@ -275,6 +276,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
                 entry_price=event.fill_price,
+                quantity=event.fill_quantity,
                 ema5=self._pending_entry.ema5,
                 ema10=self._pending_entry.ema10,
                 rsi=self._pending_entry.rsi,
@@ -305,6 +307,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                     entry_price=entry.entry_price,
                     exit_time=exit_time,
                     exit_price=exit_price,
+                    quantity=entry.quantity,
                     pnl_pts=pnl_pts,
                     pnl_pct=pnl_pct,
                     result=result,
