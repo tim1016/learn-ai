@@ -407,6 +407,38 @@ class BacktestEngine:
         # ------------------------------------------------------------------
         # 3. Finalize.
         # ------------------------------------------------------------------
+        # End-of-data consolidator flush. LEAN scans consolidators as the
+        # data feed ends, firing the final *complete* consolidated bar — a
+        # 15-min bar is complete once its window closes (e.g. 15:45–16:00),
+        # even though no later input bar arrives to trigger it. Without this
+        # the Engine drops the last consolidated bar of the backtest, an
+        # off-by-one vs LEAN's per-bar state/decision stream. scan() only
+        # flushes a full period, so a genuinely partial trailing bar is
+        # still dropped — matching LEAN, which does not emit partial bars.
+        if previous_minute_bar is not None:
+            for consolidator in ctx.get_consolidators(symbol):
+                consolidator.scan(previous_minute_bar.end_time)
+            # A market order submitted from the final consolidated bar's
+            # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
+            # mode — the same as any in-loop bar, mirroring LEAN's
+            # ImmediateFillModel. Deferred fill modes cannot fill (no next
+            # bar exists), which is the correct outcome.
+            if portfolio.pending_orders and self.fill_model.mode == FillMode.SIGNAL_BAR_CLOSE:
+                final_consolidators = ctx.get_consolidators(symbol)
+                final_signal_bar = self._last_fired(final_consolidators[0]) if final_consolidators else None
+                for order in portfolio.drain_pending():
+                    if order.order_type is not OrderType.MARKET:
+                        continue
+                    assert final_signal_bar is not None, (
+                        "market order from the final consolidated bar but no fired bar to fill against"
+                    )
+                    event = self.fill_model.fill_market_order(order, final_signal_bar, next_bar=None)
+                    assert event is not None
+                    portfolio.apply_fill(event)
+                    order_events.append(event)
+                    strategy.on_order_event(event)
+                    _register_bracket_if_needed(order, event)
+
         strategy.on_end_of_algorithm()
 
         # Score any remaining active insights with the final prices.
