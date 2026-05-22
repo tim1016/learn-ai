@@ -57,7 +57,7 @@ def compare_observations(*, reference: Path, candidate: Path) -> ObservationsPar
             ObservationsFailure(
                 row_index=-1,
                 field="schema",
-                reason=f"schema mismatch: reference header {ref_h!r} != expected {list(EXPECTED_HEADER)!r}",
+                reason=f"reference header {ref_h!r} != expected {list(EXPECTED_HEADER)!r}",
             )
         )
     if tuple(cand_h) != EXPECTED_HEADER:
@@ -65,7 +65,7 @@ def compare_observations(*, reference: Path, candidate: Path) -> ObservationsPar
             ObservationsFailure(
                 row_index=-1,
                 field="schema",
-                reason=f"schema mismatch: candidate header {cand_h!r} != expected {list(EXPECTED_HEADER)!r}",
+                reason=f"candidate header {cand_h!r} != expected {list(EXPECTED_HEADER)!r}",
             )
         )
     if failures:
@@ -76,7 +76,7 @@ def compare_observations(*, reference: Path, candidate: Path) -> ObservationsPar
             ObservationsFailure(
                 row_index=-1,
                 field="row_count",
-                reason=f"row_count mismatch: reference has {len(ref_rows)} rows; candidate has {len(cand_rows)}",
+                reason=f"reference has {len(ref_rows)} rows; candidate has {len(cand_rows)}",
             )
         )
         return ObservationsParityResult(

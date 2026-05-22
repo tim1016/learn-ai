@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.lean_sidecar.parity_matrix.observations_parity import (
+    ObservationsParityResult,
     compare_observations,
 )
 
@@ -22,6 +23,7 @@ def test_identical_passes(tmp_path: Path) -> None:
     _write(a, rows)
     _write(b, rows)
     r = compare_observations(reference=a, candidate=b)
+    assert isinstance(r, ObservationsParityResult)
     assert r.passed is True
     assert r.row_count == 2
     assert r.failures == []
@@ -33,7 +35,7 @@ def test_row_count_mismatch_fails(tmp_path: Path) -> None:
     _write(b, [])
     r = compare_observations(reference=a, candidate=b)
     assert r.passed is False
-    assert any("row_count" in f.reason for f in r.failures)
+    assert any(f.field == "row_count" for f in r.failures)
 
 
 def test_timestamp_mismatch_localized(tmp_path: Path) -> None:
@@ -66,4 +68,4 @@ def test_schema_header_drift_fails(tmp_path: Path) -> None:
     b.write_text("ms_utc,o,h,l,c,v\n1,1,1,1,1,1\n", encoding="utf-8")
     r = compare_observations(reference=a, candidate=b)
     assert r.passed is False
-    assert any("schema" in f.reason for f in r.failures)
+    assert any(f.field == "schema" for f in r.failures)
