@@ -28,7 +28,7 @@ Shared input fixture for the cross-engine parity matrix (Task 9).
 The three study windows (W6mo, W12mo, W24mo) all read from this single capture.
 The `data_contract_hash` in `manifest.json` is the authoritative integrity check:
 
-```
+```text
 a20fe2d320b22ecd0ee60948f597c062006f42365c0be0e6babb06e27d6155c4
 ```
 

@@ -115,7 +115,7 @@ def compare_state(
                         reason=f"{r['close']} != {c['close']}",
                     )
                 )
-        except InvalidOperation as e:
+        except (InvalidOperation, TypeError, KeyError) as e:
             failures.append(
                 StateFailure(
                     row_index=i,
@@ -134,7 +134,7 @@ def compare_state(
                             reason=(f"abs_diff={diff} > atol={indicator_atol} ({r[name]} vs {c[name]})"),
                         )
                     )
-            except InvalidOperation as e:
+            except (InvalidOperation, TypeError, KeyError) as e:
                 failures.append(
                     StateFailure(
                         row_index=i,
