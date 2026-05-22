@@ -175,7 +175,7 @@ def _assert_trusted_sample_run(ws: Workspace, response: LaunchResponse) -> None:
     assert obs.exists(), f"observations.csv missing at {obs}; ObjectStore is not landing inside the workspace"
     body = obs.read_text(encoding="utf-8").splitlines()
     assert len(body) >= 2, f"observations.csv too small: {body!r}"
-    assert body[0] == "ms_utc,close"
+    assert body[0] == "ms_utc,open,high,low,close,volume"
     # Bar-consumption gate (i): the algorithm received and recorded
     # bars from the staged minute series.
     assert len(body) - 1 > 0, "no bars consumed by the trusted sample"

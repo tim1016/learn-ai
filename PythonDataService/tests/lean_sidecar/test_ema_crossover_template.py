@@ -106,6 +106,19 @@ def test_template_writes_observations_csv_and_state_csv() -> None:
     assert "state.csv" in EMA_CROSSOVER_SOURCE
 
 
+def test_template_observations_csv_header_matches_gate1_spec() -> None:
+    """observations.csv must carry full OHLCV per the Gate 1 comparator schema.
+
+    Spec: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
+    § "Gate 1 — Observations parity": ms_utc, open, high, low, close, volume.
+    Must stay in sync with EXPECTED_HEADER in
+    app/lean_sidecar/parity_matrix/observations_parity.py.
+    """
+    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+
+    assert "ms_utc,open,high,low,close,volume" in EMA_CROSSOVER_SOURCE
+
+
 def test_template_state_csv_header_matches_spec() -> None:
     """state.csv must have exactly the columns the parity test asserts on."""
     from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
