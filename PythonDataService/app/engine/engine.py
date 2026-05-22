@@ -25,6 +25,7 @@ from app.engine.execution.intrabar_resolver import (
 )
 from app.engine.execution.order import Direction, FillMode, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Portfolio
+from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.strategy.base import Strategy, StrategyContext
 
 
@@ -73,6 +74,7 @@ class BacktestEngine:
         data_source: LeanMinuteDataReader | LeanDailyDataReader,
         fill_model: FillModel | None = None,
         execution_config: ExecutionConfig | None = None,
+        sizing_model: SizingModel | None = None,
     ) -> None:
         self.data_source = data_source
         self.execution_config = execution_config or ExecutionConfig()
@@ -80,6 +82,10 @@ class BacktestEngine:
         # config — keeps every existing call site (and the LEAN bit-
         # exact tests that pass a bespoke FillModel) working unchanged.
         self.fill_model = fill_model or self.execution_config.build_fill_model()
+        # Position sizing for set_holdings. Defaults to the historical
+        # plain-floor policy; LEAN-pinned callers (cross_runner) pass
+        # LeanSetHoldingsSizing to reproduce LEAN's buffered share count.
+        self.sizing_model = sizing_model or SimpleFloorSizing()
 
     def run(self, strategy: Strategy) -> BacktestResult:
         # ------------------------------------------------------------------
@@ -98,6 +104,11 @@ class BacktestEngine:
         # Now that initialize has run, reset portfolio cash to the configured amount.
         portfolio.initial_cash = strategy.initial_cash
         portfolio.cash = strategy.initial_cash
+        # Wire the sizing policy and the per-order fee it reserves. The fee
+        # comes from the fill model so LeanSetHoldingsSizing reserves exactly
+        # what the run will charge.
+        portfolio.sizing_model = self.sizing_model
+        portfolio.order_fee = self.fill_model.commission_per_order
 
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
