@@ -29,6 +29,7 @@ from app.broker.ibkr.orders import (
 )
 from app.engine.execution.order import Direction, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Position
+from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,11 @@ class LivePortfolio:
     reference_price: dict[str, Decimal] = field(default_factory=dict)
     total_fees: Decimal = Decimal(0)
     _next_order_id: int = 0
+    # Sizing policy — shared with the simulated Portfolio (see
+    # app.engine.execution.sizing). Defaults to plain-floor; a live run
+    # mirroring LEAN sets LeanSetHoldingsSizing + order_fee.
+    sizing_model: SizingModel = field(default_factory=SimpleFloorSizing)
+    order_fee: Decimal = Decimal(0)
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -258,15 +264,19 @@ class LivePortfolio:
         time: datetime,
         tag: str = "",
     ) -> Order | None:
-        """Mirror simulated Portfolio.set_holdings integer sizing."""
+        """Mirror simulated Portfolio.set_holdings sizing via self.sizing_model."""
         sym = symbol.upper()
         target_fraction = Decimal(str(target_fraction))
         price = self.reference_price.get(sym)
         if price is None:
             raise RuntimeError(f"Cannot set_holdings on {sym}: no reference price.")
         current_pos = self.get_position(sym)
-        target_value = self.total_value() * target_fraction
-        target_quantity = int(target_value / price)
+        target_quantity = self.sizing_model.target_quantity(
+            portfolio_value=self.total_value(),
+            price=price,
+            target_fraction=target_fraction,
+            order_fee=self.order_fee,
+        )
         delta = target_quantity - current_pos.quantity
         if delta == 0:
             return None
@@ -290,8 +300,7 @@ class LivePortfolio:
         if pos.quantity == 0 or (pos.quantity > 0) == (event.fill_quantity > 0):
             if new_qty != 0:
                 pos.average_price = (
-                    pos.average_price * Decimal(pos.quantity)
-                    + event.fill_price * Decimal(event.fill_quantity)
+                    pos.average_price * Decimal(pos.quantity) + event.fill_price * Decimal(event.fill_quantity)
                 ) / Decimal(new_qty)
         elif new_qty != 0 and (pos.quantity > 0) != (new_qty > 0):
             pos.average_price = event.fill_price

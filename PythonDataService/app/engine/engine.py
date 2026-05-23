@@ -25,6 +25,7 @@ from app.engine.execution.intrabar_resolver import (
 )
 from app.engine.execution.order import Direction, FillMode, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Portfolio
+from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.strategy.base import Strategy, StrategyContext
 
 
@@ -73,6 +74,7 @@ class BacktestEngine:
         data_source: LeanMinuteDataReader | LeanDailyDataReader,
         fill_model: FillModel | None = None,
         execution_config: ExecutionConfig | None = None,
+        sizing_model: SizingModel | None = None,
     ) -> None:
         self.data_source = data_source
         self.execution_config = execution_config or ExecutionConfig()
@@ -80,6 +82,10 @@ class BacktestEngine:
         # config — keeps every existing call site (and the LEAN bit-
         # exact tests that pass a bespoke FillModel) working unchanged.
         self.fill_model = fill_model or self.execution_config.build_fill_model()
+        # Position sizing for set_holdings. Defaults to the historical
+        # plain-floor policy; LEAN-pinned callers (cross_runner) pass
+        # LeanSetHoldingsSizing to reproduce LEAN's buffered share count.
+        self.sizing_model = sizing_model or SimpleFloorSizing()
 
     def run(self, strategy: Strategy) -> BacktestResult:
         # ------------------------------------------------------------------
@@ -98,6 +104,11 @@ class BacktestEngine:
         # Now that initialize has run, reset portfolio cash to the configured amount.
         portfolio.initial_cash = strategy.initial_cash
         portfolio.cash = strategy.initial_cash
+        # Wire the sizing policy and the per-order fee it reserves. The fee
+        # comes from the fill model so LeanSetHoldingsSizing reserves exactly
+        # what the run will charge.
+        portfolio.sizing_model = self.sizing_model
+        portfolio.order_fee = self.fill_model.commission_per_order
 
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
@@ -273,6 +284,10 @@ class BacktestEngine:
             #       strategy sees every minute bar including the session-close bar
             #       (which a passthrough consolidator would silently drop because
             #       no subsequent bar arrives to flush it).
+            #       current_time is set first so a strategy that places orders
+            #       from this hook (before the first consolidated bar) does not
+            #       hit the None-time guard in StrategyContext.set_holdings.
+            ctx.current_time = minute_bar.end_time
             strategy.on_minute_bar(minute_bar)
 
             # ----- Feed consolidators. Consolidators will invoke strategy handlers
@@ -407,6 +422,38 @@ class BacktestEngine:
         # ------------------------------------------------------------------
         # 3. Finalize.
         # ------------------------------------------------------------------
+        # End-of-data consolidator flush. LEAN scans consolidators as the
+        # data feed ends, firing the final *complete* consolidated bar — a
+        # 15-min bar is complete once its window closes (e.g. 15:45–16:00),
+        # even though no later input bar arrives to trigger it. Without this
+        # the Engine drops the last consolidated bar of the backtest, an
+        # off-by-one vs LEAN's per-bar state/decision stream. scan() only
+        # flushes a full period, so a genuinely partial trailing bar is
+        # still dropped — matching LEAN, which does not emit partial bars.
+        if previous_minute_bar is not None:
+            for consolidator in ctx.get_consolidators(symbol):
+                consolidator.scan(previous_minute_bar.end_time)
+            # A market order submitted from the final consolidated bar's
+            # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
+            # mode — the same as any in-loop bar, mirroring LEAN's
+            # ImmediateFillModel. Deferred fill modes cannot fill (no next
+            # bar exists), which is the correct outcome.
+            if portfolio.pending_orders and self.fill_model.mode == FillMode.SIGNAL_BAR_CLOSE:
+                final_consolidators = ctx.get_consolidators(symbol)
+                final_signal_bar = self._last_fired(final_consolidators[0]) if final_consolidators else None
+                for order in portfolio.drain_pending():
+                    if order.order_type is not OrderType.MARKET:
+                        continue
+                    assert final_signal_bar is not None, (
+                        "market order from the final consolidated bar but no fired bar to fill against"
+                    )
+                    event = self.fill_model.fill_market_order(order, final_signal_bar, next_bar=None)
+                    assert event is not None
+                    portfolio.apply_fill(event)
+                    order_events.append(event)
+                    strategy.on_order_event(event)
+                    _register_bracket_if_needed(order, event)
+
         strategy.on_end_of_algorithm()
 
         # Score any remaining active insights with the final prices.

@@ -192,15 +192,16 @@ def test_state_csv_emits_only_after_warmup(tmp_path: Path) -> None:
 
     # Header + data rows.
     data_rows = rows[1:]
-    # The 15-min consolidator fires a bar only when the *next* bar arrives
-    # with a time gap >= 15 min. For exactly N_CONSOLIDATED * 15 source bars,
-    # the last bucket (bars 286-300 for N=20) is never followed by another bar
-    # so it is silently dropped. The consolidator therefore fires N_CONSOLIDATED - 1
-    # bars, not N_CONSOLIDATED.
+    # The 15-min consolidator fires a bar when the next input bar crosses
+    # into a later period. At end-of-data the engine scans consolidators and
+    # flushes the final *complete* bucket too (LEAN parity — LEAN emits that
+    # bar as its data feed ends). For exactly N_CONSOLIDATED * 15 source
+    # bars every bucket is a full period, so all N_CONSOLIDATED bars fire.
     #
-    # RSI(14) binds at 15 consolidated bars: first state.csv row at consolidated
-    # bar 15 (1-indexed). With 19 fired bars total, that's bars 15..19 = 5 rows.
-    n_fired = n_consolidated - 1  # last bucket dropped by consolidator (by design)
+    # RSI(14) binds at 15 consolidated bars: first state.csv row at
+    # consolidated bar 15 (1-indexed). With 20 fired bars, that's bars
+    # 15..20 = 6 rows.
+    n_fired = n_consolidated  # incl. the final bucket, flushed by end-of-data scan
     rsi_ready_at = 15  # RSI(14) needs period + 1 = 15 samples
     expected_data_rows = max(0, n_fired - rsi_ready_at + 1)
     assert len(data_rows) == expected_data_rows, (

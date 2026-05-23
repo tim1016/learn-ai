@@ -86,6 +86,19 @@ def compare_observations(*, reference: Path, candidate: Path) -> ObservationsPar
         )
 
     for i, (r, c) in enumerate(zip(ref_rows, cand_rows, strict=True)):
+        # Guard positional indexing: a short/wide row would otherwise raise
+        # IndexError and abort the whole gate instead of reporting a failure.
+        if len(r) != len(EXPECTED_HEADER) or len(c) != len(EXPECTED_HEADER):
+            failures.append(
+                ObservationsFailure(
+                    row_index=i,
+                    field="schema",
+                    reason=(
+                        f"row width mismatch: reference={len(r)} candidate={len(c)} expected={len(EXPECTED_HEADER)}"
+                    ),
+                )
+            )
+            continue
         # ms_utc int
         try:
             if int(r[0]) != int(c[0]):

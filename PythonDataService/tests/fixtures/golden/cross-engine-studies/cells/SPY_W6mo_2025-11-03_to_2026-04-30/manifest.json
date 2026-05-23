@@ -1,0 +1,79 @@
+{
+  "artifacts": {
+    "observations_sha256": "2ee2bcc9b27de28201c0abb9967273aec61cf7b96c792d8d59a135fde2c2d7b9",
+    "orders_sha256": "42640cad41cd9d3e4e45cf3778c7168e61835b7f1e7a6a188c3269f11f107945",
+    "reconciliation_sha256": "33f8c1575fa50ce6904560c1f82b1d95689cac8ede0c91cd30c0513c6510386c",
+    "state_sha256": "089e39688cb4cedda3419c3efcf1f1e373c94c6abdea24de08d5f0fc702c6f98"
+  },
+  "broker": {
+    "account_type": "Margin",
+    "brokerage_model": "DefaultBrokerageModel",
+    "fee_model": "ConstantFeeModel(0)",
+    "fill_model": "ImmediateFillModel"
+  },
+  "captured_at_ms_utc": 1779491928010,
+  "captured_by": "Inkant Awasthi",
+  "cell_id": "SPY_W6mo_2025-11-03_to_2026-04-30",
+  "data": {
+    "data_contract_hash": "615fec830b501a0310389de67232497681f70933b09e72b6f931cc8745e2ebe4",
+    "lean_data_capture_ref": "_lean_data_capture/SPY"
+  },
+  "fixture_git_commit": "1375de6dc69ae3ab6f678f423c53e825816821a0",
+  "generator_script_sha256": "2b0bd986273f539b1a57a38cb7082b9c02b41fd9f6896ba619589b519fc9ba6f",
+  "lean_runtime": {
+    "container_image_digest": "docker.io/quantconnect/lean@sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c"
+  },
+  "python_data_service_commit": "1375de6dc69ae3ab6f678f423c53e825816821a0",
+  "schema_version": 1,
+  "state_csv_schema": {
+    "column_types": {
+      "close": "float64",
+      "cross_state": "str",
+      "ema_fast": "float64",
+      "ema_slow": "float64",
+      "rsi": "float64",
+      "signal": "str",
+      "ts_ms_utc": "int64"
+    },
+    "columns": [
+      "ts_ms_utc",
+      "close",
+      "ema_fast",
+      "ema_slow",
+      "rsi",
+      "cross_state",
+      "signal"
+    ]
+  },
+  "strategy": {
+    "parameters_constants": {
+      "EXIT_BARS": 5,
+      "FAST_PERIOD": 5,
+      "GAP_MIN": 0.2,
+      "RSI_HI": 70,
+      "RSI_LO": 50,
+      "RSI_PERIOD": 14,
+      "SLOW_PERIOD": 10
+    },
+    "runtime_parameters": {
+      "adjustment": "raw",
+      "bar_minutes": 15,
+      "session": "regular",
+      "sizing_model": "lean_set_holdings",
+      "starting_cash": 100000,
+      "symbol": "SPY"
+    },
+    "trusted_sample": "EMA_CROSSOVER_SOURCE",
+    "trusted_sample_source_sha256": "600d521865159ca43395da7115cfe1ba8c6c6ddf4a01b1223f71a2daedca1a5a"
+  },
+  "ticker": "SPY",
+  "timestamp_convention": "int64_ms_utc",
+  "timezone": "America/New_York",
+  "window": {
+    "end_date": "2026-04-30",
+    "label": "W6mo",
+    "session": "regular",
+    "start_date": "2025-11-03",
+    "trading_days_expected": 123
+  }
+}

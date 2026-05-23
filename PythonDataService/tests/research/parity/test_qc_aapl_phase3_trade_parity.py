@@ -259,7 +259,7 @@ def test_qc_aapl_phase3_trade_level_parity(tmp_path: Path) -> None:
     # Render report unconditionally — green-run rendering helps reviewers
     # and makes the artifact self-documenting.
     _ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    (_ARTIFACTS_DIR / "qc-aapl-phase3-latest.md").write_text(report.render_markdown())
+    (_ARTIFACTS_DIR / "qc-aapl-phase3-latest.md").write_text(report.render_markdown(), encoding="utf-8")
 
     assert report.status == "passed", (
         f"reconciliation failed; report written to {_ARTIFACTS_DIR / 'qc-aapl-phase3-latest.md'}"

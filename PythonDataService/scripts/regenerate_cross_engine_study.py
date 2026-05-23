@@ -34,7 +34,6 @@ if str(_REPO_PYTHON) not in sys.path:
 
 import argparse  # noqa: E402
 import json  # noqa: E402
-import math  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
@@ -349,11 +348,11 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
         "reconciliation_sha256": sha256_of_file(staging / "reconciliation_pinned.json"),
     }
 
-    # --- trading_days_expected: approximate from the window's date range ---
-    # NYSE calendar: roughly 252 trading days per 365 calendar days.
-    total_days = (cell.end_date - cell.start_date).days
-    # NYSE calendar: roughly 252 trading days per 365 calendar days.
-    trading_days_expected = max(1, math.ceil(total_days * 252 / 365))
+    # --- trading_days_expected: exact count from the captured session files ---
+    # The capture's minute zips are the authoritative session list for this
+    # window; an exact count keeps the manifest accurate (a 252/365 estimate
+    # drifts from the real fixture).
+    trading_days_expected = len(_capture_session_dates(cell))
 
     # --- LEAN image digest in the required format ---
     bare_digest = PINNED_LEAN_IMAGE_DIGEST  # "sha256:..."
@@ -377,6 +376,9 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
         "session": "regular",
         "adjustment": "raw",
         "starting_cash": 100000,
+        # Pinned: the Engine sizes SetHoldings like LEAN (free-portfolio
+        # buffer + order fee). Gate 3 holds qty_atol=0 against this.
+        "sizing_model": "lean_set_holdings",
     }
 
     # --- state_csv_schema (matches state.csv header written by both engines) ---
@@ -475,9 +477,22 @@ def _write_cell_atomically(
         encoding="utf-8",
     )
 
+    # Crash-safe swap: move the old cell aside to a backup, promote the
+    # staging dir, then drop the backup. If the promote raises, the backup
+    # is restored — an interrupted run never leaves the cell missing.
+    backup = FIXTURE_ROOT / "cells" / f".{cell.cell_id}.bak"
+    if backup.exists():
+        shutil.rmtree(backup)
     if target.exists():
-        shutil.rmtree(target)
-    staging.rename(target)
+        target.rename(backup)
+    try:
+        staging.rename(target)
+    except OSError:
+        if backup.exists() and not target.exists():
+            backup.rename(target)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
 
 
 def _emit_failure_report(cell: Cell, report: CellRunReport, root: Path) -> None:
@@ -518,11 +533,21 @@ def regenerate_one_cell(cell: Cell) -> bool:
         eng_out = tmp_root / "engine_staged"
         eng_out.mkdir()
 
-        _stage_lean_run(cell, lean_out)
-        # Post-run completeness gate: a clean exit code is not proof the
-        # backtest covered the whole window (see _assert_lean_observations_complete).
-        _assert_lean_observations_complete(cell, lean_out / "lean")
-        engine_orders = _run_engine_live(cell, eng_out)
+        try:
+            _stage_lean_run(cell, lean_out)
+            # Post-run completeness gate: a clean exit code is not proof the
+            # backtest covered the whole window (see _assert_lean_observations_complete).
+            _assert_lean_observations_complete(cell, lean_out / "lean")
+            engine_orders = _run_engine_live(cell, eng_out)
+        except RuntimeError as exc:
+            # A LEAN failure or a truncated observation stream. Record it and
+            # return False so an --all run still reports every other cell
+            # instead of aborting the whole batch on the first bad one.
+            failure_dir = FIXTURE_ROOT / ".failed" / cell.cell_id
+            failure_dir.mkdir(parents=True, exist_ok=True)
+            (failure_dir / "error.txt").write_text(str(exc), encoding="utf-8")
+            logger.error("  staging failed: %s", exc)
+            return False
 
         report = run_cell_gates(
             pinned_lean_dir=lean_out / "lean",
