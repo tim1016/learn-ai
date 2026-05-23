@@ -24,3 +24,25 @@ Workflow: `python scripts/regenerate_cross_engine_study.py --cell <id> | --ticke
 
 - Smoke (every PR): `pytest -m cross_engine_smoke` — runs the four W6mo cells.
 - Full (pre-push / nightly): `pytest -m slow tests/research/parity/test_cross_engine_study.py` — runs all 12.
+
+## Acceptance status
+
+The matrix locks IBKR-margin brokerage as the contract:
+`SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)`
+on the LEAN side, `FillModel(fee_model=IbkrEquityCommissionModel())` +
+`LeanSetHoldingsSizing(fee_model=...)` on the engine side. `assert_fees=True`
+gates Gate 3.
+
+Current state:
+- **SPY W6mo** — regenerated and passing Gate 3 with zero gating divergences.
+- **QQQ / AAPL / TSLA W6mo** — fixtures absent (smoke test skips). Regen
+  attempts surface a pre-existing engine-side fill-mode gap: cross-session
+  exits (entry Friday → 5 consolidated bars later → exit Monday) fill at
+  the consolidated bar's close in the engine but at the next-minute open
+  in LEAN, producing a per-share gap that cascades through the rest of the
+  run. SPY's 20 trades happen to all be intraday so the gap doesn't bite.
+  Tracked separately from this slice.
+
+Until the exit-fill-mode gap is resolved, the smoke marker shows 1 W6mo
+cell passing + 3 skipping. The 12-cell full sweep stays slow-gated and
+similarly incomplete for non-SPY tickers.
