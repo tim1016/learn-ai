@@ -1,0 +1,29 @@
+# Local agent/runtime state
+.claude/worktrees/
+.superpowers/
+.playwright-mcp/
+.design-cache/
+.tmp_audit_files/
+
+# Python local environments and generated caches
+PythonDataService/.venv/
+PythonDataService/.claude/
+PythonDataService/artifacts/
+PythonDataService/cache/
+PythonDataService/lean-cache/
+PythonDataService/tests/fixtures/polygon_capture/
+.ruff_cache/
+__pycache__/
+
+# Frontend/generated dependency noise
+node_modules/
+Frontend/.angular/
+Frontend/src/app/api/*.types.ts
+
+# Build outputs
+bin/
+obj/
+
+# Runtime data volumes
+cache/
+data-lake-volume/

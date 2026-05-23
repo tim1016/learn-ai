@@ -12,6 +12,8 @@
 
 | Doc | Domain | Owner | Last reviewed |
 |---|---|---|---|
+| `docs/CURRENT.md` | Short current-docs entry point | Tim | 2026-05-23 |
+| `docs/agent-start-here.md` | Minimal AI-agent loading guide | Tim | 2026-05-23 |
 | `docs/architecture/engine-authority-map.md` | Engine ownership map | Tim | 2026-05-04 |
 | `docs/architecture/numerical-authority-migration-plan.md` | Math authority consolidation | Tim | 2026-05-04 |
 | `docs/math-sources-of-truth.md` | All mathematical authorities | Tim | ongoing |

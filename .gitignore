@@ -61,6 +61,9 @@ PythonDataService/artifacts/
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
 
+# Nested Claude runtime state created by local tool invocations.
+PythonDataService/.claude/
+
 # Superpowers tooling session cache
 .superpowers/
 
@@ -75,3 +78,6 @@ data-lake-volume/
 
 # Cross-engine parity matrix: regen-script failure reports (runtime diagnostics).
 PythonDataService/tests/fixtures/golden/cross-engine-studies/.failed/
+
+# Local Polygon captures used during fixture/debug work.
+PythonDataService/tests/fixtures/polygon_capture/
