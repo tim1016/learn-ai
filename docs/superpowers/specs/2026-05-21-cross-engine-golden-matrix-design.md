@@ -236,17 +236,20 @@ The IBKR-margin brokerage contract is now locked end-to-end:
 
 - LEAN template (`PythonDataService/app/lean_sidecar/trusted_samples/ema_crossover.py`) calls `SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)` before `AddEquity`.
 - Cell manifest `broker` block declares `brokerage_model: InteractiveBrokersBrokerage` and `fee_model: InteractiveBrokersFeeModel`.
-- Engine side wires `FillModel(fee_model=IbkrEquityCommissionModel())` and `LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())` via the cross-runner; `cell_runner.run_cell_gates` defaults `assert_fees=True`.
+- Engine side wires `FillModel(fee_model=IbkrEquityCommissionModel(), fill_stale_signal_at_current_open=True)` and `LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())` via the cross-runner; `cell_runner.run_cell_gates` defaults `assert_fees=True`.
 
 **Cells passing Gate 3 under this contract:**
 
 - **SPY_W6mo_2025-11-03_to_2026-04-30** — passing; 20 LEAN trades, zero gating divergences.
+- **QQQ_W6mo_2025-11-03_to_2026-04-30** — passing; 66 LEAN trades, zero gating divergences.
+- **AAPL_W6mo_2025-11-03_to_2026-04-30** — passing; 20 LEAN trades, zero gating divergences.
+- **TSLA_W6mo_2025-11-03_to_2026-04-30** — passing; 74 LEAN trades, zero gating divergences.
 
-**Cells blocked on a separate engine-side gap:**
-
-- **QQQ / AAPL / TSLA W6mo** — regen attempts produce cascading `QUANTITY_MISMATCH` divergences after the first cross-session exit. Root cause: cross-session exits (entry late Friday → 5 consolidated 15-min bars later → exit Monday morning) fill at the consolidated bar's close in Engine Lab (per `FillMode.SIGNAL_BAR_CLOSE`) but at the next-minute open in LEAN's `ImmediateFillModel`. The exit-price gap (~$6/share over the weekend) reduces engine `portfolio_value` versus LEAN's, which then biases the fee-aware sizing for every subsequent trade. SPY happens to have no cross-session exits in this window so SPY passes; the other three trip the gap on most trades.
-
-This is not a brokerage / commission / sizing parity bug — those are now bit-exact for SPY. It's a fill-model semantic gap for the specific "next-bar after a session boundary" case. Tracked separately so this slice's commission parity work isn't blocked on it.
+The previous QQQ / AAPL / TSLA blocker was the cross-session exit-fill semantic:
+stale consolidated bars emitted after an overnight/weekend gap were filled at
+the old consolidated close in Engine Lab but at the current minute open in
+LEAN. Engine Lab now keeps the historical `SIGNAL_BAR_CLOSE` default and
+enables the LEAN-compatible stale-signal policy only for matrix runs.
 
 ## Regeneration policy
 

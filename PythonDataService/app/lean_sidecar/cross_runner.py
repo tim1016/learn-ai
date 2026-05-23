@@ -343,7 +343,10 @@ def run_engine_lab_on_workspace(
     engine = BacktestEngine(
         data_source=reader,
         sizing_model=LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()),
-        fill_model=FillModel(fee_model=IbkrEquityCommissionModel()),
+        fill_model=FillModel(
+            fee_model=IbkrEquityCommissionModel(),
+            fill_stale_signal_at_current_open=True,
+        ),
     )
     result = engine.run(cross_instance)
 

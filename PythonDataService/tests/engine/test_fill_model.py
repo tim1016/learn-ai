@@ -57,6 +57,55 @@ def test_signal_bar_close_fills_at_close_with_no_slippage():
     assert event.fee == Decimal("1.00")
 
 
+def test_signal_bar_close_stale_signal_uses_current_open_when_enabled() -> None:
+    """LEAN equity market orders use current market data when a consolidator
+    emits an old signal bar after a session gap. The matrix enables this
+    policy for Friday-close bars that fire on Monday's first minute."""
+    model = FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=True)
+    signal = TradeBar(
+        symbol="SPY",
+        time=datetime(2026, 1, 2, 15, 45, tzinfo=NY),
+        end_time=datetime(2026, 1, 2, 16, 0, tzinfo=NY),
+        open=Decimal("612.9"),
+        high=Decimal("613.4"),
+        low=Decimal("612.7"),
+        close=Decimal("613.09"),
+        volume=10_000,
+    )
+    current = _ny_bar(datetime(2026, 1, 5, 9, 30, tzinfo=NY), "619.32", "619.98", "618.82", "619.59")
+
+    event = model.fill_market_order(
+        _order(Direction.SHORT, quantity=-100),
+        signal,
+        current_bar=current,
+    )
+
+    assert event is not None
+    assert event.fill_price == Decimal("619.32")
+    assert event.time == datetime(2026, 1, 5, 9, 31, tzinfo=NY)
+
+
+def test_signal_bar_close_stale_signal_policy_preserves_same_boundary_fill() -> None:
+    model = FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, fill_stale_signal_at_current_open=True)
+    signal = TradeBar(
+        symbol="SPY",
+        time=datetime(2026, 1, 2, 9, 45, tzinfo=NY),
+        end_time=datetime(2026, 1, 2, 10, 0, tzinfo=NY),
+        open=Decimal("100.0"),
+        high=Decimal("100.5"),
+        low=Decimal("99.5"),
+        close=Decimal("100.3"),
+        volume=10_000,
+    )
+    current = _ny_bar(datetime(2026, 1, 2, 10, 0, tzinfo=NY), "100.4", "100.7", "100.2", "100.5")
+
+    event = model.fill_market_order(_order(Direction.LONG), signal, current_bar=current)
+
+    assert event is not None
+    assert event.fill_price == Decimal("100.3")
+    assert event.time == datetime(2026, 1, 2, 10, 0, tzinfo=NY)
+
+
 def test_next_bar_open_defers_when_next_bar_missing():
     model = FillModel(mode=FillMode.NEXT_BAR_OPEN)
     signal = _bar("100.0", "100.5", "99.5", "100.3")
