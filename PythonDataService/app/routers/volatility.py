@@ -604,7 +604,7 @@ async def build_from_csv(request: BuildFromCsvRequest) -> SurfaceBuildSummary:
 @router.get("/{surface_id}/grid", response_model=MatrixGridResponse)
 async def get_grid(
     surface_id: str,
-    axis: str = Query("log_moneyness", regex="^(log_moneyness|moneyness|strike)$"),
+    axis: str = Query("log_moneyness", pattern="^(log_moneyness|moneyness|strike)$"),
     n_strikes: int = Query(50, ge=10, le=500),
     dte_days: str | None = Query(None, description="Comma-separated DTE days"),
 ) -> MatrixGridResponse:
@@ -711,7 +711,7 @@ async def get_grid(
 @router.get("/{surface_id}/smiles", response_model=SmilesResponse)
 async def get_smiles(
     surface_id: str,
-    axis: str = Query("log_moneyness", regex="^(log_moneyness|moneyness|strike)$"),
+    axis: str = Query("log_moneyness", pattern="^(log_moneyness|moneyness|strike)$"),
 ) -> SmilesResponse:
     """
     Retrieve fitted and market smile curves per expiry.
