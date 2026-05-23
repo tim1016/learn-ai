@@ -90,6 +90,12 @@ class MyAlgorithm(QCAlgorithm):
         self.SetEndDate(ey, em, ed)
         self.SetCash(cash)
 
+        # Lock the brokerage model: matrix Gate 3 runs with assert_fees=True
+        # so LEAN must charge IBKR equity-tier commission (per-share + floor +
+        # cap), not the default ConstantFeeModel(0). The engine side pins the
+        # same model via app.engine.execution.commission.IbkrEquityCommissionModel.
+        self.SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)
+
         equity = self.AddEquity(
             symbol_str,
             Resolution.Minute,

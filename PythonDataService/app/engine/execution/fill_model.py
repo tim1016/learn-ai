@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
+from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.order import (
     Direction,
     FillMode,
@@ -46,22 +47,32 @@ DEFERRED_FILL_MODES: frozenset[FillMode] = frozenset({FillMode.NEXT_BAR_OPEN, Fi
 
 @dataclass
 class FillModel:
-    """Simple fill model configurable between the two supported modes.
+    """Simple fill model configurable between the three supported modes.
 
     Args:
         mode: One of the ``FillMode`` values.
-        commission_per_order: Flat fee charged per filled order. Defaults to
-            $1.00 which matches the ``InteractiveBrokersFeeModel`` used by
-            LEAN for SPY in the reference backtest (total fees ~$126 for 126
-            order events).
-        slippage_per_share: Applied to the fill price against the trade
-            direction. Zero by default (matches LEAN's default
-            ``ConstantSlippageModel(0)`` for equities).
+        commission_per_order: Legacy flat fee. Used when ``fee_model`` is
+            None — pre-matrix SPY parity fixtures still rely on it. New
+            fixtures pin a fee_model and ignore this field.
+        slippage_per_share: Applied against the trade direction.
+        fee_model: Optional per-fill fee model
+            (:class:`IbkrEquityCommissionModel`). When set,
+            ``compute_fee(quantity, fill_price)`` returns
+            ``fee_model.fee(quantity, fill_price)`` and ``commission_per_order``
+            is ignored. This is the single seam through which the matrix
+            cells charge IBKR equity-tier commission.
     """
 
     mode: FillMode = FillMode.SIGNAL_BAR_CLOSE
     commission_per_order: Decimal = Decimal("1.00")
     slippage_per_share: Decimal = Decimal(0)
+    fee_model: IbkrEquityCommissionModel | None = None
+
+    def compute_fee(self, *, quantity: int, fill_price: Decimal) -> Decimal:
+        """Return the fee for a single fill. Always quantized to cents."""
+        if self.fee_model is not None:
+            return self.fee_model.fee(quantity=int(quantity), fill_price=fill_price)
+        return self.commission_per_order
 
     def fill_market_order(
         self,
@@ -124,6 +135,6 @@ class FillModel:
             fill_price=fill_price,
             fill_quantity=order.quantity,
             direction=order.direction,
-            fee=self.commission_per_order,
+            fee=self.compute_fee(quantity=int(order.quantity), fill_price=fill_price),
             tag=order.tag,
         )

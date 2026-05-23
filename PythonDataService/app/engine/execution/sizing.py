@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
+from app.engine.execution.commission import IbkrEquityCommissionModel
+
 # LEAN's documented default ``Settings.FreePortfolioValuePercentage`` — the
 # slice of portfolio value LEAN holds back from ``SetHoldings`` sizing so an
 # order does not get rejected for insufficient buying power.
@@ -87,13 +89,19 @@ class SimpleFloorSizing:
 class LeanSetHoldingsSizing:
     """LEAN-equivalent ``SetHoldings`` sizing for long-only equity.
 
-    Reserves ``free_portfolio_value_pct`` of portfolio value plus the
-    per-order fee, then floors to whole shares — matching LEAN's
-    ``GetMaximumOrderQuantityForTargetBuyingPower`` for this case.
+    Reserves ``free_portfolio_value_pct`` of portfolio value, then either:
+
+    * subtracts a caller-supplied flat ``order_fee`` (legacy path used by
+      the 20-entry golden fixture), or
+    * when ``fee_model`` is supplied, solves the largest integer ``qty``
+      such that ``qty*price + fee_model.fee(qty, price) <= buying_power``
+      via monotonic decrement from the naive floor — the path the
+      cross-engine matrix cells use under IBKR margin brokerage.
     """
 
     name: str = "lean_set_holdings"
     free_portfolio_value_pct: Decimal = LEAN_FREE_PORTFOLIO_VALUE_PCT
+    fee_model: IbkrEquityCommissionModel | None = None
 
     def target_quantity(
         self,
@@ -107,7 +115,23 @@ class LeanSetHoldingsSizing:
             raise ValueError(f"sizing price must be positive, got {price}")
         target_value = portfolio_value * target_fraction
         buying_power = portfolio_value * (Decimal(1) - self.free_portfolio_value_pct)
-        budget = min(target_value, buying_power) - order_fee
-        if budget <= 0:
-            return 0
-        return int(budget / price)
+        cap = min(target_value, buying_power)
+
+        if self.fee_model is None:
+            budget = cap - order_fee
+            if budget <= 0:
+                return 0
+            return int(budget / price)
+
+        # Fee-aware path: ignore order_fee (caller hasn't computed it; we
+        # compute per-iteration from the fee model). Monotonic decrement
+        # from the naive floor. Terminates fast — the IBKR per-share rate
+        # ($0.005) is small relative to realistic equity prices, so the
+        # initial guess almost always satisfies the budget.
+        qty = int(cap / price)
+        while qty > 0:
+            fee = self.fee_model.fee(quantity=qty, fill_price=price)
+            if qty * price + fee <= cap:
+                return qty
+            qty -= 1
+        return 0

@@ -43,6 +43,8 @@ from zoneinfo import ZoneInfo
 
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
+from app.engine.execution.commission import IbkrEquityCommissionModel
+from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import OrderEvent
 from app.engine.execution.sizing import LeanSetHoldingsSizing
 from app.engine.strategy.base import Strategy
@@ -333,7 +335,16 @@ def run_engine_lab_on_workspace(
     # Cross-engine parity runs size positions like LEAN: SetHoldings reserves
     # a free-portfolio-value buffer + the order fee. SimpleFloorSizing would
     # buy one share more than LEAN (Gate 3 QUANTITY_MISMATCH).
-    engine = BacktestEngine(data_source=reader, sizing_model=LeanSetHoldingsSizing())
+    # Matrix runs pin IBKR equity-tier commission on both sides:
+    #   * FillModel.fee_model → per-fill fee on OrderEvents
+    #   * LeanSetHoldingsSizing.fee_model → buying-power calc subtracts
+    #     the same per-fill fee, so the engine's qty matches LEAN's
+    #     SetHoldings under InteractiveBrokers brokerage.
+    engine = BacktestEngine(
+        data_source=reader,
+        sizing_model=LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()),
+        fill_model=FillModel(fee_model=IbkrEquityCommissionModel()),
+    )
     result = engine.run(cross_instance)
 
     normalized = _normalize_order_events(result.order_events, symbol_default=symbol)

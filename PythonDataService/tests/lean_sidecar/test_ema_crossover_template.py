@@ -132,3 +132,20 @@ def test_template_rejects_non_15_bar_minutes() -> None:
     # Defense-in-depth check at the strategy layer.
     assert "bar_minutes" in EMA_CROSSOVER_SOURCE
     assert "raise ValueError" in EMA_CROSSOVER_SOURCE
+
+
+def test_template_pins_interactive_brokers_margin_brokerage() -> None:
+    """The matrix's LEAN-side oracle locks IBKR margin brokerage so Gate 3
+    with assert_fees=True is a meaningful comparison against the engine's
+    IbkrEquityCommissionModel. The cell manifest's broker block depends on
+    this template being unambiguous about which fee model LEAN ran."""
+    assert "SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)" in EMA_CROSSOVER_SOURCE
+
+
+def test_template_pins_brokerage_before_subscriptions() -> None:
+    """LEAN docs: SetBrokerageModel must precede AddEquity so the security's
+    fee/fill models are configured by IB at subscribe time."""
+    src = EMA_CROSSOVER_SOURCE
+    sbm_idx = src.index("SetBrokerageModel(")
+    add_equity_idx = src.index("self.AddEquity(")
+    assert sbm_idx < add_equity_idx, "SetBrokerageModel must appear before AddEquity"
