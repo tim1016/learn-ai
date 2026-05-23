@@ -60,3 +60,24 @@ def test_custom_rates_are_honored() -> None:
     )
     # 100 * 0.01 = $1.00; floored to $2.00 min; cap = 0.01 * 100 * $150 = $150.
     assert model.fee(quantity=100, fill_price=Decimal("150.00")) == Decimal("2.00")
+
+
+def test_spy_150_shares_hits_floor() -> None:
+    # 150 shares @ $662.50: per-share = 150 * 0.005 = $0.75 → floored to $1.00 min;
+    # cap = 0.5% * 150 * $662.50 = $496.88 (no bite). The minimum dominates.
+    model = IbkrEquityCommissionModel()
+    assert model.fee(quantity=150, fill_price=Decimal("662.50")) == Decimal("1.00")
+
+
+def test_aapl_365_shares_uses_per_share_rate() -> None:
+    # 365 AAPL shares @ ~$270: per-share = 365 * 0.005 = $1.825 → rounds HALF_UP to $1.83;
+    # floor $1.00 and cap ~$492.75 do not bind.
+    model = IbkrEquityCommissionModel()
+    assert model.fee(quantity=365, fill_price=Decimal("270.00")) == Decimal("1.83")
+
+
+def test_tsla_221_shares_uses_per_share_rate() -> None:
+    # 221 TSLA shares @ ~$450: per-share = 221 * 0.005 = $1.105 → rounds HALF_UP to $1.11;
+    # floor $1.00 and cap ~$497.25 do not bind.
+    model = IbkrEquityCommissionModel()
+    assert model.fee(quantity=221, fill_price=Decimal("450.00")) == Decimal("1.11")
