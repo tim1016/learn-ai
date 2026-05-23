@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.sizing import (
     LEAN_FREE_PORTFOLIO_VALUE_PCT,
     LeanSetHoldingsSizing,
@@ -114,5 +115,65 @@ def test_lean_sizing_returns_zero_when_budget_below_one_share() -> None:
         price=Decimal("665.67"),
         target_fraction=Decimal(1),
         order_fee=Decimal("1"),
+    )
+    assert qty == 0
+
+
+def test_fee_aware_sizing_matches_fixed_fee_when_model_floors_to_one_dollar() -> None:
+    """When the IBKR floor binds, fee_model path matches the fixed $1 path
+    bit-for-bit. SPY at $665.67, $100k portfolio: 100 shares * $0.005 = $0.50,
+    floored to $1.00 — same as the legacy fixed-fee parameter."""
+    pv, price = Decimal("100000"), Decimal("665.67")
+    legacy = LeanSetHoldingsSizing().target_quantity(
+        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("1")
+    )
+    fee_aware = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
+        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
+    )
+    assert legacy == fee_aware == 149
+
+
+def test_fee_aware_sizing_handles_per_share_rate_for_aapl_target_one() -> None:
+    """AAPL at $270 with $100k portfolio: naive floor = 369; the IBKR
+    per-share fee on 369 shares is $1.85 (raw $1.845, ROUND_HALF_UP to
+    $1.85). buying_power = $99,750. 369 * 270 + 1.85 = $99,631.85 <= $99,750,
+    so the monotonic solve accepts qty=369."""
+    pv, price = Decimal("100000"), Decimal("270.00")
+    qty = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
+        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
+    )
+    assert qty == 369
+
+
+def test_fee_aware_sizing_never_overbuys_vs_no_fee_path() -> None:
+    """The fee-aware path must be monotone non-increasing relative to the
+    no-fee path: adding a per-fill fee can only reduce (or hold) the
+    affordable quantity, never increase it. Sweep a few realistic cases."""
+    fee_aware = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())
+    plain = LeanSetHoldingsSizing()
+    for pv, price in [
+        (Decimal("100000"), Decimal("665.67")),
+        (Decimal("100000"), Decimal("270.00")),
+        (Decimal("100000"), Decimal("450.00")),
+        (Decimal("99000"), Decimal("1.50")),
+    ]:
+        qty_fee_aware = fee_aware.target_quantity(
+            portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
+        )
+        qty_no_fee = plain.target_quantity(
+            portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
+        )
+        assert qty_fee_aware <= qty_no_fee, (
+            f"fee-aware path must never overbuy vs no-fee path: "
+            f"pv={pv} price={price} fee_aware={qty_fee_aware} no_fee={qty_no_fee}"
+        )
+
+
+def test_fee_aware_sizing_returns_zero_when_budget_too_small_for_any_share() -> None:
+    qty = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
+        portfolio_value=Decimal("50"),
+        price=Decimal("665.67"),
+        target_fraction=Decimal(1),
+        order_fee=Decimal("0"),
     )
     assert qty == 0
