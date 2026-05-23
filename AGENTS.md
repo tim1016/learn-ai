@@ -9,7 +9,7 @@ A scientific platform for porting and validating trading logic. Reference implem
 3. **Sovereignty over the math.** Reference code is studied, ported, and then the dependency is eliminated. Vendored references in `references/` exist for audit, not for runtime use.
 4. **Strict equivalence is the default.** Warmup bars, timestamp alignment, commission, and fill models must match the reference exactly. If they can't, that fact is documented in the port's module docstring.
 5. **Python owns all math.** Every indicator, statistic, backtest calculation, fill model, Greek, and P&L computation lives in `PythonDataService/` and is exposed via FastAPI. `.NET` is transport — GraphQL, auth, persistence — and may only `decimal`-preserve passthrough from the Python response; it may not compute a number a user will compare against another number. Angular is visualization — it may downsample, format, and map for rendering, but may not compute strategy signals, P&L, or statistics. Two consequences: (a) there is exactly one authority for any given numerical answer in the system; (b) when `.NET` or Angular appears to be computing math, that's a bug to be fixed by moving the computation to Python, not a pattern to extend. See `docs/audits/computational-fidelity-2026-04-22-addendum.md` § 5 for the reasoning.
-6. **Timestamps are `int64 ms UTC` at all boundaries.** Wire and storage must always use `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. See `.Codex/rules/numerical-rigor.md` → "Timestamp rigor" for the full policy, the two conversion boundaries, and the ban list.
+6. **Timestamps are `int64 ms UTC` at all boundaries.** Wire and storage must always use `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. See `.claude/rules/numerical-rigor.md` → "Timestamp rigor" for the full policy, the two conversion boundaries, and the ban list.
 
 ## Repo map
 
@@ -21,8 +21,8 @@ A scientific platform for porting and validating trading logic. Reference implem
 - `docs/domain/` — Trading concepts, glossary, invariants
 - `docs/references/` — Per-port notes: what was ported, from where (repo + commit), with what tolerance
 - `references/` — Vendored reference code (LEAN snippets, backtesters) under version control
-- `.Codex/skills/` — Lazy-loaded skills for recurring tasks
-- `.Codex/rules/` — Stack-specific rules, referenced from here but read only when relevant
+- `.claude/skills/` — Lazy-loaded skills for recurring tasks
+- `.claude/rules/` — Stack-specific rules, referenced from here but read only when relevant
 
 ## Authority hierarchy
 
@@ -30,7 +30,7 @@ When sources conflict, resolve in this order:
 
 1. **Vendored references** in `references/` (ground truth for what we're porting)
 2. **Official docs** (angular.dev, learn.microsoft.com, chillicream.com, fastapi.tiangolo.com, pandas.pydata.org)
-3. **`.Codex/rules/*.md`** in this repo
+3. **`.claude/rules/*.md`** in this repo
 4. **Model training knowledge**
 
 **When conflicts arise, surface them.** Do not silently pick. State the conflict, cite the sources, ask the user which to follow.
@@ -46,7 +46,7 @@ Both must be updated in the same PR as any change that introduces, retires, or m
 
 ## Skills available in this repo
 
-Codex auto-discovers these from `.Codex/skills/`. Invoke directly or let them auto-trigger:
+Agent tooling auto-discovers these from `.claude/skills/`. Invoke directly or let them auto-trigger:
 
 - **port-indicator** — Port an indicator or strategy from a reference source into `PythonDataService/` with strict numerical equivalence
 - **reconcile-backtest** — Diff two backtest runs trade-by-trade and classify divergence sources
@@ -59,13 +59,13 @@ Codex auto-discovers these from `.Codex/skills/`. Invoke directly or let them au
 
 ## Stack rules
 
-Full conventions live in `.Codex/rules/`. Read the relevant file before significant changes:
+Full conventions live in `.claude/rules/`. Read the relevant file before significant changes:
 
-- `.Codex/rules/angular.md` — Angular 21 conventions (signals, zoneless, Signal Forms, Vitest)
-- `.Codex/rules/dotnet.md` — .NET 10 + Hot Chocolate v15 conventions
-- `.Codex/rules/python.md` — FastAPI, pandas, async conventions
-- `.Codex/rules/testing.md` — Per-stack testing standards
-- `.Codex/rules/numerical-rigor.md` — The core scientific rules (tolerances, golden fixtures, reconciliation taxonomy)
+- `.claude/rules/angular.md` — Angular 21 conventions (signals, zoneless, Signal Forms, Vitest)
+- `.claude/rules/dotnet.md` — .NET 10 + Hot Chocolate v15 conventions
+- `.claude/rules/python.md` — FastAPI, pandas, async conventions
+- `.claude/rules/testing.md` — Per-stack testing standards
+- `.claude/rules/numerical-rigor.md` — The core scientific rules (tolerances, golden fixtures, reconciliation taxonomy)
 
 ## Hard rules (apply to every task)
 
@@ -84,8 +84,8 @@ Full conventions live in `.Codex/rules/`. Read the relevant file before signific
 When starting a session on this repo, before the first significant edit:
 
 1. Read the user's task. Identify the skill that matches, if any.
-2. If porting math or working with trading concepts, `.Codex/skills/trading-domain/SKILL.md` should auto-load. If it didn't, load it manually.
-3. Before touching stack code, read the relevant `.Codex/rules/*.md`.
+2. If porting math or working with trading concepts, `.claude/skills/trading-domain/SKILL.md` should auto-load. If it didn't, load it manually.
+3. Before touching stack code, read the relevant `.claude/rules/*.md`.
 4. If the task involves a reference repo, check `references/` for a vendored copy. If not present, ask the user whether to vendor it or fetch via GitHub MCP.
 
 ## Disclaimers
