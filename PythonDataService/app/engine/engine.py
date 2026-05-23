@@ -154,7 +154,7 @@ class BacktestEngine:
                     fill_price=resolution.fill_price,
                     fill_quantity=exit_quantity,
                     direction=exit_direction,
-                    fee=self.fill_model.commission_per_order,
+                    fee=self.fill_model.compute_fee(quantity=int(exit_quantity), fill_price=resolution.fill_price),
                     tag="TP" if resolution.outcome is IntrabarOutcome.TAKE_PROFIT else "SL",
                 )
                 portfolio.apply_fill(exit_event)
@@ -226,7 +226,7 @@ class BacktestEngine:
                 fill_price=fill_price,
                 fill_quantity=close_qty,
                 direction=direction,
-                fee=self.fill_model.commission_per_order,
+                fee=self.fill_model.compute_fee(quantity=int(close_qty), fill_price=fill_price),
                 tag="ForceFlat",
             )
 
@@ -395,7 +395,7 @@ class BacktestEngine:
                         fill_price=order.limit_price,
                         fill_quantity=order.quantity,
                         direction=order.direction,
-                        fee=self.fill_model.commission_per_order,
+                        fee=self.fill_model.compute_fee(quantity=int(order.quantity), fill_price=order.limit_price),
                         tag=order.tag,
                     )
                     portfolio.apply_fill(event)
