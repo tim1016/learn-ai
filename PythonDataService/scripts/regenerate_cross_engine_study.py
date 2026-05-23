@@ -417,10 +417,10 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
             "data_contract_hash": data_contract_hash,
         },
         "broker": {
-            "brokerage_model": "DefaultBrokerageModel",
+            "brokerage_model": "InteractiveBrokersBrokerage",
             "account_type": "Margin",
             "fill_model": "ImmediateFillModel",
-            "fee_model": "ConstantFeeModel(0)",
+            "fee_model": "InteractiveBrokersFeeModel",
         },
         "lean_runtime": {
             "container_image_digest": container_image_digest,
