@@ -556,6 +556,14 @@ def regenerate_one_cell(cell: Cell) -> bool:
         )
 
         if not report.overall_passed:
+            if report.trade is not None:
+                logger.error(
+                    "  Gate 3 trade: %d gating divergences | counts_by_category=%s",
+                    report.trade.gating_divergent_count,
+                    {c.value: n for c, n in report.trade.counts_by_category.items()},
+                )
+                for d in report.trade.divergences[:8]:
+                    logger.error("    %s %s: %s", d.trading_date.isoformat(), d.category.value, d.detail)
             _emit_failure_report(cell, report, FIXTURE_ROOT)
             return False
 
