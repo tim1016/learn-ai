@@ -6,7 +6,10 @@ Three modes are supported:
   bar that triggered it. This reproduces the bookkeeping inside LEAN's
   ``SpyEmaCrossoverAlgorithm.OnFifteenMinuteBar``, where ``_entryPrice`` is
   set to ``bar.Close`` on the signal bar. Use this for exact replication of
-  the LEAN trade log.
+  the LEAN trade log. Matrix parity runs may additionally enable
+  ``fill_stale_signal_at_current_open`` to match LEAN's equity market-order
+  behavior when a consolidated signal bar is emitted only after a
+  session/data gap.
 
 * ``NEXT_BAR_OPEN`` — the order fills at the open of the bar *after* the
   signal bar. This is closer to LEAN's actual ``EquityFillModel.MarketFill``
@@ -61,12 +64,20 @@ class FillModel:
             ``fee_model.fee(quantity, fill_price)`` and ``commission_per_order``
             is ignored. This is the single seam through which the matrix
             cells charge IBKR equity-tier commission.
+        fill_stale_signal_at_current_open: Optional LEAN equity-market-order
+            compatibility path. When ``SIGNAL_BAR_CLOSE`` is selected and the
+            current minute bar starts after the signal bar's ``end_time``
+            (e.g. Friday's 15:45-16:00 consolidated bar emits on Monday's
+            first minute), fill at the current minute's open and timestamp
+            the event at that minute's ``end_time``. Disabled by default so
+            existing research/backtest behavior stays byte-identical.
     """
 
     mode: FillMode = FillMode.SIGNAL_BAR_CLOSE
     commission_per_order: Decimal = Decimal("1.00")
     slippage_per_share: Decimal = Decimal(0)
     fee_model: IbkrEquityCommissionModel | None = None
+    fill_stale_signal_at_current_open: bool = False
 
     def compute_fee(self, *, quantity: int, fill_price: Decimal) -> Decimal:
         """Return the fee for a single fill. Always quantized to cents."""
@@ -79,6 +90,7 @@ class FillModel:
         order: Order,
         signal_bar: TradeBar,
         next_bar: TradeBar | None = None,
+        current_bar: TradeBar | None = None,
     ) -> OrderEvent | None:
         """Attempt to fill a market order.
 
@@ -88,6 +100,8 @@ class FillModel:
             next_bar: The bar immediately following ``signal_bar``, required
                 for ``NEXT_BAR_OPEN`` mode. If None in that mode, the fill is
                 deferred (returns None).
+            current_bar: The engine's current minute bar. Used only by the
+                opt-in LEAN stale-signal path for ``SIGNAL_BAR_CLOSE``.
 
         Returns:
             OrderEvent describing the fill, or None if the fill could not be
@@ -97,8 +111,16 @@ class FillModel:
             raise NotImplementedError(f"fill_model only supports MARKET orders, got {order.order_type}")
 
         if self.mode == FillMode.SIGNAL_BAR_CLOSE:
-            fill_price = signal_bar.close
-            fill_time = signal_bar.end_time
+            if (
+                self.fill_stale_signal_at_current_open
+                and current_bar is not None
+                and signal_bar.end_time < current_bar.time
+            ):
+                fill_price = current_bar.open
+                fill_time = current_bar.end_time
+            else:
+                fill_price = signal_bar.close
+                fill_time = signal_bar.end_time
         elif self.mode == FillMode.NEXT_BAR_OPEN:
             if next_bar is None:
                 return None

@@ -16,6 +16,7 @@ def test_cross_runner_constructs_backtest_engine_with_ibkr_fee_model() -> None:
     src = (Path(__file__).resolve().parents[2] / "app" / "lean_sidecar" / "cross_runner.py").read_text(encoding="utf-8")
     # FillModel must be explicitly constructed with the IBKR fee model.
     assert "IbkrEquityCommissionModel" in src
-    assert "FillModel(fee_model=IbkrEquityCommissionModel())" in src
+    assert "fee_model=IbkrEquityCommissionModel()" in src
+    assert "fill_stale_signal_at_current_open=True" in src
     # Sizing model must also receive the IBKR fee model.
     assert "LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())" in src

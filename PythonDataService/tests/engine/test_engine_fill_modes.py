@@ -138,6 +138,36 @@ def test_next_session_open_fills_at_first_eligible_minute_open() -> None:
     assert event.fill_price == Decimal("102.2")
 
 
+def test_signal_bar_close_lean_stale_signal_fills_at_current_minute_open() -> None:
+    """Matrix parity needs LEAN's market-order behavior for a consolidated
+    signal bar that emits after an overnight/weekend data gap.
+
+    The stale day-1 daily bar fires while processing day-2 09:30. LEAN's
+    equity market fill uses the current minute's open and timestamps the
+    fill at that minute's end, rather than filling at day-1's stale close.
+    """
+    stream = _SyntheticStream(_two_day_stream())
+    strategy = _EmitOnceStrategy()
+    engine = BacktestEngine(
+        data_source=stream,
+        fill_model=FillModel(
+            mode=FillMode.SIGNAL_BAR_CLOSE,
+            commission_per_order=Decimal("0"),
+            slippage_per_share=Decimal("0"),
+            fill_stale_signal_at_current_open=True,
+        ),
+    )
+
+    engine.run(strategy)
+
+    assert strategy.signal_bar_end_time == datetime(2026, 2, 9, 16, 0, tzinfo=NY)
+    assert len(strategy.events) == 1
+    event = strategy.events[0]
+    assert event.direction is Direction.LONG
+    assert event.time == datetime(2026, 2, 10, 9, 31, tzinfo=NY)
+    assert event.fill_price == Decimal("102.0")
+
+
 def test_next_session_open_same_date_signal_stays_pending_until_session_boundary() -> None:
     """Defensive: if (for some hypothetical configuration) the consolidator
     fires day-1's bar on a SAME-DAY minute (date == signal.date), the order

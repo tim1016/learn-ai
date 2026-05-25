@@ -35,14 +35,10 @@ gates Gate 3.
 
 Current state:
 - **SPY W6mo** — regenerated and passing Gate 3 with zero gating divergences.
-- **QQQ / AAPL / TSLA W6mo** — fixtures absent (smoke test skips). Regen
-  attempts surface a pre-existing engine-side fill-mode gap: cross-session
-  exits (entry Friday → 5 consolidated bars later → exit Monday) fill at
-  the consolidated bar's close in the engine but at the next-minute open
-  in LEAN, producing a per-share gap that cascades through the rest of the
-  run. SPY's 20 trades happen to all be intraday so the gap doesn't bite.
-  Tracked separately from this slice.
+- **QQQ / AAPL / TSLA W6mo** — regenerated on 2026-05-23 after the engine
+  gained the LEAN stale-signal fill policy for cross-session exits. All
+  three pass Gate 3 with zero gating divergences under the IBKR-margin
+  contract.
 
-Until the exit-fill-mode gap is resolved, the smoke marker shows 1 W6mo
-cell passing + 3 skipping. The 12-cell full sweep stays slow-gated and
-similarly incomplete for non-SPY tickers.
+The smoke marker now covers all four W6mo cells. The 12-cell full sweep
+remains slow-gated because W12mo / W24mo cells are not yet pinned.

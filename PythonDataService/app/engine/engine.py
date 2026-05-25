@@ -343,7 +343,12 @@ class BacktestEngine:
                     )
                     for order in market_orders:
                         if self.fill_model.mode == FillMode.SIGNAL_BAR_CLOSE:
-                            event = self.fill_model.fill_market_order(order, signal_bar, next_bar=None)
+                            event = self.fill_model.fill_market_order(
+                                order,
+                                signal_bar,
+                                next_bar=None,
+                                current_bar=minute_bar,
+                            )
                             assert event is not None
                             portfolio.apply_fill(event)
                             order_events.append(event)

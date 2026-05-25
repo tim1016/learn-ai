@@ -10,7 +10,7 @@
 | learn-ai file | LEAN source | Notes |
 |---|---|---|
 | `app/engine/consolidators/trade_bar_consolidator.py` | `LEAN/Engine/DataFeeds/Consolidators/TradeBarConsolidator.cs` | Bar consolidation logic — emits an OHLCV bar when the time window closes |
-| `app/engine/execution/fill_model.py` | `LEAN/Engine/Execution/ImmediateFillModel.cs` | Immediate fill at bar close; no partial-fill or market-impact simulation |
+| `app/engine/execution/fill_model.py` | `LEAN/Engine/Execution/ImmediateFillModel.cs` / `Common/Orders/Fills/EquityFillModel.cs` | Immediate fill at bar close for on-time consolidated bars; opt-in LEAN equity stale-signal path fills at the current minute open after a session/data gap. No partial-fill or market-impact simulation |
 | `app/engine/execution/intrabar_resolver.py` | LEAN execution semantics (no single file) | Resolves whether an order can be filled within the current bar |
 | `app/engine/execution/portfolio.py` | `LEAN/Algorithm/QCAlgorithm.Portfolio` | Position tracking — cash, equity, unrealized PnL |
 | `app/engine/execution/order.py` | `LEAN/Orders/Order.cs` | Order lifecycle states |

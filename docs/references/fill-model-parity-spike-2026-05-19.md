@@ -140,6 +140,32 @@ For a 15-min bar: `EndTime` = bar boundary (e.g., 10:00 ET, 10:15 ET, …). The 
 consolidator writes `end_time = bar_open + 15 min` and the fill model reads `signal_bar.end_time`,
 matching LEAN's `bar.EndTime` contract exactly.
 
+### 2026-05-23 addendum — stale consolidated bars after a session gap
+
+The original spike covered on-time bars: the consolidated bar fires when the next minute belongs
+to the next 15-minute bucket in the same session (`signal_bar.end_time == current_minute.time`).
+The W6mo matrix exposed the missing case: a consolidated bar can be emitted only when the next
+available regular-session minute arrives after an overnight/weekend gap.
+
+Empirical receipt from the failed QQQ W6mo run before the fix:
+
+| Order | Signal context | LEAN fill | Data receipt |
+|---|---|---|---|
+| `QQQ` order 16, sell | Entry 2026-01-02 14:45 ET, 5-bar exit signal on the stale 2026-01-02 15:45-16:00 bar | `2026-01-05 09:31 ET`, price `619.32` | `observations.csv` first Monday minute has `time=09:30`, `end_time=09:31`, `open=619.32`, `close=619.59` |
+
+LEAN therefore does **not** fill this stale signal at Friday's 16:00 close. It uses the current
+minute's market data after the exchange reopens: fill price = current minute `open`, fill time =
+current minute `end_time`. Engine Lab now exposes this as an opt-in `FillModel` flag:
+`fill_stale_signal_at_current_open=True`. The cross-engine matrix runner enables it alongside
+`IbkrEquityCommissionModel`; the default remains disabled so legacy research runs keep their
+bar-close simplification.
+
+Regression receipts:
+
+- `PythonDataService/tests/engine/test_fill_model.py::test_signal_bar_close_stale_signal_uses_current_open_when_enabled`
+- `PythonDataService/tests/engine/test_engine_fill_modes.py::test_signal_bar_close_lean_stale_signal_fills_at_current_minute_open`
+- `PythonDataService/tests/lean_sidecar/test_cross_runner_fee_wiring.py::test_cross_runner_constructs_backtest_engine_with_ibkr_fee_model`
+
 ---
 
 ## 6. What was NOT investigated
@@ -167,6 +193,8 @@ cross-reconciler's `FILL_PRICE_DRIFT` category should gate at `atol=$0.01` per t
 
 - LEAN order-events: `artifacts/lean-sidecar/fill-spike-20250106/workspace/output/MyAlgorithm-order-events.json`
 - Normalized result: `artifacts/lean-sidecar/fill-spike-20250106/normalized/result.json`
+- Stale-signal receipt: `PythonDataService/tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30/lean/orders.json`
+- Stale-signal observations: `PythonDataService/tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30/lean/observations.csv`
 - Engine Lab fill model: `PythonDataService/app/engine/execution/fill_model.py`
 - Spec router: `PythonDataService/app/routers/spec_strategy.py`
 - Trusted sample: `PythonDataService/app/lean_sidecar/trusted_samples/buy_and_hold.py`
