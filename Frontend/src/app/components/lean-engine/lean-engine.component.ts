@@ -1163,7 +1163,7 @@ export class LeanEngineComponent implements OnInit {
     const end = LeanEngineComponent.yesterday();
     const start = new Date(end);
     start.setDate(start.getDate() - daysBack);
-    this.startDate.set(LeanEngineComponent.toIso(start));
+    this.startDate.set(LeanEngineComponent.toIso(LeanEngineComponent.toMostRecentWeekday(start)));
     this.endDate.set(LeanEngineComponent.toIso(end));
   }
 
@@ -1181,6 +1181,18 @@ export class LeanEngineComponent implements OnInit {
     return `${y}-${m}-${day}`;
   }
 
+  // Walk back to the most recent weekday. The lean sidecar rejects any
+  // start that isn't a session open (lean_sidecar.py:374) and we don't
+  // bump the start server-side because that would mask data gaps. The
+  // API still surfaces holiday cases via the same 422.
+  private static toMostRecentWeekday(d: Date): Date {
+    const out = new Date(d);
+    while (out.getDay() === 0 || out.getDay() === 6) {
+      out.setDate(out.getDate() - 1);
+    }
+    return out;
+  }
+
   private static defaultEnd(): string {
     return LeanEngineComponent.toIso(LeanEngineComponent.yesterday());
   }
@@ -1189,7 +1201,7 @@ export class LeanEngineComponent implements OnInit {
     const end = LeanEngineComponent.yesterday();
     const start = new Date(end);
     start.setDate(start.getDate() - 30);
-    return LeanEngineComponent.toIso(start);
+    return LeanEngineComponent.toIso(LeanEngineComponent.toMostRecentWeekday(start));
   }
 
   // ------------------------------------------------------------------

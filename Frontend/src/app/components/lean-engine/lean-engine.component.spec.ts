@@ -3,7 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { provideZonelessChangeDetection } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   LeanEngineComponent,
@@ -441,5 +441,62 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.runPhase()).toBe('failed');
     expect(component.runStatusBanner()).toContain('exit 1');
     expect(component.runStatusBanner()).not.toContain('SPY benchmark was unavailable');
+  });
+});
+
+// Regression: defaultStart() and setPresetRange() previously did raw
+// calendar arithmetic (yesterday - N days), which could land on
+// Saturday/Sunday. The lean sidecar then rejected the run with
+// "start_ms_utc resolves to <date> which is not a trading day". Fix
+// walks back to the most recent weekday before publishing the signal.
+describe('LeanEngineComponent default-date weekend handling', () => {
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: JobsService,
+          useValue: { startJob: () => Promise.resolve('id'), job: () => null, dismiss: () => undefined },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('defaultStart skips the weekend when yesterday-30d lands on Saturday', () => {
+    // Tue 2026-05-26 → yesterday Mon 2026-05-25 → 30 days back Sat 2026-04-25
+    // Expected after fix: Fri 2026-04-24.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 26, 12, 0, 0));
+
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    expect(fixture.componentInstance.startDate()).toBe('2026-04-24');
+  });
+
+  it('setPresetRange bumps a weekend start back to the previous Friday', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 26, 12, 0, 0));
+
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+    component.setPresetRange(30);
+    expect(component.startDate()).toBe('2026-04-24');
+  });
+
+  it('setPresetRange leaves a weekday start untouched', () => {
+    // Wed 2026-05-27 → yesterday Tue 2026-05-26 → 7 days back Tue 2026-05-19 (weekday)
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 27, 12, 0, 0));
+
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+    component.setPresetRange(7);
+    expect(component.startDate()).toBe('2026-05-19');
   });
 });
