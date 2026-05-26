@@ -288,11 +288,21 @@ def stage_lean_metadata_from_image(
     workspace.data_dir.mkdir(parents=True, exist_ok=True)
 
     # Bounded podman subprocess timeouts: a hung podman would otherwise
-    # stall the launch critical path indefinitely. 30s for create+cp
-    # (a hot pull is sub-second; 30s is generous), 15s for rm.
-    _CREATE_TIMEOUT_S = 30
-    _CP_TIMEOUT_S = 30
-    _RM_TIMEOUT_S = 15
+    # stall the launch critical path indefinitely. 60s for all three —
+    # on a healthy podman these are sub-second, but on a host with a
+    # bloated overlay store, a cold first-use, or transient storage
+    # contention we measured ``create`` at ~3.5s, ``cp`` of the LEAN
+    # metadata files at ~6.5s each, and ``rm`` occasionally exceeding
+    # 15s. The earlier 15/30s ceilings tripped the launcher into
+    # ``MetadataStagingError`` and surfaced as a data-plane 502 even
+    # though podman would have succeeded a few seconds later. 60s
+    # absorbs that without making a truly-hung podman wait pathologically
+    # long; the upstream data-plane HTTP timeout
+    # (``launcher_client.py::_LAUNCH_HTTP_TIMEOUT_S``, currently 90s)
+    # still bounds the round-trip.
+    _CREATE_TIMEOUT_S = 60
+    _CP_TIMEOUT_S = 60
+    _RM_TIMEOUT_S = 60
 
     # ``podman create`` returns a container id we then ``cp`` out of.
     # We do not ``run`` it; nothing inside the image executes here.
