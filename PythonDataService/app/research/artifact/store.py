@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import TypeVar
 
@@ -36,13 +37,26 @@ def _atomic_write_json(path: Path, payload: dict | list) -> None:
     """Write ``payload`` to ``path`` atomically (tmp + ``os.replace``).
 
     Atomic on POSIX and Windows so a reader either sees the previous
-    contents or the new contents — never a half-written file. Matches
-    the convention in every pre-seam phase storage module.
+    contents or the new contents — never a half-written file. The temp
+    file gets a unique name via ``tempfile.mkstemp`` so two concurrent
+    writes to the same target don't stomp each other's temp file
+    before the rename.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False))
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 class ArtifactStore:
@@ -75,7 +89,7 @@ class ArtifactStore:
         optional.
         """
         pattern = self._descriptor.id_pattern
-        if not artifact_id or not pattern.match(artifact_id):
+        if not artifact_id or not pattern.fullmatch(artifact_id):
             raise ValueError(
                 f"artifact_id must match {pattern.pattern} (got {artifact_id!r})"
             )
@@ -334,7 +348,7 @@ def _get_id(config: BaseModel, descriptor: ArtifactDescriptor) -> str:
             f"config {type(config).__name__}.{descriptor.id_field} must be a "
             f"string id matching {pattern.pattern} (got {value!r})"
         )
-    if not pattern.match(value):
+    if not pattern.fullmatch(value):
         raise ValueError(
             f"config {type(config).__name__}.{descriptor.id_field} must match "
             f"{pattern.pattern} (got {value!r})"

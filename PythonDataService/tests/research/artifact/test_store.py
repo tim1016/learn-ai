@@ -545,3 +545,43 @@ def test_store_with_empty_subdir_writes_artifact_at_root_directly(tmp_path: Path
     assert loaded_result.score == 2.0
 
     assert store.list_ids() == [config.artifact_id]
+
+
+# ---------------------------------------------------------------------------
+# Defensive: id validation is full-string, not prefix.
+# ---------------------------------------------------------------------------
+def test_save_rejects_id_when_pattern_is_unanchored_and_id_has_extra_suffix(
+    tmp_path: Path,
+):
+    """Defence against an unanchored descriptor pattern.
+
+    ``pattern.match`` only anchors at the start, so an unanchored
+    ``r"[0-9a-f]{32}"`` would silently accept ``"a"*32 + "/escape"``
+    as a valid id. The store now uses ``pattern.fullmatch`` so the
+    extra suffix is rejected regardless of how the descriptor's regex
+    is written. This is a defence-in-depth fix; the production
+    descriptors all use anchored ``^...$`` patterns where match and
+    fullmatch behave identically.
+    """
+    unanchored_descriptor = ArtifactDescriptor(
+        subdir="phase-x",
+        id_field="artifact_id",
+        id_pattern=re.compile(r"[0-9a-f]{32}"),  # deliberately unanchored
+        config_filename="config.json",
+        result_filename="result.json",
+        parent_run_id_extractor=lambda cfg: getattr(cfg, "parent_run_id", None),
+        log_tag="PHX",
+        not_found_error=_PhaseNotFound,
+        already_exists_error=_PhaseAlreadyExists,
+        corrupt_error=_PhaseCorrupt,
+    )
+    store = ArtifactStore(unanchored_descriptor, root=tmp_path)
+
+    # 32-hex prefix + path-shaped suffix would pass pattern.match() but
+    # fail pattern.fullmatch(). The store should reject it.
+    bad_id = "a" * 32 + "/escape"
+    config = _make_config(artifact_id=bad_id)
+    result = _make_result(artifact_id=bad_id)
+
+    with pytest.raises(ValueError, match=r"must match"):
+        store.save(config, result)
