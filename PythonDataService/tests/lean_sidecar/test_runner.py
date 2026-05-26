@@ -7,7 +7,6 @@ unsafe.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -322,21 +321,73 @@ class TestBuildCommand:
 
         assert "--userns=keep-id" not in argv
 
-    def test_is_rootless_podman_returns_false_on_probe_failure(
+    def test_is_rootless_podman_true_when_euid_non_root(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Defensive: any failure of the ``podman info`` probe (binary
-        missing, non-zero exit, timeout, malformed output) must fall
-        back to ``False`` so the omit-the-flag path runs. A True
-        default would corrupt rootful argvs."""
+        """The launcher's host UID being non-root is the canonical
+        signal for "rootless podman" on Linux: the same UID identity
+        is what ``--userns=keep-id`` maps into the container. The
+        previous ``podman info`` subprocess probe was abandoned because
+        its 15s wall-clock timeout intermittently fired under concurrent
+        podman load (e.g., while a prior LEAN container was exiting
+        and releasing storage locks), silently misclassifying rootless
+        as rootful and dropping ``--userns=keep-id`` from the argv. The
+        euid check is microseconds and has no race window."""
         from app.lean_sidecar import runner
 
-        def _fail(*_args: object, **_kwargs: object) -> object:
-            raise subprocess.SubprocessError("simulated probe failure")
+        monkeypatch.setattr(runner.os, "geteuid", lambda: 1000)
+        assert runner._is_rootless_podman("/usr/bin/podman") is True
 
-        monkeypatch.setattr(runner.subprocess, "run", _fail)
+    def test_is_rootless_podman_false_when_euid_root(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Launcher running as root means rootful podman; the keep-id
+        flag is not valid there (podman rejects it at parse time with
+        "keep-id is only supported in rootless mode"). Omit the flag."""
+        from app.lean_sidecar import runner
+
+        monkeypatch.setattr(runner.os, "geteuid", lambda: 0)
         assert runner._is_rootless_podman("/usr/bin/podman") is False
+
+    def test_is_rootless_podman_false_on_non_posix(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Windows hosts have no ``os.geteuid``; WSL2 handles UID
+        mapping transparently, so ``--userns=keep-id`` is not needed.
+        Omit the flag when the geteuid attribute is absent."""
+        from app.lean_sidecar import runner
+
+        monkeypatch.delattr(runner.os, "geteuid", raising=False)
+        assert runner._is_rootless_podman("/usr/bin/podman") is False
+
+    def test_is_rootless_podman_does_not_shell_out_to_podman(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression for the silent-fallback bug: previously this
+        function called ``subprocess.run`` to query ``podman info``,
+        and any failure of that call (including the 15s timeout firing
+        under concurrent podman load) would silently return ``False``
+        and drop ``--userns=keep-id`` from the LEAN argv. The fix
+        replaced the probe with a euid check, which is deterministic
+        and has no subprocess. Guard against a future regression that
+        reintroduces the subprocess path."""
+        from app.lean_sidecar import runner
+
+        def _explode(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError(
+                "_is_rootless_podman must not invoke subprocess.run; the "
+                "subprocess-based probe was removed because its 15s timeout "
+                "raced with concurrent podman activity and silently "
+                "misclassified rootless as rootful (see PR fixing this)."
+            )
+
+        monkeypatch.setattr(runner.subprocess, "run", _explode)
+        # Should return whatever euid says — no subprocess.
+        _ = runner._is_rootless_podman("/usr/bin/podman")
 
     def test_rejects_tmpfs_followed_by_another_flag(
         self,

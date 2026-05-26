@@ -159,38 +159,41 @@ def _container_user_spec() -> str:
 
 
 def _is_rootless_podman(podman_path: str) -> bool:
-    """Detect whether the discovered podman is running rootless.
+    """Detect whether the launcher is running rootless podman.
 
-    Returns ``False`` on any probe failure (podman not on PATH, exit
-    non-zero, malformed output). The downstream :func:`_userns_flags`
-    then omits ``--userns=keep-id`` which is the safe default for
-    rootful podman (where the flag errors with "keep-id is only
-    supported in rootless mode") and for non-Linux hosts.
+    Returns ``True`` iff the launcher process's effective UID is
+    non-root on a POSIX host. On Linux/macOS, "rootless podman" maps
+    1:1 to "the launcher process is not running as root": rootless
+    podman is keyed to the invoking user's UID, and that same UID is
+    what :func:`_userns_flags` needs to identity-map into the container
+    via ``--userns=keep-id``. On Windows ``os.geteuid`` is absent;
+    WSL2 handles UID mapping transparently and ``--userns=keep-id`` is
+    not needed, so non-POSIX falls through to ``False``.
 
-    Not cached on purpose: the probe runs once per ``build_command``
-    call (once per LEAN backtest, which takes seconds), the ~tens-of-ms
-    cost is negligible against that baseline, and avoiding a cache
-    keeps tests trivial — a ``monkeypatch.setattr(runner,
-    "_is_rootless_podman", ...)`` reliably overrides per-test without
-    a separate cache-reset step.
+    The ``podman_path`` parameter is retained for backward compatibility
+    with callers and tests; it is no longer consulted.
+
+    History: this used to shell out to
+    ``podman info --format '{{.Host.Security.Rootless}}'`` with a 15s
+    wall-clock timeout. Under concurrent podman load (e.g., while a
+    prior LEAN container is exiting and releasing storage locks),
+    ``podman info`` can take longer than 15s. The timeout was caught
+    as a generic ``SubprocessError`` and silently returned ``False``,
+    dropping ``--userns=keep-id`` from the LEAN argv. The container
+    then ran under the default sub-UID mapping with no write access to
+    the workspace mount, and LEAN crashed inside
+    ``BacktestingResultHandler.Exit()`` with
+    ``UnauthorizedAccessException`` on every ``output/*`` write. The
+    euid check is microseconds, deterministic, and has no race window.
+    The trade-off — a non-root user pointing at a rootful podman
+    socket would now misclassify as rootless and trigger podman's
+    "keep-id is only supported in rootless mode" parse-time error —
+    is acceptable because that is a loud, fail-fast error operators
+    can diagnose, unlike the previous silent corruption of every run.
     """
-    try:
-        completed = subprocess.run(
-            [podman_path, "info", "--format", "{{.Host.Security.Rootless}}"],
-            capture_output=True,
-            text=True,
-            # ``podman info`` is fast (~1-2s) once the user namespace is
-            # initialised, but the very first invocation in a fresh
-            # session can take noticeably longer while the storage
-            # driver and network stack come up. 15s gives margin
-            # without making a real podman misconfiguration hang the
-            # launcher for unbounded time.
-            timeout=15,
-            check=True,
-        )
-    except (subprocess.SubprocessError, OSError):
+    if not hasattr(os, "geteuid"):
         return False
-    return completed.stdout.strip().lower() == "true"
+    return os.geteuid() != 0
 
 
 def _userns_flags(podman_path: str) -> tuple[str, ...]:
