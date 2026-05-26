@@ -29,7 +29,16 @@ class ArtifactDescriptor:
     Fields:
       * ``subdir`` — directory under the artifacts root, e.g.
         ``"monte-carlo"``. Heterogeneous across phases by design
-        (decision 1 in the seam doc).
+        (decision 1 in the seam doc). The ``runs`` phase sets
+        ``subdir=""`` so its artifacts live at ``<root>/<run_id>/``
+        directly without an intermediate path segment.
+      * ``id_field`` — name of the attribute on the config model
+        carrying the artifact id (e.g. ``"monte_carlo_id"``). The
+        store pulls the id via ``getattr(config, id_field)`` and
+        validates it against ``id_pattern``. Required because some
+        configs carry multiple id-shaped fields (e.g. ``MonteCarloConfig``
+        has both ``monte_carlo_id`` and ``parent_run_id``) and the
+        store must not guess.
       * ``id_pattern`` — strict regex on the artifact id. Used both
         as the format check and as defence in depth alongside the
         resolved-path containment guard.
@@ -55,6 +64,7 @@ class ArtifactDescriptor:
     """
 
     subdir: str
+    id_field: str
     id_pattern: re.Pattern[str]
     config_filename: str
     result_filename: str

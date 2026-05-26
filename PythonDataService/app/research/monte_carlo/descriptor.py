@@ -27,6 +27,7 @@ _MC_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 MONTE_CARLO_ARTIFACT = ArtifactDescriptor(
     subdir="monte-carlo",
+    id_field="monte_carlo_id",
     id_pattern=_MC_ID_PATTERN,
     config_filename="config.json",
     result_filename="result.json",

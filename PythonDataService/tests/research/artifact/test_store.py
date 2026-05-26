@@ -71,6 +71,7 @@ def _hash_callback(cfg: BaseModel) -> str:
 def _descriptor(*, with_hash: bool = False) -> ArtifactDescriptor:
     return ArtifactDescriptor(
         subdir="phase-x",
+        id_field="artifact_id",
         id_pattern=_ID_PATTERN,
         config_filename="config.json",
         result_filename="result.json",
@@ -360,3 +361,97 @@ def test_hash_callback_not_invoked_when_absent(tmp_path: Path):
     result = _make_result()
     store.save(config, result)
     assert _HASH_TRACK == []
+
+
+# ---------------------------------------------------------------------------
+# id_field disambiguation (regression for the auto-scan bug).
+#
+# Pre-fix the store auto-scanned every Pydantic field whose value
+# matched ``id_pattern`` and raised ``multiple distinct id-shaped
+# fields ...`` when more than one matched. ``MonteCarloConfig`` has
+# *two* such fields (``monte_carlo_id`` and ``parent_run_id`` — both
+# uuid4 hex digests), so every save through the real phase descriptor
+# would crash before writing anything to disk. The fix makes the
+# descriptor name the id field explicitly via ``id_field=``.
+# ---------------------------------------------------------------------------
+class _TwoIdConfig(BaseModel):
+    """Config carrying two distinct ``id_pattern``-matching fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    sibling_id: str  # also matches ``_ID_PATTERN`` — the bug trigger
+    created_at_ms: int
+
+
+class _TwoIdResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    created_at_ms: int
+
+
+def test_save_uses_explicit_id_field_when_sibling_field_also_matches_pattern(
+    tmp_path: Path,
+):
+    """Two id-shaped fields no longer trip the store.
+
+    Without the ``id_field`` fix this raised
+    ``ValueError: ... multiple distinct id-shaped fields ...`` before
+    writing anything to disk.
+    """
+    descriptor = ArtifactDescriptor(
+        subdir="phase-x",
+        id_field="artifact_id",
+        id_pattern=_ID_PATTERN,
+        config_filename="config.json",
+        result_filename="result.json",
+        parent_run_id_extractor=lambda cfg: None,
+        not_found_error=_PhaseNotFound,
+        already_exists_error=_PhaseAlreadyExists,
+        corrupt_error=_PhaseCorrupt,
+    )
+    store = ArtifactStore(descriptor, root=tmp_path)
+
+    chosen_id = "a" * 32
+    sibling_id = "b" * 32  # also matches the regex but is not the artifact id
+
+    config = _TwoIdConfig(
+        artifact_id=chosen_id,
+        sibling_id=sibling_id,
+        created_at_ms=1_700_000_000_000,
+    )
+    result = _TwoIdResult(artifact_id=chosen_id, created_at_ms=1_700_000_000_000)
+
+    artifact_dir = store.save(config, result)
+
+    # Lives under the chosen id (``artifact_id``), not the sibling.
+    assert artifact_dir == tmp_path / "phase-x" / chosen_id
+    assert (artifact_dir / "config.json").is_file()
+    assert not (tmp_path / "phase-x" / sibling_id).exists()
+
+
+def test_save_rejects_when_id_field_value_fails_pattern(tmp_path: Path):
+    """``id_field`` value still gets the regex gate."""
+    descriptor = ArtifactDescriptor(
+        subdir="phase-x",
+        id_field="artifact_id",
+        id_pattern=_ID_PATTERN,
+        config_filename="config.json",
+        result_filename="result.json",
+        parent_run_id_extractor=lambda cfg: None,
+        not_found_error=_PhaseNotFound,
+        already_exists_error=_PhaseAlreadyExists,
+        corrupt_error=_PhaseCorrupt,
+    )
+    store = ArtifactStore(descriptor, root=tmp_path)
+    bad_config = _FixtureConfig(
+        artifact_id="not-hex-32",
+        parent_run_id=None,
+        created_at_ms=1_700_000_000_000,
+    )
+    bad_result = _FixtureResult(
+        artifact_id="not-hex-32", score=0.0, created_at_ms=1_700_000_000_000
+    )
+    with pytest.raises(ValueError, match=r"artifact_id"):
+        store.save(bad_config, bad_result)

@@ -108,12 +108,16 @@ class ArtifactStore:
         responsibility to keep in sync (the thin per-phase delegator
         is the right place for that cross-check).
         """
-        # Pull the id from whichever field on the config matches the
-        # descriptor's pattern. There's exactly one such field in
-        # every phase today (``run_id``, ``monte_carlo_id``, ...),
-        # and asking the caller to also pass the id explicitly would
-        # invite drift between the dataclass and the file path.
-        artifact_id = _extract_id(config, self._descriptor)
+        # Pull the id from the descriptor's named field. Explicit
+        # rather than auto-scanned because some configs carry more
+        # than one id-shaped field — e.g. ``MonteCarloConfig`` has
+        # both ``monte_carlo_id`` (the artifact's identity) and
+        # ``parent_run_id`` (a foreign key into ``runs/``). Letting
+        # the store guess by regex match was a real bug: any MC
+        # save where the two ids happened to share the ``[0-9a-f]{32}``
+        # shape raised ``multiple distinct id-shaped fields ...``
+        # before writing anything to disk.
+        artifact_id = _get_id(config, self._descriptor)
 
         artifact_dir = self._artifact_dir(artifact_id)
         if artifact_dir.exists() and not replace:
@@ -314,32 +318,29 @@ class ArtifactStore:
         return [artifact_id for artifact_id, _ in out]
 
 
-def _extract_id(config: BaseModel, descriptor: ArtifactDescriptor) -> str:
-    """Find the single config field whose value matches the descriptor's id pattern.
+def _get_id(config: BaseModel, descriptor: ArtifactDescriptor) -> str:
+    """Pull and validate the artifact id from the descriptor's named field.
 
-    Every phase today carries exactly one such field (``run_id``,
-    ``monte_carlo_id``, ``wf_id``, ``baseline_id``). If a phase ever
-    grows two id-shaped fields, this helper raises and forces the
-    caller to disambiguate via an explicit descriptor option — better
-    than silently picking the wrong one.
+    Reads ``getattr(config, descriptor.id_field)`` and checks it
+    against ``descriptor.id_pattern``. Raises ``ValueError`` with the
+    same shape the path-traversal guard uses when the value is
+    missing, not a string, or fails the regex — so save's failure
+    mode is consistent regardless of whether the bad id came from the
+    config (here) or a URL path segment (``_artifact_dir``).
     """
     pattern = descriptor.id_pattern
-    candidates: list[str] = []
-    for field_name in config.__class__.model_fields:
-        value = getattr(config, field_name, None)
-        if isinstance(value, str) and pattern.match(value):
-            candidates.append(value)
-    if not candidates:
+    value = getattr(config, descriptor.id_field, None)
+    if not isinstance(value, str):
         raise ValueError(
-            f"config {type(config).__name__} has no field matching "
-            f"id_pattern {pattern.pattern}"
+            f"config {type(config).__name__}.{descriptor.id_field} must be a "
+            f"string id matching {pattern.pattern} (got {value!r})"
         )
-    if len(candidates) > 1 and len(set(candidates)) > 1:
+    if not pattern.match(value):
         raise ValueError(
-            f"config {type(config).__name__} has multiple distinct id-shaped "
-            f"fields matching {pattern.pattern}: {candidates}"
+            f"config {type(config).__name__}.{descriptor.id_field} must match "
+            f"{pattern.pattern} (got {value!r})"
         )
-    return candidates[0]
+    return value
 
 
 class _PayloadView:

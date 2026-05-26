@@ -33,7 +33,7 @@ def _deterministic_config() -> MonteCarloConfig:
     """A fully populated, fixed-value config — no RNG, no defaults."""
     return MonteCarloConfig(
         monte_carlo_id="a" * 32,
-        parent_run_id="p" * 32,
+        parent_run_id="b" * 32,
         parent_trade_log_hash="t" * 64,
         method="reshuffle",
         simulation_count=1_000,
@@ -49,7 +49,7 @@ def _deterministic_result() -> MonteCarloResult:
     """A fully populated, fixed-value result — same MC id as the config."""
     return MonteCarloResult(
         monte_carlo_id="a" * 32,
-        parent_run_id="p" * 32,
+        parent_run_id="b" * 32,
         method="reshuffle",
         simulation_count=1_000,
         realised_trade_count=25,
