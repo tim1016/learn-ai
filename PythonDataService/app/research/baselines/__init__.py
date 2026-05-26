@@ -41,6 +41,12 @@ layout ``artifacts/baselines/<baseline_id>/{config,result}.json``.
 
 from __future__ import annotations
 
+from app.research.baselines.descriptor import BASELINES_ARTIFACT
+from app.research.baselines.errors import (
+    BaselineAlreadyExistsError,
+    BaselineCorruptError,
+    BaselineNotFoundError,
+)
 from app.research.baselines.generators import (
     BaselineMethod,
     buy_and_hold_spec,
@@ -57,15 +63,13 @@ from app.research.baselines.runner import (
     run_baselines,
 )
 from app.research.baselines.storage import (
-    BaselineAlreadyExistsError,
-    BaselineCorruptError,
-    BaselineNotFoundError,
     list_baselines,
     load_baseline,
     save_baseline,
 )
 
 __all__ = [
+    "BASELINES_ARTIFACT",
     "BaselineAlreadyExistsError",
     "BaselineConfig",
     "BaselineCorruptError",
