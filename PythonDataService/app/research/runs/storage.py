@@ -140,13 +140,17 @@ def list_runs(
         limit=None,
     )
 
-    # Reuse the descriptor's filename and the store's path
-    # construction so we don't duplicate them here.
-    base = store._base()  # thin delegator over our own store; private access is intentional
-
+    # Construct each ledger path via the store's ``_artifact_dir``,
+    # which re-validates the id against ``id_pattern`` and applies
+    # the resolved-path containment guard. ``list_ids`` already
+    # filters by pattern, but routing through ``_artifact_dir``
+    # makes the traversal defence visible to static analysis
+    # (CodeQL: uncontrolled data used in path expression) and
+    # provides defence in depth against any future caller that
+    # might bypass ``list_ids``.
     out: list[RunLedger] = []
     for run_id in ids:
-        ledger_path = base / run_id / RUNS_ARTIFACT.config_filename
+        ledger_path = store._artifact_dir(run_id) / RUNS_ARTIFACT.config_filename
         try:
             ledger = RunLedger.model_validate_json(
                 ledger_path.read_text(encoding="utf-8")

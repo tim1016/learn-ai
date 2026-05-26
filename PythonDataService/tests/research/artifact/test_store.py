@@ -586,6 +586,58 @@ def test_store_with_empty_subdir_writes_artifact_at_root_directly(tmp_path: Path
     assert store.list_ids() == [config.artifact_id]
 
 
+def test_list_ids_with_empty_subdir_silently_skips_sibling_phase_dirs(
+    tmp_path: Path, caplog
+):
+    """When ``subdir=""`` the base IS the shared artifacts root.
+
+    Sibling phase subdirs (``monte-carlo/``, ``walk-forward/``,
+    ``baselines/``) coexist alongside our own artifact ids at the
+    root. Warning on every one would spam ``[RUNS] skipping corrupt
+    artifact dir ...`` on every healthy listing call.
+
+    Regression test for #355 review (codex P2): when ``subdir`` is
+    empty, name-mismatched children are silently skipped — no warning.
+    When ``subdir`` is non-empty, the existing warn-on-mismatch
+    behaviour holds (the phase-specific subdir should contain only
+    its own ids).
+    """
+    descriptor = ArtifactDescriptor(
+        subdir="",
+        id_field="artifact_id",
+        id_pattern=_ID_PATTERN,
+        config_filename="ledger.json",
+        result_filename="result.json",
+        parent_run_id_extractor=lambda cfg: getattr(cfg, "parent_run_id", None),
+        log_tag="RUNS",
+        not_found_error=_PhaseNotFound,
+        already_exists_error=_PhaseAlreadyExists,
+        corrupt_error=_PhaseCorrupt,
+    )
+    store = ArtifactStore(descriptor, root=tmp_path)
+
+    good_id = "a" * 32
+    store.save(_make_config(artifact_id=good_id), _make_result(artifact_id=good_id))
+
+    # Simulate sibling phase subdirs alongside our flat-layout root.
+    for sibling in ("monte-carlo", "walk-forward", "baselines"):
+        (tmp_path / sibling).mkdir()
+        (tmp_path / sibling / "anything.json").write_text("{}")
+
+    with caplog.at_level(logging.WARNING):
+        listed = store.list_ids()
+
+    assert listed == [good_id]
+    # No warning should fire for the sibling phase dirs — they're
+    # expected coexistence under a flat-layout root.
+    assert not any(
+        "monte-carlo" in rec.message
+        or "walk-forward" in rec.message
+        or "baselines" in rec.message
+        for rec in caplog.records
+    )
+
+
 # ---------------------------------------------------------------------------
 # Defensive: id validation is full-string, not prefix.
 # ---------------------------------------------------------------------------
