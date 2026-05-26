@@ -1,6 +1,6 @@
 # Research artifact seam
 
-**Status:** Design ratified — implementation pending (no PRs yet)
+**Status:** Implementation in flight — PR 1 (`monte_carlo` + artifact module) merged 2026-05-26; PR 2 (`baselines`) and PR 3 (`walk_forward`) prepared and stacked; PR 4 (`runs/`) pending.
 **Last reviewed:** 2026-05-26
 **Pairs with:** `docs/architecture/engine-authority-map.md` (the rows for `runs`, `walk_forward`, `monte_carlo`, `baselines`), `docs/references/run-ledger.md` (the canonical-JSON hash that PR 4 must preserve byte-for-byte)
 
@@ -76,7 +76,7 @@ Runners call `save_X` exactly as they do today. Routers stay transport-only. **N
 | # | Decision | What it locks in |
 |---|---|---|
 | 1 | **Heterogeneous on-disk layout retained.** The descriptor parametrises `(subdir, id_pattern, config_filename, result_filename, parent_run_id_extractor)`. `runs/` keeps `ledger.json`; the others keep `config.json`. The names are not arbitrary — `engine/live/run_ledger.py:55-56` calls the ledger out as an *immutable identity object*; the others are mutable inputs. Collapsing would erase a semantic distinction the codebase already encodes. | Zero migration cost. No bytes change on disk. The first PR is behavior-preserving consolidation, not a schema migration. |
-| 2 | **Hashing is opt-in per phase via a callback hook.** `runs/hashing.py` remains the canonical implementation of `RunLedger` canonical-JSON SHA-256. The artifact module exposes `hash_payload: Callable | None` on the descriptor; if absent, no hashing happens. | Existing replay addresses stay stable byte-for-byte. Other phases can opt in later (when, e.g., walk-forward folds become replay-addressable) without breaking the runs/ contract. |
+| 2 | **Hashing is opt-in per phase via a callback hook.** `runs/hashing.py` remains the canonical implementation of `RunLedger` canonical-JSON SHA-256. The artifact module exposes `hash_payload: Callable \| None` on the descriptor; if absent, no hashing happens. | Existing replay addresses stay stable byte-for-byte. Other phases can opt in later (when, e.g., walk-forward folds become replay-addressable) without breaking the runs/ contract. |
 | 3 | **Parent-run-id listing is scan-based and deduplicated in the artifact module.** No physical index. A real index buys nothing today — the duplicated *code* is the pain, not duplicated *work*. | No invalidation, repair, migration, or corruption semantics to design. If profiling later shows the scan is a problem, an index slots in behind the same `list_ids` interface. |
 | 4 | **Phase owns Pydantic config/result types, runner logic, validation semantics, and any phase-specific math.** The artifact module owns path construction, id validation, atomic write, load-and-validate-into-provided-Pydantic-types, list/filter, the optional hash hook, and the parent-run-id extractor. | Phase semantics stay where they belong. The seam is purely *persistence mechanics*. Runners can call the store directly; routers stay transport-only. |
 | 5 | **Phase-named exception classes stay first-class**, supplied through the descriptor, but inherit from shared bases. | Existing tests (`pytest.raises(WalkForwardNotFoundError)`) and routers (which map specific exceptions to specific HTTP codes) continue to work unchanged. New common code can `except ArtifactError`. |
