@@ -423,18 +423,29 @@ def _stage_lean_metadata_from_cached_same_digest_workspace(
 
         workspace.ensure_layout()
         workspace.data_dir.mkdir(parents=True, exist_ok=True)
-        for relative in (
+        metadata_dirs = (
             Path("market-hours"),
             Path("symbol-properties"),
             Path("alternative") / "interest-rate",
-        ):
-            source = source_data_dir / relative
-            if not source.exists():
-                continue
-            dest = workspace.data_dir / relative
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(source, dest)
+        )
+        try:
+            for relative in metadata_dirs:
+                source = source_data_dir / relative
+                if not source.exists():
+                    continue
+                dest = workspace.data_dir / relative
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(source, dest)
+        except (OSError, shutil.Error) as e:
+            logger.warning(
+                "skipping unreadable LEAN metadata cache workspace %s: %s",
+                candidate_root,
+                e,
+            )
+            for relative in metadata_dirs:
+                shutil.rmtree(workspace.data_dir / relative, ignore_errors=True)
+            continue
 
         mh, sp = list_metadata_databases(workspace)
         if mh is not None and sp is not None:

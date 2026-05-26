@@ -179,6 +179,46 @@ class TestDataFolderRoundTrip:
         assert (target.data_dir / "alternative" / "interest-rate" / "usa.csv").exists()
         assert list_metadata_databases(target) == (market_hours, symbol_properties)
 
+    def test_metadata_staging_skips_corrupt_matching_cache(
+        self,
+        tmp_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+        good = resolve_workspace("metadata_cache_good", tmp_artifacts_root)
+        good.ensure_layout()
+        (good.data_dir / "market-hours").mkdir(parents=True)
+        (good.data_dir / "symbol-properties").mkdir(parents=True)
+        (good.data_dir / "market-hours" / "market-hours-database.json").write_text("{}", encoding="utf-8")
+        (good.data_dir / "symbol-properties" / "symbol-properties-database.csv").write_text(
+            "symbol,security-type,market\n",
+            encoding="utf-8",
+        )
+        good.manifest_path.write_text(json.dumps({"lean_image_digest": digest}), encoding="utf-8")
+
+        # Reverse lexical manifest ordering visits this corrupt cache
+        # before ``metadata_cache_good``. If copy errors abort the loop,
+        # staging never reaches the valid candidate.
+        corrupt = resolve_workspace("metadata_cache_zcorrupt", tmp_artifacts_root)
+        corrupt.ensure_layout()
+        (corrupt.data_dir / "market-hours").mkdir(parents=True)
+        (corrupt.data_dir / "market-hours" / "market-hours-database.json").write_text("{}", encoding="utf-8")
+        (corrupt.data_dir / "symbol-properties").write_text("not a directory", encoding="utf-8")
+        corrupt.manifest_path.write_text(json.dumps({"lean_image_digest": digest}), encoding="utf-8")
+
+        target = resolve_workspace("metadata_cache_target", tmp_artifacts_root)
+        monkeypatch.setattr("app.lean_sidecar.staging.shutil.which", lambda _: None)
+
+        market_hours, symbol_properties = stage_lean_metadata_from_image(
+            target,
+            digest,
+            allow_launcher_fallback=False,
+        )
+
+        assert market_hours.read_text(encoding="utf-8") == "{}"
+        assert symbol_properties.read_text(encoding="utf-8") == "symbol,security-type,market\n"
+
     def test_naive_or_utc_input_is_normalized_to_eastern(self, tmp_path: Path) -> None:
         """Bars supplied in UTC must serialize as the equivalent ET ms.
 
