@@ -172,10 +172,20 @@ def post_extract_metadata_sync(run_id: str, image_digest: str) -> dict[str, str]
     url = f"{_launcher_url()}/extract-metadata"
     payload = {"run_id": run_id, "image_digest": image_digest}
     # The podman ``create + cp + rm`` round-trip is typically <5s on a
-    # hot pull; allow 90s as a generous outer bound matching the worst-
-    # case subprocess timeouts inside ``stage_lean_metadata_from_image``
-    # (30s create + 30s cp + 15s rm worst case, plus margin).
-    timeout = httpx.Timeout(90.0)
+    # hot pull; this ceiling is dimensioned so the structured
+    # ``MetadataStagingError`` from the launcher always wins the race
+    # against an HTTP-level read timeout, even on a slow host.
+    #
+    # ``stage_lean_metadata_from_image`` runs the worst-case sequence
+    #   create (60s) + cp × 3 (60s each) + rm in finally (60s) = 300s
+    # before it can return the structured error response. The
+    # subprocess ceilings live in ``staging.py``
+    # (``_CREATE_TIMEOUT_S``/``_CP_TIMEOUT_S``/``_RM_TIMEOUT_S``); if
+    # those change, this ceiling must move in lockstep — otherwise the
+    # data plane masks a clean ``metadata_staging_failed`` as a generic
+    # ``LauncherUnreachable: timed out`` (PR #348 P1 review).
+    # 360s = 300s subprocess worst-case + 60s margin.
+    timeout = httpx.Timeout(360.0)
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=payload, headers=_auth_headers())
