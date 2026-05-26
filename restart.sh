@@ -20,6 +20,18 @@ fi
 echo "==> Tearing down all containers..."
 podman compose down
 
+# Reap orphaned non-compose containers stuck in Created (typically `sleep 1`
+# probes from lean-sidecar metadata staging that the host process abandons).
+# `podman compose down` only touches compose-managed names, so these pile up
+# in `podman ps -a` over time. Skip if none — `xargs --no-run-if-empty`
+# isn't portable, so guard explicitly.
+ORPHANS=$(podman ps -a --filter status=created --format "{{.Names}}" | grep -Ev '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+if [[ -n "$ORPHANS" ]]; then
+  echo "==> Reaping orphaned Created containers:"
+  echo "$ORPHANS" | sed 's/^/    /'
+  echo "$ORPHANS" | xargs -r podman rm -f >/dev/null
+fi
+
 # `compose up --no-cache` is not supported by the docker-compose plugin
 # (the flag is rejected at parse time). Build first when --no-cache is
 # requested, then up. The cached path can fold build into up as before.
@@ -33,8 +45,25 @@ else
   podman compose up -d --build --force-recreate
 fi
 
+# Recover services left in Created. When a `depends_on: service_healthy`
+# target takes longer than expected to flip healthy, compose abandons the
+# dependent in Created and never retries — even after the dep recovers.
+# Observed on cold restarts where postgres takes >25s for WAL fsync
+# recovery. Try starting any compose container still in Created; if its
+# deps are now healthy, it'll come up.
+STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
+  | grep -E '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+if [[ -n "$STUCK" ]]; then
+  echo "==> Starting compose services left in Created:"
+  echo "$STUCK" | sed 's/^/    /'
+  echo "$STUCK" | xargs -r podman start >/dev/null
+fi
+
+# Wait budget: the longest healthcheck start_period in compose.yaml is the
+# frontend at 120s; backend cold compile pushes 60–90s on top. Poll for
+# 240s (80 x 3s) so the script's verdict matches reality on cold builds.
 echo "==> Waiting for services to become healthy..."
-for i in {1..30}; do
+for i in {1..80}; do
   HEALTHY=$(podman ps --filter health=healthy --format "{{.Names}}" | wc -l)
   TOTAL=$(podman ps --format "{{.Names}}" | wc -l)
   echo "    [$i] $HEALTHY/$TOTAL healthy"
@@ -43,9 +72,17 @@ for i in {1..30}; do
     podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
     exit 0
   fi
+  # Mid-loop rescue: if a compose service drifted back into Created
+  # because its dep flapped, recover it without waiting for the next
+  # restart. Cheap to retry.
+  STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
+    | grep -E '^(my-postgres|my-redis|my-backend|my-frontend|polygon-data-service)$' || true)
+  if [[ -n "$STUCK" ]]; then
+    echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
+  fi
   sleep 3
 done
 
-echo "==> WARNING: Not all services healthy after 90s"
+echo "==> WARNING: Not all services healthy after 240s"
 podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 exit 1
