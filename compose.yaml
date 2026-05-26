@@ -14,6 +14,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      # Unclean shutdowns trigger WAL fsync recovery before postgres accepts
+      # connections — observed up to 40s on this host. With no start_period
+      # the healthcheck flips to unhealthy at 25s (5x5s), which strands the
+      # backend in Created (depends_on: db.service_healthy) even though
+      # postgres recovers a few seconds later. 60s covers the worst case
+      # we've seen with margin.
+      start_period: 60s
     deploy:
       resources:
         limits:
