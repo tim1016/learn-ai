@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
 from app.lean_sidecar.launcher.models import (
@@ -102,7 +103,7 @@ async def post_launch(
             detail="missing or wrong X-Launcher-Token",
         )
     try:
-        return launch(request, artifacts_root=_artifacts_root())
+        return await run_in_threadpool(launch, request, artifacts_root=_artifacts_root())
     except LaunchRejectedError as e:
         # 4xx covers all "this request is malformed in a way the
         # launcher refuses to act on". The body carries a stable
@@ -132,7 +133,7 @@ async def post_extract_metadata(
             detail="missing or wrong X-Launcher-Token",
         )
     try:
-        return extract_metadata(request, artifacts_root=_artifacts_root())
+        return await run_in_threadpool(extract_metadata, request, artifacts_root=_artifacts_root())
     except LaunchRejectedError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

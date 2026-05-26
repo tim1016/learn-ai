@@ -7,13 +7,21 @@ the API contract is stable.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
 from app.lean_sidecar import config as sidecar_config
-from app.lean_sidecar.launcher.models import LaunchRequest
+from app.lean_sidecar.launcher.models import (
+    ExtractMetadataRequest,
+    ExtractMetadataResponse,
+    LaunchRequest,
+    LaunchResponse,
+)
 from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
 from app.lean_sidecar.workspace import resolve_workspace
 
@@ -91,6 +99,76 @@ class TestLaunchValidation:
         with pytest.raises(LaunchRejectedError) as ei:
             launch(req, artifacts_root=tmp_artifacts_root)
         assert ei.value.reason == "runner_configuration_error"
+
+
+class TestLauncherAppConcurrency:
+    """Endpoint handlers must not block the launcher event loop.
+
+    A real ``/launch`` call runs a synchronous ``podman run``. If the
+    FastAPI handler executes it directly, concurrent ``/extract-metadata``
+    requests queue behind the running LEAN container and the data plane
+    surfaces them as ``LauncherUnreachable: timed out``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_extract_metadata_responds_while_launch_is_running(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from app.lean_sidecar.launcher import app as launcher_app_module
+
+        def slow_launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
+            time.sleep(0.3)
+            return LaunchResponse(
+                run_id=request.run_id,
+                exit_code=0,
+                duration_ms=300,
+                timed_out=False,
+                log_tail="ok",
+                lean_errors={},
+                is_clean=True,
+            )
+
+        def fast_extract_metadata(request: ExtractMetadataRequest, *, artifacts_root: Path) -> ExtractMetadataResponse:
+            return ExtractMetadataResponse(
+                market_hours_db_path=str(
+                    artifacts_root / request.run_id / "workspace/data/market-hours/market-hours-database.json"
+                ),
+                symbol_properties_db_path=str(
+                    artifacts_root / request.run_id / "workspace/data/symbol-properties/symbol-properties-database.csv"
+                ),
+            )
+
+        monkeypatch.setattr(launcher_app_module, "_artifacts_root", lambda: tmp_path)
+        monkeypatch.setattr(launcher_app_module, "_expected_token", lambda: "token")
+        monkeypatch.setattr(launcher_app_module, "launch", slow_launch)
+        monkeypatch.setattr(launcher_app_module, "extract_metadata", fast_extract_metadata)
+
+        headers = {"X-Launcher-Token": "token"}
+        transport = ASGITransport(app=launcher_app_module.app)
+        async with AsyncClient(transport=transport, base_url="http://launcher") as client:
+            launch_task = asyncio.create_task(
+                client.post(
+                    "/launch",
+                    json=_make_request("run_concurrent").model_dump(mode="json"),
+                    headers=headers,
+                )
+            )
+            await asyncio.sleep(0)
+
+            started = time.perf_counter()
+            metadata_response = await client.post(
+                "/extract-metadata",
+                json={"run_id": "run_concurrent", "image_digest": DUMMY_DIGEST},
+                headers=headers,
+            )
+            elapsed = time.perf_counter() - started
+            launch_response = await launch_task
+
+        assert metadata_response.status_code == 200, metadata_response.text
+        assert elapsed < 0.2
+        assert launch_response.status_code == 200, launch_response.text
 
 
 class TestWorkspaceSizeEnforcement:
