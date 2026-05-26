@@ -1,6 +1,15 @@
-"""File-backed persistence for walk-forward analyses.
+"""Thin walk-forward persistence delegators over the shared artifact store.
 
-On-disk layout:
+The mechanics — id regex, path-traversal guard, atomic tmp+rename,
+load-and-validate, scan+filter — live in
+``app/research/artifact/store.py``. This module declares the walk-
+forward specific surface: function signatures the runner and router
+already call, plus the phase-specific ``spec_hash`` filter on
+``list_walk_forwards`` that the artifact store's generic
+``list_ids`` doesn't carry. See
+``docs/architecture/research-artifact-seam.md`` for the design.
+
+On-disk layout (unchanged from pre-seam):
 
     <root>/walk-forward/<wf_id>/
         config.json   — WalkForwardConfig.model_dump(mode='json')
@@ -11,74 +20,49 @@ Each fold's individual run is *not* persisted here — folds are normal
 storage). The ``parent_run_id`` field on each fold's ledger points
 back at this WF so ``list_runs(parent_run_id=wf_id)`` enumerates them.
 
-Same correctness contract as ``app/research/runs/storage.py``:
-  * Strict regex on ``wf_id`` to reject path-traversal attempts.
-  * Resolved-path containment check as defense in depth.
-  * Atomic writes (tmp → rename); ``result.json`` written before
-    ``config.json`` so an interrupted save leaves a discoverable-as-
-    incomplete directory rather than a complete-looking one with a
-    partial result.
-
-Because this layout is parallel to ``<root>/<run_id>/``, the
-artifacts root contains a mix of run dirs (32-char hex UUID names)
-and a single ``walk-forward/`` subdirectory. ``list_runs`` ignores
-the latter (its iteration treats ``walk-forward`` as not matching the
-run-id regex, so the corresponding ``ledger.json`` lookup misses
-silently).
+Public exception classes (``WalkForwardNotFoundError``,
+``WalkForwardAlreadyExistsError``, ``WalkForwardCorruptError``) are
+defined in ``app.research.walk_forward.errors`` and re-exported here
+so existing callers that imported them from this module path keep
+working.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
 from pathlib import Path
 
-from app.research.runs.storage import default_artifacts_root
+from app.research.artifact.root import default_artifacts_root
+from app.research.artifact.store import ArtifactStore
+from app.research.walk_forward.descriptor import WALK_FORWARD_ARTIFACT
+from app.research.walk_forward.errors import (
+    WalkForwardAlreadyExistsError,
+    WalkForwardCorruptError,
+    WalkForwardNotFoundError,
+)
 from app.research.walk_forward.result import WalkForwardConfig, WalkForwardResult
 
 logger = logging.getLogger(__name__)
 
-_WALK_FORWARD_DIRNAME = "walk-forward"
-# Same alphabet as run_id — UUID4 hex, 32 lowercase hex chars.
-_WF_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+# Re-exported for backwards compatibility with any caller that
+# imported these classes from ``app.research.walk_forward.storage``
+# directly. The canonical definitions live in
+# ``app.research.walk_forward.errors``.
+__all__ = [
+    "WalkForwardAlreadyExistsError",
+    "WalkForwardCorruptError",
+    "WalkForwardNotFoundError",
+    "default_artifacts_root",
+    "list_walk_forwards",
+    "load_walk_forward",
+    "save_walk_forward",
+]
 
 
-class WalkForwardNotFoundError(LookupError):
-    """Raised when a WF cannot be found under the given root."""
-
-
-class WalkForwardAlreadyExistsError(FileExistsError):
-    """Raised when ``save_walk_forward`` would clobber an existing dir
-    without ``replace=True``."""
-
-
-class WalkForwardCorruptError(RuntimeError):
-    """Raised when a persisted WF fails Pydantic validation."""
-
-
-def _wf_dir(wf_id: str, root: Path | None) -> Path:
-    """Resolve a WF directory, refusing anything that escapes the root."""
-    if not wf_id or not _WF_ID_PATTERN.match(wf_id):
-        raise ValueError(
-            f"walk_forward_id must match {_WF_ID_PATTERN.pattern} (got {wf_id!r})"
-        )
-    base = (root if root is not None else default_artifacts_root()) / _WALK_FORWARD_DIRNAME
-    candidate = (base / wf_id).resolve()
-    base_resolved = base.resolve()
-    if not candidate.is_relative_to(base_resolved):
-        raise ValueError(
-            f"walk_forward_id resolves outside the artifacts root: {wf_id!r}"
-        )
-    return base / wf_id
-
-
-def _atomic_write_json(path: Path, payload: dict | list) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+def _store(root: Path | None) -> ArtifactStore:
+    """Construct an ``ArtifactStore`` bound to the walk-forward descriptor."""
+    return ArtifactStore(WALK_FORWARD_ARTIFACT, root=root)
 
 
 def save_walk_forward(
@@ -94,47 +78,18 @@ def save_walk_forward(
             f"config.walk_forward_id {config.walk_forward_id!r} does not match "
             f"result.walk_forward_id {result.walk_forward_id!r}"
         )
-
-    wf_dir = _wf_dir(config.walk_forward_id, root)
-    if wf_dir.exists() and not replace:
-        raise WalkForwardAlreadyExistsError(
-            f"walk-forward directory already exists: {wf_dir} "
-            f"(pass replace=True to clobber)"
-        )
-
-    # Same write order as Phase A: result first, config (the discovery
-    # key) last. An interrupted save leaves an orphan result.json but
-    # ``load_walk_forward`` checks for both files, so it surfaces as
-    # ``WalkForwardNotFoundError`` rather than corrupt-looking state.
-    _atomic_write_json(wf_dir / "result.json", result.model_dump(mode="json"))
-    _atomic_write_json(wf_dir / "config.json", config.model_dump(mode="json"))
-    return wf_dir
+    return _store(root).save(config, result, replace=replace)
 
 
 def load_walk_forward(
     wf_id: str, *, root: Path | None = None
 ) -> tuple[WalkForwardConfig, WalkForwardResult]:
     """Load a previously-saved WF by ``wf_id``."""
-    wf_dir = _wf_dir(wf_id, root)
-    config_path = wf_dir / "config.json"
-    result_path = wf_dir / "result.json"
-    if not config_path.is_file() or not result_path.is_file():
-        raise WalkForwardNotFoundError(
-            f"walk-forward not found: {wf_id} (looked in {wf_dir})"
-        )
-    try:
-        config = WalkForwardConfig.model_validate_json(
-            config_path.read_text(encoding="utf-8")
-        )
-    except Exception as exc:
-        raise WalkForwardCorruptError(f"failed to parse {config_path}: {exc}") from exc
-    try:
-        result = WalkForwardResult.model_validate_json(
-            result_path.read_text(encoding="utf-8")
-        )
-    except Exception as exc:
-        raise WalkForwardCorruptError(f"failed to parse {result_path}: {exc}") from exc
-    return config, result
+    return _store(root).load(
+        wf_id,
+        config_type=WalkForwardConfig,
+        result_type=WalkForwardResult,
+    )
 
 
 def list_walk_forwards(
@@ -145,43 +100,58 @@ def list_walk_forwards(
     since_ms: int | None = None,
     limit: int | None = None,
 ) -> list[WalkForwardConfig]:
-    """Enumerate persisted walk-forwards, optionally filtered.
+    """Enumerate persisted walk-forwards, optionally filtered, newest first.
 
     Returns ``WalkForwardConfig`` records (not full results) — the
     listing endpoint shape mirrors ``list_runs``: lightweight summary
     with full fetch on-demand via ``GET /walk-forward/{wf_id}``.
+
+    Shared filters (``parent_run_id``, ``since_ms``) are applied
+    inside the artifact store; the WF-specific ``spec_hash`` filter
+    is applied here because the store doesn't (and shouldn't) know
+    about phase-specific Pydantic fields. ``limit`` is enforced
+    *after* the ``spec_hash`` filter — matching the pre-seam
+    behaviour where every filter ran before the limit truncated.
+
+    Corrupt configs and configs that fail Pydantic validation are
+    skipped with a warning rather than raised; use
+    ``load_walk_forward`` when you need the failure to be loud.
     """
-    base = (root if root is not None else default_artifacts_root()) / _WALK_FORWARD_DIRNAME
-    if not base.is_dir():
-        return []
+    store = _store(root)
+    # Pull the candidate ids (already filtered by ``parent_run_id``
+    # and ``since_ms``, already newest-first sorted) from the
+    # generic store. We don't pass ``limit`` here because the
+    # WF-specific ``spec_hash`` filter has to run before the cap.
+    ids = store.list_ids(
+        parent_run_id=parent_run_id,
+        since_ms=since_ms,
+        limit=None,
+    )
+
+    # Reuse the descriptor's filename and the store's path
+    # construction so we don't duplicate them here.
+    base = store._base()  # thin delegator over our own store; private access is intentional
 
     out: list[WalkForwardConfig] = []
-    for child in base.iterdir():
-        if not child.is_dir():
-            continue
-        config_path = child / "config.json"
-        if not config_path.is_file():
-            continue
+    for wf_id in ids:
+        config_path = base / wf_id / WALK_FORWARD_ARTIFACT.config_filename
         try:
             config = WalkForwardConfig.model_validate_json(
                 config_path.read_text(encoding="utf-8")
             )
         except Exception as exc:
             logger.warning(
-                "[WF] skipping corrupt walk-forward config at %s: %s", config_path, exc
+                "[WF] skipping corrupt walk-forward config at %s: %s",
+                config_path,
+                exc,
             )
-            continue
-
-        if parent_run_id is not None and config.parent_run_id != parent_run_id:
             continue
         if spec_hash is not None and config.strategy_spec_hash != spec_hash:
             continue
-        if since_ms is not None and config.created_at_ms < since_ms:
-            continue
-
         out.append(config)
 
-    out.sort(key=lambda c: c.created_at_ms, reverse=True)
+    # The store sorts ids by ``created_at_ms`` desc; ``spec_hash``
+    # filtering preserves that order. Apply ``limit`` last.
     if limit is not None:
         out = out[:limit]
     return out

@@ -24,6 +24,12 @@ and the compounded-vs-rebased combined-curve decision.
 
 from __future__ import annotations
 
+from app.research.walk_forward.descriptor import WALK_FORWARD_ARTIFACT
+from app.research.walk_forward.errors import (
+    WalkForwardAlreadyExistsError,
+    WalkForwardCorruptError,
+    WalkForwardNotFoundError,
+)
 from app.research.walk_forward.result import (
     FoldResult,
     SplitPolicySpec,
@@ -40,15 +46,13 @@ from app.research.walk_forward.splits import (
     build_split_policy,
 )
 from app.research.walk_forward.storage import (
-    WalkForwardAlreadyExistsError,
-    WalkForwardCorruptError,
-    WalkForwardNotFoundError,
     list_walk_forwards,
     load_walk_forward,
     save_walk_forward,
 )
 
 __all__ = [
+    "WALK_FORWARD_ARTIFACT",
     "AnchoredSplitPolicy",
     "ChronologicalSplitPolicy",
     "FoldResult",
