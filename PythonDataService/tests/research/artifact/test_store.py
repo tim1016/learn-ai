@@ -323,18 +323,23 @@ def test_list_ids_limit_caps_after_sort(tmp_path: Path):
 
 
 def test_list_ids_skips_dir_with_corrupt_config(tmp_path: Path, caplog):
-    """A dir whose ``config.json`` won't parse is skipped with a warning.
+    """A properly-named dir whose ``config.json`` won't parse is skipped with a warning.
 
-    ``list_ids`` is intentionally forgiving — the regex gatekeeps
-    ``save`` and ``load`` (user-controlled URL ids), but listing is
-    a best-effort enumeration. Dirs with malformed configs are
-    debris and get a warning rather than raising.
+    Tests the parse-failure code path: the dir name matches
+    ``id_pattern`` (so it survives the pre-filter), but the
+    ``config.json`` payload is malformed. The store warns and skips
+    so a single broken artifact doesn't blind the listing. ``load``
+    of the same id would raise loudly; ``list_ids`` is the forgiving
+    enumerator.
     """
     store = ArtifactStore(_descriptor(), root=tmp_path)
     good_id = "a" * 32
     store.save(_make_config(artifact_id=good_id), _make_result(artifact_id=good_id))
 
-    debris = tmp_path / "phase-x" / "corrupt-debris-dir"
+    # Properly-named dir (matches id_pattern) but malformed config —
+    # exercises the parse-fail skip path, not the name-mismatch skip.
+    corrupt_id = "b" * 32
+    debris = tmp_path / "phase-x" / corrupt_id
     debris.mkdir(parents=True)
     (debris / "config.json").write_text("{not valid json")
 
@@ -342,7 +347,41 @@ def test_list_ids_skips_dir_with_corrupt_config(tmp_path: Path, caplog):
         listed = store.list_ids()
 
     assert listed == [good_id]
-    assert any("skipping corrupt" in rec.message for rec in caplog.records)
+    assert any("skipping corrupt config" in rec.message for rec in caplog.records)
+
+
+def test_list_ids_skips_dir_whose_name_fails_id_pattern(tmp_path: Path, caplog):
+    """A dir whose name doesn't match ``id_pattern`` is skipped with a warning.
+
+    Regression for a bug surfaced in the #352 review: the previous
+    implementation returned ``child.name`` unconditionally, so a
+    caller running ``for id in list_ids(): load(id)`` would hit a
+    ValueError on debris dirs (manual debug, partial recovery, an
+    accidental mkdir). The store now pre-filters by ``id_pattern``
+    and warns so operators see the debris in logs. The warning
+    carries ``skipping corrupt`` so it matches the same operator
+    grep pattern as the parse-fail path.
+    """
+    store = ArtifactStore(_descriptor(), root=tmp_path)
+    good_id = "a" * 32
+    store.save(_make_config(artifact_id=good_id), _make_result(artifact_id=good_id))
+
+    # Non-matching dir name + a valid-looking config inside, to prove
+    # the filter rejects on NAME, not on content.
+    debris = tmp_path / "phase-x" / "not-a-valid-id"
+    debris.mkdir(parents=True)
+    (debris / "config.json").write_text(
+        '{"artifact_id":"c","parent_run_id":null,"created_at_ms":1,"payload":""}'
+    )
+
+    with caplog.at_level(logging.WARNING):
+        listed = store.list_ids()
+
+    assert listed == [good_id]
+    assert any(
+        "skipping corrupt" in rec.message and "not-a-valid-id" in rec.message
+        for rec in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

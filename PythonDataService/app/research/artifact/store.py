@@ -229,8 +229,10 @@ class ArtifactStore:
         raising — a single broken artifact should not blind the rest
         of the listing. Use ``load`` directly when you need the
         failure to be loud. Directories whose name fails the id
-        pattern are also skipped silently so manual debris under the
-        artifacts root doesn't pollute the listing.
+        pattern are also skipped with a warning so the listing's
+        return values are always loadable: a caller running
+        ``for id in list_ids(): load(id)`` should never have ``load``
+        reject an id that ``list_ids`` just returned.
         """
         base = self._base()
         if not base.is_dir():
@@ -243,23 +245,28 @@ class ArtifactStore:
         # parsed configs anyway can reuse this work by parsing again
         # (PR-1 baseline) or by extending the store API in a future
         # PR if profiling shows the double-parse matters.
+        id_pattern = self._descriptor.id_pattern
         out: list[tuple[str, int]] = []
         for child in base.iterdir():
             if not child.is_dir():
                 continue
-            # Intentionally not pre-filtering by ``id_pattern`` here:
-            # ``list_ids`` is forgiving — a directory under the
-            # artifacts root whose name doesn't match the regex is
-            # debris (manual debug, partial recovery, etc.) and gets
-            # skipped via the corrupt-config code path below if its
-            # ``config.json`` can't be parsed. The regex is the
-            # gatekeeper for ``save`` / ``load`` (where the id is
-            # user-controlled URL input); listing is a best-effort
-            # enumeration of what's on disk. Skipping the regex
-            # check also preserves pre-seam behaviour where a debris
-            # dir with a malformed ``config.json`` produced a
-            # `skipping corrupt` log line; existing tests assert
-            # that line.
+            # Pre-filter by ``id_pattern`` so list_ids never returns a
+            # name that ``load`` would immediately reject. A debris
+            # directory under the artifacts root (manual debug,
+            # partial recovery, accidental mkdir) gets a warning
+            # rather than silent skip so operators see it in logs.
+            # The warning carries the ``skipping corrupt`` phrase to
+            # match the same operator grep pattern the corrupt-config
+            # path below uses.
+            if not id_pattern.fullmatch(child.name):
+                logger.warning(
+                    "[%s] skipping corrupt artifact dir at %s "
+                    "(name does not match id_pattern %s)",
+                    self._descriptor.log_tag,
+                    child,
+                    id_pattern.pattern,
+                )
+                continue
             config_path = child / self._descriptor.config_filename
             if not config_path.is_file():
                 continue
