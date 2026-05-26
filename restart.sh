@@ -6,6 +6,11 @@
 
 set -euo pipefail
 
+# Compose v2.32+ auto-opts into Buildx Bake when multiple services have build:
+# contexts. Under the podman socket BuildKit isn't wired up, so the warning
+# fires and Compose falls back to the classic builder. Disable bake to silence.
+export COMPOSE_BAKE=false
+
 NO_CACHE=""
 if [[ "${1:-}" == "--no-cache" ]]; then
   NO_CACHE="--no-cache"

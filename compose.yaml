@@ -143,7 +143,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      # Cold boot blocks ~12s on IBKR connect retries (3 attempts × ~4s each)
+      # before uvicorn binds the port. 10s wasn't enough — compose flipped
+      # unhealthy and stalled backend/frontend startup. 45s gives the IBKR
+      # retry window headroom without slowing warm restarts.
+      start_period: 45s
     deploy:
       resources:
         limits:
