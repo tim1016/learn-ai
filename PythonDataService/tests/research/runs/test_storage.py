@@ -346,6 +346,16 @@ def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
     """A single broken ledger should not blind the rest of the listing,
     and the corruption must be loud in the logs — silent skip would
     let a refactor that drops the warning slip past CI.
+
+    After the seam migration the corrupt-skip warning fires from
+    ``app.research.artifact.store`` rather than this phase's
+    ``storage`` module — but it still carries the ``[RUNS]`` prefix
+    the descriptor declares via ``log_tag="RUNS"`` so operator grep
+    patterns are preserved. Two debris shapes are exercised: a
+    directory whose name doesn't match the id_pattern (the store's
+    pre-filter rejects it) and a directory with a valid id-shaped
+    name but an unparseable ledger.json (the store's parse step
+    rejects it).
     """
     import logging
 
@@ -353,17 +363,27 @@ def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
     good_ledger, good_result = _make_run(spec, fake_data_factory)
     save_run(good_ledger, good_result, root=tmp_path)
 
-    # Plant a corrupt run dir alongside.
-    bad_dir = tmp_path / "corrupt-run"
-    bad_dir.mkdir()
-    (bad_dir / "ledger.json").write_text("{not valid json")
-    (bad_dir / "result.json").write_text("{}")
+    # Debris #1: name doesn't match the 32-hex id_pattern — the
+    # store's pre-filter rejects it before reading the file.
+    bad_name_dir = tmp_path / "corrupt-run"
+    bad_name_dir.mkdir()
+    (bad_name_dir / "ledger.json").write_text("{not valid json")
+    (bad_name_dir / "result.json").write_text("{}")
 
-    with caplog.at_level(logging.WARNING, logger="app.research.runs.storage"):
+    # Debris #2: name passes the regex but ledger.json is unparseable
+    # — the store's parse step rejects it. This is the path that
+    # produces the legacy ``[RUNS] skipping corrupt ledger`` log
+    # message (now emitted from ``app.research.artifact.store``).
+    bad_payload_dir = tmp_path / ("c" * 32)
+    bad_payload_dir.mkdir()
+    (bad_payload_dir / "ledger.json").write_text("{not valid json")
+    (bad_payload_dir / "result.json").write_text("{}")
+
+    with caplog.at_level(logging.WARNING):
         listed = list_runs(root=tmp_path)
     assert [lg.run_id for lg in listed] == [good_ledger.run_id]
     assert any(
-        "skipping corrupt ledger" in rec.message and rec.levelname == "WARNING"
+        rec.message.startswith("[RUNS]") and "skipping corrupt" in rec.message
         for rec in caplog.records
     )
 
