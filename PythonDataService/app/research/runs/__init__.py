@@ -15,6 +15,12 @@ for the hashing-scheme rationale.
 
 from __future__ import annotations
 
+from app.research.runs.descriptor import RUNS_ARTIFACT
+from app.research.runs.errors import (
+    RunAlreadyExistsError,
+    RunCorruptError,
+    RunNotFoundError,
+)
 from app.research.runs.hashing import (
     canonical_json,
     hash_payload,
@@ -30,19 +36,14 @@ from app.research.runs.result import (
 )
 from app.research.runs.runner import RunRequest, run_strategy_spec
 from app.research.runs.storage import (
-    ARTIFACTS_ROOT_ENV,
-    RunAlreadyExistsError,
-    RunCorruptError,
-    RunNotFoundError,
-    default_artifacts_root,
     list_runs,
     load_run,
     save_run,
 )
 
 __all__ = [
-    "ARTIFACTS_ROOT_ENV",
     "ENGINE_VERSION",
+    "RUNS_ARTIFACT",
     "BacktestRunResult",
     "DrawdownPoint",
     "EquityCurvePoint",
@@ -54,7 +55,6 @@ __all__ = [
     "RunRequest",
     "RunTrade",
     "canonical_json",
-    "default_artifacts_root",
     "hash_payload",
     "list_runs",
     "load_run",

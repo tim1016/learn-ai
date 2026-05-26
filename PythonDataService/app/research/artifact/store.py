@@ -81,26 +81,33 @@ class ArtifactStore:
     def _artifact_dir(self, artifact_id: str) -> Path:
         """Resolve an artifact directory, refusing anything that escapes the base.
 
-        Defense in depth against path traversal: the format check
-        rejects ``../`` segments and absolute paths; the resolved-path
-        check catches anything that slips past (e.g. symlinked roots,
-        weird Windows separators). Artifact ids reach here from
-        user-controlled URL path segments, so neither layer is
-        optional.
+        Defence in depth against path traversal: (1) the format check
+        rejects ``../`` segments, absolute paths, and anything the
+        descriptor's regex doesn't whitelist; (2) the resolved-path
+        containment check catches anything that slips past (e.g.
+        symlinked roots, weird Windows separators). Artifact ids reach
+        here from user-controlled URL path segments, so neither layer
+        is optional.
+
+        Returns the **resolved** path. Returning the resolved-and-
+        validated variable (rather than re-constructing ``base /
+        artifact_id``) is also what CodeQL's path-injection sanitiser
+        model recognises — without it, CodeQL would taint every
+        downstream ``artifact_dir / filename`` as user-controlled
+        even though the regex + containment check guarantee safety.
         """
         pattern = self._descriptor.id_pattern
         if not artifact_id or not pattern.fullmatch(artifact_id):
             raise ValueError(
                 f"artifact_id must match {pattern.pattern} (got {artifact_id!r})"
             )
-        base = self._base()
-        candidate = (base / artifact_id).resolve()
-        base_resolved = base.resolve()
+        base_resolved = self._base().resolve()
+        candidate = (base_resolved / artifact_id).resolve()
         if not candidate.is_relative_to(base_resolved):
             raise ValueError(
                 f"artifact_id resolves outside the artifacts root: {artifact_id!r}"
             )
-        return base / artifact_id
+        return candidate
 
     # ---- public surface --------------------------------------------
 
@@ -246,26 +253,36 @@ class ArtifactStore:
         # (PR-1 baseline) or by extending the store API in a future
         # PR if profiling shows the double-parse matters.
         id_pattern = self._descriptor.id_pattern
+        # When ``subdir`` is empty, the base IS the shared artifacts
+        # root — so the iterdir below sees sibling phase subdirs
+        # (``monte-carlo/``, ``walk-forward/``, ``baselines/``)
+        # alongside our own artifact ids. Warning on every sibling
+        # would spam ``[RUNS] skipping corrupt ...`` on every healthy
+        # listing call. Inside a phase-specific subdir, mismatched
+        # names ARE debris worth flagging; at the shared root they're
+        # expected coexistence.
+        warn_on_name_mismatch = self._descriptor.subdir != ""
         out: list[tuple[str, int]] = []
         for child in base.iterdir():
             if not child.is_dir():
                 continue
             # Pre-filter by ``id_pattern`` so list_ids never returns a
             # name that ``load`` would immediately reject. A debris
-            # directory under the artifacts root (manual debug,
+            # directory inside a phase-specific subdir (manual debug,
             # partial recovery, accidental mkdir) gets a warning
-            # rather than silent skip so operators see it in logs.
-            # The warning carries the ``skipping corrupt`` phrase to
+            # rather than silent skip so operators see it in logs;
+            # the warning carries the ``skipping corrupt`` phrase to
             # match the same operator grep pattern the corrupt-config
             # path below uses.
             if not id_pattern.fullmatch(child.name):
-                logger.warning(
-                    "[%s] skipping corrupt artifact dir at %s "
-                    "(name does not match id_pattern %s)",
-                    self._descriptor.log_tag,
-                    child,
-                    id_pattern.pattern,
-                )
+                if warn_on_name_mismatch:
+                    logger.warning(
+                        "[%s] skipping corrupt artifact dir at %s "
+                        "(name does not match id_pattern %s)",
+                        self._descriptor.log_tag,
+                        child,
+                        id_pattern.pattern,
+                    )
                 continue
             config_path = child / self._descriptor.config_filename
             if not config_path.is_file():
