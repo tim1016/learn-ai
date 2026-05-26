@@ -51,6 +51,7 @@ from app.lean_sidecar.reconciler import (
     FeeReconciliationReport,
     reconcile_against_ibkr,
 )
+from app.lean_sidecar.staging import MetadataStagingError
 from app.lean_sidecar.trading_calendar import (
     blocked_dates_in_range,
     is_trading_day,
@@ -600,6 +601,23 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"reason": "launcher_protocol_error", "message": str(e)},
+        ) from e
+    except MetadataStagingError as e:
+        # ``stage_lean_metadata_from_image`` raises this when the
+        # launcher can't extract market-hours-database.json /
+        # symbol-properties-database.csv from the pinned LEAN image —
+        # the launcher process is down, the pinned digest doesn't
+        # match anything locally, or ``podman create/cp`` fails inside
+        # the launcher. Without this clause the exception escapes
+        # through the global ``Exception`` handler as a 500, and the
+        # browser surfaces it as a misleading CORS error because the
+        # response that *did* reach Starlette's error path bypasses
+        # the CORS middleware's simple_response. Mapping to an
+        # explicit 502 here keeps the CORS headers attached and lets
+        # the frontend branch on a stable ``reason`` label.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"reason": "metadata_staging_failed", "message": str(e)},
         ) from e
     except RunIdAlreadyUsedError as e:
         # 409 Conflict: a run with this run_id already exists on disk.
