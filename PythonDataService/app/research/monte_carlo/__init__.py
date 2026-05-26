@@ -31,6 +31,12 @@ invariants — deferred to a future ``app/research/robustness/`` module.
 
 from __future__ import annotations
 
+from app.research.monte_carlo.descriptor import MONTE_CARLO_ARTIFACT
+from app.research.monte_carlo.errors import (
+    MonteCarloAlreadyExistsError,
+    MonteCarloCorruptError,
+    MonteCarloNotFoundError,
+)
 from app.research.monte_carlo.methods import (
     resample_trades,
     reshuffle_trades,
@@ -45,15 +51,13 @@ from app.research.monte_carlo.runner import (
     run_monte_carlo,
 )
 from app.research.monte_carlo.storage import (
-    MonteCarloAlreadyExistsError,
-    MonteCarloCorruptError,
-    MonteCarloNotFoundError,
     list_monte_carlos,
     load_monte_carlo,
     save_monte_carlo,
 )
 
 __all__ = [
+    "MONTE_CARLO_ARTIFACT",
     "EquityBandPoint",
     "MonteCarloAlreadyExistsError",
     "MonteCarloConfig",
