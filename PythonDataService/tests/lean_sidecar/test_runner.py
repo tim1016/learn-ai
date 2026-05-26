@@ -7,6 +7,7 @@ unsafe.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -267,6 +268,75 @@ class TestBuildCommand:
         monkeypatch.delattr(runner.os, "getgid", raising=False)
         spec = runner._container_user_spec()
         assert spec == "10001:10001"
+
+    def test_argv_includes_userns_keep_id_on_rootless_podman(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: on rootless podman, ``--user=<host-uid>`` alone
+        runs LEAN as a sub-UID with no write access to the workspace
+        (the workspace files are owned by the launcher's host UID,
+        which maps to container UID 0; the requested container UID
+        maps to a sub-UID from /etc/subuid). Without ``--userns=keep-id``
+        LEAN crashes inside ``BacktestingResultHandler.Exit()`` with
+        ``UnauthorizedAccessException`` on every ``output/*`` write —
+        the run looks "finished" but produces no log.txt or summary.
+
+        Pin both the flag presence AND its position before the
+        ``--user=`` flag so a future refactor cannot silently reorder
+        them (podman parses flags positionally for some interactions).
+        """
+        from app.lean_sidecar import runner
+
+        monkeypatch.setattr(runner, "_is_rootless_podman", lambda _path: True)
+        ws = resolve_workspace("run_userns_rootless", tmp_artifacts_root)
+        ws.ensure_layout()
+        argv = build_command(ws, DUMMY_DIGEST).argv
+
+        assert "--userns=keep-id" in argv
+        user_arg = next(a for a in argv if a.startswith("--user="))
+        assert argv.index("--userns=keep-id") < argv.index(user_arg), (
+            "--userns=keep-id must precede --user=<host-uid> so the user-namespace "
+            "mapping is in effect when podman resolves the requested container UID"
+        )
+
+    def test_argv_omits_userns_keep_id_on_rootful_podman(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rootful podman rejects ``--userns=keep-id`` at parse time
+        ("keep-id is only supported in rootless mode"). Omitting the
+        flag is the safe path; the default user-namespace already
+        gives identity mapping between host and container UIDs there.
+        """
+        from app.lean_sidecar import runner
+
+        monkeypatch.setattr(runner, "_is_rootless_podman", lambda _path: False)
+        ws = resolve_workspace("run_userns_rootful", tmp_artifacts_root)
+        ws.ensure_layout()
+        argv = build_command(ws, DUMMY_DIGEST).argv
+
+        assert "--userns=keep-id" not in argv
+
+    def test_is_rootless_podman_returns_false_on_probe_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Defensive: any failure of the ``podman info`` probe (binary
+        missing, non-zero exit, timeout, malformed output) must fall
+        back to ``False`` so the omit-the-flag path runs. A True
+        default would corrupt rootful argvs."""
+        from app.lean_sidecar import runner
+
+        def _fail(*_args: object, **_kwargs: object) -> object:
+            raise subprocess.SubprocessError("simulated probe failure")
+
+        monkeypatch.setattr(runner.subprocess, "run", _fail)
+        assert runner._is_rootless_podman("/usr/bin/podman") is False
 
     def test_rejects_tmpfs_followed_by_another_flag(
         self,

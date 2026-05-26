@@ -80,6 +80,8 @@ podman run --rm \
   --pids-limit=512 \
   --security-opt=no-new-privileges \
   --cap-drop=ALL \
+  --userns=keep-id  # rootless podman only; omitted on rootful (rejected at parse time)
+  --user <host-uid>:<host-gid> \
   -v <absolute_host_workspace_path>:/lean-run:rw \
   <pinned-lean-runner-image> \
   <runner-command>
@@ -90,7 +92,7 @@ Additional flags applied **if compatible** with the chosen LEAN image (validated
 - `--cap-drop=ALL` — currently listed in the required shape above; Phase 1 verifies the image tolerates it. If not, the runner must use the smallest documented capability allow-list and this ADR must be updated in the same PR.
 - `--read-only` — root filesystem read-only
 - `--tmpfs /tmp:rw,noexec,nosuid,size=256m`
-- `--user <non-root-uid>` — drop root inside the container
+- `--user <host-uid>` — drop root inside the container; paired with `--userns=keep-id` on rootless podman so the container UID actually maps to the host UID that owns the workspace files (without it, container UID 1000 maps to a `/etc/subuid` sub-UID like 100999 and POSIX permissions reject every write to `output/`, crashing LEAN inside `BacktestingResultHandler.Exit()`).
 - `--storage-opt size=<cap>` — defense-in-depth for writes to the container overlay, when supported
 
 Phase 1's runner spike must record which of these flags the LEAN image actually tolerates. If `--read-only`, `--cap-drop=ALL`, or non-root breaks LEAN, the doc gets updated with the smallest accepted relaxation. The workspace-only mount, no-network rule, no-secrets rule, and hard CPU/memory/time/disk ceilings remain mandatory.

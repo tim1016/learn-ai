@@ -131,13 +131,20 @@ _FALLBACK_CONTAINER_GID = 10001
 def _container_user_spec() -> str:
     """Return the ``--user <uid>:<gid>`` spec for the LEAN container.
 
-    On Linux the spec is the launcher process's own UID/GID so the
-    container's effective user matches the owner of the workspace
-    files the launcher just created. Without that alignment, the
-    container (running as a fixed 10001:10001) cannot write to
-    ``workspace/output``/ObjectStore because POSIX permissions
-    reject the cross-UID write — reviewer-flagged regression on
-    native Linux hosts that the launcher does not chown around.
+    On Linux the spec is the launcher process's own UID/GID. Paired
+    with :func:`_userns_flags` (which emits ``--userns=keep-id`` on
+    rootless podman), this guarantees the container's effective user
+    matches the *host-side* owner of the workspace files the launcher
+    created.
+
+    Why the pairing matters on rootless podman: without
+    ``--userns=keep-id``, container UID 1000 maps to a sub-UID from
+    ``/etc/subuid`` (e.g., 100999) rather than to the host's 1000.
+    The bind-mounted workspace shows up inside the container as owned
+    by container UID 0 (because host 1000 → container 0 under the
+    default mapping), and the UID-100999 process is denied writes,
+    crashing LEAN inside ``BacktestingResultHandler.Exit()`` with
+    ``UnauthorizedAccessException`` on every ``output/*`` write.
 
     On Windows the launcher runs as a native Windows process where
     ``os.getuid()`` does not exist; the bind mount goes through the
@@ -149,6 +156,62 @@ def _container_user_spec() -> str:
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
         return f"{os.getuid()}:{os.getgid()}"
     return f"{_FALLBACK_CONTAINER_UID}:{_FALLBACK_CONTAINER_GID}"
+
+
+def _is_rootless_podman(podman_path: str) -> bool:
+    """Detect whether the discovered podman is running rootless.
+
+    Returns ``False`` on any probe failure (podman not on PATH, exit
+    non-zero, malformed output). The downstream :func:`_userns_flags`
+    then omits ``--userns=keep-id`` which is the safe default for
+    rootful podman (where the flag errors with "keep-id is only
+    supported in rootless mode") and for non-Linux hosts.
+
+    Not cached on purpose: the probe runs once per ``build_command``
+    call (once per LEAN backtest, which takes seconds), the ~tens-of-ms
+    cost is negligible against that baseline, and avoiding a cache
+    keeps tests trivial — a ``monkeypatch.setattr(runner,
+    "_is_rootless_podman", ...)`` reliably overrides per-test without
+    a separate cache-reset step.
+    """
+    try:
+        completed = subprocess.run(
+            [podman_path, "info", "--format", "{{.Host.Security.Rootless}}"],
+            capture_output=True,
+            text=True,
+            # ``podman info`` is fast (~1-2s) once the user namespace is
+            # initialised, but the very first invocation in a fresh
+            # session can take noticeably longer while the storage
+            # driver and network stack come up. 15s gives margin
+            # without making a real podman misconfiguration hang the
+            # launcher for unbounded time.
+            timeout=15,
+            check=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return completed.stdout.strip().lower() == "true"
+
+
+def _userns_flags(podman_path: str) -> tuple[str, ...]:
+    """Return ``('--userns=keep-id',)`` when rootless, ``()`` otherwise.
+
+    Rationale: on rootless podman, the default user-namespace mapping
+    routes the launcher's host UID (e.g., 1000) to container UID 0,
+    and container UIDs >0 to a high sub-UID range from ``/etc/subuid``.
+    The ``--user=<host-uid>:<host-gid>`` spec from
+    :func:`_container_user_spec` therefore runs LEAN as a sub-UID with
+    no write access to the workspace files (owned by host UID 1000,
+    seen inside the container as owned by container UID 0).
+
+    ``--userns=keep-id`` overrides the mapping to make container UID
+    == host UID for the launcher's identity, restoring write access.
+
+    The flag is unsupported on rootful podman (errors at parse time);
+    omit it there. Detection is one-shot at module load via
+    :func:`_is_rootless_podman`.
+    """
+    return ("--userns=keep-id",) if _is_rootless_podman(podman_path) else ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +413,7 @@ def build_command(
         "--security-opt=no-new-privileges",
         "--cap-drop=ALL",
         "--read-only",
+        *_userns_flags(podman),
         f"--user={_container_user_spec()}",
         f"--cpus={limits.cpus}",
         f"--memory={limits.memory_mb}m",
