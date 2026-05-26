@@ -16,6 +16,7 @@ prices within the LEAN quantization floor (atol=0.0001).
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -30,7 +31,7 @@ from app.engine.data.lean_format import (
     write_lean_day_zip,
 )
 from app.engine.data.trade_bar import TradeBar
-from app.lean_sidecar.staging import stage_minute_bars
+from app.lean_sidecar.staging import list_metadata_databases, stage_lean_metadata_from_image, stage_minute_bars
 from app.lean_sidecar.workspace import resolve_workspace
 
 
@@ -139,6 +140,44 @@ class TestDataFolderRoundTrip:
         assert len(paths) == 1
         rel = paths[0].relative_to(ws.data_dir).as_posix()
         assert rel == "equity/usa/minute/spy/20250106_trade.zip"
+
+    def test_metadata_staging_reuses_same_digest_workspace_cache(
+        self,
+        tmp_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Same-digest extracted metadata is immutable and safe to reuse.
+
+        This keeps ordinary staging off Podman's storage lock path after
+        the first successful extraction for a pinned LEAN image.
+        """
+        digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        source = resolve_workspace("metadata_cache_source", tmp_artifacts_root)
+        source.ensure_layout()
+        (source.data_dir / "market-hours").mkdir(parents=True)
+        (source.data_dir / "symbol-properties").mkdir(parents=True)
+        (source.data_dir / "alternative" / "interest-rate").mkdir(parents=True)
+        (source.data_dir / "market-hours" / "market-hours-database.json").write_text("{}", encoding="utf-8")
+        (source.data_dir / "symbol-properties" / "symbol-properties-database.csv").write_text(
+            "symbol,security-type,market\n",
+            encoding="utf-8",
+        )
+        (source.data_dir / "alternative" / "interest-rate" / "usa.csv").write_text("date,rate\n", encoding="utf-8")
+        source.manifest_path.write_text(json.dumps({"lean_image_digest": digest}), encoding="utf-8")
+
+        target = resolve_workspace("metadata_cache_target", tmp_artifacts_root)
+        monkeypatch.setattr("app.lean_sidecar.staging.shutil.which", lambda _: None)
+
+        market_hours, symbol_properties = stage_lean_metadata_from_image(
+            target,
+            digest,
+            allow_launcher_fallback=False,
+        )
+
+        assert market_hours == target.data_dir / "market-hours" / "market-hours-database.json"
+        assert symbol_properties == target.data_dir / "symbol-properties" / "symbol-properties-database.csv"
+        assert (target.data_dir / "alternative" / "interest-rate" / "usa.csv").exists()
+        assert list_metadata_databases(target) == (market_hours, symbol_properties)
 
     def test_naive_or_utc_input_is_normalized_to_eastern(self, tmp_path: Path) -> None:
         """Bars supplied in UTC must serialize as the equivalent ET ms.

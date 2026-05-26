@@ -12,6 +12,7 @@ contract" and §"LEAN data-folder fidelity".
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -264,6 +265,10 @@ def stage_lean_metadata_from_image(
         raise MetadataStagingError(f"image_digest must be pinned, got {image_digest!r}")
     image_ref = f"{LEAN_IMAGE_REPO}@{bare}"
 
+    cached = _stage_lean_metadata_from_cached_same_digest_workspace(workspace, bare)
+    if cached is not None:
+        return cached
+
     podman = shutil.which("podman")
     if not podman:
         if not allow_launcher_fallback:
@@ -379,6 +384,67 @@ def stage_lean_metadata_from_image(
             f"metadata databases not present in workspace after extract; market-hours={mh!r}, symbol-properties={sp!r}"
         )
     return mh, sp
+
+
+def _stage_lean_metadata_from_cached_same_digest_workspace(
+    workspace: Workspace,
+    image_digest: str,
+) -> tuple[Path, Path] | None:
+    """Copy metadata from a previous workspace for the same LEAN digest.
+
+    The image-bundled metadata is immutable for a pinned digest. Once a
+    run has extracted it and recorded a manifest with the same
+    ``lean_image_digest``, later workspaces can reuse those exact files
+    without issuing another ``podman create``. This keeps the normal path
+    independent of Podman's healthcheck/storage-lock state while still
+    preserving the digest-scoped provenance contract.
+    """
+    artifacts_root = workspace.artifacts_root
+    if not artifacts_root.exists():
+        return None
+
+    for manifest_path in sorted(artifacts_root.glob("*/manifest.json"), reverse=True):
+        candidate_root = manifest_path.parent
+        if candidate_root == workspace.root:
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("skipping unreadable LEAN metadata cache manifest %s: %s", manifest_path, e)
+            continue
+        if manifest.get("lean_image_digest") != image_digest:
+            continue
+
+        source_data_dir = candidate_root / "workspace" / "data"
+        source_mh = source_data_dir / "market-hours" / "market-hours-database.json"
+        source_sp = source_data_dir / "symbol-properties" / "symbol-properties-database.csv"
+        if not source_mh.exists() or not source_sp.exists():
+            continue
+
+        workspace.ensure_layout()
+        workspace.data_dir.mkdir(parents=True, exist_ok=True)
+        for relative in (
+            Path("market-hours"),
+            Path("symbol-properties"),
+            Path("alternative") / "interest-rate",
+        ):
+            source = source_data_dir / relative
+            if not source.exists():
+                continue
+            dest = workspace.data_dir / relative
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(source, dest)
+
+        mh, sp = list_metadata_databases(workspace)
+        if mh is not None and sp is not None:
+            logger.info(
+                "reused LEAN metadata for %s from cached workspace %s",
+                image_digest,
+                candidate_root.name,
+            )
+            return mh, sp
+    return None
 
 
 def _stage_lean_metadata_via_launcher(
