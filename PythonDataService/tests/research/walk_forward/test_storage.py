@@ -243,10 +243,15 @@ def test_list_skips_corrupt_config(tmp_path: Path, caplog):
     (bad_dir / "config.json").write_text("{not valid json")
     (bad_dir / "result.json").write_text("{}")
 
-    with caplog.at_level(logging.WARNING, logger="app.research.walk_forward.storage"):
+    # After the seam migration the corrupt-skip warning fires from
+    # ``app.research.artifact.store`` rather than this phase's
+    # ``storage`` module — but it still carries the ``[WF]`` prefix
+    # the descriptor declares via ``log_tag="WF"`` so operator grep
+    # patterns are preserved.
+    with caplog.at_level(logging.WARNING):
         listed = list_walk_forwards(root=tmp_path)
     assert [c.walk_forward_id for c in listed] == [cfg.walk_forward_id]
     assert any(
-        "skipping corrupt walk-forward" in rec.message
+        rec.message.startswith("[WF]") and "skipping corrupt" in rec.message
         for rec in caplog.records
     )
