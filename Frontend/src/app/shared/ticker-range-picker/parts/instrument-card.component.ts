@@ -19,6 +19,7 @@ import {
   type TickerOption,
   type TickerRange,
 } from '../ticker-range-picker.types';
+import { toMostRecentWeekday } from '../../date/weekday';
 
 const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
   ARCA: 'NYSE Arca',
@@ -150,8 +151,13 @@ export class InstrumentCardComponent {
       const end = new Date(t.last);
       const start = new Date(end);
       start.setDate(start.getDate() - 30);
-      patch.from = isoDate(start);
-      patch.to = isoDate(end);
+      // Sidecar validator rejects weekend endpoints with 422. ``last``
+      // arrives from a data-availability response so it's usually
+      // already a weekday, but ``last - 30 days`` lands on a weekend
+      // whenever ``last`` falls Mon-Wed. Guard both endpoints to keep
+      // the picker's invariant single-sourced.
+      patch.from = isoDate(toMostRecentWeekday(start));
+      patch.to = isoDate(toMostRecentWeekday(end));
     }
     this.value.set({ ...current, ...patch });
     this.closeDropdown();
