@@ -17,7 +17,7 @@ sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
 `--read-only` documented in the security section).
 
 **Pinned LEAN image digest (Phase 1b):**
-`sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c`
+`sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
 
 ---
 
