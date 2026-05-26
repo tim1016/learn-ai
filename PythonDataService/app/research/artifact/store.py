@@ -81,26 +81,33 @@ class ArtifactStore:
     def _artifact_dir(self, artifact_id: str) -> Path:
         """Resolve an artifact directory, refusing anything that escapes the base.
 
-        Defense in depth against path traversal: the format check
-        rejects ``../`` segments and absolute paths; the resolved-path
-        check catches anything that slips past (e.g. symlinked roots,
-        weird Windows separators). Artifact ids reach here from
-        user-controlled URL path segments, so neither layer is
-        optional.
+        Defence in depth against path traversal: (1) the format check
+        rejects ``../`` segments, absolute paths, and anything the
+        descriptor's regex doesn't whitelist; (2) the resolved-path
+        containment check catches anything that slips past (e.g.
+        symlinked roots, weird Windows separators). Artifact ids reach
+        here from user-controlled URL path segments, so neither layer
+        is optional.
+
+        Returns the **resolved** path. Returning the resolved-and-
+        validated variable (rather than re-constructing ``base /
+        artifact_id``) is also what CodeQL's path-injection sanitiser
+        model recognises — without it, CodeQL would taint every
+        downstream ``artifact_dir / filename`` as user-controlled
+        even though the regex + containment check guarantee safety.
         """
         pattern = self._descriptor.id_pattern
         if not artifact_id or not pattern.fullmatch(artifact_id):
             raise ValueError(
                 f"artifact_id must match {pattern.pattern} (got {artifact_id!r})"
             )
-        base = self._base()
-        candidate = (base / artifact_id).resolve()
-        base_resolved = base.resolve()
+        base_resolved = self._base().resolve()
+        candidate = (base_resolved / artifact_id).resolve()
         if not candidate.is_relative_to(base_resolved):
             raise ValueError(
                 f"artifact_id resolves outside the artifacts root: {artifact_id!r}"
             )
-        return base / artifact_id
+        return candidate
 
     # ---- public surface --------------------------------------------
 
