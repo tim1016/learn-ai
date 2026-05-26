@@ -32,6 +32,7 @@ MONTE_CARLO_ARTIFACT = ArtifactDescriptor(
     config_filename="config.json",
     result_filename="result.json",
     parent_run_id_extractor=lambda cfg: getattr(cfg, "parent_run_id", None),
+    log_tag="MC",
     not_found_error=MonteCarloNotFoundError,
     already_exists_error=MonteCarloAlreadyExistsError,
     corrupt_error=MonteCarloCorruptError,

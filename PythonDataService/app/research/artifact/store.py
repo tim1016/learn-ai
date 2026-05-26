@@ -9,7 +9,7 @@ thorough of the four pre-seam storage modules); see
 ``docs/architecture/research-artifact-seam.md`` for the design.
 
 The default artifacts root resolves via
-``app.research.runs.storage.default_artifacts_root`` so the
+``app.research.artifact.root.default_artifacts_root`` so the
 ``LEARN_AI_ARTIFACTS_ROOT`` env var keeps working unchanged.
 """
 
@@ -24,7 +24,7 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from app.research.artifact.descriptor import ArtifactDescriptor
-from app.research.runs.storage import default_artifacts_root
+from app.research.artifact.root import default_artifacts_root
 
 logger = logging.getLogger(__name__)
 
@@ -253,9 +253,8 @@ class ArtifactStore:
                 payload = json.loads(config_path.read_text(encoding="utf-8"))
             except Exception as exc:
                 logger.warning(
-                    "[ARTIFACT:%s] skipping corrupt %s config at %s: %s",
-                    self._descriptor.subdir,
-                    self._descriptor.subdir,
+                    "[%s] skipping corrupt config at %s: %s",
+                    self._descriptor.log_tag,
                     config_path,
                     exc,
                 )
@@ -263,8 +262,8 @@ class ArtifactStore:
 
             if not isinstance(payload, dict):
                 logger.warning(
-                    "[ARTIFACT:%s] skipping non-object config at %s",
-                    self._descriptor.subdir,
+                    "[%s] skipping non-object config at %s",
+                    self._descriptor.log_tag,
                     config_path,
                 )
                 continue
@@ -274,8 +273,8 @@ class ArtifactStore:
                 # No usable timestamp — skip rather than raise; same
                 # tolerance as a corrupt config.
                 logger.warning(
-                    "[ARTIFACT:%s] skipping config without int created_at_ms at %s",
-                    self._descriptor.subdir,
+                    "[%s] skipping config without int created_at_ms at %s",
+                    self._descriptor.log_tag,
                     config_path,
                 )
                 continue
@@ -301,8 +300,8 @@ class ArtifactStore:
                     )
                 except Exception as exc:
                     logger.warning(
-                        "[ARTIFACT:%s] parent_run_id_extractor failed at %s: %s",
-                        self._descriptor.subdir,
+                        "[%s] parent_run_id_extractor failed at %s: %s",
+                        self._descriptor.log_tag,
                         config_path,
                         exc,
                     )

@@ -55,6 +55,12 @@ class ArtifactDescriptor:
         (decision 2). When absent, no hashing happens; when present,
         the store records the hash on save (PR 4 wires this up for
         ``runs``).
+      * ``log_tag`` — short phase token (``"MC"``, ``"WF"``,
+        ``"BASELINES"``, ``"RUNS"``) prepended to every warning the
+        store emits during ``list_ids``. Preserves the operator grep
+        patterns established by the pre-seam
+        ``[MC] skipping corrupt monte-carlo config in %s: %s`` /
+        ``[RUNS] skipping corrupt ledger at %s: %s`` log lines.
       * ``not_found_error`` / ``already_exists_error`` / ``corrupt_error``
         — the exception classes the store raises. Phase-named classes
         inherit from the shared bases so ``except ArtifactError``
@@ -69,6 +75,7 @@ class ArtifactDescriptor:
     config_filename: str
     result_filename: str
     parent_run_id_extractor: Callable[[BaseModel], str | None]
+    log_tag: str
     hash_payload: Callable[[BaseModel], str] | None = None
     not_found_error: type[ArtifactNotFoundError] = ArtifactNotFoundError
     already_exists_error: type[ArtifactAlreadyExistsError] = ArtifactAlreadyExistsError

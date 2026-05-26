@@ -42,6 +42,7 @@ import os
 import re
 from pathlib import Path
 
+from app.research.artifact.root import ARTIFACTS_ROOT_ENV, default_artifacts_root
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 
@@ -57,8 +58,21 @@ _RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 logger = logging.getLogger(__name__)
 
-ARTIFACTS_ROOT_ENV = "LEARN_AI_ARTIFACTS_ROOT"
-"""Env var that overrides the default artifacts root."""
+# ``ARTIFACTS_ROOT_ENV`` and ``default_artifacts_root`` are re-exported
+# from ``app.research.artifact.root`` so existing callers
+# (``walk_forward/storage.py``, ``baselines/storage.py``, the runs router,
+# tests) keep working until their own PRs migrate to import from the
+# artifact module directly.
+__all__ = [
+    "ARTIFACTS_ROOT_ENV",
+    "RunAlreadyExistsError",
+    "RunCorruptError",
+    "RunNotFoundError",
+    "default_artifacts_root",
+    "list_runs",
+    "load_run",
+    "save_run",
+]
 
 
 class RunNotFoundError(LookupError):
@@ -71,26 +85,6 @@ class RunAlreadyExistsError(FileExistsError):
 
 class RunCorruptError(RuntimeError):
     """Raised when a persisted ledger or result fails Pydantic validation."""
-
-
-def default_artifacts_root() -> Path:
-    """Return the default ``artifacts/runs/`` directory.
-
-    Resolution order:
-      1. ``$LEARN_AI_ARTIFACTS_ROOT`` if set (caller is responsible for
-         existence; ``save_run`` creates it on first write).
-      2. ``<package_root>/artifacts/runs`` — anchored relative to this
-         file so the path is correct regardless of CWD.
-
-    The "package root" is the parent of ``app/`` — i.e.
-    ``Path(__file__).resolve().parents[3]``. From
-    ``app/research/runs/storage.py`` that climbs:
-    ``runs → research → app → <package_root>``.
-    """
-    explicit = os.environ.get(ARTIFACTS_ROOT_ENV)
-    if explicit:
-        return Path(explicit)
-    return Path(__file__).resolve().parents[3] / "artifacts" / "runs"
 
 
 def _run_dir(run_id: str, root: Path | None) -> Path:

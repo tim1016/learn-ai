@@ -254,10 +254,15 @@ def test_list_skips_corrupt_config(tmp_path: Path, caplog):
     (bad_dir / "config.json").write_text("{not valid json")
     (bad_dir / "result.json").write_text("{}")
 
-    with caplog.at_level(logging.WARNING, logger="app.research.monte_carlo.storage"):
+    # After the seam migration the corrupt-skip warning fires from
+    # ``app.research.artifact.store`` rather than this phase's
+    # ``storage`` module — but it still carries the ``[MC]`` prefix
+    # the descriptor declares via ``log_tag="MC"`` so operator grep
+    # patterns are preserved.
+    with caplog.at_level(logging.WARNING):
         listed = list_monte_carlos(root=tmp_path)
     assert [c.monte_carlo_id for c in listed] == [cfg.monte_carlo_id]
     assert any(
-        "skipping corrupt monte-carlo" in rec.message
+        rec.message.startswith("[MC]") and "skipping corrupt" in rec.message
         for rec in caplog.records
     )

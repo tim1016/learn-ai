@@ -17,6 +17,7 @@ from app.research.artifact.errors import (
     ArtifactError,
     ArtifactNotFoundError,
 )
+from app.research.artifact.root import default_artifacts_root
 from app.research.artifact.store import ArtifactStore
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "ArtifactError",
     "ArtifactNotFoundError",
     "ArtifactStore",
+    "default_artifacts_root",
 ]

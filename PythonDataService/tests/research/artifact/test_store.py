@@ -76,6 +76,7 @@ def _descriptor(*, with_hash: bool = False) -> ArtifactDescriptor:
         config_filename="config.json",
         result_filename="result.json",
         parent_run_id_extractor=lambda cfg: getattr(cfg, "parent_run_id", None),
+        log_tag="PHX",
         hash_payload=_hash_callback if with_hash else None,
         not_found_error=_PhaseNotFound,
         already_exists_error=_PhaseAlreadyExists,
@@ -407,6 +408,7 @@ def test_save_uses_explicit_id_field_when_sibling_field_also_matches_pattern(
         config_filename="config.json",
         result_filename="result.json",
         parent_run_id_extractor=lambda cfg: None,
+        log_tag="PHX",
         not_found_error=_PhaseNotFound,
         already_exists_error=_PhaseAlreadyExists,
         corrupt_error=_PhaseCorrupt,
@@ -440,6 +442,7 @@ def test_save_rejects_when_id_field_value_fails_pattern(tmp_path: Path):
         config_filename="config.json",
         result_filename="result.json",
         parent_run_id_extractor=lambda cfg: None,
+        log_tag="PHX",
         not_found_error=_PhaseNotFound,
         already_exists_error=_PhaseAlreadyExists,
         corrupt_error=_PhaseCorrupt,
@@ -455,3 +458,90 @@ def test_save_rejects_when_id_field_value_fails_pattern(tmp_path: Path):
     )
     with pytest.raises(ValueError, match=r"artifact_id"):
         store.save(bad_config, bad_result)
+
+
+# ---------------------------------------------------------------------------
+# log_tag prefixes warnings (PR-4 Q2 resolved).
+# ---------------------------------------------------------------------------
+def test_list_ids_corrupt_warning_uses_descriptor_log_tag(
+    tmp_path: Path, caplog
+):
+    """A skipped corrupt config logs with the descriptor's ``[<log_tag>]`` prefix.
+
+    Preserves the operator grep patterns established by the pre-seam
+    ``[MC] skipping corrupt monte-carlo config in %s: %s`` log line so
+    existing dashboards / alerts that filter on ``[MC]`` keep matching.
+    """
+    descriptor = ArtifactDescriptor(
+        subdir="monte-carlo",
+        id_field="artifact_id",
+        id_pattern=_ID_PATTERN,
+        config_filename="config.json",
+        result_filename="result.json",
+        parent_run_id_extractor=lambda cfg: None,
+        log_tag="MC",
+        not_found_error=_PhaseNotFound,
+        already_exists_error=_PhaseAlreadyExists,
+        corrupt_error=_PhaseCorrupt,
+    )
+    store = ArtifactStore(descriptor, root=tmp_path)
+
+    debris = tmp_path / "monte-carlo" / "corrupt-debris-dir"
+    debris.mkdir(parents=True)
+    (debris / "config.json").write_text("{not valid json")
+
+    with caplog.at_level(logging.WARNING):
+        listed = store.list_ids()
+
+    assert listed == []
+    matching = [rec for rec in caplog.records if rec.message.startswith("[MC]")]
+    assert matching, (
+        "expected a warning prefixed with [MC]; got messages: "
+        f"{[rec.message for rec in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# subdir="" (the runs-phase shape — PR-4 Q3 resolved).
+#
+# ``runs`` is flat: its artifacts live at ``<root>/<run_id>/`` directly
+# rather than under an intermediate ``<root>/runs/`` segment. The
+# descriptor's ``subdir: str`` field is correct as typed; the runs
+# descriptor will pass ``subdir=""``. Encoded here so reviewers of PR 4
+# don't flag the empty string as a typo.
+# ---------------------------------------------------------------------------
+def test_store_with_empty_subdir_writes_artifact_at_root_directly(tmp_path: Path):
+    descriptor = ArtifactDescriptor(
+        subdir="",
+        id_field="artifact_id",
+        id_pattern=_ID_PATTERN,
+        config_filename="ledger.json",
+        result_filename="result.json",
+        parent_run_id_extractor=lambda cfg: getattr(cfg, "parent_run_id", None),
+        log_tag="RUNS",
+        not_found_error=_PhaseNotFound,
+        already_exists_error=_PhaseAlreadyExists,
+        corrupt_error=_PhaseCorrupt,
+    )
+    store = ArtifactStore(descriptor, root=tmp_path)
+
+    config = _make_config(payload="flat")
+    result = _make_result(score=2.0)
+
+    artifact_dir = store.save(config, result)
+
+    # No intermediate path segment — the artifact lives directly under
+    # ``<root>/<id>/``, matching the runs-phase pre-seam layout.
+    assert artifact_dir == tmp_path / config.artifact_id
+    assert (artifact_dir / "ledger.json").is_file()
+    assert (artifact_dir / "result.json").is_file()
+
+    loaded_config, loaded_result = store.load(
+        config.artifact_id,
+        config_type=_FixtureConfig,
+        result_type=_FixtureResult,
+    )
+    assert loaded_config.payload == "flat"
+    assert loaded_result.score == 2.0
+
+    assert store.list_ids() == [config.artifact_id]
