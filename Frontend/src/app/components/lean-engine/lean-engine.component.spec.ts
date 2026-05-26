@@ -499,4 +499,13 @@ describe('LeanEngineComponent default-date weekend handling', () => {
     component.setPresetRange(7);
     expect(component.startDate()).toBe('2026-05-19');
   });
+
+  it('defaultEnd skips the weekend when yesterday lands on Sunday', () => {
+    // Sun 2026-05-24 12pm → yesterday Sat 2026-05-23 → walks to Fri 2026-05-22.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 24, 12, 0, 0));
+
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    expect(fixture.componentInstance.endDate()).toBe('2026-05-22');
+  });
 });

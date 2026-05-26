@@ -15,10 +15,10 @@ import { FormsModule } from '@angular/forms';
 import { Tooltip } from 'primeng/tooltip';
 
 import {
-  isoDate,
   type TickerOption,
   type TickerRange,
 } from '../ticker-range-picker.types';
+import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
   ARCA: 'NYSE Arca',
@@ -147,11 +147,20 @@ export class InstrumentCardComponent {
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
     if (t.last) {
-      const end = new Date(t.last);
-      const start = new Date(end);
-      start.setDate(start.getDate() - 30);
-      patch.from = isoDate(start);
-      patch.to = isoDate(end);
+      // Sidecar validator rejects weekend endpoints with 422. ``last``
+      // arrives from a data-availability response so it's usually
+      // already a weekday, but ``last - 30 days`` lands on a weekend
+      // whenever ``last`` falls Mon-Wed. Operate entirely on the ISO
+      // string via ``toMostRecentTradingDayIso`` so the walk is
+      // UTC-internal — the earlier ``Date``-based path silently
+      // re-introduced a weekend in west-of-UTC browsers because
+      // ``new Date("YYYY-MM-DD")`` parses as UTC midnight (= prior
+      // local evening), the local-time walk then stepped onto a
+      // local Friday whose UTC instant fell on Saturday, and
+      // ``isoDate``'s UTC ``toISOString`` round-trip emitted the
+      // Saturday day stamp (PR #346 P1 review).
+      patch.from = toMostRecentTradingDayIso(t.last, -30);
+      patch.to = toMostRecentTradingDayIso(t.last);
     }
     this.value.set({ ...current, ...patch });
     this.closeDropdown();

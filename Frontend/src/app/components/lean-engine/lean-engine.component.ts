@@ -37,6 +37,7 @@ import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import type { DataPolicy } from "../../models/data-policy";
 import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
 import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
+import { toMostRecentWeekday } from "../../shared/date/weekday";
 
 /** Engine choice on the unified launch surface. */
 export type EngineChoice = "python" | "lean";
@@ -1163,8 +1164,8 @@ export class LeanEngineComponent implements OnInit {
     const end = LeanEngineComponent.yesterday();
     const start = new Date(end);
     start.setDate(start.getDate() - daysBack);
-    this.startDate.set(LeanEngineComponent.toIso(LeanEngineComponent.toMostRecentWeekday(start)));
-    this.endDate.set(LeanEngineComponent.toIso(end));
+    this.startDate.set(LeanEngineComponent.toIso(toMostRecentWeekday(start)));
+    this.endDate.set(LeanEngineComponent.toIso(toMostRecentWeekday(end)));
   }
 
   private static yesterday(): Date {
@@ -1183,25 +1184,15 @@ export class LeanEngineComponent implements OnInit {
 
   // Walk back to the most recent weekday. The lean sidecar rejects any
   // start that isn't a session open (lean_sidecar.py:374) and we don't
-  // bump the start server-side because that would mask data gaps. The
-  // API still surfaces holiday cases via the same 422.
-  private static toMostRecentWeekday(d: Date): Date {
-    const out = new Date(d);
-    while (out.getDay() === 0 || out.getDay() === 6) {
-      out.setDate(out.getDate() - 1);
-    }
-    return out;
-  }
-
   private static defaultEnd(): string {
-    return LeanEngineComponent.toIso(LeanEngineComponent.yesterday());
+    return LeanEngineComponent.toIso(toMostRecentWeekday(LeanEngineComponent.yesterday()));
   }
 
   private static defaultStart(): string {
     const end = LeanEngineComponent.yesterday();
     const start = new Date(end);
     start.setDate(start.getDate() - 30);
-    return LeanEngineComponent.toIso(LeanEngineComponent.toMostRecentWeekday(start));
+    return LeanEngineComponent.toIso(toMostRecentWeekday(start));
   }
 
   // ------------------------------------------------------------------

@@ -18,6 +18,7 @@ import {
   type DominantState,
   type TickerRange,
 } from '../ticker-range-picker.types';
+import { toMostRecentWeekday } from '../../date/weekday';
 
 export type LegendTreatment = 'tinted-bold' | 'solid-bold' | 'icon-glyph';
 
@@ -86,10 +87,15 @@ export class TimeWindowCardComponent {
     end.setHours(0, 0, 0, 0);
     const start = new Date(end);
     start.setDate(start.getDate() - days);
+    // Both endpoints must land on a trading weekday — the sidecar
+    // validator rejects weekend ``start_ms_utc`` or ``end_ms_utc``
+    // with a 422. The 1M/1Y/2Y presets reliably land on a weekend
+    // when today is the matching DOW; without this guard the form
+    // submits a value the server is guaranteed to reject.
     this.value.set({
       ...this.value(),
-      from: isoDate(start),
-      to: isoDate(end),
+      from: isoDate(toMostRecentWeekday(start)),
+      to: isoDate(toMostRecentWeekday(end)),
     });
   }
 }

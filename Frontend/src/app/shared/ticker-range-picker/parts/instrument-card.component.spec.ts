@@ -89,4 +89,27 @@ describe('InstrumentCardComponent', () => {
     fixture.detectChanges();
     expect(component.selectedTickerLast()).toBe('2025-04-30');
   });
+
+  // Sidecar validator rejects weekend endpoints; pickTicker derives
+  // ``from = last - 30 days`` which lands on a weekend whenever
+  // ``last`` is Mon-Wed. Guard both endpoints.
+  it('pickTicker bumps a weekend-derived from date back to Friday', () => {
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    // last = Mon 2026-05-25 → last-30 = Sat 2026-04-25 → walks to
+    // Fri 2026-04-24. ``to`` is the supplied weekday Mon (no walk).
+    component.pickTicker({
+      symbol: 'AAPL',
+      name: 'Apple',
+      exchange: 'NASDAQ',
+      cache: 1.0,
+      last: '2026-05-25',
+    });
+    fixture.detectChanges();
+
+    expect(component.value().from).toBe('2026-04-24');
+    expect(component.value().to).toBe('2026-05-25');
+  });
 });
