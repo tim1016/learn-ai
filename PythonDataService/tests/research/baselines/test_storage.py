@@ -211,10 +211,15 @@ def test_list_skips_corrupt_config(tmp_path: Path, caplog):
     (bad_dir / "config.json").write_text("{not valid json")
     (bad_dir / "result.json").write_text("{}")
 
-    with caplog.at_level(logging.WARNING, logger="app.research.baselines.storage"):
+    # After the seam migration the corrupt-skip warning fires from
+    # ``app.research.artifact.store`` rather than this phase's
+    # ``storage`` module — but it still carries the ``[BASELINES]``
+    # prefix the descriptor declares via ``log_tag="BASELINES"`` so
+    # operator grep patterns are preserved.
+    with caplog.at_level(logging.WARNING):
         listed = list_baselines(root=tmp_path)
     assert [c.baseline_id for c in listed] == [cfg.baseline_id]
     assert any(
-        "skipping corrupt baseline" in rec.message
+        rec.message.startswith("[BASELINES]") and "skipping corrupt" in rec.message
         for rec in caplog.records
     )
