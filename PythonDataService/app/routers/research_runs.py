@@ -294,22 +294,22 @@ def get_run(
 @calendar_router.get("/trading-calendar", response_model=WindowSummary)
 def get_trading_calendar(
     start: str = Query(..., description="Window start date, YYYY-MM-DD (inclusive)"),
-    end: str = Query(..., description="Window end date, YYYY-MM-DD (exclusive)"),
+    end: str = Query(..., description="Window end date, YYYY-MM-DD (inclusive)"),
 ) -> WindowSummary:
-    """Return the trading-calendar breakdown for ``[start, end)``.
+    """Return the trading-calendar breakdown for ``[start, end]``.
 
     Same date semantics as ``POST /api/research/strategy-runs``:
-    ``end`` is exclusive. The date-picker UI calls this before
-    submitting a run so the user can see which days will be skipped
-    (weekends, holidays) before discovering the truncation in the
-    result.
+    ``end`` is inclusive (``StrategyAlgorithm.set_end_date`` runs through
+    23:59:59 of that day). The date-picker UI calls this before submitting
+    a run so the user can see which days will be skipped (weekends,
+    holidays) before discovering the truncation in the result.
     """
     start_d = _parse_date(start, "start")
     end_d = _parse_date(end, "end")
-    if end_d <= start_d:
+    if end_d < start_d:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"end must be strictly after start (got start={start_d.isoformat()}, end={end_d.isoformat()})",
+            detail=f"end must be on or after start (got start={start_d.isoformat()}, end={end_d.isoformat()})",
         )
     return summarize_window(start_d, end_d)
 

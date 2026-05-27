@@ -44,7 +44,6 @@ from app.research.runs.window import (
     ExcludedDay,
     WindowSummary,
     summarize_window,
-    summarize_window_from_ms,
 )
 
 __all__ = [
@@ -70,5 +69,4 @@ __all__ = [
     "run_strategy_spec",
     "save_run",
     "summarize_window",
-    "summarize_window_from_ms",
 ]

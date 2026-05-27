@@ -17,15 +17,19 @@ The calendar source is :mod:`app.lean_sidecar.trading_calendar`
 here.
 
 Date semantics mirror the runner's window contract: ``end_date`` is
-*exclusive* — a window ``[2026-05-19, 2026-05-26)`` includes
-2026-05-25 (Memorial Day) as an excluded session and stops before
-2026-05-26.
+*inclusive* — a window ``[2026-05-19, 2026-05-26]`` includes the
+named end day. ``StrategyAlgorithm.set_end_date(y, m, d)`` sets
+``end_date = datetime(y, m, d, 23, 59, 59, tz=NY)`` (engine/strategy/
+base.py:212) — i.e. the bar emitter loops while ``current <= end``,
+so 5/26 is the last day the engine sees. The canonical Memorial-Day
+example (2026-05-19 → 2026-05-26 = 5 trading days: 5/19, 5/20, 5/21,
+5/22, 5/26) only holds when 5/26 is included.
 """
 
 from __future__ import annotations
 
 from datetime import date as Date
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Literal
 
 import pandas as pd
@@ -63,9 +67,10 @@ class ExcludedDay(BaseModel):
 class WindowSummary(BaseModel):
     """Calendar breakdown of a requested backtest window.
 
-    ``requested_end_date`` is exclusive — sessions are evaluated over
-    the half-open interval ``[requested_start_date, requested_end_date)``,
-    matching the runner's ``set_end_date`` semantics.
+    ``requested_end_date`` is inclusive — sessions are evaluated over
+    the closed interval ``[requested_start_date, requested_end_date]``,
+    matching the runner's ``set_end_date`` semantics (the named end day
+    is the last bar the engine sees, not the first one it skips).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -93,25 +98,26 @@ def _holiday_names(start: Date, end_inclusive: Date) -> dict[Date, str]:
 
 
 def summarize_window(start: Date, end: Date) -> WindowSummary:
-    """Build a :class:`WindowSummary` for ``[start, end)``.
+    """Build a :class:`WindowSummary` for ``[start, end]`` (inclusive).
 
-    ``end`` is exclusive (runner convention). Raises ``ValueError``
-    when ``end <= start`` — caller is expected to translate to a 400.
+    Mirrors the runner's ``set_end_date`` semantics: the named end day
+    is the last session the engine sees. ``start == end`` is a valid
+    single-day window. Raises ``ValueError`` when ``end < start`` —
+    caller is expected to translate to a 400.
     """
-    if end <= start:
+    if end < start:
         raise ValueError(
-            f"end must be strictly after start (got start={start.isoformat()}, end={end.isoformat()})"
+            f"end must be on or after start (got start={start.isoformat()}, end={end.isoformat()})"
         )
 
-    inclusive_end = end - timedelta(days=1)
-    blocked = blocked_dates_in_range(start, inclusive_end)
-    holiday_names = _holiday_names(start, inclusive_end)
+    blocked = blocked_dates_in_range(start, end)
+    holiday_names = _holiday_names(start, end)
 
     included: list[Date] = []
     excluded: list[ExcludedDay] = []
     current = start
     one_day = timedelta(days=1)
-    while current < end:
+    while current <= end:
         reason = blocked.get(current)
         if reason is None:
             if is_trading_day(current):
@@ -137,20 +143,3 @@ def summarize_window(start: Date, end: Date) -> WindowSummary:
         sessions_included=included,
         sessions_excluded=excluded,
     )
-
-
-def summarize_window_from_ms(start_ms: int, end_ms: int) -> WindowSummary:
-    """Build a :class:`WindowSummary` from canonical ``int64 ms UTC``
-    timestamps, interpreted as ``America/New_York`` local midnights.
-
-    The runner stores ``start_ms`` / ``end_ms`` in the ledger as
-    NY-midnight epoch ms (see ``runner._date_to_ny_midnight_ms``).
-    Round-tripping back to a ``date`` for calendar lookups happens
-    here so callers in the runner don't replicate the conversion.
-    """
-    from zoneinfo import ZoneInfo
-
-    ny = ZoneInfo("America/New_York")
-    start = datetime.fromtimestamp(start_ms / 1000, tz=ny).date()
-    end = datetime.fromtimestamp(end_ms / 1000, tz=ny).date()
-    return summarize_window(start, end)

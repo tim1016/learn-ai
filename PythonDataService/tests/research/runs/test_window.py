@@ -41,19 +41,20 @@ def test_summarize_window_flags_memorial_day_2026():
         assert we.reason == "weekend"
         assert we.name is None
 
-    # And four trading sessions slipped through: Tue 5/19, Wed 5/20,
-    # Thu 5/21, Fri 5/22. Memorial Day is Monday 5/25; end is exclusive.
+    # Five trading sessions: Tue 5/19, Wed 5/20, Thu 5/21, Fri 5/22, and
+    # Tue 5/26 (the inclusive end day after Memorial Day Monday).
     assert summary.sessions_included == [
         date(2026, 5, 19),
         date(2026, 5, 20),
         date(2026, 5, 21),
         date(2026, 5, 22),
+        date(2026, 5, 26),
     ]
 
 
 def test_summarize_window_pure_weekend_returns_no_sessions():
-    """A Sat→Mon (exclusive) window has zero sessions, two excluded."""
-    summary = summarize_window(date(2026, 5, 23), date(2026, 5, 25))
+    """A Sat→Sun (inclusive) window has zero sessions, two excluded."""
+    summary = summarize_window(date(2026, 5, 23), date(2026, 5, 24))
 
     assert summary.sessions_included == []
     assert {ex.date for ex in summary.sessions_excluded} == {
@@ -65,8 +66,8 @@ def test_summarize_window_pure_weekend_returns_no_sessions():
 
 
 def test_summarize_window_all_trading_days_has_no_excluded():
-    """Mon→Sat (exclusive) covers Mon-Fri with no holidays."""
-    summary = summarize_window(date(2026, 6, 1), date(2026, 6, 6))
+    """Mon→Fri (inclusive) covers all five weekdays with no holidays."""
+    summary = summarize_window(date(2026, 6, 1), date(2026, 6, 5))
 
     assert summary.sessions_excluded == []
     assert len(summary.sessions_included) == 5
@@ -74,10 +75,28 @@ def test_summarize_window_all_trading_days_has_no_excluded():
     assert summary.sessions_included[-1] == date(2026, 6, 5)
 
 
-def test_summarize_window_rejects_end_le_start():
-    with pytest.raises(ValueError, match="end must be strictly after start"):
-        summarize_window(date(2026, 5, 26), date(2026, 5, 26))
-    with pytest.raises(ValueError, match="end must be strictly after start"):
+def test_summarize_window_same_day_trading_day_returns_one_session():
+    """start == end is a valid single-day inclusive window."""
+    summary = summarize_window(date(2026, 5, 26), date(2026, 5, 26))
+
+    assert summary.sessions_included == [date(2026, 5, 26)]
+    assert summary.sessions_excluded == []
+
+
+def test_summarize_window_same_day_holiday_returns_excluded():
+    """start == end on Memorial Day returns the holiday as excluded."""
+    summary = summarize_window(date(2026, 5, 25), date(2026, 5, 25))
+
+    assert summary.sessions_included == []
+    assert len(summary.sessions_excluded) == 1
+    ex = summary.sessions_excluded[0]
+    assert ex.date == date(2026, 5, 25)
+    assert ex.reason == "holiday"
+    assert ex.name == "Memorial Day"
+
+
+def test_summarize_window_rejects_end_before_start():
+    with pytest.raises(ValueError, match="end must be on or after start"):
         summarize_window(date(2026, 5, 26), date(2026, 5, 25))
 
 
@@ -99,3 +118,4 @@ def test_window_summary_serializes_dates_as_iso_strings():
     assert dumped["requested_end_date"] == "2026-05-26"
     assert all(isinstance(d, str) for d in dumped["sessions_included"])
     assert all(isinstance(ex["date"], str) for ex in dumped["sessions_excluded"])
+    assert summary.sessions_included[-1] == date(2026, 5, 26)  # end-inclusive
