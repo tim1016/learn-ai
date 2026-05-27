@@ -105,3 +105,4 @@ class BacktestRunResult(BaseModel):
     metrics: RunMetrics
     log_lines: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    bars_consumed: int = Field(default=0, ge=0)

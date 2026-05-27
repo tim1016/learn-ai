@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
+from datetime import date
+from pathlib import Path
+
 from app.research.runs.hashing import (
     canonical_json,
     hash_payload,
     make_data_snapshot_id,
 )
+from app.research.runs.ledger import compute_window_files_fingerprint
 
 
 def test_canonical_json_key_order_independent():
@@ -122,3 +128,132 @@ def test_make_data_snapshot_id_changes_with_each_field():
         data_root_revision="def",
     )
     assert len({base, diff_symbol, diff_resolution, diff_start, diff_end, diff_revision}) == 6
+
+
+# ---------------------------------------------------------------------------
+# Per-file mtime fingerprint — replaces the prior "directory mtime"
+# revision suffix that was too coarse to detect cache-content drift.
+# ---------------------------------------------------------------------------
+def _write_empty_lean_minute_zip(root: Path, symbol: str, trading_date: date, mtime_s: float) -> Path:
+    """Write a LEAN-shaped minute zip with a known mtime.
+
+    The zip body is irrelevant to ``compute_window_files_fingerprint`` —
+    only the file path and mtime matter — so we ship a minimal valid zip
+    with an empty CSV. ``os.utime`` pins the mtime to a known value so
+    the test asserts stable hashing.
+    """
+    import os
+
+    sym_dir = root / "equity" / "usa" / "minute" / symbol.lower()
+    sym_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = sym_dir / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv", "")
+    zip_path.write_bytes(buf.getvalue())
+    os.utime(zip_path, (mtime_s, mtime_s))
+    return zip_path
+
+
+def test_compute_window_files_fingerprint_files_none_when_no_data_root(tmp_path):
+    # No LEAN roots passed in, no matching files — sentinel value.
+    out = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        data_roots=[],
+    )
+    assert out == "files:none"
+
+
+def test_compute_window_files_fingerprint_files_none_when_window_has_no_files(tmp_path):
+    # Data root exists but contains no zips for the window — still sentinel.
+    out = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        data_roots=[tmp_path],
+    )
+    assert out == "files:none"
+
+
+def test_compute_window_files_fingerprint_stable_when_unchanged(tmp_path):
+    _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 2), 1_700_000_000.0)
+    _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 3), 1_700_000_100.0)
+
+    first = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        data_roots=[tmp_path],
+    )
+    second = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        data_roots=[tmp_path],
+    )
+    assert first == second
+    assert first.startswith("files:")
+    # 16 hex chars after the prefix.
+    assert len(first) == len("files:") + 16
+
+
+def test_compute_window_files_fingerprint_changes_when_an_mtime_changes(tmp_path):
+    _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 2), 1_700_000_000.0)
+    second_path = _write_empty_lean_minute_zip(
+        tmp_path, "SPY", date(2024, 1, 3), 1_700_000_100.0
+    )
+
+    before = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        data_roots=[tmp_path],
+    )
+
+    # Touch the second file: same content, fresh mtime.
+    import os
+
+    new_mtime = 1_700_999_999.0
+    os.utime(second_path, (new_mtime, new_mtime))
+
+    after = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        data_roots=[tmp_path],
+    )
+    assert before != after, (
+        "Per-file mtime change must shift the fingerprint — that is the whole "
+        "reason this replaced the directory-level mtime."
+    )
+
+
+def test_compute_window_files_fingerprint_ignores_files_outside_window(tmp_path):
+    _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 2), 1_700_000_000.0)
+    # File outside [start, end] — must not influence the fingerprint.
+    out_of_window = _write_empty_lean_minute_zip(
+        tmp_path, "SPY", date(2024, 1, 10), 1_700_000_500.0
+    )
+
+    inside_only = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 2),
+        data_roots=[tmp_path],
+    )
+
+    # Touch the out-of-window file; fingerprint for the narrow window
+    # must remain stable.
+    import os
+
+    os.utime(out_of_window, (1_799_999_999.0, 1_799_999_999.0))
+
+    inside_only_after = compute_window_files_fingerprint(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 2),
+        data_roots=[tmp_path],
+    )
+    assert inside_only == inside_only_after

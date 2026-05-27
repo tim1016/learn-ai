@@ -440,3 +440,51 @@ def test_normalize_fill_mode_handles_dash_and_case_variants_for_next_session_ope
     assert _normalize_fill_mode("Next-Session-Open") == "next_session_open"
     assert _normalize_fill_mode("next_session_open") == "next_session_open"
     assert _parse_fill_mode("NEXT-SESSION-OPEN") is FillMode.NEXT_SESSION_OPEN
+
+
+# ---------------------------------------------------------------------------
+# bars_consumed surfacing (silent-failure signal).
+# ---------------------------------------------------------------------------
+def test_result_reports_bars_consumed_on_normal_run(fake_data_factory):
+    """The runner must populate ``bars_consumed`` with the engine-input
+    bar count so callers can distinguish "no data in window" from
+    "strategy didn't fire on the data we saw".
+    """
+    spec = _build_test_spec()
+    _, result = _run(spec, fake_data_factory)
+
+    # The synthetic fixture builds 2,000 bars; the runner filters by the
+    # spec's date window but the FakeDataReader yields everything inside
+    # [2024-01-02, 2024-12-31] (which covers the whole list).
+    assert result.bars_consumed > 0
+    assert isinstance(result.bars_consumed, int)
+    # No bars-empty warning when bars were actually consumed.
+    assert not any("no input bars consumed" in w for w in result.warnings)
+
+
+def test_result_warns_when_no_bars_consumed():
+    """An empty data reader must produce a ``bars_consumed == 0`` result
+    AND a loud warning — the gap this PR closes is exactly: silent
+    "trades: 0, warnings: []" responses when the LEAN cache is empty.
+    """
+    spec = _build_test_spec()
+
+    def empty_factory(symbol: str, start: date, end: date):
+        return FakeDataReader(bars=[])
+
+    ledger, result = run_strategy_spec(
+        RunRequest(
+            spec=spec,
+            start_date=date(2024, 1, 2),
+            end_date=date(2024, 12, 31),
+        ),
+        data_source_factory=empty_factory,
+        data_root_revision="test-revision-1",
+    )
+
+    assert result.bars_consumed == 0
+    assert any("no input bars consumed" in w for w in result.warnings), result.warnings
+    # The run still completes — empty data is a data-availability signal,
+    # not an engine failure.
+    assert ledger.status == "completed"
+    assert len(result.trades) == 0
