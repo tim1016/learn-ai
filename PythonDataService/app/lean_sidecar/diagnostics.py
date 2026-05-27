@@ -143,7 +143,28 @@ def _check_url_parseable(url: str) -> tuple[LauncherDiagnosticCheck, str | None,
             None,
             None,
         )
-    port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+    # ``ParseResult.port`` validates lazily — accessing it on a URL
+    # whose port component isn't a valid integer (e.g. ``host:abc``)
+    # raises ``ValueError``. Catch here so a malformed env value
+    # surfaces as a structured fail row instead of a 500 from /diagnose.
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        return (
+            LauncherDiagnosticCheck(
+                name="launcher_url_parseable",
+                label="URL parse",
+                status="fail",
+                detail=f"invalid port in LEAN_LAUNCHER_URL={url!r}: {exc}",
+                fix=(
+                    "Set LEAN_LAUNCHER_URL to a numeric port, e.g. "
+                    "http://host.docker.internal:8090."
+                ),
+            ),
+            None,
+            None,
+        )
+    port = parsed_port if parsed_port is not None else (443 if parsed.scheme == "https" else 80)
     return (
         LauncherDiagnosticCheck(
             name="launcher_url_parseable",

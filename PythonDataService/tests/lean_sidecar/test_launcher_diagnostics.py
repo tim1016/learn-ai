@@ -40,6 +40,27 @@ async def client() -> AsyncClient:
         yield c
 
 
+async def test_diagnose_malformed_port_returns_structured_fail(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a non-numeric port in ``LEAN_LAUNCHER_URL`` must
+    surface as a structured ``launcher_url_parseable`` fail row, not
+    a 500. ``ParseResult.port`` raises ``ValueError`` lazily on bad
+    inputs; the check has to catch that and render the report."""
+    monkeypatch.setenv("LEAN_LAUNCHER_URL", "http://host.docker.internal:abc")
+
+    response = await client.get("/api/lean-sidecar/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overall_status"] == "fail"
+    parse_check = next(c for c in body["checks"] if c["name"] == "launcher_url_parseable")
+    assert parse_check["status"] == "fail"
+    assert "invalid port" in parse_check["detail"]
+    healthz_check = next(c for c in body["checks"] if c["name"] == "launcher_healthz")
+    assert healthz_check["status"] == "skip"
+
+
 async def test_diagnose_happy_path_returns_pass(client: AsyncClient) -> None:
     async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
         mock.get("/healthz").mock(
