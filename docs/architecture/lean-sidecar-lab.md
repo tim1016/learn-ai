@@ -226,13 +226,15 @@ Until that gate passes, Phase 1 may run only the trusted sample algorithm.
 
 The launcher binds on the host (Windows / Linux); the data plane runs
 inside `polygon-data-service`. The container reaches the host launcher
-via the `host.docker.internal` alias, registered on the `python-service`
-service in `compose.yaml` as
-`extra_hosts: - "host.docker.internal:host-gateway"`. `host-gateway`
-resolves to the container's default gateway — which is the host on
-every supported runtime (Linux rootless Podman, Docker Desktop, WSL2)
-— so the compose default `LEAN_LAUNCHER_URL=http://host.docker.internal:8090`
-works without per-machine tuning.
+via the `host.containers.internal` alias, registered on the
+`python-service` service in `compose.yaml` as
+`extra_hosts: - "host.containers.internal:host-gateway"`.
+`host-gateway` resolves to the container's default gateway — the host
+on Windows and Linux Podman — so the compose default
+`LEAN_LAUNCHER_URL=http://host.containers.internal:8090` works without
+per-machine tuning. `host.docker.internal` is registered too for
+Docker/Desktop compatibility and older local envs, but Podman users
+should prefer `host.containers.internal`.
 
 Verification on a fresh clone / new machine:
 
@@ -254,7 +256,10 @@ path; it never spawns a sidecar run. The endpoint is implemented in
 `PythonDataService/app/lean_sidecar/diagnostics.py` and exposed by the
 `/api/lean-sidecar/*` router. Override `LEAN_LAUNCHER_URL` only for
 non-standard runtimes (remote launcher, non-default port); the default
-should not need machine-specific tweaks.
+should not need machine-specific tweaks. Machine-specific LAN IPs such
+as `192.168.x.x`, `10.x.x.x`, or `172.16-31.x.x` are intentionally
+diagnosed as brittle because they change with network attachment and
+are often blocked by host firewalls.
 
 ---
 

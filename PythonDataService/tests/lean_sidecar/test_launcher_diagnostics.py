@@ -47,7 +47,7 @@ async def test_diagnose_malformed_port_returns_structured_fail(
     surface as a structured ``launcher_url_parseable`` fail row, not
     a 500. ``ParseResult.port`` raises ``ValueError`` lazily on bad
     inputs; the check has to catch that and render the report."""
-    monkeypatch.setenv("LEAN_LAUNCHER_URL", "http://host.docker.internal:abc")
+    monkeypatch.setenv("LEAN_LAUNCHER_URL", "http://host.containers.internal:abc")
 
     response = await client.get("/api/lean-sidecar/diagnose")
 
@@ -59,6 +59,30 @@ async def test_diagnose_malformed_port_returns_structured_fail(
     assert "invalid port" in parse_check["detail"]
     healthz_check = next(c for c in body["checks"] if c["name"] == "launcher_healthz")
     assert healthz_check["status"] == "skip"
+
+
+async def test_diagnose_private_lan_launcher_url_warns(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Machine-specific LAN IPs may work today but are not a portable
+    Podman topology. Keep them visible as a warning even when the
+    launcher is reachable."""
+    launcher_url = "http://192.168.86.106:8090"
+    monkeypatch.setenv("LEAN_LAUNCHER_URL", launcher_url)
+    async with respx.mock(base_url=launcher_url) as mock:
+        mock.get("/healthz").mock(
+            return_value=httpx.Response(200, json={"status": "ok", "version": "test"})
+        )
+
+        response = await client.get("/api/lean-sidecar/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overall_status"] == "warn"
+    url_check = next(c for c in body["checks"] if c["name"] == "launcher_url")
+    assert url_check["status"] == "warn"
+    assert "private LAN IP 192.168.86.106" in url_check["detail"]
+    assert "host.containers.internal" in url_check["fix"]
 
 
 async def test_diagnose_happy_path_returns_pass(client: AsyncClient) -> None:
