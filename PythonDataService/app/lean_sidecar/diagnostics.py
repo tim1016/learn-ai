@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import UTC, datetime
+from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -80,9 +81,44 @@ def _resolved_launcher_url() -> str:
     return os.environ.get("LEAN_LAUNCHER_URL", DEFAULT_LAUNCHER_URL).rstrip("/")
 
 
+def _private_lan_host(url: str) -> str | None:
+    """Return the configured private LAN IP hostname, if any.
+
+    Private LAN IPs work only while the host remains on the same
+    network/interface and are a recurring source of Podman reachability
+    failures. Loopback is intentionally allowed for non-container dev
+    where the data plane and launcher share a namespace.
+    """
+    try:
+        hostname = urlparse(url).hostname
+    except ValueError:
+        return None
+    if hostname is None:
+        return None
+    try:
+        parsed = ip_address(hostname)
+    except ValueError:
+        return None
+    if parsed.is_private and not parsed.is_loopback:
+        return hostname
+    return None
+
+
 def _check_url_configured(url: str) -> LauncherDiagnosticCheck:
     env_value = os.environ.get("LEAN_LAUNCHER_URL")
     if env_value:
+        private_host = _private_lan_host(url)
+        if private_host is not None:
+            return LauncherDiagnosticCheck(
+                name="launcher_url",
+                label="LEAN_LAUNCHER_URL",
+                status="warn",
+                detail=f"LEAN_LAUNCHER_URL={url} (from env; private LAN IP {private_host})",
+                fix=(
+                    "Use http://host.containers.internal:8090 for Windows/Linux Podman "
+                    "instead of pinning a machine-specific LAN IP."
+                ),
+            )
         return LauncherDiagnosticCheck(
             name="launcher_url",
             label="LEAN_LAUNCHER_URL",
@@ -110,7 +146,7 @@ def _check_url_parseable(url: str) -> tuple[LauncherDiagnosticCheck, str | None,
                 detail=f"could not parse LEAN_LAUNCHER_URL={url!r}: {exc}",
                 fix=(
                     "Set LEAN_LAUNCHER_URL to a well-formed http URL like "
-                    "http://host.docker.internal:8090."
+                    "http://host.containers.internal:8090."
                 ),
             ),
             None,
@@ -137,7 +173,7 @@ def _check_url_parseable(url: str) -> tuple[LauncherDiagnosticCheck, str | None,
                 detail=f"no hostname in LEAN_LAUNCHER_URL={url!r}",
                 fix=(
                     "Set LEAN_LAUNCHER_URL to a full URL including hostname, "
-                    "e.g. http://host.docker.internal:8090."
+                    "e.g. http://host.containers.internal:8090."
                 ),
             ),
             None,
@@ -158,7 +194,7 @@ def _check_url_parseable(url: str) -> tuple[LauncherDiagnosticCheck, str | None,
                 detail=f"invalid port in LEAN_LAUNCHER_URL={url!r}: {exc}",
                 fix=(
                     "Set LEAN_LAUNCHER_URL to a numeric port, e.g. "
-                    "http://host.docker.internal:8090."
+                    "http://host.containers.internal:8090."
                 ),
             ),
             None,
@@ -239,7 +275,7 @@ async def _check_healthz(url: str) -> LauncherDiagnosticCheck:
             detail=f"timeout after {_HEALTHZ_PROBE_TIMEOUT_S:.1f}s",
             fix=(
                 "The hostname resolved but no TCP response arrived. Check "
-                "that host.docker.internal points at the host's bridge "
+                "that host.containers.internal points at the host's bridge "
                 "address and that the host firewall allows inbound from "
                 "the container bridge."
             ),
