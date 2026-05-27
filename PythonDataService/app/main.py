@@ -176,6 +176,15 @@ app.include_router(
 )
 # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
 app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
+# Trading-calendar preview — sibling endpoint under ``/api/research`` so
+# the date-picker UI can surface skipped sessions before a run is
+# submitted. Lives in a separate ``APIRouter`` instance from the
+# strategy-runs router because their prefixes differ.
+app.include_router(
+    research_runs.calendar_router,
+    prefix="/api/research",
+    tags=["research-trading-calendar"],
+)
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])

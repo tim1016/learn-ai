@@ -370,3 +370,87 @@ async def test_list_limit_truncates(client):
 
     response = await client.get("/api/research/strategy-runs", params={"limit": 2})
     assert len(response.json()["runs"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /api/research/trading-calendar — date-picker preview endpoint.
+# ---------------------------------------------------------------------------
+async def test_trading_calendar_returns_memorial_day_breakdown(client):
+    """Happy path: the motivating bug case (Memorial Day 2026 week)."""
+    response = await client.get(
+        "/api/research/trading-calendar",
+        params={"start": "2026-05-19", "end": "2026-05-26"},
+    )
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+    assert body["requested_start_date"] == "2026-05-19"
+    assert body["requested_end_date"] == "2026-05-26"
+    assert body["sessions_included"] == [
+        "2026-05-19",
+        "2026-05-20",
+        "2026-05-21",
+        "2026-05-22",
+    ]
+    excluded_by_date = {ex["date"]: ex for ex in body["sessions_excluded"]}
+    assert excluded_by_date["2026-05-25"] == {
+        "date": "2026-05-25",
+        "reason": "holiday",
+        "name": "Memorial Day",
+    }
+    assert excluded_by_date["2026-05-23"]["reason"] == "weekend"
+    assert excluded_by_date["2026-05-23"]["name"] is None
+    assert excluded_by_date["2026-05-24"]["reason"] == "weekend"
+
+
+async def test_trading_calendar_rejects_invalid_date(client):
+    response = await client.get(
+        "/api/research/trading-calendar",
+        params={"start": "not-a-date", "end": "2026-05-26"},
+    )
+    assert response.status_code == 400
+    assert "start" in response.json()["detail"]
+
+
+async def test_trading_calendar_rejects_end_le_start(client):
+    response = await client.get(
+        "/api/research/trading-calendar",
+        params={"start": "2026-05-26", "end": "2026-05-26"},
+    )
+    assert response.status_code == 400
+    assert "strictly after" in response.json()["detail"]
+
+    swapped = await client.get(
+        "/api/research/trading-calendar",
+        params={"start": "2026-05-26", "end": "2026-05-19"},
+    )
+    assert swapped.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# RunLedger.window_summary — stamped on every persisted run.
+# ---------------------------------------------------------------------------
+async def test_post_ledger_carries_window_summary(client):
+    response = await client.post("/api/research/strategy-runs", json=_request_body())
+    assert response.status_code == 200, response.text
+
+    ledger = response.json()["ledger"]
+    ws = ledger["window_summary"]
+    assert ws is not None
+    assert ws["requested_start_date"] == "2024-01-02"
+    assert ws["requested_end_date"] == "2024-12-31"
+    assert isinstance(ws["sessions_included"], list)
+    # 2024 had ~251 NYSE sessions in this window — assert a sane non-zero
+    # range without pinning the exact count (calendar updates would
+    # otherwise destabilize this test).
+    assert 240 <= len(ws["sessions_included"]) <= 260
+
+
+async def test_window_summary_round_trips_through_persist_load(client):
+    """The ledger field survives save → load (JSON serialization round-trip)."""
+    post = await client.post("/api/research/strategy-runs", json=_request_body())
+    run_id = post.json()["ledger"]["run_id"]
+
+    got = await client.get(f"/api/research/strategy-runs/{run_id}")
+    assert got.status_code == 200, got.text
+    assert got.json()["ledger"]["window_summary"] == post.json()["ledger"]["window_summary"]

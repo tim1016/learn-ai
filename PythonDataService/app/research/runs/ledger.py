@@ -34,6 +34,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.research.runs.window import WindowSummary
+
 ENGINE_VERSION = "0.1.0"
 """Bumped on engine semantic change. See ``docs/references/run-ledger.md``."""
 
@@ -234,11 +236,15 @@ class RunLedger(BaseModel):
     Schema versions:
       * v1.0: Initial schema.
       * v1.1: Added optional ``prediction_set_hash`` field for ML prediction set tracking.
+      * v1.2: Added optional ``window_summary`` field — calendar breakdown
+        (sessions included / weekends + holidays excluded) for the run's
+        date window. Older ledgers continue to load with this field as
+        ``None``.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     run_id: str
 
     # Lineage — set on child runs (folds, MC simulations, sweep points).
@@ -282,3 +288,8 @@ class RunLedger(BaseModel):
     completed_at_ms: int | None = None
     status: Literal["running", "completed", "failed"] = "running"
     failure_reason: str | None = None
+
+    # Calendar breakdown of [start_ms, end_ms) interpreted as NY-local
+    # midnights. Optional so v1.0 / v1.1 ledgers still load with
+    # ``window_summary=None``. New runs always populate it.
+    window_summary: WindowSummary | None = None
