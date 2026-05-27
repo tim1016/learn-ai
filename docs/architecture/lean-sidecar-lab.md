@@ -222,6 +222,40 @@ accepted:
 
 Until that gate passes, Phase 1 may run only the trusted sample algorithm.
 
+### Verifying the data-plane → launcher path (new machine, fresh clone)
+
+The launcher binds on the host (Windows / Linux); the data plane runs
+inside `polygon-data-service`. The container reaches the host launcher
+via the `host.docker.internal` alias, registered on the `python-service`
+service in `compose.yaml` as
+`extra_hosts: - "host.docker.internal:host-gateway"`. `host-gateway`
+resolves to the container's default gateway — which is the host on
+every supported runtime (Linux rootless Podman, Docker Desktop, WSL2)
+— so the compose default `LEAN_LAUNCHER_URL=http://host.docker.internal:8090`
+works without per-machine tuning.
+
+Verification on a fresh clone / new machine:
+
+1. Start the launcher on the host (binding `--host 0.0.0.0`, per
+   `PythonDataService/CLAUDE.md`). The launcher generates an auth
+   token and writes it to the artifacts root the container will
+   bind-mount.
+2. `./restart.sh` to bring compose up.
+3. From the host, hit the data-plane diagnostics endpoint:
+   ```bash
+   curl -s http://localhost:8000/api/lean-sidecar/diagnose | jq
+   ```
+   Expect `overall_status: "pass"` with four rows: `launcher_url`,
+   `launcher_url_parseable`, `launcher_token`, `launcher_healthz`.
+
+The diagnostics endpoint is read-only — it probes the launcher's
+unauthenticated `/healthz` and inspects the local token-resolution
+path; it never spawns a sidecar run. The endpoint is implemented in
+`PythonDataService/app/lean_sidecar/diagnostics.py` and exposed by the
+`/api/lean-sidecar/*` router. Override `LEAN_LAUNCHER_URL` only for
+non-standard runtimes (remote launcher, non-default port); the default
+should not need machine-specific tweaks.
+
 ---
 
 ## Runner choice — image, version, and the CLI question
