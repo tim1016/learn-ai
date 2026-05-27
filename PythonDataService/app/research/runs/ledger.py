@@ -22,10 +22,13 @@ to migrate later:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
 import time
+from datetime import date as Date
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -87,18 +90,87 @@ def now_ms_utc() -> int:
     return int(time.time() * 1000)
 
 
-def resolve_data_root_revision() -> str:
+def _data_root_paths() -> list[Path]:
+    """Resolve ``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` env vars to existing dirs."""
+    roots: list[Path] = []
+    for env_var in ("LEAN_DATA_ROOT", "LEAN_DATA_CACHE"):
+        val = os.environ.get(env_var)
+        if not val:
+            continue
+        root = Path(val)
+        if root.is_dir():
+            roots.append(root)
+    return roots
+
+
+def compute_window_files_fingerprint(
+    *,
+    symbol: str,
+    start_date: Date,
+    end_date: Date,
+    data_roots: list[Path] | None = None,
+) -> str:
+    """Fingerprint per-file mtimes for every LEAN minute zip in the window.
+
+    Returns ``"files:<sha256_first_16_hex>"`` over the sorted list of
+    ``(filename, mtime_ms)`` tuples for every ``YYYYMMDD_trade.zip``
+    file found under any data root for ``symbol`` whose date is inside
+    ``[start_date, end_date]``. When no matching files exist (data root
+    missing, window outside cache coverage), returns the literal
+    ``"files:none"`` so the snapshot id is still well-formed.
+
+    Replaces the prior ``mtime:<dir_mtime>`` suffix, which reflected the
+    *data-root directory's* mtime — that value could be months stale even
+    when the underlying bar files were fresh, masking cache-content drift.
+    """
+    roots = data_roots if data_roots is not None else _data_root_paths()
+    if not roots:
+        return "files:none"
+    symbol_lower = symbol.lower()
+    one_day = timedelta(days=1)
+    entries: list[tuple[str, int]] = []
+    current = start_date
+    while current <= end_date:
+        filename = f"{current.strftime('%Y%m%d')}_trade.zip"
+        for root in roots:
+            candidate = root / "equity" / "usa" / "minute" / symbol_lower / filename
+            try:
+                mtime_ms = int(candidate.stat().st_mtime * 1000)
+            except OSError:
+                continue
+            entries.append((filename, mtime_ms))
+            break
+        current += one_day
+    if not entries:
+        return "files:none"
+    entries.sort()
+    payload = "\n".join(f"{name},{mtime}" for name, mtime in entries).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()[:16]
+    return f"files:{digest}"
+
+
+def resolve_data_root_revision(
+    *,
+    symbol: str | None = None,
+    start_date: Date | None = None,
+    end_date: Date | None = None,
+) -> str:
     """Identify the LEAN data root for ``data_snapshot_id``.
 
     Strategy (best to fallback):
       1. Env var ``LEAN_DATA_ROOT_REVISION`` if explicitly set — lets
          CI/ops pin a revision string.
-      2. ``git rev-parse HEAD`` of the data-root directory if it's a git
+      2. ``files:<sha256_first_16_hex>`` over per-file mtimes for the
+         requested ``(symbol, start_date, end_date)`` window when those
+         arguments are supplied and matching minute zips exist. This is
+         evaluated before git probing so the snapshot follows
+         ``LeanMinuteDataReader`` root precedence: the first zip hit for
+         each date is the file that identifies the run.
+      3. ``git rev-parse HEAD`` of the data-root directory if it's a git
          working tree. Useful when the data is vendored or generated
          from a versioned source.
-      3. ``mtime`` of the data-root directory in integer seconds — a
-         coarse "did this change?" proxy.
-      4. ``"unknown"``.
+      4. ``"unknown"`` (only when no window args were supplied and the
+         git branch above failed too).
 
     The revision string is part of ``data_snapshot_id``, so changing it
     invalidates ledger identity. Callers that need stricter content
@@ -109,13 +181,18 @@ def resolve_data_root_revision() -> str:
     if explicit:
         return explicit
 
-    for env_var in ("LEAN_DATA_ROOT", "LEAN_DATA_CACHE"):
-        val = os.environ.get(env_var)
-        if not val:
-            continue
-        root = Path(val)
-        if not root.is_dir():
-            continue
+    roots = _data_root_paths()
+    if symbol is not None and start_date is not None and end_date is not None:
+        fingerprint = compute_window_files_fingerprint(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            data_roots=roots,
+        )
+        if fingerprint != "files:none":
+            return fingerprint
+
+    for root in roots:
         try:
             proc = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -131,24 +208,19 @@ def resolve_data_root_revision() -> str:
                     return sha
             logger.debug(
                 "[RUNS] data root %s: git rev-parse returned %d; "
-                "falling back to mtime",
+                "falling back to per-file fingerprint",
                 root,
                 proc.returncode,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             logger.debug(
-                "[RUNS] data root %s: git unavailable (%s); falling back to mtime",
+                "[RUNS] data root %s: git unavailable (%s); falling back to per-file fingerprint",
                 root,
                 exc,
             )
-        try:
-            return f"mtime:{int(root.stat().st_mtime)}"
-        except OSError as exc:
-            logger.debug(
-                "[RUNS] data root %s: mtime unavailable (%s); falling back to 'unknown'",
-                root,
-                exc,
-            )
+
+    if symbol is not None and start_date is not None and end_date is not None:
+        return "files:none"
     return "unknown"
 
 

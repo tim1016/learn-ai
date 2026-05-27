@@ -306,7 +306,11 @@ def run_strategy_spec(
     # TODO(phase-e): memoize ``resolve_data_root_revision()`` keyed on
     # ``LEAN_DATA_ROOT`` so 10×10 sensitivity sweeps don't pay for 100
     # ``git rev-parse`` subprocess starts.
-    revision = data_root_revision if data_root_revision else resolve_data_root_revision()
+    revision = data_root_revision if data_root_revision else resolve_data_root_revision(
+        symbol=symbol,
+        start_date=request.start_date,
+        end_date=request.end_date,
+    )
 
     spec_dump = spec.model_dump(mode="json")
     spec_hash = hash_payload(spec_dump)
@@ -438,6 +442,13 @@ def run_strategy_spec(
     trades = strategy.trade_log
     bars_held_total = sum(_bars_held(t.entry_time, t.exit_time, resolution) for t in trades)
     total_bars = len(engine_result.equity_curve)
+    # ``engine_result.bars`` is appended once per minute bar pulled from
+    # the data source's ``iter_bars`` loop — the engine-input layer. That
+    # is the count we want to surface (not consolidated-bar updates, not
+    # indicator ticks): a "0 bars consumed" signal means the LEAN cache
+    # was empty or the window filtered everything out, which would
+    # otherwise be indistinguishable from "strategy didn't fire".
+    bars_consumed = len(engine_result.bars)
 
     metrics = _summarize_metrics(
         initial_cash=float(engine_result.initial_cash),
@@ -448,6 +459,13 @@ def run_strategy_spec(
         total_bars=total_bars,
         resolution_minutes=resolution,
     )
+
+    warnings: list[str] = []
+    if bars_consumed == 0:
+        warnings.append(
+            "no input bars consumed for the requested window — "
+            "check LEAN data root / cache or your symbol+date filters"
+        )
 
     result = BacktestRunResult(
         run_id=rid,
@@ -461,7 +479,8 @@ def run_strategy_spec(
         trades=[_trade_to_run_trade(i, t, resolution) for i, t in enumerate(trades)],
         metrics=metrics,
         log_lines=list(engine_result.log_lines),
-        warnings=[],
+        warnings=warnings,
+        bars_consumed=bars_consumed,
     )
 
     # Hash the result subcomponents. ``run_id`` is excluded so two runs
