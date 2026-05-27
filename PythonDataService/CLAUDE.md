@@ -29,21 +29,25 @@ podman pull docker.io/quantconnect/lean:latest
 python PythonDataService/scripts/lean_sidecar_pin_image.py
 cd PythonDataService
 # Bind to 0.0.0.0 so the polygon-data-service container can reach
-# the launcher over host.containers.internal. Loopback-only would
-# refuse connections from the container's network namespace.
+# the launcher via host.docker.internal. Loopback-only would refuse
+# connections from the container's network namespace.
 .venv/Scripts/python.exe -m uvicorn app.lean_sidecar.launcher.app:app \
     --host 0.0.0.0 --port 8090
 ```
 
 The data plane reads `LEAN_LAUNCHER_URL` (default `http://127.0.0.1:8090`
 when both processes share localhost) and the optional `LEAN_LAUNCHER_TOKEN`
-env var. **When running the data plane inside compose** on Windows + WSL2,
-set `LEAN_LAUNCHER_URL=http://host.containers.internal:8090` in
-`compose.yaml`'s `python-service.environment` block — the loopback-only
-launcher binding above will refuse connections from the container's
-network namespace, so the 0.0.0.0 binding above is required for that
-path. Always set `LEAN_LAUNCHER_TOKEN` to a random secret in that
-configuration so the wider-bound port still requires authentication.
+env var. The data plane inside compose reaches the host launcher via
+`host.docker.internal`; that alias is registered as
+`extra_hosts: - "host.docker.internal:host-gateway"` on `python-service`
+in `compose.yaml`, which maps it to the container's default gateway on
+every supported runtime (Linux rootless Podman, Docker Desktop, WSL2).
+The compose default for the env is `http://host.docker.internal:8090`;
+override `LEAN_LAUNCHER_URL` only for non-standard runtimes (remote
+launcher, non-default port). After bringing compose up, verify the
+data-plane container can reach the launcher with
+`curl http://localhost:8000/api/lean-sidecar/diagnose` — the report
+covers URL config, token resolution, and a live `/healthz` probe.
 Containerizing the launcher itself is the Phase 2b / Phase 1c
 hardening pass.
 

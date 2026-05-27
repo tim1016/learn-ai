@@ -90,13 +90,13 @@ services:
       - LEAN_DATA_ROOT=/lean-data
       - LEAN_DATA_CACHE=/lean-cache
       # Phase 1c topology — the launcher is a HOST process (it owns
-      # podman access), not a compose container. The data-plane
-      # reaches it via the WSL2 adapter IP because
-      # ``host.containers.internal`` resolves to a broken link-local
-      # on this host (169.254.x). Override LEAN_LAUNCHER_URL in your
-      # local .env (or shell) when this default doesn't match your
-      # adapter — ``ipconfig | findstr WSL`` to discover yours.
-      - LEAN_LAUNCHER_URL=${LEAN_LAUNCHER_URL:-http://172.23.176.1:8090}
+      # podman access), not a compose container. The data-plane reaches
+      # it via the ``host.docker.internal`` alias registered in
+      # ``extra_hosts`` below (resolves to the bridge gateway = host
+      # machine on Linux Podman, Docker Desktop, Docker Engine, and
+      # WSL2 alike). Override ``LEAN_LAUNCHER_URL`` only for non-
+      # standard runtimes (remote launcher, non-default port).
+      - LEAN_LAUNCHER_URL=${LEAN_LAUNCHER_URL:-http://host.docker.internal:8090}
       - HOST=0.0.0.0
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
@@ -135,10 +135,14 @@ services:
       # Live-run artifact root. Container path is fixed by the volume mount
       # (./PythonDataService/artifacts:/app/artifacts).
       - IBKR_LIVE_RUNS_ROOT=/app/artifacts/live_runs
-    # Make host.docker.internal resolve to the Windows host's bridge IP.
-    # Docker Desktop adds this automatically; Podman does NOT — without
-    # this entry, the name resolves to a sentinel that doesn't reach
-    # IB Gateway running natively on Windows.
+    # Map ``host.docker.internal`` to the container's default gateway
+    # (the host on every container runtime: Linux Podman, Docker
+    # Desktop, Docker Engine, WSL2). Docker Desktop adds this alias
+    # automatically; rootless Podman does NOT — without this entry,
+    # the name is unresolvable (or worse, resolves to a sentinel that
+    # doesn't reach the host). Used by both IB Gateway and the LEAN
+    # Sidecar launcher; reach them via ``host.docker.internal:<port>``
+    # rather than a hardcoded host IP.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

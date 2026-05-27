@@ -46,10 +46,9 @@ def _isolated_launcher_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear ``LEAN_LAUNCHER_URL`` so ``respx.mock(base_url=DEFAULT_LAUNCHER_URL)``
     intercepts the launcher's HTTP traffic.
 
-    Compose now sets ``LEAN_LAUNCHER_URL=http://172.23.176.1:8090`` on
-    the live data-plane container (host-process launcher reachable via
-    the WSL2 adapter IP). If that env leaks into pytest, the
-    launcher_client posts to the live URL, respx doesn't intercept,
+    Compose sets ``LEAN_LAUNCHER_URL=http://host.docker.internal:8090``
+    on the live data-plane container. If that env leaks into pytest,
+    the launcher_client posts to the live URL, respx doesn't intercept,
     and every router test that mocks the launcher fails with
     ``AllMockedAssertionError``. Autouse so individual tests don't
     have to remember to opt in.

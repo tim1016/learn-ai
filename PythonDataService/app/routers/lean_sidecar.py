@@ -37,6 +37,10 @@ from app.lean_sidecar.cross_runner import (
     WorkspaceDataMissingError,
     run_engine_lab_on_workspace,
 )
+from app.lean_sidecar.diagnostics import (
+    LauncherDiagnosticReport,
+    run_launcher_diagnostics,
+)
 from app.lean_sidecar.launcher_client import (
     LauncherClientError,
     LauncherRejected,
@@ -1762,6 +1766,31 @@ async def get_log(run_id: str) -> PlainTextResponse:
             f.seek(size - _LEAN_LOG_TAIL_MAX_BYTES)
         raw = f.read(_LEAN_LOG_TAIL_MAX_BYTES)
     return PlainTextResponse(raw.decode("utf-8", errors="replace"))
+
+
+# ---------------------------------------------------------------------------
+# GET /diagnose — launcher reachability self-test
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/diagnose",
+    response_model=LauncherDiagnosticReport,
+    summary="Self-test the data-plane → launcher path.",
+)
+async def diagnose_launcher() -> LauncherDiagnosticReport:
+    """Layered self-test for the LEAN Sidecar launcher integration.
+
+    Returns one row per check (URL configured, URL parses, token
+    resolves, ``/healthz`` reachable) with a remediation hint when
+    something is not passing. Read-only — sends only the launcher's
+    unauthenticated ``/healthz`` probe; never spawns a sidecar run.
+
+    Intended as the "did the data plane reach the launcher?" smoke
+    test after a fresh clone, ``./restart.sh``, or a host-side
+    relaunch of the launcher process.
+    """
+    return await run_launcher_diagnostics()
 
 
 # ---------------------------------------------------------------------------
