@@ -43,6 +43,7 @@ from app.research.runs.result import (
     RunMetrics,
     RunTrade,
 )
+from app.research.runs.window import summarize_window
 from app.utils.timestamps import to_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -323,6 +324,7 @@ def run_strategy_spec(
     )
 
     rid = run_id or uuid.uuid4().hex
+    window_summary = summarize_window(request.start_date, request.end_date)
     ledger = RunLedger(
         run_id=rid,
         parent_run_id=request.parent_run_id,
@@ -341,6 +343,7 @@ def run_strategy_spec(
         slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,
         data_snapshot_id=snapshot_id,
+        window_summary=window_summary,
     )
 
     # Build the data source. Failures here are infrastructure errors,

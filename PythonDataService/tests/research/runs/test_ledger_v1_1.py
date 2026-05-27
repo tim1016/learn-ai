@@ -26,9 +26,9 @@ def _base_ledger_kwargs() -> dict:
     )
 
 
-def test_ledger_writes_schema_1_1_by_default() -> None:
+def test_ledger_writes_schema_1_2_by_default() -> None:
     ledger = RunLedger(**_base_ledger_kwargs())
-    assert ledger.schema_version == "1.1"
+    assert ledger.schema_version == "1.2"
 
 
 def test_ledger_loads_legacy_1_0_dict() -> None:
@@ -36,6 +36,7 @@ def test_ledger_loads_legacy_1_0_dict() -> None:
     ledger = RunLedger.model_validate(raw)
     assert ledger.schema_version == "1.0"
     assert ledger.prediction_set_hash is None
+    assert ledger.window_summary is None
 
 
 def test_ledger_loads_1_1_with_prediction_set_hash() -> None:
@@ -45,6 +46,8 @@ def test_ledger_loads_1_1_with_prediction_set_hash() -> None:
     }
     ledger = RunLedger.model_validate(raw)
     assert ledger.prediction_set_hash == "f" * 64
+    # v1.1 ledgers predate window_summary — must still load as None.
+    assert ledger.window_summary is None
 
 
 def test_ledger_rejects_unknown_schema_version() -> None:

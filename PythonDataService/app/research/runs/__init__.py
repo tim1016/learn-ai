@@ -40,6 +40,11 @@ from app.research.runs.storage import (
     load_run,
     save_run,
 )
+from app.research.runs.window import (
+    ExcludedDay,
+    WindowSummary,
+    summarize_window,
+)
 
 __all__ = [
     "ENGINE_VERSION",
@@ -47,6 +52,7 @@ __all__ = [
     "BacktestRunResult",
     "DrawdownPoint",
     "EquityCurvePoint",
+    "ExcludedDay",
     "RunAlreadyExistsError",
     "RunCorruptError",
     "RunLedger",
@@ -54,6 +60,7 @@ __all__ = [
     "RunNotFoundError",
     "RunRequest",
     "RunTrade",
+    "WindowSummary",
     "canonical_json",
     "hash_payload",
     "list_runs",
@@ -61,4 +68,5 @@ __all__ = [
     "make_data_snapshot_id",
     "run_strategy_spec",
     "save_run",
+    "summarize_window",
 ]

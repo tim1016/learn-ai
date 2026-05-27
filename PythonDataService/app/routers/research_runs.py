@@ -58,16 +58,24 @@ from app.research.runs import (
     RunLedger,
     RunNotFoundError,
     RunRequest,
+    WindowSummary,
     list_runs,
     load_run,
     run_strategy_spec,
     save_run,
+    summarize_window,
 )
 from app.routers.spec_strategy import (
     _default_data_source_factory,
 )
 
 router = APIRouter()
+
+# Sibling router for ``/api/research/trading-calendar`` — mounted under
+# ``/api/research`` in ``main.py``. Lives in a separate ``APIRouter`` so
+# the path doesn't collide with this file's ``/{run_id}`` catch-all
+# (which is bound under ``/api/research/strategy-runs``).
+calendar_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
@@ -281,6 +289,29 @@ def get_run(
             detail=f"run artifact is corrupt: {exc}",
         ) from exc
     return StrategyRunResponse(ledger=ledger, result=result)
+
+
+@calendar_router.get("/trading-calendar", response_model=WindowSummary)
+def get_trading_calendar(
+    start: str = Query(..., description="Window start date, YYYY-MM-DD (inclusive)"),
+    end: str = Query(..., description="Window end date, YYYY-MM-DD (inclusive)"),
+) -> WindowSummary:
+    """Return the trading-calendar breakdown for ``[start, end]``.
+
+    Same date semantics as ``POST /api/research/strategy-runs``:
+    ``end`` is inclusive (``StrategyAlgorithm.set_end_date`` runs through
+    23:59:59 of that day). The date-picker UI calls this before submitting
+    a run so the user can see which days will be skipped (weekends,
+    holidays) before discovering the truncation in the result.
+    """
+    start_d = _parse_date(start, "start")
+    end_d = _parse_date(end, "end")
+    if end_d < start_d:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"end must be on or after start (got start={start_d.isoformat()}, end={end_d.isoformat()})",
+        )
+    return summarize_window(start_d, end_d)
 
 
 @router.get("", response_model=StrategyRunListResponse)
