@@ -160,14 +160,15 @@ def resolve_data_root_revision(
     Strategy (best to fallback):
       1. Env var ``LEAN_DATA_ROOT_REVISION`` if explicitly set — lets
          CI/ops pin a revision string.
-      2. ``git rev-parse HEAD`` of the data-root directory if it's a git
+      2. ``files:<sha256_first_16_hex>`` over per-file mtimes for the
+         requested ``(symbol, start_date, end_date)`` window when those
+         arguments are supplied and matching minute zips exist. This is
+         evaluated before git probing so the snapshot follows
+         ``LeanMinuteDataReader`` root precedence: the first zip hit for
+         each date is the file that identifies the run.
+      3. ``git rev-parse HEAD`` of the data-root directory if it's a git
          working tree. Useful when the data is vendored or generated
          from a versioned source.
-      3. ``files:<sha256_first_16_hex>`` over per-file mtimes for the
-         requested ``(symbol, start_date, end_date)`` window when those
-         arguments are supplied. Captures cache-content drift the
-         directory-level mtime missed. Returns ``files:none`` when no
-         matching minute zips are present.
       4. ``"unknown"`` (only when no window args were supplied and the
          git branch above failed too).
 
@@ -181,6 +182,16 @@ def resolve_data_root_revision(
         return explicit
 
     roots = _data_root_paths()
+    if symbol is not None and start_date is not None and end_date is not None:
+        fingerprint = compute_window_files_fingerprint(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            data_roots=roots,
+        )
+        if fingerprint != "files:none":
+            return fingerprint
+
     for root in roots:
         try:
             proc = subprocess.run(
@@ -209,12 +220,7 @@ def resolve_data_root_revision(
             )
 
     if symbol is not None and start_date is not None and end_date is not None:
-        return compute_window_files_fingerprint(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            data_roots=roots,
-        )
+        return "files:none"
     return "unknown"
 
 

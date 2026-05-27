@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import io
+import os
 import zipfile
 from datetime import date
 from pathlib import Path
 
+from app.research.runs import ledger
 from app.research.runs.hashing import (
     canonical_json,
     hash_payload,
     make_data_snapshot_id,
 )
-from app.research.runs.ledger import compute_window_files_fingerprint
+from app.research.runs.ledger import (
+    compute_window_files_fingerprint,
+    resolve_data_root_revision,
+)
 
 
 def test_canonical_json_key_order_independent():
@@ -142,8 +147,6 @@ def _write_empty_lean_minute_zip(root: Path, symbol: str, trading_date: date, mt
     with an empty CSV. ``os.utime`` pins the mtime to a known value so
     the test asserts stable hashing.
     """
-    import os
-
     sym_dir = root / "equity" / "usa" / "minute" / symbol.lower()
     sym_dir.mkdir(parents=True, exist_ok=True)
     zip_path = sym_dir / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
@@ -213,8 +216,6 @@ def test_compute_window_files_fingerprint_changes_when_an_mtime_changes(tmp_path
     )
 
     # Touch the second file: same content, fresh mtime.
-    import os
-
     new_mtime = 1_700_999_999.0
     os.utime(second_path, (new_mtime, new_mtime))
 
@@ -246,8 +247,6 @@ def test_compute_window_files_fingerprint_ignores_files_outside_window(tmp_path)
 
     # Touch the out-of-window file; fingerprint for the narrow window
     # must remain stable.
-    import os
-
     os.utime(out_of_window, (1_799_999_999.0, 1_799_999_999.0))
 
     inside_only_after = compute_window_files_fingerprint(
@@ -257,3 +256,43 @@ def test_compute_window_files_fingerprint_ignores_files_outside_window(tmp_path)
         data_roots=[tmp_path],
     )
     assert inside_only == inside_only_after
+
+
+def test_resolve_data_root_revision_prefers_window_files_before_later_git_root(
+    tmp_path, monkeypatch
+):
+    reference_root = tmp_path / "reference"
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    first_path = _write_empty_lean_minute_zip(
+        reference_root, "SPY", date(2024, 1, 2), 1_700_000_000.0
+    )
+
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(reference_root))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(cache_root))
+    monkeypatch.delenv("LEAN_DATA_ROOT_REVISION", raising=False)
+
+    def fake_run(*args, **kwargs):
+        if kwargs.get("cwd") == str(cache_root):
+            return ledger.subprocess.CompletedProcess(args[0], 0, stdout="cache-sha\n", stderr="")
+        return ledger.subprocess.CompletedProcess(args[0], 1, stdout="", stderr="not a git repo")
+
+    monkeypatch.setattr(ledger.subprocess, "run", fake_run)
+
+    before = resolve_data_root_revision(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 2),
+    )
+    os.utime(first_path, (1_700_000_100.0, 1_700_000_100.0))
+    after = resolve_data_root_revision(
+        symbol="SPY",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 2),
+    )
+
+    assert before.startswith("files:")
+    assert after.startswith("files:")
+    assert before != "cache-sha"
+    assert after != "cache-sha"
+    assert before != after
