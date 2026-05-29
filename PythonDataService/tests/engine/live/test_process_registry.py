@@ -52,6 +52,38 @@ def test_empty_registry_lists_no_processes() -> None:
     assert registry.status("never_registered") is None
 
 
+def test_two_distinct_strategies_register_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Multi-process replacement for the single-_current model. Two
+    different strategy_instance_ids must coexist; list() returns both.
+    """
+    fakes = iter([FakeProcess(pid=100), FakeProcess(pid=200)])
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: next(fakes),
+    )
+
+    registry = ProcessRegistry()
+    ema = registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+    vwap = registry.start(
+        strategy_instance_id="spy_vwap_reversion_1min",
+        command=["python", "-m", "vwap"],
+        log_path=tmp_path / "vwap.log",
+    )
+
+    assert ema.pid == 100
+    assert vwap.pid == 200
+    assert {entry.strategy_instance_id for entry in registry.list()} == {
+        "spy_ema_crossover",
+        "spy_vwap_reversion_1min",
+    }
+
+
 def test_start_registers_a_managed_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
