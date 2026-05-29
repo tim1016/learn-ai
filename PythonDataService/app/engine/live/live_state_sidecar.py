@@ -139,6 +139,25 @@ class LiveStateSidecarRepo:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
+        _fsync_parent_dir(self._path)
+
+
+def _fsync_parent_dir(child_path: Path) -> None:
+    """Fsync the parent directory entry so a fresh rename survives crash.
+
+    Tempfile fsync flushes the file's own contents, but on POSIX the
+    rename's directory entry can be lost on power loss without a
+    separate dir fsync. On Windows this is a no-op — ReplaceFile is
+    not subject to the same metadata-durability gap.
+    """
+    if sys.platform == "win32":
+        return
+    dir_fd = os.open(child_path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(dir_fd)
 
 
 @contextlib.contextmanager

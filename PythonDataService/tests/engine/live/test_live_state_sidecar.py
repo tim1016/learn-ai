@@ -8,6 +8,7 @@ slice of schema or mechanics. See plan §16.4 Resolution 3 for the
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,6 +161,36 @@ def test_failed_rename_preserves_previous_snapshot(
     # No orphan .tmp left lying around after the failed write either.
     tmp_files = list(tmp_path.glob("*.tmp"))
     assert tmp_files == [], f"orphan tmp files after failed rename: {tmp_files}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="parent-dir fsync is POSIX-only")
+def test_write_fsyncs_parent_directory_for_rename_durability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fsync of the tempfile flushes its contents to disk, but on POSIX
+    the rename's directory entry can still be lost on power loss
+    unless the parent directory is also fsynced. Otherwise the old
+    sidecar can reappear after crash, rolling cursors/known ids
+    backward and opening a double-submit window.
+    """
+    fsync_calls: list[int] = []
+    real_fsync = os.fsync
+
+    def tracking_fsync(fd: int) -> None:
+        fsync_calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    repo.write(_min_envelope())
+
+    # At minimum: tempfile fd + parent-dir fd. fd numbers may be reused
+    # by the kernel after close so we don't assert distinct values, just
+    # the count.
+    assert len(fsync_calls) >= 2, (
+        f"expected at least 2 fsync calls (tempfile + parent dir), got {len(fsync_calls)}"
+    )
 
 
 def test_successful_write_leaves_no_tmp_artifact(tmp_path: Path) -> None:
