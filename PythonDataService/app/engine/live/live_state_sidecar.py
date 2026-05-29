@@ -15,7 +15,22 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+class LiveStateSidecarCorruptError(RuntimeError):
+    """Raised by ``LiveStateSidecarRepo.read`` when the on-disk bytes
+    are unparseable JSON or fail envelope validation.
+
+    Routes to ColdStartReconciler as a hard ``Poisoned`` outcome:
+    a corrupt sidecar cannot be safely resumed and the bot must not
+    submit new orders until the operator inspects the file.
+    """
+
+    def __init__(self, path: Path, cause: BaseException) -> None:
+        super().__init__(f"live-state sidecar at {path} is unreadable: {cause}")
+        self.path = path
+        self.__cause__ = cause
 
 
 class LiveStateEnvelope(BaseModel):
@@ -45,7 +60,12 @@ class LiveStateSidecarRepo:
     def read(self) -> LiveStateEnvelope | None:
         if not self._path.exists():
             return None
-        return LiveStateEnvelope.model_validate_json(self._path.read_text(encoding="utf-8"))
+        try:
+            return LiveStateEnvelope.model_validate_json(
+                self._path.read_text(encoding="utf-8")
+            )
+        except (ValidationError, ValueError) as exc:
+            raise LiveStateSidecarCorruptError(self._path, exc) from exc
 
     def write(self, envelope: LiveStateEnvelope) -> None:
         """Atomic write: serialise to a sibling .tmp, fsync, os.replace.

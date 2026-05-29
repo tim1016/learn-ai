@@ -14,6 +14,7 @@ import pytest
 
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
+    LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
 )
 
@@ -164,3 +165,31 @@ def test_successful_write_leaves_no_tmp_artifact(tmp_path: Path) -> None:
     repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
     repo.write(_min_envelope())
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_unparseable_json_raises_corrupt_error(tmp_path: Path) -> None:
+    path = tmp_path / "live_state.json"
+    path.write_text("{ not json", encoding="utf-8")
+    repo = LiveStateSidecarRepo(path)
+    with pytest.raises(LiveStateSidecarCorruptError):
+        repo.read()
+
+
+def test_schema_violation_raises_corrupt_error(tmp_path: Path) -> None:
+    path = tmp_path / "live_state.json"
+    path.write_text('{"strategy_instance_id": "x"}', encoding="utf-8")  # missing required fields
+    repo = LiveStateSidecarRepo(path)
+    with pytest.raises(LiveStateSidecarCorruptError):
+        repo.read()
+
+
+def test_corrupt_error_carries_path(tmp_path: Path) -> None:
+    path = tmp_path / "live_state.json"
+    path.write_text("garbage", encoding="utf-8")
+    repo = LiveStateSidecarRepo(path)
+    try:
+        repo.read()
+    except LiveStateSidecarCorruptError as exc:
+        assert exc.path == path
+    else:
+        pytest.fail("expected LiveStateSidecarCorruptError")
