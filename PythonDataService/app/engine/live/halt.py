@@ -71,10 +71,19 @@ class PoisonedHaltTrigger(enum.StrEnum):
     or remains unfilled at end-of-day. Indicates broker-state
     divergence the other direction — we placed an order, the broker
     doesn't show its lifecycle.
+
+    ``COLD_START_DIVERGENCE`` fires when the cold-start reconciler
+    (Resolution 2, ``cold_start_reconciler.py``) refuses to resume a
+    run at boot — corrupt sidecar, unreachable broker, unexpected /
+    missing broker orders, etc. The granular reason string is carried
+    in ``details["reason"]``; the trigger is shared so the same
+    ``poisoned.flag`` JSON shape is read by ``read_poisoned_flag`` and
+    the live-runs status endpoint.
     """
 
     OUTSIDE_MUTATION = "outside_mutation"
     LOST_FILL = "lost_fill"
+    COLD_START_DIVERGENCE = "cold_start_divergence"
 
 
 @dataclass(frozen=True)

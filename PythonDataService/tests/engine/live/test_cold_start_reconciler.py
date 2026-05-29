@@ -16,6 +16,7 @@ from app.engine.live.cold_start_reconciler import (
     Poisoned,
     SafeToResume,
 )
+from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
 
 
@@ -47,6 +48,7 @@ class FakeBroker:
     open_orders_by_namespace_result: list[dict[str, object]] = field(default_factory=list)
     executions_for_namespace_result: list[dict[str, object]] = field(default_factory=list)
     raise_on_open_orders: BaseException | None = None
+    raise_on_executions: BaseException | None = None
 
     def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]:
         if self.raise_on_open_orders is not None:
@@ -56,6 +58,8 @@ class FakeBroker:
     def executions_for_namespace(
         self, namespace: str, since_ms: int
     ) -> list[dict[str, object]]:
+        if self.raise_on_executions is not None:
+            raise self.raise_on_executions
         return list(self.executions_for_namespace_result)
 
 
@@ -253,7 +257,10 @@ def test_corrupt_sidecar_yields_poisoned_with_flag(tmp_path: Path) -> None:
 
     assert isinstance(result, Poisoned)
     assert result.reason == "sidecar_corrupt"
-    assert (run_dir / "poisoned.flag").read_text(encoding="utf-8") == "sidecar_corrupt"
+    flag = read_poisoned_flag(run_dir)
+    assert flag is not None
+    assert flag.trigger is PoisonedHaltTrigger.COLD_START_DIVERGENCE
+    assert flag.details["reason"] == "sidecar_corrupt"
 
 
 def test_safe_to_resume_leaves_no_poisoned_flag(tmp_path: Path) -> None:
@@ -292,9 +299,10 @@ def test_poisoned_outcome_writes_poisoned_flag(tmp_path: Path) -> None:
     result = reconciler.verify(broker=broker, sidecar=repo, run_dir=run_dir)
 
     assert isinstance(result, Poisoned)
-    flag_path = run_dir / "poisoned.flag"
-    assert flag_path.exists()
-    assert "unexpected_order_at_broker" in flag_path.read_text(encoding="utf-8")
+    flag = read_poisoned_flag(run_dir)
+    assert flag is not None
+    assert flag.trigger is PoisonedHaltTrigger.COLD_START_DIVERGENCE
+    assert flag.details["reason"] == "unexpected_order_at_broker"
 
 
 def test_unexpected_order_at_broker_yields_poisoned(tmp_path: Path) -> None:
@@ -317,3 +325,116 @@ def test_unexpected_order_at_broker_yields_poisoned(tmp_path: Path) -> None:
 
     assert isinstance(result, Poisoned)
     assert result.reason == "unexpected_order_at_broker"
+
+
+def test_multiple_executions_for_one_order_all_recovered(tmp_path: Path) -> None:
+    """Regression (Codex P1): IBKR can report several executions for one
+    order (partial / split fills, each with its own exec_id) after the
+    last flush. The reconciler must recover *every* unflushed execution,
+    not just the last one — collapsing to one entry per client_order_id
+    understates the resumed fill quantity / P&L.
+    """
+    order_id = "learn-ai/spy_ema_crossover/v1/2"
+    repo = _seed_sidecar(
+        tmp_path / "live_state.json",
+        submitted_orders={order_id: {"perm_id": 9876543210, "status": "Submitted"}},
+        known_exec_ids=[],
+    )
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[],  # filled — no longer open
+        executions_for_namespace_result=[
+            {"client_order_id": order_id, "exec_id": "exec-1", "fill_qty": 40},
+            {"client_order_id": order_id, "exec_id": "exec-2", "fill_qty": 60},
+        ],
+    )
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo)
+
+    assert isinstance(result, SafeToResume)
+    recovered_exec_ids = {fill["exec_id"] for fill in result.recovered_fills}
+    assert recovered_exec_ids == {"exec-1", "exec-2"}
+
+
+def test_multiple_executions_only_unknown_recovered(tmp_path: Path) -> None:
+    """A previously-flushed execution (its exec_id already in
+    known_exec_ids) is not re-recovered, but its sibling unflushed
+    execution on the same order still is.
+    """
+    order_id = "learn-ai/spy_ema_crossover/v1/2"
+    repo = _seed_sidecar(
+        tmp_path / "live_state.json",
+        submitted_orders={order_id: {"perm_id": 9876543210, "status": "Submitted"}},
+        known_exec_ids=["exec-1"],
+    )
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[],
+        executions_for_namespace_result=[
+            {"client_order_id": order_id, "exec_id": "exec-1", "fill_qty": 40},
+            {"client_order_id": order_id, "exec_id": "exec-2", "fill_qty": 60},
+        ],
+    )
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo)
+
+    assert isinstance(result, SafeToResume)
+    assert [fill["exec_id"] for fill in result.recovered_fills] == ["exec-2"]
+
+
+def test_execution_lookup_failure_yields_cannot_verify_offline(tmp_path: Path) -> None:
+    """Regression (Codex P2): if the open-order query succeeds but the
+    execution-history query fails, the reconciler must poison rather
+    than raise. The module contract says there is no offline/unverified
+    resume path — broker reachability failures are Poisoned.
+    """
+    order_id = "learn-ai/spy_ema_crossover/v1/2"
+    repo = _seed_sidecar(
+        tmp_path / "live_state.json",
+        submitted_orders={order_id: {"perm_id": 9876543210, "status": "Submitted"}},
+    )
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[],  # forces the execution lookup
+        raise_on_executions=ConnectionError("execution stream disconnected"),
+    )
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir()
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, run_dir=run_dir)
+
+    assert isinstance(result, Poisoned)
+    assert result.reason == "cannot_verify_offline"
+    assert (run_dir / "poisoned.flag").exists()
+
+
+def test_poisoned_flag_is_shared_json_format(tmp_path: Path) -> None:
+    """Regression (Codex P1): poisoned.flag must be the shared halt JSON
+    object, not a bare reason string. Otherwise run.py's
+    read_poisoned_flag raises on restart and the live-runs status
+    endpoint's _read_flag silently drops the poison details. Assert the
+    flag round-trips through BOTH consumers.
+    """
+    import json
+
+    repo = _seed_sidecar(tmp_path / "live_state.json")
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[{"client_order_id": "rogue", "perm_id": 1}],
+    )
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir()
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, run_dir=run_dir)
+
+    assert isinstance(result, Poisoned)
+    # run.py consumer: parses as a PoisonedHaltReason without raising.
+    flag = read_poisoned_flag(run_dir)
+    assert flag is not None
+    assert flag.trigger is PoisonedHaltTrigger.COLD_START_DIVERGENCE
+    assert flag.details["reason"] == "unexpected_order_at_broker"
+    assert flag.last_clean_bar_close_ms == 1_748_000_000_000
+    # live-runs status consumer: valid JSON object, not a bare string.
+    payload = json.loads((run_dir / "poisoned.flag").read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    assert payload["trigger"] == "cold_start_divergence"

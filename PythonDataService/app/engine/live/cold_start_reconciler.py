@@ -13,9 +13,6 @@ one side effect.
 
 from __future__ import annotations
 
-import contextlib
-import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -63,7 +60,7 @@ class ColdStartReconciler:
     ) -> ReconciliationResult:
         result = self._verify_inner(broker=broker, sidecar=sidecar, shadow_mode=shadow_mode)
         if isinstance(result, Poisoned) and run_dir is not None:
-            _write_poisoned_flag(run_dir, result.reason)
+            _write_poisoned_flag(run_dir, result.reason, sidecar=sidecar)
         return result
 
     def _verify_inner(
@@ -106,21 +103,37 @@ class ColdStartReconciler:
         # open, look at executions before declaring it missing — the
         # crash may have happened between fill and flush, in which case
         # the broker has the execution and we record it.
-        executions = broker.executions_for_namespace(
-            envelope.bot_order_namespace, envelope.last_artifact_flush_ms
-        )
-        executions_by_order_id: dict[object, dict[str, object]] = {
-            exec_record.get("client_order_id"): exec_record for exec_record in executions
-        }
+        try:
+            executions = broker.executions_for_namespace(
+                envelope.bot_order_namespace, envelope.last_artifact_flush_ms
+            )
+        except Exception:
+            # Same contract as the open-order query above: there is no
+            # offline/unverified resume path. If the execution-history
+            # query fails (timeout, disconnect, auth) we cannot
+            # distinguish a clean cold start from one with hidden,
+            # unflushed fills — so we poison rather than raise.
+            return Poisoned(reason="cannot_verify_offline")
+        # Group every execution by order id — a single order can report
+        # multiple executions (partial fills / split executions, each
+        # with its own exec_id) after the last flush. Collapsing to one
+        # entry per order would drop earlier unflushed fills and
+        # understate the recovered quantity/P&L on resume.
+        executions_by_order_id: dict[object, list[dict[str, object]]] = {}
+        for exec_record in executions:
+            executions_by_order_id.setdefault(
+                exec_record.get("client_order_id"), []
+            ).append(exec_record)
         recovered_fills: list[dict[str, object]] = []
         for sidecar_order_id in envelope.submitted_orders:
             if sidecar_order_id in broker_order_ids:
                 continue
-            fill = executions_by_order_id.get(sidecar_order_id)
-            if fill is None:
+            fills = executions_by_order_id.get(sidecar_order_id)
+            if not fills:
                 return Poisoned(reason="expected_order_missing_at_broker")
-            if fill.get("exec_id") not in envelope.known_exec_ids:
-                recovered_fills.append(fill)
+            for fill in fills:
+                if fill.get("exec_id") not in envelope.known_exec_ids:
+                    recovered_fills.append(fill)
 
         return SafeToResume(
             from_bar_ms=envelope.last_processed_bar_ms,
@@ -128,34 +141,47 @@ class ColdStartReconciler:
         )
 
 
-def _write_poisoned_flag(run_dir: Path, reason: str) -> None:
-    """Atomically write <run_dir>/poisoned.flag with the reason.
+def _write_poisoned_flag(
+    run_dir: Path, reason: str, *, sidecar: LiveStateSidecarRepo
+) -> None:
+    """Write <run_dir>/poisoned.flag in the shared halt JSON format.
 
-    Mirrors the LiveStateSidecar atomic-write pattern: tempfile, fsync,
-    os.replace, parent-dir fsync on POSIX. The flag is the cross-process
-    signal to the engine and operator tooling that this run must not
-    submit new orders. Atomicity matters because partial writes from a
-    crash here would leave a half-written flag that downstream
-    parsing might either miss or misinterpret.
+    Delegates to ``halt.write_poisoned_flag`` so the on-disk shape is
+    the same JSON object the rest of the system reads: ``run.py``'s
+    ``read_poisoned_flag`` (which parses it as JSON and surfaces the
+    trigger/timestamp) and the live-runs status endpoint's
+    ``_read_flag`` (which also expects JSON). Writing the bare reason
+    string here would make both consumers treat the flag as corrupt —
+    the next ``start`` would report a corrupted flag and the status
+    endpoint would not surface the poison details.
+
+    The granular cold-start reason (``sidecar_corrupt``,
+    ``unexpected_order_at_broker``, ...) is carried in
+    ``details["reason"]`` under the shared
+    ``COLD_START_DIVERGENCE`` trigger. ``last_clean_bar_close_ms`` is
+    the sidecar's last processed bar when readable, else ``0`` (a
+    corrupt sidecar gives us no clean bar to anchor on).
     """
-    run_dir.mkdir(parents=True, exist_ok=True)
-    target = run_dir / "poisoned.flag"
-    tmp = target.with_suffix(".flag.tmp")
-    payload = reason.encode("utf-8")
-    with open(tmp, "wb") as fh:
-        fh.write(payload)
-        fh.flush()
-        os.fsync(fh.fileno())
+    from app.engine.live.halt import (
+        PoisonedHaltReason,
+        PoisonedHaltTrigger,
+        now_ms_utc,
+        write_poisoned_flag,
+    )
+    from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError
+
+    last_clean_bar_close_ms = 0
     try:
-        os.replace(tmp, target)
-    except Exception:
-        with contextlib.suppress(OSError):
-            tmp.unlink()
-        raise
-    if sys.platform != "win32":
-        dir_fd = os.open(run_dir, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            with contextlib.suppress(OSError):
-                os.close(dir_fd)
+        envelope = sidecar.read()
+    except LiveStateSidecarCorruptError:
+        envelope = None
+    if envelope is not None:
+        last_clean_bar_close_ms = envelope.last_processed_bar_ms
+
+    halt_reason = PoisonedHaltReason(
+        trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+        halted_at_ms=now_ms_utc(),
+        last_clean_bar_close_ms=last_clean_bar_close_ms,
+        details={"reason": reason},
+    )
+    write_poisoned_flag(run_dir, halt_reason)
