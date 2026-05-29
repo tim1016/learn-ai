@@ -546,6 +546,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     import os as _os
     from importlib import import_module
 
+    from app.engine.live.artifacts import DECISION_COLUMNS, resolve_decision_columns
     from app.engine.live.halt import FatalHaltError, read_poisoned_flag
     from app.engine.live.live_engine import (
         LiveEngine,
@@ -553,6 +554,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
     from app.engine.live.run_logging import configure_run_logging
     from app.engine.live.run_status import now_ms, write_run_status
+    from app.engine.strategy.spec import load_spec_from_path
     from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
     # § 7.2 #4 refusal: a poisoned run cannot resume on its own
@@ -689,6 +691,28 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     command_channel = CommandChannel(args.run_dir / "commands")
 
+    # Resolve the decision-row schema + provenance from the strategy spec
+    # the ledger pins (PRD-A §16.1 Resolution 5). The spec is authoritative
+    # for the strategy-specific columns, submit_mode (the run's mode), and
+    # bar_source. If the spec can't be loaded at runtime (path moved since
+    # init-ledger, parse error), fall back to the default EMA schema so a
+    # decisions.parquet is still produced — and log it.
+    decision_columns = DECISION_COLUMNS
+    run_mode = "live_paper"
+    bar_source = "ibkr_paper_delayed"
+    try:
+        spec = load_spec_from_path(Path(ledger.strategy_spec_path))
+        decision_columns = resolve_decision_columns(spec)
+        run_mode = spec.submit_mode
+        bar_source = spec.bar_source_descriptor
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "could not load strategy spec at %s for decision schema; "
+            "falling back to default EMA schema: %s",
+            ledger.strategy_spec_path,
+            exc,
+        )
+
     engine = LiveEngine(
         client,
         live_config,
@@ -704,6 +728,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         strategy_spec_sha=ledger.strategy_spec_sha256,
         live_state_writer=live_state_writer,
         command_channel=command_channel,
+        run_id=ledger.run_id,
+        strategy_key=args.strategy,
+        strategy_instance_id=args.strategy,
+        run_mode=run_mode,
+        bar_source=bar_source,
+        decision_columns=decision_columns,
     )
 
     _entry_sidecar = RunStatusSidecar(

@@ -32,6 +32,8 @@ from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live.artifacts import (
+    CORE_DECISION_COLUMNS,
+    DECISION_COLUMNS,
     DecisionRow,
     ExecutionRow,
     LiveArtifactWriters,
@@ -253,6 +255,16 @@ class LiveEngine:
         # PAUSE/RESUME/STOP/FLATTEN/RECONCILE/MARK_POISONED to
         # in-process state. None disables the polling.
         command_channel: CommandChannel | None = None,
+        # NEW: decision-row provenance (PRD-A §16.1 Resolution 5). Threaded
+        # from run.py off the ledger + resolved spec. ``decision_columns``
+        # is the resolved parquet schema (core + spec.decision_columns);
+        # defaults to the SPY EMA schema for the no-spec replay path.
+        run_id: str = "",
+        strategy_key: str = "",
+        strategy_instance_id: str = "",
+        run_mode: str = "live_paper",
+        bar_source: str = "ibkr_paper_delayed",
+        decision_columns: tuple[str, ...] = DECISION_COLUMNS,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -308,6 +320,17 @@ class LiveEngine:
         # restores normal submission. STOP / MARK_POISONED set the
         # bar loop's shutdown_event so the existing graceful path runs.
         self._paused = False
+        # Decision-row provenance.
+        self._run_id = run_id
+        self._strategy_key = strategy_key
+        self._strategy_instance_id = strategy_instance_id
+        self._run_mode = run_mode
+        self._bar_source = bar_source
+        self._decision_columns = decision_columns
+        # The strategy-specific decision columns = resolved minus the core.
+        self._strategy_decision_columns = tuple(
+            c for c in decision_columns if c not in CORE_DECISION_COLUMNS
+        )
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -411,7 +434,7 @@ class LiveEngine:
         last_written_decision_ms: int | None = None
         last_written_trade_count = 0
         if self._output_dir is not None:
-            writers = LiveArtifactWriters.open(self._output_dir)
+            writers = LiveArtifactWriters.open(self._output_dir, self._decision_columns)
 
         started_event_stream = False
         if isinstance(self._broker, IbkrEventAdapter):
@@ -734,8 +757,8 @@ class LiveEngine:
 
     # ──────────────────── Artifact-writer helpers ────────────────────
 
-    @staticmethod
     def _maybe_write_decision(
+        self,
         writers: LiveArtifactWriters,
         strategy: Strategy,
         last_written_ms: int | None,
@@ -748,18 +771,37 @@ class LiveEngine:
         because the consolidator only fires on 15-min boundaries — most
         minute bars leave ``last_decision_snapshot`` unchanged from the
         prior iteration.
+
+        Core provenance columns (run_id / strategy ids / mode /
+        bar_source) come from the run context threaded in at
+        construction; the strategy-specific indicator columns are read
+        off the snapshot by the names ``spec.decision_columns`` declared
+        (resolved into ``self._strategy_decision_columns``). A snapshot
+        missing a declared column fails fast at the writer's column
+        check rather than writing a silently-wrong schema.
         """
         snap = strategy.last_decision_snapshot
         if snap is None or snap.bar_close_ms == last_written_ms:
             return last_written_ms
+        indicator_values = {
+            name: getattr(snap, name) for name in self._strategy_decision_columns
+        }
         writers.decisions.append_row(
             DecisionRow(
                 bar_close_ms=snap.bar_close_ms,
-                ema5=snap.ema5,
-                ema10=snap.ema10,
-                rsi=snap.rsi,
                 signal=snap.signal,
                 intended_price=snap.intended_price,
+                run_id=self._run_id,
+                strategy_key=self._strategy_key,
+                strategy_instance_id=self._strategy_instance_id,
+                bar_source=self._bar_source,
+                # The consolidated bar close == intended_price (share-count
+                # reference); the rest of OHLCV is not on DecisionSnapshot
+                # yet, so it stays NULL until the snapshot grows (Layer B).
+                bar_close=snap.intended_price,
+                intended_fill_model="NEXT_BAR_OPEN",
+                mode=self._run_mode,
+                indicator_values=indicator_values,
             )
         )
         return snap.bar_close_ms

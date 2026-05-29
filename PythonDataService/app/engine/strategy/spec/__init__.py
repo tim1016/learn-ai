@@ -19,8 +19,9 @@ parity-pinned secondary implementation. Same pattern as
 
 from app.engine.strategy.spec.evaluator import SpecAlgorithm
 from app.engine.strategy.spec.schema import (
+    DecisionColumnSpec,
     StrategySpec,
     load_spec_from_path,
 )
 
-__all__ = ["SpecAlgorithm", "StrategySpec", "load_spec_from_path"]
+__all__ = ["DecisionColumnSpec", "SpecAlgorithm", "StrategySpec", "load_spec_from_path"]
