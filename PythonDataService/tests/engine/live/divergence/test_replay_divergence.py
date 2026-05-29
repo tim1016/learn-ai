@@ -84,6 +84,32 @@ def test_close_price_drift_out_of_tolerance_emits_data_drift_c() -> None:
     assert drift[0].bar_close_ms == 1000
 
 
+def test_data_drift_skips_fields_the_live_run_did_not_capture() -> None:
+    # Real live decisions populate only bar_close; the rest of OHLCV is NULL
+    # (the live engine has not grown those yet). A field the live run never
+    # captured is absent, not a drift — and must never crash on None.
+    live = DecisionRow(
+        bar_close_ms=1000,
+        signal="HOLD",
+        intended_price=100.0,
+        bar_source="ibkr_paper_delayed",
+        bar_open=None,
+        bar_high=None,
+        bar_low=None,
+        bar_close=100.0,
+        bar_volume=None,
+    )
+    canonical = _canonical(close=100.0)  # matches the one captured field
+    joined = JoinedBar(bar_close_ms=1000, live=live, canonical=canonical, gap_side=None)
+
+    divergences = classify_replay_divergences(joined, _replayed(), ReplayTolerances())
+
+    drift_cats = {
+        d.category for d in divergences if d.category.value.startswith("data_drift")
+    }
+    assert drift_cats == set()  # no crash, no fabricated drift on NULL fields
+
+
 def test_open_high_low_drift_each_emit_their_own_category() -> None:
     live = DecisionRow(
         bar_close_ms=1000,
