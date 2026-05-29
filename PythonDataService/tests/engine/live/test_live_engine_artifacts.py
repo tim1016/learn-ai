@@ -160,10 +160,10 @@ async def test_decisions_carry_core_columns_and_provenance(tmp_path: Path) -> No
     strategy-specific indicator columns in decisions.parquet."""
     from app.engine.live.artifacts import CORE_DECISION_COLUMNS, resolve_decision_columns
     from app.engine.strategy.spec import load_spec_from_path
+    from app.engine.strategy.spec import schema as _spec_schema
 
-    spec = load_spec_from_path(
-        "/app/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json"
-    )
+    spec_path = Path(_spec_schema.__file__).parent / "fixtures" / "spy_ema_crossover.spec.json"
+    spec = load_spec_from_path(spec_path)
     cols = resolve_decision_columns(spec)
 
     broker = FakeBroker()
