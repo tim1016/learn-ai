@@ -235,6 +235,27 @@ def test_fill_arrived_after_last_flush_yields_safe_with_recovered_fill(
     assert result.recovered_fills[0]["client_order_id"] == "learn-ai/spy_ema_crossover/v1/2"
 
 
+def test_corrupt_sidecar_yields_poisoned_with_flag(tmp_path: Path) -> None:
+    """If the on-disk sidecar is unreadable (LiveStateSidecarCorruptError)
+    the reconciler cannot verify anything and must refuse to resume.
+    The flag carries the corrupt-sidecar reason so operator tooling
+    can route the operator to inspect the file directly.
+    """
+    sidecar_path = tmp_path / "live_state.json"
+    sidecar_path.write_text("{ this is not valid json", encoding="utf-8")
+    repo = LiveStateSidecarRepo(sidecar_path)
+    broker = FakeBroker()
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir()
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, run_dir=run_dir)
+
+    assert isinstance(result, Poisoned)
+    assert result.reason == "sidecar_corrupt"
+    assert (run_dir / "poisoned.flag").read_text(encoding="utf-8") == "sidecar_corrupt"
+
+
 def test_safe_to_resume_leaves_no_poisoned_flag(tmp_path: Path) -> None:
     """Negative-space invariant: a clean cold start must not create
     poisoned.flag. Otherwise the engine's halt check would treat every

@@ -18,7 +18,10 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
 
 
 class _BrokerProtocol(Protocol):
@@ -54,7 +57,7 @@ class ColdStartReconciler:
         self,
         *,
         broker: _BrokerProtocol,
-        sidecar: "LiveStateSidecarRepo",  # noqa: F821 — forward string ref
+        sidecar: LiveStateSidecarRepo,
         shadow_mode: bool = False,
         run_dir: Path | None = None,
     ) -> ReconciliationResult:
@@ -67,10 +70,15 @@ class ColdStartReconciler:
         self,
         *,
         broker: _BrokerProtocol,
-        sidecar: "LiveStateSidecarRepo",  # noqa: F821 — forward string ref
+        sidecar: LiveStateSidecarRepo,
         shadow_mode: bool,
     ) -> ReconciliationResult:
-        envelope = sidecar.read()
+        from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError
+
+        try:
+            envelope = sidecar.read()
+        except LiveStateSidecarCorruptError:
+            return Poisoned(reason="sidecar_corrupt")
         assert envelope is not None  # cycle 1 happy path
 
         try:
