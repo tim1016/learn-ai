@@ -10,8 +10,9 @@ the envelope+repo+atomic-write pattern this mirrors.
 
 from __future__ import annotations
 
+import contextlib
+import os
 from pathlib import Path
-
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -47,5 +48,23 @@ class LiveStateSidecarRepo:
         return LiveStateEnvelope.model_validate_json(self._path.read_text(encoding="utf-8"))
 
     def write(self, envelope: LiveStateEnvelope) -> None:
+        """Atomic write: serialise to a sibling .tmp, fsync, os.replace.
+
+        A crash between the tempfile flush and the rename leaves the
+        previous good snapshot in place; a crash mid-tempfile-write
+        leaves an orphan .tmp that read() ignores. See
+        test_failed_rename_preserves_previous_snapshot for the invariant.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(envelope.model_dump_json(), encoding="utf-8")
+        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        payload = envelope.model_dump_json().encode("utf-8")
+        with open(tmp_path, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.replace(tmp_path, self._path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            raise

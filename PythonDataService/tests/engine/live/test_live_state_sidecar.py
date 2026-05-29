@@ -7,7 +7,10 @@ slice of schema or mechanics. See plan §16.4 Resolution 3 for the
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
@@ -129,3 +132,35 @@ def test_round_trip_persists_poisoned_reason(tmp_path: Path) -> None:
     loaded = repo.read()
     assert loaded is not None
     assert loaded.poisoned_reason == "unexpected_order_at_broker"
+
+
+def test_failed_rename_preserves_previous_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Atomic-write invariant: a crash between tempfile write and rename
+    must leave the live path unchanged. The previous envelope is what
+    a subsequent read() returns.
+    """
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    repo.write(_min_envelope(run_id="alpha"))
+
+    def failing_replace(src: str, dst: str) -> None:
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    with pytest.raises(OSError):
+        repo.write(_min_envelope(run_id="beta"))
+    monkeypatch.undo()
+
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.run_id == "alpha"
+    # No orphan .tmp left lying around after the failed write either.
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert tmp_files == [], f"orphan tmp files after failed rename: {tmp_files}"
+
+
+def test_successful_write_leaves_no_tmp_artifact(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    repo.write(_min_envelope())
+    assert list(tmp_path.glob("*.tmp")) == []
