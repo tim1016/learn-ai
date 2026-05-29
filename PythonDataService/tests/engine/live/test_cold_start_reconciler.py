@@ -45,12 +45,18 @@ class FakeBroker:
     """
 
     open_orders_by_namespace_result: list[dict[str, object]] = field(default_factory=list)
+    executions_for_namespace_result: list[dict[str, object]] = field(default_factory=list)
     raise_on_open_orders: BaseException | None = None
 
     def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]:
         if self.raise_on_open_orders is not None:
             raise self.raise_on_open_orders
         return list(self.open_orders_by_namespace_result)
+
+    def executions_for_namespace(
+        self, namespace: str, since_ms: int
+    ) -> list[dict[str, object]]:
+        return list(self.executions_for_namespace_result)
 
 
 def test_empty_broker_and_empty_sidecar_yields_safe_to_resume(tmp_path: Path) -> None:
@@ -186,6 +192,47 @@ def test_expected_order_missing_at_broker_yields_poisoned(tmp_path: Path) -> Non
 
     assert isinstance(result, Poisoned)
     assert result.reason == "expected_order_missing_at_broker"
+
+
+def test_fill_arrived_after_last_flush_yields_safe_with_recovered_fill(
+    tmp_path: Path,
+) -> None:
+    """Recovery happy path: the bot submitted an order; the broker filled
+    it; the bot crashed before flushing the exec_id to artifacts. At
+    cold-start the broker shows the order absent from open orders
+    (filled, no longer open) but present in the executions list. The
+    reconciler classifies as a recovered_fill and proceeds.
+    """
+    repo = _seed_sidecar(
+        tmp_path / "live_state.json",
+        submitted_orders={
+            "learn-ai/spy_ema_crossover/v1/2": {
+                "perm_id": 9876543210,
+                "status": "Submitted",
+            }
+        },
+        known_exec_ids=[],
+    )
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[],  # filled — no longer open
+        executions_for_namespace_result=[
+            {
+                "client_order_id": "learn-ai/spy_ema_crossover/v1/2",
+                "perm_id": 9876543210,
+                "exec_id": "0000e0d5.6452f4c2.01.01",
+                "fill_price": 421.50,
+                "fill_qty": 100,
+            }
+        ],
+    )
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo)
+
+    assert isinstance(result, SafeToResume)
+    assert len(result.recovered_fills) == 1
+    assert result.recovered_fills[0]["exec_id"] == "0000e0d5.6452f4c2.01.01"
+    assert result.recovered_fills[0]["client_order_id"] == "learn-ai/spy_ema_crossover/v1/2"
 
 
 def test_unexpected_order_at_broker_yields_poisoned(tmp_path: Path) -> None:

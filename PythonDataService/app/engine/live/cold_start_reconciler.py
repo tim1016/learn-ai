@@ -13,7 +13,7 @@ one side effect.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -26,11 +26,15 @@ class _BrokerProtocol(Protocol):
     """
 
     def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]: ...
+    def executions_for_namespace(
+        self, namespace: str, since_ms: int
+    ) -> list[dict[str, object]]: ...
 
 
 @dataclass(frozen=True)
 class SafeToResume:
     from_bar_ms: int
+    recovered_fills: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -73,8 +77,27 @@ class ColdStartReconciler:
             if order_id not in envelope.submitted_orders:
                 return Poisoned(reason="unexpected_order_at_broker")
 
+        # For each expected-open order that the broker doesn't show as
+        # open, look at executions before declaring it missing — the
+        # crash may have happened between fill and flush, in which case
+        # the broker has the execution and we record it.
+        executions = broker.executions_for_namespace(
+            envelope.bot_order_namespace, envelope.last_artifact_flush_ms
+        )
+        executions_by_order_id: dict[object, dict[str, object]] = {
+            exec_record.get("client_order_id"): exec_record for exec_record in executions
+        }
+        recovered_fills: list[dict[str, object]] = []
         for sidecar_order_id in envelope.submitted_orders:
-            if sidecar_order_id not in broker_order_ids:
+            if sidecar_order_id in broker_order_ids:
+                continue
+            fill = executions_by_order_id.get(sidecar_order_id)
+            if fill is None:
                 return Poisoned(reason="expected_order_missing_at_broker")
+            if fill.get("exec_id") not in envelope.known_exec_ids:
+                recovered_fills.append(fill)
 
-        return SafeToResume(from_bar_ms=envelope.last_processed_bar_ms)
+        return SafeToResume(
+            from_bar_ms=envelope.last_processed_bar_ms,
+            recovered_fills=recovered_fills,
+        )
