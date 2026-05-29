@@ -527,3 +527,84 @@ Run phases sequentially. After each phase Codex should:
 
 **Manual phases (not Codex-driven):**
 - **Phase 10 (paper week)** — requires real IBKR connection and human supervision. Codex's job ends at "the runner is verified end-to-end against the fake broker, and the reconciliation script works on a recorded sample run."
+
+---
+
+## 16. Design-Lock Round (2026-05-28)
+
+This section captures the design decisions taken in the 2026-05-28 grilling session for the persistent paper-trading bot architecture, sim ↔ paper divergence harness, and the shadow VWAP strategy onboarding. It supersedes any conflicting framing in earlier sections of this document (in particular, the pre-implementation design draft's proposal of a Postgres control plane and a `gnzsnz/ib-gateway-docker` container topology).
+
+The full session record lives in `docs/architecture/adrs/000{1,2,3}-*.md` for the three load-bearing decisions; this section is the digest, queue, and term lock.
+
+### 16.1. The 8 resolutions
+
+| # | Decision | Authority |
+|---|---|---|
+| **1** | **Substrate** — JSON + Parquet + hash-sidecar artifacts remain canonical for the live-runtime control plane. Postgres is reserved as a future *projection layer* (read-replica derived from artifacts), never the source of truth. Triggers for the projection layer are written into the ADR. | [ADR 0001](architecture/adrs/0001-control-plane-substrate-json-parquet.md) |
+| **2** | **Cold-restart source of truth** — broker truth via namespaced ownership (`orderRef` / `client_order_id`), not `reqAllOpenOrders`. Sidecar is a cross-check ("what must be checked"), not a source of state. Mismatch → `poisoned.flag`, refuse to submit new orders. Rule: **no broker connection, no verified resume; mismatch, no trading.** | This § 16.4 |
+| **3** | **Sidecar field list** — explicit. `run_id, strategy_instance_id, bot_order_namespace, ib_client_id, last_processed_bar_ms, last_artifact_flush, pending_intents, submitted_orders, known_perm_ids, known_exec_ids, expected_position_by_symbol, poisoned_reason?`. | This § 16.4 |
+| **4** | **Shadow mode** — same engine, broker-adapter-level `submit_mode` switch (`"live_paper"` \| `"shadow"`). Separate OS processes per strategy. Five invariants govern shadow (cold-start namespace empty at broker; explicit `execution_source` tag; explicit `fill_model` + `source_bar_close_ms`; bounded blast radius; graduation = new run ledger). | [ADR 0002](architecture/adrs/0002-shadow-mode-adapter-level-no-submit.md) |
+| **5** | **Schema growth** — per-strategy parquet, schema generated from `StrategySpec` at run init. Universal core prefix (`run_id, strategy_key, strategy_instance_id, bar_close_ms, bar_source, bar_open, bar_high, bar_low, bar_close, bar_volume, signal, intended_action, intended_price, intended_fill_model, decision_latency_ms, mode`) plus strategy-specific typed indicator columns. `DECISION_COLUMNS` resolution rule: `CORE_DECISION_COLUMNS + strategy_spec.decision_columns`. Spec declares types + nullability + semantics, not just names. Cross-strategy joins live in the report layer, not the artifact writer. `ExecutionRow` grows by `execution_source ∈ {"broker_fill","shadow_sim"}`, `fill_model`, `source_bar_close_ms`. | This § 16.4 |
+| **6** | **Divergence taxonomy** — two new layer-scoped enums; existing `DivergenceCategory` + `CrossEngineClass` + `FillClass` from `qc_reconciler.py` / `reconcile.py` are **untouched** (they describe backtest-vs-backtest agreement, which is a different question). New enums: <br>**Layer A — `ExecutionDivergence`:** `SLIPPAGE, LATENCY_SUBMIT, LATENCY_FILL, MISSED, EXTRA, PARTIAL, REJECTED, COMMISSION_MISSING, COMMISSION_DRIFT`. `COMMISSION_OBSERVED` is a metric/status field, not a category. <br>**Layer B — `ReplayDivergence`:** `DATA_DRIFT_{O,H,L,C,V}, INDICATOR_STATE_DRIFT, DECISION_DRIFT, COVERAGE_GAP, TRADE_GRAPH_DRIFT`. <br>`fill_latency_atol_ms` (default 2000 for SPY paper market orders) is configurable per-report and reported with every divergence record. Report bundles are separate: `day-N.exec.{md,json,parquet}` (Layer A) and `day-N.replay.{md,json,parquet}` (Layer B), each with own tolerances, category counts, manifest hash, and pass/fail gate. The three-way reconciler's existing `day-N.{md,json,parquet,hashes.json}` continues to write unchanged as a third bundle. | This § 16.4 |
+| **7** | **Operator control surface** — file-based command channel matching the artifact substrate. **Durable desired state** at `artifacts/live_state/<strategy_instance_id>/desired_state.json` with `{desired_state ∈ {RUNNING,PAUSED,STOPPED}, updated_at_ms, updated_by, reason, version}` — survives crash + reboot (PAUSED stays PAUSED across restart). **Per-run commands** at `artifacts/live_runs/<run_id>/commands/command.<seq>.<verb>.pending.json` with verbs `{PAUSE, RESUME, STOP, FLATTEN, RECONCILE, MARK_POISONED}`. Atomic create/rename for partial-write safety. Ack as `command.<seq>.<verb>.ack.json` with outcome payload. Bot polls command dir at 1s, independent of bar loop. **Panic path** is `run.py emergency-flatten` direct-broker CLI — does not depend on bot being alive. **Final truth on restart** = broker cross-check per Resolution 2 before any trading. `MARK_POISONED` is the operator-declared halt verb (e.g. "I saw a manual trade hit this account"). | This § 16.4 |
+| **8** | **Operational topology** — (T3) Hybrid. Windows host-venv preserved (Gateway + IBC native; bots in host venv; `host_daemon.py` extended to N processes and NSSM-wrapped for boot survival). Podman compose stays observability-only. One Gateway, multiple `clientId`s pinned per strategy spec. IBKR paper data remains delayed (no subscription) and is logged as `bar_source = "ibkr_paper_delayed"` in every `DecisionRow`; subscribe only if Layer B becomes uninformative. Explicit triggers for (T4) Linux VPS migration are written. | [ADR 0003](architecture/adrs/0003-operational-topology-host-venv.md) |
+
+§ 8 (open questions in the pre-implementation draft) is superseded: items #1 (always-on machine), #4 (paper market data), #5 (one Gateway vs two) are all resolved above. Items #2 (reconcile existing repo), #3 (long-only vs long/short for VWAP) — the first is done by the design-lock reconnaissance; the second is left to the VWAP `port-indicator` session along with bar size, band formula, k, session filter, and position sizing.
+
+### 16.2. PR queue
+
+Suggested batching. Each PR ends with documentation per "documentation is part of done". The Phase 10 prereq RTH dry-run is an operational event, not a PR — it sits between PR-D and PR-E in the queue as a gating activity.
+
+| PR | Title | Scope | Depends on |
+|---|---|---|---|
+| **PR-A** | `host_daemon` registry refactor | `_current: ManagedProcess \| None` → `_managed: dict[strategy_instance_id, ManagedProcess]`. Existing single-bot lifecycle preserved end-to-end. | none |
+| **PR-B** | `StrategySpec` growth + clientId/submit_mode pinning | Typed `decision_columns`, `clientId`, `submit_mode` (default `"live_paper"`), `bar_source_descriptor`. Update `spy_ema_crossover.spec.json`. No behavior change for EMA. | PR-A |
+| **PR-C** | `DecisionRow` / `ExecutionRow` schema growth | Core columns from § 16.1 Resolution 5 added; `artifacts.py` refactored to resolve columns from spec; `ExecutionRow` gains `execution_source` / `fill_model` / `source_bar_close_ms`. Parity test, replay parity gate must still pass. | PR-B |
+| **PR-D** | Command channel + durable desired-state | Stable `desired_state.json` per strategy_instance_id; per-run command files with atomic writes; 1s poll loop in bot independent of bar loop; CLI verbs wired. Tests: PAUSED across crash; STOPPED → no restart loop. | PR-A, PR-C |
+| **Phase 10 prereq — Full RTH dry-run pass** | First end-to-end populated `decisions.parquet` against real Gateway | Operator-driven session (~10.5h wall clock per integration authority § 11). Closes "writer-schema + reconcile-loader contract unverified" gap. | PR-D |
+| **PR-E** | Order-idempotency `.live_state.json` sidecar + cold-start cross-check | Sidecar fields from § 16.1 Resolution 3; cold-start procedure from § 16.1 Resolution 2; mismatch writes `poisoned.flag` and refuses to submit. Tests: mock IBKR with mismatched open orders → poison fires. | PR-D + Phase 10 prereq |
+| **PR-F** | NSSM / Windows Service wrap for `host_daemon` | Auto-start on boot. Test: reboot machine, host_daemon up before login. | PR-A (any time after) |
+| **PR-G** | `commissionReport` callback + `ExecutionRow.fee` populated + `COMMISSION_OBSERVED` metric | Wires the IBKR callback path; required before Layer A divergence is meaningful. (Phase 10 prereq row in integration authority § 11.) | PR-C |
+| **PR-H** | Layer A `ExecutionDivergence` harness + `day-N.exec.{md,json,parquet}` | New enum, matched-ledger code over `decisions.parquet` + `executions.parquet`; per-category default tolerances declared; per-report tolerance override and report-time logging; pass/fail gate. Synthetic fixture exercises each category. | PR-C, PR-G |
+| **PR-I** | Layer B `ReplayDivergence` harness + `day-N.replay.{md,json,parquet}` | Replays strategy spec against archived Polygon bars for same session window; joins to live decisions; emits divergence categories; pass/fail gate. Synthetic fixture covers each category. | PR-C |
+| **PR-J** | `NoSubmitBrokerAdapter` + adapter-level submit-mode switch | Implements ADR 0002. Existing `IbkrBrokerAdapter` unchanged. Engine no longer branches on submit-mode internally. Tests: shadow run produces `execution_source = "shadow_sim"` rows; never calls `ib.placeOrder`. | PR-B, PR-C |
+| **PR-K** | VWAP-band reversion strategy port | `port-indicator` session: math, golden fixture from LEAN / Polygon reference, parity test at `atol=1e-9`. Strategy spec `spy_vwap_reversion.spec.json` with clientId, typed decision_columns, `submit_mode = "shadow"`. Indicator-state sidecar at `artifacts/live_state/spy_vwap_reversion_1min/SPY_1m.json`. | PR-J |
+| **PR-L** | Shadow VWAP onboarding | Second managed process under PR-A's registry. Smoke run: shadow boots, registers, emits decisions, never submits orders, cold-start namespace check yields zero broker orders. | PR-A, PR-J, PR-K |
+
+Deferred per the revised direction (Step 7+):
+- PDF/matplotlib presentation layer over Layer A/B markdown+parquet outputs.
+- Angular polish: control widgets for the verbs in Resolution 7 (Pause / Stop / Flatten / Reconcile), stale-heartbeat warnings on the Paper Run nav, divergence-report viewer.
+- Authentication / authorization around command issuance and audit identity.
+
+### 16.3. Term Lock (deployment-specific glossary)
+
+These terms are introduced or pinned by this design-lock round. They are deployment-runtime-specific; trading-domain terms remain owned by `.claude/skills/trading-domain/`. A repo-wide `CONTEXT.md` is not created at this time — if/when a third use site for these terms emerges, promote them.
+
+| Term | Definition |
+|---|---|
+| **strategy_instance_id** | Stable identifier for a configured strategy instance across runs. Used as the key for the per-strategy stable sidecar directory (`artifacts/live_state/<strategy_instance_id>/`), the indicator-state sidecar, and the `host_daemon` managed-process registry. Distinct from `strategy_key` (the algorithm family, e.g. `spy_ema_crossover`) and from `run_id` (a single execution). One `strategy_key` can have many `strategy_instance_id`s; one `strategy_instance_id` has many `run_id`s over time. |
+| **bot_order_namespace** | A unique prefix the bot stamps on every order's `orderRef` / `client_order_id` so it can claim ownership of orders at the broker without using `reqAllOpenOrders`. Per strategy_instance_id. Cold-start broker cross-check (Resolution 2) queries the broker for orders within this namespace and only those. |
+| **ib_client_id** | The `clientId` the bot uses on the IBKR Gateway connection. Pinned per strategy_instance_id in the strategy spec so executing and shadow processes never collide. One Gateway, multiple clientIds. |
+| **submit_mode** | The broker-adapter-level switch: `"live_paper"` (route through `IbkrBrokerAdapter`, `ib.placeOrder` called) or `"shadow"` (route through `NoSubmitBrokerAdapter`, synthetic fill via declared fill model). Part of the hashed `live_config`, so changing it produces a new `run_id` (graduation requires new ledger). |
+| **execution_source** | Required `ExecutionRow` column: `"broker_fill"` (came from IBKR) or `"shadow_sim"` (synthesized by `NoSubmitBrokerAdapter`). Layer A divergence applies only to `broker_fill` rows; Layer B replay applies to both. |
+| **Layer A divergence** | `ExecutionDivergence` regime: did broker execution diverge from what this live run intended, on the same data source? Slippage, latency, missed/extra/partial/rejected fills, commission drift. Meaningful only for executing strategies. |
+| **Layer B divergence** | `ReplayDivergence` regime: did the live run's observed world diverge from the canonical research world (Polygon / LEAN baseline) when the strategy spec is replayed against archived canonical bars for the same session? Data drift, indicator-state drift, decision drift, coverage gaps, trade-graph drift. Meaningful for both executing and shadow strategies. |
+| **shadow_sim** | The `execution_source` discriminator value for synthetic fills produced by `NoSubmitBrokerAdapter`. Always carries `fill_model` + `source_bar_close_ms` in the same `ExecutionRow`. Never written by the executing path. |
+| **NoSubmitBrokerAdapter** | The `IBrokerAdapter` implementation used when `submit_mode = "shadow"`. Same interface as `IbkrBrokerAdapter`; `place_order` no-ops on broker submission and produces a `shadow_sim` `ExecutionRow` instead. |
+| **command channel** | The file-based control protocol of Resolution 7. Distinct from the durable desired-state sidecar (also Resolution 7); commands are one-shot per-run events, desired-state is persistent operator intent across runs. |
+| **MARK_POISONED** | An operator command verb. Writes `poisoned.flag` into the run_dir externally — used when the operator observes a poison condition the bot itself has not detected (e.g. a manual trade hit the account from outside the bot's clientId). |
+| **(T3) topology** | The current operational layout: Windows host-venv for Gateway/IBC/bots/host_daemon; Podman compose for observability only. Distinct from (T2) all-containerized and (T4) Linux VPS. Migration to (T4) is gated on the written triggers in ADR 0003. |
+
+### 16.4. Cross-references
+
+- ADRs for the three load-bearing decisions: [0001](architecture/adrs/0001-control-plane-substrate-json-parquet.md), [0002](architecture/adrs/0002-shadow-mode-adapter-level-no-submit.md), [0003](architecture/adrs/0003-operational-topology-host-venv.md).
+- Code surfaces affected by the PR queue:
+  - `PythonDataService/app/engine/live/host_daemon.py` — registry refactor (PR-A), NSSM wrapping (PR-F).
+  - `PythonDataService/app/engine/strategy/spec/` — `StrategySpec` growth (PR-B); new `spy_vwap_reversion.spec.json` (PR-K).
+  - `PythonDataService/app/engine/live/artifacts.py` — `DECISION_COLUMNS` resolution from spec; `ExecutionRow` growth (PR-C).
+  - `PythonDataService/app/engine/live/live_engine.py` — adapter polymorphism at the order boundary (PR-J).
+  - `PythonDataService/app/broker/ibkr/orders.py` — `commissionReport` wiring (PR-G); orderRef namespacing (PR-E).
+  - `PythonDataService/app/engine/live/` — new `command_channel.py`, `live_state_sidecar.py` (PR-D, PR-E).
+  - `PythonDataService/app/engine/live/reconcile.py` — sibling layer-A / layer-B modules (PR-H, PR-I); existing three-way reconciler untouched.
+- Status: Phase 10 prereq RTH dry-run remains the gating operational activity per `docs/ibkr-integration-authority.md` § 11; this design-lock round does not change that status, only the scope of work that follows it.
+
