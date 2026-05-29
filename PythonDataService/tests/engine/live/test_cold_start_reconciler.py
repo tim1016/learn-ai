@@ -45,8 +45,11 @@ class FakeBroker:
     """
 
     open_orders_by_namespace_result: list[dict[str, object]] = field(default_factory=list)
+    raise_on_open_orders: BaseException | None = None
 
     def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]:
+        if self.raise_on_open_orders is not None:
+            raise self.raise_on_open_orders
         return list(self.open_orders_by_namespace_result)
 
 
@@ -59,6 +62,22 @@ def test_empty_broker_and_empty_sidecar_yields_safe_to_resume(tmp_path: Path) ->
 
     assert isinstance(result, SafeToResume)
     assert result.from_bar_ms == 1_748_000_000_000
+
+
+def test_broker_connect_failure_yields_cannot_verify_offline(tmp_path: Path) -> None:
+    """No broker connection, no verified resume. Per Resolution 2 there
+    is no offline path: if we can't reach the broker, we cannot
+    distinguish a clean cold start from one with hidden divergence,
+    so we refuse to resume.
+    """
+    repo = _seed_sidecar(tmp_path / "live_state.json")
+    broker = FakeBroker(raise_on_open_orders=ConnectionError("gateway unreachable"))
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo)
+
+    assert isinstance(result, Poisoned)
+    assert result.reason == "cannot_verify_offline"
 
 
 def test_shadow_mode_with_any_broker_order_yields_poisoned(tmp_path: Path) -> None:

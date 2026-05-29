@@ -52,7 +52,15 @@ class ColdStartReconciler:
         envelope = sidecar.read()
         assert envelope is not None  # cycle 1 happy path
 
-        broker_orders = broker.open_orders_by_namespace(envelope.bot_order_namespace)
+        try:
+            broker_orders = broker.open_orders_by_namespace(envelope.bot_order_namespace)
+        except Exception:
+            # Resolution 2: no broker connection, no verified resume.
+            # We deliberately catch broadly because any exception path
+            # from the broker call — connection refused, timeout,
+            # auth failure — means we cannot distinguish a clean cold
+            # start from one with hidden divergence.
+            return Poisoned(reason="cannot_verify_offline")
         broker_order_ids = {order.get("client_order_id") for order in broker_orders}
 
         # Shadow strategies never submit; the namespace must be empty.
