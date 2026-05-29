@@ -66,6 +66,29 @@ def test_empty_registry_lists_no_processes() -> None:
     assert registry.status("never_registered") is None
 
 
+def test_status_returns_none_for_unknown_id_even_after_others_registered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unknown id is distinct from "registered but exited"; the engine
+    needs to tell the two apart so it doesn't try to ack a stop for
+    a strategy it never knew about.
+    """
+    fake = FakeProcess()
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: fake,
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+
+    assert registry.status("spy_vwap_reversion_1min") is None
+
+
 def test_crash_detected_via_status_poll(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
