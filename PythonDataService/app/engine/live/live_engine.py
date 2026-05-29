@@ -838,6 +838,12 @@ class LiveEngine:
                 # reported, so a missing fee stays distinguishable from a
                 # genuine zero downstream and is never fabricated (PRD-B).
                 fee=float(event.recorded_fee) if event.recorded_fee is not None else float("nan"),
+                # Provenance flows from the adapter's event: real fills are
+                # ``broker_fill`` (default); the NoSubmitBrokerAdapter stamps
+                # ``shadow_sim`` + source bar so the receipt is unambiguous.
+                execution_source=event.execution_source,
+                fill_model=event.fill_model,
+                source_bar_close_ms=event.source_bar_close_ms,
             )
         )
 

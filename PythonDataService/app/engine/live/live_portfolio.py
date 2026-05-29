@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import IbkrClient
@@ -44,8 +44,12 @@ class LiveBrokerEventStreamError(RuntimeError):
     """
 
 
+@runtime_checkable
 class BrokerAdapter(Protocol):
-    """Async broker surface LivePortfolio needs."""
+    """Async broker surface LivePortfolio + LiveEngine consume — the typed
+    ``IBrokerAdapter`` contract of ADR 0002. Both the executing
+    ``IbkrBrokerAdapter`` and the shadow ``NoSubmitBrokerAdapter`` implement
+    it, so the engine depends on the protocol, never a concrete adapter."""
 
     async def fetch_account_summary(self): ...
 
@@ -64,7 +68,7 @@ class BrokerAdapter(Protocol):
         ...
 
 
-class IbkrBrokerAdapter:
+class IbkrBrokerAdapter(BrokerAdapter):
     """Production adapter over the existing broker module.
 
     Tracks the set of order IDs this adapter has placed so that
