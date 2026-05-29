@@ -701,3 +701,21 @@ def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: py
     assert rc == 2
     err = capsys.readouterr().err
     assert "could not import strategy" in err
+
+
+def test_make_ibkr_client_pins_spec_client_id() -> None:
+    """A spec-declared client_id pins the Gateway clientId so two
+    strategies never collide on one Gateway (PR #376 P2 / §16.3).
+
+    Before the fix, cmd_start created IbkrClient() unconditionally and the
+    spec's client_id was inert — the run used the env/default clientId
+    even though the ledger pinned a different one.
+    """
+    from app.engine.live.run import _make_ibkr_client
+
+    pinned = _make_ibkr_client(11)
+    assert pinned.settings.client_id == 11
+
+    # Omitted (None) ⇒ fall back to the env/default clientId, not 11.
+    fallback = _make_ibkr_client(None)
+    assert fallback.settings.client_id != 11

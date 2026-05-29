@@ -389,3 +389,32 @@ def test_empty_writer_close_does_not_create_file(tmp_path: Path) -> None:
     writer = DecisionWriter(tmp_path / "decisions.parquet")
     writer.close()
     assert not (tmp_path / "decisions.parquet").exists()
+
+
+def test_decision_row_preserves_non_float_indicator_dtype(tmp_path: Path) -> None:
+    """A spec declaring a string/bool/int decision column must round-trip
+    without being coerced through float() (PR #376 P2): before the fix,
+    as_row() forced every indicator value through _opt_float, which would
+    crash on a string and silently coerce bool/int to float."""
+    cols = resolve_decision_columns(
+        _spec_with_decision_columns(
+            [
+                DecisionColumnSpec(name="regime", dtype="string"),
+                DecisionColumnSpec(name="warmed_up", dtype="bool"),
+            ]
+        )
+    )
+    writer = DecisionWriter(tmp_path / "decisions.parquet", cols)
+    writer.append_row(
+        DecisionRow(
+            bar_close_ms=0,
+            signal="HOLD",
+            intended_price=1.0,
+            indicator_values={"regime": "bull", "warmed_up": True},
+        )
+    )
+    writer.close()
+
+    df = pd.read_parquet(tmp_path / "decisions.parquet")
+    assert df.iloc[0]["regime"] == "bull"
+    assert bool(df.iloc[0]["warmed_up"]) is True

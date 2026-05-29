@@ -40,7 +40,12 @@ from app.engine.live.artifacts import (
     TradeRow,
 )
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
-from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
+from app.engine.live.command_channel import (
+    Command,
+    CommandChannel,
+    CommandChannelCorruptError,
+    CommandVerb,
+)
 from app.engine.live.config import LiveConfig
 from app.engine.live.halt import (
     FatalHaltError,
@@ -964,6 +969,20 @@ class LiveEngine:
         while not shutdown_event.is_set():
             try:
                 pending = self._command_channel.read_pending()
+            except CommandChannelCorruptError:
+                # A malformed command.*.pending.json cannot be safely
+                # executed (operator typo / partial manual write). The
+                # command_channel contract treats this as a hard stop:
+                # halt the engine for inspection rather than log-and-retry
+                # forever while the bot keeps trading against a corrupt
+                # control channel. The bad file is left in place so the
+                # operator can see what was wrong.
+                logger.critical(
+                    "command channel is corrupt; halting the engine for "
+                    "operator inspection (the malformed command file is left in place)"
+                )
+                shutdown_event.set()
+                return
             except Exception:
                 logger.exception("command channel read_pending failed; sleeping then retrying")
                 pending = []
