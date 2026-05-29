@@ -606,12 +606,14 @@ class LiveEngine:
                 retained_bars.append(minute_bar)
                 previous_bar = minute_bar
 
-                # Live-state sidecar: persist cursors and position snapshot
-                # once per bar so a crash between bars leaves enough context
-                # for ColdStartReconciler to safely resume. Cheap no-op
-                # when no writer was configured.
+                # Live-state sidecar: flush buffered artifacts, then persist
+                # cursors and position snapshot once per bar so a crash between
+                # bars leaves enough context for ColdStartReconciler to safely
+                # resume — and so the recorded cursor never runs ahead of the
+                # durable parquet rows. Cheap no-op when no writer was
+                # configured.
                 self._persist_live_state(
-                    portfolio, int(minute_bar.end_time.timestamp() * 1000)
+                    portfolio, int(minute_bar.end_time.timestamp() * 1000), writers
                 )
 
             # Source exhausted. Stop the stream first so the task flushes
@@ -658,8 +660,12 @@ class LiveEngine:
                 except Exception:
                     logger.exception("indicator-state shutdown checkpoint failed; continuing finally cleanup")
                 # Live-state sidecar final checkpoint — same shape as the
-                # mid-run per-bar writes; helper handles the no-op case.
-                self._persist_live_state(portfolio, int(last_bar.end_time.timestamp() * 1000))
+                # mid-run per-bar writes; helper flushes artifacts first so the
+                # cursor stays consistent with on-disk rows, and handles the
+                # no-op case.
+                self._persist_live_state(
+                    portfolio, int(last_bar.end_time.timestamp() * 1000), writers
+                )
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
             if writers is not None:
@@ -749,16 +755,45 @@ class LiveEngine:
             )
         )
 
-    def _persist_live_state(self, portfolio: LivePortfolio, bar_close_ms: int) -> None:
-        """Invoke the optional live-state-sidecar writer.
+    def _persist_live_state(
+        self,
+        portfolio: LivePortfolio,
+        bar_close_ms: int,
+        writers: LiveArtifactWriters | None,
+    ) -> None:
+        """Flush artifacts, then invoke the optional live-state-sidecar writer.
 
-        Failures here are logged but never propagated — the sidecar is
-        a crash-recovery aid, not a precondition for processing. The
+        Ordering matters: the sidecar envelope records
+        ``last_processed_bar_ms`` / ``last_artifact_flush_ms`` as
+        durable cursors. The decision / execution / trade parquet rows,
+        however, are only buffered in memory until ``writers.flush_all``
+        (or ``close_all`` in the run finally). If we wrote the sidecar
+        cursor first and the process crashed before the buffered rows
+        reached disk, ColdStartReconciler would resume from a cursor
+        that is *ahead* of the actual artifacts — claiming a bar/flush
+        is durable when its rows were lost. So we flush the artifact
+        bundle to disk before advancing the cursor; the cursor then
+        only ever reflects truly durable artifacts.
+
+        A flush failure is logged and suppresses the sidecar write for
+        this bar (the cursor must not advance past artifacts we failed
+        to persist), but never propagates — the sidecar is a
+        crash-recovery aid, not a precondition for processing. Likewise
+        the sidecar write itself is logged-and-swallowed; the
         ColdStartReconciler at next boot can detect any divergence
         between sidecar and broker if writes were missed.
         """
         if self._live_state_writer is None or bar_close_ms <= 0:
             return
+        if writers is not None:
+            try:
+                writers.flush_all()
+            except Exception:
+                logger.exception(
+                    "artifact flush before live-state sidecar write failed; "
+                    "skipping cursor advance this bar"
+                )
+                return
         try:
             self._live_state_writer(portfolio, bar_close_ms)
         except Exception:
