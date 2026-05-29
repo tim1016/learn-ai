@@ -235,6 +235,23 @@ def test_fill_arrived_after_last_flush_yields_safe_with_recovered_fill(
     assert result.recovered_fills[0]["client_order_id"] == "learn-ai/spy_ema_crossover/v1/2"
 
 
+def test_safe_to_resume_leaves_no_poisoned_flag(tmp_path: Path) -> None:
+    """Negative-space invariant: a clean cold start must not create
+    poisoned.flag. Otherwise the engine's halt check would treat every
+    boot as poisoned and refuse to ever submit orders.
+    """
+    repo = _seed_sidecar(tmp_path / "live_state.json")
+    broker = FakeBroker()
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir()
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, run_dir=run_dir)
+
+    assert isinstance(result, SafeToResume)
+    assert not (run_dir / "poisoned.flag").exists()
+
+
 def test_poisoned_outcome_writes_poisoned_flag(tmp_path: Path) -> None:
     """When verify returns Poisoned and a run_dir was supplied, the
     reconciler writes <run_dir>/poisoned.flag with the reason. The
