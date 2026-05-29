@@ -12,6 +12,7 @@ a follow-up; this module is unit-testable in isolation.
 
 from __future__ import annotations
 
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -85,4 +86,20 @@ class ProcessRegistry:
             started_at_ms=int(time.time() * 1000),
         )
         self._managed[strategy_instance_id] = managed
+        return managed
+
+    def stop(
+        self, strategy_instance_id: str, *, timeout_s: float = 2.0
+    ) -> ManagedProcess:
+        """Send SIGTERM, wait up to timeout_s for the process to exit,
+        then record the outcome. SIGKILL fallback comes in a later
+        cycle when a test forces it.
+        """
+        managed = self._managed[strategy_instance_id]
+        managed.state = "stopping"
+        managed.process.send_signal(signal.SIGTERM)
+        managed.process.wait(timeout=timeout_s)
+        managed.exit_code = managed.process.returncode
+        managed.ended_at_ms = int(time.time() * 1000)
+        managed.state = "exited"
         return managed

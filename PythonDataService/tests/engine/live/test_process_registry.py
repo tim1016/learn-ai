@@ -28,11 +28,19 @@ class FakeProcess:
     test idiom.
     """
 
-    def __init__(self, pid: int = 4242) -> None:
+    def __init__(
+        self,
+        pid: int = 4242,
+        *,
+        exit_on_signal: int | None = None,
+        exit_code_on_signal: int = 0,
+    ) -> None:
         self.pid = pid
         self.returncode: int | None = None
         self.signals: list[int] = []
         self.killed = False
+        self._exit_on_signal = exit_on_signal
+        self._exit_code_on_signal = exit_code_on_signal
 
     def poll(self) -> int | None:
         return self.returncode
@@ -44,6 +52,8 @@ class FakeProcess:
 
     def send_signal(self, sig: int) -> None:
         self.signals.append(sig)
+        if self._exit_on_signal is not None and sig == self._exit_on_signal:
+            self.returncode = self._exit_code_on_signal
 
     def kill(self) -> None:
         self.killed = True
@@ -54,6 +64,32 @@ def test_empty_registry_lists_no_processes() -> None:
     registry = ProcessRegistry()
     assert registry.list() == []
     assert registry.status("never_registered") is None
+
+
+def test_stop_sends_sigterm_and_records_ended_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import signal as _signal
+
+    fake = FakeProcess(pid=4242, exit_on_signal=_signal.SIGTERM, exit_code_on_signal=0)
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: fake,
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+
+    stopped = registry.stop("spy_ema_crossover")
+
+    assert _signal.SIGTERM in fake.signals
+    assert stopped.state == "exited"
+    assert stopped.ended_at_ms is not None
+    assert stopped.exit_code == 0
 
 
 def test_cannot_start_same_strategy_twice_while_running(
