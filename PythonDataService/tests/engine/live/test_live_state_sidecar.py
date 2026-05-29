@@ -16,6 +16,7 @@ from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
+    stable_live_state_path,
 )
 
 
@@ -193,3 +194,17 @@ def test_corrupt_error_carries_path(tmp_path: Path) -> None:
         assert exc.path == path
     else:
         pytest.fail("expected LiveStateSidecarCorruptError")
+
+
+def test_stable_live_state_path_layout(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    resolved = stable_live_state_path(artifacts_root, "spy_ema_crossover")
+    assert resolved == artifacts_root / "live_state" / "spy_ema_crossover" / "live_state.json"
+
+
+def test_stable_path_keys_directory_on_strategy_instance_id(tmp_path: Path) -> None:
+    """Two strategy instances must not collide on disk."""
+    artifacts_root = tmp_path / "artifacts"
+    ema = stable_live_state_path(artifacts_root, "spy_ema_crossover")
+    vwap = stable_live_state_path(artifacts_root, "spy_vwap_reversion_1min")
+    assert ema.parent != vwap.parent

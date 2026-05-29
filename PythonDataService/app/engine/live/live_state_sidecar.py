@@ -33,6 +33,17 @@ class LiveStateSidecarCorruptError(RuntimeError):
         self.__cause__ = cause
 
 
+def stable_live_state_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
+    """Canonical on-disk path for a strategy instance's live-state sidecar.
+
+    Layout: <artifacts_root>/live_state/<strategy_instance_id>/live_state.json
+    Matches plan §16.4 / §16.5 and parallels indicator_state's
+    stable_global_path so both sidecars sit side-by-side under the same
+    per-strategy directory.
+    """
+    return artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
+
+
 class LiveStateEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
