@@ -377,6 +377,11 @@ class IbkrOrderEvent(BaseModel):
     cumulative_filled: float | None = None
     remaining: float | None = None
     last_fill_price: float | None = None
+    # Commission for this fill, read from the polled ``Fill.commissionReport``
+    # (PRD-B). ``None`` when IBKR has not yet reported the commission for this
+    # execId — never a fabricated zero, so a missing fee stays distinguishable
+    # from a genuine zero downstream (COMMISSION_MISSING vs COMMISSION_DRIFT).
+    fee: float | None = None
 
     # Error payload (event_type == "error")
     error_code: int | None = None
