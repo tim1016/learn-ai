@@ -111,3 +111,21 @@ def test_round_trip_persists_position_and_bar_cursors(tmp_path: Path) -> None:
     assert loaded.expected_position_by_symbol == {"SPY": 100}
     assert loaded.last_processed_bar_ms == 1_748_000_000_000
     assert loaded.last_artifact_flush_ms == 1_748_000_001_500
+
+
+def test_poisoned_reason_defaults_to_none(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    env = _min_envelope()
+    repo.write(env)
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.poisoned_reason is None
+
+
+def test_round_trip_persists_poisoned_reason(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    env = _min_envelope(poisoned_reason="unexpected_order_at_broker")
+    repo.write(env)
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.poisoned_reason == "unexpected_order_at_broker"

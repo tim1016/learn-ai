@@ -34,6 +34,8 @@ class LiveStateEnvelope(BaseModel):
     last_processed_bar_ms: int = Field(gt=0)
     last_artifact_flush_ms: int = Field(gt=0)
 
+    poisoned_reason: str | None = None
+
 
 class LiveStateSidecarRepo:
     def __init__(self, path: Path) -> None:
