@@ -47,12 +47,19 @@ class ColdStartReconciler:
         *,
         broker: _BrokerProtocol,
         sidecar: "LiveStateSidecarRepo",  # noqa: F821 — forward string ref
+        shadow_mode: bool = False,
     ) -> ReconciliationResult:
         envelope = sidecar.read()
         assert envelope is not None  # cycle 1 happy path
 
         broker_orders = broker.open_orders_by_namespace(envelope.bot_order_namespace)
         broker_order_ids = {order.get("client_order_id") for order in broker_orders}
+
+        # Shadow strategies never submit; the namespace must be empty.
+        if shadow_mode:
+            if broker_order_ids:
+                return Poisoned(reason="shadow_namespace_nonempty")
+            return SafeToResume(from_bar_ms=envelope.last_processed_bar_ms)
 
         for order_id in broker_order_ids:
             if order_id not in envelope.submitted_orders:

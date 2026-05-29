@@ -61,6 +61,38 @@ def test_empty_broker_and_empty_sidecar_yields_safe_to_resume(tmp_path: Path) ->
     assert result.from_bar_ms == 1_748_000_000_000
 
 
+def test_shadow_mode_with_any_broker_order_yields_poisoned(tmp_path: Path) -> None:
+    """Shadow-mode invariant: a shadow strategy never submits real orders,
+    so its namespace at the broker must always yield zero open orders.
+    Any non-empty result is a sign that something is submitting under
+    this namespace that shouldn't be — refuse to resume.
+    """
+    repo = _seed_sidecar(tmp_path / "live_state.json")
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[
+            {"client_order_id": "learn-ai/spy_vwap_shadow/v1/1", "perm_id": 1},
+        ],
+    )
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, shadow_mode=True)
+
+    assert isinstance(result, Poisoned)
+    assert result.reason == "shadow_namespace_nonempty"
+
+
+def test_shadow_mode_with_empty_broker_is_safe(tmp_path: Path) -> None:
+    """The good shadow-mode case: namespace yields zero orders, sidecar
+    is clean, verify returns SafeToResume."""
+    repo = _seed_sidecar(tmp_path / "live_state.json")
+    broker = FakeBroker(open_orders_by_namespace_result=[])
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, shadow_mode=True)
+
+    assert isinstance(result, SafeToResume)
+
+
 def test_expected_order_missing_at_broker_yields_poisoned(tmp_path: Path) -> None:
     """Sidecar believes an order is open at the broker, but the broker
     doesn't show it. Could mean the order was cancelled out of band,
