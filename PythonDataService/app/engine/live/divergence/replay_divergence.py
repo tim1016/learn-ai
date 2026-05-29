@@ -123,6 +123,12 @@ def classify_replay_divergences(
                 tolerances.volume_atol,
             ),
         ):
+            # A field the live run never captured (NULL — the live engine
+            # populates only bar_close today) is absent, not a drift. Skip it
+            # rather than fabricate a comparison (no forward-fill, no invented
+            # value — per .claude/rules/numerical-rigor.md).
+            if live_value is None or canonical_value is None:
+                continue
             drift = abs(live_value - canonical_value)
             if drift > atol:
                 divergences.append(
