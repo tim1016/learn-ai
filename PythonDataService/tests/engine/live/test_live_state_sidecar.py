@@ -256,7 +256,7 @@ def test_concurrent_writers_serialize_without_error(tmp_path: Path) -> None:
         try:
             for _ in range(50):
                 repo.write(_min_envelope(run_id=label))
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     t1 = threading.Thread(target=writer, args=("alpha",))
