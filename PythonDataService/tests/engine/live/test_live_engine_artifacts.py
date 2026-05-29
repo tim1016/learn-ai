@@ -147,6 +147,52 @@ async def test_live_engine_writes_executions_when_output_dir_set(tmp_path: Path)
     assert df.iloc[0]["fill_price"] == pytest.approx(500.0)
     # client_order_id must be unique per order — the reconciler joins on it later.
     assert df.iloc[0]["client_order_id"] == "live-1"
+    # PRD-A §16.1 Resolution 5: a real broker fill is tagged broker_fill.
+    assert df.iloc[0]["execution_source"] == "broker_fill"
+    assert df.iloc[0]["fill_model"] == "NEXT_BAR_OPEN"
+
+
+@pytest.mark.asyncio
+async def test_decisions_carry_core_columns_and_provenance(tmp_path: Path) -> None:
+    """PRD-A §16.1 Resolution 5 integration check: a run driven with the
+    resolved EMA schema + run-context populates the universal core
+    columns (run_id / strategy ids / mode / bar_source) and the
+    strategy-specific indicator columns in decisions.parquet."""
+    from app.engine.live.artifacts import CORE_DECISION_COLUMNS, resolve_decision_columns
+    from app.engine.strategy.spec import load_spec_from_path
+
+    spec = load_spec_from_path(
+        "/app/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json"
+    )
+    cols = resolve_decision_columns(spec)
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        run_id="run-abc",
+        strategy_key="spy_ema_crossover",
+        strategy_instance_id="spy_ema_crossover",
+        run_mode=spec.submit_mode,
+        bar_source=spec.bar_source_descriptor,
+        decision_columns=cols,
+    )
+    bars = [_bar(minute, "500", "500") for minute in range(30, 61)]
+    await engine.run(_OneEntryWithDecisionSnapshotStrategy(), iter_bars(bars))
+
+    df = pd.read_parquet(tmp_path / "decisions.parquet")
+    # Every core column is present, plus the EMA indicator columns.
+    for col in (*CORE_DECISION_COLUMNS, "ema5", "ema10", "rsi"):
+        assert col in df.columns, f"missing decision column {col!r}"
+    # Provenance is populated from the run context.
+    assert set(df["run_id"]) == {"run-abc"}
+    assert set(df["strategy_key"]) == {"spy_ema_crossover"}
+    assert set(df["mode"]) == {"live_paper"}
+    assert set(df["bar_source"]) == {"ibkr_paper_delayed"}
+    assert set(df["intended_fill_model"]) == {"NEXT_BAR_OPEN"}
 
 
 @pytest.mark.asyncio
