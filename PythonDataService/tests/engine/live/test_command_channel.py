@@ -47,6 +47,20 @@ def test_orphan_pending_tmp_is_invisible_to_read_pending(tmp_path: Path) -> None
     assert channel.read_pending() == []
 
 
+def test_ack_renames_pending_to_ack_and_clears_pending_queue(tmp_path: Path) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    channel.write_from_operator(CommandVerb.PAUSE)
+    [pending_cmd] = channel.read_pending()
+
+    channel.ack(pending_cmd)
+
+    assert channel.read_pending() == []
+    assert list((tmp_path / "commands").glob("*.pending.json")) == []
+    ack_files = list((tmp_path / "commands").glob("*.ack.json"))
+    assert len(ack_files) == 1
+    assert ack_files[0].name == f"command.{pending_cmd.seq}.{pending_cmd.verb.value}.ack.json"
+
+
 def test_write_uses_tempfile_rename_pattern(
     tmp_path: Path, monkeypatch: __import__("pytest").MonkeyPatch
 ) -> None:

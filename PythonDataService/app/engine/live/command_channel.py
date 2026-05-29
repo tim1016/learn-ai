@@ -82,3 +82,14 @@ class CommandChannel:
             Command.model_validate_json(p.read_text(encoding="utf-8"))
             for p in sorted(self._dir.glob("command.*.pending.json"))
         ]
+
+    def ack(self, command: Command) -> None:
+        """Atomically transition pending → ack for one command.
+
+        Renames the pending.json filename in place. Future readers'
+        read_pending() will no longer return this command; the ack.json
+        is the audit-trail record that the engine acted on it.
+        """
+        pending = self._dir / f"command.{command.seq}.{command.verb.value}.pending.json"
+        ack = self._dir / f"command.{command.seq}.{command.verb.value}.ack.json"
+        os.replace(pending, ack)
