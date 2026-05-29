@@ -19,6 +19,9 @@ class LiveStateEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     strategy_instance_id: str
+    run_id: str
+    bot_order_namespace: str
+    ib_client_id: int
 
 
 class LiveStateSidecarRepo:
