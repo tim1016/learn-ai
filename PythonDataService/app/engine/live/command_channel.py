@@ -37,6 +37,22 @@ class Command(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AckedCommand(BaseModel):
+    """On-disk shape for an acknowledged command.
+
+    Schema = pending Command + outcome payload. The outcome records what
+    the engine did when it dispatched the command: success / error
+    message / downstream side effects ("wrote poisoned.flag", etc.).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seq: int
+    verb: CommandVerb
+    payload: dict[str, Any] = Field(default_factory=dict)
+    outcome: dict[str, Any] = Field(default_factory=dict)
+
+
 class CommandChannel:
     def __init__(self, commands_dir: Path) -> None:
         self._dir = commands_dir
@@ -92,13 +108,33 @@ class CommandChannel:
             for p in sorted(self._dir.glob("command.*.pending.json"))
         ]
 
-    def ack(self, command: Command) -> None:
-        """Atomically transition pending → ack for one command.
+    def ack(self, command: Command, *, outcome: dict[str, Any] | None = None) -> None:
+        """Atomically transition pending → ack with the engine's outcome.
 
-        Renames the pending.json filename in place. Future readers'
-        read_pending() will no longer return this command; the ack.json
-        is the audit-trail record that the engine acted on it.
+        Writes the AckedCommand to ack.tmp, os.replaces it into the
+        canonical ack.json, then unlinks the original pending.json. The
+        outcome captures what dispatch did (success, error message,
+        side effects) so the audit trail is self-describing.
         """
         pending = self._dir / f"command.{command.seq}.{command.verb.value}.pending.json"
-        ack = self._dir / f"command.{command.seq}.{command.verb.value}.ack.json"
-        os.replace(pending, ack)
+        ack_final = self._dir / f"command.{command.seq}.{command.verb.value}.ack.json"
+        acked = AckedCommand(
+            seq=command.seq,
+            verb=command.verb,
+            payload=command.payload,
+            outcome=outcome or {},
+        )
+        ack_tmp = ack_final.with_suffix(".json.tmp")
+        payload_bytes = acked.model_dump_json().encode("utf-8")
+        with open(ack_tmp, "wb") as fh:
+            fh.write(payload_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.replace(ack_tmp, ack_final)
+        except Exception:
+            with contextlib.suppress(OSError):
+                ack_tmp.unlink()
+            raise
+        with contextlib.suppress(FileNotFoundError):
+            pending.unlink()

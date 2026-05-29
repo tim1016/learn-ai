@@ -7,6 +7,7 @@ exercises the channel's read/ack/write contract.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,36 @@ def test_ack_renames_pending_to_ack_and_clears_pending_queue(tmp_path: Path) -> 
     ack_files = list((tmp_path / "commands").glob("*.ack.json"))
     assert len(ack_files) == 1
     assert ack_files[0].name == f"command.{pending_cmd.seq}.{pending_cmd.verb.value}.ack.json"
+
+
+def test_ack_outcome_payload_persists_in_ack_file(tmp_path: Path) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    channel.write_from_operator(
+        CommandVerb.MARK_POISONED, payload={"reason": "manual_trade_observed"}
+    )
+    [pending] = channel.read_pending()
+
+    channel.ack(
+        pending,
+        outcome={"status": "success", "side_effect": "wrote poisoned.flag"},
+    )
+
+    [ack_path] = list((tmp_path / "commands").glob("*.ack.json"))
+    data = json.loads(ack_path.read_text(encoding="utf-8"))
+    assert data["seq"] == pending.seq
+    assert data["verb"] == "MARK_POISONED"
+    assert data["payload"] == {"reason": "manual_trade_observed"}
+    assert data["outcome"] == {"status": "success", "side_effect": "wrote poisoned.flag"}
+
+
+def test_ack_outcome_defaults_to_empty_dict(tmp_path: Path) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    channel.write_from_operator(CommandVerb.PAUSE)
+    [pending] = channel.read_pending()
+    channel.ack(pending)
+    [ack_path] = list((tmp_path / "commands").glob("*.ack.json"))
+    data = json.loads(ack_path.read_text(encoding="utf-8"))
+    assert data["outcome"] == {}
 
 
 def test_write_uses_tempfile_rename_pattern(
