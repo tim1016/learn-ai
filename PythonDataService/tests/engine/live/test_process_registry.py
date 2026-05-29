@@ -67,6 +67,35 @@ def test_empty_registry_lists_no_processes() -> None:
     assert registry.status("never_registered") is None
 
 
+def test_stop_falls_back_to_sigkill_when_process_ignores_sigterm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wedged-bot scenario: process is stuck in a syscall and never
+    handles SIGTERM. After timeout_s, the registry escalates to
+    SIGKILL so the operator's stop intent isn't held hostage by a
+    hung process.
+    """
+    # No exit_on_signal — fake ignores SIGTERM. Only .kill() resolves it.
+    fake = FakeProcess()
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: fake,
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+
+    stopped = registry.stop("spy_ema_crossover", timeout_s=0.01)
+
+    assert fake.killed is True
+    assert stopped.state == "exited"
+    assert stopped.exit_code == -9  # FakeProcess.kill sets returncode = -9
+
+
 def test_stop_unknown_id_raises_typed_error() -> None:
     """A silent no-op would leak: the caller would assume the stop
     succeeded. Typed error surfaces the misuse.

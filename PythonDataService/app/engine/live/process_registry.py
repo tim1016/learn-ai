@@ -150,7 +150,13 @@ class ProcessRegistry:
             raise NotTrackingError(strategy_instance_id)
         managed.state = "stopping"
         managed.process.send_signal(signal.SIGTERM)
-        managed.process.wait(timeout=timeout_s)
+        try:
+            managed.process.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            # Process is wedged — escalate to SIGKILL so the operator's
+            # stop intent isn't held hostage by a hung child.
+            managed.process.kill()
+            managed.process.wait(timeout=timeout_s)
         managed.exit_code = managed.process.returncode
         managed.ended_at_ms = int(time.time() * 1000)
         managed.state = "exited"
