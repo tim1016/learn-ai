@@ -64,6 +64,58 @@ def test_empty_broker_and_empty_sidecar_yields_safe_to_resume(tmp_path: Path) ->
     assert result.from_bar_ms == 1_748_000_000_000
 
 
+def test_verify_never_calls_req_all_open_orders(tmp_path: Path) -> None:
+    """Resolution 2 forbids reqAllOpenOrders. The reconciler must query
+    only via its namespaced orderRef / client_order_id. Add the method
+    to the fake broker as a spy and assert the count stays at 0 across
+    every branch verify() takes.
+    """
+
+    @dataclass
+    class TrackingBroker(FakeBroker):
+        req_all_open_orders_calls: int = 0
+
+        def req_all_open_orders(self) -> list[dict[str, object]]:
+            self.req_all_open_orders_calls += 1
+            return []
+
+    reconciler = ColdStartReconciler()
+
+    scenarios: list[tuple[str, TrackingBroker, dict[str, object]]] = [
+        ("happy", TrackingBroker(), {}),
+        (
+            "unexpected_order",
+            TrackingBroker(
+                open_orders_by_namespace_result=[
+                    {"client_order_id": "rogue", "perm_id": 1}
+                ],
+            ),
+            {},
+        ),
+        (
+            "missing_expected",
+            TrackingBroker(open_orders_by_namespace_result=[]),
+            {"submitted_orders": {"x": {"perm_id": 1, "status": "Submitted"}}},
+        ),
+        ("shadow_empty", TrackingBroker(), {"shadow_kwarg": True}),
+        (
+            "connect_failure",
+            TrackingBroker(raise_on_open_orders=ConnectionError("x")),
+            {},
+        ),
+    ]
+
+    for name, broker, overrides in scenarios:
+        sidecar_path = tmp_path / f"{name}.json"
+        shadow = overrides.pop("shadow_kwarg", False)
+        repo = _seed_sidecar(sidecar_path, **overrides)
+        reconciler.verify(broker=broker, sidecar=repo, shadow_mode=bool(shadow))
+        assert broker.req_all_open_orders_calls == 0, (
+            f"scenario {name!r}: reqAllOpenOrders was invoked "
+            f"({broker.req_all_open_orders_calls}x)"
+        )
+
+
 def test_broker_connect_failure_yields_cannot_verify_offline(tmp_path: Path) -> None:
     """No broker connection, no verified resume. Per Resolution 2 there
     is no offline path: if we can't reach the broker, we cannot
