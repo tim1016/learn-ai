@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LiveStateEnvelope(BaseModel):
@@ -22,6 +24,11 @@ class LiveStateEnvelope(BaseModel):
     run_id: str
     bot_order_namespace: str
     ib_client_id: int
+
+    pending_intents: list[dict[str, Any]] = Field(default_factory=list)
+    submitted_orders: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    known_perm_ids: list[int] = Field(default_factory=list)
+    known_exec_ids: list[str] = Field(default_factory=list)
 
 
 class LiveStateSidecarRepo:

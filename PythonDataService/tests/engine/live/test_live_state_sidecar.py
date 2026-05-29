@@ -55,3 +55,36 @@ def test_round_trip_persists_identity_tuple(tmp_path: Path) -> None:
     repo.write(env)
     loaded = repo.read()
     assert loaded == env
+
+
+def test_round_trip_persists_order_tracking(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    env = _min_envelope(
+        pending_intents=[
+            {"client_order_id": "learn-ai/spy_ema_crossover/v1/3", "side": "BUY", "qty": 100},
+        ],
+        submitted_orders={
+            "learn-ai/spy_ema_crossover/v1/2": {"perm_id": 9876543210, "status": "Submitted"},
+        },
+        known_perm_ids=[9876543209, 9876543210],
+        known_exec_ids=["0000e0d5.6452f4c2.01.01"],
+    )
+    repo.write(env)
+    loaded = repo.read()
+    assert loaded == env
+    assert loaded is not None
+    assert loaded.known_perm_ids == [9876543209, 9876543210]
+    assert loaded.submitted_orders["learn-ai/spy_ema_crossover/v1/2"]["perm_id"] == 9876543210
+
+
+def test_order_tracking_defaults_to_empty(tmp_path: Path) -> None:
+    """Fresh cold start: no submitted orders, no intents, no known ids."""
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    env = _min_envelope()
+    repo.write(env)
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.pending_intents == []
+    assert loaded.submitted_orders == {}
+    assert loaded.known_perm_ids == []
+    assert loaded.known_exec_ids == []
