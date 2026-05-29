@@ -473,6 +473,26 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     return LiveConfig(**kwargs)
 
 
+def _make_ibkr_client(spec_client_id: int | None):
+    """Construct the IBKR client for a live ``start``, pinning the Gateway
+    clientId the strategy spec declares (PRD-A §16.3 isolation invariant).
+
+    When ``spec_client_id`` is set, the per-strategy clientId overrides the
+    env/default so two strategies never collide on one Gateway. When the
+    spec omits it (``None``), fall back to ``IbkrSettings``' env/default
+    clientId. ``IbkrClient()`` does not connect at construction, so this is
+    safe to build before the pre-flight gates run.
+    """
+    from app.broker.ibkr.client import IbkrClient
+
+    if spec_client_id is None:
+        return IbkrClient()
+    from app.broker.ibkr.config import get_settings
+
+    settings = get_settings().model_copy(update={"client_id": spec_client_id})
+    return IbkrClient(settings)
+
+
 def _build_live_state_writer(
     *,
     strategy_instance_id: str,
@@ -658,13 +678,37 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     _artifacts_root = getattr(args, "artifacts_root", Path("PythonDataService/artifacts"))
 
+    # Resolve the decision-row schema + provenance from the strategy spec
+    # the ledger pins (PRD-A §16.1 Resolution 5). Loaded BEFORE the client
+    # so spec.client_id can pin the Gateway clientId (§16.3 isolation
+    # invariant). The spec is authoritative for the strategy-specific
+    # columns, submit_mode (the run's mode), bar_source, and client_id.
+    # If the spec can't be loaded at runtime (path moved since init-ledger,
+    # parse error), fall back to the default EMA schema + env client id so
+    # a decisions.parquet is still produced — and log it.
+    decision_columns = DECISION_COLUMNS
+    run_mode = "live_paper"
+    bar_source = "ibkr_paper_delayed"
+    spec_client_id: int | None = None
+    try:
+        spec = load_spec_from_path(Path(ledger.strategy_spec_path))
+        decision_columns = resolve_decision_columns(spec)
+        run_mode = spec.submit_mode
+        bar_source = spec.bar_source_descriptor
+        spec_client_id = spec.client_id
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "could not load strategy spec at %s for decision schema; "
+            "falling back to default EMA schema: %s",
+            ledger.strategy_spec_path,
+            exc,
+        )
+
     broker = getattr(args, "broker", None)
     client = getattr(args, "client", None)
     if broker is None:
         if client is None:
-            from app.broker.ibkr.client import IbkrClient
-
-            client = IbkrClient()
+            client = _make_ibkr_client(spec_client_id)
         from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
         broker = IbkrBrokerAdapter(client)
@@ -690,28 +734,6 @@ def cmd_start(args: argparse.Namespace) -> int:
     from app.engine.live.command_channel import CommandChannel
 
     command_channel = CommandChannel(args.run_dir / "commands")
-
-    # Resolve the decision-row schema + provenance from the strategy spec
-    # the ledger pins (PRD-A §16.1 Resolution 5). The spec is authoritative
-    # for the strategy-specific columns, submit_mode (the run's mode), and
-    # bar_source. If the spec can't be loaded at runtime (path moved since
-    # init-ledger, parse error), fall back to the default EMA schema so a
-    # decisions.parquet is still produced — and log it.
-    decision_columns = DECISION_COLUMNS
-    run_mode = "live_paper"
-    bar_source = "ibkr_paper_delayed"
-    try:
-        spec = load_spec_from_path(Path(ledger.strategy_spec_path))
-        decision_columns = resolve_decision_columns(spec)
-        run_mode = spec.submit_mode
-        bar_source = spec.bar_source_descriptor
-    except (OSError, ValueError) as exc:
-        logger.warning(
-            "could not load strategy spec at %s for decision schema; "
-            "falling back to default EMA schema: %s",
-            ledger.strategy_spec_path,
-            exc,
-        )
 
     engine = LiveEngine(
         client,
