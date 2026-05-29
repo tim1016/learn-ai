@@ -8,10 +8,13 @@ verb dispatch) is consumed by a separate module and out of scope here.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
+
+_SEQ_RE = re.compile(r"^command\.(\d+)\.")
 
 
 class CommandVerb(StrEnum):
@@ -31,11 +34,25 @@ class CommandChannel:
 
     def write_from_operator(self, verb: CommandVerb) -> Command:
         self._dir.mkdir(parents=True, exist_ok=True)
-        seq = 1
+        seq = self._next_seq()
         cmd = Command(seq=seq, verb=verb)
         path = self._dir / f"command.{seq}.{verb.value}.pending.json"
         path.write_text(cmd.model_dump_json(), encoding="utf-8")
         return cmd
+
+    def _next_seq(self) -> int:
+        """Highest existing seq + 1 across pending and ack files.
+
+        Scanning ack files too means an op that has already been processed
+        doesn't have its seq reused; the audit trail stays unambiguous.
+        """
+        max_seen = 0
+        for entry in self._dir.iterdir():
+            match = _SEQ_RE.match(entry.name)
+            if match is None:
+                continue
+            max_seen = max(max_seen, int(match.group(1)))
+        return max_seen + 1
 
     def read_pending(self) -> list[Command]:
         if not self._dir.exists():

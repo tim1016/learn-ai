@@ -18,3 +18,14 @@ def test_write_then_read_pending_returns_single_pause(tmp_path: Path) -> None:
     pending = channel.read_pending()
     assert len(pending) == 1
     assert pending[0].verb is CommandVerb.PAUSE
+
+
+def test_consecutive_writes_assign_monotonic_seq(tmp_path: Path) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    first = channel.write_from_operator(CommandVerb.PAUSE)
+    second = channel.write_from_operator(CommandVerb.PAUSE)
+    assert first.seq == 1
+    assert second.seq == 2
+
+    pending = channel.read_pending()
+    assert [p.seq for p in pending] == [1, 2]
