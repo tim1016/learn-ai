@@ -42,6 +42,7 @@ import logging
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -472,6 +473,60 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     return LiveConfig(**kwargs)
 
 
+def _build_live_state_writer(
+    *,
+    strategy_instance_id: str,
+    run_id: str,
+    client: object | None,
+    artifacts_root: Path,
+):  # -> Callable[[LivePortfolio, int], None] | None  (lazy types to keep imports light)
+    """Construct the sidecar-write callable LiveEngine invokes after each bar.
+
+    Returns ``None`` when no IBKR client is available — the replay /
+    test path. The callable snapshots position state from the portfolio
+    and writes the 12-field envelope under the canonical
+    ``artifacts/live_state/<strategy_instance_id>/live_state.json``
+    path. Failures are caught inside the engine wrapper so a sidecar
+    I/O hiccup doesn't crash the bar loop.
+    """
+    if client is None:
+        return None
+    # Test stubs may not carry a settings.client_id; without one we
+    # cannot populate the envelope's ib_client_id field, so skip the
+    # sidecar entirely.
+    settings = getattr(client, "settings", None)
+    raw_client_id = getattr(settings, "client_id", None) if settings is not None else None
+    if raw_client_id is None:
+        return None
+    from app.engine.live.live_state_sidecar import (
+        LiveStateEnvelope,
+        LiveStateSidecarRepo,
+        stable_live_state_path,
+    )
+
+    bot_order_namespace = f"learn-ai/{strategy_instance_id}/v1"
+    ib_client_id = int(raw_client_id)
+    repo = LiveStateSidecarRepo(
+        stable_live_state_path(artifacts_root, strategy_instance_id)
+    )
+
+    def _write(portfolio, bar_close_ms: int) -> None:
+        envelope = LiveStateEnvelope(
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            bot_order_namespace=bot_order_namespace,
+            ib_client_id=ib_client_id,
+            last_processed_bar_ms=bar_close_ms,
+            last_artifact_flush_ms=int(time.time() * 1000),
+            expected_position_by_symbol={
+                sym: int(pos.quantity) for sym, pos in portfolio.positions.items()
+            },
+        )
+        repo.write(envelope)
+
+    return _write
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Run the live engine end-to-end against an existing run directory.
 
@@ -611,6 +666,19 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
         broker = IbkrBrokerAdapter(client)
+    # Live-state sidecar writer (PRD-A § 16.4 Resolution 3 / PR-E).
+    # Only wired when an IBKR client is present — replay tests pass
+    # broker= directly with client=None and don't need the order-
+    # idempotency sidecar. Failures inside the writer are swallowed by
+    # LiveEngine._persist_live_state so a sidecar I/O hiccup doesn't
+    # crash the bar loop.
+    live_state_writer = _build_live_state_writer(
+        strategy_instance_id=args.strategy,
+        run_id=ledger.run_id,
+        client=client,
+        artifacts_root=_artifacts_root,
+    )
+
     engine = LiveEngine(
         client,
         live_config,
@@ -624,6 +692,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         session_start_ms=ledger.start_date_ms,
         code_sha=ledger.code_sha,
         strategy_spec_sha=ledger.strategy_spec_sha256,
+        live_state_writer=live_state_writer,
     )
 
     _entry_sidecar = RunStatusSidecar(
