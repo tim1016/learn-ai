@@ -8,6 +8,8 @@ verb dispatch) is consumed by a separate module and out of scope here.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 from enum import StrEnum
 from pathlib import Path
@@ -33,11 +35,30 @@ class CommandChannel:
         self._dir = commands_dir
 
     def write_from_operator(self, verb: CommandVerb) -> Command:
+        """Atomically publish a command: write to a sibling .tmp, fsync,
+        os.replace to .pending.json.
+
+        Readers glob only `.pending.json` so the in-flight `.tmp` is
+        never visible. A crash before the rename leaves no
+        `.pending.json` to dispatch; a crash after the rename leaves a
+        complete command. There is no partial state the reader can see.
+        """
         self._dir.mkdir(parents=True, exist_ok=True)
         seq = self._next_seq()
         cmd = Command(seq=seq, verb=verb)
-        path = self._dir / f"command.{seq}.{verb.value}.pending.json"
-        path.write_text(cmd.model_dump_json(), encoding="utf-8")
+        final = self._dir / f"command.{seq}.{verb.value}.pending.json"
+        tmp = final.with_suffix(".json.tmp")
+        payload = cmd.model_dump_json().encode("utf-8")
+        with open(tmp, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.replace(tmp, final)
+        except Exception:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
         return cmd
 
     def _next_seq(self) -> int:
