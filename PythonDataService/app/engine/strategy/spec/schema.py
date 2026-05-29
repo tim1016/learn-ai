@@ -447,7 +447,10 @@ class StrategySpec(BaseModel):
     # requires a new ledger" for free (ADR 0002). ``bar_source_descriptor``
     # is stamped on every decision row (Layer B baseline). ``decision_columns``
     # declares the strategy-specific decision-row schema (Resolution 5).
-    client_id: int | None = None
+    # Bounds match IbkrSettings.client_id (config.py) so a malformed spec
+    # is rejected at load time with a clear error, rather than constructing
+    # an out-of-range IbkrClient that only fails later at Gateway connect.
+    client_id: int | None = Field(default=None, ge=0, le=2**31 - 1)
     submit_mode: Literal["live_paper", "shadow"] = "live_paper"
     bar_source_descriptor: str = "ibkr_paper_delayed"
     decision_columns: list[DecisionColumnSpec] = Field(default_factory=list)
