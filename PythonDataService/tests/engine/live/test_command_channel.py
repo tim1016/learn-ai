@@ -169,6 +169,46 @@ def test_ack_outcome_defaults_to_empty_dict(tmp_path: Path) -> None:
     assert data["outcome"] == {}
 
 
+def test_read_pending_skips_commands_with_sibling_ack(tmp_path: Path) -> None:
+    """ack() does os.replace then unlink(pending). If the engine crashes
+    between the rename and the unlink, both the .pending.json and the
+    .ack.json file exist for the same (seq, verb). On restart,
+    read_pending must NOT re-surface the command — re-dispatching a
+    STOP / FLATTEN / MARK_POISONED already acted on would repeat a
+    non-idempotent operator action.
+    """
+    commands_dir = tmp_path / "commands"
+    commands_dir.mkdir(parents=True)
+    pending_path = commands_dir / "command.1.STOP.pending.json"
+    ack_path = commands_dir / "command.1.STOP.ack.json"
+    pending_path.write_text(
+        '{"seq": 1, "verb": "STOP", "payload": {}}', encoding="utf-8"
+    )
+    ack_path.write_text(
+        '{"seq": 1, "verb": "STOP", "payload": {}, "outcome": {"status": "success"}}',
+        encoding="utf-8",
+    )
+
+    channel = CommandChannel(commands_dir)
+    assert channel.read_pending() == []
+
+
+def test_read_pending_returns_only_unacked_when_mixed(tmp_path: Path) -> None:
+    """A mix of acked + still-pending commands: only the still-pending
+    ones surface to dispatch."""
+    channel = CommandChannel(tmp_path / "commands")
+    cmd1 = channel.write_from_operator(CommandVerb.STOP)
+    channel.write_from_operator(CommandVerb.PAUSE)
+    channel.ack(cmd1)
+    # Recreate cmd1's pending file to simulate the crash window
+    (tmp_path / "commands" / "command.1.STOP.pending.json").write_text(
+        '{"seq": 1, "verb": "STOP", "payload": {}}', encoding="utf-8"
+    )
+
+    pending = channel.read_pending()
+    assert [p.verb for p in pending] == [CommandVerb.PAUSE]
+
+
 def test_concurrent_writers_produce_unique_seqs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

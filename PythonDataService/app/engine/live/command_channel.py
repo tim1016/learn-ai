@@ -126,12 +126,23 @@ class CommandChannel:
         """
         if not self._dir.exists():
             return []
+        # If ack() crashed between os.replace and unlink(pending), both
+        # files exist for the same seq; suppress so the engine doesn't
+        # re-dispatch a non-idempotent verb (STOP/FLATTEN/MARK_POISONED).
+        acked_seqs: set[int] = set()
+        for ack_entry in self._dir.glob("command.*.ack.json"):
+            match = _SEQ_RE.match(ack_entry.name)
+            if match is not None:
+                acked_seqs.add(int(match.group(1)))
         pending_files: list[tuple[int, Path]] = []
         for entry in self._dir.glob("command.*.pending.json"):
             match = _SEQ_RE.match(entry.name)
             if match is None:
                 continue
-            pending_files.append((int(match.group(1)), entry))
+            seq = int(match.group(1))
+            if seq in acked_seqs:
+                continue
+            pending_files.append((seq, entry))
         pending_files.sort(key=lambda item: item[0])
         commands: list[Command] = []
         for _seq, path in pending_files:
