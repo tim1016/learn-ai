@@ -12,13 +12,61 @@ a follow-up; this module is unit-testable in isolation.
 
 from __future__ import annotations
 
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+State = Literal["running", "stopping", "exited"]
+
+
+@dataclass
+class ManagedProcess:
+    strategy_instance_id: str
+    process: subprocess.Popen
+    command: list[str]
+    log_path: Path
+    started_at_ms: int
+    state: State = "running"
+    ended_at_ms: int | None = None
+    exit_code: int | None = None
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
 
 class ProcessRegistry:
     def __init__(self) -> None:
-        self._managed: dict[str, object] = {}
+        self._managed: dict[str, ManagedProcess] = {}
 
-    def list(self) -> list[object]:
+    def list(self) -> list[ManagedProcess]:
         return list(self._managed.values())
 
-    def status(self, strategy_instance_id: str) -> object | None:
+    def status(self, strategy_instance_id: str) -> ManagedProcess | None:
         return self._managed.get(strategy_instance_id)
+
+    def start(
+        self,
+        *,
+        strategy_instance_id: str,
+        command: list[str],
+        log_path: Path,
+    ) -> ManagedProcess:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_path.open("a", encoding="utf-8")
+        process = subprocess.Popen(
+            command,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+        )
+        managed = ManagedProcess(
+            strategy_instance_id=strategy_instance_id,
+            process=process,
+            command=command,
+            log_path=log_path,
+            started_at_ms=int(time.time() * 1000),
+        )
+        self._managed[strategy_instance_id] = managed
+        return managed
