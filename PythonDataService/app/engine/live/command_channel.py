@@ -101,11 +101,24 @@ class CommandChannel:
         return max_seen + 1
 
     def read_pending(self) -> list[Command]:
+        """Return pending commands ordered by numeric seq.
+
+        Lexicographic sort on the filename would put seq 10 before seq
+        2; the dispatcher needs them in the order the operator issued
+        them, so sort by the seq embedded in the filename.
+        """
         if not self._dir.exists():
             return []
+        pending_files: list[tuple[int, Path]] = []
+        for entry in self._dir.glob("command.*.pending.json"):
+            match = _SEQ_RE.match(entry.name)
+            if match is None:
+                continue
+            pending_files.append((int(match.group(1)), entry))
+        pending_files.sort(key=lambda item: item[0])
         return [
             Command.model_validate_json(p.read_text(encoding="utf-8"))
-            for p in sorted(self._dir.glob("command.*.pending.json"))
+            for _seq, p in pending_files
         ]
 
     def ack(self, command: Command, *, outcome: dict[str, Any] | None = None) -> None:

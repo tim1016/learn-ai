@@ -122,6 +122,16 @@ def test_ack_outcome_payload_persists_in_ack_file(tmp_path: Path) -> None:
     assert data["outcome"] == {"status": "success", "side_effect": "wrote poisoned.flag"}
 
 
+def test_read_pending_sorts_by_numeric_seq_not_filename(tmp_path: Path) -> None:
+    """Seq 10 sorts after seq 9, not after seq 1, regardless of filename
+    lexicographic order."""
+    channel = CommandChannel(tmp_path / "commands")
+    for _ in range(12):
+        channel.write_from_operator(CommandVerb.PAUSE)
+    pending = channel.read_pending()
+    assert [p.seq for p in pending] == list(range(1, 13))
+
+
 def test_ack_outcome_defaults_to_empty_dict(tmp_path: Path) -> None:
     channel = CommandChannel(tmp_path / "commands")
     channel.write_from_operator(CommandVerb.PAUSE)
