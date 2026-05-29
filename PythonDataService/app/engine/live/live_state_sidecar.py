@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -79,23 +81,60 @@ class LiveStateSidecarRepo:
             raise LiveStateSidecarCorruptError(self._path, exc) from exc
 
     def write(self, envelope: LiveStateEnvelope) -> None:
-        """Atomic write: serialise to a sibling .tmp, fsync, os.replace.
+        """Atomic write under advisory lock: serialise to a sibling .tmp,
+        fsync, os.replace.
 
-        A crash between the tempfile flush and the rename leaves the
-        previous good snapshot in place; a crash mid-tempfile-write
-        leaves an orphan .tmp that read() ignores. See
-        test_failed_rename_preserves_previous_snapshot for the invariant.
+        Lock window covers the full tempfile-write-then-rename sequence so
+        two concurrent writers don't race on the shared tempfile name.
+        Without the lock, the loser's os.replace finds the tempfile
+        already renamed by the winner and raises FileNotFoundError.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
         payload = envelope.model_dump_json().encode("utf-8")
-        with open(tmp_path, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.replace(tmp_path, self._path)
-        except Exception:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-            raise
+        with _file_lock(self._path):
+            with open(tmp_path, "wb") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.replace(tmp_path, self._path)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+                raise
+
+
+@contextlib.contextmanager
+def _file_lock(target_path: Path) -> Iterator[None]:
+    """Advisory lock on a sibling .lock file for the duration of the write.
+
+    Ported from indicator_state.py's _file_lock. POSIX uses fcntl.flock,
+    Windows uses msvcrt.locking. Concurrent processes / threads writing
+    the same path serialise here; the lock window is only as long as the
+    atomic write.
+    """
+    lock_path = target_path.with_suffix(target_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "a+b")  # noqa: SIM115
+    fh.seek(0)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()

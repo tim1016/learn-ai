@@ -208,3 +208,38 @@ def test_stable_path_keys_directory_on_strategy_instance_id(tmp_path: Path) -> N
     ema = stable_live_state_path(artifacts_root, "spy_ema_crossover")
     vwap = stable_live_state_path(artifacts_root, "spy_vwap_reversion_1min")
     assert ema.parent != vwap.parent
+
+
+def test_concurrent_writers_serialize_without_error(tmp_path: Path) -> None:
+    """Two threads writing the same sidecar must not race on the shared
+    tempfile name. Without serialisation the loser's os.replace finds
+    the tempfile already renamed by the winner and raises
+    FileNotFoundError. With the advisory lock, writes take turns and
+    the final on-disk envelope is one of the two writers' content.
+    """
+    import threading
+
+    path = tmp_path / "live_state.json"
+    repo = LiveStateSidecarRepo(path)
+    repo.write(_min_envelope(run_id="seed"))
+
+    errors: list[BaseException] = []
+
+    def writer(label: str) -> None:
+        try:
+            for _ in range(50):
+                repo.write(_min_envelope(run_id=label))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t1 = threading.Thread(target=writer, args=("alpha",))
+    t2 = threading.Thread(target=writer, args=("beta",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert errors == [], f"concurrent writers raised: {errors!r}"
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.run_id in {"alpha", "beta"}
