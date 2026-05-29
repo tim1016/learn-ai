@@ -66,6 +66,36 @@ def test_empty_registry_lists_no_processes() -> None:
     assert registry.status("never_registered") is None
 
 
+def test_crash_detected_via_status_poll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process can exit on its own without ever calling stop() —
+    OOM kill, segfault, uncaught exception. The registry must detect
+    this on status() poll and classify it.
+    """
+    fake = FakeProcess()
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: fake,
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+    # Simulate the process crashing on its own.
+    fake.returncode = 137
+
+    managed = registry.status("spy_ema_crossover")
+    assert managed is not None
+    assert managed.state == "exited"
+    assert managed.exit_code == 137
+    assert managed.exit_classification == "crashed"
+    assert managed.ended_at_ms is not None
+
+
 def test_clean_exit_classified_as_intentional(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

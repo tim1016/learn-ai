@@ -68,10 +68,32 @@ class ProcessRegistry:
         self._managed: dict[str, ManagedProcess] = {}
 
     def list(self) -> list[ManagedProcess]:
+        for managed in self._managed.values():
+            self._refresh_state(managed)
         return list(self._managed.values())
 
     def status(self, strategy_instance_id: str) -> ManagedProcess | None:
-        return self._managed.get(strategy_instance_id)
+        managed = self._managed.get(strategy_instance_id)
+        if managed is None:
+            return None
+        self._refresh_state(managed)
+        return managed
+
+    def _refresh_state(self, managed: ManagedProcess) -> None:
+        """Poll the underlying process; if it has exited, transition
+        state and record the exit code + ended_at_ms.
+
+        Called from status() and list() so callers don't observe a
+        stale "running" state for a process that already crashed.
+        """
+        if managed.state != "running":
+            return
+        rc = managed.process.poll()
+        if rc is None:
+            return
+        managed.exit_code = rc
+        managed.ended_at_ms = int(time.time() * 1000)
+        managed.state = "exited"
 
     def start(
         self,
