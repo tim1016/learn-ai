@@ -79,11 +79,22 @@ class PoisonedHaltTrigger(enum.StrEnum):
     in ``details["reason"]``; the trigger is shared so the same
     ``poisoned.flag`` JSON shape is read by ``read_poisoned_flag`` and
     the live-runs status endpoint.
+
+    ``OPERATOR_DECLARED`` fires when an operator issues the
+    ``MARK_POISONED`` command (Resolution 7) — e.g. they observed a
+    manual trade hit the account from outside the bot's clientId
+    namespace. It carries the operator's free-text justification in
+    ``details["reason"]`` and ``details["source"] = "operator_command"``
+    so post-mortem tooling can distinguish operator intent from the
+    automatic triggers. Uses the structured schema (not a plain-text
+    flag) so the boot-time ``read_poisoned_flag`` parser loads it
+    cleanly rather than rejecting it as corrupt.
     """
 
     OUTSIDE_MUTATION = "outside_mutation"
     LOST_FILL = "lost_fill"
     COLD_START_DIVERGENCE = "cold_start_divergence"
+    OPERATOR_DECLARED = "operator_declared"
 
 
 @dataclass(frozen=True)

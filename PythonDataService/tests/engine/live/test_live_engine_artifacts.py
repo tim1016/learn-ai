@@ -219,6 +219,62 @@ async def test_live_engine_invokes_live_state_writer_per_bar(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_live_state_writer_sees_flushed_artifacts(tmp_path: Path) -> None:
+    """Regression: artifacts must be flushed to disk BEFORE the sidecar
+    write advances its cursor.
+
+    The sidecar envelope records ``last_processed_bar_ms`` /
+    ``last_artifact_flush_ms`` as durable cursors. Decision / execution /
+    trade rows, however, are only buffered until ``flush_all`` /
+    ``close_all``. If the cursor advanced first and the process crashed
+    before the buffer reached disk, cold-start recovery would resume from
+    a cursor ahead of the actual artifacts (PR #370 P1).
+
+    We capture, at each sidecar invocation, the on-disk row count of
+    decisions.parquet. Once the strategy has published a snapshot, every
+    subsequent sidecar write must observe those rows already durable on
+    disk — not still buffered in memory.
+    """
+    decisions_path = tmp_path / "decisions.parquet"
+    rows_on_disk_at_each_call: list[int] = []
+
+    def writer(_portfolio: object, _bar_close_ms: int) -> None:
+        if decisions_path.exists():
+            rows_on_disk_at_each_call.append(len(pd.read_parquet(decisions_path)))
+        else:
+            rows_on_disk_at_each_call.append(0)
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        live_state_writer=writer,
+    )
+    # 31 minute bars close two consolidated 15-min windows, so the decision
+    # writer buffers at least one row partway through the run.
+    bars = [_bar(minute, "500", "500") for minute in range(30, 61)]
+    await engine.run(_OneEntryWithDecisionSnapshotStrategy(), iter_bars(bars))
+
+    # At least one consolidated decision row was produced during the run.
+    final_rows = len(pd.read_parquet(decisions_path))
+    assert final_rows >= 1, "test setup: expected at least one decision row"
+
+    # The final sidecar invocation must see every decision row already on
+    # disk — proving flush happened before the cursor advanced. Before the
+    # fix, rows stayed buffered until close_all() and the last on-disk count
+    # would lag the final total.
+    assert rows_on_disk_at_each_call, "writer was never invoked"
+    assert rows_on_disk_at_each_call[-1] == final_rows, (
+        "sidecar cursor advanced before artifacts were flushed to disk: "
+        f"saw {rows_on_disk_at_each_call[-1]} on-disk rows at the last write, "
+        f"but {final_rows} rows are durable after the run"
+    )
+
+
+@pytest.mark.asyncio
 async def test_live_engine_swallows_live_state_writer_exceptions(
     tmp_path: Path,
 ) -> None:

@@ -679,6 +679,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         artifacts_root=_artifacts_root,
     )
 
+    # Operator command channel (PRD-A § 16.4 Resolution 7 / PR-D). The
+    # bot polls ``<run_dir>/commands/`` at 1s, independent of the bar
+    # loop, for PAUSE / RESUME / STOP / FLATTEN / RECONCILE /
+    # MARK_POISONED. Always wired on a CLI start (the dir is created
+    # lazily by the channel); replay tests construct LiveEngine
+    # directly and leave command_channel=None.
+    from app.engine.live.command_channel import CommandChannel
+
+    command_channel = CommandChannel(args.run_dir / "commands")
+
     engine = LiveEngine(
         client,
         live_config,
@@ -693,6 +703,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         code_sha=ledger.code_sha,
         strategy_spec_sha=ledger.strategy_spec_sha256,
         live_state_writer=live_state_writer,
+        command_channel=command_channel,
     )
 
     _entry_sidecar = RunStatusSidecar(
