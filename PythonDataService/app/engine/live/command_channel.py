@@ -13,8 +13,9 @@ import os
 import re
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 _SEQ_RE = re.compile(r"^command\.(\d+)\.")
 
@@ -33,13 +34,16 @@ class Command(BaseModel):
 
     seq: int
     verb: CommandVerb
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class CommandChannel:
     def __init__(self, commands_dir: Path) -> None:
         self._dir = commands_dir
 
-    def write_from_operator(self, verb: CommandVerb) -> Command:
+    def write_from_operator(
+        self, verb: CommandVerb, *, payload: dict[str, Any] | None = None
+    ) -> Command:
         """Atomically publish a command: write to a sibling .tmp, fsync,
         os.replace to .pending.json.
 
@@ -50,7 +54,7 @@ class CommandChannel:
         """
         self._dir.mkdir(parents=True, exist_ok=True)
         seq = self._next_seq()
-        cmd = Command(seq=seq, verb=verb)
+        cmd = Command(seq=seq, verb=verb, payload=payload or {})
         final = self._dir / f"command.{seq}.{verb.value}.pending.json"
         tmp = final.with_suffix(".json.tmp")
         payload = cmd.model_dump_json().encode("utf-8")

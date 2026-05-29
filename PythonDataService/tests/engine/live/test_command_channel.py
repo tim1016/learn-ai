@@ -67,6 +67,26 @@ def test_full_verb_vocabulary_round_trips(tmp_path: Path, verb: CommandVerb) -> 
     assert pending.verb is verb
 
 
+def test_command_carries_payload_round_trip(tmp_path: Path) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    channel.write_from_operator(
+        CommandVerb.MARK_POISONED,
+        payload={"reason": "manual_trade_observed", "noticed_at_ms": 1_748_000_000_000},
+    )
+    [pending] = channel.read_pending()
+    assert pending.payload == {
+        "reason": "manual_trade_observed",
+        "noticed_at_ms": 1_748_000_000_000,
+    }
+
+
+def test_command_payload_defaults_to_empty_dict(tmp_path: Path) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    channel.write_from_operator(CommandVerb.PAUSE)
+    [pending] = channel.read_pending()
+    assert pending.payload == {}
+
+
 def test_ack_renames_pending_to_ack_and_clears_pending_queue(tmp_path: Path) -> None:
     channel = CommandChannel(tmp_path / "commands")
     channel.write_from_operator(CommandVerb.PAUSE)
