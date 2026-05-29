@@ -16,6 +16,7 @@ import pytest
 from app.engine.live.process_registry import (
     AlreadyRunningError,
     ManagedProcess,
+    NotTrackingError,
     ProcessRegistry,
 )
 
@@ -64,6 +65,16 @@ def test_empty_registry_lists_no_processes() -> None:
     registry = ProcessRegistry()
     assert registry.list() == []
     assert registry.status("never_registered") is None
+
+
+def test_stop_unknown_id_raises_typed_error() -> None:
+    """A silent no-op would leak: the caller would assume the stop
+    succeeded. Typed error surfaces the misuse.
+    """
+    registry = ProcessRegistry()
+    with pytest.raises(NotTrackingError) as excinfo:
+        registry.stop("never_registered")
+    assert excinfo.value.strategy_instance_id == "never_registered"
 
 
 def test_status_returns_none_for_unknown_id_even_after_others_registered(

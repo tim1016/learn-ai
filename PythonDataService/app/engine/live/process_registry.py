@@ -22,6 +22,22 @@ from typing import Literal
 State = Literal["running", "stopping", "exited"]
 
 
+class NotTrackingError(KeyError):
+    """Raised by stop() for an id the registry never registered.
+
+    KeyError lineage so callers that already handle missing-key
+    semantics still work; the typed subclass carries the id and a
+    descriptive message for callers that want to surface it.
+    """
+
+    def __init__(self, strategy_instance_id: str) -> None:
+        super().__init__(strategy_instance_id)
+        self.strategy_instance_id = strategy_instance_id
+
+    def __str__(self) -> str:
+        return f"strategy_instance_id={self.strategy_instance_id!r} is not tracked"
+
+
 class AlreadyRunningError(RuntimeError):
     """Raised when start() is called for a strategy_instance_id that
     already has a running managed process. Carries the id so callers
@@ -129,7 +145,9 @@ class ProcessRegistry:
         then record the outcome. SIGKILL fallback comes in a later
         cycle when a test forces it.
         """
-        managed = self._managed[strategy_instance_id]
+        managed = self._managed.get(strategy_instance_id)
+        if managed is None:
+            raise NotTrackingError(strategy_instance_id)
         managed.state = "stopping"
         managed.process.send_signal(signal.SIGTERM)
         managed.process.wait(timeout=timeout_s)
