@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live.process_registry import ManagedProcess, ProcessRegistry
+from app.engine.live.process_registry import (
+    AlreadyRunningError,
+    ManagedProcess,
+    ProcessRegistry,
+)
 
 
 class FakeProcess:
@@ -50,6 +54,37 @@ def test_empty_registry_lists_no_processes() -> None:
     registry = ProcessRegistry()
     assert registry.list() == []
     assert registry.status("never_registered") is None
+
+
+def test_cannot_start_same_strategy_twice_while_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two competing processes under the same strategy_instance_id would
+    fight for the same IBKR clientId, indicator-state sidecar, and
+    live-state sidecar. The registry refuses the second start.
+    """
+    fake = FakeProcess(pid=4242)
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: fake,
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+
+    with pytest.raises(AlreadyRunningError) as excinfo:
+        registry.start(
+            strategy_instance_id="spy_ema_crossover",
+            command=["python", "-m", "ema"],
+            log_path=tmp_path / "ema.log",
+        )
+    assert excinfo.value.strategy_instance_id == "spy_ema_crossover"
+    # First process untouched.
+    assert registry.status("spy_ema_crossover").pid == 4242
 
 
 def test_two_distinct_strategies_register_concurrently(

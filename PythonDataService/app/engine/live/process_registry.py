@@ -21,6 +21,19 @@ from typing import Literal
 State = Literal["running", "stopping", "exited"]
 
 
+class AlreadyRunningError(RuntimeError):
+    """Raised when start() is called for a strategy_instance_id that
+    already has a running managed process. Carries the id so callers
+    can surface it without re-parsing the message.
+    """
+
+    def __init__(self, strategy_instance_id: str) -> None:
+        super().__init__(
+            f"strategy_instance_id={strategy_instance_id!r} is already running"
+        )
+        self.strategy_instance_id = strategy_instance_id
+
+
 @dataclass
 class ManagedProcess:
     strategy_instance_id: str
@@ -54,6 +67,9 @@ class ProcessRegistry:
         command: list[str],
         log_path: Path,
     ) -> ManagedProcess:
+        existing = self._managed.get(strategy_instance_id)
+        if existing is not None and existing.state == "running":
+            raise AlreadyRunningError(strategy_instance_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("a", encoding="utf-8")
         process = subprocess.Popen(
