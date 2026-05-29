@@ -188,6 +188,66 @@ async def test_live_engine_dedupes_decisions_across_minute_bars(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_live_engine_invokes_live_state_writer_per_bar(tmp_path: Path) -> None:
+    """Smoke test for the LiveStateSidecar wire-up: the engine calls
+    the live_state_writer callable once per bar with the bar's close_ms.
+    """
+    invocations: list[tuple[object, int]] = []
+
+    def writer(portfolio: object, bar_close_ms: int) -> None:
+        invocations.append((portfolio, bar_close_ms))
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        live_state_writer=writer,
+    )
+    bars = [_bar(minute, "500", "500") for minute in range(30, 35)]
+    await engine.run(_OneEntryWithDecisionSnapshotStrategy(), iter_bars(bars))
+
+    assert len(invocations) >= len(bars), (
+        f"writer must run at least once per bar; got {len(invocations)} "
+        f"for {len(bars)} bars"
+    )
+    # Each invocation carries a positive int64 ms timestamp.
+    for _portfolio, bar_close_ms in invocations:
+        assert isinstance(bar_close_ms, int) and bar_close_ms > 0
+
+
+@pytest.mark.asyncio
+async def test_live_engine_swallows_live_state_writer_exceptions(
+    tmp_path: Path,
+) -> None:
+    """A sidecar I/O failure must not crash the bar loop. The engine
+    catches and logs but processing continues.
+    """
+    call_count = 0
+
+    def boom(_portfolio: object, _bar_close_ms: int) -> None:
+        nonlocal call_count
+        call_count += 1
+        raise OSError("simulated sidecar I/O failure")
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        live_state_writer=boom,
+    )
+    bars = [_bar(minute, "500", "500") for minute in range(30, 33)]
+    # Must NOT raise.
+    await engine.run(_OneEntryWithDecisionSnapshotStrategy(), iter_bars(bars))
+    assert call_count >= 1, "writer was never invoked"
+
+
+@pytest.mark.asyncio
 async def test_live_engine_closes_writers_on_exception(tmp_path: Path) -> None:
     """Writers must close (and flush) even when run() raises mid-loop.
 

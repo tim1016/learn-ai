@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -241,6 +241,10 @@ class LiveEngine:
         session_start_ms: int | None = None,
         code_sha: str = "",
         strategy_spec_sha: str = "",
+        # NEW: order-idempotency sidecar (PRD-A § 16.4 Resolution 3).
+        # Callable provided by run.py knows how to build the envelope
+        # from current state; engine just invokes it after each flush.
+        live_state_writer: Callable[[LivePortfolio, int], None] | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -290,6 +294,7 @@ class LiveEngine:
         self._session_start_ms = session_start_ms
         self._code_sha = code_sha
         self._strategy_spec_sha = strategy_spec_sha
+        self._live_state_writer = live_state_writer
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -601,6 +606,14 @@ class LiveEngine:
                 retained_bars.append(minute_bar)
                 previous_bar = minute_bar
 
+                # Live-state sidecar: persist cursors and position snapshot
+                # once per bar so a crash between bars leaves enough context
+                # for ColdStartReconciler to safely resume. Cheap no-op
+                # when no writer was configured.
+                self._persist_live_state(
+                    portfolio, int(minute_bar.end_time.timestamp() * 1000)
+                )
+
             # Source exhausted. Stop the stream first so the task flushes
             # any in-flight event into the buffer, then drain. Without
             # this final pass, fills that arrive between the last per-bar
@@ -644,6 +657,9 @@ class LiveEngine:
                     )
                 except Exception:
                     logger.exception("indicator-state shutdown checkpoint failed; continuing finally cleanup")
+                # Live-state sidecar final checkpoint — same shape as the
+                # mid-run per-bar writes; helper handles the no-op case.
+                self._persist_live_state(portfolio, int(last_bar.end_time.timestamp() * 1000))
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
             if writers is not None:
@@ -732,6 +748,21 @@ class LiveEngine:
                 fee=float(event.fee),
             )
         )
+
+    def _persist_live_state(self, portfolio: LivePortfolio, bar_close_ms: int) -> None:
+        """Invoke the optional live-state-sidecar writer.
+
+        Failures here are logged but never propagated — the sidecar is
+        a crash-recovery aid, not a precondition for processing. The
+        ColdStartReconciler at next boot can detect any divergence
+        between sidecar and broker if writes were missed.
+        """
+        if self._live_state_writer is None or bar_close_ms <= 0:
+            return
+        try:
+            self._live_state_writer(portfolio, bar_close_ms)
+        except Exception:
+            logger.exception("live-state sidecar write failed; continuing")
 
     @staticmethod
     def _flush_new_trades(
