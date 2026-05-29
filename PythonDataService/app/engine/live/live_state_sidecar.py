@@ -25,7 +25,9 @@ class LiveStateSidecarRepo:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def read(self) -> LiveStateEnvelope:
+    def read(self) -> LiveStateEnvelope | None:
+        if not self._path.exists():
+            return None
         return LiveStateEnvelope.model_validate_json(self._path.read_text(encoding="utf-8"))
 
     def write(self, envelope: LiveStateEnvelope) -> None:

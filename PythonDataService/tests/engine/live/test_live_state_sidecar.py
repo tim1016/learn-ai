@@ -21,3 +21,8 @@ def test_write_then_read_round_trips_strategy_instance_id(tmp_path: Path) -> Non
     repo.write(env)
     loaded = repo.read()
     assert loaded == env
+
+
+def test_read_missing_returns_none(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "absent.json")
+    assert repo.read() is None
