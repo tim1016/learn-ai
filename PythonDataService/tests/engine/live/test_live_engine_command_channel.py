@@ -158,3 +158,52 @@ async def test_mark_poisoned_writes_structured_operator_flag(tmp_path: Path) -> 
     assert reason.trigger is PoisonedHaltTrigger.OPERATOR_DECLARED
     assert reason.details["source"] == "operator_command"
     assert reason.details["reason"] == "manual_trade_observed"
+
+
+@pytest.mark.asyncio
+async def test_corrupt_command_halts_engine(tmp_path: Path) -> None:
+    """A malformed command.*.pending.json must HALT the engine for
+    operator inspection, not spin in a log-and-retry loop while the bot
+    keeps trading against a corrupt control channel (PR #373 P1).
+
+    The poll loop catches CommandChannelCorruptError, sets the
+    shutdown_event, and returns — so engine.run() exits via the normal
+    graceful path within a couple of poll ticks rather than running to
+    source exhaustion (here: 400 bars).
+    """
+    commands_dir = tmp_path / "commands"
+    commands_dir.mkdir(parents=True)
+    # A visible (.json), unparseable pending command.
+    (commands_dir / "command.1.PAUSE.pending.json").write_text(
+        "{ this is not valid json", encoding="utf-8"
+    )
+    channel = CommandChannel(commands_dir)
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        command_channel=channel,
+    )
+
+    total_bars = 200
+    consumed = 0
+
+    async def _slow_bars():
+        nonlocal consumed
+        for minute in range(30, 30 + total_bars):
+            consumed += 1
+            await asyncio.sleep(0.02)
+            yield _bar(minute)
+
+    await asyncio.wait_for(engine.run(_NoopStrategy(), _slow_bars()), timeout=15.0)
+
+    # The halt fired early — only a small fraction of the source was
+    # consumed before shutdown. A swallow-and-retry loop would have
+    # drained all 200.
+    assert consumed < total_bars // 2, f"consumed {consumed}/{total_bars}; expected early halt"
+    # The corrupt file is left in place for the operator to inspect.
+    assert (commands_dir / "command.1.PAUSE.pending.json").exists()
