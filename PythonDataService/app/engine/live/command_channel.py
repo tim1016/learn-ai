@@ -11,6 +11,8 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import sys
+from collections.abc import Iterator
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -83,21 +85,22 @@ class CommandChannel:
         complete command. There is no partial state the reader can see.
         """
         self._dir.mkdir(parents=True, exist_ok=True)
-        seq = self._next_seq()
-        cmd = Command(seq=seq, verb=verb, payload=payload or {})
-        final = self._dir / f"command.{seq}.{verb.value}.pending.json"
-        tmp = final.with_suffix(".json.tmp")
-        payload = cmd.model_dump_json().encode("utf-8")
-        with open(tmp, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.replace(tmp, final)
-        except Exception:
-            with contextlib.suppress(OSError):
-                tmp.unlink()
-            raise
+        with _dir_lock(self._dir):
+            seq = self._next_seq()
+            cmd = Command(seq=seq, verb=verb, payload=payload or {})
+            final = self._dir / f"command.{seq}.{verb.value}.pending.json"
+            tmp = final.with_suffix(".json.tmp")
+            payload_bytes = cmd.model_dump_json().encode("utf-8")
+            with open(tmp, "wb") as fh:
+                fh.write(payload_bytes)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.replace(tmp, final)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    tmp.unlink()
+                raise
         return cmd
 
     def _next_seq(self) -> int:
@@ -158,15 +161,52 @@ class CommandChannel:
         )
         ack_tmp = ack_final.with_suffix(".json.tmp")
         payload_bytes = acked.model_dump_json().encode("utf-8")
-        with open(ack_tmp, "wb") as fh:
-            fh.write(payload_bytes)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.replace(ack_tmp, ack_final)
-        except Exception:
-            with contextlib.suppress(OSError):
-                ack_tmp.unlink()
-            raise
-        with contextlib.suppress(FileNotFoundError):
-            pending.unlink()
+        with _dir_lock(self._dir):
+            with open(ack_tmp, "wb") as fh:
+                fh.write(payload_bytes)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.replace(ack_tmp, ack_final)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    ack_tmp.unlink()
+                raise
+            with contextlib.suppress(FileNotFoundError):
+                pending.unlink()
+
+
+@contextlib.contextmanager
+def _dir_lock(commands_dir: Path) -> Iterator[None]:
+    """Advisory lock on a sibling .write.lock file inside commands_dir.
+
+    Serialises (next_seq + rename) so concurrent writers don't collide
+    on the same proposed seq, and serialises the (write ack.tmp + rename
+    + unlink pending) sequence so concurrent acks don't interleave.
+    Ported from LiveStateSidecar / IndicatorStateRepo's _file_lock —
+    fcntl on POSIX, msvcrt on Windows.
+    """
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = commands_dir / ".write.lock"
+    fh = open(lock_path, "a+b")  # noqa: SIM115
+    fh.seek(0)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()

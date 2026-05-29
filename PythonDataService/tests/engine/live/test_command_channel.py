@@ -169,6 +169,54 @@ def test_ack_outcome_defaults_to_empty_dict(tmp_path: Path) -> None:
     assert data["outcome"] == {}
 
 
+def test_concurrent_writers_produce_unique_seqs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two threads each writing N commands must produce 2N distinct
+    seqs. Without a lock around (next_seq + rename) they can both read
+    max_seen and assign the same seq, overwriting each other.
+
+    The test injects a yield (time.sleep(0)) inside _next_seq to widen
+    the race window past the GIL's accidental serialisation. The lock
+    must close that window.
+    """
+    import threading
+    import time
+
+    from app.engine.live import command_channel as cc_module
+
+    real_next_seq = cc_module.CommandChannel._next_seq
+
+    def instrumented_next_seq(self: CommandChannel) -> int:
+        seq = real_next_seq(self)
+        time.sleep(0.005)  # widen race window past the GIL's accidental serialisation
+        return seq
+
+    monkeypatch.setattr(cc_module.CommandChannel, "_next_seq", instrumented_next_seq)
+
+    channel = CommandChannel(tmp_path / "commands")
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            for _ in range(20):
+                channel.write_from_operator(CommandVerb.PAUSE)
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=writer)
+    t2 = threading.Thread(target=writer)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert errors == [], f"concurrent writers raised: {errors!r}"
+    pending = channel.read_pending()
+    seqs = [p.seq for p in pending]
+    assert sorted(seqs) == list(range(1, 41)), f"got seqs={sorted(seqs)}"
+
+
 def test_write_uses_tempfile_rename_pattern(
     tmp_path: Path, monkeypatch: __import__("pytest").MonkeyPatch
 ) -> None:
