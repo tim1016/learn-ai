@@ -38,5 +38,13 @@
   },
   "diagnostics": {
     "snapshot_at_entry": ["ema5", "ema10", "rsi14"]
-  }
+  },
+  "client_id": 11,
+  "submit_mode": "live_paper",
+  "bar_source_descriptor": "ibkr_paper_delayed",
+  "decision_columns": [
+    {"name": "ema5",  "dtype": "float64", "nullable": false, "semantic": "EMA(5) of consolidated close at decision time"},
+    {"name": "ema10", "dtype": "float64", "nullable": false, "semantic": "EMA(10) of consolidated close at decision time"},
+    {"name": "rsi",   "dtype": "float64", "nullable": false, "semantic": "Wilders RSI(14) of consolidated close at decision time"}
+  ]
 }
