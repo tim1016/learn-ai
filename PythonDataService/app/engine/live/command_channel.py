@@ -15,7 +15,21 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+class CommandChannelCorruptError(RuntimeError):
+    """Raised by ``CommandChannel.read_pending`` when an on-disk
+    command file is unparseable JSON or fails schema validation.
+
+    Routes to engine-side dispatch as a hard stop: a corrupt command
+    cannot be safely executed and demands operator inspection.
+    """
+
+    def __init__(self, path: Path, cause: BaseException) -> None:
+        super().__init__(f"command at {path} is unreadable: {cause}")
+        self.path = path
+        self.__cause__ = cause
 
 _SEQ_RE = re.compile(r"^command\.(\d+)\.")
 
@@ -116,10 +130,15 @@ class CommandChannel:
                 continue
             pending_files.append((int(match.group(1)), entry))
         pending_files.sort(key=lambda item: item[0])
-        return [
-            Command.model_validate_json(p.read_text(encoding="utf-8"))
-            for _seq, p in pending_files
-        ]
+        commands: list[Command] = []
+        for _seq, path in pending_files:
+            try:
+                commands.append(
+                    Command.model_validate_json(path.read_text(encoding="utf-8"))
+                )
+            except (ValidationError, ValueError) as exc:
+                raise CommandChannelCorruptError(path, exc) from exc
+        return commands
 
     def ack(self, command: Command, *, outcome: dict[str, Any] | None = None) -> None:
         """Atomically transition pending → ack with the engine's outcome.

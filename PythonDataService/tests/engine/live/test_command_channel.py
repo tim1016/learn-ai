@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live.command_channel import CommandChannel, CommandVerb
+from app.engine.live.command_channel import (
+    CommandChannel,
+    CommandChannelCorruptError,
+    CommandVerb,
+)
 
 
 def test_write_then_read_pending_returns_single_pause(tmp_path: Path) -> None:
@@ -120,6 +124,29 @@ def test_ack_outcome_payload_persists_in_ack_file(tmp_path: Path) -> None:
     assert data["verb"] == "MARK_POISONED"
     assert data["payload"] == {"reason": "manual_trade_observed"}
     assert data["outcome"] == {"status": "success", "side_effect": "wrote poisoned.flag"}
+
+
+def test_unparseable_pending_json_raises_typed_error(tmp_path: Path) -> None:
+    commands_dir = tmp_path / "commands"
+    commands_dir.mkdir(parents=True)
+    bad = commands_dir / "command.1.PAUSE.pending.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    channel = CommandChannel(commands_dir)
+    with pytest.raises(CommandChannelCorruptError) as excinfo:
+        channel.read_pending()
+    assert excinfo.value.path == bad
+
+
+def test_schema_violation_in_pending_raises_typed_error(tmp_path: Path) -> None:
+    commands_dir = tmp_path / "commands"
+    commands_dir.mkdir(parents=True)
+    bad = commands_dir / "command.1.PAUSE.pending.json"
+    bad.write_text(
+        '{"seq": 1, "verb": "NOT_A_REAL_VERB", "payload": {}}', encoding="utf-8"
+    )
+    channel = CommandChannel(commands_dir)
+    with pytest.raises(CommandChannelCorruptError):
+        channel.read_pending()
 
 
 def test_read_pending_sorts_by_numeric_seq_not_filename(tmp_path: Path) -> None:
