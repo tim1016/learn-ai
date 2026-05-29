@@ -178,7 +178,9 @@ class DecisionRow:
     mode: str = ""
     # Strategy-specific columns, keyed by the names spec.decision_columns
     # declares (e.g. {"ema5": .., "ema10": .., "rsi": ..} for SPY EMA).
-    indicator_values: dict[str, float] = field(default_factory=dict)
+    # Values pass through to the parquet with their own type so a spec's
+    # declared dtype (float64 / int64 / string / bool) is preserved.
+    indicator_values: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.signal not in SIGNAL_VALUES:
@@ -216,7 +218,11 @@ class DecisionRow:
             "decision_latency_ms": _opt_float(self.decision_latency_ms),
             "mode": str(self.mode),
         }
-        row.update({k: _opt_float(v) for k, v in self.indicator_values.items()})
+        # Strategy-specific values pass through with their own type so a
+        # spec declaring dtype "string" / "bool" / "int64" isn't coerced
+        # to float (or crashed by float("...")); the strategy is
+        # responsible for emitting values matching its declared dtypes.
+        row.update(dict(self.indicator_values))
         return row
 
 
