@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -173,7 +174,7 @@ class NoSubmitBrokerAdapter:
             if isinstance(fill, PendingFill):
                 still_pending.append(item)
                 continue
-            self._events.append(self._execution_to_event(bar, fill))
+            self._events.append(self._execution_to_event(fill))
         self._pending = still_pending
         self._current_bar = canonical
 
@@ -182,12 +183,16 @@ class NoSubmitBrokerAdapter:
         self._events.clear()
         return events
 
-    def _execution_to_event(self, bar: TradeBar, fill) -> OrderEvent:
+    def _execution_to_event(self, fill) -> OrderEvent:
         signed_qty = int(fill.fill_quantity)
+        # Timestamp the fill at the simulator's ts_ms (the next bar's close, when
+        # the fill is known) — not the bar's start — so the receipt agrees with
+        # the simulated ExecutionRow. Carry the shadow ids through so the
+        # writer preserves the broker-noncolliding invariant.
         return OrderEvent(
             order_id=self._order_seq,
             symbol=fill.symbol,
-            time=bar.time,
+            time=datetime.fromtimestamp(fill.ts_ms / 1000, tz=UTC),
             fill_price=Decimal(str(fill.fill_price)),
             fill_quantity=signed_qty,
             direction=Direction.LONG if signed_qty > 0 else Direction.SHORT,
@@ -197,6 +202,8 @@ class NoSubmitBrokerAdapter:
             execution_source="shadow_sim",
             fill_model=fill.fill_model,
             source_bar_close_ms=fill.source_bar_close_ms,
+            exec_id=fill.exec_id,
+            client_order_id=fill.client_order_id,
         )
 
     # ── Shadow invariant ─────────────────────────────────────────────────

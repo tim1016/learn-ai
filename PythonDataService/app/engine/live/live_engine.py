@@ -827,9 +827,17 @@ class LiveEngine:
         writers.executions.append_row(
             ExecutionRow(
                 ts_ms=int(event.time.timestamp() * 1000),
-                exec_id=f"engine-{event.order_id}",
+                # Shadow fills carry the simulator's ``shadow:``-prefixed ids;
+                # preserve them so the broker-noncolliding invariant survives
+                # into the artifact. Real fills (ids None) keep the synthesised
+                # ``engine-``/``live-`` fallbacks.
+                exec_id=event.exec_id if event.exec_id is not None else f"engine-{event.order_id}",
                 perm_id=int(event.order_id),
-                client_order_id=f"live-{event.order_id}",
+                client_order_id=(
+                    event.client_order_id
+                    if event.client_order_id is not None
+                    else f"live-{event.order_id}"
+                ),
                 account_id=self._account_id,
                 symbol=event.symbol,
                 fill_quantity=int(event.fill_quantity),

@@ -91,6 +91,11 @@ async def test_shadow_smoke_produces_shadow_sim_rows_without_submitting(tmp_path
     assert (execs["execution_source"] == "shadow_sim").all()
     assert execs["fill_model"].iloc[0] == "NEXT_BAR_OPEN"
     assert execs["source_bar_close_ms"].notna().all()
+    # Shadow invariant survives into the artifact: exec_ids are shadow:-prefixed
+    # (never the generic engine-/live- ids), so they can't collide with a real
+    # IBKR execId. (Codex P2 on #385.)
+    assert execs["exec_id"].str.startswith("shadow:").all()
+    assert execs["client_order_id"].str.startswith("shadow-").all()
 
     # No poisoned.flag — shadow ran cleanly.
     assert not (tmp_path / "poisoned.flag").exists()

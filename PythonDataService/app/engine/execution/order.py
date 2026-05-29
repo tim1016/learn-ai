@@ -91,3 +91,10 @@ class OrderEvent:
     execution_source: str = "broker_fill"
     fill_model: str = "NEXT_BAR_OPEN"
     source_bar_close_ms: int | None = None
+    # Broker-primary-key identifiers carried through to the receipt. When set
+    # (shadow fills carry the simulator's ``shadow:``-prefixed ids), the writer
+    # uses them verbatim so the shadow invariant — simulated exec_ids can never
+    # collide with a real IBKR execId — survives into executions.parquet. When
+    # None (real broker fills today), the writer falls back to synthesised ids.
+    exec_id: str | None = None
+    client_order_id: str | None = None
