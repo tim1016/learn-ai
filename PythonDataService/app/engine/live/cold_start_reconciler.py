@@ -33,13 +33,28 @@ class SafeToResume:
     from_bar_ms: int
 
 
+@dataclass(frozen=True)
+class Poisoned:
+    reason: str
+
+
+ReconciliationResult = SafeToResume | Poisoned
+
+
 class ColdStartReconciler:
     def verify(
         self,
         *,
         broker: _BrokerProtocol,
         sidecar: "LiveStateSidecarRepo",  # noqa: F821 — forward string ref
-    ) -> SafeToResume:
+    ) -> ReconciliationResult:
         envelope = sidecar.read()
         assert envelope is not None  # cycle 1 happy path
+
+        broker_orders = broker.open_orders_by_namespace(envelope.bot_order_namespace)
+        for order in broker_orders:
+            client_order_id = order.get("client_order_id")
+            if client_order_id not in envelope.submitted_orders:
+                return Poisoned(reason="unexpected_order_at_broker")
+
         return SafeToResume(from_bar_ms=envelope.last_processed_bar_ms)

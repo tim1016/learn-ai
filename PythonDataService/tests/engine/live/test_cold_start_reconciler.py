@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.engine.live.cold_start_reconciler import (
     ColdStartReconciler,
+    Poisoned,
     SafeToResume,
 )
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
@@ -58,3 +59,25 @@ def test_empty_broker_and_empty_sidecar_yields_safe_to_resume(tmp_path: Path) ->
 
     assert isinstance(result, SafeToResume)
     assert result.from_bar_ms == 1_748_000_000_000
+
+
+def test_unexpected_order_at_broker_yields_poisoned(tmp_path: Path) -> None:
+    """Broker namespace shows an order whose client_order_id is not in
+    sidecar.submitted_orders. The reconciler must refuse to resume.
+    """
+    repo = _seed_sidecar(tmp_path / "live_state.json", submitted_orders={})
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[
+            {
+                "client_order_id": "learn-ai/spy_ema_crossover/v1/99",
+                "perm_id": 1234567,
+                "status": "Submitted",
+            }
+        ],
+    )
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo)
+
+    assert isinstance(result, Poisoned)
+    assert result.reason == "unexpected_order_at_broker"
