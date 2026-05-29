@@ -611,6 +611,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
         broker = IbkrBrokerAdapter(client)
+
+    # Operator command channel (PRD-A § 16.4 Resolution 7 / PR-D).
+    # Watches <run_dir>/commands/ at 1s for PAUSE / RESUME / STOP /
+    # FLATTEN / RECONCILE / MARK_POISONED. Lifecycle is bound to the
+    # engine.run() call: the poll task is spawned at run start and
+    # cancelled in finally.
+    from app.engine.live.command_channel import CommandChannel
+
+    command_channel = CommandChannel(args.run_dir / "commands")
+
     engine = LiveEngine(
         client,
         live_config,
@@ -624,6 +634,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         session_start_ms=ledger.start_date_ms,
         code_sha=ledger.code_sha,
         strategy_spec_sha=ledger.strategy_spec_sha256,
+        command_channel=command_channel,
     )
 
     _entry_sidecar = RunStatusSidecar(

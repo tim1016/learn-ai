@@ -38,6 +38,7 @@ from app.engine.live.artifacts import (
     TradeRow,
 )
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
+from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.halt import (
     FatalHaltError,
@@ -241,6 +242,11 @@ class LiveEngine:
         session_start_ms: int | None = None,
         code_sha: str = "",
         strategy_spec_sha: str = "",
+        # NEW: operator command channel (PRD-A § 16.4 Resolution 7 / PR-D).
+        # Bot polls at 1s independent of the bar loop and dispatches
+        # PAUSE/RESUME/STOP/FLATTEN/RECONCILE/MARK_POISONED to
+        # in-process state. None disables the polling.
+        command_channel: CommandChannel | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -290,6 +296,11 @@ class LiveEngine:
         self._session_start_ms = session_start_ms
         self._code_sha = code_sha
         self._strategy_spec_sha = strategy_spec_sha
+        self._command_channel = command_channel
+        # PAUSE drops new orders the strategy queues each bar; RESUME
+        # restores normal submission. STOP / MARK_POISONED set the
+        # bar loop's shutdown_event so the existing graceful path runs.
+        self._paused = False
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -399,6 +410,18 @@ class LiveEngine:
         if isinstance(self._broker, IbkrEventAdapter):
             await self._broker.start_event_stream()
             started_event_stream = True
+
+        # Operator command-channel poll task. Spawned only when a
+        # channel is configured; cancelled in the finally block. The
+        # task needs a shutdown_event to honor STOP / MARK_POISONED,
+        # so synthesise one if the caller didn't pass one.
+        command_poll_task: asyncio.Task | None = None
+        if self._command_channel is not None:
+            if shutdown_event is None:
+                shutdown_event = asyncio.Event()
+            command_poll_task = asyncio.create_task(
+                self._command_poll_loop(shutdown_event)
+            )
 
         source_iter = source.__aiter__()
         last_bar: TradeBar | None = None
@@ -579,6 +602,12 @@ class LiveEngine:
                         writers=writers,
                     )
 
+                # PAUSE drops new orders this bar before submit. The
+                # strategy still consumes the bar (indicators advance),
+                # but nothing new reaches the broker. RESUME flips the
+                # flag and the next bar's queue gets submitted normally.
+                if self._paused:
+                    portfolio.pending_orders.clear()
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
@@ -632,6 +661,13 @@ class LiveEngine:
                         self._write_execution(writers, engine_event)
                         last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
         finally:
+            # Stop the command-channel poller before any other cleanup
+            # so a late-arriving operator command doesn't race with
+            # shutdown writes.
+            if command_poll_task is not None:
+                command_poll_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await command_poll_task
             # NEW: indicator-state checkpoint at graceful shutdown.
             if last_bar is not None:
                 try:
@@ -800,6 +836,103 @@ class LiveEngine:
         return acks
 
     # ──────────────────── Graceful shutdown helper ───────────────────
+
+    async def _command_poll_loop(self, shutdown_event: asyncio.Event) -> None:
+        """1s poll task that dispatches operator commands.
+
+        Sleeps in 1s ticks until shutdown_event is set or the task is
+        cancelled. On each tick, reads pending commands and dispatches
+        each verb to in-process state. Always acks (even on failure)
+        so the operator-side surface sees the outcome.
+
+        STOP, MARK_POISONED set shutdown_event for the bar loop to
+        observe at the next tick. PAUSE/RESUME flip self._paused —
+        the bar loop drops new orders while paused. FLATTEN currently
+        aliases to STOP (graceful shutdown runs the flatten path).
+        RECONCILE is a runtime no-op — the ColdStartReconciler is the
+        boot-time gate, not a mid-run primitive.
+        """
+        assert self._command_channel is not None
+        while not shutdown_event.is_set():
+            try:
+                pending = self._command_channel.read_pending()
+            except Exception:
+                logger.exception("command channel read_pending failed; sleeping then retrying")
+                pending = []
+            for cmd in pending:
+                outcome = self._dispatch_command(cmd, shutdown_event)
+                try:
+                    self._command_channel.ack(cmd, outcome=outcome)
+                except Exception:
+                    logger.exception(
+                        "command channel ack failed for seq=%s verb=%s",
+                        cmd.seq,
+                        cmd.verb.value,
+                    )
+            try:
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                raise
+
+    def _dispatch_command(
+        self, cmd: Command, shutdown_event: asyncio.Event
+    ) -> dict:
+        """Apply a single command to engine state. Returns the outcome
+        payload that will be written into the ack file.
+
+        Broad exception catch so a single bad command doesn't take
+        down the poll loop; the outcome reflects the failure for
+        post-mortem inspection.
+        """
+        try:
+            if cmd.verb is CommandVerb.PAUSE:
+                self._paused = True
+                return {"status": "success", "effect": "paused"}
+            if cmd.verb is CommandVerb.RESUME:
+                self._paused = False
+                return {"status": "success", "effect": "resumed"}
+            if cmd.verb is CommandVerb.STOP:
+                shutdown_event.set()
+                return {"status": "success", "effect": "shutdown_signalled"}
+            if cmd.verb is CommandVerb.FLATTEN:
+                # Graceful shutdown path already calls _shutdown_flatten
+                # which liquidates open positions. Aliasing FLATTEN to
+                # STOP for now; refinement is a follow-up that exposes
+                # a flatten-without-stop primitive.
+                shutdown_event.set()
+                return {"status": "success", "effect": "shutdown_signalled_with_flatten"}
+            if cmd.verb is CommandVerb.MARK_POISONED:
+                if self._output_dir is not None:
+                    self._write_operator_poisoned_flag(
+                        self._output_dir, cmd.payload.get("reason", "operator_declared")
+                    )
+                shutdown_event.set()
+                return {"status": "success", "effect": "poisoned_flag_written"}
+            if cmd.verb is CommandVerb.RECONCILE:
+                # Cold-start reconciliation is a boot-time gate; the
+                # bar loop has no runtime equivalent. Ack with noop so
+                # the operator-side surface sees the verb was received.
+                return {"status": "noop_at_runtime", "effect": "reconcile_is_boot_only"}
+            return {"status": "error", "effect": f"unknown_verb_{cmd.verb.value}"}
+        except Exception as exc:
+            logger.exception("command dispatch failed for verb=%s", cmd.verb.value)
+            return {"status": "error", "effect": f"dispatch_exception: {exc!r}"}
+
+    def _write_operator_poisoned_flag(self, run_dir: Path, reason: str) -> None:
+        """Write a simple operator-declared poisoned.flag.
+
+        Distinct from the structured PoisonedHaltReason used by
+        outside_mutation / lost_fill — those go through halt.py's
+        ``write_poisoned_flag``. The operator-declared flag is plain
+        text carrying the operator's reason so post-mortem tooling can
+        differentiate operator intent from automatic triggers.
+        """
+        try:
+            (run_dir / "poisoned.flag").write_text(
+                f"operator_declared: {reason}\n", encoding="utf-8"
+            )
+        except OSError:
+            logger.exception("could not write operator-declared poisoned.flag")
 
     async def _shutdown_flatten(
         self,
