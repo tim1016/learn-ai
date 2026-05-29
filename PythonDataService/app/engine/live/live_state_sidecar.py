@@ -90,19 +90,21 @@ class LiveStateSidecarRepo:
         back. Every other field is preserved verbatim. Called by the
         engine after a successful artifact flush.
         """
-        existing = self.read()
-        if existing is None:
-            raise FileNotFoundError(
-                f"cannot update flush cursors: no live-state sidecar at {self._path}"
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(self._path):
+            existing = self.read()
+            if existing is None:
+                raise FileNotFoundError(
+                    f"cannot update flush cursors: no live-state sidecar at {self._path}"
+                )
+            self._write_locked(
+                existing.model_copy(
+                    update={
+                        "last_processed_bar_ms": last_processed_bar_ms,
+                        "last_artifact_flush_ms": last_artifact_flush_ms,
+                    }
+                )
             )
-        self.write(
-            existing.model_copy(
-                update={
-                    "last_processed_bar_ms": last_processed_bar_ms,
-                    "last_artifact_flush_ms": last_artifact_flush_ms,
-                }
-            )
-        )
 
     def write(self, envelope: LiveStateEnvelope) -> None:
         """Atomic write under advisory lock: serialise to a sibling .tmp,
@@ -114,19 +116,29 @@ class LiveStateSidecarRepo:
         already renamed by the winner and raises FileNotFoundError.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(self._path):
+            self._write_locked(envelope)
+
+    def _write_locked(self, envelope: LiveStateEnvelope) -> None:
+        """File-mechanics half of write(). Caller must hold _file_lock.
+
+        Split out so update_after_flush can hold a single lock across
+        its full read-modify-write without re-entering _file_lock
+        (fcntl/msvcrt locks are per-fd; nesting would deadlock or
+        produce surprising semantics).
+        """
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
         payload = envelope.model_dump_json().encode("utf-8")
-        with _file_lock(self._path):
-            with open(tmp_path, "wb") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
-            try:
-                os.replace(tmp_path, self._path)
-            except Exception:
-                with contextlib.suppress(OSError):
-                    tmp_path.unlink()
-                raise
+        with open(tmp_path, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.replace(tmp_path, self._path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            raise
 
 
 @contextlib.contextmanager

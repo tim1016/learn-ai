@@ -210,6 +210,70 @@ def test_stable_path_keys_directory_on_strategy_instance_id(tmp_path: Path) -> N
     assert ema.parent != vwap.parent
 
 
+def test_update_after_flush_holds_lock_across_full_rmw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """update_after_flush's read-modify-write must hold the lock across
+    the full sequence.
+
+    Bug being closed: read() happens before _file_lock is acquired;
+    a concurrent write() that writes v1 between this method's read
+    and write causes the cursor-advanced v0 to clobber v1, losing
+    the writer's submitted_orders / pending_intents update.
+
+    Test injects a 100ms delay after read() to force the race window
+    deterministically. The writer thread bypasses the slow read so its
+    timing is controlled. Without the fix, the writer's pending_intent
+    is silently lost; with the fix, it is preserved (even though the
+    updater's cursor advance is then lost — that is the unavoidable
+    cost of blind-write semantics outside the lock).
+    """
+    import threading
+    import time
+
+    from app.engine.live import live_state_sidecar as lss
+
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    repo.write(_min_envelope(pending_intents=[]))
+
+    real_read = lss.LiveStateSidecarRepo.read
+
+    def slow_read(self: lss.LiveStateSidecarRepo) -> lss.LiveStateEnvelope | None:
+        result = real_read(self)
+        time.sleep(0.1)
+        return result
+
+    monkeypatch.setattr(lss.LiveStateSidecarRepo, "read", slow_read)
+
+    def updater() -> None:
+        repo.update_after_flush(
+            last_processed_bar_ms=2_000_000_000_000,
+            last_artifact_flush_ms=2_000_000_000_500,
+        )
+
+    def writer() -> None:
+        time.sleep(0.03)  # let updater's read+sleep start first
+        env = real_read(repo)  # bypass the slow read so writer's timing is tight
+        assert env is not None
+        repo.write(env.model_copy(update={"pending_intents": [{"id": "DURING_RMW"}]}))
+
+    t_updater = threading.Thread(target=updater)
+    t_writer = threading.Thread(target=writer)
+    t_updater.start()
+    t_writer.start()
+    t_updater.join()
+    t_writer.join()
+
+    monkeypatch.undo()
+    final = repo.read()
+    assert final is not None
+    intent_ids = [i.get("id") for i in final.pending_intents]
+    assert "DURING_RMW" in intent_ids, (
+        f"writer's pending_intent was clobbered by stale update_after_flush RMW; "
+        f"got pending_intents={final.pending_intents}"
+    )
+
+
 def test_update_after_flush_advances_cursors_and_preserves_rest(tmp_path: Path) -> None:
     repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
     repo.write(
