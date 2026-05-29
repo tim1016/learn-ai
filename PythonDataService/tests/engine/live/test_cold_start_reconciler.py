@@ -61,6 +61,30 @@ def test_empty_broker_and_empty_sidecar_yields_safe_to_resume(tmp_path: Path) ->
     assert result.from_bar_ms == 1_748_000_000_000
 
 
+def test_expected_order_missing_at_broker_yields_poisoned(tmp_path: Path) -> None:
+    """Sidecar believes an order is open at the broker, but the broker
+    doesn't show it. Could mean the order was cancelled out of band,
+    or it was never submitted in the first place but the sidecar lied.
+    Either way: not safe to resume.
+    """
+    repo = _seed_sidecar(
+        tmp_path / "live_state.json",
+        submitted_orders={
+            "learn-ai/spy_ema_crossover/v1/2": {
+                "perm_id": 9876543210,
+                "status": "Submitted",
+            }
+        },
+    )
+    broker = FakeBroker(open_orders_by_namespace_result=[])
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo)
+
+    assert isinstance(result, Poisoned)
+    assert result.reason == "expected_order_missing_at_broker"
+
+
 def test_unexpected_order_at_broker_yields_poisoned(tmp_path: Path) -> None:
     """Broker namespace shows an order whose client_order_id is not in
     sidecar.submitted_orders. The reconciler must refuse to resume.

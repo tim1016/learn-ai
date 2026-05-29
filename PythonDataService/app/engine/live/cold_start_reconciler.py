@@ -52,9 +52,14 @@ class ColdStartReconciler:
         assert envelope is not None  # cycle 1 happy path
 
         broker_orders = broker.open_orders_by_namespace(envelope.bot_order_namespace)
-        for order in broker_orders:
-            client_order_id = order.get("client_order_id")
-            if client_order_id not in envelope.submitted_orders:
+        broker_order_ids = {order.get("client_order_id") for order in broker_orders}
+
+        for order_id in broker_order_ids:
+            if order_id not in envelope.submitted_orders:
                 return Poisoned(reason="unexpected_order_at_broker")
+
+        for sidecar_order_id in envelope.submitted_orders:
+            if sidecar_order_id not in broker_order_ids:
+                return Poisoned(reason="expected_order_missing_at_broker")
 
         return SafeToResume(from_bar_ms=envelope.last_processed_bar_ms)
