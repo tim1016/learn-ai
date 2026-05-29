@@ -26,6 +26,8 @@ def _min_envelope(**overrides: object) -> LiveStateEnvelope:
         "run_id": "run-fixture",
         "bot_order_namespace": "learn-ai/spy_ema_crossover/v1",
         "ib_client_id": 17,
+        "last_processed_bar_ms": 1_748_000_000_000,
+        "last_artifact_flush_ms": 1_748_000_000_500,
     }
     base.update(overrides)
     return LiveStateEnvelope(**base)  # type: ignore[arg-type]
@@ -46,7 +48,7 @@ def test_read_missing_returns_none(tmp_path: Path) -> None:
 
 def test_round_trip_persists_identity_tuple(tmp_path: Path) -> None:
     repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
-    env = LiveStateEnvelope(
+    env = _min_envelope(
         strategy_instance_id="spy_ema_crossover",
         run_id="run-2026-05-28-001",
         bot_order_namespace="learn-ai/spy_ema_crossover/v1",
@@ -55,6 +57,11 @@ def test_round_trip_persists_identity_tuple(tmp_path: Path) -> None:
     repo.write(env)
     loaded = repo.read()
     assert loaded == env
+    assert loaded is not None
+    assert loaded.strategy_instance_id == "spy_ema_crossover"
+    assert loaded.run_id == "run-2026-05-28-001"
+    assert loaded.bot_order_namespace == "learn-ai/spy_ema_crossover/v1"
+    assert loaded.ib_client_id == 17
 
 
 def test_round_trip_persists_order_tracking(tmp_path: Path) -> None:
@@ -88,3 +95,19 @@ def test_order_tracking_defaults_to_empty(tmp_path: Path) -> None:
     assert loaded.submitted_orders == {}
     assert loaded.known_perm_ids == []
     assert loaded.known_exec_ids == []
+
+
+def test_round_trip_persists_position_and_bar_cursors(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    env = _min_envelope(
+        expected_position_by_symbol={"SPY": 100},
+        last_processed_bar_ms=1_748_000_000_000,
+        last_artifact_flush_ms=1_748_000_001_500,
+    )
+    repo.write(env)
+    loaded = repo.read()
+    assert loaded == env
+    assert loaded is not None
+    assert loaded.expected_position_by_symbol == {"SPY": 100}
+    assert loaded.last_processed_bar_ms == 1_748_000_000_000
+    assert loaded.last_artifact_flush_ms == 1_748_000_001_500

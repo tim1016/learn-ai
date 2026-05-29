@@ -30,6 +30,10 @@ class LiveStateEnvelope(BaseModel):
     known_perm_ids: list[int] = Field(default_factory=list)
     known_exec_ids: list[str] = Field(default_factory=list)
 
+    expected_position_by_symbol: dict[str, int] = Field(default_factory=dict)
+    last_processed_bar_ms: int = Field(gt=0)
+    last_artifact_flush_ms: int = Field(gt=0)
+
 
 class LiveStateSidecarRepo:
     def __init__(self, path: Path) -> None:
