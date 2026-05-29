@@ -50,6 +50,18 @@ class ManagedProcess:
     def pid(self) -> int:
         return self.process.pid
 
+    @property
+    def exit_classification(self) -> Literal["intentional", "crashed"] | None:
+        """Derived from exit_code: 0 → intentional, non-zero → crashed.
+
+        None until the process has exited (exit_code is None). The
+        dispatcher uses this to decide whether to restart (crashed) or
+        leave idle (intentional).
+        """
+        if self.exit_code is None:
+            return None
+        return "intentional" if self.exit_code == 0 else "crashed"
+
 
 class ProcessRegistry:
     def __init__(self) -> None:

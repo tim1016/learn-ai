@@ -66,6 +66,28 @@ def test_empty_registry_lists_no_processes() -> None:
     assert registry.status("never_registered") is None
 
 
+def test_clean_exit_classified_as_intentional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import signal as _signal
+
+    fake = FakeProcess(exit_on_signal=_signal.SIGTERM, exit_code_on_signal=0)
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: fake,
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+    stopped = registry.stop("spy_ema_crossover")
+
+    assert stopped.exit_classification == "intentional"
+
+
 def test_stop_sends_sigterm_and_records_ended_at(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
