@@ -1,0 +1,40 @@
+{
+  "schedule": {
+    "per_share_usd": "0.005",
+    "min_per_order_usd": "1.00",
+    "max_pct_of_trade_value": "0.005",
+    "rounding": "half-up to cents"
+  },
+  "cases": [
+    {
+      "description": "min-fee floor: small qty raw per-share below $1.00 minimum",
+      "quantity": 10,
+      "fill_price": "100.00",
+      "expected_fee": "1.00"
+    },
+    {
+      "description": "per-share rate: raw per-share above floor, below cap",
+      "quantity": 500,
+      "fill_price": "100.00",
+      "expected_fee": "2.50"
+    },
+    {
+      "description": "max-pct cap bites: low price, high qty so 0.5% cap dominates",
+      "quantity": 1000,
+      "fill_price": "0.50",
+      "expected_fee": "2.50"
+    },
+    {
+      "description": "SPY small order: hits the $1.00 floor",
+      "quantity": 100,
+      "fill_price": "580.00",
+      "expected_fee": "1.00"
+    },
+    {
+      "description": "SPY large order: per-share rate, floor and cap inactive",
+      "quantity": 1000,
+      "fill_price": "580.00",
+      "expected_fee": "5.00"
+    }
+  ]
+}
