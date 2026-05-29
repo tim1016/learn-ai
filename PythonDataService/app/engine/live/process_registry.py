@@ -119,8 +119,15 @@ class ProcessRegistry:
         log_path: Path,
     ) -> ManagedProcess:
         existing = self._managed.get(strategy_instance_id)
-        if existing is not None and existing.state == "running":
-            raise AlreadyRunningError(strategy_instance_id)
+        if existing is not None:
+            # Poll before deciding: a child that crashed/exited on its own
+            # still carries a stale state == "running" until someone calls
+            # status()/list(). Without this refresh, restarting the same
+            # strategy_instance_id after a crash would wrongly raise
+            # AlreadyRunningError and block crash recovery.
+            self._refresh_state(existing)
+            if existing.state == "running":
+                raise AlreadyRunningError(strategy_instance_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("a", encoding="utf-8")
         process = subprocess.Popen(

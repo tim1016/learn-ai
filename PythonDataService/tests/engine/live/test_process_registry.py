@@ -238,6 +238,43 @@ def test_cannot_start_same_strategy_twice_while_running(
     assert registry.status("spy_ema_crossover").pid == 4242
 
 
+def test_can_restart_same_strategy_after_crash_without_prior_poll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crash-recovery: a child can exit on its own, and the dispatcher
+    may immediately restart the same strategy_instance_id without first
+    calling status()/list(). start() must poll the stale entry itself —
+    otherwise it sees state == "running" and wrongly raises
+    AlreadyRunningError, blocking restart.
+    """
+    crashed = FakeProcess(pid=100)
+    restarted = FakeProcess(pid=200)
+    fakes = iter([crashed, restarted])
+    monkeypatch.setattr(
+        "app.engine.live.process_registry.subprocess.Popen",
+        lambda *_args, **_kw: next(fakes),
+    )
+
+    registry = ProcessRegistry()
+    registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+    # Child crashes on its own; no status()/list() call refreshes state.
+    crashed.returncode = 137
+
+    managed = registry.start(
+        strategy_instance_id="spy_ema_crossover",
+        command=["python", "-m", "ema"],
+        log_path=tmp_path / "ema.log",
+    )
+
+    assert managed.pid == 200
+    assert managed.state == "running"
+    assert registry.status("spy_ema_crossover").pid == 200
+
+
 def test_two_distinct_strategies_register_concurrently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
