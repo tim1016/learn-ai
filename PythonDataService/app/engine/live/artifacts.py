@@ -29,6 +29,8 @@ TODO in ``app/engine/live/live_engine.py``.
 from __future__ import annotations
 
 import logging
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -267,6 +269,18 @@ class ExecutionRow:
                 f"ExecutionRow.execution_source={self.execution_source!r} "
                 f"not in {sorted(EXECUTION_SOURCE_VALUES)}"
             )
+
+
+def commission_observed_count(fees: Iterable[float | None]) -> int:
+    """COMMISSION_OBSERVED metric (PRD-B story 2): count of fills whose
+    commission was successfully captured — fee present and not NaN.
+
+    Derived from the execution artifact's ``fee`` column so the count can
+    never drift from what was actually recorded. A NaN fee is a commission
+    the broker has not yet reported (the commissionReport had not arrived
+    when the fill was written); it does not count as observed.
+    """
+    return sum(1 for f in fees if f is not None and not math.isnan(float(f)))
 
 
 # ──────────────────────────── Trade rows ─────────────────────────────

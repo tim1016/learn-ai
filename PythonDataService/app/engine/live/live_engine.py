@@ -834,7 +834,10 @@ class LiveEngine:
                 symbol=event.symbol,
                 fill_quantity=int(event.fill_quantity),
                 fill_price=float(event.fill_price),
-                fee=float(event.fee),
+                # Record the broker's reported commission; NaN when not yet
+                # reported, so a missing fee stays distinguishable from a
+                # genuine zero downstream and is never fabricated (PRD-B).
+                fee=float(event.recorded_fee) if event.recorded_fee is not None else float("nan"),
             )
         )
 
@@ -1343,10 +1346,12 @@ class LiveEngine:
         fill_price = Decimal(str(price_source))
         direction = Direction.LONG if signed_fill_qty > 0 else Direction.SHORT
         fill_time = datetime.fromtimestamp(fill.ts_ms / 1000, tz=UTC).astimezone(_ENGINE_TZ)
-        # Commission is reported separately by IBKR (commissionReport
-        # callback, not order-status events). Fee-tolerance reconciliation
-        # is the Phase-9 paper-vs-broker step; keep this fee zero here so
-        # the live receipt does not silently invent a commission number.
+        # Commission is reported by IBKR a beat after the execution; PRD-B reads
+        # it off the polled Fill (see orders._fill_to_event). ``recorded_fee``
+        # preserves the unknown (None) so the execution artifact never invents a
+        # zero; the portfolio-facing ``fee`` is 0 when unknown so cash math is
+        # never poisoned, and the real commission once reported.
+        recorded_fee = Decimal(str(fill.fee)) if fill.fee is not None else None
         return OrderEvent(
             order_id=int(fill.order_id),
             symbol=meta.symbol,
@@ -1354,6 +1359,7 @@ class LiveEngine:
             fill_price=fill_price,
             fill_quantity=signed_fill_qty,
             direction=direction,
-            fee=Decimal("0"),
+            fee=recorded_fee if recorded_fee is not None else Decimal("0"),
+            recorded_fee=recorded_fee,
             tag=meta.tag,
         )

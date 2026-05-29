@@ -423,6 +423,11 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
     exec_obj = getattr(fill, "execution", None)
     exec_id = getattr(exec_obj, "execId", None) if exec_obj is not None else None
     client_id_raw = getattr(exec_obj, "clientId", None) if exec_obj is not None else None
+    # Commission rides on the polled Fill once IBKR reports it (a beat after the
+    # execution). Read it off the cached object — no eventkit subscription, per
+    # this module's poll-based design. None until reported (PRD-B).
+    commission_obj = getattr(fill, "commissionReport", None)
+    fee = getattr(commission_obj, "commission", None) if commission_obj is not None else None
     return IbkrOrderEvent(
         account_id=account_id,
         order_id=int(trade.order.orderId),
@@ -437,6 +442,7 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
+        fee=float(fee) if fee is not None else None,
         ts_ms=_now_ms(),
     )
 

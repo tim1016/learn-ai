@@ -77,3 +77,10 @@ class OrderEvent:
     direction: Direction
     fee: Decimal
     tag: str = ""
+    # The commission the broker actually reported for this fill, or ``None``
+    # when not yet reported. ``fee`` above is portfolio-facing (0 when unknown,
+    # so cash math never sees NaN); ``recorded_fee`` preserves the unknown for
+    # the execution artifact so a missing commission is never written as a
+    # fabricated zero (PRD-B). Only the live IBKR fill path sets this; backtest
+    # fills leave it ``None`` (they do not flow through the live receipt writer).
+    recorded_fee: Decimal | None = None
