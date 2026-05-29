@@ -21,6 +21,11 @@ _SEQ_RE = re.compile(r"^command\.(\d+)\.")
 
 class CommandVerb(StrEnum):
     PAUSE = "PAUSE"
+    RESUME = "RESUME"
+    STOP = "STOP"
+    FLATTEN = "FLATTEN"
+    RECONCILE = "RECONCILE"
+    MARK_POISONED = "MARK_POISONED"
 
 
 class Command(BaseModel):

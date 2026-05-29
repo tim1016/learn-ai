@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 
 
@@ -45,6 +47,24 @@ def test_orphan_pending_tmp_is_invisible_to_read_pending(tmp_path: Path) -> None
     )
     channel = CommandChannel(commands_dir)
     assert channel.read_pending() == []
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        CommandVerb.PAUSE,
+        CommandVerb.RESUME,
+        CommandVerb.STOP,
+        CommandVerb.FLATTEN,
+        CommandVerb.RECONCILE,
+        CommandVerb.MARK_POISONED,
+    ],
+)
+def test_full_verb_vocabulary_round_trips(tmp_path: Path, verb: CommandVerb) -> None:
+    channel = CommandChannel(tmp_path / "commands")
+    channel.write_from_operator(verb)
+    [pending] = channel.read_pending()
+    assert pending.verb is verb
 
 
 def test_ack_renames_pending_to_ack_and_clears_pending_queue(tmp_path: Path) -> None:
