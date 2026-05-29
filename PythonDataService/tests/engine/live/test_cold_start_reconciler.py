@@ -235,6 +235,30 @@ def test_fill_arrived_after_last_flush_yields_safe_with_recovered_fill(
     assert result.recovered_fills[0]["client_order_id"] == "learn-ai/spy_ema_crossover/v1/2"
 
 
+def test_poisoned_outcome_writes_poisoned_flag(tmp_path: Path) -> None:
+    """When verify returns Poisoned and a run_dir was supplied, the
+    reconciler writes <run_dir>/poisoned.flag with the reason. The
+    file is the cross-process signal to the engine and any operator
+    tooling that this run must not submit new orders.
+    """
+    repo = _seed_sidecar(tmp_path / "live_state.json")
+    broker = FakeBroker(
+        open_orders_by_namespace_result=[
+            {"client_order_id": "rogue", "perm_id": 1234567}
+        ],
+    )
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir()
+    reconciler = ColdStartReconciler()
+
+    result = reconciler.verify(broker=broker, sidecar=repo, run_dir=run_dir)
+
+    assert isinstance(result, Poisoned)
+    flag_path = run_dir / "poisoned.flag"
+    assert flag_path.exists()
+    assert "unexpected_order_at_broker" in flag_path.read_text(encoding="utf-8")
+
+
 def test_unexpected_order_at_broker_yields_poisoned(tmp_path: Path) -> None:
     """Broker namespace shows an order whose client_order_id is not in
     sidecar.submitted_orders. The reconciler must refuse to resume.

@@ -13,7 +13,11 @@ one side effect.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 
@@ -52,6 +56,19 @@ class ColdStartReconciler:
         broker: _BrokerProtocol,
         sidecar: "LiveStateSidecarRepo",  # noqa: F821 — forward string ref
         shadow_mode: bool = False,
+        run_dir: Path | None = None,
+    ) -> ReconciliationResult:
+        result = self._verify_inner(broker=broker, sidecar=sidecar, shadow_mode=shadow_mode)
+        if isinstance(result, Poisoned) and run_dir is not None:
+            _write_poisoned_flag(run_dir, result.reason)
+        return result
+
+    def _verify_inner(
+        self,
+        *,
+        broker: _BrokerProtocol,
+        sidecar: "LiveStateSidecarRepo",  # noqa: F821 — forward string ref
+        shadow_mode: bool,
     ) -> ReconciliationResult:
         envelope = sidecar.read()
         assert envelope is not None  # cycle 1 happy path
@@ -101,3 +118,36 @@ class ColdStartReconciler:
             from_bar_ms=envelope.last_processed_bar_ms,
             recovered_fills=recovered_fills,
         )
+
+
+def _write_poisoned_flag(run_dir: Path, reason: str) -> None:
+    """Atomically write <run_dir>/poisoned.flag with the reason.
+
+    Mirrors the LiveStateSidecar atomic-write pattern: tempfile, fsync,
+    os.replace, parent-dir fsync on POSIX. The flag is the cross-process
+    signal to the engine and operator tooling that this run must not
+    submit new orders. Atomicity matters because partial writes from a
+    crash here would leave a half-written flag that downstream
+    parsing might either miss or misinterpret.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    target = run_dir / "poisoned.flag"
+    tmp = target.with_suffix(".flag.tmp")
+    payload = reason.encode("utf-8")
+    with open(tmp, "wb") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        os.replace(tmp, target)
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    if sys.platform != "win32":
+        dir_fd = os.open(run_dir, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(dir_fd)
