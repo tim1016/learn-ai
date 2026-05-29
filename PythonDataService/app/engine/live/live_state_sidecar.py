@@ -80,6 +80,30 @@ class LiveStateSidecarRepo:
         except (ValidationError, ValueError) as exc:
             raise LiveStateSidecarCorruptError(self._path, exc) from exc
 
+    def update_after_flush(
+        self, *, last_processed_bar_ms: int, last_artifact_flush_ms: int
+    ) -> None:
+        """Advance the bar/flush cursors on the existing envelope.
+
+        Read-modify-write under the same atomic-write contract: read the
+        current envelope, replace just the two cursor fields, write it
+        back. Every other field is preserved verbatim. Called by the
+        engine after a successful artifact flush.
+        """
+        existing = self.read()
+        if existing is None:
+            raise FileNotFoundError(
+                f"cannot update flush cursors: no live-state sidecar at {self._path}"
+            )
+        self.write(
+            existing.model_copy(
+                update={
+                    "last_processed_bar_ms": last_processed_bar_ms,
+                    "last_artifact_flush_ms": last_artifact_flush_ms,
+                }
+            )
+        )
+
     def write(self, envelope: LiveStateEnvelope) -> None:
         """Atomic write under advisory lock: serialise to a sibling .tmp,
         fsync, os.replace.

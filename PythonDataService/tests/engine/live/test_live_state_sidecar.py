@@ -210,6 +210,33 @@ def test_stable_path_keys_directory_on_strategy_instance_id(tmp_path: Path) -> N
     assert ema.parent != vwap.parent
 
 
+def test_update_after_flush_advances_cursors_and_preserves_rest(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    repo.write(
+        _min_envelope(
+            run_id="r1",
+            submitted_orders={"learn-ai/spy_ema_crossover/v1/2": {"perm_id": 42}},
+            known_perm_ids=[42],
+            expected_position_by_symbol={"SPY": 100},
+            last_processed_bar_ms=1_748_000_000_000,
+            last_artifact_flush_ms=1_748_000_000_500,
+        )
+    )
+    repo.update_after_flush(
+        last_processed_bar_ms=1_748_000_900_000,
+        last_artifact_flush_ms=1_748_000_901_500,
+    )
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.last_processed_bar_ms == 1_748_000_900_000
+    assert loaded.last_artifact_flush_ms == 1_748_000_901_500
+    # Every other field preserved verbatim.
+    assert loaded.run_id == "r1"
+    assert loaded.submitted_orders == {"learn-ai/spy_ema_crossover/v1/2": {"perm_id": 42}}
+    assert loaded.known_perm_ids == [42]
+    assert loaded.expected_position_by_symbol == {"SPY": 100}
+
+
 def test_concurrent_writers_serialize_without_error(tmp_path: Path) -> None:
     """Two threads writing the same sidecar must not race on the shared
     tempfile name. Without serialisation the loser's os.replace finds
