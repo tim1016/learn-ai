@@ -84,3 +84,17 @@ class OrderEvent:
     # fabricated zero (PRD-B). Only the live IBKR fill path sets this; backtest
     # fills leave it ``None`` (they do not flow through the live receipt writer).
     recorded_fee: Decimal | None = None
+    # Execution provenance for the live receipt (PRD-A schema, PRD-C shadow).
+    # Real broker fills default to ``broker_fill``; the NoSubmitBrokerAdapter
+    # stamps ``shadow_sim`` + the source bar it synthesised the fill from so
+    # the receipt writer can never confuse simulated fills with real ones.
+    execution_source: str = "broker_fill"
+    fill_model: str = "NEXT_BAR_OPEN"
+    source_bar_close_ms: int | None = None
+    # Broker-primary-key identifiers carried through to the receipt. When set
+    # (shadow fills carry the simulator's ``shadow:``-prefixed ids), the writer
+    # uses them verbatim so the shadow invariant — simulated exec_ids can never
+    # collide with a real IBKR execId — survives into executions.parquet. When
+    # None (real broker fills today), the writer falls back to synthesised ids.
+    exec_id: str | None = None
+    client_order_id: str | None = None
