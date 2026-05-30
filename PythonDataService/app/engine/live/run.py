@@ -17,6 +17,12 @@ Subcommands:
     contaminated-account case in § 7.2 #6. Requires ``--confirm`` +
     ``--account``; logs every action to
     ``<run_dir>/emergency_flatten.log``.
+  * ``pause`` / ``resume`` / ``stop`` — set the durable operator
+    desired-state for a strategy_instance_id (PRD-A § 16.4 Resolution
+    7 / PR-D). Writes ``desired_state.json`` under
+    ``<artifacts-root>/live_state/<strategy_instance_id>/``; survives
+    crash + reboot. ``start`` reads it: PAUSED boots paused, STOPPED
+    refuses to start.
 
 Subcommands deferred to subsequent PRs:
   * ``reconcile`` — invoke ``app.engine.live.reconcile`` post-force-flat.
@@ -678,6 +684,48 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     _artifacts_root = getattr(args, "artifacts_root", Path("PythonDataService/artifacts"))
 
+    # Durable operator desired-state gate (PRD-A § 16.4 Resolution 7 /
+    # PR-D). Keyed by strategy_instance_id (== args.strategy), it
+    # outlives any single run_id: a bot PAUSED before a crash resumes
+    # paused; a STOPPED bot refuses to restart on its own. A corrupt
+    # control file is a refusal, never a clean restart — same invariant
+    # as poisoned.flag above.
+    from app.engine.live.desired_state import (
+        DesiredState,
+        DesiredStateCorruptError,
+        DesiredStateRepo,
+        stable_desired_state_path,
+    )
+
+    desired_state_path = stable_desired_state_path(_artifacts_root, args.strategy)
+    desired_repo = DesiredStateRepo(desired_state_path)
+    try:
+        desired = desired_repo.read_state()
+    except DesiredStateCorruptError as exc:
+        print(
+            f"[START] desired_state.json at {desired_state_path} is corrupted: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    if desired is DesiredState.STOPPED:
+        print(
+            f"[START] HALT — desired_state=STOPPED for {args.strategy} "
+            f"({desired_state_path}). § 16.4 Resolution 7: clear it with "
+            f"'run.py resume' before the bot will start.",
+            file=sys.stderr,
+        )
+        return 1
+    start_paused = desired is DesiredState.PAUSED
+    if start_paused:
+        logger.info(
+            "Booting paused: durable desired_state=PAUSED for %s",
+            args.strategy,
+            extra={"step": "0"},
+        )
+
+    def _write_desired_state(state: DesiredState, reason: str) -> None:
+        desired_repo.set(state, updated_by="engine", reason=reason, now_ms=now_ms())
+
     # Resolve the decision-row schema + provenance from the strategy spec
     # the ledger pins (PRD-A §16.1 Resolution 5). Loaded BEFORE the client
     # so spec.client_id can pin the Gateway clientId (§16.3 isolation
@@ -750,6 +798,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         strategy_spec_sha=ledger.strategy_spec_sha256,
         live_state_writer=live_state_writer,
         command_channel=command_channel,
+        start_paused=start_paused,
+        desired_state_writer=_write_desired_state,
         run_id=ledger.run_id,
         strategy_key=args.strategy,
         strategy_instance_id=args.strategy,
@@ -1096,6 +1146,52 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
 # ──────────────────────────── Argparse ───────────────────────────────
 
 
+# ──────────────────── desired-state subcommands (PR-D) ───────────────
+
+
+def _cmd_set_desired_state(args: argparse.Namespace, state) -> int:
+    """Shared body for pause/resume/stop: atomically set the durable
+    desired-state for a strategy_instance_id (PRD-A § 16.4 Resolution 7).
+    """
+    from app.engine.live.desired_state import (
+        DesiredStateRepo,
+        stable_desired_state_path,
+    )
+    from app.engine.live.run_status import now_ms
+
+    path = stable_desired_state_path(args.artifacts_root, args.strategy_instance_id)
+    repo = DesiredStateRepo(path)
+    record = repo.set(
+        state,
+        updated_by=args.updated_by,
+        reason=args.reason,
+        now_ms=now_ms(),
+    )
+    print(
+        f"[DESIRED-STATE] {args.strategy_instance_id} -> {record.desired_state.value} "
+        f"(version {record.version}) at {path}"
+    )
+    return 0
+
+
+def cmd_pause(args: argparse.Namespace) -> int:
+    from app.engine.live.desired_state import DesiredState
+
+    return _cmd_set_desired_state(args, DesiredState.PAUSED)
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    from app.engine.live.desired_state import DesiredState
+
+    return _cmd_set_desired_state(args, DesiredState.RUNNING)
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    from app.engine.live.desired_state import DesiredState
+
+    return _cmd_set_desired_state(args, DesiredState.STOPPED)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m app.engine.live.run",
@@ -1266,6 +1362,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required. Without this flag the subcommand refuses (typo-proofing).",
     )
     flatten.set_defaults(func=cmd_emergency_flatten)
+
+    # pause / resume / stop — durable desired-state verbs (PR-D).
+    for verb, handler, helptext in (
+        ("pause", cmd_pause, "Set durable desired-state PAUSED for a strategy instance."),
+        ("resume", cmd_resume, "Set durable desired-state RUNNING (clears PAUSED/STOPPED)."),
+        ("stop", cmd_stop, "Set durable desired-state STOPPED; 'start' will then refuse."),
+    ):
+        verb_parser = sub.add_parser(verb, help=helptext)
+        verb_parser.add_argument(
+            "--strategy-instance-id",
+            required=True,
+            dest="strategy_instance_id",
+            help="Strategy instance id (the same value passed as 'start --strategy').",
+        )
+        verb_parser.add_argument(
+            "--artifacts-root",
+            type=Path,
+            default=Path("PythonDataService/artifacts"),
+            help="Root for cross-session artifacts; must match 'start --artifacts-root'.",
+        )
+        verb_parser.add_argument(
+            "--reason", default=None, help="Optional operator note recorded in the file."
+        )
+        verb_parser.add_argument(
+            "--updated-by", default="operator", help="Identity recorded in the file."
+        )
+        verb_parser.set_defaults(func=handler)
 
     return parser
 
