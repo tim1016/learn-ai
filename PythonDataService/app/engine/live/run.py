@@ -97,6 +97,11 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
     check is the gate that makes ``code_sha`` (set to git HEAD) the
     *actual* identity of the running code, not just a "close enough"
     hint.
+
+    Persists ``--strategy-instance-id`` (UI-0) into the ledger (schema
+    1.1) so a fresh, pre-decision run has an O(1)
+    ``run_id -> strategy_instance_id`` mapping. It is NOT hashed into
+    ``run_id``; omitting it records an empty binding (legacy / unknown).
     """
     repo_root: Path = args.repo_root.resolve()
     scope_paths = [Path(p) for p in args.clean_tree_scope]
@@ -135,6 +140,7 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
             account_id=args.account_id,
             start_date_ms=args.start_date_ms,
             live_config=live_config,
+            strategy_instance_id=args.strategy_instance_id,
         )
     except FileNotFoundError as exc:
         print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
@@ -684,12 +690,31 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     _artifacts_root = getattr(args, "artifacts_root", Path("PythonDataService/artifacts"))
 
+    # UI-0 identity binding: resolve the strategy_instance_id from the
+    # ledger (schema 1.1). It is the durable key for the desired-state
+    # sidecar, the live-state sidecar, and LiveEngine. A legacy/empty
+    # ledger (schema 1.0, or 1.1 with no binding) falls back to
+    # --strategy so older runs still operate, but the operator is warned
+    # because there is then no O(1) run_id -> strategy_instance_id mapping
+    # for the UI to key the durable controls off. --strategy stays the
+    # algorithm MODULE / strategy_key used for dynamic import below.
+    strategy_instance_id = ledger.strategy_instance_id or args.strategy
+    if not ledger.strategy_instance_id:
+        logger.warning(
+            "no strategy_instance_id binding in ledger (schema_version=%s); "
+            "falling back to --strategy=%r as the instance id. The durable "
+            "desired-state and live-state sidecars will be keyed off this "
+            "fallback, not a ledger-persisted identity.",
+            ledger.schema_version,
+            args.strategy,
+        )
+
     # Durable operator desired-state gate (PRD-A § 16.4 Resolution 7 /
-    # PR-D). Keyed by strategy_instance_id (== args.strategy), it
-    # outlives any single run_id: a bot PAUSED before a crash resumes
-    # paused; a STOPPED bot refuses to restart on its own. A corrupt
-    # control file is a refusal, never a clean restart — same invariant
-    # as poisoned.flag above.
+    # PR-D). Keyed by the resolved strategy_instance_id, it outlives any
+    # single run_id: a bot PAUSED before a crash resumes paused; a
+    # STOPPED bot refuses to restart on its own. A corrupt control file is
+    # a refusal, never a clean restart — same invariant as poisoned.flag
+    # above.
     from app.engine.live.desired_state import (
         DesiredState,
         DesiredStateCorruptError,
@@ -697,7 +722,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         stable_desired_state_path,
     )
 
-    desired_state_path = stable_desired_state_path(_artifacts_root, args.strategy)
+    desired_state_path = stable_desired_state_path(_artifacts_root, strategy_instance_id)
     desired_repo = DesiredStateRepo(desired_state_path)
     try:
         desired = desired_repo.read_state()
@@ -709,7 +734,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 1
     if desired is DesiredState.STOPPED:
         print(
-            f"[START] HALT — desired_state=STOPPED for {args.strategy} "
+            f"[START] HALT — desired_state=STOPPED for {strategy_instance_id} "
             f"({desired_state_path}). § 16.4 Resolution 7: clear it with "
             f"'run.py resume' before the bot will start.",
             file=sys.stderr,
@@ -719,7 +744,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     if start_paused:
         logger.info(
             "Booting paused: durable desired_state=PAUSED for %s",
-            args.strategy,
+            strategy_instance_id,
             extra={"step": "0"},
         )
 
@@ -767,7 +792,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # LiveEngine._persist_live_state so a sidecar I/O hiccup doesn't
     # crash the bar loop.
     live_state_writer = _build_live_state_writer(
-        strategy_instance_id=args.strategy,
+        strategy_instance_id=strategy_instance_id,
         run_id=ledger.run_id,
         client=client,
         artifacts_root=_artifacts_root,
@@ -802,7 +827,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         desired_state_writer=_write_desired_state,
         run_id=ledger.run_id,
         strategy_key=args.strategy,
-        strategy_instance_id=args.strategy,
+        strategy_instance_id=strategy_instance_id,
         run_mode=run_mode,
         bar_source=bar_source,
         decision_columns=decision_columns,
@@ -1215,6 +1240,19 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--qc-audit-copy-path", type=Path, required=True)
     init.add_argument("--qc-cloud-backtest-id", required=True)
     init.add_argument("--account-id", required=True, help="IBKR account ID, e.g. DU1234567.")
+    init.add_argument(
+        "--strategy-instance-id",
+        dest="strategy_instance_id",
+        default="",
+        help=(
+            "Stable identifier for the configured strategy instance (UI-0). "
+            "Persisted in run_ledger.json (schema 1.1) and used to key the "
+            "durable desired-state sidecar at "
+            "artifacts/live_state/<strategy_instance_id>/. NOT part of the "
+            "run_id hash. Omit for a legacy/unknown binding (empty); 'start' "
+            "then falls back to --strategy with a warning."
+        ),
+    )
     init.add_argument("--start-date-ms", type=int, required=True, help="int64 ms UTC of the run-start session.")
     init.add_argument(
         "--live-config-json",
@@ -1288,8 +1326,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--strategy",
         default="spy_ema_crossover",
         help=(
-            "Strategy module under app.engine.strategy.algorithms (snake_case). "
-            "Class name is inferred (PascalCase + 'Algorithm')."
+            "Strategy module / strategy_key under app.engine.strategy.algorithms "
+            "(snake_case). Class name is inferred (PascalCase + 'Algorithm'). "
+            "This is the algorithm family, NOT the instance id: the durable "
+            "strategy_instance_id comes from run_ledger.json (schema 1.1). When "
+            "the ledger has no binding (legacy), this value is used as the "
+            "instance id fallback."
         ),
     )
     start.add_argument(
