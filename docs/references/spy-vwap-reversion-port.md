@@ -1,7 +1,10 @@
 # SPY 1-min VWAP-band reversion — port notes (PRD-C / PR-K)
 
-**Status:** `pending-fixture` — reference algorithm authored; awaiting the
-QuantConnect orders export to pin the golden fixture and the Python port.
+**Status:** `reconciled` (decision-level, 2026-05-29) — Python port matches
+the QuantConnect reference trade-by-trade at the decision level; residual
+fill-price drift is the documented QC-vs-Polygon vendor floor. See
+`docs/references/reconciliations/spy-vwap-reversion.md`. Live shadow
+onboarding (spec JSON + decision-column publishing) is PR-L.
 
 ## What is being ported
 
@@ -60,12 +63,19 @@ cash-buffer rounding so the port reproduces the share count exactly.
    - run `qc_reconciler` to prove trade-by-trade parity, and
    - write the `spy_vwap_reversion.spec.json` (shadow, `clientId=43`).
 
-## Open items (filled in when the fixture lands)
+## Open items
 
-- [ ] QC orders export captured → `tests/fixtures/golden/spy-vwap-reversion-qc/`
-- [ ] Polygon 1-min SPY price-history fixture for the same window
-- [ ] `SessionAnchoredVwap` + `RollingDistanceSigma` indicators + golden fixtures
-- [ ] `SpyVwapReversionAlgorithm` Python port
-- [ ] `qc_reconciler` parity report (0 gating divergences)
-- [ ] `spy_vwap_reversion.spec.json` (submit_mode=shadow, clientId=43, decision_columns)
-- [ ] Documented tolerance + any reference divergence
+- [x] QC orders export captured → `tests/fixtures/golden/spy-vwap-reversion-qc/`
+- [x] 1-min SPY price-history fixture (committed LEAN minute cache, 5 sessions)
+- [x] `SessionAnchoredVwap` + `RollingDistanceSigma` indicators + parity tests
+- [x] `SpyVwapReversionAlgorithm` Python port
+- [x] `qc_reconciler` parity: decision-level exact; fill drift within documented
+      data-source floor (`docs/references/reconciliations/spy-vwap-reversion.md`)
+- [x] Documented tolerance + the 2 confirmed data-source divergences
+- [ ] **(PR-L)** `spy_vwap_reversion.spec.json` (submit_mode=shadow, clientId=43,
+      decision_columns) — needs a generalized `DecisionSnapshot` (the current
+      one is EMA-shaped: ema5/ema10/rsi). The port produces correct *trades*
+      today; publishing VWAP *decision columns* for the live shadow run is
+      onboarding work.
+- [ ] **(PR-L)** Register under `ProcessRegistry`; shadow smoke run via
+      `NoSubmitBrokerAdapter` (PR-J, merged).

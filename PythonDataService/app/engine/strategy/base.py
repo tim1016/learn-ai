@@ -168,6 +168,16 @@ class StrategyContext:
         assert self.current_time is not None
         self.portfolio.liquidate(symbol.upper(), self.current_time)
 
+    def market_order(self, symbol: str, quantity: int, tag: str = "") -> None:
+        """Submit a fixed-quantity market order (signed: + buy, − sell).
+
+        For strategies that size by a fixed share count rather than a
+        portfolio fraction (e.g. the VWAP-reversion port, which mirrors a
+        fixed-quantity reference). Delegates to the portfolio's
+        ``submit_market_order``."""
+        assert self.current_time is not None
+        self.portfolio.submit_market_order(symbol.upper(), quantity, self.current_time, tag)
+
     def emit_insight(self, insight: Insight) -> None:
         """Register a structured prediction.
 

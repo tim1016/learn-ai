@@ -84,6 +84,12 @@ class LiveContext:
             raise RuntimeError("liquidate requires a current live bar time")
         self.portfolio.liquidate(symbol.upper(), self.current_time)
 
+    def market_order(self, symbol: str, quantity: int, tag: str = "") -> None:
+        """Submit a fixed-quantity market order (signed: + buy, − sell)."""
+        if self.current_time is None:
+            raise RuntimeError("market_order requires a current live bar time")
+        self.portfolio.submit_market_order(symbol.upper(), quantity, self.current_time, tag)
+
     def emit_insight(self, insight: Insight) -> None:
         if self.current_time is not None:
             insight.generated_time = self.current_time
