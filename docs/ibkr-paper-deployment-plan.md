@@ -627,6 +627,13 @@ As of PR #387 / PR-D, the shipped Angular surface is `Frontend/src/app/component
 
 #### Required additions after PR-D
 
+0. **Persist the run → strategy-instance identity binding before UI-1.**
+   - Current gap: `run_id` is derived from `run_ledger.json` identity inputs, while `strategy_instance_id` is supplied later to `run.py start` as `--strategy` and is not written to `run_ledger.json` or `run_status.json`. A fresh run with no decisions has no durable `run_id -> strategy_instance_id` mapping, so `/api/live-runs/{run_id}/status` cannot locate `artifacts/live_state/<strategy_instance_id>/desired_state.json`.
+   - Decision: write `strategy_instance_id` into `run_ledger.json` at `init-ledger` time. The ledger is the run's identity record and exists before the engine starts, before warmup, and before the first decision row. This is the only place that gives the UI an O(1), pre-decision mapping.
+   - Plumbing: add an explicit `--strategy-instance-id` argument to `init-ledger` and `LiveRunLedger`. Include it in the run-id identity payload unless the migration deliberately chooses `schema_version="1.1"` with documented hash semantics. Then make `start` prefer `ledger.strategy_instance_id`; `--strategy` remains the algorithm module / strategy key and must match or be derived consistently from the spec/ledger.
+   - Back-compat: existing ledgers without the field render `strategy_instance_id: null`, `desired_state.path_status: "unknown_no_ledger_binding"`, and no desired-state controls. Do not fall back to the first decision row except as a clearly labeled diagnostic because it is absent in the operator-critical pre-warmup window.
+   - Tests: run-ledger schema/hash tests, `init-ledger` CLI parser/writer tests, `start` mismatch/refusal tests if `--strategy` conflicts with ledger identity, and live-runs router tests for missing legacy binding.
+
 1. **Expose durable desired state as first-class status.**
    - Backend: extend the live-runs status response with `strategy_instance_id` and `desired_state: { state, updated_at_ms, updated_by, reason, version, path_status }`.
    - Source: `DesiredStateRepo` at `artifacts/live_state/<strategy_instance_id>/desired_state.json`.
@@ -667,6 +674,7 @@ As of PR #387 / PR-D, the shipped Angular surface is `Frontend/src/app/component
 
 | Slice | Scope | Acceptance |
 |---|---|---|
+| **UI-0 — Identity binding** | Persist `strategy_instance_id` in `run_ledger.json` at `init-ledger`; update `LiveRunLedger`, run-id hash/version semantics, CLI args, host-daemon start assumptions, and legacy-read behavior. | A fresh pre-decision run has an O(1) `run_id -> strategy_instance_id` binding; legacy runs are explicit `unknown`, not guessed from parquet. |
 | **UI-1 — Status contract** | Add desired-state fields and command summary to `app.schemas.live_runs`, `app.routers.live_runs`, TS types, and service tests. | API returns accurate absent/PAUSED/STOPPED/corrupt states; no timestamp strings; existing observer UI still renders. |
 | **UI-2 — Read-only clarity pass** | Update Paper Run Observer top strip and cards to distinguish process state, run state, desired state, flags, and data provenance. | Playwright/Vitest assertions cover each operator state; no control writes yet. |
 | **UI-3 — Durable intent controls** | Add Pause / Resume / Stop strategy controls backed by durable desired-state write API. | Button click writes the sidecar, UI reloads to the new state, corrupt sidecar blocks with clear error. |
