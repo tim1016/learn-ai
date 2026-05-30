@@ -229,6 +229,38 @@ def test_unexpected_position_fails_on_short_strategy_symbol() -> None:
     assert "short_position" in str(result.data)
 
 
+def test_unexpected_position_excludes_sibling_managed_symbol() -> None:
+    """Two managed instances on one account (SPY + QQQ): the SPY instance must
+    not flag the sibling's QQQ position as contamination (#395 regression)."""
+    snap = _Snap(positions=[_Pos(symbol="SPY", quantity=100), _Pos(symbol="QQQ", quantity=50)])
+    result = check_unexpected_position(
+        snap, expected_symbol="SPY", managed_symbols={"SPY", "QQQ"}
+    )
+    assert result.passed is True
+
+
+def test_unexpected_position_still_fails_on_foreign_symbol_outside_managed_set() -> None:
+    """A symbol owned by no managed instance is still foreign contamination."""
+    snap = _Snap(positions=[_Pos(symbol="SPY", quantity=100), _Pos(symbol="GOOG", quantity=10)])
+    result = check_unexpected_position(
+        snap, expected_symbol="SPY", managed_symbols={"SPY", "QQQ"}
+    )
+    assert result.passed is False
+    assert "non_strategy_symbol" in str(result.data)
+    assert "GOOG" in str(result.data)
+    assert "QQQ" not in str(result.data)
+
+
+def test_unexpected_position_still_fails_on_short_own_symbol_within_managed_set() -> None:
+    """A short in the instance's own symbol fails even when a managed set is given."""
+    snap = _Snap(positions=[_Pos(symbol="SPY", quantity=-100)])
+    result = check_unexpected_position(
+        snap, expected_symbol="SPY", managed_symbols={"SPY", "QQQ"}
+    )
+    assert result.passed is False
+    assert "short_position" in str(result.data)
+
+
 # ──────────────────────────── check_run_state_intact ─────────────────
 
 

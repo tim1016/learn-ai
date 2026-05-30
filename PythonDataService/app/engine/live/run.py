@@ -216,7 +216,18 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        checks.append(check_unexpected_position(snapshot, expected_symbol=args.expected_symbol))
+        managed_symbols = (
+            {s.strip() for s in args.managed_symbols.split(",") if s.strip()}
+            if args.managed_symbols
+            else None
+        )
+        checks.append(
+            check_unexpected_position(
+                snapshot,
+                expected_symbol=args.expected_symbol,
+                managed_symbols=managed_symbols,
+            )
+        )
     else:
         print(
             "[PRE-FLIGHT] skipping unexpected-position check "
@@ -899,6 +910,10 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # not an operator-error condition. Exit 2 would imply
                 # bad args or missing files.
                 return 3
+            # managed_symbols defaults to {symbol} here: a subprocess started in
+            # isolation does not yet know its sibling instances. The host daemon
+            # injects the fleet's sibling symbols at launch (#392) so a sibling's
+            # position is not misread as foreign contamination (ADR 0005).
             position_check = check_unexpected_position(positions, expected_symbol=live_config.symbol)
             if not position_check.passed:
                 print(
@@ -1311,6 +1326,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-symbol",
         default="SPY",
         help="Symbol expected for the running strategy (long-only). Used by the position check.",
+    )
+    pre.add_argument(
+        "--managed-symbols",
+        default=None,
+        help=(
+            "Comma-separated symbols owned by sibling managed strategy instances on this "
+            "account. Positions in these symbols are excluded from this instance's "
+            "unexpected-position verdict (ADR 0005; fleet contamination is separate). "
+            "Defaults to just --expected-symbol."
+        ),
     )
     pre.set_defaults(func=cmd_pre_flight)
 

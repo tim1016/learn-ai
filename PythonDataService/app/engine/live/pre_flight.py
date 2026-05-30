@@ -208,27 +208,48 @@ class _PositionsLike(Protocol):
 
 
 def check_unexpected_position(
-    snapshot: _PositionsLike, *, expected_symbol: str
+    snapshot: _PositionsLike,
+    *,
+    expected_symbol: str,
+    managed_symbols: set[str] | None = None,
 ) -> CheckResult:
-    """Refuse to run if the broker has a non-strategy position open.
+    """Refuse to run if the broker holds a position this strategy instance
+    cannot account for.
 
-    "Unexpected" means: any position whose symbol is not
-    ``expected_symbol``, OR a short position in ``expected_symbol`` (the
-    SPY EMA strategy is long-only). Both indicate the account is in a
-    state the runner cannot model — could be a manual override, a
-    leftover from a prior halted run, or a foreign client. Either way,
-    don't trade.
+    Two failure shapes flag the account as unmodellable:
+
+    - a **short** position in ``expected_symbol`` (the strategy is long-only);
+    - a position in a symbol **outside all managed namespaces** — a
+      foreign/manual position or a leftover from a prior halted run.
+
+    ``managed_symbols`` is the union of symbols owned by every managed
+    strategy instance on this account (including this one). A position in a
+    *sibling* managed instance's symbol is **not** this instance's
+    contamination and is excluded from the verdict — otherwise two managed
+    instances on one account each falsely flag the other. The per-instance
+    gate is self-consistency only; account-level contamination is a separate
+    fleet concern (ADR 0005). When ``managed_symbols`` is ``None`` the managed
+    set is just ``{expected_symbol}``, preserving the original
+    single-instance behaviour; the host daemon widens it with sibling
+    symbols (#392).
     """
     expected = expected_symbol.upper()
+    managed = {s.upper() for s in managed_symbols} if managed_symbols else {expected}
+    managed.add(expected)
     bad_positions: list[dict] = []
     for pos in snapshot.positions:
         symbol = str(pos.symbol).upper()
         quantity = float(pos.quantity)
-        if symbol != expected:
-            bad_positions.append({"symbol": symbol, "quantity": quantity, "reason": "non_strategy_symbol"})
+        if symbol == expected:
+            if quantity < 0:
+                bad_positions.append({"symbol": symbol, "quantity": quantity, "reason": "short_position"})
             continue
-        if quantity < 0:
-            bad_positions.append({"symbol": symbol, "quantity": quantity, "reason": "short_position"})
+        if symbol in managed:
+            # A managed sibling instance owns this symbol — not this
+            # instance's contamination. Excluded from the self-consistency
+            # verdict; the fleet view (ADR 0005) owns account-level residual.
+            continue
+        bad_positions.append({"symbol": symbol, "quantity": quantity, "reason": "non_strategy_symbol"})
     if bad_positions:
         return CheckResult(
             name="unexpected_position",
