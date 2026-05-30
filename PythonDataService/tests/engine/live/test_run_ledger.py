@@ -9,6 +9,7 @@ deterministic round-trip, and FileNotFoundError on missing inputs.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -165,3 +166,111 @@ def test_write_ledger_produces_canonical_bytes(tmp_path: Path) -> None:
     write_ledger(p1, ledger)
     write_ledger(p2, ledger)
     assert p1.read_bytes() == p2.read_bytes()
+
+
+# ──────────────────── UI-0 identity binding (strategy_instance_id) ─────
+
+
+def test_build_ledger_stores_strategy_instance_id_and_bumps_schema(tmp_path: Path) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    ledger = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_instance_id="spy-ema-paper-1",
+    )
+    assert ledger.strategy_instance_id == "spy-ema-paper-1"
+    assert ledger.schema_version == "1.1"
+
+
+def test_strategy_instance_id_not_in_run_id_hash(tmp_path: Path) -> None:
+    """LOCKED decision: ``strategy_instance_id`` is persisted but NOT part
+    of the ``run_id`` identity hash. Building with instance id "A", "B",
+    or absent must yield a byte-identical ``run_id`` — proving existing
+    run_ids, run directories, and fixtures stay valid (back-compat).
+    """
+    spec, qc_copy = _make_inputs(tmp_path)
+    common = dict(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+    )
+    run_id_a = build_ledger(**common, strategy_instance_id="A").run_id
+    run_id_b = build_ledger(**common, strategy_instance_id="B").run_id
+    run_id_absent = build_ledger(**common).run_id
+
+    assert run_id_a == run_id_b == run_id_absent
+
+
+def test_read_legacy_1_0_ledger_without_field_defaults_empty(tmp_path: Path) -> None:
+    """A hand-written schema-1.0 ledger (no ``strategy_instance_id`` key)
+    reads cleanly: the field defaults to empty string, no error.
+    """
+    spec, qc_copy = _make_inputs(tmp_path)
+    legacy = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+    )
+    payload = legacy.model_dump(mode="json")
+    payload["schema_version"] = "1.0"
+    del payload["strategy_instance_id"]
+    out = tmp_path / "legacy" / "run_ledger.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = read_ledger(out)
+    assert loaded.schema_version == "1.0"
+    assert loaded.strategy_instance_id == ""
+
+
+def test_write_read_round_trips_strategy_instance_id(tmp_path: Path) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    ledger = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_instance_id="spy-ema-paper-1",
+    )
+    out = tmp_path / "live_runs" / ledger.run_id / "run_ledger.json"
+    write_ledger(out, ledger)
+
+    loaded = read_ledger(out)
+    assert loaded.strategy_instance_id == "spy-ema-paper-1"
+    assert loaded.schema_version == "1.1"
+    assert loaded.run_id == ledger.run_id
+
+
+def test_default_ledger_is_schema_1_1() -> None:
+    """A freshly constructed ledger (no instance id) defaults to schema
+    1.1 with an empty binding — the new baseline."""
+    ledger = LiveRunLedger(
+        run_id="x" * 64,
+        code_sha="abc",
+        strategy_spec_path="/tmp/s.json",
+        strategy_spec_sha256="d" * 64,
+        qc_audit_copy_path="/tmp/q.py",
+        qc_audit_copy_sha256="e" * 64,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={},
+    )
+    assert ledger.schema_version == "1.1"
+    assert ledger.strategy_instance_id == ""

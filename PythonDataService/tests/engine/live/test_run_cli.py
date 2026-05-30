@@ -88,6 +88,8 @@ def test_parser_supports_init_ledger_and_pre_flight() -> None:
     )
     assert init_args.command == "init-ledger"
     assert init_args.account_id == "DU111"
+    # UI-0: --strategy-instance-id is optional, defaults to empty (legacy).
+    assert init_args.strategy_instance_id == ""
 
     pre_args = parser.parse_args(
         [
@@ -138,6 +140,72 @@ def test_init_ledger_succeeds_in_clean_tree(repo_with_inputs: tuple[Path, Path, 
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["account_id"] == "DU111"
     assert ledger["live_config"] == {"symbol": "SPY"}
+    assert ledger["run_id"] == runs[0].name
+
+
+@requires_git
+def test_parser_accepts_strategy_instance_id() -> None:
+    args = build_parser().parse_args(
+        [
+            "init-ledger",
+            "--repo-root",
+            "/tmp/x",
+            "--strategy-spec-path",
+            "/tmp/spec.json",
+            "--qc-audit-copy-path",
+            "/tmp/qc.py",
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--strategy-instance-id",
+            "spy-ema-paper-1",
+            "--start-date-ms",
+            "1700000000000",
+        ]
+    )
+    assert args.strategy_instance_id == "spy-ema-paper-1"
+
+
+@requires_git
+def test_init_ledger_writes_strategy_instance_id(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """UI-0: --strategy-instance-id is persisted into run_ledger.json at
+    init-ledger time, with schema bumped to 1.1, while run_id is keyed off
+    the existing identity inputs (not the instance id)."""
+    repo, spec, qc = repo_with_inputs
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--strategy-instance-id",
+            "spy-ema-paper-1",
+            "--start-date-ms",
+            "1700000000000",
+            "--run-root",
+            str(tmp_path / "live_runs"),
+        ]
+    )
+    assert rc == 0
+
+    runs = list((tmp_path / "live_runs").iterdir())
+    assert len(runs) == 1
+    ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["strategy_instance_id"] == "spy-ema-paper-1"
+    assert ledger["schema_version"] == "1.1"
     assert ledger["run_id"] == runs[0].name
 
 

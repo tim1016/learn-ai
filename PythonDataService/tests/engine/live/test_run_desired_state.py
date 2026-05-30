@@ -207,7 +207,7 @@ async def test_paused_desired_state_survives_restart(tmp_path: Path) -> None:
 # ──────────────────── STOPPED → no restart loop (cmd_start) ───────────
 
 
-def _build_started_ledger(tmp_path: Path):
+def _build_started_ledger(tmp_path: Path, *, strategy_instance_id: str = ""):
     from app.engine.live.run_ledger import build_ledger, write_ledger
 
     spec = tmp_path / "spec.json"
@@ -223,6 +223,7 @@ def _build_started_ledger(tmp_path: Path):
         account_id="DU123",
         start_date_ms=1714838400000,
         live_config={},
+        strategy_instance_id=strategy_instance_id,
     )
     run_dir = tmp_path / "run"
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -263,6 +264,107 @@ def test_start_refuses_when_desired_state_stopped(
     assert "STOPPED" in capsys.readouterr().err
     # The bot never ran: no orders touched the broker.
     assert broker.orders == []
+
+
+def test_start_keys_desired_state_off_ledger_instance_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """UI-0: cmd_start must key the durable desired-state gate off the
+    LEDGER's strategy_instance_id, NOT off --strategy. A STOPPED state at
+    the LEDGER-id path refuses the start even when --strategy differs."""
+    run_dir = _build_started_ledger(tmp_path, strategy_instance_id="spy-ema-paper-1")
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    # STOPPED placed at the LEDGER instance-id path, not the --strategy path.
+    DesiredStateRepo(stable_desired_state_path(artifacts_root, "spy-ema-paper-1")).set(
+        DesiredState.STOPPED, updated_by="operator", now_ms=1, reason="end of week"
+    )
+
+    broker = FakeBroker()
+    args = argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="spy_ema_crossover",  # module/key — deliberately != instance id
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="disabled",
+        artifacts_root=artifacts_root,
+        broker=broker,
+        bars=_empty_bars(),
+        client=None,
+    )
+    rc = cmd_start(args)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "STOPPED" in err
+    assert "spy-ema-paper-1" in err
+    assert broker.orders == []
+
+
+def test_start_does_not_refuse_when_stopped_at_strategy_path_but_ledger_bound(
+    tmp_path: Path,
+) -> None:
+    """Mirror of the above: a STOPPED placed at the --strategy path is
+    IGNORED when the ledger binds a different instance id — proving start
+    no longer keys off --strategy when a binding exists."""
+    run_dir = _build_started_ledger(tmp_path, strategy_instance_id="spy-ema-paper-1")
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    # STOPPED at the OLD --strategy keyed path; ledger binds a different id.
+    DesiredStateRepo(stable_desired_state_path(artifacts_root, "spy_ema_crossover")).set(
+        DesiredState.STOPPED, updated_by="operator", now_ms=1, reason="stale key"
+    )
+
+    args = argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="spy_ema_crossover",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="disabled",
+        artifacts_root=artifacts_root,
+        broker=FakeBroker(),
+        bars=_empty_bars(),
+        client=None,
+    )
+    rc = cmd_start(args)
+    # Not the STOPPED refusal (the ledger-bound path has no STOPPED state).
+    assert rc != 1
+
+
+def test_start_legacy_ledger_falls_back_to_strategy_with_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """UI-0 back-compat: a legacy (empty instance id) ledger falls back to
+    --strategy as the instance id and logs a warning naming the condition.
+    The STOPPED placed at the --strategy path then refuses the start."""
+    import logging
+
+    run_dir = _build_started_ledger(tmp_path, strategy_instance_id="")
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    DesiredStateRepo(stable_desired_state_path(artifacts_root, "spy_ema_crossover")).set(
+        DesiredState.STOPPED, updated_by="operator", now_ms=1, reason="legacy stop"
+    )
+
+    args = argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="spy_ema_crossover",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="disabled",
+        artifacts_root=artifacts_root,
+        broker=FakeBroker(),
+        bars=_empty_bars(),
+        client=None,
+    )
+    with caplog.at_level(logging.WARNING, logger="app.engine.live.run"):
+        rc = cmd_start(args)
+
+    assert rc == 1  # STOPPED at the --strategy fallback path refuses
+    assert any("strategy_instance_id" in r.message for r in caplog.records)
 
 
 def test_start_does_not_refuse_when_desired_state_running(tmp_path: Path) -> None:
