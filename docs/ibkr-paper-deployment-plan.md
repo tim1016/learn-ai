@@ -604,7 +604,7 @@ These terms are introduced or pinned by this design-lock round. They are deploym
   - `PythonDataService/app/engine/live/artifacts.py` — `DECISION_COLUMNS` resolution from spec; `ExecutionRow` growth (PR-C).
   - `PythonDataService/app/engine/live/live_engine.py` — adapter polymorphism at the order boundary (PR-J).
   - `PythonDataService/app/broker/ibkr/orders.py` — `commissionReport` wiring (PR-G); orderRef namespacing (PR-E).
-  - `PythonDataService/app/engine/live/` — new `command_channel.py`, `live_state_sidecar.py` (PR-D, PR-E).
+  - `PythonDataService/app/engine/live/` — new `command_channel.py`, `desired_state.py` (PR-D); `live_state_sidecar.py` (PR-E).
   - `PythonDataService/app/engine/live/reconcile.py` — sibling layer-A / layer-B modules (PR-H, PR-I); existing three-way reconciler untouched.
 - Status: Phase 10 prereq RTH dry-run remains the gating operational activity per `docs/ibkr-integration-authority.md` § 11; this design-lock round does not change that status, only the scope of work that follows it.
 

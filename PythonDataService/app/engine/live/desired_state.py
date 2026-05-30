@@ -26,7 +26,18 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 # Reuse the atomic-write primitives instead of duplicating them. The
 # reviewer-flagged extraction of these into a shared util is the
 # follow-up; importing keeps a single source of truth in the meantime.
+from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+
+# Re-exported so existing callers can keep importing it from here.
+__all__ = [
+    "DesiredState",
+    "DesiredStateCorruptError",
+    "DesiredStateRecord",
+    "DesiredStateRepo",
+    "stable_desired_state_path",
+    "validate_strategy_instance_id",
+]
 
 
 class DesiredStateCorruptError(RuntimeError):
@@ -51,7 +62,12 @@ def stable_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -
     Sits alongside ``live_state.json`` (the order-idempotency sidecar)
     under the same per-strategy directory — see
     ``live_state_sidecar.stable_live_state_path``.
+
+    The id is validated as a single safe path segment (fail-fast at the
+    boundary) so a caller-controlled value can never escape
+    ``artifacts_root``.
     """
+    validate_strategy_instance_id(strategy_instance_id)
     return artifacts_root / "live_state" / strategy_instance_id / "desired_state.json"
 
 
