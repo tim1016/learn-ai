@@ -51,9 +51,29 @@
   } @else {
     <span class="mode-pill">PAPER</span>
     <span class="account mono">{{ s.account_id }}</span>
-    <span class="state-badge" [class]="'badge-' + st">{{ st }}</span>
+    <span class="strip-group" title="Process / Run / Desired state are distinct sources of truth">
+      <span class="strip-label">PROCESS</span>
+      <span class="strip-val process-val">{{ hostProcessLabel() }}</span>
+    </span>
+    <span class="strip-group">
+      <span class="strip-label">RUN</span>
+      <span class="state-badge" [class]="'badge-' + st">{{ st }}</span>
+    </span>
+    <span class="strip-group">
+      <span class="strip-label">DESIRED</span>
+      <span class="state-badge" [class]="'desired-' + desiredStateLabel()">{{ desiredStateLabel() }}</span>
+    </span>
+    @if (s.flags.poisoned_flag) {
+      <span class="flag-pill bad">POISONED</span>
+    }
+    @if (s.flags.halt_flag) {
+      <span class="flag-pill bad">HALT</span>
+    }
     <span class="last-bar" [class.stale]="lastBarAgeStale()">
       Last &#91;BAR&#93;: {{ lastBarAgeLabel() }}
+    </span>
+    <span class="bar-source" title="Data provenance for ingested bars">
+      src: <span class="mono">{{ barSource() ?? '—' }}</span>
     </span>
     <span class="decisions">Decisions: {{ fmtInteger(s.decisions.row_count) }}</span>
     @if (actionRequired()) {
@@ -136,6 +156,25 @@
         <p class="runner-message bad">{{ runnerError() }}</p>
       }
     </section>
+
+    <!-- 0b. Desired state + durable intent controls (UI-2 / UI-3) -->
+    <app-desired-state-card
+      [desired]="desiredState()"
+      [strategyInstanceId]="strategyInstanceId()"
+      [runState]="s.state"
+      [busy]="desiredBusy()"
+      [writeError]="desiredError()"
+      (act)="issueDesiredState($event)"
+    />
+
+    <!-- 0c. Per-run command channel + pending/ack timeline (UI-4) -->
+    <app-command-panel
+      [commands]="commands()"
+      [nowMs]="nowMs()"
+      [busyVerb]="commandBusyVerb()"
+      [writeError]="commandError()"
+      (issue)="issueCommand($event)"
+    />
 
     <!-- 1. Heartbeat panel -->
     <section class="card" aria-labelledby="heartbeat-heading">

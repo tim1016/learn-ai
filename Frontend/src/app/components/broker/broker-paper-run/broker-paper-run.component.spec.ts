@@ -4,7 +4,9 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerPaperRunComponent } from './broker-paper-run.component';
 import type {
   ArtifactsSummary,
+  CommandsSummary,
   DecisionsSummary,
+  DesiredState,
   ExecutionsSummary,
   FlagsSummary,
   HostRunnerHealth,
@@ -19,6 +21,9 @@ class FakeLiveRunsService {
   listRuns = vi.fn().mockResolvedValue([]);
   getStatus = vi.fn().mockResolvedValue(null);
   getLogTail = vi.fn().mockResolvedValue([]);
+  getCommands = vi.fn().mockResolvedValue(EMPTY_COMMANDS);
+  writeDesiredState = vi.fn().mockResolvedValue({ accepted: true, desired_state: OK_DESIRED });
+  writeCommand = vi.fn().mockResolvedValue({ accepted: true, command: null });
   getHostRunnerHealth = vi.fn().mockResolvedValue(makeHostRunnerHealth());
   startHostRunner = vi.fn().mockResolvedValue({
     accepted: true,
@@ -56,12 +61,25 @@ const EMPTY_TRADES: TradesSummary = { row_count: 0, open_position: null };
 const EMPTY_FLAGS: FlagsSummary = { halt_flag: null, poisoned_flag: null };
 const EMPTY_ARTIFACTS: ArtifactsSummary = { files: [] };
 const EMPTY_RECONCILE: ReconcileSummary = { latest_receipt_name: null, latest_receipt_url: null };
+const EMPTY_COMMANDS: CommandsSummary = { entries: [], poll_interval_ms: 1_000 };
+
+const OK_DESIRED: DesiredState = {
+  state: 'RUNNING',
+  updated_at_ms: 1_700_000_000_000,
+  updated_by: 'operator',
+  reason: null,
+  version: 1,
+  path_status: 'ok',
+};
 
 function makeStatus(state: RunState, overrides: Partial<LiveRunStatus> = {}): LiveRunStatus {
   return {
     run_id: RUN_ID,
     account_id: 'DU1234567',
     state,
+    strategy_instance_id: 'spy_ema_crossover_1min',
+    desired_state: OK_DESIRED,
+    bar_source: 'ibkr_paper_delayed',
     last_bar_time_ms: 1_700_000_000_000,
     last_bar_age_s: 30,
     heartbeat_parse_status: 'ok',
@@ -71,6 +89,7 @@ function makeStatus(state: RunState, overrides: Partial<LiveRunStatus> = {}): Li
     flags: EMPTY_FLAGS,
     artifacts: EMPTY_ARTIFACTS,
     reconcile: EMPTY_RECONCILE,
+    commands: EMPTY_COMMANDS,
     fetched_at_ms: 1_700_000_000_000,
     ...overrides,
   };
@@ -407,5 +426,107 @@ describe('BrokerPaperRunComponent — host runner controls', () => {
 
     expect(svc.stopHostRunner).toHaveBeenCalledWith(RUN_ID, { force: false });
     expect(component.runnerError()).toBeNull();
+  });
+});
+
+// ── Desired-state intent (UI-3) ───────────────────────────────────────
+
+describe('BrokerPaperRunComponent — desired-state intent', () => {
+  it('exposes the desired state from status', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const { component } = setup(runs, makeStatus('running'));
+    await flush();
+    await flush();
+    expect(component.desiredStateLabel()).toBe('RUNNING');
+    expect(component.strategyInstanceId()).toBe('spy_ema_crossover_1min');
+  });
+
+  it('renders "unknown" desired label when there is no ledger binding', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const status = makeStatus('running', {
+      strategy_instance_id: null,
+      desired_state: {
+        state: null,
+        updated_at_ms: null,
+        updated_by: null,
+        reason: null,
+        version: null,
+        path_status: 'unknown_no_ledger_binding',
+      },
+    });
+    const { component } = setup(runs, status);
+    await flush();
+    await flush();
+    expect(component.desiredStateLabel()).toBe('unknown');
+  });
+
+  it('renders "corrupt" desired label for a corrupt sidecar', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const status = makeStatus('running', {
+      desired_state: {
+        state: null,
+        updated_at_ms: null,
+        updated_by: null,
+        reason: null,
+        version: null,
+        path_status: 'corrupt',
+      },
+    });
+    const { component } = setup(runs, status);
+    await flush();
+    await flush();
+    expect(component.desiredStateLabel()).toBe('corrupt');
+  });
+
+  it('writes desired state and reloads status on a pause action', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const { component, svc } = setup(runs, makeStatus('running'));
+    await flush();
+    await flush();
+
+    await component.issueDesiredState('pause');
+
+    expect(svc.writeDesiredState).toHaveBeenCalledWith(RUN_ID, { action: 'pause' });
+    expect(component.desiredError()).toBeNull();
+  });
+
+  it('surfaces an error when the desired-state write fails', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const { component, svc } = setup(runs, makeStatus('running'));
+    await flush();
+    await flush();
+
+    svc.writeDesiredState.mockRejectedValueOnce({ error: { detail: 'sidecar is corrupt' } });
+    await component.issueDesiredState('stop');
+
+    expect(component.desiredError()).toBe('sidecar is corrupt');
+  });
+});
+
+// ── Command channel (UI-4) ────────────────────────────────────────────
+
+describe('BrokerPaperRunComponent — command channel', () => {
+  it('writes a command-channel verb and reloads the timeline', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const { component, svc } = setup(runs, makeStatus('running'));
+    await flush();
+    await flush();
+
+    await component.issueCommand('FLATTEN');
+
+    expect(svc.writeCommand).toHaveBeenCalledWith(RUN_ID, { verb: 'FLATTEN' });
+    expect(component.commandError()).toBeNull();
+  });
+
+  it('surfaces an error when the command write fails', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const { component, svc } = setup(runs, makeStatus('running'));
+    await flush();
+    await flush();
+
+    svc.writeCommand.mockRejectedValueOnce({ message: 'network down' });
+    await component.issueCommand('RECONCILE');
+
+    expect(component.commandError()).toBe('network down');
   });
 });
