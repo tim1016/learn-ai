@@ -67,16 +67,53 @@ logger = logging.getLogger(__name__)
 _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
 
 
+def _validate_path_segment(value: str, *, field: str) -> str:
+    """Reject any operator-supplied value unsafe as a single path segment.
+
+    API-boundary input validation: rejects path separators, ``.``/``..``
+    segments, absolute paths, leading/trailing whitespace, the empty
+    string, and NUL bytes. Returns a sanitized literal that breaks the
+    CodeQL py/path-injection taint chain.
+
+    TODO: converge with ``app.engine.live.identity.validate_strategy_instance_id``
+    once PR #389 lands — that module is the canonical engine-layer validator.
+    """
+    if not value or value != value.strip():
+        raise ValueError(f"{field} must be non-empty with no surrounding whitespace")
+    if value in (".", ".."):
+        raise ValueError(f"{field} must not be a path segment ('.' or '..')")
+    if "\x00" in value or "/" in value or "\\" in value:
+        raise ValueError(f"{field} must not contain path separators or NUL bytes")
+    if Path(value).is_absolute():
+        raise ValueError(f"{field} must not be an absolute path")
+    return value
+
+
+def _confine(root: Path, segment: str) -> Path:
+    """Resolve ``root/segment`` and assert it stays within ``root``.
+
+    Belt-and-suspenders confinement (the segment is already validated by
+    ``_validate_path_segment``): rebuild the path from the validated
+    literal, resolve it, and verify containment so the dataflow is
+    obviously safe to the scanner.
+    """
+    root_resolved = root.resolve()
+    resolved = (root_resolved / segment).resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError(f"path traversal detected for segment {segment!r}") from exc
+    return resolved
+
+
 def _validate_run_id(run_id: str, root: Path) -> Path:
     """Validate run_id is safe and the resolved path stays within root."""
-    m = _RUN_ID_RE.fullmatch(run_id)
-    if m is None:
+    safe = _validate_path_segment(run_id, field="run_id")
+    if _RUN_ID_RE.fullmatch(safe) is None:
         raise ValueError(f"Invalid run_id format: {run_id!r}")
-    # Use m.group(0) — regex-derived value breaks CodeQL py/path-injection taint chain.
-    run_dir = (root / m.group(0)).resolve()
-    if not run_dir.is_relative_to(root.resolve()):
-        raise ValueError(f"Path traversal detected for run_id {run_id!r}")
-    return run_dir
+    # Use the validated literal — regex + confinement breaks the CodeQL
+    # py/path-injection taint chain.
+    return _confine(root, safe)
 
 
 # ── Layer 1: directory listing cache (15 s TTL) ────────────────────────────
@@ -109,7 +146,10 @@ def _get_run_dirs(root: Path) -> list[Path]:
 # ── Layer 2: per-run status cache (mtime-signature LRU, 256 entries) ──────
 
 _STATUS_CACHE_MAX = 256
-_status_cache: OrderedDict[tuple[str, tuple[float, ...]], LiveRunStatus] = OrderedDict()
+# Cache key: (run_id, mtime-signature). The signature is an opaque nested
+# tuple from _mtime_sig — folds tracked sentinels + desired-state + commands.
+_StatusCacheKey = tuple[str, tuple]
+_status_cache: OrderedDict[_StatusCacheKey, LiveRunStatus] = OrderedDict()
 
 _TRACKED_FILES = [
     "run_ledger.json",
@@ -123,19 +163,72 @@ _TRACKED_FILES = [
 ]
 
 
-def _mtime_sig(run_dir: Path) -> tuple[float, ...]:
-    """Build an 8-tuple of mtimes for the tracked sentinel files."""
-    return tuple((run_dir / f).stat().st_mtime if (run_dir / f).exists() else 0.0 for f in _TRACKED_FILES)
+def _commands_sig(run_dir: Path) -> tuple[tuple[str, float], ...]:
+    """Signature of the run's ``commands/`` dir: (name, mtime) per entry.
+
+    A new pending command or a fresh ack file changes the set or the
+    mtimes, so folding this into the cache key invalidates a stale
+    ``command_summary`` when controls are enqueued/acked.
+    """
+    commands_dir = run_dir / "commands"
+    if not commands_dir.is_dir():
+        return ()
+    entries: list[tuple[str, float]] = []
+    try:
+        for p in commands_dir.iterdir():
+            try:
+                entries.append((p.name, p.stat().st_mtime))
+            except OSError:
+                entries.append((p.name, 0.0))
+    except OSError:
+        return ()
+    entries.sort()
+    return tuple(entries)
 
 
-def _status_cache_get(key: tuple[str, tuple[float, ...]]) -> LiveRunStatus | None:
+def _desired_state_sig(run_dir: Path) -> float:
+    """mtime of the run's desired-state sidecar (0.0 if absent/unresolvable).
+
+    Resolves the ``live_state/<sid>/desired_state.json`` path off the
+    ledger binding so a control write busts the cached status.
+    """
+    sid = _status_sid(run_dir)
+    if not sid:
+        return 0.0
+    try:
+        path = _safe_desired_state_path(
+            _desired_state_root(Path(get_settings().live_runs_root)), sid
+        )
+    except ValueError:
+        return 0.0
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _mtime_sig(run_dir: Path) -> tuple:
+    """Cache signature: tracked sentinel mtimes + desired-state + commands.
+
+    The tracked-file mtimes detect ledger/log/parquet/flag changes; the
+    desired-state sidecar mtime and the ``commands/`` dir signature detect
+    control writes so ``/status`` never serves a stale ``desired_state`` /
+    ``command_summary``.
+    """
+    tracked = tuple(
+        (run_dir / f).stat().st_mtime if (run_dir / f).exists() else 0.0 for f in _TRACKED_FILES
+    )
+    return (tracked, _desired_state_sig(run_dir), _commands_sig(run_dir))
+
+
+def _status_cache_get(key: _StatusCacheKey) -> LiveRunStatus | None:
     if key not in _status_cache:
         return None
     _status_cache.move_to_end(key)
     return _status_cache[key]
 
 
-def _status_cache_set(key: tuple[str, tuple[float, ...]], value: LiveRunStatus) -> None:
+def _status_cache_set(key: _StatusCacheKey, value: LiveRunStatus) -> None:
     _status_cache[key] = value
     _status_cache.move_to_end(key)
     while len(_status_cache) > _STATUS_CACHE_MAX:
@@ -506,7 +599,7 @@ async def get_run_status(run_id: str) -> LiveRunStatus:
 
     now_ms = int(time.time() * 1000)
     sig = _mtime_sig(run_dir)
-    cache_key: tuple[str, tuple[float, ...]] = (run_id, sig)
+    cache_key: _StatusCacheKey = (run_id, sig)
 
     cached = _status_cache_get(cache_key)
     if cached is not None:
@@ -601,6 +694,20 @@ def _desired_state_root(live_runs_root: Path) -> Path:
     return live_runs_root.parent
 
 
+def _safe_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
+    """Build the desired-state sidecar path with boundary validation + confinement.
+
+    ``strategy_instance_id`` is operator-supplied and flows into the
+    ``live_state/<sid>/`` path component; validate it as a single path
+    segment and confine the per-instance dir under ``live_state/`` so the
+    dataflow is obviously safe (CodeQL py/path-injection).
+    """
+    safe_sid = _validate_path_segment(strategy_instance_id, field="strategy_instance_id")
+    live_state_root = artifacts_root / "live_state"
+    _confine(live_state_root, safe_sid)
+    return stable_desired_state_path(artifacts_root, safe_sid)
+
+
 def _resolve_desired_state(live_runs_root: Path, strategy_instance_id: str) -> DesiredStateView:
     """Resolve the durable-intent view for a run's strategy instance (UI-1).
 
@@ -609,7 +716,10 @@ def _resolve_desired_state(live_runs_root: Path, strategy_instance_id: str) -> D
     """
     if not strategy_instance_id:
         return DesiredStateView(path_status=DesiredStatePathStatus.unknown_no_ledger_binding)
-    path = stable_desired_state_path(_desired_state_root(live_runs_root), strategy_instance_id)
+    try:
+        path = _safe_desired_state_path(_desired_state_root(live_runs_root), strategy_instance_id)
+    except ValueError:
+        return DesiredStateView(path_status=DesiredStatePathStatus.unknown_no_ledger_binding)
     repo = DesiredStateRepo(path)
     try:
         record = repo.read()
@@ -628,17 +738,30 @@ def _resolve_desired_state(live_runs_root: Path, strategy_instance_id: str) -> D
 
 
 def _command_summary(run_dir: Path) -> CommandSummary:
-    """Pending/ack counts + latest verb from the run's command channel (UI-1)."""
+    """Pending/ack counts + latest verb from the run's command channel (UI-1).
+
+    Latest verb/seq is the highest-seq command across BOTH pending and
+    acked files: once the most recent command is acked, ``read_pending``
+    filters it out, but the ack file still carries seq+verb — so the
+    summary keeps reporting it rather than dropping to null.
+    """
     commands_dir = run_dir / "commands"
     channel = CommandChannel(commands_dir)
     pending = channel.read_pending() if commands_dir.exists() else []
-    acked_count = len(list(commands_dir.glob("command.*.ack.json"))) if commands_dir.exists() else 0
+    candidates: list[tuple[int, str]] = [(c.seq, c.verb.value) for c in pending]
+    acked_count = 0
+    if commands_dir.exists():
+        for ack_path in commands_dir.glob("command.*.ack.json"):
+            acked_count += 1
+            try:
+                data = json.loads(ack_path.read_text(encoding="utf-8"))
+                candidates.append((int(data["seq"]), str(data["verb"])))
+            except (OSError, ValueError, KeyError):
+                continue
     latest_verb: str | None = None
     latest_seq: int | None = None
-    if pending:
-        latest = max(pending, key=lambda c: c.seq)
-        latest_verb = latest.verb.value
-        latest_seq = latest.seq
+    if candidates:
+        latest_seq, latest_verb = max(candidates, key=lambda item: item[0])
     return CommandSummary(
         pending_count=len(pending),
         acked_count=acked_count,
@@ -660,18 +783,19 @@ def _ledger_or_404(run_dir: Path, run_id: str):
         ) from exc
 
 
-_INVALID_SID_CHARS = ("/", "\\", "..", "\x00")
-
-
 def _validate_strategy_instance_id(sid: str) -> None:
     """Reject path-traversal-unsafe strategy-instance ids at the boundary.
 
-    A sibling remediation PR may introduce a canonical
-    ``validate_strategy_instance_id`` in the engine layer; this inline guard
-    should converge with that validator once importable on this base.
+    Delegates to ``_validate_path_segment``; a sibling remediation PR (#389)
+    may introduce a canonical ``validate_strategy_instance_id`` in the
+    engine layer — this guard should converge with it once importable.
     """
-    if not sid or any(c in sid for c in _INVALID_SID_CHARS) or Path(sid).is_absolute():
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id")
+    try:
+        _validate_path_segment(sid, field="strategy_instance_id")
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
+        ) from exc
 
 
 _ACTION_TO_STATE = {
@@ -713,7 +837,7 @@ async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> Desire
             detail="run has no strategy_instance_id binding (legacy ledger)",
         )
     _validate_strategy_instance_id(sid)
-    repo = DesiredStateRepo(stable_desired_state_path(_desired_state_root(root), sid))
+    repo = DesiredStateRepo(_safe_desired_state_path(_desired_state_root(root), sid))
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,

@@ -258,3 +258,64 @@ async def test_command_timeline_reads_ack_files(live_runs_root):
     assert len(tl["acks"]) == 1
     assert tl["acks"][0]["verb"] == "STOP"
     assert tl["acks"][0]["outcome"]["status"] == "ok"
+
+
+async def test_command_summary_latest_survives_ack(live_runs_root):
+    """Regression: latest verb/seq must survive an ack (read from ack files)."""
+    from app.engine.live.command_channel import CommandChannel, CommandVerb
+
+    run_dir = _make_run(live_runs_root, _RID, sid="inst-cmd-ack")
+    channel = CommandChannel(run_dir / "commands")
+    cmd = channel.write_from_operator(CommandVerb.PAUSE)
+    channel.ack(cmd, outcome={"status": "ok"})
+    async with _client() as client:
+        resp = await client.get(f"/api/live-runs/{_RID}/status")
+    cs = resp.json()["command_summary"]
+    assert cs["pending_count"] == 0
+    assert cs["acked_count"] == 1
+    assert cs["latest_verb"] == "PAUSE"
+    assert cs["latest_seq"] == cmd.seq
+
+
+# --- UI-1: status cache invalidation on control writes ---
+
+
+async def test_status_cache_busts_on_desired_state_write(live_runs_root):
+    """Regression: a desired-state write must invalidate the cached /status."""
+    _make_run(live_runs_root, _RID, sid="inst-cache-ds")
+    async with _client() as client:
+        before = await client.get(f"/api/live-runs/{_RID}/status")
+        assert before.json()["desired_state"]["path_status"] == "absent"
+
+        repo = DesiredStateRepo(
+            stable_desired_state_path(_artifacts_root(live_runs_root), "inst-cache-ds")
+        )
+        repo.set(DesiredState.PAUSED, updated_by="op", reason="hold", now_ms=1_700_000_700_000)
+
+        after = await client.get(f"/api/live-runs/{_RID}/status")
+    ds = after.json()["desired_state"]
+    assert ds["path_status"] == "ok"
+    assert ds["state"] == "PAUSED"
+
+
+async def test_status_cache_busts_on_command_write(live_runs_root):
+    """Regression: an enqueued command must invalidate the cached /status."""
+    _make_run(live_runs_root, _RID, sid="inst-cache-cmd")
+    async with _client() as client:
+        before = await client.get(f"/api/live-runs/{_RID}/status")
+        assert before.json()["command_summary"]["pending_count"] == 0
+
+        await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": "FLATTEN"})
+
+        after = await client.get(f"/api/live-runs/{_RID}/status")
+    cs = after.json()["command_summary"]
+    assert cs["pending_count"] == 1
+    assert cs["latest_verb"] == "FLATTEN"
+
+
+async def test_path_traversal_run_id_rejected(live_runs_root):
+    """Boundary: traversal/separator run_ids are rejected (never 200)."""
+    async with _client() as client:
+        for bad in ("..", "a%2Fb", "."):
+            resp = await client.get(f"/api/live-runs/{bad}/status")
+            assert resp.status_code in (400, 404)
