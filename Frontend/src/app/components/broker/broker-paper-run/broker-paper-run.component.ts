@@ -14,6 +14,10 @@ import { PageHeaderComponent } from '../../../shared/page-header/page-header.com
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import type {
+  CommandsSummary,
+  CommandVerb,
+  DesiredState,
+  DesiredStateAction,
   HostRunnerHealth,
   HydratePolicy,
   LiveRunStatus,
@@ -22,6 +26,8 @@ import type {
   RunState,
 } from '../../../api/live-runs.types';
 import { fmtTimestampNy, fmtInteger } from '../format';
+import { DesiredStateCardComponent } from './desired-state-card.component';
+import { CommandPanelComponent } from './command-panel.component';
 
 type FilterChip = 'today' | 'last14' | 'halted' | 'complete' | 'all';
 
@@ -60,6 +66,26 @@ const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 const WARMUP_BARS_REQUIRED = 15;
 const DAEMON_LAUNCH_COMMAND = "$env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .";
 
+const EMPTY_DESIRED_STATE: DesiredState = {
+  state: null,
+  updated_at_ms: null,
+  updated_by: null,
+  reason: null,
+  version: null,
+  path_status: 'unknown_no_ledger_binding',
+};
+
+const EMPTY_COMMANDS: CommandsSummary = {
+  entries: [],
+  poll_interval_ms: 1_000,
+};
+
+const DESIRED_ACTION_PAST_TENSE: Record<DesiredStateAction, string> = {
+  pause: 'paused',
+  resume: 'resumed',
+  stop: 'stopped',
+};
+
 function isHydratePolicy(value: string): value is HydratePolicy {
   return value === 'require' || value === 'optional' || value === 'disabled';
 }
@@ -71,7 +97,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 @Component({
   selector: 'app-broker-paper-run',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, SectionErrorComponent, JsonPipe],
+  imports: [
+    PageHeaderComponent,
+    SectionErrorComponent,
+    JsonPipe,
+    DesiredStateCardComponent,
+    CommandPanelComponent,
+  ],
   templateUrl: './broker-paper-run.component.html',
   styleUrl: './broker-paper-run.component.scss',
 })
@@ -114,6 +146,26 @@ export class BrokerPaperRunComponent {
     defaultValue: null as LiveRunStatus | null,
   });
 
+  // Per-run command channel (UI-4). Declared alongside the other resources.
+  // A reload-tick signal is folded into `params` so we can force a refetch
+  // by bumping the tick — `resource().reload()` is lazily attached only
+  // after the resource is first read in a reactive context, which is not
+  // guaranteed at the moment an operator action fires.
+  private readonly commandsReloadTick = signal<number>(0);
+
+  readonly commandsRes = resource({
+    params: () => ({ runId: this.selectedRunId(), tick: this.commandsReloadTick() }),
+    loader: ({ params }): Promise<CommandsSummary | null> => {
+      if (!params.runId) return Promise.resolve(null);
+      return this.svc.getCommands(params.runId);
+    },
+    defaultValue: null as CommandsSummary | null,
+  });
+
+  private reloadCommands(): void {
+    this.commandsReloadTick.update((n) => n + 1);
+  }
+
   private readonly pollIntervalMs = computed<number>(() => {
     const state = this.status.value()?.state;
     return state === 'idle' || state === 'complete' ? 10_000 : 5_000;
@@ -129,6 +181,53 @@ export class BrokerPaperRunComponent {
       );
     },
   });
+
+  // ── Desired state + provenance (UI-2 / UI-3) ─────────────────────────
+  readonly desiredState = computed<DesiredState>(
+    () => this.status.value()?.desired_state ?? EMPTY_DESIRED_STATE,
+  );
+
+  readonly strategyInstanceId = computed<string | null>(
+    () => this.status.value()?.strategy_instance_id ?? null,
+  );
+
+  readonly barSource = computed<string | null>(() => this.status.value()?.bar_source ?? null);
+
+  /** Durable intent, resolved for display (UI-2). Never a guess. */
+  readonly desiredStateLabel = computed<string>(() => {
+    const d = this.desiredState();
+    switch (d.path_status) {
+      case 'unknown_no_ledger_binding':
+        return 'unknown';
+      case 'corrupt':
+        return 'corrupt';
+      case 'absent':
+        return 'RUNNING';
+      default:
+        return d.state ?? 'RUNNING';
+    }
+  });
+
+  readonly desiredBusy = signal<boolean>(false);
+  readonly desiredError = signal<string | null>(null);
+
+  // ── Command channel (UI-4) ───────────────────────────────────────────
+  readonly commands = computed<CommandsSummary>(
+    () => this.commandsRes.value() ?? EMPTY_COMMANDS,
+  );
+
+  readonly commandBusyVerb = signal<CommandVerb | null>(null);
+  readonly commandError = signal<string | null>(null);
+  readonly nowMs = signal<number>(Date.now());
+
+  /**
+   * Command-channel verbs are addressed by `run_id`, so they only require a
+   * selected run — unlike durable intent they do not depend on the ledger's
+   * `strategy_instance_id` binding. Disable when no run is selected.
+   */
+  readonly commandControlsDisabled = computed<boolean>(
+    () => this.selectedRunId() == null,
+  );
 
   // ── Host runner daemon ───────────────────────────────────────────────
   readonly runnerReadonly = signal<boolean>(true);
@@ -250,6 +349,16 @@ export class BrokerPaperRunComponent {
       const id = setInterval(() => this.daemonHealth.reload(), 5_000);
       onCleanup(() => clearInterval(id));
     });
+
+    // Command timeline + wall-clock tick for staleness detection (UI-4).
+    effect((onCleanup) => {
+      if (!this.selectedRunId()) return;
+      const id = setInterval(() => {
+        this.reloadCommands();
+        this.nowMs.set(Date.now());
+      }, 2_000);
+      onCleanup(() => clearInterval(id));
+    });
   }
 
   selectRun(runId: string): void {
@@ -271,6 +380,47 @@ export class BrokerPaperRunComponent {
 
   reloadRunList(): void {
     this.runList.reload();
+  }
+
+  /**
+   * UI-3 — write durable operator intent, then reload status so the UI
+   * reflects the new desired state. Errors surface on the card.
+   */
+  async issueDesiredState(action: DesiredStateAction): Promise<void> {
+    const runId = this.selectedRunId();
+    if (!runId) return;
+    this.desiredBusy.set(true);
+    this.desiredError.set(null);
+    try {
+      await this.svc.writeDesiredState(runId, { action });
+      this.status.reload();
+    } catch (err) {
+      this.desiredError.set(
+        this.formatError(err, `Could not ${DESIRED_ACTION_PAST_TENSE[action]} the strategy.`),
+      );
+    } finally {
+      this.desiredBusy.set(false);
+    }
+  }
+
+  /**
+   * UI-4 — write a per-run command-channel verb, then reload the command
+   * timeline so the queued entry appears immediately.
+   */
+  async issueCommand(verb: CommandVerb): Promise<void> {
+    const runId = this.selectedRunId();
+    if (!runId) return;
+    this.commandBusyVerb.set(verb);
+    this.commandError.set(null);
+    try {
+      await this.svc.writeCommand(runId, { verb });
+      this.reloadCommands();
+      this.nowMs.set(Date.now());
+    } catch (err) {
+      this.commandError.set(this.formatError(err, `Could not queue ${verb} command.`));
+    } finally {
+      this.commandBusyVerb.set(null);
+    }
   }
 
   setRunnerReadonly(event: Event): void {
@@ -348,13 +498,13 @@ export class BrokerPaperRunComponent {
     return (event.target as HTMLSelectElement).value;
   }
 
-  private formatError(err: unknown): string {
+  private formatError(err: unknown, fallback = 'Host runner action failed.'): string {
     const record = asRecord(err);
     const errorPayload = asRecord(record?.['error']);
     const detail = errorPayload?.['detail'];
     if (typeof detail === 'string') return detail;
     const message = record?.['message'];
     if (typeof message === 'string') return message;
-    return 'Host runner action failed.';
+    return fallback;
   }
 }

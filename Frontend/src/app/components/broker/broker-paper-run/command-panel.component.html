@@ -1,0 +1,62 @@
+<section class="card command-card" aria-labelledby="commands-heading">
+  <header class="card-header">
+    <h2 id="commands-heading">Command Channel</h2>
+    @if (hasStale()) {
+      <span class="status-pill bad" title="A queued command has not been acked in time">STALE</span>
+    }
+  </header>
+
+  <p class="muted source-note">
+    Per-run commands — <span class="source-tag">command ack</span> from
+    <code>commands/</code> files. Queued until the bot writes an ack file.
+  </p>
+
+  <div class="command-buttons" role="group" aria-label="Per-run command controls">
+    @for (btn of buttons; track btn.verb) {
+      <button
+        type="button"
+        class="cmd-btn"
+        [class.warn]="btn.tone === 'warn'"
+        [class.danger]="btn.tone === 'danger'"
+        (click)="issueCommand(btn.verb)"
+        [disabled]="disabled() || isBusy(btn.verb) || busyVerb() !== null"
+      >
+        {{ isBusy(btn.verb) ? 'Sending…' : btn.label }}
+      </button>
+    }
+  </div>
+
+  @if (writeError(); as err) {
+    <p class="write-error" role="alert">{{ err }}</p>
+  }
+
+  <h3 class="subsection-heading">Pending / ack timeline</h3>
+  @if (!hasRows()) {
+    <p class="muted">No commands issued for this run yet.</p>
+  } @else {
+    <ul class="timeline" aria-label="Command pending and acknowledgement timeline">
+      @for (row of rows(); track row.seq) {
+        <li class="timeline-row" [class.is-stale]="row.stale">
+          <span class="seq mono">#{{ row.seq }}</span>
+          <span class="verb mono">{{ row.verb }}</span>
+          <span class="status-pill" [class]="statusClass(row)">{{ statusLabel(row) }}</span>
+          <span class="queued mono">
+            queued {{ fmtTimestampNy(row.queued_at_ms) }}
+            @if (row.stale) {
+              <span class="stale-age" title="Age since queued">({{ ageLabel(row.ageMs) }} unacked)</span>
+            }
+          </span>
+          @if (row.status === 'acknowledged' || row.status === 'failed') {
+            <span class="acked mono">acked {{ fmtTimestampNy(row.acked_at_ms) }}</span>
+          }
+          @if (row.outcome; as outcome) {
+            <span class="outcome mono" [class.outcome-failed]="row.status === 'failed'">{{ outcome }}</span>
+          }
+          @if (row.outcome_detail; as detail) {
+            <span class="outcome-detail mono">{{ detail }}</span>
+          }
+        </li>
+      }
+    </ul>
+  }
+</section>
