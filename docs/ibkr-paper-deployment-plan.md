@@ -573,7 +573,7 @@ Suggested batching. Each PR ends with documentation per "documentation is part o
 
 Deferred per the revised direction (Step 7+):
 - PDF/matplotlib presentation layer over Layer A/B markdown+parquet outputs.
-- Angular polish: control widgets for the verbs in Resolution 7 (Pause / Stop / Flatten / Reconcile), stale-heartbeat warnings on the Paper Run nav, divergence-report viewer.
+- Angular polish: see §16.5 for the now-required UI accuracy and operator UX plan.
 - Authentication / authorization around command issuance and audit identity.
 
 ### 16.3. Term Lock (deployment-specific glossary)
@@ -608,3 +608,70 @@ These terms are introduced or pinned by this design-lock round. They are deploym
   - `PythonDataService/app/engine/live/reconcile.py` — sibling layer-A / layer-B modules (PR-H, PR-I); existing three-way reconciler untouched.
 - Status: Phase 10 prereq RTH dry-run remains the gating operational activity per `docs/ibkr-integration-authority.md` § 11; this design-lock round does not change that status, only the scope of work that follows it.
 
+### 16.5. UI Accuracy + Operator UX Plan (added 2026-05-30)
+
+This section converts the PRD-A-through-D control-plane work into a UI plan. "Accurate" means the browser shows only state that exists in code or artifacts, labels each value by its source, and never implies that a command succeeded before the durable artifact or ack says it did. "User friendly" means the operator can answer the trading-critical questions in one glance: is the bot alive, is it allowed to trade, what did it last see, what did it last decide, what orders/fills exist, and what action is safe next?
+
+#### Current UI truth table
+
+As of PR #387 / PR-D, the shipped Angular surface is `Frontend/src/app/components/broker/broker-paper-run/broker-paper-run.component.*` backed by `Frontend/src/app/services/live-runs.service.ts`.
+
+| UI area | What it currently shows | Source of truth | Accuracy constraint |
+|---|---|---|---|
+| Run picker + top strip | Run id, `PAPER`, account id, inferred run state, last bar age, decision count | `GET /api/live-runs` and `GET /api/live-runs/{run_id}/status`, derived from `run_ledger.json`, `run_status.json`, `live.log`, parquet row counts, `halt.flag`, `poisoned.flag` | Label as artifact-derived observer state, not broker state. |
+| Host Runner card | Daemon health, process state, pid, start time, exit code, host log path; Start / Stop process buttons | Host daemon `GET /health`, `POST /runs/{run_id}/start`, `POST /runs/{run_id}/stop` | "Stop" here is process stop only. It is not PR-D durable `STOPPED` intent and must not be labeled as strategy stop after PR-D controls land. |
+| Heartbeat | Parsed `[BAR]` log tail and stale marker when `last_bar_age_s > 90` | `GET /api/live-runs/{run_id}/log-tail` parsed by `app.services.live_log_parser` | If parsing is degraded, show degraded; do not synthesize a heartbeat from file mtimes. |
+| Strategy State | Latest decision row fields (`signal`, `ema5`, `ema10`, `rsi14`) and warmup count | `decisions.parquet` tail via `app.routers.live_runs` | Fields are strategy-specific. Missing columns render as absent/unknown, not zero. |
+| Position & Exposure | Recent fills and open position derived from run artifacts | `executions.parquet` and `trades.parquet` | Current copy says "readonly run"; after executing-paper mode this must branch on `execution_source` / `submit_mode` so broker fills are not mislabeled as simulated. |
+| Safety Flags | `halt.flag`, `poisoned.flag`, latest reconcile receipt link | Files under `artifacts/live_runs/<run_id>/` | Flags are run-scoped safety artifacts. They are distinct from durable desired state under `artifacts/live_state/<strategy_instance_id>/desired_state.json`. |
+
+#### Required additions after PR-D
+
+1. **Expose durable desired state as first-class status.**
+   - Backend: extend the live-runs status response with `strategy_instance_id` and `desired_state: { state, updated_at_ms, updated_by, reason, version, path_status }`.
+   - Source: `DesiredStateRepo` at `artifacts/live_state/<strategy_instance_id>/desired_state.json`.
+   - Absence must render as `RUNNING (default; no operator intent file)`. Corruption must render as a blocking red state and match `run.py start` refusal semantics.
+   - Tests: router fixtures for absent/RUNNING, PAUSED, STOPPED, and corrupt desired-state file; Angular render tests for each state.
+
+2. **Separate process lifecycle from trading intent.**
+   - UI has two rows of controls:
+     - **Host process:** Start process, stop process. These call the host daemon and own only subprocess lifecycle.
+     - **Strategy intent:** Pause, Resume, Stop strategy. These write durable desired state and/or command-channel files and own trading permission.
+   - Copy rule: never use one "Stop" button for both meanings. Process stop and strategy stop have different blast radii and different persistence behavior.
+
+3. **Add command-channel controls with ack visibility.**
+   - Backend: add an API surface that writes `CommandChannel.write_from_operator` into the selected run's `commands/` directory and reads recent pending/ack files.
+   - UI controls: Pause, Resume, Stop, Flatten, Mark Poisoned, Reconcile.
+   - User feedback states: `queued` (pending file exists), `acknowledged` (ack file exists), `failed` (ack outcome status error), `stale` (pending older than 3 poll intervals).
+   - Flatten must be visually separated as the highest-risk action. Its copy must state current behavior: PR-D aliases FLATTEN to graceful shutdown + flatten and persists durable `STOPPED`; flatten-without-stop is a future primitive.
+
+4. **Make the top strip a quant/operator risk dashboard.**
+   - Left to right: mode/account, process state, desired state, run state, heartbeat age, last decision timestamp, latest execution timestamp, flags.
+   - Color semantics: green only when process is running, desired state is RUNNING, run state is running/warming/waiting, heartbeat is fresh or no bars yet pre-open, and no flags are set. Yellow for PAUSED, stale heartbeat, waiting for bars, warmup, or degraded parser. Red for STOPPED, halted, poisoned, corrupt desired state, daemon offline for an active run, or command ack failure.
+   - Every timestamp remains `int64 ms UTC` over the wire and converts to America/New_York only at render.
+
+5. **Show numbers with provenance and no frontend math authority.**
+   - Decision values (`ema5`, `ema10`, `rsi14`, signal, intended action/price/fill model) come from `decisions.parquet`.
+   - Execution values (`execution_source`, `fill_model`, `source_bar_close_ms`, fee once PR-G lands) come from `executions.parquet`.
+   - UI may format and round for display; it must not recompute indicators, signals, P&L, divergence categories, or fees.
+   - Add a compact "source" marker per panel: `decision artifact`, `execution artifact`, `desired-state sidecar`, `command ack`, `host daemon`, `log parser`.
+
+6. **Design the operator flow around safe next actions.**
+   - `PAUSED`: show Resume as primary; Start Process is allowed only if the process is down and must boot paused.
+   - `STOPPED`: show Resume as the only way to clear durable stop before Start; Start Process should explain the engine will refuse until desired state becomes RUNNING.
+   - `poisoned.flag`: disable all start/resume controls and route to the documented cold-start inspection.
+   - `halt.flag`: disable start/resume unless the backend proves the halt condition has been cleared.
+   - Daemon offline: show the launch command as today, but keep strategy intent visible if artifacts are readable.
+
+#### Implementation slices
+
+| Slice | Scope | Acceptance |
+|---|---|---|
+| **UI-1 — Status contract** | Add desired-state fields and command summary to `app.schemas.live_runs`, `app.routers.live_runs`, TS types, and service tests. | API returns accurate absent/PAUSED/STOPPED/corrupt states; no timestamp strings; existing observer UI still renders. |
+| **UI-2 — Read-only clarity pass** | Update Paper Run Observer top strip and cards to distinguish process state, run state, desired state, flags, and data provenance. | Playwright/Vitest assertions cover each operator state; no control writes yet. |
+| **UI-3 — Durable intent controls** | Add Pause / Resume / Stop strategy controls backed by durable desired-state write API. | Button click writes the sidecar, UI reloads to the new state, corrupt sidecar blocks with clear error. |
+| **UI-4 — Per-run command controls** | Add Pause / Resume / Stop / Flatten / Mark Poisoned / Reconcile command-channel writes plus pending/ack timeline. | UI shows queued then acked outcomes using real command files; stale pending commands are obvious. |
+| **UI-5 — Execution-aware exposure panel** | Branch exposure copy and tables by `execution_source`, `submit_mode`, and PR-G commission fields. | Executing broker fills, shadow fills, and readonly/simulated rows are labeled differently; no frontend fee/P&L computation. |
+| **UI-6 — Divergence/report viewer** | Render Layer A/B reports and latest receipt bundle with pass/fail, counts, tolerances, and artifact hashes. | UI displays report fields produced by Python/reconcile artifacts; no category recomputation in Angular. |
+
+UI-1 and UI-2 should land before any new trading-control buttons. Otherwise the UI would expose powerful actions without first making the current state and source-of-truth boundaries legible.
