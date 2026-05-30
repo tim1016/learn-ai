@@ -19,6 +19,7 @@ import re
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -26,10 +27,27 @@ import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.broker.ibkr.config import get_settings
+from app.engine.live.command_channel import CommandChannel, CommandVerb
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
+from app.engine.live.run_ledger import read_ledger
 from app.schemas.live_runs import (
     ArtifactFile,
     ArtifactsSummary,
+    CommandAckView,
+    CommandSummary,
+    CommandTimelineResponse,
+    CommandView,
     DecisionsSummary,
+    DesiredStateAction,
+    DesiredStatePathStatus,
+    DesiredStateRecordResponse,
+    DesiredStateView,
+    EnqueueCommandRequest,
     ExecutionsSummary,
     FlagsSummary,
     LiveRunStatus,
@@ -37,6 +55,7 @@ from app.schemas.live_runs import (
     LogLine,
     ReconcileSummary,
     RunStatusSidecar,
+    SetDesiredStateRequest,
     TradesSummary,
 )
 from app.services.live_log_parser import BarEvent, parse_log_tail
@@ -404,6 +423,11 @@ def _build_run_status(run_dir: Path, now_ms: int) -> LiveRunStatus:
         flags=_build_flags_summary(run_dir),
         artifacts=_build_artifacts_summary(run_dir),
         reconcile=_build_reconcile_summary(run_dir),
+        strategy_instance_id=(_status_sid(run_dir) or None),
+        desired_state=_resolve_desired_state(
+            Path(get_settings().live_runs_root), _status_sid(run_dir)
+        ),
+        command_summary=_command_summary(run_dir),
         fetched_at_ms=now_ms,
     )
 
@@ -546,3 +570,213 @@ async def get_log_tail(
             )
 
     return result
+
+
+def _status_sid(run_dir: Path) -> str:
+    """Best-effort strategy_instance_id from the ledger; \"\" on any failure."""
+    ledger_path = run_dir / "run_ledger.json"
+    if not ledger_path.exists():
+        return ""
+    try:
+        return read_ledger(ledger_path).strategy_instance_id
+    except (OSError, ValueError):
+        return ""
+
+
+# --- PRD-A UI-1/UI-3/UI-4 endpoints ---
+
+
+def _now_ms() -> int:
+    """Current wall-clock as int64 ms UTC (boundary conversion)."""
+    return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def _desired_state_root(live_runs_root: Path) -> Path:
+    """Artifacts root that holds both live_runs/ and live_state/.
+
+    ``stable_desired_state_path`` keys off ``<artifacts_root>/live_state/...``;
+    the per-run dirs live under ``<artifacts_root>/live_runs/...``. The
+    settings value is the live_runs dir, so its parent is the artifacts root.
+    """
+    return live_runs_root.parent
+
+
+def _resolve_desired_state(live_runs_root: Path, strategy_instance_id: str) -> DesiredStateView:
+    """Resolve the durable-intent view for a run's strategy instance (UI-1).
+
+    Legacy ledgers (empty ``strategy_instance_id``) resolve to
+    ``unknown_no_ledger_binding`` with a null state — never guessed from parquet.
+    """
+    if not strategy_instance_id:
+        return DesiredStateView(path_status=DesiredStatePathStatus.unknown_no_ledger_binding)
+    path = stable_desired_state_path(_desired_state_root(live_runs_root), strategy_instance_id)
+    repo = DesiredStateRepo(path)
+    try:
+        record = repo.read()
+    except DesiredStateCorruptError:
+        return DesiredStateView(path_status=DesiredStatePathStatus.corrupt)
+    if record is None:
+        return DesiredStateView(path_status=DesiredStatePathStatus.absent)
+    return DesiredStateView(
+        state=record.desired_state.value,
+        updated_at_ms=record.updated_at_ms,
+        updated_by=record.updated_by,
+        reason=record.reason,
+        version=record.version,
+        path_status=DesiredStatePathStatus.ok,
+    )
+
+
+def _command_summary(run_dir: Path) -> CommandSummary:
+    """Pending/ack counts + latest verb from the run's command channel (UI-1)."""
+    commands_dir = run_dir / "commands"
+    channel = CommandChannel(commands_dir)
+    pending = channel.read_pending() if commands_dir.exists() else []
+    acked_count = len(list(commands_dir.glob("command.*.ack.json"))) if commands_dir.exists() else 0
+    latest_verb: str | None = None
+    latest_seq: int | None = None
+    if pending:
+        latest = max(pending, key=lambda c: c.seq)
+        latest_verb = latest.verb.value
+        latest_seq = latest.seq
+    return CommandSummary(
+        pending_count=len(pending),
+        acked_count=acked_count,
+        latest_verb=latest_verb,
+        latest_seq=latest_seq,
+    )
+
+
+def _ledger_or_404(run_dir: Path, run_id: str):
+    """Read the run ledger, mapping read failures to a 404."""
+    ledger_path = run_dir / "run_ledger.json"
+    if not ledger_path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} has no ledger")
+    try:
+        return read_ledger(ledger_path)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} ledger unreadable"
+        ) from exc
+
+
+_INVALID_SID_CHARS = ("/", "\\", "..", "\x00")
+
+
+def _validate_strategy_instance_id(sid: str) -> None:
+    """Reject path-traversal-unsafe strategy-instance ids at the boundary.
+
+    A sibling remediation PR may introduce a canonical
+    ``validate_strategy_instance_id`` in the engine layer; this inline guard
+    should converge with that validator once importable on this base.
+    """
+    if not sid or any(c in sid for c in _INVALID_SID_CHARS) or Path(sid).is_absolute():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id")
+
+
+_ACTION_TO_STATE = {
+    DesiredStateAction.pause: DesiredState.PAUSED,
+    DesiredStateAction.resume: DesiredState.RUNNING,
+    DesiredStateAction.stop: DesiredState.STOPPED,
+}
+
+
+@router.get("/{run_id}/desired-state", response_model=DesiredStateView)
+async def get_desired_state(run_id: str) -> DesiredStateView:
+    """Return the resolved durable-intent view for a run (UI-1)."""
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    ledger = _ledger_or_404(run_dir, run_id)
+    return _resolve_desired_state(root, ledger.strategy_instance_id)
+
+
+@router.post("/{run_id}/desired-state", response_model=DesiredStateRecordResponse)
+async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> DesiredStateRecordResponse:
+    """Write durable operator intent for a run's strategy instance (UI-3)."""
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    ledger = _ledger_or_404(run_dir, run_id)
+    sid = ledger.strategy_instance_id
+    if not sid:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="run has no strategy_instance_id binding (legacy ledger)",
+        )
+    _validate_strategy_instance_id(sid)
+    repo = DesiredStateRepo(stable_desired_state_path(_desired_state_root(root), sid))
+    record = repo.set(
+        _ACTION_TO_STATE[body.action],
+        updated_by=body.updated_by,
+        reason=body.reason,
+        now_ms=_now_ms(),
+    )
+    return DesiredStateRecordResponse(
+        state=record.desired_state.value,
+        updated_at_ms=record.updated_at_ms,
+        updated_by=record.updated_by,
+        reason=record.reason,
+        version=record.version,
+    )
+
+
+@router.post("/{run_id}/commands", response_model=CommandView)
+async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandView:
+    """Enqueue a per-run command-channel verb (UI-4)."""
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    try:
+        verb = CommandVerb(body.verb)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
+    channel = CommandChannel(run_dir / "commands")
+    command = channel.write_from_operator(verb)
+    return CommandView(seq=command.seq, verb=command.verb.value)
+
+
+@router.get("/{run_id}/commands", response_model=CommandTimelineResponse)
+async def get_command_timeline(run_id: str) -> CommandTimelineResponse:
+    """Return the pending + ack timeline for a run's command channel (UI-4)."""
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    commands_dir = run_dir / "commands"
+    channel = CommandChannel(commands_dir)
+    pending = [
+        CommandView(seq=c.seq, verb=c.verb.value)
+        for c in (channel.read_pending() if commands_dir.exists() else [])
+    ]
+    acks: list[CommandAckView] = []
+    if commands_dir.exists():
+        for ack_path in sorted(commands_dir.glob("command.*.ack.json")):
+            try:
+                data = json.loads(ack_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            acks.append(
+                CommandAckView(
+                    seq=int(data["seq"]),
+                    verb=str(data["verb"]),
+                    outcome=dict(data.get("outcome", {})),
+                )
+            )
+    acks.sort(key=lambda a: a.seq)
+    return CommandTimelineResponse(pending=pending, acks=acks)

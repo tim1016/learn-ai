@@ -147,6 +147,9 @@ class LiveRunStatus(BaseModel):
     flags: FlagsSummary
     artifacts: ArtifactsSummary
     reconcile: ReconcileSummary
+    strategy_instance_id: str | None = None
+    desired_state: DesiredStateView | None = None
+    command_summary: CommandSummary | None = None
     fetched_at_ms: int
 
 
@@ -226,3 +229,99 @@ class HostRunnerActionResponse(BaseModel):
 
     accepted: bool
     process: HostRunnerProcessStatus
+
+
+# --- PRD-A UI-1/UI-3/UI-4 contract additions ---
+
+
+class DesiredStatePathStatus(StrEnum):
+    """How the desired-state sidecar resolved for a run (UI-1)."""
+
+    ok = "ok"
+    absent = "absent"
+    corrupt = "corrupt"
+    unknown_no_ledger_binding = "unknown_no_ledger_binding"
+
+
+class DesiredStateView(BaseModel):
+    """Resolved durable-intent view; ``path_status`` carries resolution.
+
+    ``state`` is null unless ``path_status == ok``. Absence is the
+    effective-RUNNING default; an empty ledger binding yields
+    ``unknown_no_ledger_binding`` and is never guessed from parquet.
+    """
+
+    state: str | None = None
+    updated_at_ms: int | None = None
+    updated_by: str | None = None
+    reason: str | None = None
+    version: int | None = None
+    path_status: DesiredStatePathStatus
+
+
+class CommandSummary(BaseModel):
+    """Pending/ack counts + latest verb for a run's command channel."""
+
+    pending_count: int
+    acked_count: int
+    latest_verb: str | None = None
+    latest_seq: int | None = None
+
+
+class DesiredStateAction(StrEnum):
+    """Operator actions mapped to durable desired-state (UI-3)."""
+
+    pause = "pause"
+    resume = "resume"
+    stop = "stop"
+
+
+class SetDesiredStateRequest(BaseModel):
+    """Body for POST /api/live-runs/{run_id}/desired-state."""
+
+    action: DesiredStateAction
+    reason: str = Field(default="", max_length=1024)
+    updated_by: str = Field(default="operator", max_length=256)
+
+
+class DesiredStateRecordResponse(BaseModel):
+    """Persisted desired-state record returned after a write."""
+
+    state: str
+    updated_at_ms: int
+    updated_by: str
+    reason: str | None = None
+    version: int
+
+
+class EnqueueCommandRequest(BaseModel):
+    """Body for POST /api/live-runs/{run_id}/commands."""
+
+    verb: str = Field(
+        description="PAUSE | RESUME | STOP | FLATTEN | MARK_POISONED | RECONCILE."
+    )
+
+
+class CommandView(BaseModel):
+    """A single pending command in the timeline."""
+
+    seq: int
+    verb: str
+
+
+class CommandAckView(BaseModel):
+    """A single acknowledged command in the timeline."""
+
+    seq: int
+    verb: str
+    outcome: dict
+
+
+class CommandTimelineResponse(BaseModel):
+    """Pending + ack timeline for a run's command channel (UI-4)."""
+
+    pending: list[CommandView]
+    acks: list[CommandAckView]
+
+
+LiveRunStatus.model_rebuild()
