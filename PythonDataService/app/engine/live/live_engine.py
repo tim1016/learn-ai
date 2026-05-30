@@ -47,6 +47,7 @@ from app.engine.live.command_channel import (
     CommandVerb,
 )
 from app.engine.live.config import LiveConfig
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.halt import (
     FatalHaltError,
     PoisonedHaltReason,
@@ -260,6 +261,13 @@ class LiveEngine:
         # PAUSE/RESUME/STOP/FLATTEN/RECONCILE/MARK_POISONED to
         # in-process state. None disables the polling.
         command_channel: CommandChannel | None = None,
+        # NEW: durable operator desired-state (PRD-A §16.4 Resolution 7 /
+        # PR-D). ``start_paused`` boots the engine paused when the prior
+        # desired_state.json says PAUSED (survives crash/reboot);
+        # ``desired_state_writer`` persists intent when the command
+        # channel dispatches PAUSE/RESUME/STOP so it outlives this run.
+        start_paused: bool = False,
+        desired_state_writer: Callable[[DesiredState, str], None] | None = None,
         # NEW: decision-row provenance (PRD-A §16.1 Resolution 5). Threaded
         # from run.py off the ledger + resolved spec. ``decision_columns``
         # is the resolved parquet schema (core + spec.decision_columns);
@@ -321,10 +329,13 @@ class LiveEngine:
         self._strategy_spec_sha = strategy_spec_sha
         self._live_state_writer = live_state_writer
         self._command_channel = command_channel
+        self._desired_state_writer = desired_state_writer
         # PAUSE drops new orders the strategy queues each bar; RESUME
         # restores normal submission. STOP / MARK_POISONED set the
         # bar loop's shutdown_event so the existing graceful path runs.
-        self._paused = False
+        # ``start_paused`` seeds this from durable desired-state so a
+        # bot that was PAUSED before a crash resumes paused.
+        self._paused = start_paused
         # Decision-row provenance.
         self._run_id = run_id
         self._strategy_key = strategy_key
@@ -1026,18 +1037,23 @@ class LiveEngine:
         try:
             if cmd.verb is CommandVerb.PAUSE:
                 self._paused = True
+                self._persist_desired_state(DesiredState.PAUSED, "command_channel:PAUSE")
                 return {"status": "success", "effect": "paused"}
             if cmd.verb is CommandVerb.RESUME:
                 self._paused = False
+                self._persist_desired_state(DesiredState.RUNNING, "command_channel:RESUME")
                 return {"status": "success", "effect": "resumed"}
             if cmd.verb is CommandVerb.STOP:
+                self._persist_desired_state(DesiredState.STOPPED, "command_channel:STOP")
                 shutdown_event.set()
                 return {"status": "success", "effect": "shutdown_signalled"}
             if cmd.verb is CommandVerb.FLATTEN:
                 # Graceful shutdown path already calls _shutdown_flatten
                 # which liquidates open positions. Aliasing FLATTEN to
                 # STOP for now; refinement is a follow-up that exposes
-                # a flatten-without-stop primitive.
+                # a flatten-without-stop primitive. FLATTEN persists
+                # STOPPED too so the bot doesn't auto-restart after it.
+                self._persist_desired_state(DesiredState.STOPPED, "command_channel:FLATTEN")
                 shutdown_event.set()
                 return {"status": "success", "effect": "shutdown_signalled_with_flatten"}
             if cmd.verb is CommandVerb.MARK_POISONED:
@@ -1057,6 +1073,26 @@ class LiveEngine:
         except Exception as exc:
             logger.exception("command dispatch failed for verb=%s", cmd.verb.value)
             return {"status": "error", "effect": f"dispatch_exception: {exc!r}"}
+
+    def _persist_desired_state(self, state: DesiredState, reason: str) -> None:
+        """Best-effort durable write of operator intent (PRD-A §16.4
+        Resolution 7) so PAUSE / STOP survive a crash + reboot.
+
+        Mirrors ``_persist_live_state``'s swallow-with-log contract: a
+        desired-state sidecar I/O hiccup must not break command dispatch
+        or take down the 1s poll loop. A ``None`` writer disables it
+        (replay / test paths that don't pass one).
+        """
+        if self._desired_state_writer is None:
+            return
+        try:
+            self._desired_state_writer(state, reason)
+        except Exception:
+            logger.exception(
+                "desired-state persist failed for state=%s reason=%s",
+                state.value,
+                reason,
+            )
 
     def _write_operator_poisoned_flag(self, run_dir: Path, reason: str) -> str:
         """Write a structured operator-declared poisoned.flag.
