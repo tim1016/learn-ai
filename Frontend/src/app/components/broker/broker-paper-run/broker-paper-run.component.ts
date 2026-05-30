@@ -220,6 +220,15 @@ export class BrokerPaperRunComponent {
   readonly commandError = signal<string | null>(null);
   readonly nowMs = signal<number>(Date.now());
 
+  /**
+   * Command-channel verbs are addressed by `run_id`, so they only require a
+   * selected run — unlike durable intent they do not depend on the ledger's
+   * `strategy_instance_id` binding. Disable when no run is selected.
+   */
+  readonly commandControlsDisabled = computed<boolean>(
+    () => this.selectedRunId() == null,
+  );
+
   // ── Host runner daemon ───────────────────────────────────────────────
   readonly runnerReadonly = signal<boolean>(true);
   readonly runnerHydratePolicy = signal<HydratePolicy>('require');

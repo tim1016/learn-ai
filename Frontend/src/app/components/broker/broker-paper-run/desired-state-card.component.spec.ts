@@ -66,6 +66,18 @@ function buttonByText(el: HTMLElement, label: string): HTMLButtonElement | undef
   );
 }
 
+function requireButton(el: HTMLElement, label: string): HTMLButtonElement {
+  const btn = buttonByText(el, label);
+  if (!btn) throw new Error(`Expected a button labelled "${label}"`);
+  return btn;
+}
+
+function requireEl<T extends Element>(root: ParentNode, selector: string): T {
+  const found = root.querySelector<T>(selector);
+  if (!found) throw new Error(`Expected an element matching "${selector}"`);
+  return found;
+}
+
 afterEach(() => {
   TestBed.resetTestingModule();
   vi.restoreAllMocks();
@@ -106,24 +118,24 @@ describe('DesiredStateCardComponent — read-only clarity (UI-2)', () => {
 describe('DesiredStateCardComponent — durable intent controls (UI-3)', () => {
   it('emits a pause action when Pause is clicked from RUNNING', () => {
     const { el, host } = setup(makeDesired('ok', { state: 'RUNNING' }));
-    buttonByText(el, 'Pause strategy')!.click();
+    requireButton(el, 'Pause strategy').click();
     expect(host.actions).toEqual(['pause']);
   });
 
   it('disables Pause when already PAUSED and enables Resume', () => {
     const { el } = setup(makeDesired('ok', { state: 'PAUSED' }));
-    expect(buttonByText(el, 'Pause strategy')!.disabled).toBe(true);
-    expect(buttonByText(el, 'Resume strategy')!.disabled).toBe(false);
+    expect(requireButton(el, 'Pause strategy').disabled).toBe(true);
+    expect(requireButton(el, 'Resume strategy').disabled).toBe(false);
   });
 
   it('requires a confirm step before emitting stop', () => {
     const { fixture, el, host } = setup(makeDesired('ok', { state: 'RUNNING' }));
-    buttonByText(el, 'Stop strategy')!.click();
+    requireButton(el, 'Stop strategy').click();
     fixture.detectChanges();
     expect(host.actions).toEqual([]);
     expect(text(el)).toContain('Stop durably?');
 
-    buttonByText(el, 'Confirm stop')!.click();
+    requireButton(el, 'Confirm stop').click();
     expect(host.actions).toEqual(['stop']);
   });
 
@@ -138,8 +150,8 @@ describe('DesiredStateCardComponent — durable intent controls (UI-3)', () => {
 describe('DesiredStateCardComponent — accessibility', () => {
   it('exposes the card via an aria-labelledby region with a real heading', () => {
     const { el } = setup(makeDesired('ok', { state: 'RUNNING' }));
-    const section = el.querySelector('section[aria-labelledby]')!;
-    const labelId = section.getAttribute('aria-labelledby')!;
+    const section = requireEl(el, 'section[aria-labelledby]');
+    const labelId = section.getAttribute('aria-labelledby') ?? '';
     const heading = el.querySelector(`#${labelId}`);
     expect(heading?.textContent).toContain('Desired State');
   });

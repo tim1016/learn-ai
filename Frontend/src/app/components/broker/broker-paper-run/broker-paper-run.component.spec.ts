@@ -125,6 +125,8 @@ async function flush() {
   TestBed.flushEffects();
 }
 
+let activeFixture: { destroy(): void } | null = null;
+
 function setup(runs: LiveRunSummary[] = [], status: LiveRunStatus | null = null) {
   const svc = new FakeLiveRunsService();
   svc.listRuns.mockResolvedValue(runs);
@@ -134,11 +136,19 @@ function setup(runs: LiveRunSummary[] = [], status: LiveRunStatus | null = null)
     providers: [{ provide: LiveRunsService, useValue: svc }],
   });
   const fixture = TestBed.createComponent(BrokerPaperRunComponent);
+  activeFixture = fixture;
   fixture.detectChanges();
   return { fixture, svc, component: fixture.componentInstance };
 }
 
 afterEach(() => {
+  // Destroy the component before resetting the module so its constructor
+  // effects (setInterval pollers + resource reloads) are torn down
+  // deterministically. Without this, a leaked poller from one test perturbs
+  // the zoneless scheduler of the next, intermittently dropping a queued
+  // signal write (e.g. the auto-selected run id) before an action reads it.
+  activeFixture?.destroy();
+  activeFixture = null;
   TestBed.resetTestingModule();
   vi.restoreAllMocks();
 });
@@ -511,8 +521,10 @@ describe('BrokerPaperRunComponent — command channel', () => {
     const { component, svc } = setup(runs, makeStatus('running'));
     await flush();
     await flush();
+    component.selectRun(RUN_ID);
 
     await component.issueCommand('FLATTEN');
+    await flush();
 
     expect(svc.writeCommand).toHaveBeenCalledWith(RUN_ID, { verb: 'FLATTEN' });
     expect(component.commandError()).toBeNull();
@@ -523,6 +535,7 @@ describe('BrokerPaperRunComponent — command channel', () => {
     const { component, svc } = setup(runs, makeStatus('running'));
     await flush();
     await flush();
+    component.selectRun(RUN_ID);
 
     svc.writeCommand.mockRejectedValueOnce({ message: 'network down' });
     await component.issueCommand('RECONCILE');

@@ -85,25 +85,30 @@ export interface ReconcileSummary {
  *   `strategy_instance_id`, so the sidecar cannot be located at all.
  *   Never guessed — surfaced explicitly.
  */
-export type DesiredStateValue = 'RUNNING' | 'PAUSED' | 'STOPPED';
+// Canonical control-plane primitives live in `live-runs-controls.types.ts`,
+// which is owned by the sibling backend PR (`prd-a/ui-1-status-and-controls-api`,
+// #390). They are imported here and re-exported so existing imports from this
+// module keep working while the single source of truth for the control-plane
+// contract stays in one file.
+import type {
+  CommandVerb,
+  DesiredStateAction,
+  DesiredStateView,
+} from './live-runs-controls.types';
 
-export type DesiredStatePathStatus =
-  | 'ok'
-  | 'absent'
-  | 'corrupt'
-  | 'unknown_no_ledger_binding';
+export type {
+  CommandVerb,
+  DesiredStateAction,
+  DesiredStatePathStatus,
+  DesiredStateValue,
+} from './live-runs-controls.types';
 
-export interface DesiredState {
-  state: DesiredStateValue | null;
-  updated_at_ms: number | null;
-  updated_by: string | null;
-  reason: string | null;
-  version: number | null;
-  path_status: DesiredStatePathStatus;
-}
-
-/** Operator-issued desired-state transition verbs (UI-3). */
-export type DesiredStateAction = 'pause' | 'resume' | 'stop';
+/**
+ * Resolved durable-intent view consumed by the UI. Structurally identical to
+ * `DesiredStateView` from the control-plane contract; aliased so the UI layer
+ * has a stable local name.
+ */
+export type DesiredState = DesiredStateView;
 
 export interface DesiredStateWriteRequest {
   action: DesiredStateAction;
@@ -114,15 +119,6 @@ export interface DesiredStateWriteResponse {
   accepted: boolean;
   desired_state: DesiredState;
 }
-
-/** Per-run command-channel verbs (UI-4, Resolution 7). */
-export type CommandVerb =
-  | 'PAUSE'
-  | 'RESUME'
-  | 'STOP'
-  | 'FLATTEN'
-  | 'MARK_POISONED'
-  | 'RECONCILE';
 
 /**
  * One command-channel entry, derived from the real command files under

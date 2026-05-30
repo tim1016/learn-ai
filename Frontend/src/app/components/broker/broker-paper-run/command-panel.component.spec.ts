@@ -72,6 +72,18 @@ function buttonByText(el: HTMLElement, label: string): HTMLButtonElement | undef
   );
 }
 
+function requireButton(el: HTMLElement, label: string): HTMLButtonElement {
+  const btn = buttonByText(el, label);
+  if (!btn) throw new Error(`Expected a button labelled "${label}"`);
+  return btn;
+}
+
+function requireEl<T extends Element>(root: ParentNode, selector: string): T {
+  const found = root.querySelector<T>(selector);
+  if (!found) throw new Error(`Expected an element matching "${selector}"`);
+  return found;
+}
+
 afterEach(() => {
   TestBed.resetTestingModule();
   vi.restoreAllMocks();
@@ -87,7 +99,7 @@ describe('CommandPanelComponent — controls (UI-4)', () => {
 
   it('emits the verb when a command button is clicked', () => {
     const { el, host } = setup();
-    buttonByText(el, 'Flatten')!.click();
+    requireButton(el, 'Flatten').click();
     expect(host.issued).toEqual(['FLATTEN']);
   });
 
@@ -99,7 +111,7 @@ describe('CommandPanelComponent — controls (UI-4)', () => {
       (b.textContent ?? '').includes('Sending'),
     );
     expect(sendingBtn).toBeDefined();
-    expect(buttonByText(el, 'Pause')!.disabled).toBe(true);
+    expect(requireButton(el, 'Pause').disabled).toBe(true);
   });
 
   it('shows the parent write error', () => {
@@ -173,8 +185,8 @@ describe('CommandPanelComponent — pending/ack timeline (UI-4)', () => {
 describe('CommandPanelComponent — accessibility', () => {
   it('exposes the card via an aria-labelledby region with a real heading', () => {
     const { el } = setup();
-    const section = el.querySelector('section[aria-labelledby]')!;
-    const labelId = section.getAttribute('aria-labelledby')!;
+    const section = requireEl(el, 'section[aria-labelledby]');
+    const labelId = section.getAttribute('aria-labelledby') ?? '';
     const heading = el.querySelector(`#${labelId}`);
     expect(heading?.textContent).toContain('Command Channel');
   });
