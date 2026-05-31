@@ -197,3 +197,24 @@ async def test_set_desired_state_without_live_binding_is_durable_only(
     assert body["durable"]["state"] == "STOPPED"
     assert body["actuation"]["actuated"] is False
     assert "durable only" in body["actuation"]["detail"]
+
+
+async def test_set_desired_state_live_but_run_dir_not_visible_is_durable_only(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Daemon reports a live process but its run dir is not visible under this
+    service's root: never claim a phantom actuation (a command written here
+    would never be seen by the engine polling its real dir)."""
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-ghost", "pid": 5})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "pause"},
+        )
+
+    body = response.json()
+    assert body["durable"]["state"] == "PAUSED"
+    assert body["actuation"]["actuated"] is False
+    assert "not visible locally" in body["actuation"]["detail"]
