@@ -1,5 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
-import type { LiveInstanceSummary } from '../../../api/live-instances.types';
+import type {
+  DesiredStateAction,
+  IntentActuation,
+  LiveInstanceSummary,
+} from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 
 /**
@@ -32,7 +36,29 @@ export class BrokerInstancesComponent {
 
   readonly instances = computed<LiveInstanceSummary[]>(() => this.fleet.value() ?? []);
 
+  readonly busyAction = signal<DesiredStateAction | null>(null);
+  readonly lastActuation = signal<IntentActuation | null>(null);
+
   select(instanceId: string): void {
     this.selectedInstanceId.set(instanceId);
+    this.lastActuation.set(null);
+  }
+
+  /**
+   * The single operator intent knob: durable desired-state, actuated on the
+   * live binding when present (ADR 0004). Liveness-independent — PAUSED means
+   * "should not make new orders" whether it actuates now or gates the next start.
+   */
+  async setIntent(action: DesiredStateAction): Promise<void> {
+    const id = this.selectedInstanceId();
+    if (id === null) return;
+    this.busyAction.set(action);
+    try {
+      const result = await this.svc.setInstanceDesiredState(id, { action });
+      this.lastActuation.set(result.actuation);
+      this.status.reload();
+    } finally {
+      this.busyAction.set(null);
+    }
   }
 }

@@ -412,3 +412,23 @@ class LiveInstanceSummary(BaseModel):
     bound_run_id: str | None = None
     latest_run_id: str | None = None
     desired_state: str | None = None
+
+
+class IntentActuation(BaseModel):
+    """Result of actuating durable intent against the live binding (ADR 0004).
+
+    ``actuated`` is true only when a command was queued on a live run. With no
+    live binding the durable write still gates the next start.
+    """
+
+    actuated: bool
+    run_id: str | None = None
+    command_seq: int | None = None
+    detail: str
+
+
+class SetInstanceDesiredStateResponse(BaseModel):
+    """Single intent knob: durable write first, then live actuation if bound."""
+
+    durable: DesiredStateRecordResponse
+    actuation: IntentActuation

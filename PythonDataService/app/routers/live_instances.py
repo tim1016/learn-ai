@@ -20,14 +20,37 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
-from app.routers.live_runs import _now_ms, _read_ledger, _resolve_desired_state
+from app.engine.live.command_channel import CommandChannel, CommandVerb
+from app.engine.live.desired_state import DesiredStateRepo
+from app.routers.live_runs import (
+    _ACTION_TO_STATE,
+    _desired_state_root,
+    _now_ms,
+    _read_ledger,
+    _resolve_desired_state,
+    _safe_desired_state_path,
+)
 from app.schemas.live_runs import (
+    DesiredStateAction,
+    DesiredStateRecordResponse,
     EvidenceBinding,
     InstanceProcessView,
+    IntentActuation,
     LiveBinding,
     LiveInstanceStatus,
     LiveInstanceSummary,
+    SetDesiredStateRequest,
+    SetInstanceDesiredStateResponse,
 )
+
+# Durable intent action -> live-actuation command verb. PAUSE/RESUME/STOP are the
+# only verbs the durable knob actuates; the engine persists them as reconciling
+# writers, so live actuation leaves desired_state.json at the same semantic state.
+_ACTION_TO_VERB = {
+    DesiredStateAction.pause: CommandVerb.PAUSE,
+    DesiredStateAction.resume: CommandVerb.RESUME,
+    DesiredStateAction.stop: CommandVerb.STOP,
+}
 
 router = APIRouter(tags=["live-instances"])
 
@@ -162,3 +185,54 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         desired_state=_resolve_desired_state(root, sid),
         fetched_at_ms=_now_ms(),
     )
+
+
+@router.post("/{strategy_instance_id}/desired-state", response_model=SetInstanceDesiredStateResponse)
+async def set_instance_desired_state(
+    strategy_instance_id: str, body: SetDesiredStateRequest
+) -> SetInstanceDesiredStateResponse:
+    """The single operator intent knob (ADR 0004).
+
+    1. Write durable intent first (the crash-proof guarantee).
+    2. If a live binding exists, enqueue the matching actuation command on the
+       bound run so the running engine actuates immediately and acks.
+    3. With no live binding, the durable write alone gates the next start.
+
+    The engine command dispatcher persists intent as a *reconciling* writer, so
+    live actuation leaves ``desired_state.json`` at the same semantic state —
+    "paused-but-still-trading" is structurally hard to create.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    repo = DesiredStateRepo(_safe_desired_state_path(_desired_state_root(root), sid))
+    record = repo.set(
+        _ACTION_TO_STATE[body.action],
+        updated_by=body.updated_by,
+        reason=body.reason,
+        now_ms=_now_ms(),
+    )
+    durable = DesiredStateRecordResponse(
+        state=record.desired_state.value,
+        updated_at_ms=record.updated_at_ms,
+        updated_by=record.updated_by,
+        reason=record.reason,
+        version=record.version,
+    )
+
+    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    if live_binding is None:
+        actuation = IntentActuation(actuated=False, detail="durable only; will gate next start")
+    else:
+        verb = _ACTION_TO_VERB[body.action]
+        command = CommandChannel(root / live_binding.run_id / "commands").write_from_operator(verb)
+        actuation = IntentActuation(
+            actuated=True,
+            run_id=live_binding.run_id,
+            command_seq=command.seq,
+            detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
+        )
+
+    return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)

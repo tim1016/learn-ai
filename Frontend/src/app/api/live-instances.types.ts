@@ -46,3 +46,33 @@ export interface LiveInstanceSummary {
   latest_run_id?: string | null;
   desired_state?: string | null;
 }
+
+// --- Single operator intent knob (ADR 0004) ---
+
+export type DesiredStateAction = 'pause' | 'resume' | 'stop';
+
+export interface InstanceDesiredStateRequest {
+  action: DesiredStateAction;
+  reason?: string;
+  updated_by?: string;
+}
+
+export interface IntentActuation {
+  actuated: boolean;
+  run_id?: string | null;
+  command_seq?: number | null;
+  detail: string;
+}
+
+export interface DesiredStateRecord {
+  state: string;
+  updated_at_ms: number;
+  updated_by: string;
+  reason?: string | null;
+  version: number;
+}
+
+export interface SetInstanceDesiredStateResponse {
+  durable: DesiredStateRecord;
+  actuation: IntentActuation;
+}
