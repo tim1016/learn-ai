@@ -46,12 +46,19 @@ import asyncio
 import json
 import logging
 import signal
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.engine.live.deploy import (
+    DeployParams,
+    DirtyTreeError,
+    GitUnavailableError,
+    RunAlreadyExistsError,
+    SpecOrAuditMissingError,
+    deploy_run,
+)
 from app.engine.live.pre_flight import (
     check_clean_tree,
     check_no_halt_flag,
@@ -61,30 +68,9 @@ from app.engine.live.pre_flight import (
     check_yesterday_artifacts_valid,
     run_pre_flight,
 )
-from app.engine.live.run_ledger import (
-    build_ledger,
-    read_ledger,
-    write_ledger,
-)
+from app.engine.live.run_ledger import read_ledger
 
 logger = logging.getLogger(__name__)
-
-
-def _git_head_sha(repo_root: Path) -> str:
-    proc = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        cwd=str(repo_root),
-        timeout=5.0,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"git rev-parse HEAD failed in {repo_root}: rc={proc.returncode} stderr={proc.stderr!r}")
-    sha = proc.stdout.strip()
-    if not sha:
-        raise RuntimeError(f"git rev-parse HEAD returned empty in {repo_root}")
-    return sha
 
 
 # ──────────────────────────── init-ledger subcommand ─────────────────
@@ -93,26 +79,17 @@ def _git_head_sha(repo_root: Path) -> str:
 def cmd_init_ledger(args: argparse.Namespace) -> int:
     """Build a new live-run ledger and write it under ``--run-root/<run_id>/``.
 
-    Refuses to start with a dirty source tree — see § 9. The clean-tree
-    check is the gate that makes ``code_sha`` (set to git HEAD) the
-    *actual* identity of the running code, not just a "close enough"
-    hint.
+    Thin CLI wrapper over :func:`app.engine.live.deploy.deploy_run` (ADR 0006):
+    the deploy seam owns the dirty-tree gate, ``code_sha`` capture, ledger
+    build/write, and idempotency; this maps its typed exceptions to the CLI's
+    exit codes. Non-idempotent here (an existing run dir is an error, exit 2)
+    so the CLI contract is unchanged.
 
-    Persists ``--strategy-instance-id`` (UI-0) into the ledger (schema
-    1.1) so a fresh, pre-decision run has an O(1)
-    ``run_id -> strategy_instance_id`` mapping. It is NOT hashed into
-    ``run_id``; omitting it records an empty binding (legacy / unknown).
+    Persists ``--strategy-instance-id`` (UI-0) into the ledger (schema 1.1) so a
+    fresh, pre-decision run has an O(1) ``run_id -> strategy_instance_id``
+    mapping. It is NOT hashed into ``run_id``; omitting it records an empty
+    binding (legacy / unknown).
     """
-    repo_root: Path = args.repo_root.resolve()
-    scope_paths = [Path(p) for p in args.clean_tree_scope]
-
-    clean = check_clean_tree(scope_paths, repo_root=repo_root)
-    if not clean.passed:
-        print(f"[INIT-LEDGER] dirty-tree halt: {clean.detail}", file=sys.stderr)
-        return 1
-
-    code_sha = _git_head_sha(repo_root)
-
     if args.live_config_json:
         try:
             live_config = json.loads(args.live_config_json)
@@ -131,32 +108,40 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
     else:
         live_config = {}
 
+    params = DeployParams(
+        repo_root=args.repo_root,
+        strategy_spec_path=args.strategy_spec_path,
+        qc_audit_copy_path=args.qc_audit_copy_path,
+        qc_cloud_backtest_id=args.qc_cloud_backtest_id,
+        account_id=args.account_id,
+        start_date_ms=args.start_date_ms,
+        run_root=args.run_root,
+        live_config=live_config,
+        strategy_instance_id=args.strategy_instance_id,
+        clean_tree_scope=tuple(args.clean_tree_scope),
+        force=args.force,
+        idempotent=False,
+    )
     try:
-        ledger = build_ledger(
-            code_sha=code_sha,
-            strategy_spec_path=args.strategy_spec_path,
-            qc_audit_copy_path=args.qc_audit_copy_path,
-            qc_cloud_backtest_id=args.qc_cloud_backtest_id,
-            account_id=args.account_id,
-            start_date_ms=args.start_date_ms,
-            live_config=live_config,
-            strategy_instance_id=args.strategy_instance_id,
-        )
-    except FileNotFoundError as exc:
+        result = deploy_run(params)
+    except DirtyTreeError as exc:
+        print(f"[INIT-LEDGER] dirty-tree halt: {exc}", file=sys.stderr)
+        return 1
+    except GitUnavailableError as exc:
+        print(f"[INIT-LEDGER] {exc}", file=sys.stderr)
+        return 1
+    except SpecOrAuditMissingError as exc:
         print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
         return 2
-
-    run_dir = args.run_root / ledger.run_id
-    if run_dir.exists() and not args.force:
+    except RunAlreadyExistsError as exc:
         print(
-            f"[INIT-LEDGER] run directory already exists: {run_dir}. "
+            f"[INIT-LEDGER] run directory already exists: {exc.run_dir}. "
             f"Pass --force to overwrite (rare — usually means re-running with identical inputs).",
             file=sys.stderr,
         )
         return 2
 
-    write_ledger(run_dir / "run_ledger.json", ledger)
-    print(f"[INIT-LEDGER] wrote {run_dir}/run_ledger.json (run_id={ledger.run_id})")
+    print(f"[INIT-LEDGER] wrote {result.run_dir}/run_ledger.json (run_id={result.run_id})")
     return 0
 
 

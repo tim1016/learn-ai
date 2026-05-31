@@ -255,6 +255,52 @@ class HostRunnerActionResponse(BaseModel):
     process: HostRunnerProcessStatus
 
 
+class HostRunnerDeployRequest(BaseModel):
+    """Request body for creating a run via the daemon (ADR 0006).
+
+    The daemon supplies ``repo_root`` / ``run_root`` from its own config — they
+    are deliberately NOT client-chosen. ``strategy_spec_path`` and
+    ``qc_audit_copy_path`` are resolved against the daemon's repo root and
+    confined to it. The QC anchor (``qc_cloud_backtest_id`` +
+    ``qc_audit_copy_path``) is required — a live run is never created without it.
+    """
+
+    strategy_spec_path: str = Field(min_length=1)
+    qc_audit_copy_path: str = Field(min_length=1)
+    qc_cloud_backtest_id: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
+    start_date_ms: int = Field(ge=0)
+    strategy_instance_id: str = ""
+    live_config: dict = Field(default_factory=dict)
+    force: bool = False
+    # When true, chain a host-runner start after a successful create.
+    start: bool = False
+    start_options: HostRunnerStartRequest = Field(default_factory=HostRunnerStartRequest)
+
+
+class HostRunnerDeployResponse(BaseModel):
+    """Result of a deploy: the content-addressed run plus an optional chained
+    start. ``created`` is ``False`` for an idempotent no-op (the run already
+    existed with a matching ledger)."""
+
+    run_id: str
+    run_dir: str
+    created: bool
+    start: HostRunnerActionResponse | None = None
+
+
+class QcAuditCopyListing(BaseModel):
+    """Committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
+
+    ``entries`` are repo-relative POSIX paths suitable to pass straight back as
+    a deploy's ``qc_audit_copy_path``. Empty when the directory is absent or the
+    daemon is unreachable.
+    """
+
+    scope_root: str
+    entries: list[str] = Field(default_factory=list)
+
+
 # --- PRD-A UI-1/UI-3/UI-4 contract additions ---
 
 
