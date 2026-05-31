@@ -70,7 +70,7 @@ describe('TimeWindowCardComponent', () => {
       component.applyPreset(30);
       const from = new Date(component.value().from);
       // Mon 2026-05-25 minus 30 = Sat 2026-04-25 → walks to Fri 2026-04-24.
-      expect(from.getDay()).toBe(5);
+      expect(from.getUTCDay()).toBe(5);
       expect(component.value().from).toBe('2026-04-24');
     });
 
@@ -81,7 +81,7 @@ describe('TimeWindowCardComponent', () => {
       component.applyPreset(365);
       const from = new Date(component.value().from);
       // Mon 2026-05-25 minus 365 = Sun 2025-05-25 → walks to Fri 2025-05-23.
-      expect(from.getDay()).toBe(5);
+      expect(from.getUTCDay()).toBe(5);
       expect(component.value().from).toBe('2025-05-23');
     });
 
@@ -93,7 +93,7 @@ describe('TimeWindowCardComponent', () => {
       const to = new Date(component.value().to);
       // Today is Sun → end walks to Fri 2026-05-22. Start follows the
       // same 7-day-back-then-weekday rule so it also lands on Friday.
-      expect(to.getDay()).toBe(5);
+      expect(to.getUTCDay()).toBe(5);
       expect(component.value().to).toBe('2026-05-22');
     });
 

@@ -14,7 +14,7 @@ describe('describeOperationError', () => {
   it('maps a 503 to infra with start-specific remediation', () => {
     const e = describeOperationError('start', 503, 'host daemon unreachable');
     expect(e.category).toBe('infra');
-    expect(e.remediation.toLowerCase()).toContain('host daemon');
+    expect(e.remediation.toLowerCase()).toContain('live engine');
   });
 
   it('maps a 409 command to a no-binding precondition', () => {
