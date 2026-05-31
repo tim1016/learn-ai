@@ -48,8 +48,21 @@
         </span>
         <span class="rung"><small>DESIRED</small>{{ s.desired_state?.state ?? 'unknown' }}</span>
       </header>
+
+      <div class="intent" role="group" aria-label="Operator intent">
+        <span class="intent-label">Intent</span>
+        <button type="button" (click)="setIntent('pause')" [disabled]="busyAction() !== null">Pause</button>
+        <button type="button" (click)="setIntent('resume')" [disabled]="busyAction() !== null">Resume</button>
+        <button type="button" (click)="setIntent('stop')" [disabled]="busyAction() !== null">Stop</button>
+      </div>
+
+      @let act = lastActuation();
+      @if (act) {
+        <p class="actuation" [class.live]="act.actuated">{{ act.detail }}</p>
+      }
+
       @if (!s.live_binding && s.evidence_binding) {
-        <p class="note">No live process — showing the latest completed/stale run as evidence. Commands are disabled.</p>
+        <p class="note">No live process — showing the latest completed/stale run as evidence. Intent changes will gate the next start.</p>
       }
     </article>
   }

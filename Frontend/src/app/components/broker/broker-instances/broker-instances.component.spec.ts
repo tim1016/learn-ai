@@ -44,6 +44,15 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
 class FakeLiveRunsService {
   getInstances = vi.fn().mockResolvedValue(FLEET);
   getInstanceStatus = vi.fn().mockResolvedValue(makeStatus());
+  setInstanceDesiredState = vi.fn().mockResolvedValue({
+    durable: { state: 'PAUSED', updated_at_ms: 1, updated_by: 'operator', reason: null, version: 2 },
+    actuation: {
+      actuated: true,
+      run_id: 'run-live',
+      command_seq: 1,
+      detail: 'PAUSE queued on run-live; awaiting ack',
+    },
+  });
 }
 
 /** Flush microtask queue and Angular effect queue (resource loads). */
@@ -117,6 +126,25 @@ describe('BrokerInstancesComponent', () => {
 
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('stale evidence');
-    expect(text).toContain('Commands are disabled');
+    expect(text).toContain('gate the next start');
+  });
+
+  it('issues durable intent and surfaces the actuation result', async () => {
+    const { fixture, component, svc } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    await component.setIntent('pause');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.setInstanceDesiredState).toHaveBeenCalledWith('spy_ema_paper', { action: 'pause' });
+    expect(fixture.nativeElement.textContent).toContain('PAUSE queued on run-live');
   });
 });
