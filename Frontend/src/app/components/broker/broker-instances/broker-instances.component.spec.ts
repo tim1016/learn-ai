@@ -46,6 +46,11 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
         { name: 'orders_cap', status: 'fail', severity: 'hard', detail: '4 / 4 orders used' },
       ],
     },
+    latest_decision: { signal: 'ENTER', ema5: 624.123, rsi: 61.2 },
+    decision_columns: [
+      { name: 'ema5', label: 'EMA 5', type: 'float64', format: 'decimal' },
+      { name: 'rsi', label: 'RSI', type: 'float64', format: 'decimal' },
+    ],
     fetched_at_ms: 1,
     ...overrides,
   };
@@ -173,5 +178,22 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('BLOCKED');
     expect(text).toContain('orders_cap');
     expect(text).toContain('4 / 4 orders used');
+  });
+
+  it('renders strategy state from spec descriptors, formatted, with no hardcoded names', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('EMA 5'); // descriptor label, not the raw column name
+    expect(text).toContain('RSI');
+    expect(text).toContain('624.12'); // decimal-formatted to 2 dp
+    expect(text).toContain('Signal: ENTER');
   });
 });

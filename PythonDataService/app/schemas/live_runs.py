@@ -417,6 +417,20 @@ class ReadinessVector(BaseModel):
     live_readiness_available: bool | None = None
 
 
+class DecisionColumnDescriptor(BaseModel):
+    """Operator-facing descriptor for one strategy-specific decision column (#396).
+
+    Derived from the strategy spec so the console renders any strategy's
+    indicators generically. ``format`` is decimal|integer|boolean|text.
+    """
+
+    name: str
+    label: str
+    type: str
+    format: str
+    semantic: str = ""
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -430,6 +444,8 @@ class LiveInstanceStatus(BaseModel):
     evidence_binding: EvidenceBinding | None = None
     desired_state: DesiredStateView | None = None
     readiness: ReadinessVector | None = None
+    latest_decision: dict | None = None
+    decision_columns: list[DecisionColumnDescriptor] = Field(default_factory=list)
     fetched_at_ms: int
 
 

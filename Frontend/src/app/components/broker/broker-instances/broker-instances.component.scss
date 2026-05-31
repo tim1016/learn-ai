@@ -132,6 +132,46 @@
     }
   }
 
+  .strategy-state {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border, #e5e7eb);
+
+    h2 {
+      margin: 0 0 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .signal {
+      margin: 0 0 0.5rem;
+      font-weight: 600;
+    }
+
+    .indicators {
+      margin: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+      gap: 0.5rem;
+    }
+
+    .indicator {
+      display: flex;
+      flex-direction: column;
+
+      dt {
+        font-size: 0.6875rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-muted, #6b7280);
+      }
+
+      dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+    }
+  }
+
   .readiness {
     margin-top: 1rem;
     padding-top: 0.75rem;

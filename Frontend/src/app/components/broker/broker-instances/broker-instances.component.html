@@ -72,6 +72,24 @@
         </section>
       }
 
+      @if (s.decision_columns.length) {
+        <section class="strategy-state" aria-label="Strategy state">
+          <h2>Strategy state</h2>
+          @let sig = signalOf(s.latest_decision);
+          @if (sig) {
+            <p class="signal">Signal: {{ sig }}</p>
+          }
+          <dl class="indicators">
+            @for (col of s.decision_columns; track col.name) {
+              <div class="indicator">
+                <dt [title]="col.semantic ?? ''">{{ col.label }}</dt>
+                <dd>{{ formatCell(s.latest_decision, col) }}</dd>
+              </div>
+            }
+          </dl>
+        </section>
+      }
+
       <div class="intent" role="group" aria-label="Operator intent">
         <span class="intent-label">Intent</span>
         <button type="button" (click)="setIntent('pause')" [disabled]="busyAction() !== null">Pause</button>

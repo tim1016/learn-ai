@@ -51,6 +51,14 @@ export interface ReadinessVector {
   live_readiness_available?: boolean | null;
 }
 
+export interface DecisionColumnDescriptor {
+  name: string;
+  label: string;
+  type: string;
+  format: string;
+  semantic?: string;
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;
@@ -58,6 +66,8 @@ export interface LiveInstanceStatus {
   evidence_binding: EvidenceBinding | null;
   desired_state: DesiredStateView | null;
   readiness: ReadinessVector | null;
+  latest_decision: Record<string, unknown> | null;
+  decision_columns: DecisionColumnDescriptor[];
   fetched_at_ms: number;
 }
 
