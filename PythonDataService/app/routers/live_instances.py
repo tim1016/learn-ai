@@ -13,7 +13,6 @@ Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -25,11 +24,11 @@ from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
+    _confine,
     _desired_state_root,
     _now_ms,
     _read_ledger,
     _resolve_desired_state,
-    _safe_desired_state_path,
     _validate_path_segment,
 )
 from app.schemas.live_runs import (
@@ -53,6 +52,10 @@ _ACTION_TO_VERB = {
     DesiredStateAction.resume: CommandVerb.RESUME,
     DesiredStateAction.stop: CommandVerb.STOP,
 }
+
+# Filename of the durable desired-state sidecar (the stable
+# <artifacts>/live_state/<sid>/ layout owned by desired_state.py).
+_DESIRED_STATE_FILE = "desired_state.json"
 
 router = APIRouter(tags=["live-instances"])
 
@@ -221,19 +224,20 @@ async def set_instance_desired_state(
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    # The id is a remote (URL) value flowing into a filesystem write. Confine
-    # the final path with realpath + startswith — the form the scanner
-    # recognizes as breaking py/path-injection — and pass the checked realpath
-    # to the writer (`_safe_desired_state_path` validates the segment but
-    # returns an unresolved path the scanner cannot see as confined).
+    # The id is a remote (URL) value flowing into a filesystem write. Build the
+    # sidecar path through `_confine` (resolve + relative_to on the validated
+    # literal, return used) exactly as `_validate_run_id` does for the
+    # CodeQL-clean command-channel write — this is the form the scanner
+    # recognizes as breaking py/path-injection. `_safe_desired_state_path`
+    # discards `_confine`'s confined return, so the scanner can't see it.
     artifacts_root = _desired_state_root(root)
-    live_state_root = os.path.realpath(artifacts_root / "live_state")
-    sidecar_real = os.path.realpath(_safe_desired_state_path(artifacts_root, sid))
-    if sidecar_real != live_state_root and not sidecar_real.startswith(live_state_root + os.sep):
+    try:
+        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+    except ValueError as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
-        )
-    repo = DesiredStateRepo(Path(sidecar_real))
+        ) from exc
+    repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,
