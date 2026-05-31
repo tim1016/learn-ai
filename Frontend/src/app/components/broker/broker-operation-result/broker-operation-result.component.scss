@@ -1,0 +1,43 @@
+.op-result {
+  border-left: 3px solid var(--op-accent, #888);
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.85rem;
+}
+
+.op-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.op-detail {
+  margin: 0.25rem 0 0;
+  opacity: 0.85;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  overflow-wrap: break-word;
+}
+
+.op-remediation {
+  margin: 0.35rem 0 0;
+}
+
+// Category accents. Color is reinforced by the title text (not color-only),
+// keeping the alert WCAG-AA legible.
+.cat-validation {
+  --op-accent: #d6a700;
+}
+.cat-not-found {
+  --op-accent: #8a8a8a;
+}
+.cat-precondition {
+  --op-accent: #d97706;
+}
+.cat-infra {
+  --op-accent: #d73a49;
+}
+.cat-unknown {
+  --op-accent: #b060d0;
+}
