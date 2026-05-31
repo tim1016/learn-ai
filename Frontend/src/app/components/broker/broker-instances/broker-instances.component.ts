@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
 import type {
+  DecisionColumnDescriptor,
   DesiredStateAction,
   IntentActuation,
   LiveInstanceSummary,
@@ -62,5 +63,19 @@ export class BrokerInstancesComponent {
     } finally {
       this.busyAction.set(null);
     }
+  }
+
+  /** Format a decision-row value by its spec-declared format (#396). */
+  formatCell(decision: Record<string, unknown> | null, col: DecisionColumnDescriptor): string {
+    const value = decision?.[col.name];
+    if (value === null || value === undefined) return '—';
+    if (col.format === 'decimal' && typeof value === 'number') return value.toFixed(2);
+    return String(value);
+  }
+
+  /** The latest decision's core signal (ENTER/EXIT/HOLD), when present. */
+  signalOf(decision: Record<string, unknown> | null): string | null {
+    const value = decision?.['signal'];
+    return typeof value === 'string' ? value : null;
   }
 }
