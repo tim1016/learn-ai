@@ -555,6 +555,26 @@ async def test_qc_audit_copies_lists_committed_files(
     assert "references/qc-shadow/SpyEmaCrossoverAlgorithm.py" in body["entries"]
 
 
+@requires_git
+async def test_qc_audit_copies_excludes_untracked_files(
+    git_daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """ADR 0006 provenance: only committed copies are deploy-eligible. An
+    untracked file under references/qc-shadow must NOT be listed — otherwise the
+    UI offers a deploy option not backed by committed source."""
+    manager, repo = git_daemon_context
+    untracked = repo / "references" / "qc-shadow" / "UncommittedAlgorithm.py"
+    untracked.write_text("# not committed\n", encoding="utf-8")
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/qc-audit-copies")
+
+    entries = response.json()["entries"]
+    assert "references/qc-shadow/SpyEmaCrossoverAlgorithm.py" in entries  # committed
+    assert "references/qc-shadow/UncommittedAlgorithm.py" not in entries  # untracked
+
+
 async def test_qc_audit_copies_empty_when_dir_absent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "PythonDataService").mkdir(parents=True)

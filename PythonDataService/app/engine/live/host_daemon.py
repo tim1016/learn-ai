@@ -31,6 +31,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.engine.live.deploy import (
+    DeployIOError,
     DeployParams,
     DirtyTreeError,
     GitUnavailableError,
@@ -303,6 +304,10 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc
         except GitUnavailableError as exc:
             raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"git unavailable: {exc}") from exc
+        except DeployIOError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE, f"deploy filesystem error: {exc}"
+            ) from exc
 
         start_action: HostRunnerActionResponse | None = None
         if request.start:
@@ -322,25 +327,52 @@ class RunnerProcessManager:
             start=start_action,
         )
 
+    def _git_tracked_under(self, subdir: Path) -> list[str]:
+        """Repo-relative POSIX paths of git-tracked files under ``subdir``.
+
+        ``git ls-files`` lists only committed/staged (tracked) files, so ignored
+        and untracked files are excluded by construction. A non-repo / git
+        failure raises so the caller can fail closed rather than fall back to a
+        raw filesystem walk that would surface untracked files."""
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--", str(subdir)],
+            capture_output=True,
+            text=True,
+            cwd=str(self.repo_root),
+            timeout=10.0,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"git ls-files failed: rc={proc.returncode} stderr={proc.stderr!r}")
+        return [p for p in proc.stdout.split("\0") if p]
+
     def list_qc_audit_copies(self) -> QcAuditCopyListing:
         """List committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
 
         Returns repo-relative POSIX paths so each can be passed straight back as
-        a deploy's ``qc_audit_copy_path``. The scope root is fixed (not client
-        input); each entry is still re-confined under it to guard against
-        symlink escapes. An absent directory yields an empty list, not an error.
+        a deploy's ``qc_audit_copy_path``. Only **git-tracked** files are listed:
+        the ADR 0006 provenance contract is "committed QC audit copies", and the
+        deploy clean-tree check assumes the audit copy is committed — surfacing
+        ignored/untracked files would hand the UI a deploy option not backed by
+        committed source. The scope root is fixed (not client input); each entry
+        is re-confined under it to guard against symlink escapes. An absent
+        directory yields an empty list, not an error.
         """
         scope_root = (self.repo_root / _QC_SHADOW_SUBDIR).resolve()
+        if not (scope_root.is_dir() and scope_root.is_relative_to(self.repo_root)):
+            return QcAuditCopyListing(scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=[])
+
         entries: list[str] = []
-        if scope_root.is_dir() and scope_root.is_relative_to(self.repo_root):
-            for path in sorted(scope_root.rglob("*")):
-                if not path.is_file():
-                    continue
-                resolved = path.resolve()
-                if not resolved.is_relative_to(scope_root):
-                    continue  # symlink pointing outside the scope root
-                entries.append(resolved.relative_to(self.repo_root).as_posix())
-        return QcAuditCopyListing(scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=entries)
+        for rel in self._git_tracked_under(_QC_SHADOW_SUBDIR):
+            resolved = (self.repo_root / rel).resolve()
+            if not resolved.is_file():
+                continue  # tracked but deleted-on-disk
+            if not resolved.is_relative_to(scope_root):
+                continue  # symlink pointing outside the scope root
+            entries.append(resolved.relative_to(self.repo_root).as_posix())
+        return QcAuditCopyListing(
+            scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=sorted(entries)
+        )
 
     def _resolve_under_repo(self, raw: str, *, field: str) -> Path:
         """Resolve an operator-supplied path against ``repo_root`` and confine

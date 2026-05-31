@@ -325,7 +325,16 @@ async def deploy_instance(
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
-    parsed = HostRunnerDeployResponse.model_validate(result)
+    try:
+        parsed = HostRunnerDeployResponse.model_validate(result)
+    except ValidationError as exc:
+        # Upstream (daemon) contract failure — surface as a gateway error, not a
+        # 500 that makes the data plane look broken.
+        logger.warning("invalid deploy payload from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid deploy payload",
+        ) from exc
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
     return parsed
@@ -393,7 +402,18 @@ async def get_qc_audit_copies() -> QcAuditCopyListing:
     listing = await host_daemon_client.fetch_qc_audit_copies(settings.live_runner_daemon_url)
     if listing is None:
         return QcAuditCopyListing(scope_root="references/qc-shadow", entries=[])
-    return QcAuditCopyListing.model_validate(listing)
+    try:
+        return QcAuditCopyListing.model_validate(listing)
+    except ValidationError as exc:
+        # A schema-invalid payload is an upstream contract failure, distinct from
+        # an unreachable daemon (which fails closed to an empty listing above).
+        # Surface it as a gateway error rather than 500 or a silently-empty list
+        # that would read as "no committed QC copies".
+        logger.warning("invalid qc-audit-copy listing from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid QC audit-copy listing",
+        ) from exc
 
 
 @router.get("/account", response_model=FleetContamination)

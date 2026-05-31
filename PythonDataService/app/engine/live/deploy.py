@@ -53,6 +53,12 @@ class SpecOrAuditMissingError(DeployError):
     """The strategy spec or QC audit-copy path does not exist on disk."""
 
 
+class DeployIOError(DeployError):
+    """A filesystem error reading the inputs or writing the ledger that is not a
+    plain missing-file (e.g. a permission error, or the spec path is a
+    directory). Maps to infra-failure status rather than a 500 traceback."""
+
+
 class RunAlreadyExistsError(DeployError):
     """The content-addressed run directory already exists.
 
@@ -150,6 +156,11 @@ def deploy_run(params: DeployParams) -> DeployResult:
         )
     except FileNotFoundError as exc:
         raise SpecOrAuditMissingError(str(exc)) from exc
+    except OSError as exc:
+        # IsADirectoryError / PermissionError / etc. reading the input paths —
+        # not a plain missing file, but still a filesystem failure that must
+        # stay inside the typed contract, not escape as a 500 traceback.
+        raise DeployIOError(str(exc)) from exc
 
     run_dir = params.run_root / ledger.run_id
     ledger_path = run_dir / "run_ledger.json"
@@ -160,12 +171,22 @@ def deploy_run(params: DeployParams) -> DeployResult:
                 existing = read_ledger(ledger_path)
             except (OSError, ValueError) as exc:
                 raise RunAlreadyExistsError(ledger.run_id, run_dir) from exc
-            if existing.run_id == ledger.run_id:
+            # run_id is content-addressed and excludes strategy_instance_id, so a
+            # re-deploy with the same inputs but a DIFFERENT instance binding is
+            # NOT a safe no-op — returning the old ledger would attach a later
+            # start() to the wrong durable instance. Require both to match.
+            if (
+                existing.run_id == ledger.run_id
+                and existing.strategy_instance_id == ledger.strategy_instance_id
+            ):
                 return DeployResult(
                     run_id=ledger.run_id, run_dir=run_dir, created=False, ledger=existing
                 )
             raise RunAlreadyExistsError(ledger.run_id, run_dir)
         raise RunAlreadyExistsError(ledger.run_id, run_dir)
 
-    write_ledger(ledger_path, ledger)
+    try:
+        write_ledger(ledger_path, ledger)
+    except OSError as exc:
+        raise DeployIOError(str(exc)) from exc
     return DeployResult(run_id=ledger.run_id, run_dir=run_dir, created=True, ledger=ledger)

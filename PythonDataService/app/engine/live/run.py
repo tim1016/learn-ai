@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.engine.live.deploy import (
+    DeployIOError,
     DeployParams,
     DirtyTreeError,
     GitUnavailableError,
@@ -133,6 +134,9 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
     except SpecOrAuditMissingError as exc:
         print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
         return 2
+    except DeployIOError as exc:
+        print(f"[INIT-LEDGER] filesystem error: {exc}", file=sys.stderr)
+        return 1
     except RunAlreadyExistsError as exc:
         print(
             f"[INIT-LEDGER] run directory already exists: {exc.run_dir}. "

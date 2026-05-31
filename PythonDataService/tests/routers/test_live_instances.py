@@ -594,6 +594,42 @@ async def test_deploy_instance_daemon_unreachable_propagates_503(
     assert response.status_code == 503
 
 
+async def test_deploy_instance_invalid_payload_returns_502(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema-invalid deploy payload from the daemon is an upstream contract
+    failure → 502, not a 500 that makes the data plane look broken."""
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"unexpected": "shape"}  # missing run_id/run_dir/created
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 502
+
+
+async def test_qc_audit_copies_invalid_payload_returns_502(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed (non-None) listing from the daemon must not 500 or silently
+    read as an empty list — surface it as a gateway error."""
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str) -> dict | None:
+        return {"scope_root": 123, "entries": "not-a-list"}  # wrong types
+
+    monkeypatch.setattr(host_daemon_client, "fetch_qc_audit_copies", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/qc-audit-copies")
+
+    assert response.status_code == 502
+
+
 async def test_qc_audit_copies_passthrough(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 

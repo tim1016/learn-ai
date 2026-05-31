@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.deploy import (
+    DeployIOError,
     DeployParams,
     DirtyTreeError,
     RunAlreadyExistsError,
@@ -124,6 +125,18 @@ def test_deploy_run_missing_audit_raises(
 
 
 @requires_git
+def test_deploy_run_directory_as_spec_raises_io_error(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """A non-missing filesystem failure (spec path is a directory) stays inside
+    the typed contract as DeployIOError, not an escaping IsADirectoryError."""
+    repo, _spec, qc = repo_with_inputs
+    a_dir = repo / "PythonDataService"  # exists, but is a directory
+    with pytest.raises(DeployIOError):
+        deploy_run(_params(repo, a_dir, qc, tmp_path / "live_runs"))
+
+
+@requires_git
 def test_deploy_run_idempotent_redeploy_is_noop(
     repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
 ) -> None:
@@ -136,6 +149,27 @@ def test_deploy_run_idempotent_redeploy_is_noop(
     assert first.created is True
     assert second.created is False
     assert second.run_id == first.run_id
+
+
+@requires_git
+def test_deploy_run_idempotent_different_instance_is_collision(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """run_id excludes strategy_instance_id, so a re-deploy with the same inputs
+    but a DIFFERENT instance binding must NOT be a safe no-op — it would attach a
+    later start() to the wrong durable instance. It's a collision."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    first = deploy_run(_params(repo, spec, qc, run_root, idempotent=True, strategy_instance_id="inst-A"))
+    assert first.created is True
+
+    with pytest.raises(RunAlreadyExistsError):
+        deploy_run(_params(repo, spec, qc, run_root, idempotent=True, strategy_instance_id="inst-B"))
+
+    # Same instance binding remains a safe no-op.
+    same = deploy_run(_params(repo, spec, qc, run_root, idempotent=True, strategy_instance_id="inst-A"))
+    assert same.created is False
 
 
 @requires_git
