@@ -13,6 +13,7 @@ Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -220,21 +221,19 @@ async def set_instance_desired_state(
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    # The id is a remote (URL) value flowing into a filesystem write, so apply
-    # a confinement barrier on the *final* path (resolve + relative_to) and pass
-    # the checked path to the writer — this is the form the scanner recognizes
-    # as breaking py/path-injection (`_safe_desired_state_path` validates the
-    # segment but returns an unresolved path the scanner can't see as confined).
+    # The id is a remote (URL) value flowing into a filesystem write. Confine
+    # the final path with realpath + startswith — the form the scanner
+    # recognizes as breaking py/path-injection — and pass the checked realpath
+    # to the writer (`_safe_desired_state_path` validates the segment but
+    # returns an unresolved path the scanner cannot see as confined).
     artifacts_root = _desired_state_root(root)
-    sidecar_path = _safe_desired_state_path(artifacts_root, sid).resolve()
-    live_state_root = (artifacts_root / "live_state").resolve()
-    try:
-        sidecar_path.relative_to(live_state_root)
-    except ValueError as exc:
+    live_state_root = os.path.realpath(artifacts_root / "live_state")
+    sidecar_real = os.path.realpath(_safe_desired_state_path(artifacts_root, sid))
+    if sidecar_real != live_state_root and not sidecar_real.startswith(live_state_root + os.sep):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
-        ) from exc
-    repo = DesiredStateRepo(sidecar_path)
+        )
+    repo = DesiredStateRepo(Path(sidecar_real))
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,
