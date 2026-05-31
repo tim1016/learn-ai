@@ -287,6 +287,66 @@ async def test_start_injects_sibling_managed_symbols(
     assert captured[1][idx + 1] == expected_symbol
 
 
+async def test_sibling_symbols_resolves_relative_spec_paths_from_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ledgers store repo-relative spec paths; daemon cwd may be PythonDataService."""
+    from app.engine.strategy.spec import schema as spec_schema
+
+    source_fixture = Path(spec_schema.__file__).parent / "fixtures" / "spy_ema_crossover.spec.json"
+    expected_symbol = json.loads(source_fixture.read_text(encoding="utf-8"))["symbols"][0]
+
+    repo_root = tmp_path / "repo"
+    live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
+    fixture = (
+        repo_root
+        / "PythonDataService"
+        / "app"
+        / "engine"
+        / "strategy"
+        / "spec"
+        / "fixtures"
+        / "spy_ema_crossover.spec.json"
+    )
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(source_fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    (repo_root / "PythonDataService").mkdir(exist_ok=True)
+
+    ema_run = "run-ema-" + "a" * 54
+    vwap_run = "run-vwap-" + "b" * 52
+    for run_id, sid in ((ema_run, "spy_ema"), (vwap_run, "spy_vwap")):
+        run_dir = live_runs_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run_ledger.json").write_text(
+            json.dumps(
+                {
+                    "strategy_instance_id": sid,
+                    "strategy_spec_path": "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+    captured: list[list[str]] = []
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        captured.append(command)
+        return FakeProcess()
+
+    monkeypatch.chdir(repo_root / "PythonDataService")
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(f"/runs/{ema_run}/start", json={})
+        await client.post(f"/runs/{vwap_run}/start", json={})
+
+    assert "--managed-symbols" in captured[1]
+    idx = captured[1].index("--managed-symbols")
+    assert captured[1][idx + 1] == expected_symbol
+
+
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "8.8.8.8"])
 def test_build_parser_rejects_non_loopback_host(host: str) -> None:
     parser = build_parser()

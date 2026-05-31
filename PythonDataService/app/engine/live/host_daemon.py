@@ -314,7 +314,10 @@ class RunnerProcessManager:
         """Best-effort: the single trading symbol of a run, from its spec."""
         try:
             data = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
-            spec = load_spec_from_path(data["strategy_spec_path"])
+            spec_path = Path(data["strategy_spec_path"])
+            if not spec_path.is_absolute():
+                spec_path = self.repo_root / spec_path
+            spec = load_spec_from_path(spec_path)
             return spec.symbols[0] if spec.symbols else None
         except (OSError, ValueError, KeyError, IndexError):
             return None
