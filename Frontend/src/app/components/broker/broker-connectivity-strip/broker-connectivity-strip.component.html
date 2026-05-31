@@ -12,7 +12,7 @@
 
   @if (connectivity.blockers().length > 0) {
     <ul class="blockers" role="alert">
-      @for (reason of connectivity.blockers(); track reason) {
+      @for (reason of connectivity.blockers(); track $index) {
         <li>{{ reason }}</li>
       }
     </ul>
