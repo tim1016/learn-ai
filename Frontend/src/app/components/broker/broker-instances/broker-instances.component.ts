@@ -9,6 +9,19 @@ import type {
 } from '../../../api/live-instances.types';
 import type { CommandEntry, CommandVerb } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
+import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
+import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
+
+// One-shot command verb -> operation kind for the error map.
+const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
+  RECONCILE: 'reconcile',
+  FLATTEN: 'flatten',
+  MARK_POISONED: 'mark-poisoned',
+  PAUSE: 'pause',
+  RESUME: 'resume',
+  STOP: 'stop',
+};
 
 /**
  * Instance control room — foundation (ADR 0004).
@@ -21,6 +34,7 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 @Component({
   selector: 'app-broker-instances',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [BrokerConnectivityStripComponent, BrokerOperationResultComponent],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
 })
@@ -57,9 +71,15 @@ export class BrokerInstancesComponent {
   readonly lastActuation = signal<IntentActuation | null>(null);
   readonly busyVerb = signal<CommandVerb | null>(null);
 
+  // Structured inline errors (handoff: inline-only surfacing, never a toast).
+  readonly intentError = signal<OperationError | null>(null);
+  readonly commandError = signal<OperationError | null>(null);
+
   select(instanceId: string): void {
     this.selectedInstanceId.set(instanceId);
     this.lastActuation.set(null);
+    this.intentError.set(null);
+    this.commandError.set(null);
   }
 
   /**
@@ -71,12 +91,15 @@ export class BrokerInstancesComponent {
     const id = this.selectedInstanceId();
     if (id === null) return;
     this.busyAction.set(action);
+    this.intentError.set(null);
     try {
       const result = await this.svc.setInstanceDesiredState(id, { action });
       if (this.selectedInstanceId() === id) {
         this.lastActuation.set(result.actuation);
         this.status.reload();
       }
+    } catch (err) {
+      if (this.selectedInstanceId() === id) this.intentError.set(toOperationError(action, err));
     } finally {
       this.busyAction.set(null);
     }
@@ -87,9 +110,12 @@ export class BrokerInstancesComponent {
     const id = this.selectedInstanceId();
     if (id === null) return;
     this.busyVerb.set(verb);
+    this.commandError.set(null);
     try {
       await this.svc.issueInstanceCommand(id, { verb });
       if (this.selectedInstanceId() === id) this.commands.reload();
+    } catch (err) {
+      if (this.selectedInstanceId() === id) this.commandError.set(toOperationError(VERB_TO_KIND[verb], err));
     } finally {
       this.busyVerb.set(null);
     }

@@ -2,6 +2,8 @@
   <h1>Strategy instances</h1>
   <p class="subtitle">Operator control room — the instance is the subject; the run is evidence.</p>
 
+  <app-broker-connectivity-strip />
+
   @let acct = account.value();
   @if (acct) {
     <section class="account" aria-label="Account contamination" [class.dirty]="acct.verdict === 'contaminated'">
@@ -140,6 +142,7 @@
       @if (act) {
         <p class="actuation" [class.live]="act.actuated">{{ act.detail }}</p>
       }
+      <app-broker-operation-result [error]="intentError()" />
 
       @if (!s.live_binding && s.evidence_binding) {
         <p class="note">No live process — showing the latest completed/stale run as evidence. Intent changes will gate the next start.</p>
@@ -152,6 +155,10 @@
           <button type="button" (click)="issueCommand('FLATTEN')" [disabled]="busyVerb() !== null || !s.live_binding">Flatten now</button>
           <button type="button" (click)="issueCommand('MARK_POISONED')" [disabled]="busyVerb() !== null || !s.live_binding">Mark poisoned</button>
         </div>
+        @if (!s.live_binding) {
+          <p class="disabled-reason">Commands need a live run bound to this instance — start the instance first.</p>
+        }
+        <app-broker-operation-result [error]="commandError()" />
         @if (commandEntries().length) {
           <ul class="command-timeline" aria-label="Command timeline">
             @for (c of commandEntries(); track c.seq) {

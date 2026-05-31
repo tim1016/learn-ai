@@ -5,6 +5,7 @@ import type {
   LiveInstanceSummary,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { BrokerInstancesComponent } from './broker-instances.component';
 
 const FLEET: LiveInstanceSummary[] = [
@@ -112,8 +113,15 @@ let activeFixture: { destroy(): void } | null = null;
 
 function setup() {
   const svc = new FakeLiveRunsService();
+  // The console embeds the connectivity strip, which injects
+  // BrokerConnectivityService. Provide a quiet fake so these tests don't pull
+  // in the real BrokerHealthService / HttpClient polling chain.
+  const connectivity = { links: () => [], blockers: () => [] };
   TestBed.configureTestingModule({
-    providers: [{ provide: LiveRunsService, useValue: svc }],
+    providers: [
+      { provide: LiveRunsService, useValue: svc },
+      { provide: BrokerConnectivityService, useValue: connectivity },
+    ],
   });
   const fixture = TestBed.createComponent(BrokerInstancesComponent);
   activeFixture = fixture;

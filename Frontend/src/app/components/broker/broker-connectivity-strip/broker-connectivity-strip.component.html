@@ -1,0 +1,20 @@
+<section class="connectivity-strip" aria-label="Broker connectivity">
+  <ul class="links">
+    @for (link of connectivity.links(); track link.key) {
+      <li class="link" [class]="'state-' + link.state">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="label">{{ link.label }}</span>
+        <span class="detail">{{ link.detail }}</span>
+        <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
+      </li>
+    }
+  </ul>
+
+  @if (connectivity.blockers().length > 0) {
+    <ul class="blockers" role="alert">
+      @for (reason of connectivity.blockers(); track reason) {
+        <li>{{ reason }}</li>
+      }
+    </ul>
+  }
+</section>

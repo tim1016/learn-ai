@@ -1,0 +1,82 @@
+.connectivity-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.label {
+  font-weight: 600;
+}
+
+.detail {
+  opacity: 0.8;
+}
+
+.dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--link-color, #888);
+  flex: 0 0 auto;
+}
+
+// State colour reinforced by the always-present detail text, so the strip is
+// not conveying status by colour alone (WCAG AA).
+.state-ok {
+  --link-color: #2ea043;
+}
+.state-down {
+  --link-color: #d73a49;
+}
+.state-warn {
+  --link-color: #d97706;
+}
+.state-unknown {
+  --link-color: #8a8a8a;
+}
+
+.blockers {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  list-style: none;
+  border-left: 3px solid #d97706;
+  background: rgba(217, 118, 6, 0.08);
+  border-radius: 4px;
+  font-size: 0.85rem;
+
+  li + li {
+    margin-top: 0.25rem;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
