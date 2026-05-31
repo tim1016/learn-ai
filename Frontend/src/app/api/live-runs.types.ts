@@ -264,3 +264,14 @@ export interface EngineStrategyInfo {
   display_name: string;
   description: string;
 }
+
+/** Canonical strategy-spec fixture from `GET /api/spec-strategy/fixtures`.
+ * `path` is repo-relative and can be passed back to deploy as
+ * `strategy_spec_path`. */
+export interface SpecStrategyFixture {
+  name: string;
+  spec_name: string;
+  path: string;
+  symbols: string[];
+  description: string | null;
+}

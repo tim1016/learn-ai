@@ -99,6 +99,7 @@ class SpecBacktestResponse(BaseModel):
 class FixtureListItem(BaseModel):
     name: str
     spec_name: str
+    path: str
     symbols: list[str]
     description: str | None = None
 
@@ -214,6 +215,7 @@ def list_fixtures() -> list[FixtureListItem]:
                 FixtureListItem(
                     name=path.stem.replace(".spec", ""),
                     spec_name=payload.get("name", ""),
+                    path=f"PythonDataService/app/engine/strategy/spec/fixtures/{path.name}",
                     symbols=payload.get("symbols", []),
                     description=payload.get("description"),
                 )

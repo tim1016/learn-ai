@@ -19,6 +19,7 @@ import type {
   LiveRunSummary,
   LogLine,
   QcAuditCopyListing,
+  SpecStrategyFixture,
 } from '../api/live-runs.types';
 import type {
   FleetContamination,
@@ -186,5 +187,10 @@ export class LiveRunsService {
   /** Registered engine strategies — the deploy form's algorithm dropdown. */
   getEngineStrategies(): Promise<EngineStrategyInfo[]> {
     return firstValueFrom(this.http.get<EngineStrategyInfo[]>('/api/engine/strategies'));
+  }
+
+  /** Canonical strategy spec fixtures, including repo-relative paths for deploy. */
+  getSpecStrategyFixtures(): Promise<SpecStrategyFixture[]> {
+    return firstValueFrom(this.http.get<SpecStrategyFixture[]>('/api/spec-strategy/fixtures'));
   }
 }

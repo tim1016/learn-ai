@@ -16,6 +16,15 @@ function setup(opts: { daemonDown?: boolean; fleetBlocks?: boolean } = {}) {
       .mockResolvedValue([
         { name: 'spy_ema_crossover', display_name: 'SPY EMA Crossover', description: '' },
       ]),
+    getSpecStrategyFixtures: vi.fn().mockResolvedValue([
+      {
+        name: 'spy_ema_crossover',
+        spec_name: 'SPY EMA Crossover',
+        path: 'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
+        symbols: ['SPY'],
+        description: null,
+      },
+    ]),
     getQcAuditCopies: vi
       .fn()
       .mockResolvedValue({ scope_root: 'references/qc-shadow', entries: ['references/qc-shadow/A.py'] }),
@@ -27,8 +36,13 @@ function setup(opts: { daemonDown?: boolean; fleetBlocks?: boolean } = {}) {
   const connectivity = {
     links: () => [],
     blockers: () => [],
+    daemonState: () => (opts.daemonDown ? 'down' : 'ok'),
+    brokerState: () => 'ok',
+    fleetState: () => (opts.fleetBlocks ? 'warn' : 'ok'),
+    nothingDeployed: () => false,
     daemonDown: () => opts.daemonDown ?? false,
     fleetBlocksStarts: () => opts.fleetBlocks ?? false,
+    reload: vi.fn(),
   };
   TestBed.configureTestingModule({
     providers: [
@@ -97,7 +111,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(typeof req.start_date_ms).toBe('number');
     // Deploy-only: launch knobs are omitted so they aren't validated.
     expect(req.start_options).toBeUndefined();
-    expect(fixture.nativeElement.textContent).toContain('Deployed run');
+    expect(fixture.nativeElement.textContent).toContain('Deployment created');
     expect(fixture.nativeElement.textContent).toContain('run-new');
   });
 
@@ -113,6 +127,25 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.start).toBe(true);
     expect(req.start_options.strategy).toBe('spy_ema_crossover');
     expect(req.start_options.max_orders_per_day).toBe(4);
+  });
+
+  it('asks for confirmation before starting in Live mode', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    component.readonlyFlag.set(false);
+    fixture.detectChanges();
+
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).toContain('Start live trading?');
+
+    await component.confirmLiveAndSubmit();
+
+    expect(svc.deployInstance).toHaveBeenCalledTimes(1);
   });
 
   it('reuses a stable start_date_ms across retries (idempotency)', async () => {
@@ -172,7 +205,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Host daemon unreachable');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Live engine unavailable');
   });
 
   it('blocks "Deploy & start" when fleet policy blocks starts, but allows deploy-only', async () => {
@@ -182,7 +215,7 @@ describe('BrokerDeployFormComponent', () => {
     component.startNow.set(true);
     fixture.detectChanges();
     expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Fleet policy blocks new starts');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Fleet state blocks new starts');
 
     component.startNow.set(false);
     fixture.detectChanges();

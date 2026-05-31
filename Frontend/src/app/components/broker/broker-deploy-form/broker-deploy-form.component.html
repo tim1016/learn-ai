@@ -1,111 +1,196 @@
 <section class="deploy">
   <header class="head">
-    <h1>Deploy a strategy</h1>
-    <a routerLink="/broker/instances" class="back">← Instances</a>
+    <div>
+      <h1>Deploy a strategy</h1>
+      <p class="subtitle">Create a live strategy instance and bind it to the QuantConnect backtest that approved it.</p>
+    </div>
+    <a routerLink="/broker/instances" class="back">Instances</a>
   </header>
-  <p class="subtitle">Create a run (stage 1). Reconciliation-gated by design — the QC audit copy must be committed under <code>references/qc-shadow/</code> and the working tree clean.</p>
 
   <app-broker-connectivity-strip />
 
   @if (deployed(); as d) {
     <div class="deployed" role="status">
-      <p class="run">
-        @if (d.created) {
-          ✓ Deployed run <span class="mono">{{ d.run_id }}</span>
-        } @else {
-          ✓ Run <span class="mono">{{ d.run_id }}</span> already exists — idempotent no-op (same inputs + HEAD).
-        }
-      </p>
-      @if (d.start) {
-        <p class="started">Launch {{ d.start.accepted ? 'accepted' : 'rejected' }} — process {{ d.start.process.state }}.</p>
+      @if (d.created) {
+        <h2>Deployment created</h2>
+        <p>Your strategy instance is ready.</p>
+      } @else {
+        <h2>This deployment already exists</h2>
+        <p>Nothing changed; your inputs match the existing deployment.</p>
       }
-      <a routerLink="/broker/instances" class="goto">Go to the instance console →</a>
+      @if (d.start) {
+        <p>Start {{ d.start.accepted ? 'accepted' : 'rejected' }}: {{ d.start.process.message ?? d.start.process.state }}</p>
+      }
+      <details>
+        <summary>Run id</summary>
+        <code>{{ d.run_id }}</code>
+      </details>
+      <a routerLink="/broker/instances" class="goto">View deployment</a>
     </div>
   }
 
-  <form class="form" (submit)="$event.preventDefault(); submit()">
-    <label class="field">
-      <span>Strategy (algorithm)</span>
-      <select [value]="strategyKey()" (change)="setStrategyKey($event)" required>
-        <option value="" disabled>Select a strategy…</option>
-        @for (s of strategies.value() ?? []; track s.name) {
-          <option [value]="s.name">{{ s.display_name }} ({{ s.name }})</option>
+  <div class="workspace">
+    <form class="form" (submit)="$event.preventDefault(); submit()">
+      <section class="group" aria-labelledby="strategy-section">
+        <h2 id="strategy-section">Strategy</h2>
+        <label class="field">
+          <span>Strategy</span>
+          <select [value]="strategyKey()" (change)="setStrategyKey($event)" required>
+            <option value="" disabled>Select a strategy…</option>
+            @for (s of strategies.value() ?? []; track s.name) {
+              <option [value]="s.name">{{ s.display_name }}</option>
+            }
+          </select>
+        </label>
+
+        @if (manualSpecPath()) {
+          <label class="field">
+            <span>Strategy settings file</span>
+            <input type="text" [value]="specPath()" (input)="setSpecPath($event)" required
+              placeholder="PythonDataService/app/engine/strategy/spec/fixtures/<name>.spec.json" autocomplete="off" spellcheck="false" />
+            <small>Repo-relative path to the strategy settings JSON.</small>
+          </label>
+        } @else {
+          <label class="field">
+            <span>Strategy settings file</span>
+            <select [value]="specPath()" (change)="setSpecFixturePath($event)" required>
+              <option value="" disabled>Select a settings file…</option>
+              @for (fixture of specFixtures.value() ?? []; track fixture.path) {
+                <option [value]="fixture.path">{{ fixture.spec_name || fixture.name }}</option>
+              }
+            </select>
+            <small>{{ selectedFixture()?.path ?? 'Defaults to the file that matches the selected strategy.' }}</small>
+          </label>
+          <button type="button" class="text-button" (click)="useManualSpecPath()">Enter path manually</button>
         }
-      </select>
-      <small>Pins both the launch algorithm and the reconciliation guard (strategy_key).</small>
-    </label>
+      </section>
 
-    <label class="field">
-      <span>Strategy spec path</span>
-      <input type="text" [value]="specPath()" (input)="setSpecPath($event)" required
-        placeholder="PythonDataService/app/engine/strategy/spec/fixtures/<name>.spec.json" autocomplete="off" spellcheck="false" />
-      <small>A committed spec JSON, repo-relative. Must match the selected algorithm.</small>
-    </label>
+      <section class="group" aria-labelledby="account-section">
+        <h2 id="account-section">Account</h2>
+        <label class="field">
+          <span>Brokerage account</span>
+          <input type="text" [value]="accountId()" (input)="setAccountId($event)" required
+            placeholder="DU1234567" autocomplete="off" />
+          <small>{{ account.value() ? 'Prefilled from the connected broker.' : 'Broker disconnected; enter the account id.' }}</small>
+        </label>
+      </section>
 
-    <label class="field">
-      <span>Account</span>
-      <input type="text" [value]="accountId()" (input)="setAccountId($event)" required
-        placeholder="DU1234567" autocomplete="off" />
-      <small>{{ account.value() ? 'Prefilled from the connected broker; override if needed.' : 'Broker not connected — enter the IBKR account id.' }}</small>
-    </label>
+      <section class="group" aria-labelledby="verification-section">
+        <h2 id="verification-section">Backtest verification</h2>
+        <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result.</p>
+        <label class="field">
+          <span>Backtest ID <span class="hint" title="QuantConnect Cloud id">ⓘ</span></span>
+          <input type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
+            placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
+        </label>
 
-    <label class="field">
-      <span>QC Cloud backtest id</span>
-      <input type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
-        placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
-    </label>
+        <label class="field">
+          <span>Backtest results file <span class="hint" title="Committed snapshot under references/qc-shadow.">ⓘ</span></span>
+          <select [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
+            <option value="" disabled>Select a saved backtest result…</option>
+            @for (path of qcCopies.value()?.entries ?? []; track path) {
+              <option [value]="path">{{ path }}</option>
+            }
+          </select>
+          <small>Empty list? Save and commit the QuantConnect result first.</small>
+        </label>
+      </section>
 
-    <label class="field">
-      <span>QC audit copy</span>
-      <select [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
-        <option value="" disabled>Select a committed audit copy…</option>
-        @for (path of qcCopies.value()?.entries ?? []; track path) {
-          <option [value]="path">{{ path }}</option>
-        }
-      </select>
-      <small>Committed copies under <code>references/qc-shadow/</code>. Empty? Commit the audit copy first.</small>
-    </label>
+      <section class="group" aria-labelledby="launch-section">
+        <div class="group-head">
+          <h2 id="launch-section">Launch options</h2>
+          @if (!startNow()) {
+            <span class="scope-note">Applies only when starting now</span>
+          }
+        </div>
+        <fieldset class="mode" [class.live-selected]="launchMode() === 'live'" [disabled]="!startNow()">
+          <legend>Mode</legend>
+          <label>
+            <input type="radio" name="launch-mode" value="paper" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
+            <span>Paper</span>
+          </label>
+          <label>
+            <input type="radio" name="launch-mode" value="live" [checked]="!readonlyFlag()" (change)="setReadonly($event)" />
+            <span>Live</span>
+          </label>
+        </fieldset>
 
-    <label class="field">
-      <span>Instance name</span>
-      <input type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
-        placeholder="spy-ema-paper-1" autocomplete="off" spellcheck="false" />
-    </label>
+        <div class="launch-fields" [class.dimmed]="!startNow()">
+          <label class="field inline">
+            <span>Daily order limit</span>
+            <input type="number" min="0" max="100" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
+          </label>
 
-    <fieldset class="knobs">
-      <legend>Runtime</legend>
-      <label class="check">
-        <input type="checkbox" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
-        <span>Read-only (no live order submission)</span>
-      </label>
-      <label class="inline">
-        <span>Hydrate policy</span>
-        <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
-          <option value="require">require</option>
-          <option value="optional">optional</option>
-          <option value="disabled">disabled</option>
-        </select>
-      </label>
-      <label class="inline">
-        <span>Max orders / day</span>
-        <input type="number" min="0" max="100" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
-      </label>
-      <label class="check">
-        <input type="checkbox" [checked]="startNow()" (change)="setStartNow($event)" />
-        <span>Start the run immediately after deploy</span>
-      </label>
-    </fieldset>
+          <label class="field inline">
+            <span>Restore previous state <span class="hint" title="Controls whether the engine must load yesterday's saved indicator state before it starts.">ⓘ</span></span>
+            <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
+              <option value="require">Required</option>
+              <option value="optional">Optional</option>
+              <option value="disabled">Off</option>
+            </select>
+          </label>
+        </div>
 
-    <div class="actions">
-      <button type="submit" class="primary" [disabled]="!canSubmit()">
+        <label class="check">
+          <input type="checkbox" [checked]="startNow()" (change)="setStartNow($event)" />
+          <span>Start trading immediately</span>
+        </label>
+
+        <label class="field">
+          <span>Deployment name</span>
+          <input type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
+            placeholder="spy-ema-paper-1" autocomplete="off" spellcheck="false" />
+        </label>
+      </section>
+
+      <app-broker-operation-result [error]="error()" />
+    </form>
+
+    <aside class="readiness" aria-label="Deployment readiness">
+      <section>
+        <h2>Now</h2>
+        <ul>
+          @for (check of nowChecks(); track check.key) {
+            <li [class]="'state-' + check.state">
+              <span class="dot" aria-hidden="true"></span>
+              <span>{{ check.label }}</span>
+              <small>{{ check.detail }}</small>
+            </li>
+          }
+        </ul>
+      </section>
+
+      <section class="at-deploy">
+        <h2>At deploy</h2>
+        <ul>
+          @for (check of deployChecks(); track check.key) {
+            <li [class]="'state-' + check.state">
+              <span class="dot" aria-hidden="true"></span>
+              <span>{{ check.label }}</span>
+              <small>{{ check.detail }}</small>
+            </li>
+          }
+        </ul>
+      </section>
+
+      <button type="submit" class="primary" [disabled]="!canSubmit()" (click)="submit()">
         {{ startNow() ? 'Deploy & start' : 'Deploy' }}
       </button>
       @let reason = blockedReason();
-      @if (reason) {
-        <p class="blocked" role="status">{{ reason }}</p>
-      }
-    </div>
+      <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
+    </aside>
+  </div>
 
-    <app-broker-operation-result [error]="error()" />
-  </form>
+  @if (showLiveConfirm()) {
+    <div class="dialog-backdrop" role="presentation">
+      <section class="confirm" role="dialog" aria-modal="true" aria-labelledby="live-confirm-title">
+        <h2 id="live-confirm-title">Start live trading?</h2>
+        <p>Live mode can place real orders on {{ accountId() || 'the selected account' }}.</p>
+        <div class="confirm-actions">
+          <button type="button" class="danger" (click)="confirmLiveAndSubmit()">Deploy & start live</button>
+          <button type="button" (click)="cancelLiveConfirm()">Cancel</button>
+        </div>
+      </section>
+    </div>
+  }
 </section>
