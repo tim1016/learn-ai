@@ -8,8 +8,11 @@ import {
   signal,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import type { HydratePolicy } from '../../../api/live-runs.types';
-import type { HostRunnerDeployResponse } from '../../../api/live-runs.types';
+import type {
+  HostRunnerDeployRequest,
+  HostRunnerDeployResponse,
+  HydratePolicy,
+} from '../../../api/live-runs.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -67,6 +70,12 @@ export class BrokerDeployFormComponent {
   readonly error = signal<OperationError | null>(null);
   readonly deployed = signal<HostRunnerDeployResponse | null>(null);
 
+  // Captured once when the form opens, NOT per-submit: start_date_ms is part of
+  // the content-addressed run_id hash, so a retry with identical inputs must
+  // reuse the same value to hit the backend's idempotent no-op (created=false)
+  // rather than minting a new run_id off the current clock.
+  private readonly startDateMs = Date.now();
+
   private readonly required = computed<boolean>(
     () =>
       this.strategyKey().trim() !== '' &&
@@ -97,25 +106,32 @@ export class BrokerDeployFormComponent {
     this.busy.set(true);
     this.error.set(null);
     this.deployed.set(null);
+    const strategyKey = this.strategyKey().trim();
+    const request: HostRunnerDeployRequest = {
+      strategy_spec_path: this.specPath().trim(),
+      qc_audit_copy_path: this.qcAuditCopyPath().trim(),
+      qc_cloud_backtest_id: this.qcBacktestId().trim(),
+      account_id: this.accountId().trim(),
+      start_date_ms: this.startDateMs,
+      strategy_instance_id: this.instanceId().trim(),
+      strategy_key: strategyKey,
+      start: this.startNow(),
+    };
+    // Only attach launch knobs when actually starting — otherwise a deploy-only
+    // request carries irrelevant start_options that still get validated (and a
+    // cleared "max orders" field would serialize NaN → null and fail).
+    if (this.startNow()) {
+      const maxOrders = this.maxOrdersPerDay();
+      request.start_options = {
+        readonly: this.readonlyFlag(),
+        hydrate_policy: this.hydratePolicy(),
+        strategy: strategyKey,
+        max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : 4,
+        ibkr_host: '127.0.0.1',
+      };
+    }
     try {
-      const response = await this.svc.deployInstance({
-        strategy_spec_path: this.specPath().trim(),
-        qc_audit_copy_path: this.qcAuditCopyPath().trim(),
-        qc_cloud_backtest_id: this.qcBacktestId().trim(),
-        account_id: this.accountId().trim(),
-        // int64 ms UTC of the run-start session (run_id identity input).
-        start_date_ms: Date.now(),
-        strategy_instance_id: this.instanceId().trim(),
-        strategy_key: this.strategyKey(),
-        start: this.startNow(),
-        start_options: {
-          readonly: this.readonlyFlag(),
-          hydrate_policy: this.hydratePolicy(),
-          strategy: this.strategyKey(),
-          max_orders_per_day: this.maxOrdersPerDay(),
-          ibkr_host: '127.0.0.1',
-        },
-      });
+      const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
     } catch (err) {
       this.error.set(toOperationError('deploy', err));

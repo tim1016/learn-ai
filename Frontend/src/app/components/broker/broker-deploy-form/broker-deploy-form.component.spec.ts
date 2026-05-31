@@ -95,9 +95,37 @@ describe('BrokerDeployFormComponent', () => {
       start: false,
     });
     expect(typeof req.start_date_ms).toBe('number');
-    expect(req.start_options.strategy).toBe('spy_ema_crossover');
+    // Deploy-only: launch knobs are omitted so they aren't validated.
+    expect(req.start_options).toBeUndefined();
     expect(fixture.nativeElement.textContent).toContain('Deployed run');
     expect(fixture.nativeElement.textContent).toContain('run-new');
+  });
+
+  it('attaches start_options only when "Start now" is checked', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.start).toBe(true);
+    expect(req.start_options.strategy).toBe('spy_ema_crossover');
+    expect(req.start_options.max_orders_per_day).toBe(4);
+  });
+
+  it('reuses a stable start_date_ms across retries (idempotency)', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+
+    await component.submit();
+    await component.submit();
+
+    const first = svc.deployInstance.mock.calls[0][0].start_date_ms;
+    const second = svc.deployInstance.mock.calls[1][0].start_date_ms;
+    expect(second).toBe(first);
   });
 
   it('conveys an idempotent no-op as success, not an error', async () => {
