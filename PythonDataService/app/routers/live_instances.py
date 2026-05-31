@@ -68,25 +68,26 @@ _LIVE_STATES = frozenset({"running", "stopping"})
 
 
 def _validate_instance_id(strategy_instance_id: str) -> str:
-    """Validate the operator-supplied instance id at the boundary and return a
-    sanitized literal.
+    """Validate the operator-supplied instance id and return a sanitized literal.
 
-    The id flows into both a host-daemon URL and the desired-state filesystem
-    path, so it is rejected unless it matches a strict single-segment pattern,
-    then run through ``_validate_path_segment`` whose returned value breaks the
-    CodeQL py/path-injection taint chain for the downstream sidecar write.
+    Mirrors ``_validate_run_id``: run the value through ``_validate_path_segment``
+    then assert a strict single-segment regex via ``fullmatch`` as the sole guard
+    on the *returned* literal. That regex guard on the value that reaches the
+    daemon URL and the desired-state path is the form the scanner recognizes as
+    breaking the CodeQL py/path-injection taint chain.
     """
-    if _INSTANCE_ID_RE.fullmatch(strategy_instance_id) is None or ".." in strategy_instance_id:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid strategy_instance_id: {strategy_instance_id!r}",
-        )
     try:
-        return _validate_path_segment(strategy_instance_id, field="strategy_instance_id")
+        safe = _validate_path_segment(strategy_instance_id, field="strategy_instance_id")
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
         ) from exc
+    if _INSTANCE_ID_RE.fullmatch(safe) is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid strategy_instance_id: {strategy_instance_id!r}",
+        )
+    return safe
 
 
 def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
