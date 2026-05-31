@@ -508,3 +508,155 @@ async def test_set_desired_state_enqueue_failure_is_durable_only(
     assert body["actuation"]["actuated"] is False
     assert body["actuation"]["run_id"] == "run-live-ddd"
     assert "failed to enqueue live command" in body["actuation"]["detail"]
+
+
+# ── deploy / create (ADR 0006) ───────────────────────────────────────
+
+
+def _deploy_body() -> dict:
+    return {
+        "strategy_spec_path": "PythonDataService/spec.json",
+        "qc_audit_copy_path": "references/qc-shadow/A.py",
+        "qc_cloud_backtest_id": "bt-1",
+        "account_id": "DU111",
+        "start_date_ms": 1700000000000,
+        "strategy_instance_id": "spy_ema_paper",
+        "live_config": {"symbol": "SPY"},
+    }
+
+
+async def test_deploy_instance_created_returns_201(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["run_id"] == "run-new"
+    assert body["created"] is True
+
+
+async def test_deploy_instance_idempotent_returns_200(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-existing", "run_dir": "/runs/run-existing", "created": False, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 200
+    assert response.json()["created"] is False
+
+
+async def test_deploy_instance_dirty_tree_propagates_409(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(409, "Working tree is dirty; commit or stash before deploying.")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 409
+    assert "dirty" in response.json()["detail"].lower()
+
+
+async def test_deploy_instance_daemon_unreachable_propagates_503(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(503, "host daemon unreachable: connection refused")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 503
+
+
+async def test_deploy_instance_invalid_payload_returns_502(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema-invalid deploy payload from the daemon is an upstream contract
+    failure → 502, not a 500 that makes the data plane look broken."""
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"unexpected": "shape"}  # missing run_id/run_dir/created
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 502
+
+
+async def test_qc_audit_copies_invalid_payload_returns_502(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed (non-None) listing from the daemon must not 500 or silently
+    read as an empty list — surface it as a gateway error."""
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str) -> dict | None:
+        return {"scope_root": 123, "entries": "not-a-list"}  # wrong types
+
+    monkeypatch.setattr(host_daemon_client, "fetch_qc_audit_copies", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/qc-audit-copies")
+
+    assert response.status_code == 502
+
+
+async def test_qc_audit_copies_passthrough(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str) -> dict | None:
+        return {"scope_root": "references/qc-shadow", "entries": ["references/qc-shadow/A.py"]}
+
+    monkeypatch.setattr(host_daemon_client, "fetch_qc_audit_copies", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/qc-audit-copies")
+
+    assert response.status_code == 200
+    assert response.json()["entries"] == ["references/qc-shadow/A.py"]
+
+
+async def test_qc_audit_copies_failclosed_to_empty(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str) -> dict | None:
+        return None  # daemon unreachable
+
+    monkeypatch.setattr(host_daemon_client, "fetch_qc_audit_copies", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/qc-audit-copies")
+
+    assert response.status_code == 200
+    assert response.json()["entries"] == []

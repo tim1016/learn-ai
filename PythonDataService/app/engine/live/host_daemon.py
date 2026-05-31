@@ -30,9 +30,20 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.live.deploy import (
+    DeployIOError,
+    DeployParams,
+    DirtyTreeError,
+    GitUnavailableError,
+    RunAlreadyExistsError,
+    SpecOrAuditMissingError,
+    deploy_run,
+)
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
     HostRunnerActionResponse,
+    HostRunnerDeployRequest,
+    HostRunnerDeployResponse,
     HostRunnerHealth,
     HostRunnerInstance,
     HostRunnerInstancesStatus,
@@ -40,11 +51,14 @@ from app.schemas.live_runs import (
     HostRunnerProcessStatus,
     HostRunnerStartRequest,
     HostRunnerStopRequest,
+    QcAuditCopyListing,
 )
 
 logger = logging.getLogger(__name__)
 
 _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
+# Fixed subdirectory holding committed QC audit copies (ADR 0006).
+_QC_SHADOW_SUBDIR = Path("references") / "qc-shadow"
 _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 
@@ -248,6 +262,134 @@ class RunnerProcessManager:
         )
         return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
+    def deploy(self, request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
+        """Create a run on the host via ``deploy_run`` (ADR 0006), optionally
+        starting it.
+
+        Only the host has the git working tree, so ``init-ledger`` must run
+        here, not in the data-plane container. ``repo_root`` / ``run_root`` are
+        the daemon's own; the spec and QC audit paths are confined under
+        ``repo_root``. Idempotent on the content-addressed ``run_id``: an
+        identical re-deploy returns ``created=False``.
+        """
+        spec_path = self._resolve_under_repo(request.strategy_spec_path, field="strategy_spec_path")
+        audit_path = self._resolve_under_repo(request.qc_audit_copy_path, field="qc_audit_copy_path")
+
+        params = DeployParams(
+            repo_root=self.repo_root,
+            strategy_spec_path=spec_path,
+            qc_audit_copy_path=audit_path,
+            qc_cloud_backtest_id=request.qc_cloud_backtest_id,
+            account_id=request.account_id,
+            start_date_ms=request.start_date_ms,
+            run_root=self.live_runs_root,
+            live_config=request.live_config,
+            strategy_instance_id=request.strategy_instance_id,
+            force=request.force,
+            idempotent=True,
+        )
+        try:
+            result = deploy_run(params)
+        except DirtyTreeError as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                f"Working tree is dirty; commit or stash before deploying. {exc}",
+            ) from exc
+        except RunAlreadyExistsError as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                f"Run directory already exists without a matching ledger: {exc.run_dir}",
+            ) from exc
+        except SpecOrAuditMissingError as exc:
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc
+        except GitUnavailableError as exc:
+            raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"git unavailable: {exc}") from exc
+        except DeployIOError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE, f"deploy filesystem error: {exc}"
+            ) from exc
+
+        start_action: HostRunnerActionResponse | None = None
+        if request.start:
+            start_action = self.start(result.run_id, request.start_options)
+
+        logger.info(
+            "Deployed run=%s instance=%s (created=%s, started=%s)",
+            result.run_id,
+            request.strategy_instance_id or "(legacy)",
+            result.created,
+            request.start,
+        )
+        return HostRunnerDeployResponse(
+            run_id=result.run_id,
+            run_dir=str(result.run_dir),
+            created=result.created,
+            start=start_action,
+        )
+
+    def _git_tracked_under(self, subdir: Path) -> list[str]:
+        """Repo-relative POSIX paths of git-tracked files under ``subdir``.
+
+        ``git ls-files`` lists only committed/staged (tracked) files, so ignored
+        and untracked files are excluded by construction. A non-repo / git
+        failure raises so the caller can fail closed rather than fall back to a
+        raw filesystem walk that would surface untracked files."""
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--", str(subdir)],
+            capture_output=True,
+            text=True,
+            cwd=str(self.repo_root),
+            timeout=10.0,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"git ls-files failed: rc={proc.returncode} stderr={proc.stderr!r}")
+        return [p for p in proc.stdout.split("\0") if p]
+
+    def list_qc_audit_copies(self) -> QcAuditCopyListing:
+        """List committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
+
+        Returns repo-relative POSIX paths so each can be passed straight back as
+        a deploy's ``qc_audit_copy_path``. Only **git-tracked** files are listed:
+        the ADR 0006 provenance contract is "committed QC audit copies", and the
+        deploy clean-tree check assumes the audit copy is committed — surfacing
+        ignored/untracked files would hand the UI a deploy option not backed by
+        committed source. The scope root is fixed (not client input); each entry
+        is re-confined under it to guard against symlink escapes. An absent
+        directory yields an empty list, not an error.
+        """
+        scope_root = (self.repo_root / _QC_SHADOW_SUBDIR).resolve()
+        if not (scope_root.is_dir() and scope_root.is_relative_to(self.repo_root)):
+            return QcAuditCopyListing(scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=[])
+
+        entries: list[str] = []
+        for rel in self._git_tracked_under(_QC_SHADOW_SUBDIR):
+            resolved = (self.repo_root / rel).resolve()
+            if not resolved.is_file():
+                continue  # tracked but deleted-on-disk
+            if not resolved.is_relative_to(scope_root):
+                continue  # symlink pointing outside the scope root
+            entries.append(resolved.relative_to(self.repo_root).as_posix())
+        return QcAuditCopyListing(
+            scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=sorted(entries)
+        )
+
+    def _resolve_under_repo(self, raw: str, *, field: str) -> Path:
+        """Resolve an operator-supplied path against ``repo_root`` and confine
+        it there. Relative paths resolve under the repo; absolute paths are
+        accepted only if they fall within it. Anything escaping the repo root
+        is rejected (path-injection barrier)."""
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = self.repo_root / candidate
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(self.repo_root):
+            raise HostRunnerError(
+                status.HTTP_400_BAD_REQUEST,
+                f"{field} escapes the repo root: {raw!r}",
+            )
+        return resolved
+
     def stop(self, run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
         """Signal the host runner for ``run_id`` to stop."""
         current = self._by_run_id(run_id)
@@ -414,6 +556,17 @@ def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: 
     @app.get("/runs/{run_id}/process", response_model=HostRunnerProcessStatus)
     async def run_process(run_id: str) -> HostRunnerProcessStatus:
         return process_manager.process_status(run_id)
+
+    @app.get("/qc-audit-copies", response_model=QcAuditCopyListing)
+    async def qc_audit_copies() -> QcAuditCopyListing:
+        return process_manager.list_qc_audit_copies()
+
+    @app.post("/deploy", response_model=HostRunnerDeployResponse)
+    async def deploy(request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
+        try:
+            return await run_in_threadpool(process_manager.deploy, request)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
     async def start_run(run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:

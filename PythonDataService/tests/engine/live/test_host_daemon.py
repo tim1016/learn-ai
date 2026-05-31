@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
+from app.schemas.live_runs import (
+    HostRunnerActionResponse,
+    HostRunnerProcessState,
+    HostRunnerProcessStatus,
+)
 
 RUN_ID = "run-daemon-" + "a" * 53
 
@@ -365,3 +371,220 @@ def test_build_parser_rejects_garbage_host() -> None:
     parser = build_parser()
     with pytest.raises((SystemExit, argparse.ArgumentTypeError)):
         parser.parse_args(["--host", "not-a-host"])
+
+
+# ── deploy (ADR 0006) ────────────────────────────────────────────────
+
+requires_git = pytest.mark.skipif(
+    shutil.which("git") is None,
+    reason="git binary not available in this environment",
+)
+
+
+def _init_git_repo(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.local"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+
+
+@pytest.fixture
+def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
+    """Daemon manager whose repo_root is a clean git repo holding a spec + QC
+    audit copy. Returns ``(manager, repo_root)``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / "PythonDataService").mkdir()
+    (repo / "PythonDataService" / "spec.json").write_text(
+        '{"strategy": "spy_ema_crossover"}', encoding="utf-8"
+    )
+    (repo / "references" / "qc-shadow").mkdir(parents=True)
+    (repo / "references" / "qc-shadow" / "SpyEmaCrossoverAlgorithm.py").write_text(
+        "# QC audit copy\n", encoding="utf-8"
+    )
+    # Mirror the real repo: live-run artifacts are gitignored, so writing a
+    # run_ledger under PythonDataService/artifacts does NOT dirty the tree (the
+    # clean-tree scope includes PythonDataService). Without this, a second
+    # deploy would see the first deploy's output as an uncommitted change.
+    (repo / ".gitignore").write_text("PythonDataService/artifacts/\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "git",
+            "add",
+            ".gitignore",
+            "PythonDataService/spec.json",
+            "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "commit", "-q", "-m", "seed", "--no-gpg-sign"], cwd=repo, check=True)
+
+    live_runs_root = repo / "PythonDataService" / "artifacts" / "live_runs"
+    manager = RunnerProcessManager(repo_root=repo, live_runs_root=live_runs_root)
+    return manager, repo
+
+
+def _deploy_body(**overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "strategy_spec_path": "PythonDataService/spec.json",
+        "qc_audit_copy_path": "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+        "qc_cloud_backtest_id": "bt-1",
+        "account_id": "DU111",
+        "start_date_ms": 1700000000000,
+        "strategy_instance_id": "spy-ema-paper-1",
+        "live_config": {"symbol": "SPY"},
+    }
+    body.update(overrides)
+    return body
+
+
+@requires_git
+async def test_deploy_creates_run(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
+    manager, repo = git_daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/deploy", json=_deploy_body())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] is True
+    assert body["start"] is None
+    run_dir = repo / "PythonDataService" / "artifacts" / "live_runs" / body["run_id"]
+    assert (run_dir / "run_ledger.json").is_file()
+
+
+@requires_git
+async def test_deploy_is_idempotent(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
+    manager, _ = git_daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.post("/deploy", json=_deploy_body())
+        second = await client.post("/deploy", json=_deploy_body())
+
+    assert first.json()["created"] is True
+    assert second.json()["created"] is False
+    assert second.json()["run_id"] == first.json()["run_id"]
+
+
+@requires_git
+async def test_deploy_rejects_dirty_tree(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
+    manager, repo = git_daemon_context
+    (repo / "PythonDataService" / "spec.json").write_text('{"strategy": "x"}', encoding="utf-8")
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/deploy", json=_deploy_body())
+
+    assert response.status_code == 409
+
+
+@requires_git
+async def test_deploy_rejects_missing_spec(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
+    manager, _ = git_daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/deploy", json=_deploy_body(strategy_spec_path="PythonDataService/nope.json")
+        )
+
+    assert response.status_code == 400
+
+
+@requires_git
+async def test_deploy_rejects_path_escape(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
+    manager, _ = git_daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/deploy", json=_deploy_body(strategy_spec_path="../../../etc/passwd")
+        )
+
+    assert response.status_code == 400
+
+
+@requires_git
+async def test_deploy_with_start_chains_a_launch(
+    git_daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, _ = git_daemon_context
+    # Patch the manager's start (not subprocess.Popen): deploy_run still needs a
+    # real `git rev-parse HEAD` via subprocess, so a global Popen fake would
+    # break the deploy itself. This asserts the chaining wiring directly.
+    calls: dict[str, Any] = {}
+    canned = HostRunnerActionResponse(
+        accepted=True,
+        process=HostRunnerProcessStatus(state=HostRunnerProcessState.running, pid=4242),
+    )
+
+    def fake_start(run_id: str, request: Any) -> HostRunnerActionResponse:
+        calls["run_id"] = run_id
+        return canned
+
+    monkeypatch.setattr(manager, "start", fake_start)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/deploy", json=_deploy_body(start=True))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] is True
+    assert body["start"]["accepted"] is True
+    assert calls["run_id"] == body["run_id"]
+
+
+@requires_git
+async def test_qc_audit_copies_lists_committed_files(
+    git_daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = git_daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/qc-audit-copies")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope_root"] == "references/qc-shadow"
+    assert "references/qc-shadow/SpyEmaCrossoverAlgorithm.py" in body["entries"]
+
+
+@requires_git
+async def test_qc_audit_copies_excludes_untracked_files(
+    git_daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """ADR 0006 provenance: only committed copies are deploy-eligible. An
+    untracked file under references/qc-shadow must NOT be listed — otherwise the
+    UI offers a deploy option not backed by committed source."""
+    manager, repo = git_daemon_context
+    untracked = repo / "references" / "qc-shadow" / "UncommittedAlgorithm.py"
+    untracked.write_text("# not committed\n", encoding="utf-8")
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/qc-audit-copies")
+
+    entries = response.json()["entries"]
+    assert "references/qc-shadow/SpyEmaCrossoverAlgorithm.py" in entries  # committed
+    assert "references/qc-shadow/UncommittedAlgorithm.py" not in entries  # untracked
+
+
+async def test_qc_audit_copies_empty_when_dir_absent(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "PythonDataService").mkdir(parents=True)
+    manager = RunnerProcessManager(
+        repo_root=repo, live_runs_root=repo / "PythonDataService" / "artifacts" / "live_runs"
+    )
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/qc-audit-copies")
+
+    assert response.status_code == 200
+    assert response.json()["entries"] == []

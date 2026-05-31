@@ -17,7 +17,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import ValidationError
 
 from app.broker.ibkr.config import get_settings
@@ -50,12 +50,15 @@ from app.schemas.live_runs import (
     EnqueueCommandRequest,
     EvidenceBinding,
     FleetContamination,
+    HostRunnerDeployRequest,
+    HostRunnerDeployResponse,
     InstanceBrokerView,
     InstanceProcessView,
     IntentActuation,
     LiveBinding,
     LiveInstanceStatus,
     LiveInstanceSummary,
+    QcAuditCopyListing,
     ReadinessVector,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
@@ -298,6 +301,45 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     return summaries
 
 
+@router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
+async def deploy_instance(
+    body: HostRunnerDeployRequest, response: Response
+) -> HostRunnerDeployResponse:
+    """Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
+
+    Deploy is a host-daemon operation: ``init-ledger`` runs a git clean-tree
+    check and hashes ``git HEAD`` into the content-addressed ``run_id``, and only
+    the host has the working tree. This endpoint forwards (mirroring how
+    Start/Stop forward) and propagates the daemon's structured precondition
+    statuses: dirty tree / collision -> 409, missing spec or audit file -> 400,
+    git unavailable / daemon unreachable -> 503.
+
+    Idempotent on the ``run_id``: an identical re-deploy returns 200 with
+    ``created=false`` rather than erroring (the run already exists).
+    """
+    settings = get_settings()
+    try:
+        result = await host_daemon_client.deploy(
+            settings.live_runner_daemon_url, body.model_dump()
+        )
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+    try:
+        parsed = HostRunnerDeployResponse.model_validate(result)
+    except ValidationError as exc:
+        # Upstream (daemon) contract failure — surface as a gateway error, not a
+        # 500 that makes the data plane look broken.
+        logger.warning("invalid deploy payload from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid deploy payload",
+        ) from exc
+    if not parsed.created:
+        response.status_code = status.HTTP_200_OK
+    return parsed
+
+
 def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     """The instance's namespace-attributed broker slice from its live-state
     sidecar (ADR 0005, #398). Ownership is keyed on bot_order_namespace;
@@ -346,6 +388,32 @@ async def _fetch_net_positions() -> dict[str, int] | None:
         symbol = str(pos.symbol).upper()
         net[symbol] = net.get(symbol, 0) + int(pos.quantity)
     return net
+
+
+@router.get("/qc-audit-copies", response_model=QcAuditCopyListing)
+async def get_qc_audit_copies() -> QcAuditCopyListing:
+    """List committed QC audit copies for the deploy form's picker (ADR 0006).
+
+    Passthrough to the daemon (only the host sees ``references/qc-shadow``).
+    Fails closed: an unreachable daemon yields an empty listing — the deploy
+    form's connectivity strip is what surfaces "daemon down", not this endpoint.
+    """
+    settings = get_settings()
+    listing = await host_daemon_client.fetch_qc_audit_copies(settings.live_runner_daemon_url)
+    if listing is None:
+        return QcAuditCopyListing(scope_root="references/qc-shadow", entries=[])
+    try:
+        return QcAuditCopyListing.model_validate(listing)
+    except ValidationError as exc:
+        # A schema-invalid payload is an upstream contract failure, distinct from
+        # an unreachable daemon (which fails closed to an empty listing above).
+        # Surface it as a gateway error rather than 500 or a silently-empty list
+        # that would read as "no committed QC copies".
+        logger.warning("invalid qc-audit-copy listing from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid QC audit-copy listing",
+        ) from exc
 
 
 @router.get("/account", response_model=FleetContamination)
