@@ -31,12 +31,12 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
 
 let activeFixture: { destroy(): void } | null = null;
 
-function render(status: LiveInstanceStatus, daemonDown = false) {
+function render(status: LiveInstanceStatus, daemonDown = false, fleetBlocks = false) {
   const svc = {
     startHostRunner: vi.fn().mockResolvedValue({ accepted: true, process: { state: 'running' } }),
     stopHostRunner: vi.fn().mockResolvedValue({ accepted: true, process: { state: 'stopping' } }),
   };
-  const connectivity = { daemonDown: () => daemonDown };
+  const connectivity = { daemonDown: () => daemonDown, fleetBlocksStarts: () => fleetBlocks };
   TestBed.configureTestingModule({
     providers: [
       { provide: LiveRunsService, useValue: svc },
@@ -124,6 +124,14 @@ describe('BrokerStartStopCardComponent', () => {
 
     expect(button(fixture, 'Start').disabled).toBe(true);
     expect(el.querySelector('.disabled-reason')?.textContent).toContain('Host daemon unreachable');
+  });
+
+  it('disables Start with a reason when fleet policy blocks new starts', () => {
+    const { fixture } = render(makeStatus(), /* daemonDown */ false, /* fleetBlocks */ true);
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(button(fixture, 'Start').disabled).toBe(true);
+    expect(el.querySelector('.disabled-reason')?.textContent).toContain('Fleet policy blocks new starts');
   });
 
   it('disables Start with a reason when there is no run to start', () => {
