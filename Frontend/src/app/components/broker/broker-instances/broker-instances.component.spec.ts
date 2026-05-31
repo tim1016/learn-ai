@@ -64,6 +64,15 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
 class FakeLiveRunsService {
   getInstances = vi.fn().mockResolvedValue(FLEET);
   getInstanceStatus = vi.fn().mockResolvedValue(makeStatus());
+  getAccountFleet = vi.fn().mockResolvedValue({
+    net_positions: { SPY: 137 },
+    explained_total: { SPY: 100 },
+    explained_by_instance: [{ strategy_instance_id: 'spy_ema_paper', positions: { SPY: 100 } }],
+    residual: { SPY: 37 },
+    verdict: 'contaminated',
+    policy_blocks_starts: false,
+    summary: 'Account residual: SPY +37 unattributed outside managed namespaces.',
+  });
   setInstanceDesiredState = vi.fn().mockResolvedValue({
     durable: { state: 'PAUSED', updated_at_ms: 1, updated_by: 'operator', reason: null, version: 2 },
     actuation: {
@@ -251,5 +260,24 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('spy_ema_ns'); // bot_order_namespace
     expect(text).toContain('SPY'); // owned position symbol
     expect(text).toContain('1 pending order');
+  });
+
+  it('renders account contamination and the inherited banner on the instance', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    // account overview at the top
+    const text1 = fixture.nativeElement.textContent ?? '';
+    expect(text1).toContain('contaminated');
+    expect(text1).toContain('SPY +37 unattributed');
+
+    // inherited DEGRADED banner appears on the selected instance
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Account residual detected: DEGRADED');
   });
 });

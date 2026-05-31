@@ -13,6 +13,7 @@ Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
+from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
@@ -47,6 +49,7 @@ from app.schemas.live_runs import (
     DesiredStateRecordResponse,
     EnqueueCommandRequest,
     EvidenceBinding,
+    FleetContamination,
     InstanceBrokerView,
     InstanceProcessView,
     IntentActuation,
@@ -74,6 +77,8 @@ _ACTION_TO_VERB = {
 # Filename of the durable desired-state sidecar (the stable
 # <artifacts>/live_state/<sid>/ layout owned by desired_state.py).
 _DESIRED_STATE_FILE = "desired_state.json"
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
 
@@ -318,6 +323,48 @@ def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
         owned_positions=dict(envelope.expected_position_by_symbol),
         pending_order_count=len(envelope.pending_intents),
     )
+
+
+async def _fetch_net_positions() -> dict[str, int] | None:
+    """Best-effort net account position by symbol from the broker; ``None`` when
+    the broker is unavailable — the fleet view then reports residual unknown.
+
+    Fail-open boundary: any broker/connection error resolves to ``None`` (logged,
+    not silent) rather than failing the fleet endpoint.
+    """
+    try:
+        from app.broker.ibkr import account as ibkr_account
+        from app.routers.broker import _require_connected_or_503
+
+        client = _require_connected_or_503()
+        snapshot = await ibkr_account.fetch_positions(client)
+    except Exception as exc:
+        logger.info("fleet net-position fetch unavailable: %s", exc)
+        return None
+    net: dict[str, int] = {}
+    for pos in snapshot.positions:
+        symbol = str(pos.symbol).upper()
+        net[symbol] = net.get(symbol, 0) + int(pos.quantity)
+    return net
+
+
+@router.get("/account", response_model=FleetContamination)
+async def get_account_fleet() -> FleetContamination:
+    """Account/fleet contamination: net account position vs the sum of every
+    managed instance's namespace-attributed expected position (ADR 0005, #399).
+    """
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    explained: dict[str, dict[str, int]] = {}
+    for sid in _scan_runs_by_instance(root):
+        broker = _instance_broker(root, sid)
+        if broker is not None and broker.owned_positions:
+            explained[sid] = broker.owned_positions
+    net = await _fetch_net_positions()
+    result = compute_fleet_contamination(
+        net, explained, policy_blocks_starts=settings.fleet_dirty_blocks_starts
+    )
+    return FleetContamination(**result)
 
 
 @router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)

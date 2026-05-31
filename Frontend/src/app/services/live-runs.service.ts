@@ -17,6 +17,7 @@ import type {
   LogLine,
 } from '../api/live-runs.types';
 import type {
+  FleetContamination,
   InstanceDesiredStateRequest,
   LiveInstanceStatus,
   LiveInstanceSummary,
@@ -156,5 +157,10 @@ export class LiveRunsService {
         request,
       ),
     );
+  }
+
+  /** Account/fleet contamination: net vs Σ instance expecteds (ADR 0005, #399). */
+  getAccountFleet(): Promise<FleetContamination> {
+    return firstValueFrom(this.http.get<FleetContamination>(`${this.instancesBase}/account`));
   }
 }

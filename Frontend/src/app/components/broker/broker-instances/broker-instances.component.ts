@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, resource, signal 
 import type {
   DecisionColumnDescriptor,
   DesiredStateAction,
+  FleetContamination,
   InstanceBrokerView,
   IntentActuation,
   LiveInstanceSummary,
@@ -38,6 +39,13 @@ export class BrokerInstancesComponent {
   });
 
   readonly instances = computed<LiveInstanceSummary[]>(() => this.fleet.value() ?? []);
+
+  /** Account-level contamination (ADR 0005, #399). Backend-authored — the one
+   * readiness signal no single engine can see. */
+  readonly account = resource({ loader: () => this.svc.getAccountFleet() });
+  readonly accountContaminated = computed<boolean>(
+    () => this.account.value()?.verdict === 'contaminated',
+  );
 
   readonly commands = resource({
     params: () => this.selectedInstanceId() ?? undefined,
@@ -104,5 +112,10 @@ export class BrokerInstancesComponent {
   /** The instance's namespace-attributed owned positions as rows (#398). */
   brokerPositions(broker: InstanceBrokerView): { symbol: string; qty: number }[] {
     return Object.entries(broker.owned_positions).map(([symbol, qty]) => ({ symbol, qty }));
+  }
+
+  /** Account residual (unattributed) positions as rows (#399). */
+  residualRows(fleet: FleetContamination): { symbol: string; qty: number }[] {
+    return Object.entries(fleet.residual).map(([symbol, qty]) => ({ symbol, qty }));
   }
 }
