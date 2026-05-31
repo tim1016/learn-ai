@@ -7,7 +7,12 @@ import {
 } from '../../../services/broker-connectivity.service';
 
 function renderStrip(links: ConnectivityLink[], blockers: string[] = []) {
-  const fake = { links: () => links, blockers: () => blockers } as Partial<BrokerConnectivityService>;
+  const fake = {
+    links: () => links,
+    blockers: () => blockers,
+    daemonDown: () => links.some((link) => link.key === 'daemon' && link.state === 'down'),
+    reload: () => undefined,
+  } as Partial<BrokerConnectivityService>;
   TestBed.configureTestingModule({
     providers: [{ provide: BrokerConnectivityService, useValue: fake }],
   });
@@ -35,15 +40,16 @@ describe('BrokerConnectivityStripComponent', () => {
   it('distinguishes daemon-down from broker-down (not collapsed)', () => {
     const el = renderStrip(
       [
-        { key: 'daemon', label: 'Host daemon', state: 'down', detail: 'Unreachable — start the host daemon process' },
+        { key: 'daemon', label: 'Live engine', state: 'down', detail: 'Unavailable' },
         { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
         { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
       ],
-      ['Host daemon unreachable — start the host daemon to deploy or control runs.'],
+      ['Live engine unavailable — start it on this machine, then recheck.'],
     );
 
     expect(el.querySelector('.link.state-down')).toBeTruthy();
-    expect(el.textContent).toContain('Unreachable');
+    expect(el.textContent).toContain('Live engine unavailable');
+    expect(el.textContent).toContain('Copy start command');
     expect(el.textContent).toContain('Connected');
   });
 

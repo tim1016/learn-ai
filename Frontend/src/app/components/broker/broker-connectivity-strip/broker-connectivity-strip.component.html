@@ -17,4 +17,29 @@
       }
     </ul>
   }
+
+  @if (connectivity.daemonDown()) {
+    <article class="recovery" aria-labelledby="live-engine-recovery-title">
+      <div>
+        <h2 id="live-engine-recovery-title">Live engine unavailable</h2>
+        <p>The local live-trading engine is not running on this machine.</p>
+      </div>
+      <div class="recovery-actions">
+        <button type="button" (click)="recheck()">Recheck</button>
+        <button type="button" (click)="copyStartCommand()">
+          {{ copied() ? 'Copied' : 'Copy start command' }}
+        </button>
+      </div>
+      <details>
+        <summary>Start command and status details</summary>
+        <p>Run this from the learn-ai repo root:</p>
+        <code>{{ startCommand }}</code>
+        @for (link of connectivity.links(); track link.key) {
+          @if (link.key === 'daemon') {
+            <p>{{ link.label }}: {{ link.detail }}</p>
+          }
+        }
+      </details>
+    </article>
+  }
 </section>

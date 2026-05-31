@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 
 /**
@@ -16,4 +16,17 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 })
 export class BrokerConnectivityStripComponent {
   protected readonly connectivity = inject(BrokerConnectivityService);
+  protected readonly copied = signal<boolean>(false);
+  protected readonly startCommand =
+    'PYTHONPATH=PythonDataService PythonDataService/.venv/bin/python -m app.engine.live.host_daemon --repo-root .';
+
+  protected recheck(): void {
+    this.connectivity.reload();
+  }
+
+  protected async copyStartCommand(): Promise<void> {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(this.startCommand);
+    this.copied.set(true);
+  }
 }

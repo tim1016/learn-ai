@@ -62,16 +62,16 @@ const REMEDIATION: Partial<Record<OperationKind, Partial<Record<number, string>>
   deploy: {
     409: 'A run with these inputs already exists, or the working tree is dirty. Commit or stash the listed paths, then deploy again.',
     400: 'Check the strategy spec path and the QC audit-copy path exist and are committed.',
-    503: 'The host daemon is unreachable or git is unavailable. Start the host daemon and retry.',
+    503: 'The live engine is unavailable or git is unavailable. Start the live engine and retry.',
   },
   start: {
     409: 'A run is already active for this instance. Stop it before starting another.',
     404: 'No run directory was found for this instance. Deploy a run first.',
-    503: 'The host daemon is unreachable. Start the host daemon and retry.',
+    503: 'The live engine is unavailable. Start the live engine and retry.',
   },
   stop: {
     404: 'No live process is bound to this instance — nothing to stop.',
-    503: 'The host daemon is unreachable. Start the host daemon and retry.',
+    503: 'The live engine is unavailable. Start the live engine and retry.',
   },
   flatten: { 409: 'No live run is bound to this instance. Start the instance before issuing commands.' },
   reconcile: { 409: 'No live run is bound to this instance. Start the instance before issuing commands.' },

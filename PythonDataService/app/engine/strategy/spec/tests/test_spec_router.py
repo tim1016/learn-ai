@@ -82,6 +82,11 @@ async def test_fixtures_list_endpoint() -> None:
     assert names == {"spy_ema_crossover", "sma_crossover", "rsi_mean_reversion"}, (
         f"unexpected fixture names: {names}"
     )
+    by_name = {item["name"]: item for item in items}
+    assert (
+        by_name["spy_ema_crossover"]["path"]
+        == "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json"
+    )
 
 
 async def test_fixture_detail_endpoint() -> None:

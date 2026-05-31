@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   linkedSignal,
   resource,
@@ -12,6 +13,7 @@ import type {
   HostRunnerDeployRequest,
   HostRunnerDeployResponse,
   HydratePolicy,
+  SpecStrategyFixture,
 } from '../../../api/live-runs.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
@@ -21,20 +23,9 @@ import { BrokerOperationResultComponent } from '../broker-operation-result/broke
 import { type OperationError, toOperationError } from '../operation-error';
 
 /**
- * Deploy form — stage 1 of the deploy pipeline (ADR 0006), the create-a-run UI
- * the platform never had. Lifts the `init-ledger` CLI args into a form and
- * forwards to the host daemon via `POST /api/live-instances`.
- *
- * The QC anchor (backtest id + committed audit copy) is mandatory by design —
- * deploy is reconciliation-gated, not one-click. v1 sources both by manual entry
- * (ADR 0006 §4): the operator types the backtest id and picks an audit copy that
- * is already committed under `references/qc-shadow/` (the clean-tree check
- * enforces this). The algorithm is chosen from the engine registry; its `name`
- * pins both the spec-reconciled `strategy_key` and the launch `strategy`.
- *
- * All messaging routes through the connectivity strip + operation-error pattern;
- * the dirty-tree precondition (the most likely operator confusion) surfaces its
- * offending paths via the backend detail line.
+ * Deploy form for a live strategy instance. The UI uses plain operator words,
+ * while the request still maps exactly to ADR 0006: create the run on the host,
+ * bind it to a QC backtest receipt, and optionally start it immediately.
  */
 @Component({
   selector: 'app-broker-deploy-form',
@@ -49,6 +40,7 @@ export class BrokerDeployFormComponent {
   protected readonly connectivity = inject(BrokerConnectivityService);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
+  readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
   readonly qcCopies = resource({ loader: () => this.svc.getQcAuditCopies() });
   // Best-effort: the account prefill is convenience only — broker may be down,
   // in which case the operator types the account id manually.
@@ -57,6 +49,7 @@ export class BrokerDeployFormComponent {
   // Form fields.
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
+  readonly manualSpecPath = signal<boolean>(false);
   readonly accountId = linkedSignal<string>(() => this.account.value()?.account_id ?? '');
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
@@ -65,6 +58,8 @@ export class BrokerDeployFormComponent {
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(4);
   readonly startNow = signal<boolean>(false);
+  readonly showLiveConfirm = signal<boolean>(false);
+  private readonly liveConfirmed = signal<boolean>(false);
 
   readonly busy = signal<boolean>(false);
   readonly error = signal<OperationError | null>(null);
@@ -75,6 +70,89 @@ export class BrokerDeployFormComponent {
   // reuse the same value to hit the backend's idempotent no-op (created=false)
   // rather than minting a new run_id off the current clock.
   private readonly startDateMs = Date.now();
+
+  readonly selectedFixture = computed<SpecStrategyFixture | null>(
+    () => this.specFixtures.value()?.find((f) => f.path === this.specPath()) ?? null,
+  );
+
+  readonly launchMode = computed<'paper' | 'live'>(() => (this.readonlyFlag() ? 'paper' : 'live'));
+
+  readonly fieldsReady = computed<boolean>(() => this.required());
+
+  readonly nowChecks = computed(() => [
+    {
+      key: 'engine',
+      label: 'Engine up',
+      state: this.connectivity.daemonState(),
+      detail:
+        this.connectivity.daemonState() === 'ok'
+          ? 'Ready'
+          : this.connectivity.daemonState() === 'unknown'
+            ? 'Checking'
+            : 'Start it, then recheck',
+    },
+    {
+      key: 'broker',
+      label: 'Broker',
+      state: this.connectivity.brokerState(),
+      detail:
+        this.connectivity.brokerState() === 'ok'
+          ? 'Connected'
+          : this.connectivity.brokerState() === 'unknown'
+            ? 'Checking'
+            : 'Disconnected',
+    },
+    {
+      key: 'fields',
+      label: 'Fields',
+      state: this.fieldsReady() ? 'ok' : 'warn',
+      detail: this.fieldsReady() ? 'Complete' : 'Required fields missing',
+    },
+    {
+      key: 'fleet',
+      label: 'Fleet clear',
+      state: this.connectivity.fleetState(),
+      detail:
+        this.connectivity.fleetState() === 'warn'
+          ? 'Starts blocked'
+          : this.connectivity.fleetState() === 'unknown'
+            ? this.connectivity.nothingDeployed()
+              ? 'Nothing deployed'
+              : 'Checking'
+            : 'Clear',
+    },
+  ]);
+
+  readonly deployChecks = computed(() => [
+    {
+      key: 'tree',
+      label: 'Working tree clean',
+      state: this.error()?.status === 409 ? 'down' : 'pending',
+      detail: this.error()?.status === 409
+        ? 'Commit or stash the listed files'
+        : 'Checked when you deploy',
+    },
+    {
+      key: 'spec',
+      label: 'Spec matches strategy',
+      state: this.error()?.status === 400 ? 'down' : 'pending',
+      detail: this.error()?.status === 400
+        ? 'Pick the matching spec'
+        : 'Checked when you deploy',
+    },
+  ]);
+
+  constructor() {
+    effect(() => {
+      if (this.manualSpecPath()) return;
+      const strategy = this.strategyKey();
+      const fixtures = this.specFixtures.value() ?? [];
+      const match = fixtures.find((f) => f.name === strategy);
+      if (match && this.specPath() !== match.path) {
+        this.specPath.set(match.path);
+      }
+    });
+  }
 
   private readonly required = computed<boolean>(
     () =>
@@ -90,10 +168,10 @@ export class BrokerDeployFormComponent {
    * Null = ready. */
   readonly blockedReason = computed<string | null>(() => {
     if (this.connectivity.daemonDown()) {
-      return 'Host daemon unreachable — deploy runs git operations on the host; start the daemon and retry.';
+      return 'Live engine unavailable. Start it on this machine, then recheck.';
     }
     if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
-      return 'Fleet policy blocks new starts — uncheck "Start now" to deploy without launching, or resolve the contamination.';
+      return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
     }
     if (!this.required()) return 'Fill every required field before deploying.';
     return null;
@@ -103,6 +181,11 @@ export class BrokerDeployFormComponent {
 
   async submit(): Promise<void> {
     if (!this.canSubmit()) return;
+    if (this.startNow() && !this.readonlyFlag() && !this.liveConfirmed()) {
+      this.showLiveConfirm.set(true);
+      return;
+    }
+    this.liveConfirmed.set(false);
     this.busy.set(true);
     this.error.set(null);
     this.deployed.set(null);
@@ -140,6 +223,17 @@ export class BrokerDeployFormComponent {
     }
   }
 
+  async confirmLiveAndSubmit(): Promise<void> {
+    this.showLiveConfirm.set(false);
+    this.liveConfirmed.set(true);
+    await this.submit();
+  }
+
+  cancelLiveConfirm(): void {
+    this.showLiveConfirm.set(false);
+    this.liveConfirmed.set(false);
+  }
+
   // Event readers that narrow without a type assertion.
   private text(e: Event): string {
     return e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement
@@ -151,6 +245,13 @@ export class BrokerDeployFormComponent {
   }
   setSpecPath(e: Event): void {
     this.specPath.set(this.text(e));
+  }
+  setSpecFixturePath(e: Event): void {
+    this.manualSpecPath.set(false);
+    this.specPath.set(this.text(e));
+  }
+  useManualSpecPath(): void {
+    this.manualSpecPath.set(true);
   }
   setAccountId(e: Event): void {
     this.accountId.set(this.text(e));
@@ -165,7 +266,10 @@ export class BrokerDeployFormComponent {
     this.instanceId.set(this.text(e));
   }
   setReadonly(e: Event): void {
-    if (e.target instanceof HTMLInputElement) this.readonlyFlag.set(e.target.checked);
+    if (e.target instanceof HTMLInputElement) {
+      this.readonlyFlag.set(e.target.value !== 'live');
+      this.liveConfirmed.set(false);
+    }
   }
   setHydratePolicy(e: Event): void {
     const v = this.text(e);
@@ -175,6 +279,9 @@ export class BrokerDeployFormComponent {
     if (e.target instanceof HTMLInputElement) this.maxOrdersPerDay.set(e.target.valueAsNumber);
   }
   setStartNow(e: Event): void {
-    if (e.target instanceof HTMLInputElement) this.startNow.set(e.target.checked);
+    if (e.target instanceof HTMLInputElement) {
+      this.startNow.set(e.target.checked);
+      this.liveConfirmed.set(false);
+    }
   }
 }

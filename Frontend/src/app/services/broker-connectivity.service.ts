@@ -65,14 +65,14 @@ export class BrokerConnectivityService {
   readonly links = computed<ConnectivityLink[]>(() => [
     {
       key: 'daemon',
-      label: 'Host daemon',
+      label: 'Live engine',
       state: this.daemonState(),
       detail:
         this.daemonState() === 'ok'
-          ? 'Reachable'
+          ? 'Running'
           : this.daemonState() === 'unknown'
             ? 'Checking…'
-            : 'Unreachable — start the host daemon process',
+            : 'Unavailable',
     },
     {
       key: 'broker',
@@ -107,7 +107,7 @@ export class BrokerConnectivityService {
   readonly blockers = computed<string[]>(() => {
     const out: string[] = [];
     if (this.daemonState() === 'down') {
-      out.push('Host daemon unreachable — start the host daemon to deploy or control runs.');
+      out.push('Live engine unavailable — start it on this machine, then recheck.');
     }
     if (this.brokerState() === 'down') {
       out.push('Broker disconnected — connect IBKR to act on a live run.');
