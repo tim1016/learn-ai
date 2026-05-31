@@ -189,6 +189,9 @@ class HostRunnerProcessStatus(BaseModel):
 
     state: HostRunnerProcessState
     run_id: str | None = None
+    # Multi-process registry (ADR 0004): the strategy instance this process
+    # belongs to. None for legacy runs with no ledger binding.
+    strategy_instance_id: str | None = None
     pid: int | None = None
     started_at_ms: int | None = None
     ended_at_ms: int | None = None
@@ -206,6 +209,27 @@ class HostRunnerHealth(BaseModel):
     live_runs_root: str
     fetched_at_ms: int
     process: HostRunnerProcessStatus
+
+
+class HostRunnerInstance(BaseModel):
+    """One managed strategy instance's live process binding.
+
+    The host-daemon registry is the sole authority for the live
+    ``strategy_instance_id -> run_id`` binding (ADR 0004): "live" is a
+    process fact, not an artifact fact.
+    """
+
+    strategy_instance_id: str
+    run_id: str
+    run_dir: str
+    process: HostRunnerProcessStatus
+
+
+class HostRunnerInstancesStatus(BaseModel):
+    """All strategy instances the host daemon currently manages."""
+
+    instances: list[HostRunnerInstance] = Field(default_factory=list)
+    fetched_at_ms: int
 
 
 class HostRunnerStartRequest(BaseModel):
@@ -325,3 +349,66 @@ class CommandTimelineResponse(BaseModel):
 
 
 LiveRunStatus.model_rebuild()
+
+
+# --- ADR 0004: instance-addressed operator console ---
+
+
+class InstanceProcessView(BaseModel):
+    """Live process snapshot for a strategy instance, from the host-daemon
+    registry (the live-binding authority). ``state`` is ``unreachable`` when
+    the daemon could not be queried — distinct from ``idle`` (daemon reachable,
+    nothing running)."""
+
+    state: str  # running | stopping | exited | idle | unreachable
+    pid: int | None = None
+    bound_run_id: str | None = None
+    started_at_ms: int | None = None
+
+
+class LiveBinding(BaseModel):
+    """The run an instance is writing to *right now* (registry-sourced).
+
+    Present only when a process is live. Commands route here and nowhere else.
+    """
+
+    run_id: str
+    run_dir: str | None = None
+    source: str = "registry"
+
+
+class EvidenceBinding(BaseModel):
+    """The instance's latest run by ledger — evidence only, never live.
+
+    Rendered as stale/completed-run evidence when no process is bound. Never a
+    command-routing authority.
+    """
+
+    run_id: str
+    state: str = "latest_run_by_ledger"
+    is_live: bool = False
+
+
+class LiveInstanceStatus(BaseModel):
+    """Instance-addressed status: the operator's control-room subject (ADR 0004).
+
+    The current run is attached as evidence; the ``live_binding`` is the only
+    thing commands may target.
+    """
+
+    strategy_instance_id: str
+    process: InstanceProcessView
+    live_binding: LiveBinding | None = None
+    evidence_binding: EvidenceBinding | None = None
+    desired_state: DesiredStateView | None = None
+    fetched_at_ms: int
+
+
+class LiveInstanceSummary(BaseModel):
+    """One row in the account fleet overview."""
+
+    strategy_instance_id: str
+    process_state: str
+    bound_run_id: str | None = None
+    latest_run_id: str | None = None
+    desired_state: str | None = None

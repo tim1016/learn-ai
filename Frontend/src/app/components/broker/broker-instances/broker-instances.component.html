@@ -1,0 +1,56 @@
+<section class="instances">
+  <h1>Strategy instances</h1>
+  <p class="subtitle">Operator control room — the instance is the subject; the run is evidence.</p>
+
+  @if (fleet.isLoading()) {
+    <p>Loading instances…</p>
+  } @else if (fleet.error()) {
+    <p role="alert">Could not load strategy instances.</p>
+  } @else {
+    <ul class="fleet" aria-label="Strategy instances">
+      @for (inst of instances(); track inst.strategy_instance_id) {
+        <li>
+          <button
+            type="button"
+            [class.selected]="inst.strategy_instance_id === selectedInstanceId()"
+            (click)="select(inst.strategy_instance_id)"
+          >
+            <span class="sid">{{ inst.strategy_instance_id }}</span>
+            <span class="state" [class.live]="inst.process_state === 'running'">{{ inst.process_state }}</span>
+            @if (inst.bound_run_id) {
+              <span class="bound">run {{ inst.bound_run_id }}</span>
+            } @else if (inst.latest_run_id) {
+              <span class="evidence">latest {{ inst.latest_run_id }} (evidence)</span>
+            }
+          </button>
+        </li>
+      } @empty {
+        <li class="empty">No strategy instances found.</li>
+      }
+    </ul>
+  }
+
+  @let s = status.value();
+  @if (s) {
+    <article class="control-room" aria-label="Instance status">
+      <header class="ladder">
+        <span class="rung"><small>INSTANCE</small>{{ s.strategy_instance_id }}</span>
+        <span class="rung"><small>PROCESS</small>{{ s.process.state }}</span>
+        <span class="rung">
+          <small>CURRENT RUN</small>
+          @if (s.live_binding) {
+            <span class="live">{{ s.live_binding.run_id }} (live)</span>
+          } @else if (s.evidence_binding) {
+            <span class="evidence">{{ s.evidence_binding.run_id }} (latest / stale evidence)</span>
+          } @else {
+            <span>—</span>
+          }
+        </span>
+        <span class="rung"><small>DESIRED</small>{{ s.desired_state?.state ?? 'unknown' }}</span>
+      </header>
+      @if (!s.live_binding && s.evidence_binding) {
+        <p class="note">No live process — showing the latest completed/stale run as evidence. Commands are disabled.</p>
+      }
+    </article>
+  }
+</section>

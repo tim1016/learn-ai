@@ -1,0 +1,164 @@
+"""Instance-addressed operator console API (ADR 0004).
+
+The operator's subject is the **strategy instance**, not the run. These
+endpoints resolve, *server-side*, the authoritative live binding from the host
+daemon (the process registry) and merge it with disk-derived evidence
+(latest run by ledger) and durable desired-state. The client never scans runs
+to infer liveness; it receives both bindings with names that make misuse hard
+(`live_binding` vs `evidence_binding`).
+
+Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, status
+
+from app.broker.ibkr.config import get_settings
+from app.engine.live import host_daemon_client
+from app.routers.live_runs import _now_ms, _read_ledger, _resolve_desired_state
+from app.schemas.live_runs import (
+    EvidenceBinding,
+    InstanceProcessView,
+    LiveBinding,
+    LiveInstanceStatus,
+    LiveInstanceSummary,
+)
+
+router = APIRouter(tags=["live-instances"])
+
+# strategy_instance_id flows into a daemon URL and a filesystem path; confine it
+# to a single safe segment at the boundary.
+_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+# Process states that mean a run is being actively written right now.
+_LIVE_STATES = frozenset({"running", "stopping"})
+
+
+def _validate_instance_id(strategy_instance_id: str) -> str:
+    if _INSTANCE_ID_RE.fullmatch(strategy_instance_id) is None or ".." in strategy_instance_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid strategy_instance_id: {strategy_instance_id!r}",
+        )
+    return strategy_instance_id
+
+
+def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
+    """Group run dirs by ``strategy_instance_id`` from their ledgers, newest first.
+
+    Legacy runs with no binding are skipped — they are not instances.
+    """
+    out: dict[str, list[dict]] = {}
+    if not root.is_dir():
+        return out
+    for run_dir in root.iterdir():
+        if not run_dir.is_dir():
+            continue
+        try:
+            ledger = _read_ledger(run_dir)
+        except (OSError, json.JSONDecodeError):
+            continue
+        sid = ledger.get("strategy_instance_id") or ""
+        if not sid:
+            continue
+        out.setdefault(sid, []).append(
+            {
+                "run_id": ledger.get("run_id") or run_dir.name,
+                "run_dir": str(run_dir),
+                "created_at_ms": ledger.get("created_at_ms") or 0,
+            }
+        )
+    for runs in out.values():
+        runs.sort(key=lambda r: r["created_at_ms"], reverse=True)
+    return out
+
+
+def _interpret_daemon_process(
+    daemon: dict | None, root: Path
+) -> tuple[InstanceProcessView, LiveBinding | None]:
+    """Turn the daemon's process snapshot into a process view + live binding.
+
+    ``None`` (daemon unreachable) is rendered as ``unreachable`` with no live
+    binding — never guessed from disk.
+    """
+    if daemon is None:
+        return InstanceProcessView(state="unreachable"), None
+    state = str(daemon.get("state") or "idle")
+    run_id = daemon.get("run_id")
+    pid = daemon.get("pid")
+    started = daemon.get("started_at_ms")
+    if state in _LIVE_STATES and run_id:
+        run_dir = root / run_id
+        binding = LiveBinding(run_id=run_id, run_dir=str(run_dir) if run_dir.is_dir() else None)
+        view = InstanceProcessView(state=state, pid=pid, bound_run_id=run_id, started_at_ms=started)
+        return view, binding
+    # exited / idle: a run id may be present (the run that just exited) but it is
+    # not a live binding.
+    return InstanceProcessView(state=state, pid=pid, bound_run_id=run_id, started_at_ms=started), None
+
+
+@router.get("", response_model=list[LiveInstanceSummary])
+async def list_live_instances() -> list[LiveInstanceSummary]:
+    """Account fleet overview: every known strategy instance, live or not."""
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    by_instance = _scan_runs_by_instance(root)
+
+    daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    daemon_reachable = daemon is not None
+    daemon_by_sid: dict[str, dict] = {}
+    if daemon:
+        for inst in daemon.get("instances", []):
+            sid = inst.get("strategy_instance_id")
+            if sid:
+                daemon_by_sid[sid] = inst
+
+    summaries: list[LiveInstanceSummary] = []
+    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+        managed = daemon_by_sid.get(sid)
+        runs = by_instance.get(sid, [])
+        if managed is not None:
+            proc_state = str(managed.get("process", {}).get("state") or "idle")
+            bound = managed.get("run_id") if proc_state in _LIVE_STATES else None
+        else:
+            proc_state = "offline" if daemon_reachable else "unreachable"
+            bound = None
+        desired = _resolve_desired_state(root, sid)
+        summaries.append(
+            LiveInstanceSummary(
+                strategy_instance_id=sid,
+                process_state=proc_state,
+                bound_run_id=bound,
+                latest_run_id=runs[0]["run_id"] if runs else None,
+                desired_state=desired.state,
+            )
+        )
+    return summaries
+
+
+@router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)
+async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
+    """Instance control-room status: live binding (registry) + evidence + intent."""
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process, live_binding = _interpret_daemon_process(daemon, root)
+
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
+
+    return LiveInstanceStatus(
+        strategy_instance_id=sid,
+        process=process,
+        live_binding=live_binding,
+        evidence_binding=evidence,
+        desired_state=_resolve_desired_state(root, sid),
+        fetched_at_ms=_now_ms(),
+    )

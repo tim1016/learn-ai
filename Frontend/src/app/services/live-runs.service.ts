@@ -16,11 +16,16 @@ import type {
   LiveRunSummary,
   LogLine,
 } from '../api/live-runs.types';
+import type {
+  LiveInstanceStatus,
+  LiveInstanceSummary,
+} from '../api/live-instances.types';
 
 @Injectable({ providedIn: 'root' })
 export class LiveRunsService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/live-runs';
+  private readonly instancesBase = '/api/live-instances';
   private readonly daemonBase = environment.liveRunnerDaemonUrl;
 
   listRuns(params?: {
@@ -100,6 +105,20 @@ export class LiveRunsService {
   stopHostRunner(runId: string, request: HostRunnerStopRequest): Promise<HostRunnerActionResponse> {
     return firstValueFrom(
       this.http.post<HostRunnerActionResponse>(`${this.daemonBase}/runs/${encodeURIComponent(runId)}/stop`, request),
+    );
+  }
+
+  // --- Instance-addressed operator console (ADR 0004) ---
+
+  /** Account fleet overview: every known strategy instance, live or not. */
+  getInstances(): Promise<LiveInstanceSummary[]> {
+    return firstValueFrom(this.http.get<LiveInstanceSummary[]>(this.instancesBase));
+  }
+
+  /** Instance control-room status: live binding (registry) + evidence + intent. */
+  getInstanceStatus(instanceId: string): Promise<LiveInstanceStatus> {
+    return firstValueFrom(
+      this.http.get<LiveInstanceStatus>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/status`),
     );
   }
 }

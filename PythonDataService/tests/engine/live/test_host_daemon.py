@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -172,6 +173,74 @@ async def test_stop_handles_process_exiting_between_poll_and_signal(
     assert start.status_code == 200
     assert stop.status_code == 200
     assert stop.json()["accepted"] is False
+
+
+async def test_instances_lists_each_managed_strategy_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registry keys by strategy_instance_id, so an executing and a shadow
+    instance coexist as separate processes and both surface on /instances."""
+    repo_root = tmp_path / "repo"
+    live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
+    runs = {
+        "run-exec-" + "a" * 52: "spy_ema_paper",
+        "run-shadow-" + "b" * 50: "spy_vwap_shadow",
+    }
+    for run_id, sid in runs.items():
+        run_dir = live_runs_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run_ledger.json").write_text(
+            json.dumps({"strategy_instance_id": sid}), encoding="utf-8"
+        )
+
+    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: FakeProcess())
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for run_id in runs:
+            started = await client.post(f"/runs/{run_id}/start", json={})
+            assert started.status_code == 200  # different instances coexist
+        listing = await client.get("/instances")
+        exec_process = await client.get("/instances/spy_ema_paper/process")
+        missing = await client.get("/instances/no_such_instance/process")
+
+    assert listing.status_code == 200
+    body = listing.json()
+    by_sid = {inst["strategy_instance_id"]: inst for inst in body["instances"]}
+    assert set(by_sid) == {"spy_ema_paper", "spy_vwap_shadow"}
+    for sid, inst in by_sid.items():
+        assert inst["run_id"] in runs
+        assert inst["process"]["state"] == "running"
+        assert inst["process"]["strategy_instance_id"] == sid
+
+    assert exec_process.status_code == 200
+    assert exec_process.json()["state"] == "running"
+    assert exec_process.json()["strategy_instance_id"] == "spy_ema_paper"
+
+    assert missing.status_code == 200
+    assert missing.json()["state"] == "idle"
+
+
+async def test_start_falls_back_to_run_id_key_without_ledger_binding(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy run with no strategy_instance_id keys by run_id and still
+    surfaces on /instances with an empty instance id."""
+    manager, _ = daemon_context
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: FakeProcess())
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        started = await client.post(f"/runs/{RUN_ID}/start", json={})
+        listing = await client.get("/instances")
+
+    assert started.status_code == 200
+    instances = listing.json()["instances"]
+    assert len(instances) == 1
+    assert instances[0]["run_id"] == RUN_ID
+    assert instances[0]["strategy_instance_id"] == ""
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "8.8.8.8"])

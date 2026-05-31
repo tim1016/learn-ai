@@ -1,0 +1,48 @@
+// Instance-addressed operator console types (ADR 0004).
+// The console's subject is the strategy instance; the current run is evidence.
+import type { DesiredStateView } from './live-runs-controls.types';
+
+export type InstanceProcessState =
+  | 'running'
+  | 'stopping'
+  | 'exited'
+  | 'idle'
+  | 'unreachable';
+
+export interface InstanceProcessView {
+  state: InstanceProcessState;
+  pid?: number | null;
+  bound_run_id?: string | null;
+  started_at_ms?: number | null;
+}
+
+/** The run an instance is writing to right now (registry-sourced). Commands route here only. */
+export interface LiveBinding {
+  run_id: string;
+  run_dir?: string | null;
+  source: string;
+}
+
+/** The instance's latest run by ledger — evidence only, never live. */
+export interface EvidenceBinding {
+  run_id: string;
+  state: string;
+  is_live: boolean;
+}
+
+export interface LiveInstanceStatus {
+  strategy_instance_id: string;
+  process: InstanceProcessView;
+  live_binding: LiveBinding | null;
+  evidence_binding: EvidenceBinding | null;
+  desired_state: DesiredStateView | null;
+  fetched_at_ms: number;
+}
+
+export interface LiveInstanceSummary {
+  strategy_instance_id: string;
+  process_state: string;
+  bound_run_id?: string | null;
+  latest_run_id?: string | null;
+  desired_state?: string | null;
+}
