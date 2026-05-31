@@ -144,6 +144,30 @@ def _interpret_daemon_process(
     return InstanceProcessView(state=state, pid=pid, bound_run_id=run_id, started_at_ms=started), None
 
 
+def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
+    """Return the locally visible bound run dir, confined under ``root``.
+
+    The daemon is a separate process and reports the live binding. Before this
+    API writes a command file, re-check that the bound ``run_id`` resolves under
+    this service's live-runs root and that the directory exists locally. A root
+    mismatch stays durable-only; the engine would not see a command written to a
+    freshly-created phantom directory.
+    """
+    try:
+        safe_run_id = _validate_path_segment(live_binding.run_id, field="run_id")
+        run_dir = _confine(root, safe_run_id)
+    except ValueError:
+        return None
+    if live_binding.run_dir is not None:
+        try:
+            reported = Path(live_binding.run_dir).resolve()
+            if reported != run_dir:
+                return None
+        except OSError:
+            return None
+    return run_dir if run_dir.is_dir() else None
+
+
 @router.get("", response_model=list[LiveInstanceSummary])
 async def list_live_instances() -> list[LiveInstanceSummary]:
     """Account fleet overview: every known strategy instance, live or not."""
@@ -255,7 +279,8 @@ async def set_instance_desired_state(
 
     daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
-    if live_binding is None or live_binding.run_dir is None:
+    live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+    if live_binding is None or live_run_dir is None:
         # No live binding, or the bound run dir is not visible under this
         # service's live_runs_root (root mismatch / missing artifacts). The
         # engine polls its real run dir, so a command written here would never
@@ -270,12 +295,20 @@ async def set_instance_desired_state(
         actuation = IntentActuation(actuated=False, detail=detail)
     else:
         verb = _ACTION_TO_VERB[body.action]
-        command = CommandChannel(Path(live_binding.run_dir) / "commands").write_from_operator(verb)
-        actuation = IntentActuation(
-            actuated=True,
-            run_id=live_binding.run_id,
-            command_seq=command.seq,
-            detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
-        )
+        try:
+            command = CommandChannel(live_run_dir / "commands").write_from_operator(verb)
+        except Exception as exc:
+            actuation = IntentActuation(
+                actuated=False,
+                run_id=live_binding.run_id,
+                detail=f"failed to enqueue live command: {exc}",
+            )
+        else:
+            actuation = IntentActuation(
+                actuated=True,
+                run_id=live_binding.run_id,
+                command_seq=command.seq,
+                detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
+            )
 
     return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)

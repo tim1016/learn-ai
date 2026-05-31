@@ -55,8 +55,10 @@ export class BrokerInstancesComponent {
     this.busyAction.set(action);
     try {
       const result = await this.svc.setInstanceDesiredState(id, { action });
-      this.lastActuation.set(result.actuation);
-      this.status.reload();
+      if (this.selectedInstanceId() === id) {
+        this.lastActuation.set(result.actuation);
+        this.status.reload();
+      }
     } finally {
       this.busyAction.set(null);
     }
