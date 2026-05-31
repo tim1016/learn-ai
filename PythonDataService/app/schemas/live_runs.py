@@ -342,10 +342,41 @@ class CommandAckView(BaseModel):
 
 
 class CommandTimelineResponse(BaseModel):
-    """Pending + ack timeline for a run's command channel (UI-4)."""
+    """Pending + ack timeline for a run's command channel (UI-4).
+
+    Deprecated by ``CommandsTimeline`` (#397); retained for back-compat.
+    """
 
     pending: list[CommandView]
     acks: list[CommandAckView]
+
+
+class CommandTimelineEntry(BaseModel):
+    """One command with its full lifecycle (#397).
+
+    ``status``: ``queued`` (pending, no ack) -> ``acknowledged`` (ack with an
+    ok outcome) | ``failed`` (ack with an error outcome). Timestamps are
+    payload-sourced where present, else derived from file mtime.
+    """
+
+    seq: int
+    verb: str
+    status: str  # queued | acknowledged | failed
+    reason: str | None = None
+    issued_by: str | None = None
+    queued_at_ms: int | None = None
+    acked_at_ms: int | None = None
+    outcome: str | None = None
+    outcome_detail: str | None = None
+
+
+class CommandsTimeline(BaseModel):
+    """Canonical unified command timeline: one entry per command, newest first,
+    with the dispatcher's poll cadence so the client's staleness threshold is
+    server-provided (#397)."""
+
+    entries: list[CommandTimelineEntry]
+    poll_interval_ms: int
 
 
 LiveRunStatus.model_rebuild()

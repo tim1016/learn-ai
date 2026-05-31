@@ -158,6 +158,87 @@ async def test_instance_status_rejects_invalid_id(
     assert response.status_code == 400
 
 
+async def test_instance_commands_returns_bound_run_timeline(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-cmd", "spy_ema_paper", 100)
+    commands = root / "run-cmd" / "commands"
+    commands.mkdir()
+    (commands / "command.1.RECONCILE.pending.json").write_text(
+        json.dumps({"seq": 1, "verb": "RECONCILE", "payload": {}}), encoding="utf-8"
+    )
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-cmd", "pid": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/commands")
+
+    body = response.json()
+    assert body["poll_interval_ms"] == 1000  # server-provided
+    assert "pending" not in body and "acks" not in body  # canonical entries[] shape
+    assert [e["seq"] for e in body["entries"]] == [1]
+    assert body["entries"][0]["status"] == "queued"
+
+
+async def test_instance_commands_empty_without_live_binding(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/commands")
+
+    assert response.json() == {"entries": [], "poll_interval_ms": 1000}
+
+
+async def test_issue_one_shot_command_queues_on_bound_run(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-os", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-os", "pid": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/commands", json={"verb": "RECONCILE"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["verb"] == "RECONCILE"
+    queued = list((root / "run-os" / "commands").glob("command.*.RECONCILE.pending.json"))
+    assert len(queued) == 1
+
+
+async def test_issue_command_rejects_intent_verbs(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-os2", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-os2", "pid": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/commands", json={"verb": "PAUSE"}
+        )
+
+    assert response.status_code == 400  # PAUSE is the intent knob, not a one-shot command
+
+
+async def test_issue_command_without_live_binding_conflicts(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/commands", json={"verb": "FLATTEN"}
+        )
+
+    assert response.status_code == 409
+
+
 async def test_set_desired_state_actuates_live_binding(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

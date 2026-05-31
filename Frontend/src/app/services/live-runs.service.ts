@@ -140,4 +140,21 @@ export class LiveRunsService {
       ),
     );
   }
+
+  /** Unified one-shot command timeline for an instance's bound run (#397). */
+  getInstanceCommands(instanceId: string): Promise<CommandsSummary> {
+    return firstValueFrom(
+      this.http.get<CommandsSummary>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/commands`),
+    );
+  }
+
+  /** Issue a one-shot command (FLATTEN/RECONCILE/MARK_POISONED) to the bound run (#397). */
+  issueInstanceCommand(instanceId: string, request: CommandWriteRequest): Promise<CommandWriteResponse> {
+    return firstValueFrom(
+      this.http.post<CommandWriteResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/commands`,
+        request,
+      ),
+    );
+  }
 }

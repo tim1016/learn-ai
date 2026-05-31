@@ -24,16 +24,21 @@ from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
+    COMMAND_POLL_INTERVAL_MS,
     _confine,
     _desired_state_root,
     _now_ms,
     _read_ledger,
     _resolve_desired_state,
     _validate_path_segment,
+    build_command_timeline,
 )
 from app.schemas.live_runs import (
+    CommandsTimeline,
+    CommandView,
     DesiredStateAction,
     DesiredStateRecordResponse,
+    EnqueueCommandRequest,
     EvidenceBinding,
     InstanceProcessView,
     IntentActuation,
@@ -43,6 +48,10 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
 )
+
+# The instance command channel is reserved for one-shot operations; PAUSE/
+# RESUME/STOP are the durable intent knob (POST .../desired-state), not commands.
+_ONE_SHOT_VERBS = frozenset({CommandVerb.FLATTEN, CommandVerb.RECONCILE, CommandVerb.MARK_POISONED})
 
 # Durable intent action -> live-actuation command verb. PAUSE/RESUME/STOP are the
 # only verbs the durable knob actuates; the engine persists them as reconciling
@@ -312,3 +321,56 @@ async def set_instance_desired_state(
             )
 
     return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
+
+
+@router.get("/{strategy_instance_id}/commands", response_model=CommandsTimeline)
+async def get_instance_commands(strategy_instance_id: str) -> CommandsTimeline:
+    """Unified one-shot command timeline for the instance's bound run (#397).
+
+    Commands route to the live binding only, so the timeline is empty when no
+    live binding is visible.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    if live_binding is not None:
+        run_dir = _visible_live_run_dir(root, live_binding)
+        if run_dir is not None:
+            return build_command_timeline(run_dir / "commands")
+    return CommandsTimeline(entries=[], poll_interval_ms=COMMAND_POLL_INTERVAL_MS)
+
+
+@router.post("/{strategy_instance_id}/commands", response_model=CommandView)
+async def issue_instance_command(
+    strategy_instance_id: str, body: EnqueueCommandRequest
+) -> CommandView:
+    """Enqueue a one-shot command on the instance's bound run (#397).
+
+    Reserved to FLATTEN / RECONCILE / MARK_POISONED — PAUSE/RESUME/STOP are the
+    durable intent knob, not commands. Requires a live binding.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    try:
+        verb = CommandVerb(body.verb)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
+    if verb not in _ONE_SHOT_VERBS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"{verb.value} is not a one-shot command; use the desired-state intent knob",
+        )
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+    if run_dir is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command"
+        )
+    command = CommandChannel(run_dir / "commands").write_from_operator(verb)
+    return CommandView(seq=command.seq, verb=command.verb.value)
