@@ -2,6 +2,24 @@
   <h1>Strategy instances</h1>
   <p class="subtitle">Operator control room — the instance is the subject; the run is evidence.</p>
 
+  @let acct = account.value();
+  @if (acct) {
+    <section class="account" aria-label="Account contamination" [class.dirty]="acct.verdict === 'contaminated'">
+      <span class="acct-verdict" [class]="'av-' + acct.verdict">Account: {{ acct.verdict }}</span>
+      <span class="acct-summary">{{ acct.summary }}</span>
+      @if (residualRows(acct).length) {
+        <ul class="residual" aria-label="Unattributed positions">
+          @for (r of residualRows(acct); track r.symbol) {
+            <li><span class="sym">{{ r.symbol }}</span> <span class="qty">{{ r.qty }}</span></li>
+          }
+        </ul>
+      }
+      @if (acct.policy_blocks_starts) {
+        <span class="policy">Fleet policy: dirty account blocks starts</span>
+      }
+    </section>
+  }
+
   @if (fleet.isLoading()) {
     <p>Loading instances…</p>
   } @else if (fleet.error()) {
@@ -48,6 +66,10 @@
         </span>
         <span class="rung"><small>DESIRED</small>{{ s.desired_state?.state ?? 'unknown' }}</span>
       </header>
+
+      @if (accountContaminated()) {
+        <p class="inherited-banner">Account residual detected: DEGRADED — unattributed positions outside managed namespaces. Instance readiness is independent; the account is dirty.</p>
+      }
 
       @let r = s.readiness;
       @if (r) {

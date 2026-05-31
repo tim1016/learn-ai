@@ -66,6 +66,23 @@ export interface InstanceBrokerView {
   pending_order_count: number;
 }
 
+// --- Fleet/account contamination (ADR 0005, #399) ---
+
+export interface FleetExplainedBucket {
+  strategy_instance_id: string;
+  positions: Record<string, number>;
+}
+
+export interface FleetContamination {
+  net_positions: Record<string, number> | null;
+  explained_total: Record<string, number>;
+  explained_by_instance: FleetExplainedBucket[];
+  residual: Record<string, number>;
+  verdict: 'clean' | 'contaminated' | 'unknown';
+  policy_blocks_starts: boolean;
+  summary: string;
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;

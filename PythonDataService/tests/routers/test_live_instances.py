@@ -29,11 +29,34 @@ def _write_ledger(
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_live_state(root: Path, sid: str, run_id: str, positions: dict[str, int]) -> None:
+    live_state_dir = root.parent / "live_state" / sid
+    live_state_dir.mkdir(parents=True, exist_ok=True)
+    (live_state_dir / "live_state.json").write_text(
+        json.dumps(
+            {
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "bot_order_namespace": f"{sid}_ns",
+                "ib_client_id": 42,
+                "expected_position_by_symbol": positions,
+                "last_processed_bar_ms": 1,
+                "last_artifact_flush_ms": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "live_runs"
     root.mkdir()
-    stub = SimpleNamespace(live_runs_root=str(root), live_runner_daemon_url="http://daemon")
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        fleet_dirty_blocks_starts=False,
+    )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
     from app.main import app
 
@@ -202,6 +225,48 @@ async def test_status_broker_absent_without_sidecar(
         response = await client.get("/api/live-instances/spy_ema_paper/status")
 
     assert response.json()["broker"] is None
+
+
+async def test_account_fleet_flags_residual_contamination(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema", "spy_ema", 100)
+    _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
+
+    async def fake_net() -> dict[str, int]:
+        return {"SPY": 137}  # 37 unexplained
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account")
+
+    body = response.json()
+    assert body["verdict"] == "contaminated"
+    assert body["residual"] == {"SPY": 37}
+    assert body["explained_total"] == {"SPY": 100}
+    assert any(b["strategy_instance_id"] == "spy_ema" for b in body["explained_by_instance"])
+
+
+async def test_account_fleet_unknown_without_broker(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema", "spy_ema", 100)
+    _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
+
+    async def fake_net() -> None:
+        return None
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account")
+
+    assert response.json()["verdict"] == "unknown"
 
 
 async def test_instance_commands_returns_bound_run_timeline(

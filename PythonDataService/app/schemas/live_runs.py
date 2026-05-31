@@ -506,6 +506,29 @@ class LiveInstanceSummary(BaseModel):
     desired_state: str | None = None
 
 
+class FleetExplainedBucket(BaseModel):
+    """One instance's contribution to the account's explained position (#399)."""
+
+    strategy_instance_id: str
+    positions: dict[str, int]
+
+
+class FleetContamination(BaseModel):
+    """Account-level contamination — the one readiness signal authored by the
+    backend (ADR 0005, #399). ``residual = net - Σ explained``; a non-zero
+    residual is a position no managed instance created. ``verdict`` is
+    clean|contaminated|unknown (unknown when the net snapshot is unavailable).
+    """
+
+    net_positions: dict[str, int] | None = None
+    explained_total: dict[str, int] = Field(default_factory=dict)
+    explained_by_instance: list[FleetExplainedBucket] = Field(default_factory=list)
+    residual: dict[str, int] = Field(default_factory=dict)
+    verdict: str
+    policy_blocks_starts: bool = False
+    summary: str
+
+
 class IntentActuation(BaseModel):
     """Result of actuating durable intent against the live binding (ADR 0004).
 
