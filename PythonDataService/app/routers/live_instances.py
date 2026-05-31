@@ -223,11 +223,22 @@ async def set_instance_desired_state(
 
     daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
-    if live_binding is None:
-        actuation = IntentActuation(actuated=False, detail="durable only; will gate next start")
+    if live_binding is None or live_binding.run_dir is None:
+        # No live binding, or the bound run dir is not visible under this
+        # service's live_runs_root (root mismatch / missing artifacts). The
+        # engine polls its real run dir, so a command written here would never
+        # be seen or acked — stay durable-only rather than claim a phantom
+        # actuation. `_interpret_daemon_process` only sets run_dir when the dir
+        # actually exists locally.
+        detail = (
+            "durable only; will gate next start"
+            if live_binding is None
+            else f"durable only; bound run {live_binding.run_id} is not visible locally"
+        )
+        actuation = IntentActuation(actuated=False, detail=detail)
     else:
         verb = _ACTION_TO_VERB[body.action]
-        command = CommandChannel(root / live_binding.run_id / "commands").write_from_operator(verb)
+        command = CommandChannel(Path(live_binding.run_dir) / "commands").write_from_operator(verb)
         actuation = IntentActuation(
             actuated=True,
             run_id=live_binding.run_id,
