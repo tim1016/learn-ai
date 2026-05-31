@@ -910,11 +910,18 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # not an operator-error condition. Exit 2 would imply
                 # bad args or missing files.
                 return 3
-            # managed_symbols defaults to {symbol} here: a subprocess started in
-            # isolation does not yet know its sibling instances. The host daemon
-            # injects the fleet's sibling symbols at launch (#392) so a sibling's
-            # position is not misread as foreign contamination (ADR 0005).
-            position_check = check_unexpected_position(positions, expected_symbol=live_config.symbol)
+            # The host daemon injects sibling instances' symbols via
+            # --managed-symbols (ADR 0005, completes #395) so a sibling's
+            # position is not misread as foreign contamination. Absent (a run
+            # started in isolation) -> defaults to {symbol}.
+            managed_symbols = (
+                {s.strip() for s in args.managed_symbols.split(",") if s.strip()}
+                if getattr(args, "managed_symbols", None)
+                else None
+            )
+            position_check = check_unexpected_position(
+                positions, expected_symbol=live_config.symbol, managed_symbols=managed_symbols
+            )
             if not position_check.passed:
                 print(
                     f"[START] HALT unexpected_position: {position_check.detail} "
@@ -1392,6 +1399,15 @@ def build_parser() -> argparse.ArgumentParser:
         const="disabled",
         dest="hydrate_policy",
         help="Alias for --hydrate-policy disabled. The operator escape hatch.",
+    )
+    start.add_argument(
+        "--managed-symbols",
+        default=None,
+        help=(
+            "Comma-separated symbols owned by sibling managed instances on this account "
+            "(injected by the host daemon). Positions in these symbols are excluded from "
+            "this instance's unexpected-position gate (ADR 0005, completes #395)."
+        ),
     )
     start.add_argument(
         "--artifacts-root",

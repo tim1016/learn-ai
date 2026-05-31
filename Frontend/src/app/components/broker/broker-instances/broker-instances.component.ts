@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, resource, signal 
 import type {
   DecisionColumnDescriptor,
   DesiredStateAction,
+  InstanceBrokerView,
   IntentActuation,
   LiveInstanceSummary,
 } from '../../../api/live-instances.types';
@@ -98,5 +99,10 @@ export class BrokerInstancesComponent {
   signalOf(decision: Record<string, unknown> | null): string | null {
     const value = decision?.['signal'];
     return typeof value === 'string' ? value : null;
+  }
+
+  /** The instance's namespace-attributed owned positions as rows (#398). */
+  brokerPositions(broker: InstanceBrokerView): { symbol: string; qty: number }[] {
+    return Object.entries(broker.owned_positions).map(([symbol, qty]) => ({ symbol, qty }));
   }
 }

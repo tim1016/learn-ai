@@ -90,6 +90,22 @@
         </section>
       }
 
+      @if (s.broker; as broker) {
+        <section class="broker" aria-label="Broker slice">
+          <h2>Broker slice <small>ns: {{ broker.bot_order_namespace }}</small></h2>
+          @if (brokerPositions(broker).length) {
+            <ul class="positions">
+              @for (p of brokerPositions(broker); track p.symbol) {
+                <li><span class="sym">{{ p.symbol }}</span> <span class="qty">{{ p.qty }}</span></li>
+              }
+            </ul>
+          } @else {
+            <p class="flat">Flat — no owned position</p>
+          }
+          <p class="pending">{{ broker.pending_order_count }} pending order(s)</p>
+        </section>
+      }
+
       <div class="intent" role="group" aria-label="Operator intent">
         <span class="intent-label">Intent</span>
         <button type="button" (click)="setIntent('pause')" [disabled]="busyAction() !== null">Pause</button>

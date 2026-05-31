@@ -158,6 +158,52 @@ async def test_instance_status_rejects_invalid_id(
     assert response.status_code == 400
 
 
+async def test_status_includes_namespace_attributed_broker_slice(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-brk", "spy_ema_paper", 100)
+    live_state_dir = root.parent / "live_state" / "spy_ema_paper"
+    live_state_dir.mkdir(parents=True)
+    (live_state_dir / "live_state.json").write_text(
+        json.dumps(
+            {
+                "strategy_instance_id": "spy_ema_paper",
+                "run_id": "run-brk",
+                "bot_order_namespace": "spy_ema_ns",
+                "ib_client_id": 42,
+                "expected_position_by_symbol": {"SPY": 100},
+                "pending_intents": [{"symbol": "SPY"}],
+                "last_processed_bar_ms": 1,
+                "last_artifact_flush_ms": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    broker = response.json()["broker"]
+    assert broker["bot_order_namespace"] == "spy_ema_ns"
+    assert broker["owned_positions"] == {"SPY": 100}  # engine's own namespace tally
+    assert broker["pending_order_count"] == 1
+
+
+async def test_status_broker_absent_without_sidecar(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-nobrk", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.json()["broker"] is None
+
+
 async def test_instance_commands_returns_bound_run_timeline(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

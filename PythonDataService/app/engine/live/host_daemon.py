@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerHealth,
@@ -213,7 +214,7 @@ class RunnerProcessManager:
                     "Stop it before starting another run for this instance.",
                 )
 
-        command = self._build_start_command(run_dir, request)
+        command = self._build_start_command(run_dir, request, self._sibling_symbols(key))
         env = self._build_child_env(request)
         log_path = run_dir / "host_daemon.log"
         log_handle = log_path.open("a", encoding="utf-8")
@@ -283,7 +284,9 @@ class RunnerProcessManager:
         logger.info("Stop requested for host live runner %s", run_id)
         return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
-    def _build_start_command(self, run_dir: Path, request: HostRunnerStartRequest) -> list[str]:
+    def _build_start_command(
+        self, run_dir: Path, request: HostRunnerStartRequest, managed_symbols: set[str]
+    ) -> list[str]:
         command = [
             sys.executable,
             "-m",
@@ -300,7 +303,37 @@ class RunnerProcessManager:
         ]
         if request.readonly:
             command.append("--readonly")
+        if managed_symbols:
+            # Sibling symbols from other running instances on this account, so
+            # the unexpected-position gate excludes them rather than flagging a
+            # sibling as foreign contamination (ADR 0005, completes #395).
+            command += ["--managed-symbols", ",".join(sorted(managed_symbols))]
         return command
+
+    def _resolve_symbol(self, run_dir: Path) -> str | None:
+        """Best-effort: the single trading symbol of a run, from its spec."""
+        try:
+            data = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+            spec_path = Path(data["strategy_spec_path"])
+            if not spec_path.is_absolute():
+                spec_path = self.repo_root / spec_path
+            spec = load_spec_from_path(spec_path)
+            return spec.symbols[0] if spec.symbols else None
+        except (OSError, ValueError, KeyError, IndexError):
+            return None
+
+    def _sibling_symbols(self, exclude_key: str) -> set[str]:
+        """Symbols owned by other currently-running managed instances."""
+        symbols: set[str] = set()
+        for key, managed in self._managed.items():
+            if key == exclude_key:
+                continue
+            self._refresh(managed)
+            if managed.process.poll() is None:
+                symbol = self._resolve_symbol(managed.run_dir)
+                if symbol:
+                    symbols.add(symbol)
+        return symbols
 
     def _build_child_env(self, request: HostRunnerStartRequest) -> dict[str, str]:
         env = os.environ.copy()

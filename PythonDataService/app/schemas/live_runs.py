@@ -462,6 +462,21 @@ class DecisionColumnDescriptor(BaseModel):
     semantic: str = ""
 
 
+class InstanceBrokerView(BaseModel):
+    """The instance's namespace-attributed broker slice (ADR 0005, #398).
+
+    Engine-authored, from the live-state sidecar: ownership is keyed on
+    ``bot_order_namespace``; ``owned_positions`` is the engine's running tally of
+    its own namespace fills (``expected_position_by_symbol``) — never decomposed
+    from the raw net account snapshot. The instance broker gate is
+    self-consistency only.
+    """
+
+    bot_order_namespace: str
+    owned_positions: dict[str, int] = Field(default_factory=dict)
+    pending_order_count: int = 0
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -477,6 +492,7 @@ class LiveInstanceStatus(BaseModel):
     readiness: ReadinessVector | None = None
     latest_decision: dict | None = None
     decision_columns: list[DecisionColumnDescriptor] = Field(default_factory=list)
+    broker: InstanceBrokerView | None = None
     fetched_at_ms: int
 
 

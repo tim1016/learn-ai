@@ -59,6 +59,13 @@ export interface DecisionColumnDescriptor {
   semantic?: string;
 }
 
+/** The instance's namespace-attributed broker slice (ADR 0005, #398). */
+export interface InstanceBrokerView {
+  bot_order_namespace: string;
+  owned_positions: Record<string, number>;
+  pending_order_count: number;
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;
@@ -68,6 +75,7 @@ export interface LiveInstanceStatus {
   readiness: ReadinessVector | null;
   latest_decision: Record<string, unknown> | null;
   decision_columns: DecisionColumnDescriptor[];
+  broker: InstanceBrokerView | null;
   fetched_at_ms: number;
 }
 
