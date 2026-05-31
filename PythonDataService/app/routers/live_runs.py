@@ -943,4 +943,4 @@ async def get_command_timeline(run_id: str) -> CommandsTimeline:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
-    return build_command_timeline(run_dir / "commands")
+    return build_command_timeline(_confine(run_dir, "commands"))

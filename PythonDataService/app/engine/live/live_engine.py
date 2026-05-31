@@ -64,6 +64,8 @@ from app.engine.live.live_portfolio import (
     LiveBrokerEventStreamError,
     LivePortfolio,
 )
+from app.engine.live.readiness import build_live_readiness
+from app.engine.live.readiness_sidecar import write_readiness
 from app.engine.strategy.base import LoggedTrade, Strategy
 
 logger = logging.getLogger(__name__)
@@ -684,6 +686,17 @@ class LiveEngine:
                     portfolio, int(minute_bar.end_time.timestamp() * 1000), writers
                 )
 
+                # Engine-authored readiness (ADR 0005): emit the consolidated
+                # "can act on the next bar?" vector from the in-loop guard values
+                # each bar. The backend status endpoint transports it verbatim —
+                # the operator console shows exactly what the engine enforces.
+                self._emit_readiness(
+                    as_of_ms=int(minute_bar.end_time.timestamp() * 1000),
+                    orders_used=orders_submitted_today,
+                    in_session=True,
+                    force_flat_active=(last_force_flat_date == minute_bar.time.date()),
+                )
+
             # Source exhausted. Stop the stream first so the task flushes
             # any in-flight event into the buffer, then drain. Without
             # this final pass, fills that arrive between the last per-bar
@@ -865,6 +878,42 @@ class LiveEngine:
                 source_bar_close_ms=event.source_bar_close_ms,
             )
         )
+
+    def _emit_readiness(
+        self,
+        *,
+        as_of_ms: int,
+        orders_used: int,
+        in_session: bool,
+        force_flat_active: bool,
+    ) -> None:
+        """Write the engine-authored readiness vector sidecar (ADR 0005).
+
+        Best-effort: a sidecar I/O hiccup must not break the bar loop.
+        ``broker_connected`` is True mid-loop — a stream failure raises and
+        exits before this runs, so a dead broker shows up as a stale sidecar,
+        not a false "connected".
+        """
+        if self._output_dir is None:
+            return
+        poisoned = (self._output_dir / "poisoned.flag").exists()
+        vector = build_live_readiness(
+            as_of_ms=as_of_ms,
+            paused=self._paused,
+            broker_connected=True,
+            submit_mode="readonly" if self._readonly else "live_paper",
+            orders_used=orders_used,
+            orders_cap=self._max_orders_per_day,
+            in_session=in_session,
+            force_flat_active=force_flat_active,
+            poisoned=poisoned,
+            bar_source=self._bar_source,
+            expected_bar_source=self._bar_source,
+        )
+        try:
+            write_readiness(self._output_dir, vector)
+        except OSError:
+            logger.warning("readiness sidecar write failed", exc_info=True)
 
     def _persist_live_state(
         self,

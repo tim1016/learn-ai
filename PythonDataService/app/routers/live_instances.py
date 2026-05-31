@@ -17,11 +17,16 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import ValidationError
 
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
+from app.engine.live.readiness import build_start_readiness
+from app.engine.live.readiness_sidecar import read_readiness
+from app.engine.strategy.spec.descriptors import decision_column_descriptors
+from app.engine.strategy.spec.schema import load_spec_from_path
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
     COMMAND_POLL_INTERVAL_MS,
@@ -29,6 +34,7 @@ from app.routers.live_runs import (
     _desired_state_root,
     _now_ms,
     _read_ledger,
+    _read_parquet_tail,
     _resolve_desired_state,
     _validate_path_segment,
     build_command_timeline,
@@ -45,6 +51,7 @@ from app.schemas.live_runs import (
     LiveBinding,
     LiveInstanceStatus,
     LiveInstanceSummary,
+    ReadinessVector,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
 )
@@ -177,6 +184,74 @@ def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
     return run_dir if run_dir.is_dir() else None
 
 
+def _resolve_readiness(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+    desired_state: str | None,
+) -> ReadinessVector:
+    """Transport the engine-authored live-readiness vector when a live binding is
+    locally visible; otherwise derive a labelled start-readiness from durable
+    artifacts (ADR 0005). The engine authors live readiness — the backend never
+    recomputes it; it only derives start-readiness for a dead instance.
+    """
+    if live_binding is not None:
+        run_dir = _visible_live_run_dir(root, live_binding)
+        if run_dir is not None:
+            raw = read_readiness(run_dir)
+            if raw is not None:
+                try:
+                    return ReadinessVector.model_validate(raw)
+                except ValidationError:
+                    pass  # malformed sidecar -> fall through to start-readiness
+    latest_run_dir = Path(runs[0]["run_dir"]) if runs else None
+    poisoned = latest_run_dir is not None and (latest_run_dir / "poisoned.flag").exists()
+    halted = latest_run_dir is not None and (latest_run_dir / "halt.flag").exists()
+    return ReadinessVector.model_validate(
+        build_start_readiness(
+            as_of_ms=_now_ms(),
+            desired_state=desired_state,
+            poisoned=poisoned,
+            halted=halted,
+            reconcile_passed=None,
+        )
+    )
+
+
+def _strategy_state(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> tuple[dict | None, list[dict]]:
+    """Latest decision row + spec-derived column descriptors for the instance.
+
+    Reads from the live run when visible, else the latest evidence run. The
+    descriptors come from the run's strategy spec (the single source of column
+    semantics), so the console renders any strategy's indicators generically.
+    """
+    run_dir: Path | None = None
+    if live_binding is not None:
+        run_dir = _visible_live_run_dir(root, live_binding)
+    if run_dir is None and runs:
+        run_dir = Path(runs[0]["run_dir"])
+    if run_dir is None:
+        return None, []
+
+    decisions_path = run_dir / "decisions.parquet"
+    # Guard existence: _read_parquet_tail's except tuple references a pyarrow
+    # symbol absent in this version, so it raises on a missing file rather than
+    # returning []. A run with no decisions yet is normal (pre-warmup).
+    rows = _read_parquet_tail(decisions_path, 1) if decisions_path.is_file() else []
+    latest_decision = rows[0] if rows else None
+
+    descriptors: list[dict] = []
+    try:
+        ledger = _read_ledger(run_dir)
+        spec = load_spec_from_path(ledger["strategy_spec_path"])
+        descriptors = decision_column_descriptors(spec)
+    except (OSError, ValueError, KeyError):
+        descriptors = []
+    return latest_decision, descriptors
+
+
 @router.get("", response_model=list[LiveInstanceSummary])
 async def list_live_instances() -> list[LiveInstanceSummary]:
     """Account fleet overview: every known strategy instance, live or not."""
@@ -228,13 +303,18 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
 
     runs = _scan_runs_by_instance(root).get(sid, [])
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
+    desired = _resolve_desired_state(root, sid)
+    latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
         process=process,
         live_binding=live_binding,
         evidence_binding=evidence,
-        desired_state=_resolve_desired_state(root, sid),
+        desired_state=desired,
+        readiness=_resolve_readiness(root, live_binding, runs, desired.state),
+        latest_decision=latest_decision,
+        decision_columns=decision_columns,
         fetched_at_ms=_now_ms(),
     )
 
@@ -339,7 +419,7 @@ async def get_instance_commands(strategy_instance_id: str) -> CommandsTimeline:
     if live_binding is not None:
         run_dir = _visible_live_run_dir(root, live_binding)
         if run_dir is not None:
-            return build_command_timeline(run_dir / "commands")
+            return build_command_timeline(_confine(run_dir, "commands"))
     return CommandsTimeline(entries=[], poll_interval_ms=COMMAND_POLL_INTERVAL_MS)
 
 

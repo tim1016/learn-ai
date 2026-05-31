@@ -18,15 +18,15 @@ from app.engine.live import host_daemon_client
 from app.routers import live_instances
 
 
-def _write_ledger(root: Path, run_id: str, sid: str, created_at_ms: int) -> None:
+def _write_ledger(
+    root: Path, run_id: str, sid: str, created_at_ms: int, spec_path: Path | None = None
+) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {"run_id": run_id, "strategy_instance_id": sid, "created_at_ms": created_at_ms}
-        ),
-        encoding="utf-8",
-    )
+    payload: dict = {"run_id": run_id, "strategy_instance_id": sid, "created_at_ms": created_at_ms}
+    if spec_path is not None:
+        payload["strategy_spec_path"] = str(spec_path)
+    (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 @pytest.fixture
@@ -237,6 +237,74 @@ async def test_issue_command_without_live_binding_conflicts(
         )
 
     assert response.status_code == 409
+
+
+async def test_status_transports_engine_readiness_when_live(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live-rdy", "spy_ema_paper", 100)
+    (root / "run-live-rdy" / "readiness.json").write_text(
+        json.dumps(
+            {
+                "kind": "live_readiness",
+                "as_of_ms": 5,
+                "source": "engine",
+                "verdict": "READY",
+                "summary": "ready",
+                "gates": [{"name": "desired_state", "status": "pass", "severity": "hard", "detail": "RUNNING"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live-rdy", "pid": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    readiness = response.json()["readiness"]
+    assert readiness["kind"] == "live_readiness"
+    assert readiness["source"] == "engine"  # engine-authored, transported verbatim
+    assert readiness["verdict"] == "READY"
+
+
+async def test_status_derives_start_readiness_when_dead(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-dead-rdy", "spy_ema_paper", 50)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    readiness = response.json()["readiness"]
+    assert readiness["kind"] == "start_readiness"
+    assert readiness["source"] == "backend_derived"
+    assert readiness["live_readiness_available"] is False
+
+
+async def test_status_includes_spec_derived_decision_column_descriptors(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.engine.strategy.spec import schema as spec_schema
+
+    fixture = Path(spec_schema.__file__).parent / "fixtures" / "spy_ema_crossover.spec.json"
+    app, root = app_with_root
+    _write_ledger(root, "run-desc", "spy_ema_paper", 100, spec_path=fixture)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    body = response.json()
+    cols = {c["name"]: c for c in body["decision_columns"]}
+    assert {"ema5", "ema10", "rsi"} <= set(cols)
+    assert cols["rsi"]["label"] == "RSI"
+    assert cols["ema5"]["label"] == "EMA 5"
+    assert cols["ema5"]["format"] == "decimal"
+    # No decisions.parquet written -> latest_decision is None, descriptors still resolve.
+    assert body["latest_decision"] is None
 
 
 async def test_set_desired_state_actuates_live_binding(
