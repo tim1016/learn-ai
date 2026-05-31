@@ -74,6 +74,8 @@
         <p class="inherited-banner">Account residual detected: DEGRADED — unattributed positions outside managed namespaces. Instance readiness is independent; the account is dirty.</p>
       }
 
+      <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
+
       @let r = s.readiness;
       @if (r) {
         <section class="readiness" aria-label="Readiness">

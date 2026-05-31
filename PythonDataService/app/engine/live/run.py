@@ -141,6 +141,7 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
             start_date_ms=args.start_date_ms,
             live_config=live_config,
             strategy_instance_id=args.strategy_instance_id,
+            strategy_key=args.strategy_key,
         )
     except FileNotFoundError as exc:
         print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
@@ -631,6 +632,23 @@ def cmd_start(args: argparse.Namespace) -> int:
         ledger = read_ledger(ledger_path)
     except (OSError, ValueError) as exc:
         print(f"[START] could not parse run_ledger.json: {exc}", file=sys.stderr)
+        return 2
+
+    # Foot-gun guard (#416): the algorithm is imported purely from --strategy,
+    # while the ledger's spec/QC-audit pin the reconciliation target. A
+    # mismatched --strategy would silently run a *different* algorithm against
+    # a ledger reconciled to a different QC backtest. When the ledger records
+    # the intended algorithm module (strategy_key, schema 1.2+), reject any
+    # inconsistent --strategy up-front. Empty strategy_key (legacy ledger) is
+    # unguarded — preserves existing runs that predate the field.
+    if ledger.strategy_key and args.strategy != ledger.strategy_key:
+        print(
+            f"[START] --strategy {args.strategy!r} does not match the ledger's "
+            f"strategy_key {ledger.strategy_key!r}. The ledger is reconciled to a "
+            f"specific algorithm; starting a different one breaks the three-way "
+            f"reconciliation guarantee. Start with --strategy {ledger.strategy_key!r}.",
+            file=sys.stderr,
+        )
         return 2
 
     # Attach file + console logging keyed off the run-dir. Done after
@@ -1273,6 +1291,20 @@ def build_parser() -> argparse.ArgumentParser:
             "artifacts/live_state/<strategy_instance_id>/. NOT part of the "
             "run_id hash. Omit for a legacy/unknown binding (empty); 'start' "
             "then falls back to --strategy with a warning."
+        ),
+    )
+    init.add_argument(
+        "--strategy-key",
+        dest="strategy_key",
+        default="",
+        help=(
+            "The hand-coded algorithm module this run starts under (the "
+            "--strategy arg to 'start'; #416). Persisted in run_ledger.json "
+            "(schema 1.2), NOT part of the run_id hash. When set, 'start' "
+            "rejects any --strategy that does not match it, closing the "
+            "foot-gun where a mismatched algorithm runs against a ledger "
+            "reconciled to a different QC backtest. Omit for a legacy/unknown "
+            "binding (empty); the guard then no-ops."
         ),
     )
     init.add_argument("--start-date-ms", type=int, required=True, help="int64 ms UTC of the run-start session.")

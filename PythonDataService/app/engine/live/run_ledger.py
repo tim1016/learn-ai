@@ -60,12 +60,13 @@ class LiveRunLedger(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # 1.1 adds ``strategy_instance_id`` (UI-0 identity binding). The field
-    # is NOT part of the ``run_id`` hash, so existing 1.0 run_ids, run
-    # directories, and fixtures stay byte-identical. A legacy 1.0 ledger
-    # has no ``strategy_instance_id`` key; the empty-string default lets it
-    # read cleanly as "unknown / legacy".
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    # 1.1 adds ``strategy_instance_id`` (UI-0 identity binding). 1.2 adds
+    # ``strategy_key`` (#416 — the hand-coded algorithm module the run starts
+    # under). Both are NOT part of the ``run_id`` hash, so existing 1.0/1.1
+    # run_ids, run directories, and fixtures stay byte-identical. A legacy
+    # ledger that predates a field has no key for it; the empty-string default
+    # lets it read cleanly as "unknown / legacy".
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
 
     run_id: str
     code_sha: str
@@ -77,6 +78,15 @@ class LiveRunLedger(BaseModel):
     # mapping. Deliberately NOT hashed into ``run_id`` (see ``compute_run_id``).
     # Empty string = legacy / unknown (a 1.0 ledger read without the field).
     strategy_instance_id: str = ""
+
+    # The hand-coded algorithm module this run is meant to start under (the
+    # ``--strategy`` arg to ``run start``; #416). Recorded at init-ledger so
+    # the console can default the Start card from it AND ``run start`` can
+    # reject a ``--strategy`` inconsistent with it — closing the foot-gun where
+    # a mismatched algorithm silently runs against a ledger reconciled to a
+    # different QC backtest. Deliberately NOT hashed into ``run_id``. Empty
+    # string = legacy / unknown; the guard and the default both no-op when empty.
+    strategy_key: str = ""
 
     strategy_spec_path: str
     strategy_spec_sha256: str
@@ -133,6 +143,7 @@ def build_ledger(
     start_date_ms: int,
     live_config: dict,
     strategy_instance_id: str = "",
+    strategy_key: str = "",
 ) -> LiveRunLedger:
     """Build a ``LiveRunLedger`` from on-disk inputs and resolved config.
 
@@ -141,10 +152,11 @@ def build_ledger(
     referenced path is missing — fail fast at run-start before any
     broker connection.
 
-    ``strategy_instance_id`` (UI-0) is persisted but deliberately left
-    out of ``compute_run_id`` — adding it must not change ``run_id`` for
-    existing runs. Defaults to ``""`` (legacy / unknown) so existing
-    callers that don't supply it produce an identical ``run_id``.
+    ``strategy_instance_id`` (UI-0) and ``strategy_key`` (#416) are both
+    persisted but deliberately left out of ``compute_run_id`` — adding them
+    must not change ``run_id`` for existing runs. They default to ``""``
+    (legacy / unknown) so existing callers that don't supply them produce an
+    identical ``run_id``.
     """
     if not strategy_spec_path.exists():
         raise FileNotFoundError(f"strategy_spec_path does not exist: {strategy_spec_path}")
@@ -174,6 +186,7 @@ def build_ledger(
         start_date_ms=start_date_ms,
         live_config=live_config,
         strategy_instance_id=strategy_instance_id,
+        strategy_key=strategy_key,
     )
 
 

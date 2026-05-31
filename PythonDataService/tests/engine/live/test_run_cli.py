@@ -205,8 +205,49 @@ def test_init_ledger_writes_strategy_instance_id(
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "spy-ema-paper-1"
-    assert ledger["schema_version"] == "1.1"
+    assert ledger["schema_version"] == "1.2"
     assert ledger["run_id"] == runs[0].name
+
+
+@requires_git
+def test_init_ledger_writes_strategy_key(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """#416: --strategy-key is persisted into run_ledger.json at init-ledger
+    time so the console can default the Start card and 'start' can guard against
+    a mismatched algorithm. Not part of the run_id hash."""
+    repo, spec, qc = repo_with_inputs
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--strategy-key",
+            "spy_ema_crossover",
+            "--start-date-ms",
+            "1700000000000",
+            "--run-root",
+            str(tmp_path / "live_runs"),
+        ]
+    )
+    assert rc == 0
+
+    runs = list((tmp_path / "live_runs").iterdir())
+    assert len(runs) == 1
+    ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["strategy_key"] == "spy_ema_crossover"
+    assert ledger["schema_version"] == "1.2"
 
 
 @requires_git
@@ -538,6 +579,61 @@ def test_start_returns_2_when_run_dir_missing_ledger(tmp_path: Path, capsys: pyt
     )
     assert rc == 2
     assert "missing run_ledger.json" in capsys.readouterr().err
+
+
+def _write_ledger_with_strategy_key(tmp_path: Path, strategy_key: str) -> Path:
+    """Build a run dir whose ledger pins ``strategy_key``. Returns the run dir."""
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+
+    spec = tmp_path / "spec.json"
+    spec.write_text('{"strategy": "spy_ema_crossover"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-test-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={},
+        strategy_key=strategy_key,
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    return run_dir
+
+
+def test_start_rejects_strategy_inconsistent_with_ledger_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """#416 foot-gun guard: when the ledger pins ``strategy_key``, starting with
+    a different ``--strategy`` is rejected (exit 2) before the algorithm imports —
+    it would otherwise run a different algorithm against a ledger reconciled to a
+    different QC backtest.
+    """
+    run_dir = _write_ledger_with_strategy_key(tmp_path, "spy_ema_crossover")
+    rc = main(["start", "--run-dir", str(run_dir), "--strategy", "rsi_mean_reversion", "--readonly"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "does not match" in err
+    assert "spy_ema_crossover" in err
+
+
+def test_start_guard_noops_when_ledger_strategy_key_empty(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A legacy ledger (empty ``strategy_key``) is unguarded — any ``--strategy``
+    passes the guard and advances to the algorithm import. Using a non-existent
+    module, the run fails at *import* (exit 2, "could not import"), not at the
+    guard — proving the guard let it through without executing the engine.
+    """
+    run_dir = _write_ledger_with_strategy_key(tmp_path, "")
+    rc = main(["start", "--run-dir", str(run_dir), "--strategy", "no_such_algo_xyz", "--readonly"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "could not import strategy module" in err
+    assert "does not match the ledger's strategy_key" not in err
 
 
 def test_live_config_from_ledger_applies_known_fields() -> None:

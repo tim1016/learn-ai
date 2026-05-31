@@ -117,6 +117,55 @@ async def test_instance_status_dead_is_evidence_only(
     assert body["evidence_binding"]["run_id"] == "run-old-bbb"
 
 
+async def test_status_start_defaults_seed_strategy_from_ledger_key(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#416: the Start-card defaults seed ``strategy`` from the run ledger's
+    ``strategy_key`` so the console never starts from a blank/hardcoded field."""
+    app, root = app_with_root
+    run_dir = root / "run-keyed"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-keyed",
+                "strategy_instance_id": "spy_ema_paper",
+                "created_at_ms": 100,
+                "strategy_key": "spy_ema_crossover",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    defaults = response.json()["start_defaults"]
+    assert defaults["strategy"] == "spy_ema_crossover"
+    assert defaults["readonly"] is True
+    assert defaults["hydrate_policy"] == "require"
+    assert defaults["max_orders_per_day"] == 4
+    assert defaults["ibkr_host"] == "127.0.0.1"
+
+
+async def test_status_start_defaults_empty_strategy_for_legacy_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy ledger without ``strategy_key`` yields an empty ``strategy`` for
+    the operator to supply — the field is present, just unseeded."""
+    app, root = app_with_root
+    _write_ledger(root, "run-legacy", "spy_ema_paper", 50)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    assert response.json()["start_defaults"]["strategy"] == ""
+
+
 async def test_instance_status_unreachable_daemon_is_not_guessed(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
