@@ -51,6 +51,11 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       { name: 'ema5', label: 'EMA 5', type: 'float64', format: 'decimal' },
       { name: 'rsi', label: 'RSI', type: 'float64', format: 'decimal' },
     ],
+    broker: {
+      bot_order_namespace: 'spy_ema_ns',
+      owned_positions: { SPY: 100 },
+      pending_order_count: 1,
+    },
     fetched_at_ms: 1,
     ...overrides,
   };
@@ -230,5 +235,21 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('RSI');
     expect(text).toContain('624.12'); // decimal-formatted to 2 dp
     expect(text).toContain('Signal: ENTER');
+  });
+
+  it('renders the namespace-attributed broker slice', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('spy_ema_ns'); // bot_order_namespace
+    expect(text).toContain('SPY'); // owned position symbol
+    expect(text).toContain('1 pending order');
   });
 });

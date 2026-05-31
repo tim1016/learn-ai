@@ -23,6 +23,7 @@ from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
+from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
@@ -46,6 +47,7 @@ from app.schemas.live_runs import (
     DesiredStateRecordResponse,
     EnqueueCommandRequest,
     EvidenceBinding,
+    InstanceBrokerView,
     InstanceProcessView,
     IntentActuation,
     LiveBinding,
@@ -291,6 +293,33 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     return summaries
 
 
+def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
+    """The instance's namespace-attributed broker slice from its live-state
+    sidecar (ADR 0005, #398). Ownership is keyed on bot_order_namespace;
+    owned_positions is the engine's running tally of its own namespace fills,
+    never decomposed from the net account snapshot.
+    """
+    artifacts_root = _desired_state_root(root)
+    try:
+        # Confine the sidecar path on the validated id (same barrier as the
+        # desired-state write) so the read can't escape live_state/.
+        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+    except ValueError:
+        return None
+    repo = LiveStateSidecarRepo(sidecar_dir / "live_state.json")
+    try:
+        envelope = repo.read()
+    except LiveStateSidecarCorruptError:
+        return None
+    if envelope is None:
+        return None
+    return InstanceBrokerView(
+        bot_order_namespace=envelope.bot_order_namespace,
+        owned_positions=dict(envelope.expected_position_by_symbol),
+        pending_order_count=len(envelope.pending_intents),
+    )
+
+
 @router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)
 async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     """Instance control-room status: live binding (registry) + evidence + intent."""
@@ -315,6 +344,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         readiness=_resolve_readiness(root, live_binding, runs, desired.state),
         latest_decision=latest_decision,
         decision_columns=decision_columns,
+        broker=_instance_broker(root, sid),
         fetched_at_ms=_now_ms(),
     )
 
