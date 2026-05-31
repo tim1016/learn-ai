@@ -158,6 +158,51 @@ async def test_instance_status_rejects_invalid_id(
     assert response.status_code == 400
 
 
+async def test_status_transports_engine_readiness_when_live(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live-rdy", "spy_ema_paper", 100)
+    (root / "run-live-rdy" / "readiness.json").write_text(
+        json.dumps(
+            {
+                "kind": "live_readiness",
+                "as_of_ms": 5,
+                "source": "engine",
+                "verdict": "READY",
+                "summary": "ready",
+                "gates": [{"name": "desired_state", "status": "pass", "severity": "hard", "detail": "RUNNING"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live-rdy", "pid": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    readiness = response.json()["readiness"]
+    assert readiness["kind"] == "live_readiness"
+    assert readiness["source"] == "engine"  # engine-authored, transported verbatim
+    assert readiness["verdict"] == "READY"
+
+
+async def test_status_derives_start_readiness_when_dead(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-dead-rdy", "spy_ema_paper", 50)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    readiness = response.json()["readiness"]
+    assert readiness["kind"] == "start_readiness"
+    assert readiness["source"] == "backend_derived"
+    assert readiness["live_readiness_available"] is False
+
+
 async def test_set_desired_state_actuates_live_binding(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

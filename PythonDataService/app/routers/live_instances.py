@@ -17,11 +17,14 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import ValidationError
 
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
+from app.engine.live.readiness import build_start_readiness
+from app.engine.live.readiness_sidecar import read_readiness
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
     _confine,
@@ -40,6 +43,7 @@ from app.schemas.live_runs import (
     LiveBinding,
     LiveInstanceStatus,
     LiveInstanceSummary,
+    ReadinessVector,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
 )
@@ -168,6 +172,40 @@ def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
     return run_dir if run_dir.is_dir() else None
 
 
+def _resolve_readiness(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+    desired_state: str | None,
+) -> ReadinessVector:
+    """Transport the engine-authored live-readiness vector when a live binding is
+    locally visible; otherwise derive a labelled start-readiness from durable
+    artifacts (ADR 0005). The engine authors live readiness — the backend never
+    recomputes it; it only derives start-readiness for a dead instance.
+    """
+    if live_binding is not None:
+        run_dir = _visible_live_run_dir(root, live_binding)
+        if run_dir is not None:
+            raw = read_readiness(run_dir)
+            if raw is not None:
+                try:
+                    return ReadinessVector.model_validate(raw)
+                except ValidationError:
+                    pass  # malformed sidecar -> fall through to start-readiness
+    latest_run_dir = Path(runs[0]["run_dir"]) if runs else None
+    poisoned = latest_run_dir is not None and (latest_run_dir / "poisoned.flag").exists()
+    halted = latest_run_dir is not None and (latest_run_dir / "halt.flag").exists()
+    return ReadinessVector.model_validate(
+        build_start_readiness(
+            as_of_ms=_now_ms(),
+            desired_state=desired_state,
+            poisoned=poisoned,
+            halted=halted,
+            reconcile_passed=None,
+        )
+    )
+
+
 @router.get("", response_model=list[LiveInstanceSummary])
 async def list_live_instances() -> list[LiveInstanceSummary]:
     """Account fleet overview: every known strategy instance, live or not."""
@@ -219,13 +257,15 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
 
     runs = _scan_runs_by_instance(root).get(sid, [])
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
+    desired = _resolve_desired_state(root, sid)
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
         process=process,
         live_binding=live_binding,
         evidence_binding=evidence,
-        desired_state=_resolve_desired_state(root, sid),
+        desired_state=desired,
+        readiness=_resolve_readiness(root, live_binding, runs, desired.state),
         fetched_at_ms=_now_ms(),
     )
 

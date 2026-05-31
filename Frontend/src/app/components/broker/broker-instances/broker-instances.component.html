@@ -49,6 +49,29 @@
         <span class="rung"><small>DESIRED</small>{{ s.desired_state?.state ?? 'unknown' }}</span>
       </header>
 
+      @let r = s.readiness;
+      @if (r) {
+        <section class="readiness" aria-label="Readiness">
+          <div class="verdict-line">
+            <span class="verdict" [class]="'v-' + r.verdict.toLowerCase()">{{ r.verdict }}</span>
+            <span class="headline">Can act on the next bar?</span>
+            <small class="kind">{{ r.kind === 'start_readiness' ? 'start readiness — no live process' : 'live readiness — engine-authored' }}</small>
+          </div>
+          <p class="summary">{{ r.summary }}</p>
+          @if (r.gates.length) {
+            <ul class="gates" aria-label="Readiness gates">
+              @for (g of r.gates; track g.name) {
+                <li class="gate" [class.fail]="g.status === 'fail'" [class.unknown]="g.status === 'unknown'" [class.soft]="g.severity === 'soft'">
+                  <span class="gate-name">{{ g.name }}</span>
+                  <span class="gate-status">{{ g.status }}</span>
+                  <span class="gate-detail">{{ g.detail }}</span>
+                </li>
+              }
+            </ul>
+          }
+        </section>
+      }
+
       <div class="intent" role="group" aria-label="Operator intent">
         <span class="intent-label">Intent</span>
         <button type="button" (click)="setIntent('pause')" [disabled]="busyAction() !== null">Pause</button>

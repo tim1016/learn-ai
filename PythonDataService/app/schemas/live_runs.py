@@ -389,6 +389,34 @@ class EvidenceBinding(BaseModel):
     is_live: bool = False
 
 
+class ReadinessGate(BaseModel):
+    """One named input to the "can this strategy act on the next bar?" verdict
+    (ADR 0005). ``status`` is pass|fail|unknown; ``severity`` is hard|soft."""
+
+    name: str
+    status: str  # pass | fail | unknown
+    severity: str  # hard | soft
+    detail: str
+
+
+class ReadinessVector(BaseModel):
+    """Structured readiness verdict (ADR 0005).
+
+    ``kind``/``source``: ``live_readiness``/``engine`` when authored by the
+    running engine; ``start_readiness``/``backend_derived`` when computed for a
+    dead instance from durable artifacts. ``verdict`` is READY|BLOCKED|DEGRADED|
+    UNKNOWN. ``live_readiness_available`` is set only on start_readiness.
+    """
+
+    kind: str
+    as_of_ms: int
+    source: str
+    verdict: str
+    summary: str
+    gates: list[ReadinessGate] = Field(default_factory=list)
+    live_readiness_available: bool | None = None
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -401,6 +429,7 @@ class LiveInstanceStatus(BaseModel):
     live_binding: LiveBinding | None = None
     evidence_binding: EvidenceBinding | None = None
     desired_state: DesiredStateView | None = None
+    readiness: ReadinessVector | None = None
     fetched_at_ms: int
 
 

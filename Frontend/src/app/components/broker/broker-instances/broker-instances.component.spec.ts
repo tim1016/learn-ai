@@ -36,6 +36,16 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       version: 1,
       path_status: 'ok',
     },
+    readiness: {
+      kind: 'live_readiness',
+      as_of_ms: 1,
+      source: 'engine',
+      verdict: 'BLOCKED',
+      summary: 'Blocked: orders_cap — 4 / 4 orders used.',
+      gates: [
+        { name: 'orders_cap', status: 'fail', severity: 'hard', detail: '4 / 4 orders used' },
+      ],
+    },
     fetched_at_ms: 1,
     ...overrides,
   };
@@ -146,5 +156,22 @@ describe('BrokerInstancesComponent', () => {
 
     expect(svc.setInstanceDesiredState).toHaveBeenCalledWith('spy_ema_paper', { action: 'pause' });
     expect(fixture.nativeElement.textContent).toContain('PAUSE queued on run-live');
+  });
+
+  it('renders the engine-authored readiness verdict and gates', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Can act on the next bar?');
+    expect(text).toContain('BLOCKED');
+    expect(text).toContain('orders_cap');
+    expect(text).toContain('4 / 4 orders used');
   });
 });

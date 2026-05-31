@@ -30,12 +30,34 @@ export interface EvidenceBinding {
   is_live: boolean;
 }
 
+// --- Readiness vector (ADR 0005) ---
+
+export type ReadinessVerdict = 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN';
+
+export interface ReadinessGate {
+  name: string;
+  status: 'pass' | 'fail' | 'unknown';
+  severity: 'hard' | 'soft';
+  detail: string;
+}
+
+export interface ReadinessVector {
+  kind: 'live_readiness' | 'start_readiness';
+  as_of_ms: number;
+  source: 'engine' | 'backend_derived';
+  verdict: ReadinessVerdict;
+  summary: string;
+  gates: ReadinessGate[];
+  live_readiness_available?: boolean | null;
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;
   live_binding: LiveBinding | null;
   evidence_binding: EvidenceBinding | null;
   desired_state: DesiredStateView | null;
+  readiness: ReadinessVector | null;
   fetched_at_ms: number;
 }
 
