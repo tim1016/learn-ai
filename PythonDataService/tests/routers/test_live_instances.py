@@ -154,3 +154,46 @@ async def test_instance_status_rejects_invalid_id(
         response = await client.get("/api/live-instances/evil$/status")
 
     assert response.status_code == 400
+
+
+async def test_set_desired_state_actuates_live_binding(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live-ccc", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live-ccc", "pid": 7})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "pause", "updated_by": "operator", "reason": "risk"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    # 1. durable intent written first
+    assert body["durable"]["state"] == "PAUSED"
+    # 2. live actuation queued on the bound run
+    assert body["actuation"]["actuated"] is True
+    assert body["actuation"]["run_id"] == "run-live-ccc"
+    assert body["actuation"]["command_seq"] is not None
+    queued = list((root / "run-live-ccc" / "commands").glob("command.*.PAUSE.pending.json"))
+    assert len(queued) == 1
+
+
+async def test_set_desired_state_without_live_binding_is_durable_only(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process=None)  # no live process
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "stop", "updated_by": "op"},
+        )
+
+    body = response.json()
+    assert body["durable"]["state"] == "STOPPED"
+    assert body["actuation"]["actuated"] is False
+    assert "durable only" in body["actuation"]["detail"]

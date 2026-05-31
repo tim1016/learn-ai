@@ -17,8 +17,10 @@ import type {
   LogLine,
 } from '../api/live-runs.types';
 import type {
+  InstanceDesiredStateRequest,
   LiveInstanceStatus,
   LiveInstanceSummary,
+  SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
 
 @Injectable({ providedIn: 'root' })
@@ -119,6 +121,23 @@ export class LiveRunsService {
   getInstanceStatus(instanceId: string): Promise<LiveInstanceStatus> {
     return firstValueFrom(
       this.http.get<LiveInstanceStatus>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/status`),
+    );
+  }
+
+  /**
+   * The single operator intent knob (ADR 0004): writes durable desired-state
+   * and, if a live binding exists, actuates it on the bound run. PAUSED/RUNNING/
+   * STOPPED is liveness-independent — live actuation or gates the next start.
+   */
+  setInstanceDesiredState(
+    instanceId: string,
+    request: InstanceDesiredStateRequest,
+  ): Promise<SetInstanceDesiredStateResponse> {
+    return firstValueFrom(
+      this.http.post<SetInstanceDesiredStateResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/desired-state`,
+        request,
+      ),
     );
   }
 }
