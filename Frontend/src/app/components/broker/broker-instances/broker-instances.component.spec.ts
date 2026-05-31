@@ -68,6 +68,23 @@ class FakeLiveRunsService {
       detail: 'PAUSE queued on run-live; awaiting ack',
     },
   });
+  getInstanceCommands = vi.fn().mockResolvedValue({
+    entries: [
+      {
+        seq: 2,
+        verb: 'RECONCILE',
+        status: 'acknowledged',
+        reason: null,
+        issued_by: 'operator',
+        queued_at_ms: 1,
+        acked_at_ms: 2,
+        outcome: 'ok',
+        outcome_detail: 'day-3 reconciliation written',
+      },
+    ],
+    poll_interval_ms: 1000,
+  });
+  issueInstanceCommand = vi.fn().mockResolvedValue({ accepted: true, command: null });
 }
 
 /** Flush microtask queue and Angular effect queue (resource loads). */
@@ -161,6 +178,24 @@ describe('BrokerInstancesComponent', () => {
 
     expect(svc.setInstanceDesiredState).toHaveBeenCalledWith('spy_ema_paper', { action: 'pause' });
     expect(fixture.nativeElement.textContent).toContain('PAUSE queued on run-live');
+  });
+
+  it('renders the command timeline and issues one-shot commands', async () => {
+    const { fixture, component, svc } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    // unified entries[] timeline rendered
+    expect(fixture.nativeElement.textContent).toContain('RECONCILE');
+    expect(fixture.nativeElement.textContent).toContain('day-3 reconciliation written');
+
+    await component.issueCommand('FLATTEN');
+    expect(svc.issueInstanceCommand).toHaveBeenCalledWith('spy_ema_paper', { verb: 'FLATTEN' });
   });
 
   it('renders the engine-authored readiness verdict and gates', async () => {

@@ -5,6 +5,7 @@ import type {
   IntentActuation,
   LiveInstanceSummary,
 } from '../../../api/live-instances.types';
+import type { CommandEntry, CommandVerb } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 
 /**
@@ -37,8 +38,15 @@ export class BrokerInstancesComponent {
 
   readonly instances = computed<LiveInstanceSummary[]>(() => this.fleet.value() ?? []);
 
+  readonly commands = resource({
+    params: () => this.selectedInstanceId() ?? undefined,
+    loader: ({ params }) => this.svc.getInstanceCommands(params),
+  });
+  readonly commandEntries = computed<CommandEntry[]>(() => this.commands.value()?.entries ?? []);
+
   readonly busyAction = signal<DesiredStateAction | null>(null);
   readonly lastActuation = signal<IntentActuation | null>(null);
+  readonly busyVerb = signal<CommandVerb | null>(null);
 
   select(instanceId: string): void {
     this.selectedInstanceId.set(instanceId);
@@ -62,6 +70,19 @@ export class BrokerInstancesComponent {
       }
     } finally {
       this.busyAction.set(null);
+    }
+  }
+
+  /** Issue a one-shot command (FLATTEN/RECONCILE/MARK_POISONED) to the bound run (#397). */
+  async issueCommand(verb: CommandVerb): Promise<void> {
+    const id = this.selectedInstanceId();
+    if (id === null) return;
+    this.busyVerb.set(verb);
+    try {
+      await this.svc.issueInstanceCommand(id, { verb });
+      if (this.selectedInstanceId() === id) this.commands.reload();
+    } finally {
+      this.busyVerb.set(null);
     }
   }
 

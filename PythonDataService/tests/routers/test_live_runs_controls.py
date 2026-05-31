@@ -220,10 +220,12 @@ async def test_enqueue_command_writes_pending_and_timeline_reads_it(live_runs_ro
 
     assert timeline.status_code == 200
     tl = timeline.json()
-    assert len(tl["pending"]) == 1
-    assert tl["pending"][0]["verb"] == "FLATTEN"
-    assert tl["pending"][0]["seq"] == enq.json()["seq"]
-    assert tl["acks"] == []
+    assert "pending" not in tl and "acks" not in tl
+    assert tl["poll_interval_ms"] == 1000
+    assert len(tl["entries"]) == 1
+    assert tl["entries"][0]["verb"] == "FLATTEN"
+    assert tl["entries"][0]["seq"] == enq.json()["seq"]
+    assert tl["entries"][0]["status"] == "queued"
 
 
 async def test_enqueue_command_invalid_verb_rejected(live_runs_root):
@@ -254,10 +256,11 @@ async def test_command_timeline_reads_ack_files(live_runs_root):
     async with _client() as client:
         timeline = await client.get(f"/api/live-runs/{_RID}/commands")
     tl = timeline.json()
-    assert tl["pending"] == []
-    assert len(tl["acks"]) == 1
-    assert tl["acks"][0]["verb"] == "STOP"
-    assert tl["acks"][0]["outcome"]["status"] == "ok"
+    assert "pending" not in tl and "acks" not in tl
+    assert len(tl["entries"]) == 1
+    assert tl["entries"][0]["verb"] == "STOP"
+    assert tl["entries"][0]["status"] == "acknowledged"
+    assert tl["entries"][0]["outcome"] == "ok"
 
 
 async def test_command_summary_latest_survives_ack(live_runs_root):

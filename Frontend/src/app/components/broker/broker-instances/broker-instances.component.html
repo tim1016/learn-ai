@@ -105,6 +105,28 @@
       @if (!s.live_binding && s.evidence_binding) {
         <p class="note">No live process — showing the latest completed/stale run as evidence. Intent changes will gate the next start.</p>
       }
+
+      <section class="commands" aria-label="One-shot commands">
+        <div class="command-buttons" role="group" aria-label="One-shot commands">
+          <span class="commands-label">One-shot</span>
+          <button type="button" (click)="issueCommand('RECONCILE')" [disabled]="busyVerb() !== null || !s.live_binding">Reconcile now</button>
+          <button type="button" (click)="issueCommand('FLATTEN')" [disabled]="busyVerb() !== null || !s.live_binding">Flatten now</button>
+          <button type="button" (click)="issueCommand('MARK_POISONED')" [disabled]="busyVerb() !== null || !s.live_binding">Mark poisoned</button>
+        </div>
+        @if (commandEntries().length) {
+          <ul class="command-timeline" aria-label="Command timeline">
+            @for (c of commandEntries(); track c.seq) {
+              <li class="cmd" [class.failed]="c.status === 'failed'" [class.queued]="c.status === 'queued'">
+                <span class="cmd-verb">{{ c.verb }}</span>
+                <span class="cmd-status">{{ c.status }}</span>
+                @if (c.outcome_detail) {
+                  <span class="cmd-detail">{{ c.outcome_detail }}</span>
+                }
+              </li>
+            }
+          </ul>
+        }
+      </section>
     </article>
   }
 </section>

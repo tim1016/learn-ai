@@ -38,9 +38,9 @@ from app.engine.live.run_ledger import read_ledger
 from app.schemas.live_runs import (
     ArtifactFile,
     ArtifactsSummary,
-    CommandAckView,
+    CommandsTimeline,
     CommandSummary,
-    CommandTimelineResponse,
+    CommandTimelineEntry,
     CommandView,
     DecisionsSummary,
     DesiredStateAction,
@@ -872,9 +872,70 @@ async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandVi
     return CommandView(seq=command.seq, verb=command.verb.value)
 
 
-@router.get("/{run_id}/commands", response_model=CommandTimelineResponse)
-async def get_command_timeline(run_id: str) -> CommandTimelineResponse:
-    """Return the pending + ack timeline for a run's command channel (UI-4)."""
+# The bot polls the command dir at ~1s, independent of the bar loop
+# (plan §16.4 Resolution 7). Server-provided so the client's staleness
+# threshold derives from the dispatcher's cadence, not a magic constant.
+COMMAND_POLL_INTERVAL_MS = 1000
+
+
+def _file_mtime_ms(path: Path) -> int | None:
+    try:
+        return int(path.stat().st_mtime * 1000)
+    except OSError:
+        return None
+
+
+def build_command_timeline(commands_dir: Path) -> CommandsTimeline:
+    """Join pending + ack command files into one entry-per-command timeline (#397).
+
+    ``status``: queued (pending, no ack) -> acknowledged (ack, ok outcome) |
+    failed (ack, error outcome). ``issued_by``/``reason`` come from the command
+    payload where present; timestamps fall back to file mtime (legacy-derived).
+    """
+    entries: dict[int, CommandTimelineEntry] = {}
+    if commands_dir.is_dir():
+        for pending_path in commands_dir.glob("command.*.pending.json"):
+            try:
+                data = json.loads(pending_path.read_text(encoding="utf-8"))
+                seq = int(data["seq"])
+                payload = data.get("payload") or {}
+                entries[seq] = CommandTimelineEntry(
+                    seq=seq,
+                    verb=str(data["verb"]),
+                    status="queued",
+                    reason=payload.get("reason"),
+                    issued_by=payload.get("issued_by") or "operator",
+                    queued_at_ms=_file_mtime_ms(pending_path),
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        for ack_path in commands_dir.glob("command.*.ack.json"):
+            try:
+                data = json.loads(ack_path.read_text(encoding="utf-8"))
+                seq = int(data["seq"])
+                outcome = dict(data.get("outcome", {}))
+                raw_status = str(outcome.get("status", "ok"))
+                prior = entries.get(seq)
+                entries[seq] = CommandTimelineEntry(
+                    seq=seq,
+                    verb=str(data["verb"]),
+                    status="acknowledged" if raw_status == "ok" else "failed",
+                    reason=prior.reason if prior else None,
+                    issued_by=prior.issued_by if prior else "operator",
+                    queued_at_ms=prior.queued_at_ms if prior else None,
+                    acked_at_ms=_file_mtime_ms(ack_path),
+                    outcome=raw_status,
+                    outcome_detail=outcome.get("effect") or outcome.get("detail"),
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    ordered = sorted(entries.values(), key=lambda e: e.seq, reverse=True)
+    return CommandsTimeline(entries=ordered, poll_interval_ms=COMMAND_POLL_INTERVAL_MS)
+
+
+@router.get("/{run_id}/commands", response_model=CommandsTimeline)
+async def get_command_timeline(run_id: str) -> CommandsTimeline:
+    """Return the unified command timeline for a run's channel (#397, evidence read)."""
     root = Path(get_settings().live_runs_root)
     try:
         run_dir = _validate_run_id(run_id, root)
@@ -882,25 +943,4 @@ async def get_command_timeline(run_id: str) -> CommandTimelineResponse:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
-    commands_dir = run_dir / "commands"
-    channel = CommandChannel(commands_dir)
-    pending = [
-        CommandView(seq=c.seq, verb=c.verb.value)
-        for c in (channel.read_pending() if commands_dir.exists() else [])
-    ]
-    acks: list[CommandAckView] = []
-    if commands_dir.exists():
-        for ack_path in sorted(commands_dir.glob("command.*.ack.json")):
-            try:
-                data = json.loads(ack_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            acks.append(
-                CommandAckView(
-                    seq=int(data["seq"]),
-                    verb=str(data["verb"]),
-                    outcome=dict(data.get("outcome", {})),
-                )
-            )
-    acks.sort(key=lambda a: a.seq)
-    return CommandTimelineResponse(pending=pending, acks=acks)
+    return build_command_timeline(_confine(run_dir, "commands"))
