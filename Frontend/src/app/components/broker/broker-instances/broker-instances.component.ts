@@ -9,8 +9,10 @@ import type {
 } from '../../../api/live-instances.types';
 import type { CommandEntry, CommandVerb } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
+import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 
 // One-shot command verb -> operation kind for the error map.
@@ -34,12 +36,17 @@ const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
 @Component({
   selector: 'app-broker-instances',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BrokerConnectivityStripComponent, BrokerOperationResultComponent],
+  imports: [
+    BrokerConnectivityStripComponent,
+    BrokerOperationResultComponent,
+    BrokerStartStopCardComponent,
+  ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
 })
 export class BrokerInstancesComponent {
   private readonly svc = inject(LiveRunsService);
+  private readonly connectivity = inject(BrokerConnectivityService);
 
   readonly selectedInstanceId = signal<string | null>(null);
 
@@ -103,6 +110,13 @@ export class BrokerInstancesComponent {
     } finally {
       this.busyAction.set(null);
     }
+  }
+
+  /** A start/stop the daemon accepted (#416): refresh process state, the live
+   * binding, and the connectivity strip's daemon-process signal. */
+  onStartStopChanged(): void {
+    this.status.reload();
+    this.connectivity.reload();
   }
 
   /** Issue a one-shot command (FLATTEN/RECONCILE/MARK_POISONED) to the bound run (#397). */

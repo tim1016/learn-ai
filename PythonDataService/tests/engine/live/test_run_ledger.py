@@ -184,7 +184,7 @@ def test_build_ledger_stores_strategy_instance_id_and_bumps_schema(tmp_path: Pat
         strategy_instance_id="spy-ema-paper-1",
     )
     assert ledger.strategy_instance_id == "spy-ema-paper-1"
-    assert ledger.schema_version == "1.1"
+    assert ledger.schema_version == "1.2"
 
 
 def test_strategy_instance_id_not_in_run_id_hash(tmp_path: Path) -> None:
@@ -253,13 +253,13 @@ def test_write_read_round_trips_strategy_instance_id(tmp_path: Path) -> None:
 
     loaded = read_ledger(out)
     assert loaded.strategy_instance_id == "spy-ema-paper-1"
-    assert loaded.schema_version == "1.1"
+    assert loaded.schema_version == "1.2"
     assert loaded.run_id == ledger.run_id
 
 
-def test_default_ledger_is_schema_1_1() -> None:
-    """A freshly constructed ledger (no instance id) defaults to schema
-    1.1 with an empty binding — the new baseline."""
+def test_default_ledger_is_schema_1_2() -> None:
+    """A freshly constructed ledger (no instance id / strategy key) defaults to
+    schema 1.2 with empty bindings — the new baseline."""
     ledger = LiveRunLedger(
         run_id="x" * 64,
         code_sha="abc",
@@ -272,5 +272,93 @@ def test_default_ledger_is_schema_1_1() -> None:
         start_date_ms=1_700_000_000_000,
         live_config={},
     )
-    assert ledger.schema_version == "1.1"
+    assert ledger.schema_version == "1.2"
     assert ledger.strategy_instance_id == ""
+    assert ledger.strategy_key == ""
+
+
+# ──────────────────── algorithm-module binding (strategy_key, #416) ────
+
+
+def test_build_ledger_stores_strategy_key(tmp_path: Path) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    ledger = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_key="spy_ema_crossover",
+    )
+    assert ledger.strategy_key == "spy_ema_crossover"
+    assert ledger.schema_version == "1.2"
+
+
+def test_strategy_key_not_in_run_id_hash(tmp_path: Path) -> None:
+    """``strategy_key`` is persisted but NOT part of the ``run_id`` identity
+    hash — adding it must keep existing run_ids/dirs/fixtures byte-identical.
+    """
+    spec, qc_copy = _make_inputs(tmp_path)
+    common = dict(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+    )
+    run_id_x = build_ledger(**common, strategy_key="spy_ema_crossover").run_id
+    run_id_y = build_ledger(**common, strategy_key="rsi_mean_reversion").run_id
+    run_id_absent = build_ledger(**common).run_id
+
+    assert run_id_x == run_id_y == run_id_absent
+
+
+def test_read_legacy_1_1_ledger_without_strategy_key_defaults_empty(tmp_path: Path) -> None:
+    """A schema-1.1 ledger (no ``strategy_key`` key) reads cleanly: the field
+    defaults to empty string, no error.
+    """
+    spec, qc_copy = _make_inputs(tmp_path)
+    legacy = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_instance_id="spy-ema-paper-1",
+    )
+    payload = legacy.model_dump(mode="json")
+    payload["schema_version"] = "1.1"
+    del payload["strategy_key"]
+    out = tmp_path / "legacy11" / "run_ledger.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = read_ledger(out)
+    assert loaded.schema_version == "1.1"
+    assert loaded.strategy_key == ""
+
+
+def test_write_read_round_trips_strategy_key(tmp_path: Path) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    ledger = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_key="spy_ema_crossover",
+    )
+    out = tmp_path / "live_runs" / ledger.run_id / "run_ledger.json"
+    write_ledger(out, ledger)
+
+    loaded = read_ledger(out)
+    assert loaded.strategy_key == "spy_ema_crossover"
+    assert loaded.run_id == ledger.run_id

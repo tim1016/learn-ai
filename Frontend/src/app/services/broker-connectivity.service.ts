@@ -119,6 +119,9 @@ export class BrokerConnectivityService {
   });
 
   readonly daemonReachable = computed<boolean>(() => this.daemonState() === 'ok');
+  /** Explicitly down (probe failed) — distinct from 'unknown' while loading, so
+   * disable-with-reason doesn't block a control mid-probe (#416). */
+  readonly daemonDown = computed<boolean>(() => this.daemonState() === 'down');
   readonly fleetBlocksStarts = computed<boolean>(() => this.fleetState() === 'warn');
 
   reload(): void {

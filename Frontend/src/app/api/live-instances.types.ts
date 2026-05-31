@@ -1,5 +1,6 @@
 // Instance-addressed operator console types (ADR 0004).
 // The console's subject is the strategy instance; the current run is evidence.
+import type { HydratePolicy } from './live-runs.types';
 import type { DesiredStateView } from './live-runs-controls.types';
 
 export type InstanceProcessState =
@@ -83,6 +84,17 @@ export interface FleetContamination {
   summary: string;
 }
 
+/** Pre-filled Start-card values for the console (#416). `strategy` is seeded
+ * from the run ledger's `strategy_key`; empty means a legacy ledger with no
+ * recorded key. The other four mirror the daemon start-request defaults. */
+export interface InstanceStartDefaults {
+  strategy: string;
+  readonly: boolean;
+  hydrate_policy: HydratePolicy;
+  max_orders_per_day: number;
+  ibkr_host: string;
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;
@@ -93,6 +105,8 @@ export interface LiveInstanceStatus {
   latest_decision: Record<string, unknown> | null;
   decision_columns: DecisionColumnDescriptor[];
   broker: InstanceBrokerView | null;
+  /** Pre-filled Start-card values (#416); null when nothing is deployed. */
+  start_defaults: InstanceStartDefaults | null;
   fetched_at_ms: number;
 }
 
