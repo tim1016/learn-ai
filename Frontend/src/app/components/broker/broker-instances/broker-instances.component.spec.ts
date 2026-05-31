@@ -127,6 +127,7 @@ function setup() {
     links: () => [],
     blockers: () => [],
     daemonDown: () => false,
+    fleetBlocksStarts: () => false,
     reload: () => {},
   };
   TestBed.configureTestingModule({

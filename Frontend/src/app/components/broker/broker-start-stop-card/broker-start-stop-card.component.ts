@@ -87,6 +87,13 @@ export class BrokerStartStopCardComponent {
     if (this.connectivity.daemonDown()) {
       return 'Host daemon unreachable — start the host daemon to launch a run.';
     }
+    // Fleet safety policy (fleet_dirty_blocks_starts): when the account is
+    // contaminated and policy blocks starts, the strip already says so — the
+    // Start control must honour it too, not post to the daemon behind the
+    // policy's back.
+    if (this.connectivity.fleetBlocksStarts()) {
+      return 'Fleet policy blocks new starts — the account is contaminated.';
+    }
     return null;
   });
 
