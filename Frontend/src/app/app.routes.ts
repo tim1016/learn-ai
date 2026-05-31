@@ -205,11 +205,12 @@ export const routes: Routes = [
       ).then((m) => m.BrokerReconciliationComponent),
   },
   {
+    // Cutover (#400): the run-spine paper-run page is retired; the
+    // instance-addressed control room is the operator console. The old
+    // component is kept for reference but no longer routed.
     path: "broker/paper-run",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-paper-run/broker-paper-run.component"
-      ).then((m) => m.BrokerPaperRunComponent),
+    redirectTo: "broker/instances",
+    pathMatch: "full",
   },
   {
     path: "broker/instances",

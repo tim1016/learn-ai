@@ -819,9 +819,13 @@ async def get_desired_state(run_id: str) -> DesiredStateView:
     return _resolve_desired_state(root, ledger.strategy_instance_id)
 
 
-@router.post("/{run_id}/desired-state", response_model=DesiredStateRecordResponse)
+@router.post("/{run_id}/desired-state", response_model=DesiredStateRecordResponse, deprecated=True)
 async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> DesiredStateRecordResponse:
-    """Write durable operator intent for a run's strategy instance (UI-3)."""
+    """DEPRECATED (#400 cutover): superseded by the instance-addressed intent knob
+    ``POST /api/live-instances/{id}/desired-state``, which writes durable intent
+    *and* actuates the live binding. Run-addressed routes are evidence-only;
+    operator mutations move to the instance console. Kept temporarily for
+    back-compat — slated for removal once the cutover is signed off."""
     root = Path(get_settings().live_runs_root)
     try:
         run_dir = _validate_run_id(run_id, root)
@@ -853,9 +857,13 @@ async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> Desire
     )
 
 
-@router.post("/{run_id}/commands", response_model=CommandView)
+@router.post("/{run_id}/commands", response_model=CommandView, deprecated=True)
 async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandView:
-    """Enqueue a per-run command-channel verb (UI-4)."""
+    """DEPRECATED (#400 cutover): superseded by the instance-addressed one-shot
+    command ``POST /api/live-instances/{id}/commands`` (reserved to
+    FLATTEN/RECONCILE/MARK_POISONED). Run-addressed routes are evidence-only.
+    Kept temporarily for back-compat — slated for removal once the cutover is
+    signed off."""
     root = Path(get_settings().live_runs_root)
     try:
         run_dir = _validate_run_id(run_id, root)

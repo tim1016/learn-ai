@@ -65,6 +65,7 @@
           }
         </span>
         <span class="rung"><small>DESIRED</small>{{ s.desired_state?.state ?? 'unknown' }}</span>
+        <span class="rung"><small>BROKER</small>{{ s.broker?.bot_order_namespace ?? '—' }}</span>
       </header>
 
       @if (accountContaminated()) {
