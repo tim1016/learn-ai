@@ -121,6 +121,13 @@ class IbkrSettings(BaseSettings):
     # parameterise it. Container default: /app/artifacts/live_runs.
     live_runs_root: str = "/app/artifacts/live_runs"
 
+    # Host-side live-run daemon (ADR 0004). The instance-status endpoint queries
+    # it for the authoritative live strategy_instance_id -> run_id binding —
+    # "live" is a process fact only the registry can prove. The container reaches
+    # the host daemon via host.containers.internal (same pattern as
+    # LEAN_LAUNCHER_URL); the daemon defaults to port 8765.
+    live_runner_daemon_url: str = "http://host.containers.internal:8765"
+
     @model_validator(mode="after")
     def _enforce_port_mode_consistency(self) -> IbkrSettings:
         """Refuse to run with a port that disagrees with ``mode``.

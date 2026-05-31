@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -32,6 +33,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerHealth,
+    HostRunnerInstance,
+    HostRunnerInstancesStatus,
     HostRunnerProcessState,
     HostRunnerProcessStatus,
     HostRunnerStartRequest,
@@ -58,6 +61,7 @@ class HostRunnerError(RuntimeError):
 class ManagedProcess:
     """Subprocess plus the file handle used for stdout/stderr capture."""
 
+    strategy_instance_id: str
     run_id: str
     run_dir: Path
     process: subprocess.Popen
@@ -70,76 +74,145 @@ class ManagedProcess:
 
 
 class RunnerProcessManager:
-    """Own exactly one host-side live-run subprocess at a time."""
+    """Own host-side live-run subprocesses — one per strategy instance.
+
+    Keyed by ``strategy_instance_id`` (ADR 0002 / ADR 0004): an executing
+    and a shadow strategy coexist as separate OS processes. Legacy runs
+    with no ledger binding key by ``run_id``. This registry is the sole
+    authority for the live ``strategy_instance_id -> run_id`` binding —
+    "live" is a process fact, not an artifact fact.
+    """
 
     def __init__(self, *, repo_root: Path, live_runs_root: Path) -> None:
         self.repo_root = repo_root.resolve()
         self.live_runs_root = live_runs_root.resolve()
-        self._current: ManagedProcess | None = None
+        self._managed: dict[str, ManagedProcess] = {}
 
     def health(self) -> HostRunnerHealth:
-        """Return daemon health plus the active subprocess snapshot."""
+        """Return daemon health plus a representative active subprocess.
+
+        Back-compat for the run-spine UI: surfaces the first running
+        managed process (or idle). The instance-addressed view is
+        :meth:`instances`.
+        """
         return HostRunnerHealth(
             ok=True,
             repo_root=str(self.repo_root),
             live_runs_root=str(self.live_runs_root),
             fetched_at_ms=_now_ms(),
-            process=self.process_status(),
+            process=self._first_process_status(),
         )
 
-    def process_status(self, run_id: str | None = None) -> HostRunnerProcessStatus:
-        """Return the current subprocess state.
+    def instances(self) -> HostRunnerInstancesStatus:
+        """All managed instances with their live binding (registry authority)."""
+        out: list[HostRunnerInstance] = []
+        for managed in self._managed.values():
+            self._refresh(managed)
+            out.append(
+                HostRunnerInstance(
+                    strategy_instance_id=managed.strategy_instance_id,
+                    run_id=managed.run_id,
+                    run_dir=str(managed.run_dir),
+                    process=self._status_of(managed),
+                )
+            )
+        return HostRunnerInstancesStatus(instances=out, fetched_at_ms=_now_ms())
 
-        If ``run_id`` is supplied and another run is active, return idle for
-        the requested run. This lets the UI show selected-run controls without
-        inheriting another run's process status.
-        """
-        self._refresh_current()
-        current = self._current
-        if current is None:
-            return HostRunnerProcessStatus(state=HostRunnerProcessState.idle, message="No host runner process.")
-        if run_id is not None and current.run_id != run_id:
+    def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
+        """Live process status for one strategy instance (idle if untracked)."""
+        managed = self._managed.get(strategy_instance_id)
+        if managed is None:
             return HostRunnerProcessStatus(
                 state=HostRunnerProcessState.idle,
-                message=f"Host runner is tracking {current.run_id}, not {run_id}.",
+                message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
             )
+        self._refresh(managed)
+        return self._status_of(managed)
 
-        exit_code = current.process.poll()
+    def process_status(self, run_id: str | None = None) -> HostRunnerProcessStatus:
+        """Return a run's subprocess state (back-compat, run-addressed).
+
+        With no ``run_id``, returns the first running managed process (or
+        idle). With a ``run_id``, returns that run's process if the registry
+        tracks it, else idle — so selected-run controls don't inherit another
+        run's status.
+        """
+        if run_id is None:
+            return self._first_process_status()
+        managed = self._by_run_id(run_id)
+        if managed is None:
+            return HostRunnerProcessStatus(
+                state=HostRunnerProcessState.idle,
+                message=f"No host runner process for {run_id}.",
+            )
+        return self._status_of(managed)
+
+    def _status_of(self, managed: ManagedProcess) -> HostRunnerProcessStatus:
+        """Build a process-status snapshot from a managed process."""
+        sid = managed.strategy_instance_id or None
+        exit_code = managed.process.poll()
         if exit_code is None:
-            state = HostRunnerProcessState.stopping if current.stopping else HostRunnerProcessState.running
+            state = HostRunnerProcessState.stopping if managed.stopping else HostRunnerProcessState.running
             return HostRunnerProcessStatus(
                 state=state,
-                run_id=current.run_id,
-                pid=current.process.pid,
-                started_at_ms=current.started_at_ms,
-                command=current.command,
-                log_path=str(current.log_path),
+                run_id=managed.run_id,
+                strategy_instance_id=sid,
+                pid=managed.process.pid,
+                started_at_ms=managed.started_at_ms,
+                command=managed.command,
+                log_path=str(managed.log_path),
                 message="Host runner process is active.",
             )
-
         return HostRunnerProcessStatus(
             state=HostRunnerProcessState.exited,
-            run_id=current.run_id,
-            pid=current.process.pid,
-            started_at_ms=current.started_at_ms,
-            ended_at_ms=current.ended_at_ms,
+            run_id=managed.run_id,
+            strategy_instance_id=sid,
+            pid=managed.process.pid,
+            started_at_ms=managed.started_at_ms,
+            ended_at_ms=managed.ended_at_ms,
             exit_code=exit_code,
-            command=current.command,
-            log_path=str(current.log_path),
+            command=managed.command,
+            log_path=str(managed.log_path),
             message=f"Host runner process exited with code {exit_code}.",
         )
 
-    def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
-        """Start ``app.engine.live.run start`` for an existing run directory."""
-        self._refresh_current()
-        current = self._current
-        if current is not None and current.process.poll() is None:
-            raise HostRunnerError(
-                status.HTTP_409_CONFLICT,
-                f"Host runner already active for {current.run_id}. Stop it before starting another run.",
-            )
+    def _first_process_status(self) -> HostRunnerProcessStatus:
+        for managed in self._managed.values():
+            self._refresh(managed)
+        for managed in self._managed.values():
+            if managed.process.poll() is None:
+                return self._status_of(managed)
+        return HostRunnerProcessStatus(state=HostRunnerProcessState.idle, message="No host runner process.")
 
+    def _by_run_id(self, run_id: str) -> ManagedProcess | None:
+        for managed in self._managed.values():
+            if managed.run_id == run_id:
+                self._refresh(managed)
+                return managed
+        return None
+
+    def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
+        """Start ``app.engine.live.run start`` for an existing run directory.
+
+        Keyed by the run's ``strategy_instance_id`` (resolved from the
+        ledger; falls back to ``run_id`` for legacy runs). A second start for
+        the *same* instance while it is running is rejected; different
+        instances coexist as separate processes.
+        """
         run_dir = self._validate_run_dir(run_id)
+        sid = self._resolve_strategy_instance_id(run_dir)
+        key = sid or run_id
+
+        existing = self._managed.get(key)
+        if existing is not None:
+            self._refresh(existing)
+            if existing.process.poll() is None:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    f"Host runner already active for {existing.run_id} (instance {key!r}). "
+                    "Stop it before starting another run for this instance.",
+                )
+
         command = self._build_start_command(run_dir, request)
         env = self._build_child_env(request)
         log_path = run_dir / "host_daemon.log"
@@ -159,7 +232,8 @@ class RunnerProcessManager:
             log_handle.close()
             raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}") from exc
 
-        self._current = ManagedProcess(
+        self._managed[key] = ManagedProcess(
+            strategy_instance_id=sid,
             run_id=run_id,
             run_dir=run_dir,
             process=process,
@@ -168,19 +242,17 @@ class RunnerProcessManager:
             log_path=log_path,
             log_handle=log_handle,
         )
-        logger.info("Started host live runner for %s with pid=%s", run_id, process.pid)
+        logger.info(
+            "Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid
+        )
         return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
     def stop(self, run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
-        """Signal the active host runner to stop."""
-        self._refresh_current()
-        current = self._current
+        """Signal the host runner for ``run_id`` to stop."""
+        current = self._by_run_id(run_id)
         if current is None:
-            raise HostRunnerError(status.HTTP_404_NOT_FOUND, "No host runner process is being tracked.")
-        if current.run_id != run_id:
             raise HostRunnerError(
-                status.HTTP_409_CONFLICT,
-                f"Host runner is active for {current.run_id}, not {run_id}.",
+                status.HTTP_404_NOT_FOUND, f"No host runner process is being tracked for {run_id}."
             )
         if current.process.poll() is not None:
             return HostRunnerActionResponse(accepted=False, process=self.process_status(run_id))
@@ -190,7 +262,7 @@ class RunnerProcessManager:
             try:
                 _send_graceful_stop(current.process)
             except OSError:
-                self._refresh_current()
+                self._refresh(current)
                 if current.process.poll() is not None:
                     return HostRunnerActionResponse(accepted=False, process=self.process_status(run_id))
                 raise
@@ -202,12 +274,12 @@ class RunnerProcessManager:
                     try:
                         current.process.kill()
                     except OSError:
-                        self._refresh_current()
+                        self._refresh(current)
                         if current.process.poll() is None:
                             raise
                 current.process.wait(timeout=_STOP_WAIT_SECONDS)
 
-        self._refresh_current()
+        self._refresh(current)
         logger.info("Stop requested for host live runner %s", run_id)
         return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
@@ -249,15 +321,29 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_404_NOT_FOUND, f"Run {run_id!r} not found under {self.live_runs_root}")
         return run_dir
 
-    def _refresh_current(self) -> None:
-        current = self._current
-        if current is None:
+    def _refresh(self, managed: ManagedProcess) -> None:
+        """Settle a managed process if it has exited: stamp ``ended_at_ms``
+        and close its log handle exactly once."""
+        if managed.process.poll() is None:
             return
-        if current.process.poll() is None:
-            return
-        if current.ended_at_ms is None:
-            current.ended_at_ms = _now_ms()
-            current.log_handle.close()
+        if managed.ended_at_ms is None:
+            managed.ended_at_ms = _now_ms()
+            managed.log_handle.close()
+
+    def _resolve_strategy_instance_id(self, run_dir: Path) -> str:
+        """Read ``strategy_instance_id`` from the run ledger (UI-0 binding).
+
+        Parsed directly from JSON to keep the host daemon free of the
+        artifact-stack dependencies. Empty string = legacy / unknown, which
+        makes the registry key fall back to ``run_id``.
+        """
+        ledger_path = run_dir / "run_ledger.json"
+        try:
+            data = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        sid = data.get("strategy_instance_id")
+        return sid if isinstance(sid, str) else ""
 
 
 def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: list[str] | None = None) -> FastAPI:
@@ -283,6 +369,14 @@ def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: 
     @app.get("/process", response_model=HostRunnerProcessStatus)
     async def process() -> HostRunnerProcessStatus:
         return process_manager.process_status()
+
+    @app.get("/instances", response_model=HostRunnerInstancesStatus)
+    async def instances() -> HostRunnerInstancesStatus:
+        return process_manager.instances()
+
+    @app.get("/instances/{strategy_instance_id}/process", response_model=HostRunnerProcessStatus)
+    async def instance_process(strategy_instance_id: str) -> HostRunnerProcessStatus:
+        return process_manager.instance_status(strategy_instance_id)
 
     @app.get("/runs/{run_id}/process", response_model=HostRunnerProcessStatus)
     async def run_process(run_id: str) -> HostRunnerProcessStatus:

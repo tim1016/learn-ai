@@ -212,6 +212,13 @@ export const routes: Routes = [
       ).then((m) => m.BrokerPaperRunComponent),
   },
   {
+    path: "broker/instances",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-instances/broker-instances.component"
+      ).then((m) => m.BrokerInstancesComponent),
+  },
+  {
     path: "edge",
     loadComponent: () =>
       import("./components/edge/edge.component").then((m) => m.EdgeComponent),

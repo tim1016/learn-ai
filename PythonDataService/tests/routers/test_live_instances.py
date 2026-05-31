@@ -1,0 +1,156 @@
+"""Contract tests for the instance-addressed operator console API (ADR 0004).
+
+The host daemon is faked at the client seam (no network); liveness is resolved
+server-side and the serialized response carries both `live_binding` and
+`evidence_binding` so the client cannot confuse them.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.engine.live import host_daemon_client
+from app.routers import live_instances
+
+
+def _write_ledger(root: Path, run_id: str, sid: str, created_at_ms: int) -> None:
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {"run_id": run_id, "strategy_instance_id": sid, "created_at_ms": created_at_ms}
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / "live_runs"
+    root.mkdir()
+    stub = SimpleNamespace(live_runs_root=str(root), live_runner_daemon_url="http://daemon")
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    from app.main import app
+
+    return app, root
+
+
+def _set_daemon(
+    monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None
+) -> None:
+    async def fake_instances(_base_url: str) -> dict | None:
+        return instances
+
+    async def fake_process(_base_url: str, _sid: str) -> dict | None:
+        return process
+
+    monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
+    monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
+
+
+async def test_instance_status_running_exposes_live_binding(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-live-aaa", "pid": 99, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["process"]["state"] == "running"
+    assert body["process"]["bound_run_id"] == "run-live-aaa"
+    assert body["live_binding"]["run_id"] == "run-live-aaa"
+    assert body["live_binding"]["source"] == "registry"
+    assert body["evidence_binding"]["run_id"] == "run-live-aaa"
+    assert body["evidence_binding"]["is_live"] is False
+    assert body["desired_state"] is not None
+
+
+async def test_instance_status_dead_is_evidence_only(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-old-bbb", "spy_ema_paper", 50)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    body = response.json()
+    assert body["process"]["state"] == "idle"
+    assert body["live_binding"] is None
+    assert body["evidence_binding"]["run_id"] == "run-old-bbb"
+
+
+async def test_instance_status_unreachable_daemon_is_not_guessed(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-x", "spy_ema_paper", 10)
+    _set_daemon(monkeypatch, process=None)  # daemon unreachable -> None
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    body = response.json()
+    assert body["process"]["state"] == "unreachable"
+    assert body["live_binding"] is None
+    assert body["evidence_binding"]["run_id"] == "run-x"
+
+
+async def test_list_instances_merges_daemon_and_disk(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 100)
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-ema-1",
+                    "run_dir": str(root / "run-ema-1"),
+                    "process": {"state": "running", "run_id": "run-ema-1"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances")
+
+    assert response.status_code == 200
+    rows = {row["strategy_instance_id"]: row for row in response.json()}
+    assert set(rows) == {"spy_ema_paper", "spy_vwap_shadow"}
+    assert rows["spy_ema_paper"]["process_state"] == "running"
+    assert rows["spy_ema_paper"]["bound_run_id"] == "run-ema-1"
+    # Disk-only instance: daemon reachable but not managing it -> offline, no bound run.
+    assert rows["spy_vwap_shadow"]["process_state"] == "offline"
+    assert rows["spy_vwap_shadow"]["bound_run_id"] is None
+    assert rows["spy_vwap_shadow"]["latest_run_id"] == "run-vwap-1"
+
+
+async def test_instance_status_rejects_invalid_id(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/evil$/status")
+
+    assert response.status_code == 400

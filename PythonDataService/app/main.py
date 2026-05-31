@@ -50,6 +50,9 @@ from app.routers import (
     walk_forward,
 )
 from app.routers import (
+    live_instances as live_instances_router,
+)
+from app.routers import (
     live_runs as live_runs_router,
 )
 from app.utils.error_handlers import polygon_exception_handler
@@ -236,6 +239,7 @@ app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures
 # Layer 1: 15 s TTL on dir listing; Layer 2: mtime-signature LRU on status;
 # Layer 3: inode-tracked incremental deque on log tail.
 app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
+app.include_router(live_instances_router.router, prefix="/api/live-instances", tags=["live-instances"])
 
 # Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
 # When disabled, the prefix has no registered routes; clients get 404.
