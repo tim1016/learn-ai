@@ -220,7 +220,21 @@ async def set_instance_desired_state(
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    repo = DesiredStateRepo(_safe_desired_state_path(_desired_state_root(root), sid))
+    # The id is a remote (URL) value flowing into a filesystem write, so apply
+    # a confinement barrier on the *final* path (resolve + relative_to) and pass
+    # the checked path to the writer — this is the form the scanner recognizes
+    # as breaking py/path-injection (`_safe_desired_state_path` validates the
+    # segment but returns an unresolved path the scanner can't see as confined).
+    artifacts_root = _desired_state_root(root)
+    sidecar_path = _safe_desired_state_path(artifacts_root, sid).resolve()
+    live_state_root = (artifacts_root / "live_state").resolve()
+    try:
+        sidecar_path.relative_to(live_state_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
+        ) from exc
+    repo = DesiredStateRepo(sidecar_path)
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,
