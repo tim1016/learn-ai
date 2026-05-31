@@ -271,6 +271,10 @@ class HostRunnerDeployRequest(BaseModel):
     account_id: str = Field(min_length=1)
     start_date_ms: int = Field(ge=0)
     strategy_instance_id: str = ""
+    # The hand-coded algorithm module the run starts under (#416). Recorded in
+    # the ledger so the console defaults the Start card and `run start` rejects a
+    # mismatched --strategy. Optional; "" leaves the run unguarded (legacy).
+    strategy_key: str = ""
     live_config: dict = Field(default_factory=dict)
     force: bool = False
     # When true, chain a host-runner start after a successful create.
@@ -523,6 +527,24 @@ class InstanceBrokerView(BaseModel):
     pending_order_count: int = 0
 
 
+class InstanceStartDefaults(BaseModel):
+    """Pre-filled Start-card values for the console (#416).
+
+    The five ``run start`` knobs, defaulted so the operator never starts from a
+    blank form. ``strategy`` is sourced from the run's ledger ``strategy_key``
+    (the algorithm module the ledger is reconciled to) when present — empty
+    string means a legacy ledger with no recorded key, so the field is
+    operator-supplied. The other four mirror ``HostRunnerStartRequest`` defaults;
+    they are not persisted in the ledger.
+    """
+
+    strategy: str = ""
+    readonly: bool = True
+    hydrate_policy: HydratePolicy = "require"
+    max_orders_per_day: int = 4
+    ibkr_host: str = "127.0.0.1"
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -539,6 +561,9 @@ class LiveInstanceStatus(BaseModel):
     latest_decision: dict | None = None
     decision_columns: list[DecisionColumnDescriptor] = Field(default_factory=list)
     broker: InstanceBrokerView | None = None
+    # Pre-filled Start-card values (#416); None when the instance has no run to
+    # resolve a ledger from (nothing-deployed).
+    start_defaults: InstanceStartDefaults | None = None
     fetched_at_ms: int
 
 

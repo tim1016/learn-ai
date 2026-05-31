@@ -88,6 +88,10 @@ class DeployParams:
     run_root: Path
     live_config: dict = field(default_factory=dict)
     strategy_instance_id: str = ""
+    # The hand-coded algorithm module the run starts under (#416). Recorded in
+    # the ledger so the console defaults the Start card from it and `run start`
+    # rejects a mismatched --strategy. Not hashed into run_id; "" = unrecorded.
+    strategy_key: str = ""
     clean_tree_scope: tuple[str, ...] = DEFAULT_CLEAN_TREE_SCOPE
     force: bool = False
     idempotent: bool = False
@@ -153,6 +157,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
             start_date_ms=params.start_date_ms,
             live_config=params.live_config,
             strategy_instance_id=params.strategy_instance_id,
+            strategy_key=params.strategy_key,
         )
     except FileNotFoundError as exc:
         raise SpecOrAuditMissingError(str(exc)) from exc

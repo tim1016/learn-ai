@@ -57,6 +57,13 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       owned_positions: { SPY: 100 },
       pending_order_count: 1,
     },
+    start_defaults: {
+      strategy: 'spy_ema_crossover',
+      readonly: true,
+      hydrate_policy: 'require',
+      max_orders_per_day: 4,
+      ibkr_host: '127.0.0.1',
+    },
     fetched_at_ms: 1,
     ...overrides,
   };
@@ -113,10 +120,15 @@ let activeFixture: { destroy(): void } | null = null;
 
 function setup() {
   const svc = new FakeLiveRunsService();
-  // The console embeds the connectivity strip, which injects
-  // BrokerConnectivityService. Provide a quiet fake so these tests don't pull
-  // in the real BrokerHealthService / HttpClient polling chain.
-  const connectivity = { links: () => [], blockers: () => [] };
+  // The console embeds the connectivity strip and the start/stop card, which
+  // inject BrokerConnectivityService. Provide a quiet fake so these tests don't
+  // pull in the real BrokerHealthService / HttpClient polling chain.
+  const connectivity = {
+    links: () => [],
+    blockers: () => [],
+    daemonDown: () => false,
+    reload: () => {},
+  };
   TestBed.configureTestingModule({
     providers: [
       { provide: LiveRunsService, useValue: svc },

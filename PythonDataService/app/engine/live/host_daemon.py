@@ -285,6 +285,7 @@ class RunnerProcessManager:
             run_root=self.live_runs_root,
             live_config=request.live_config,
             strategy_instance_id=request.strategy_instance_id,
+            strategy_key=request.strategy_key,
             force=request.force,
             idempotent=True,
         )

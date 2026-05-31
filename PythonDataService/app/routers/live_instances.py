@@ -54,6 +54,7 @@ from app.schemas.live_runs import (
     HostRunnerDeployResponse,
     InstanceBrokerView,
     InstanceProcessView,
+    InstanceStartDefaults,
     IntentActuation,
     LiveBinding,
     LiveInstanceStatus,
@@ -262,6 +263,33 @@ def _strategy_state(
     return latest_decision, descriptors
 
 
+def _start_defaults(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> InstanceStartDefaults | None:
+    """Pre-filled Start-card values for the console (#416).
+
+    Resolves the same run the rest of the status view does (the visible live
+    run, else the latest evidence run) and seeds ``strategy`` from that ledger's
+    ``strategy_key`` — the algorithm module the ledger is reconciled to. The
+    other four knobs use their request defaults. ``None`` when the instance has
+    no run to resolve a ledger from (nothing-deployed); a ledger without a
+    ``strategy_key`` (legacy) yields an empty ``strategy`` for the operator to
+    supply.
+    """
+    run_dir: Path | None = None
+    if live_binding is not None:
+        run_dir = _visible_live_run_dir(root, live_binding)
+    if run_dir is None and runs:
+        run_dir = Path(runs[0]["run_dir"])
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return InstanceStartDefaults()
+    return InstanceStartDefaults(strategy=str(ledger.get("strategy_key", "")))
+
+
 @router.get("", response_model=list[LiveInstanceSummary])
 async def list_live_instances() -> list[LiveInstanceSummary]:
     """Account fleet overview: every known strategy instance, live or not."""
@@ -460,6 +488,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         latest_decision=latest_decision,
         decision_columns=decision_columns,
         broker=_instance_broker(root, sid),
+        start_defaults=_start_defaults(root, live_binding, runs),
         fetched_at_ms=_now_ms(),
     )
 
