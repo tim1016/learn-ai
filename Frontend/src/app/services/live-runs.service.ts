@@ -8,13 +8,17 @@ import type {
   CommandWriteResponse,
   DesiredStateWriteRequest,
   DesiredStateWriteResponse,
+  EngineStrategyInfo,
   HostRunnerActionResponse,
+  HostRunnerDeployRequest,
+  HostRunnerDeployResponse,
   HostRunnerHealth,
   HostRunnerStartRequest,
   HostRunnerStopRequest,
   LiveRunStatus,
   LiveRunSummary,
   LogLine,
+  QcAuditCopyListing,
 } from '../api/live-runs.types';
 import type {
   FleetContamination,
@@ -162,5 +166,25 @@ export class LiveRunsService {
   /** Account/fleet contamination: net vs Σ instance expecteds (ADR 0005, #399). */
   getAccountFleet(): Promise<FleetContamination> {
     return firstValueFrom(this.http.get<FleetContamination>(`${this.instancesBase}/account`));
+  }
+
+  /** Deploy (create a run): data plane forwards to the daemon (ADR 0006, #415).
+   * 201 created / 200 idempotent no-op; precondition failures map to 4xx/5xx. */
+  deployInstance(request: HostRunnerDeployRequest): Promise<HostRunnerDeployResponse> {
+    return firstValueFrom(
+      this.http.post<HostRunnerDeployResponse>(this.instancesBase, request),
+    );
+  }
+
+  /** Committed QC audit copies for the deploy picker (ADR 0006, #413). */
+  getQcAuditCopies(): Promise<QcAuditCopyListing> {
+    return firstValueFrom(
+      this.http.get<QcAuditCopyListing>(`${this.instancesBase}/qc-audit-copies`),
+    );
+  }
+
+  /** Registered engine strategies — the deploy form's algorithm dropdown. */
+  getEngineStrategies(): Promise<EngineStrategyInfo[]> {
+    return firstValueFrom(this.http.get<EngineStrategyInfo[]>('/api/engine/strategies'));
   }
 }

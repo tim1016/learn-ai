@@ -1,0 +1,111 @@
+<section class="deploy">
+  <header class="head">
+    <h1>Deploy a strategy</h1>
+    <a routerLink="/broker/instances" class="back">← Instances</a>
+  </header>
+  <p class="subtitle">Create a run (stage 1). Reconciliation-gated by design — the QC audit copy must be committed under <code>references/qc-shadow/</code> and the working tree clean.</p>
+
+  <app-broker-connectivity-strip />
+
+  @if (deployed(); as d) {
+    <div class="deployed" role="status">
+      <p class="run">
+        @if (d.created) {
+          ✓ Deployed run <span class="mono">{{ d.run_id }}</span>
+        } @else {
+          ✓ Run <span class="mono">{{ d.run_id }}</span> already exists — idempotent no-op (same inputs + HEAD).
+        }
+      </p>
+      @if (d.start) {
+        <p class="started">Launch {{ d.start.accepted ? 'accepted' : 'rejected' }} — process {{ d.start.process.state }}.</p>
+      }
+      <a routerLink="/broker/instances" class="goto">Go to the instance console →</a>
+    </div>
+  }
+
+  <form class="form" (submit)="$event.preventDefault(); submit()">
+    <label class="field">
+      <span>Strategy (algorithm)</span>
+      <select [value]="strategyKey()" (change)="setStrategyKey($event)" required>
+        <option value="" disabled>Select a strategy…</option>
+        @for (s of strategies.value() ?? []; track s.name) {
+          <option [value]="s.name">{{ s.display_name }} ({{ s.name }})</option>
+        }
+      </select>
+      <small>Pins both the launch algorithm and the reconciliation guard (strategy_key).</small>
+    </label>
+
+    <label class="field">
+      <span>Strategy spec path</span>
+      <input type="text" [value]="specPath()" (input)="setSpecPath($event)" required
+        placeholder="PythonDataService/app/engine/strategy/spec/fixtures/<name>.spec.json" autocomplete="off" spellcheck="false" />
+      <small>A committed spec JSON, repo-relative. Must match the selected algorithm.</small>
+    </label>
+
+    <label class="field">
+      <span>Account</span>
+      <input type="text" [value]="accountId()" (input)="setAccountId($event)" required
+        placeholder="DU1234567" autocomplete="off" />
+      <small>{{ account.value() ? 'Prefilled from the connected broker; override if needed.' : 'Broker not connected — enter the IBKR account id.' }}</small>
+    </label>
+
+    <label class="field">
+      <span>QC Cloud backtest id</span>
+      <input type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
+        placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
+    </label>
+
+    <label class="field">
+      <span>QC audit copy</span>
+      <select [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
+        <option value="" disabled>Select a committed audit copy…</option>
+        @for (path of qcCopies.value()?.entries ?? []; track path) {
+          <option [value]="path">{{ path }}</option>
+        }
+      </select>
+      <small>Committed copies under <code>references/qc-shadow/</code>. Empty? Commit the audit copy first.</small>
+    </label>
+
+    <label class="field">
+      <span>Instance name</span>
+      <input type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
+        placeholder="spy-ema-paper-1" autocomplete="off" spellcheck="false" />
+    </label>
+
+    <fieldset class="knobs">
+      <legend>Runtime</legend>
+      <label class="check">
+        <input type="checkbox" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
+        <span>Read-only (no live order submission)</span>
+      </label>
+      <label class="inline">
+        <span>Hydrate policy</span>
+        <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
+          <option value="require">require</option>
+          <option value="optional">optional</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </label>
+      <label class="inline">
+        <span>Max orders / day</span>
+        <input type="number" min="0" max="100" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
+      </label>
+      <label class="check">
+        <input type="checkbox" [checked]="startNow()" (change)="setStartNow($event)" />
+        <span>Start the run immediately after deploy</span>
+      </label>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="primary" [disabled]="!canSubmit()">
+        {{ startNow() ? 'Deploy & start' : 'Deploy' }}
+      </button>
+      @let reason = blockedReason();
+      @if (reason) {
+        <p class="blocked" role="status">{{ reason }}</p>
+      }
+    </div>
+
+    <app-broker-operation-result [error]="error()" />
+  </form>
+</section>

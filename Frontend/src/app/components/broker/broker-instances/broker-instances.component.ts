@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import type {
   DecisionColumnDescriptor,
   DesiredStateAction,
@@ -37,6 +38,7 @@ const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
   selector: 'app-broker-instances',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    RouterLink,
     BrokerConnectivityStripComponent,
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,

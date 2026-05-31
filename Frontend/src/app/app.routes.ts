@@ -220,6 +220,14 @@ export const routes: Routes = [
       ).then((m) => m.BrokerInstancesComponent),
   },
   {
+    // Deploy form — stage 1 of the deploy pipeline (ADR 0006, #417).
+    path: "broker/deploy",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-deploy-form/broker-deploy-form.component"
+      ).then((m) => m.BrokerDeployFormComponent),
+  },
+  {
     path: "edge",
     loadComponent: () =>
       import("./components/edge/edge.component").then((m) => m.EdgeComponent),
