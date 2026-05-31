@@ -29,6 +29,7 @@ from app.routers.live_runs import (
     _read_ledger,
     _resolve_desired_state,
     _safe_desired_state_path,
+    _validate_path_segment,
 )
 from app.schemas.live_runs import (
     DesiredStateAction,
@@ -63,12 +64,25 @@ _LIVE_STATES = frozenset({"running", "stopping"})
 
 
 def _validate_instance_id(strategy_instance_id: str) -> str:
+    """Validate the operator-supplied instance id at the boundary and return a
+    sanitized literal.
+
+    The id flows into both a host-daemon URL and the desired-state filesystem
+    path, so it is rejected unless it matches a strict single-segment pattern,
+    then run through ``_validate_path_segment`` whose returned value breaks the
+    CodeQL py/path-injection taint chain for the downstream sidecar write.
+    """
     if _INSTANCE_ID_RE.fullmatch(strategy_instance_id) is None or ".." in strategy_instance_id:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid strategy_instance_id: {strategy_instance_id!r}",
         )
-    return strategy_instance_id
+    try:
+        return _validate_path_segment(strategy_instance_id, field="strategy_instance_id")
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
+        ) from exc
 
 
 def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
