@@ -223,3 +223,44 @@ export interface HostRunnerActionResponse {
   accepted: boolean;
   process: HostRunnerProcessStatus;
 }
+
+/** Deploy (create-a-run) request — forwarded by the data plane to the daemon
+ * (ADR 0006). The QC anchor (`qc_cloud_backtest_id` + `qc_audit_copy_path`) is
+ * mandatory by design. `start: true` chains a launch using `start_options`. */
+export interface HostRunnerDeployRequest {
+  strategy_spec_path: string;
+  qc_audit_copy_path: string;
+  qc_cloud_backtest_id: string;
+  account_id: string;
+  start_date_ms: number;
+  strategy_instance_id: string;
+  /** Algorithm module the run is reconciled to (#416); pins the Start guard. */
+  strategy_key: string;
+  live_config?: Record<string, unknown>;
+  force?: boolean;
+  start?: boolean;
+  start_options?: HostRunnerStartRequest;
+}
+
+export interface HostRunnerDeployResponse {
+  run_id: string;
+  run_dir: string;
+  /** False for an idempotent no-op (the run already existed with a matching ledger). */
+  created: boolean;
+  start: HostRunnerActionResponse | null;
+}
+
+/** Committed QC audit copies under `references/qc-shadow` (the deploy picker). */
+export interface QcAuditCopyListing {
+  scope_root: string;
+  entries: string[];
+}
+
+/** Minimal strategy descriptor from `GET /api/engine/strategies`. `name` is the
+ * algorithm module (the `strategy_key`); the full payload also carries a params
+ * schema the deploy form does not need. */
+export interface EngineStrategyInfo {
+  name: string;
+  display_name: string;
+  description: string;
+}

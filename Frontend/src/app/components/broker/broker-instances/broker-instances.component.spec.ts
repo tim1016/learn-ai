@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   LiveInstanceStatus,
@@ -132,6 +133,7 @@ function setup() {
   };
   TestBed.configureTestingModule({
     providers: [
+      provideRouter([]),
       { provide: LiveRunsService, useValue: svc },
       { provide: BrokerConnectivityService, useValue: connectivity },
     ],
