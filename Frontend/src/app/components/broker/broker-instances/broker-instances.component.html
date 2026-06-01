@@ -57,7 +57,7 @@
               [class.selected]="inst.strategy_instance_id === selectedInstanceId()"
               (click)="select(inst.strategy_instance_id)"
             >
-              <span class="bot-name">{{ shortId(inst.strategy_instance_id) }}</span>
+              <span class="bot-name" [title]="inst.strategy_instance_id">{{ inst.strategy_instance_id }}</span>
               <span class="state-chip" [class.live]="inst.process_state === 'running'">{{ inst.process_state === 'running' ? 'RUNNING' : 'STOPPED' }}</span>
               @if (inst.bound_run_id) {
                 <span class="bound">Live session {{ shortId(inst.bound_run_id) }}</span>
