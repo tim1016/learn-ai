@@ -77,7 +77,7 @@
 
       <section class="group" aria-labelledby="verification-section">
         <h2 id="verification-section">Backtest verification</h2>
-        <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result. Both fields come from one backtest you ran on <a href="https://www.quantconnect.com" target="_blank" rel="noopener">quantconnect.com</a>.</p>
+        <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result. Both fields come from one backtest you ran on <a href="https://www.quantconnect.com" target="_blank" rel="noopener noreferrer">quantconnect.com</a>.</p>
         <label class="field">
           <span>Backtest ID <span class="hint" title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;).">ⓘ</span></span>
           <input type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
