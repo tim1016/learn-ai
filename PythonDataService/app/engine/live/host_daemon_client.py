@@ -11,8 +11,11 @@ state ``unreachable``) rather than guessing one from disk.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import httpx
+
+from app.engine.live.daemon_auth import TOKEN_HEADER, read_daemon_token
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,24 @@ _TIMEOUT = httpx.Timeout(2.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
+
+
+def _auth_headers() -> dict[str, str]:
+    """Attach ``X-Live-Runner-Token`` to every daemon request (ADR 0007).
+
+    Resolves the token from ``LIVE_RUNNER_DAEMON_TOKEN`` env (operator override)
+    or, when env is unset, from the daemon's token file shared via the artifacts
+    bind mount. If no token is resolvable (daemon not started yet, env unset, no
+    file on the mount) we send no header — the daemon then 401s and the caller
+    surfaces that as it would any other error (deploy: re-raised; GETs: None).
+    """
+    # Lazy import keeps the engine/live client from pulling broker config into
+    # module import order and keeps test monkeypatching of settings effective.
+    from app.broker.ibkr.config import get_settings
+
+    artifacts_root = Path(get_settings().live_runs_root).parent
+    token = read_daemon_token(artifacts_root)
+    return {TOKEN_HEADER: token} if token else {}
 
 
 class HostDaemonError(Exception):
@@ -47,7 +68,7 @@ async def deploy(base_url: str, payload: dict) -> dict:
     url = f"{base_url.rstrip('/')}/deploy"
     try:
         async with httpx.AsyncClient(timeout=_DEPLOY_TIMEOUT) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=_auth_headers())
     except httpx.HTTPError as exc:
         logger.warning("host daemon unreachable at %s: %s", url, exc)
         raise HostDaemonError(503, f"host daemon unreachable: {exc}") from exc
@@ -88,7 +109,7 @@ async def fetch_qc_audit_copies(base_url: str) -> dict | None:
 async def _get_json(url: str) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=_auth_headers())
             response.raise_for_status()
             return response.json()
     except (httpx.HTTPError, ValueError) as exc:

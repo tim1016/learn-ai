@@ -26,10 +26,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
 from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
@@ -522,9 +523,22 @@ class RunnerProcessManager:
         return sid if isinstance(sid, str) else ""
 
 
-def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: list[str] | None = None) -> FastAPI:
-    """Create the host-daemon FastAPI app."""
+def create_app(
+    manager: RunnerProcessManager | None = None,
+    *,
+    allowed_origins: list[str] | None = None,
+    auth_token: str | None = None,
+) -> FastAPI:
+    """Create the host-daemon FastAPI app.
+
+    ``auth_token`` is the shared secret every protected route requires in the
+    ``X-Live-Runner-Token`` header. When ``None`` it is resolved (or generated)
+    via :func:`ensure_daemon_token` so there is no unauthenticated mode — auth is
+    mandatory regardless of bind interface (ADR 0007). ``/health`` stays open so
+    the data plane's connectivity probe works without a token.
+    """
     process_manager = manager if manager is not None else _manager_from_env()
+    token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
     app = FastAPI(
         title="learn-ai host live-run daemon",
         description="Host-side subprocess bridge for IBKR paper-run starts.",
@@ -538,45 +552,60 @@ def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: 
         allow_headers=["*"],
     )
 
+    async def _verify_token(
+        supplied: str | None = Header(default=None, alias=TOKEN_HEADER),
+    ) -> None:
+        if supplied != token:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                detail=f"missing or wrong {TOKEN_HEADER}",
+            )
+
+    auth = [Depends(_verify_token)]
+
     @app.get("/health", response_model=HostRunnerHealth)
     async def health() -> HostRunnerHealth:
         return process_manager.health()
 
-    @app.get("/process", response_model=HostRunnerProcessStatus)
+    @app.get("/process", response_model=HostRunnerProcessStatus, dependencies=auth)
     async def process() -> HostRunnerProcessStatus:
         return process_manager.process_status()
 
-    @app.get("/instances", response_model=HostRunnerInstancesStatus)
+    @app.get("/instances", response_model=HostRunnerInstancesStatus, dependencies=auth)
     async def instances() -> HostRunnerInstancesStatus:
         return process_manager.instances()
 
-    @app.get("/instances/{strategy_instance_id}/process", response_model=HostRunnerProcessStatus)
+    @app.get(
+        "/instances/{strategy_instance_id}/process",
+        response_model=HostRunnerProcessStatus,
+        dependencies=auth,
+    )
     async def instance_process(strategy_instance_id: str) -> HostRunnerProcessStatus:
         return process_manager.instance_status(strategy_instance_id)
 
-    @app.get("/runs/{run_id}/process", response_model=HostRunnerProcessStatus)
+    @app.get("/runs/{run_id}/process", response_model=HostRunnerProcessStatus, dependencies=auth)
     async def run_process(run_id: str) -> HostRunnerProcessStatus:
         return process_manager.process_status(run_id)
 
-    @app.get("/qc-audit-copies", response_model=QcAuditCopyListing)
+    @app.get("/qc-audit-copies", response_model=QcAuditCopyListing, dependencies=auth)
     async def qc_audit_copies() -> QcAuditCopyListing:
         return process_manager.list_qc_audit_copies()
 
-    @app.post("/deploy", response_model=HostRunnerDeployResponse)
+    @app.post("/deploy", response_model=HostRunnerDeployResponse, dependencies=auth)
     async def deploy(request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
         try:
             return await run_in_threadpool(process_manager.deploy, request)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
-    @app.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
+    @app.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse, dependencies=auth)
     async def start_run(run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         try:
             return await run_in_threadpool(process_manager.start, run_id, request)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
-    @app.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse)
+    @app.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse, dependencies=auth)
     async def stop_run(run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
         try:
             return await run_in_threadpool(process_manager.stop, run_id, request)
@@ -588,10 +617,24 @@ def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: 
 
 def _manager_from_env() -> RunnerProcessManager:
     repo_root = Path(os.environ.get("LEARN_AI_REPO_ROOT", Path.cwd())).resolve()
-    live_runs_root = Path(
+    return RunnerProcessManager(repo_root=repo_root, live_runs_root=_live_runs_root_from_env(repo_root))
+
+
+def _live_runs_root_from_env(repo_root: Path) -> Path:
+    return Path(
         os.environ.get("LIVE_RUNS_ROOT", str(repo_root / "PythonDataService" / "artifacts" / "live_runs"))
     ).resolve()
-    return RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+
+
+def _artifacts_root_from_env() -> Path:
+    """Artifacts root holding the shared token file (sibling to live_runs/).
+
+    Parent of the live-runs root so the host daemon and the data-plane container
+    view the same ``.host-daemon-token`` through the
+    ``./PythonDataService/artifacts:/app/artifacts`` bind mount.
+    """
+    repo_root = Path(os.environ.get("LEARN_AI_REPO_ROOT", Path.cwd())).resolve()
+    return _live_runs_root_from_env(repo_root).parent
 
 
 def _allowed_origins_from_env() -> list[str]:
@@ -616,7 +659,7 @@ def _now_ms() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the learn-ai host live-run daemon.")
-    parser.add_argument("--host", default="127.0.0.1", type=_loopback_host)
+    parser.add_argument("--host", default="127.0.0.1", type=_valid_bind_host)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument(
@@ -633,18 +676,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _loopback_host(host: str) -> str:
-    """Validate that the unauthenticated daemon binds only to loopback."""
+def _valid_bind_host(host: str) -> str:
+    """Validate ``--host`` is a bindable IP (or ``localhost``).
+
+    Non-loopback addresses (e.g. ``0.0.0.0`` so the data-plane container can
+    reach the daemon on Linux rootless podman) are allowed because every
+    protected route now enforces shared-secret auth (ADR 0007). Garbage is still
+    rejected so a typo fails fast at startup rather than binding nothing.
+    """
     if host == "localhost":
         return host
     try:
-        parsed = ipaddress.ip_address(host)
+        ipaddress.ip_address(host)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            f"--host must be loopback (127.0.0.1 / ::1 / localhost), got {host!r}."
+            f"--host must be an IP address or 'localhost', got {host!r}."
         ) from exc
-    if not parsed.is_loopback:
-        raise argparse.ArgumentTypeError(f"--host must be loopback (127.0.0.1 / ::1 / localhost), got {host!r}.")
     return host
 
 
@@ -657,9 +704,21 @@ def main(argv: list[str] | None = None) -> int:
         else (repo_root / "PythonDataService" / "artifacts" / "live_runs").resolve()
     )
     manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+    # Resolve/generate the shared secret next to live_runs/ so the data-plane
+    # container reads the same token through the artifacts bind mount.
+    token = ensure_daemon_token(live_runs_root.parent)
     app = create_app(
         manager,
         allowed_origins=[origin.strip() for origin in args.allowed_origins.split(",") if origin.strip()],
+        auth_token=token,
+    )
+    logging.basicConfig(level=logging.INFO)
+    logger.info(
+        "host daemon binding %s:%s with mandatory %s auth (token at %s)",
+        args.host,
+        args.port,
+        TOKEN_HEADER,
+        token_file_path(live_runs_root.parent),
     )
 
     import uvicorn
@@ -668,7 +727,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-app = create_app()
+# No module-level ``app = create_app()``: that ran at import time and, via the
+# default ``auth_token=None`` path, generated a token using the cwd as repo root.
+# Under the systemd unit (``WorkingDirectory=PythonDataService``) that wrote a
+# doubly-nested ``PythonDataService/PythonDataService/artifacts/.host-daemon-token``
+# outside the ignore rule, which the deploy clean-tree gate then saw as a dirty
+# tree (ADR 0007 P1). The daemon is launched via ``main()`` (``python -m`` or the
+# console entry), which resolves the token from the explicit ``--repo-root``. An
+# ASGI ``:app`` target, if ever needed, must build with an explicit repo root.
 
 
 if __name__ == "__main__":
