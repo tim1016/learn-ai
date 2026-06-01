@@ -80,6 +80,43 @@ async def deploy(base_url: str, payload: dict) -> dict:
         raise HostDaemonError(502, f"host daemon returned a non-JSON body: {exc}") from exc
 
 
+async def start_run(base_url: str, run_id: str, payload: dict) -> dict:
+    """POST /runs/{run_id}/start to the daemon and return the parsed body.
+
+    Mirrors :func:`deploy`: the daemon's auth, precondition, and unreachable
+    statuses are propagated via :class:`HostDaemonError` so the data-plane
+    endpoint can re-raise them verbatim. Browsers must never hold the daemon's
+    shared secret, so the UI routes Start through the data plane (which forwards
+    the token from the artifacts bind mount) rather than calling the daemon
+    directly (ADR 0007).
+    """
+    return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/start", payload)
+
+
+async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
+    """POST /runs/{run_id}/stop to the daemon and return the parsed body.
+
+    Same forwarding contract as :func:`start_run`.
+    """
+    return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
+
+
+async def _post_action(url: str, payload: dict) -> dict:
+    """Shared body for the start/stop forwards (same contract as :func:`deploy`)."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url, json=payload, headers=_auth_headers())
+    except httpx.HTTPError as exc:
+        logger.warning("host daemon unreachable at %s: %s", url, exc)
+        raise HostDaemonError(503, f"host daemon unreachable: {exc}") from exc
+    if response.status_code >= 400:
+        raise HostDaemonError(response.status_code, _detail_of(response))
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise HostDaemonError(502, f"host daemon returned a non-JSON body: {exc}") from exc
+
+
 def _detail_of(response: httpx.Response) -> str:
     """Extract a human-readable detail from a daemon error response."""
     try:

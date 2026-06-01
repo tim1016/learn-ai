@@ -50,8 +50,11 @@ from app.schemas.live_runs import (
     EnqueueCommandRequest,
     EvidenceBinding,
     FleetContamination,
+    HostRunnerActionResponse,
     HostRunnerDeployRequest,
     HostRunnerDeployResponse,
+    HostRunnerStartRequest,
+    HostRunnerStopRequest,
     InstanceBrokerView,
     InstanceProcessView,
     InstanceStartDefaults,
@@ -366,6 +369,65 @@ async def deploy_instance(
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
     return parsed
+
+
+def _parse_action_response(result: dict) -> HostRunnerActionResponse:
+    """Validate a daemon start/stop body or surface a 502 gateway error."""
+    try:
+        return HostRunnerActionResponse.model_validate(result)
+    except ValidationError as exc:
+        logger.warning("invalid start/stop payload from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid start/stop payload",
+        ) from exc
+
+
+@router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
+async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActionResponse:
+    """Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
+
+    Start/Stop are routed through the data plane — not called from the browser —
+    because the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every
+    actuation route, and the browser must never hold that shared secret. The data
+    plane reads the token from the artifacts bind mount and forwards it. The
+    daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
+    missing run -> 404, subprocess/daemon unreachable -> 503.
+    """
+    try:
+        run_id = _validate_path_segment(run_id, field="run_id")
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    settings = get_settings()
+    try:
+        result = await host_daemon_client.start_run(
+            settings.live_runner_daemon_url, run_id, body.model_dump()
+        )
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    return _parse_action_response(result)
+
+
+@router.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse)
+async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerActionResponse:
+    """Stop the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
+
+    Same token-forwarding rationale as :func:`start_run`.
+    """
+    try:
+        run_id = _validate_path_segment(run_id, field="run_id")
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    settings = get_settings()
+    try:
+        result = await host_daemon_client.stop_run(
+            settings.live_runner_daemon_url, run_id, body.model_dump()
+        )
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    return _parse_action_response(result)
 
 
 def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
