@@ -104,15 +104,26 @@ export class LiveRunsService {
     return firstValueFrom(this.http.get<HostRunnerHealth>(`${this.daemonBase}/health`));
   }
 
+  // Start/Stop route through the data plane, not the daemon directly: the
+  // daemon enforces a mandatory X-Live-Runner-Token on every actuation route
+  // (ADR 0007), and the browser must never hold that shared secret. The data
+  // plane forwards the token from the artifacts bind mount. (/health stays
+  // daemon-direct above — it is the one unauthenticated route.)
   startHostRunner(runId: string, request: HostRunnerStartRequest): Promise<HostRunnerActionResponse> {
     return firstValueFrom(
-      this.http.post<HostRunnerActionResponse>(`${this.daemonBase}/runs/${encodeURIComponent(runId)}/start`, request),
+      this.http.post<HostRunnerActionResponse>(
+        `${this.instancesBase}/runs/${encodeURIComponent(runId)}/start`,
+        request,
+      ),
     );
   }
 
   stopHostRunner(runId: string, request: HostRunnerStopRequest): Promise<HostRunnerActionResponse> {
     return firstValueFrom(
-      this.http.post<HostRunnerActionResponse>(`${this.daemonBase}/runs/${encodeURIComponent(runId)}/stop`, request),
+      this.http.post<HostRunnerActionResponse>(
+        `${this.instancesBase}/runs/${encodeURIComponent(runId)}/stop`,
+        request,
+      ),
     );
   }
 

@@ -709,3 +709,141 @@ async def test_qc_audit_copies_failclosed_to_empty(
 
     assert response.status_code == 200
     assert response.json()["entries"] == []
+
+
+# ── start / stop proxy (ADR 0007 — token forwarded server-side) ──────
+
+
+def _running_process(run_id: str) -> dict:
+    return {
+        "state": "running",
+        "run_id": run_id,
+        "strategy_instance_id": "spy_ema_paper",
+        "pid": 4242,
+        "started_at_ms": 1700000000000,
+        "ended_at_ms": None,
+        "exit_code": None,
+        "command": ["python", "-m", "app.engine.live.run", "start"],
+        "log_path": "/runs/host_daemon.log",
+        "message": "Host runner process is active.",
+    }
+
+
+async def test_start_run_forwards_and_returns_action(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    seen: dict = {}
+
+    async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
+        seen["run_id"] = run_id
+        seen["payload"] = payload
+        return {"accepted": True, "process": _running_process(run_id)}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-abc/start",
+            json={"readonly": False, "hydrate_policy": "optional", "strategy": "spy_ema_crossover"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["process"]["state"] == "running"
+    # The proxy forwards the run_id and the start knobs verbatim to the daemon.
+    assert seen["run_id"] == "run-abc"
+    assert seen["payload"]["readonly"] is False
+    assert seen["payload"]["hydrate_policy"] == "optional"
+
+
+async def test_stop_run_forwards_and_returns_action(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_stop(_base_url: str, run_id: str, _payload: dict) -> dict:
+        proc = _running_process(run_id)
+        proc["state"] = "stopping"
+        return {"accepted": True, "process": proc}
+
+    monkeypatch.setattr(host_daemon_client, "stop_run", fake_stop)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-abc/stop", json={"force": False})
+
+    assert response.status_code == 200
+    assert response.json()["process"]["state"] == "stopping"
+
+
+async def test_start_run_propagates_daemon_404(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(404, "Run 'run-missing' not found")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-missing/start", json={})
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+async def test_start_run_propagates_daemon_unreachable_503(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(503, "host daemon unreachable: connection refused")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-abc/start", json={})
+
+    assert response.status_code == 503
+
+
+async def test_start_run_invalid_daemon_payload_returns_502(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        return {"unexpected": "shape"}  # missing accepted/process
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-abc/start", json={})
+
+    assert response.status_code == 502
+
+
+async def test_start_run_rejects_unsafe_run_id_400(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unsafe run_id is rejected at the boundary before any forward."""
+    app, _ = app_with_root
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("x")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Leading whitespace reaches the handler as a single segment and is
+        # rejected by _validate_path_segment; the daemon is never called.
+        response = await client.post("/api/live-instances/runs/ bad/start", json={})
+
+    assert response.status_code == 400
+    assert called is False
