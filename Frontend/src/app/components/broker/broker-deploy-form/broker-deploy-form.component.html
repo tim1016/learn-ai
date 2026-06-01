@@ -77,22 +77,23 @@
 
       <section class="group" aria-labelledby="verification-section">
         <h2 id="verification-section">Backtest verification</h2>
-        <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result.</p>
+        <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result. Both fields come from one backtest you ran on <a href="https://www.quantconnect.com" target="_blank" rel="noopener noreferrer">quantconnect.com</a>.</p>
         <label class="field">
-          <span>Backtest ID <span class="hint" title="QuantConnect Cloud id">ⓘ</span></span>
+          <span>Backtest ID <span class="hint" title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;).">ⓘ</span></span>
           <input type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
             placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
+          <small>Run the strategy on quantconnect.com, then copy this backtest's id from its page URL.</small>
         </label>
 
         <label class="field">
-          <span>Backtest results file <span class="hint" title="Committed snapshot under references/qc-shadow.">ⓘ</span></span>
+          <span>Algorithm audit copy <span class="hint" title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest.">ⓘ</span></span>
           <select [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
-            <option value="" disabled>Select a saved backtest result…</option>
+            <option value="" disabled>Select the committed algorithm source…</option>
             @for (path of qcCopies.value()?.entries ?? []; track path) {
               <option [value]="path">{{ path }}</option>
             }
           </select>
-          <small>Empty list? Save and commit the QuantConnect result first.</small>
+          <small>This is the algorithm file you ran on QuantConnect, committed under <code>references/qc-shadow/</code> — not a results CSV. Empty list usually means the live engine isn't running (only git-tracked files there appear here).</small>
         </label>
       </section>
 

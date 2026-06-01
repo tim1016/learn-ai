@@ -9,6 +9,13 @@ SERVICE_NAME="${SERVICE_NAME:-learn-ai-host-daemon.service}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 PYTHON_EXE="${PYTHON_EXE:-$REPO_ROOT/PythonDataService/.venv/bin/python}"
 PORT="${PORT:-8765}"
+# The daemon is unauthenticated and enforces a loopback-only bind (host_daemon
+# _loopback_host rejects anything non-loopback). Do NOT change this to 0.0.0.0 —
+# the process refuses to start. The containerized data plane reaches it via
+# host.containers.internal, which forwards to host loopback on Windows/Mac podman
+# (gvproxy). On Linux rootless podman that alias maps to the bridge gateway and
+# does NOT reach host loopback — see docs for the container→daemon bridge options.
+HOST="${HOST:-127.0.0.1}"
 USER_SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$USER_SYSTEMD_DIR/$SERVICE_NAME"
 WORKING_DIR="$REPO_ROOT/PythonDataService"
@@ -32,7 +39,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$WORKING_DIR
 Environment=PYTHONPATH=$WORKING_DIR
-ExecStart=$PYTHON_EXE -m app.engine.live.host_daemon --host 127.0.0.1 --port $PORT --repo-root $REPO_ROOT --live-runs-root $LIVE_RUNS_ROOT
+ExecStart=$PYTHON_EXE -m app.engine.live.host_daemon --host $HOST --port $PORT --repo-root $REPO_ROOT --live-runs-root $LIVE_RUNS_ROOT
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:$LOG_DIR/host_daemon_service.out.log
