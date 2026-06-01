@@ -9,6 +9,12 @@ SERVICE_NAME="${SERVICE_NAME:-learn-ai-host-daemon.service}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 PYTHON_EXE="${PYTHON_EXE:-$REPO_ROOT/PythonDataService/.venv/bin/python}"
 PORT="${PORT:-8765}"
+# Bind a container-reachable interface, not loopback. The polygon-data-service
+# container reaches this daemon via host.containers.internal (the host gateway),
+# so a 127.0.0.1 bind refuses those connections and the deploy form's pickers
+# silently fall back to empty. Default 0.0.0.0 mirrors the LEAN launcher; set
+# HOST to the specific gateway IP to narrow LAN exposure on an untrusted network.
+HOST="${HOST:-0.0.0.0}"
 USER_SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$USER_SYSTEMD_DIR/$SERVICE_NAME"
 WORKING_DIR="$REPO_ROOT/PythonDataService"
@@ -32,7 +38,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$WORKING_DIR
 Environment=PYTHONPATH=$WORKING_DIR
-ExecStart=$PYTHON_EXE -m app.engine.live.host_daemon --host 127.0.0.1 --port $PORT --repo-root $REPO_ROOT --live-runs-root $LIVE_RUNS_ROOT
+ExecStart=$PYTHON_EXE -m app.engine.live.host_daemon --host $HOST --port $PORT --repo-root $REPO_ROOT --live-runs-root $LIVE_RUNS_ROOT
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:$LOG_DIR/host_daemon_service.out.log
