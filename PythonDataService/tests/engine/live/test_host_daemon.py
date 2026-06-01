@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -431,6 +433,25 @@ async def test_health_is_open_without_token(
         response = await client.get("/health")
 
     assert response.status_code == 200
+
+
+def test_importing_host_daemon_does_not_generate_token(tmp_path: Path) -> None:
+    # Regression (ADR 0007 P1): importing the module must NOT generate a token.
+    # The old module-level ``app = create_app()`` ran at import and, via the
+    # default path, generated one from the cwd — under systemd's
+    # WorkingDirectory=PythonDataService that wrote a doubly-nested,
+    # un-ignored token file that tripped the deploy dirty-tree gate.
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    env.pop("LIVE_RUNNER_DAEMON_TOKEN", None)
+    subprocess.run(
+        [sys.executable, "-c", "import app.engine.live.host_daemon"],
+        cwd=str(tmp_path),
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+
+    assert list(tmp_path.rglob(".host-daemon-token")) == []
 
 
 # ── deploy (ADR 0006) ────────────────────────────────────────────────

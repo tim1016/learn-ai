@@ -727,7 +727,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-app = create_app()
+# No module-level ``app = create_app()``: that ran at import time and, via the
+# default ``auth_token=None`` path, generated a token using the cwd as repo root.
+# Under the systemd unit (``WorkingDirectory=PythonDataService``) that wrote a
+# doubly-nested ``PythonDataService/PythonDataService/artifacts/.host-daemon-token``
+# outside the ignore rule, which the deploy clean-tree gate then saw as a dirty
+# tree (ADR 0007 P1). The daemon is launched via ``main()`` (``python -m`` or the
+# console entry), which resolves the token from the explicit ``--repo-root``. An
+# ASGI ``:app`` target, if ever needed, must build with an explicit repo root.
 
 
 if __name__ == "__main__":
