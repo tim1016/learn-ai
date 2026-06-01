@@ -56,7 +56,7 @@ const NAV: NavGroup[] = [
   },
   {
     id: 'research',
-    title: 'Research Lab',
+    title: 'Research',
     icon: 'pi pi-compass',
     items: [
       { label: 'Research Lab', route: '/research-lab' },
@@ -65,7 +65,7 @@ const NAV: NavGroup[] = [
   },
   {
     id: 'edge',
-    title: 'Edge',
+    title: 'Edge Analysis',
     icon: 'pi pi-bolt',
     items: [
       { label: 'Overview', route: '/edge' },
@@ -79,12 +79,12 @@ const NAV: NavGroup[] = [
     title: 'Broker',
     icon: 'pi pi-link',
     items: [
-      { label: 'Status', route: '/broker' },
+      { label: 'Broker Status', route: '/broker' },
       { label: 'Options Chain (Live)', route: '/broker/options-chain' },
       { label: 'Account Monitor', route: '/broker/account-monitor' },
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },
-      { label: 'Paper Run (Daemon)', route: '/broker/paper-run' },
+      { label: 'Bot Control Panel', route: '/broker/paper-run' },
     ],
   },
   {
@@ -201,10 +201,10 @@ const NAV: NavGroup[] = [
         }
       </nav>
 
-      <div class="status-footer mono">
-        <span class="status-dot"></span>
-        polygon · live
-        <span class="version">v3.4.1</span>
+      <div class="status-footer">
+        <span class="paper-dot"></span>
+        <span class="paper-mode">Paper Mode</span>
+        <span class="paper-note">No real orders</span>
       </div>
     </aside>
   `,

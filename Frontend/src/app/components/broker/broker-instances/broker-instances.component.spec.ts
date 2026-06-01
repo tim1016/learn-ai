@@ -173,10 +173,11 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     expect(svc.getInstanceStatus).toHaveBeenCalledWith('spy_ema_paper');
-    expect(fixture.nativeElement.textContent).toContain('run-live (live)');
+    expect(fixture.nativeElement.textContent).toContain('RUNNING - NOT READY');
+    expect(fixture.nativeElement.textContent).toContain('Live session run-live');
   });
 
-  it('labels a dead instance as stale evidence with commands disabled', async () => {
+  it('labels a stopped instance as last-session evidence with advanced actions disabled', async () => {
     const { fixture, component, svc } = setup();
     svc.getInstanceStatus.mockResolvedValue(
       makeStatus({
@@ -194,8 +195,9 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('stale evidence');
-    expect(text).toContain('gate the next start');
+    expect(text).toContain('STOPPED');
+    expect(text).toContain('Last session run-old');
+    expect(text).toContain('These take effect on the next start.');
   });
 
   it('issues durable intent and surfaces the actuation result', async () => {
@@ -246,9 +248,9 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Can act on the next bar?');
-    expect(text).toContain('BLOCKED');
-    expect(text).toContain('orders_cap');
+    expect(text).toContain('Pre-Trade Checklist');
+    expect(text).toContain('0 / 1 checks passed');
+    expect(text).toContain('Daily Trade Limit Available');
     expect(text).toContain('4 / 4 orders used');
   });
 
@@ -280,9 +282,9 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('spy_ema_ns'); // bot_order_namespace
+    expect(text).toContain('spy_ema_ns'); // details still expose bot_order_namespace
     expect(text).toContain('SPY'); // owned position symbol
-    expect(text).toContain('1 pending order');
+    expect(text).toContain('1 pending');
   });
 
   it('renders account contamination and the inherited banner on the instance', async () => {
@@ -292,7 +294,7 @@ describe('BrokerInstancesComponent', () => {
 
     // account overview at the top
     const text1 = fixture.nativeElement.textContent ?? '';
-    expect(text1).toContain('contaminated');
+    expect(text1).toContain('UNRECOGNIZED POSITIONS DETECTED');
     expect(text1).toContain('SPY +37 unattributed');
 
     // inherited DEGRADED banner appears on the selected instance
@@ -301,6 +303,6 @@ describe('BrokerInstancesComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain('Account residual detected: DEGRADED');
+    expect(fixture.nativeElement.textContent).toContain('UNRECOGNIZED POSITIONS DETECTED');
   });
 });

@@ -1,183 +1,273 @@
 <section class="instances">
   <header class="page-head">
-    <h1>Strategy instances</h1>
-    <a routerLink="/broker/deploy" class="deploy-link">+ Deploy a strategy</a>
+    <div>
+      <h1>Broker Instance Control Panel</h1>
+      <p class="subtitle">See whether your trading bot is running, healthy, and ready for action.</p>
+    </div>
+    <a routerLink="/broker/deploy" class="deploy-link">
+      <i class="pi pi-plus" aria-hidden="true"></i>
+      <span>Deploy a strategy</span>
+    </a>
   </header>
-  <p class="subtitle">Operator control room — the instance is the subject; the run is evidence.</p>
 
   <app-broker-connectivity-strip />
 
   @let acct = account.value();
   @if (acct) {
-    <section class="account" aria-label="Account contamination" [class.dirty]="acct.verdict === 'contaminated'">
-      <span class="acct-verdict" [class]="'av-' + acct.verdict">Account: {{ acct.verdict }}</span>
-      <span class="acct-summary">{{ acct.summary }}</span>
+    <section class="card account-card" aria-labelledby="account-heading" [class.problem]="acct.verdict === 'contaminated'">
+      <header class="card-header">
+        <div>
+          <h2 id="account-heading">Account Status</h2>
+          <p>Is my account clean?</p>
+        </div>
+        <span class="status-chip" [class.ok]="acct.verdict === 'clean'" [class.bad]="acct.verdict === 'contaminated'" [class.warn]="acct.verdict === 'unknown'">
+          {{ accountBadge(acct) }}
+        </span>
+      </header>
+      <p class="plain-text">{{ acct.summary }}</p>
       @if (residualRows(acct).length) {
-        <ul class="residual" aria-label="Unattributed positions">
+        <ul class="position-pills" aria-label="Unrecognized positions">
           @for (r of residualRows(acct); track r.symbol) {
-            <li><span class="sym">{{ r.symbol }}</span> <span class="qty">{{ r.qty }}</span></li>
+            <li><span>{{ r.symbol }}</span><strong>{{ r.qty }}</strong></li>
           }
         </ul>
-      }
-      @if (acct.policy_blocks_starts) {
-        <span class="policy">Fleet policy: dirty account blocks starts</span>
+      } @else {
+        <p class="plain-text">Every open position in your account is managed by a known strategy. Nothing unexpected.</p>
       }
     </section>
   }
 
   @if (fleet.isLoading()) {
-    <p>Loading instances…</p>
+    <p>Loading bot instances...</p>
   } @else if (fleet.error()) {
-    <p role="alert">Could not load strategy instances.</p>
+    <p role="alert">Could not load bot instances.</p>
   } @else {
-    <ul class="fleet" aria-label="Strategy instances">
-      @for (inst of instances(); track inst.strategy_instance_id) {
-        <li>
-          <button
-            type="button"
-            [class.selected]="inst.strategy_instance_id === selectedInstanceId()"
-            (click)="select(inst.strategy_instance_id)"
-          >
-            <span class="sid">{{ inst.strategy_instance_id }}</span>
-            <span class="state" [class.live]="inst.process_state === 'running'">{{ inst.process_state }}</span>
-            @if (inst.bound_run_id) {
-              <span class="bound">run {{ inst.bound_run_id }}</span>
-            } @else if (inst.latest_run_id) {
-              <span class="evidence">latest {{ inst.latest_run_id }} (evidence)</span>
-            }
-          </button>
-        </li>
-      } @empty {
-        <li class="empty">No strategy instances found.</li>
-      }
-    </ul>
+    <section class="fleet-card card" aria-labelledby="fleet-heading">
+      <header class="card-header">
+        <div>
+          <h2 id="fleet-heading">Choose a Bot</h2>
+          <p>Select the strategy instance you want to control.</p>
+        </div>
+      </header>
+      <ul class="fleet" aria-label="Strategy instances">
+        @for (inst of instances(); track inst.strategy_instance_id) {
+          <li>
+            <button
+              type="button"
+              [class.selected]="inst.strategy_instance_id === selectedInstanceId()"
+              (click)="select(inst.strategy_instance_id)"
+            >
+              <span class="bot-name">{{ shortId(inst.strategy_instance_id) }}</span>
+              <span class="state-chip" [class.live]="inst.process_state === 'running'">{{ inst.process_state === 'running' ? 'RUNNING' : 'STOPPED' }}</span>
+              @if (inst.bound_run_id) {
+                <span class="bound">Live session {{ shortId(inst.bound_run_id) }}</span>
+              } @else if (inst.latest_run_id) {
+                <span class="evidence">Last session {{ shortId(inst.latest_run_id) }}</span>
+              }
+            </button>
+          </li>
+        } @empty {
+          <li class="empty">No strategy instances found.</li>
+        }
+      </ul>
+    </section>
   }
 
   @let s = status.value();
   @if (s) {
-    <article class="control-room" aria-label="Instance status">
-      <header class="ladder">
-        <span class="rung"><small>INSTANCE</small>{{ s.strategy_instance_id }}</span>
-        <span class="rung"><small>PROCESS</small>{{ s.process.state }}</span>
-        <span class="rung">
-          <small>CURRENT RUN</small>
-          @if (s.live_binding) {
-            <span class="live">{{ s.live_binding.run_id }} (live)</span>
-          } @else if (s.evidence_binding) {
-            <span class="evidence">{{ s.evidence_binding.run_id }} (latest / stale evidence)</span>
-          } @else {
-            <span>—</span>
-          }
+    @let hero = heroStatus(s);
+    <article class="control-panel" aria-label="Instance status">
+      <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
+        <div class="hero-copy">
+          <p class="mode-line">Paper trading mode - no real money at risk</p>
+          <h2>{{ strategyTitle(s) }} - Paper</h2>
+          <p>{{ hero.detail }}</p>
+        </div>
+        <span class="mega-status" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
+          {{ hero.label }}
         </span>
-        <span class="rung"><small>DESIRED</small>{{ s.desired_state?.state ?? 'unknown' }}</span>
-        <span class="rung"><small>BROKER</small>{{ s.broker?.bot_order_namespace ?? '—' }}</span>
       </header>
 
-      @if (accountContaminated()) {
-        <p class="inherited-banner">Account residual detected: DEGRADED — unattributed positions outside managed namespaces. Instance readiness is independent; the account is dirty.</p>
-      }
-
-      <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
-
-      @let r = s.readiness;
-      @if (r) {
-        <section class="readiness" aria-label="Readiness">
-          <div class="verdict-line">
-            <span class="verdict" [class]="'v-' + r.verdict.toLowerCase()">{{ r.verdict }}</span>
-            <span class="headline">Can act on the next bar?</span>
-            <small class="kind">{{ r.kind === 'start_readiness' ? 'start readiness — no live process' : 'live readiness — engine-authored' }}</small>
-          </div>
-          <p class="summary">{{ r.summary }}</p>
-          @if (r.gates.length) {
-            <ul class="gates" aria-label="Readiness gates">
-              @for (g of r.gates; track g.name) {
-                <li class="gate" [class.fail]="g.status === 'fail'" [class.unknown]="g.status === 'unknown'" [class.soft]="g.severity === 'soft'">
-                  <span class="gate-name">{{ g.name }}</span>
-                  <span class="gate-status">{{ g.status }}</span>
-                  <span class="gate-detail">{{ g.detail }}</span>
-                </li>
-              }
-            </ul>
-          }
-        </section>
-      }
-
-      @if (s.decision_columns.length) {
-        <section class="strategy-state" aria-label="Strategy state">
-          <h2>Strategy state</h2>
-          @let sig = signalOf(s.latest_decision);
-          @if (sig) {
-            <p class="signal">Signal: {{ sig }}</p>
-          }
-          <dl class="indicators">
-            @for (col of s.decision_columns; track col.name) {
-              <div class="indicator">
-                <dt [title]="col.semantic ?? ''">{{ col.label }}</dt>
-                <dd>{{ formatCell(s.latest_decision, col) }}</dd>
-              </div>
+      <div class="dashboard-grid">
+        <section class="card system-health" aria-labelledby="health-heading">
+          <header class="card-header">
+            <div>
+              <h2 id="health-heading">System Health</h2>
+              <p>Is everything connected?</p>
+            </div>
+          </header>
+          <div class="health-grid">
+            @for (row of healthRows(s); track row.technicalKey) {
+              <details class="health-pill" [class.ok]="row.tone === 'ok'" [class.warn]="row.tone === 'warn'" [class.bad]="row.tone === 'bad'">
+                <summary [title]="'Technical key: ' + row.technicalKey">
+                  <i [class]="row.icon" aria-hidden="true"></i>
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.status }}</strong>
+                </summary>
+                <p>{{ row.guide }}</p>
+              </details>
             }
-          </dl>
+          </div>
         </section>
-      }
 
-      @if (s.broker; as broker) {
-        <section class="broker" aria-label="Broker slice">
-          <h2>Broker slice <small>ns: {{ broker.bot_order_namespace }}</small></h2>
-          @if (brokerPositions(broker).length) {
-            <ul class="positions">
-              @for (p of brokerPositions(broker); track p.symbol) {
-                <li><span class="sym">{{ p.symbol }}</span> <span class="qty">{{ p.qty }}</span></li>
-              }
-            </ul>
-          } @else {
-            <p class="flat">Flat — no owned position</p>
-          }
-          <p class="pending">{{ broker.pending_order_count }} pending order(s)</p>
-        </section>
-      }
-
-      <div class="intent" role="group" aria-label="Operator intent">
-        <span class="intent-label">Intent</span>
-        <button type="button" (click)="setIntent('pause')" [disabled]="busyAction() !== null">Pause</button>
-        <button type="button" (click)="setIntent('resume')" [disabled]="busyAction() !== null">Resume</button>
-        <button type="button" (click)="setIntent('stop')" [disabled]="busyAction() !== null">Stop</button>
-      </div>
-
-      @let act = lastActuation();
-      @if (act) {
-        <p class="actuation" [class.live]="act.actuated">{{ act.detail }}</p>
-      }
-      <app-broker-operation-result [error]="intentError()" />
-
-      @if (!s.live_binding && s.evidence_binding) {
-        <p class="note">No live process — showing the latest completed/stale run as evidence. Intent changes will gate the next start.</p>
-      }
-
-      <section class="commands" aria-label="One-shot commands">
-        <div class="command-buttons" role="group" aria-label="One-shot commands">
-          <span class="commands-label">One-shot</span>
-          <button type="button" (click)="issueCommand('RECONCILE')" [disabled]="busyVerb() !== null || !s.live_binding">Reconcile now</button>
-          <button type="button" (click)="issueCommand('FLATTEN')" [disabled]="busyVerb() !== null || !s.live_binding">Flatten now</button>
-          <button type="button" (click)="issueCommand('MARK_POISONED')" [disabled]="busyVerb() !== null || !s.live_binding">Mark poisoned</button>
-        </div>
-        @if (!s.live_binding) {
-          <p class="disabled-reason">Commands need a live run bound to this instance — start the instance first.</p>
-        }
-        <app-broker-operation-result [error]="commandError()" />
-        @if (commandEntries().length) {
-          <ul class="command-timeline" aria-label="Command timeline">
-            @for (c of commandEntries(); track c.seq) {
-              <li class="cmd" [class.failed]="c.status === 'failed'" [class.queued]="c.status === 'queued'">
-                <span class="cmd-verb">{{ c.verb }}</span>
-                <span class="cmd-status">{{ c.status }}</span>
-                @if (c.outcome_detail) {
-                  <span class="cmd-detail">{{ c.outcome_detail }}</span>
+        @let r = s.readiness;
+        <section class="card checklist-card" aria-labelledby="checklist-heading">
+          <header class="card-header">
+            <div>
+              <h2 id="checklist-heading">Pre-Trade Checklist</h2>
+              <p>All boxes must be checked before your bot can act on the next signal.</p>
+            </div>
+            <span class="score" [class.ok]="r?.verdict === 'READY'" [class.bad]="r?.verdict === 'BLOCKED'" [class.warn]="r?.verdict === 'DEGRADED' || r?.verdict === 'UNKNOWN'">
+              {{ checksPassed(r) }} / {{ checklistRows(r).length }} checks passed
+            </span>
+          </header>
+          <p class="plain-text">
+            @if (r?.verdict === 'READY') {
+              Bot can trade on the next valid signal.
+            } @else {
+              Bot cannot trade yet.
+            }
+          </p>
+          <ul class="checklist" aria-label="Pre-trade checklist">
+            @for (row of checklistRows(r); track row.key) {
+              <li [class.pass]="row.status === 'pass'" [class.fail]="row.status === 'fail'" [class.unknown]="row.status === 'unknown'">
+                <span class="check-mark">{{ row.status === 'pass' ? 'PASS' : row.status === 'fail' ? 'FAIL' : 'UNKNOWN' }}</span>
+                <div>
+                  <strong [title]="'Technical key: ' + row.key">{{ row.label }}</strong>
+                  <p>{{ row.meaning }}</p>
+                  <small>{{ row.detail }}</small>
+                </div>
+                @if (row.status !== 'pass') {
+                  <button type="button" class="link-button" [title]="row.fix">Fix this</button>
                 }
               </li>
             }
           </ul>
+        </section>
+
+        <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
+
+        <section class="card behavior-card" aria-labelledby="behavior-heading">
+          <header class="card-header">
+            <div>
+              <h2 id="behavior-heading">Bot Behavior</h2>
+              <p>These settings control what happens the next time the bot starts.</p>
+            </div>
+          </header>
+          @let disabledReason = intentDisabledReason(s);
+          @if (disabledReason && !s.live_binding) {
+            <p class="notice warn">{{ disabledReason }}</p>
+          }
+          <div class="intent-segments" role="group" aria-label="Bot behavior">
+            @for (choice of intentChoices; track choice.action) {
+              <button
+                type="button"
+                [class.active]="currentIntent(s) === choice.action"
+                (click)="setIntent(choice.action)"
+                [disabled]="busyAction() !== null"
+                [title]="choice.description"
+              >
+                <i [class]="choice.icon" aria-hidden="true"></i>
+                <span>{{ choice.label }}</span>
+                <small>{{ choice.description }}</small>
+              </button>
+            }
+          </div>
+          @let act = lastActuation();
+          @if (act) {
+            <p class="actuation" [class.live]="act.actuated">{{ act.detail }}</p>
+          }
+          <app-broker-operation-result [error]="intentError()" />
+        </section>
+
+        @if (s.decision_columns.length) {
+          <section class="card strategy-state" aria-label="Strategy state">
+            <header class="card-header">
+              <div>
+                <h2>Latest Strategy Signal</h2>
+                <p>What the algorithm last decided.</p>
+              </div>
+            </header>
+            @let sig = signalOf(s.latest_decision);
+            @if (sig) {
+              <p class="signal">Signal: {{ sig }}</p>
+            }
+            <dl class="indicators">
+              @for (col of s.decision_columns; track col.name) {
+                <div class="indicator">
+                  <dt [title]="col.semantic ?? col.name">{{ col.label }}</dt>
+                  <dd>{{ formatCell(s.latest_decision, col) }}</dd>
+                </div>
+              }
+            </dl>
+          </section>
         }
-      </section>
+
+        @if (s.broker; as broker) {
+          <section class="card broker-card" aria-label="Broker account slice">
+            <header class="card-header">
+              <div>
+                <h2>Managed Positions</h2>
+                <p>Positions this strategy accounts for.</p>
+              </div>
+              <span class="status-chip ok">{{ broker.pending_order_count }} pending</span>
+            </header>
+            @if (brokerPositions(broker).length) {
+              <ul class="position-pills">
+                @for (p of brokerPositions(broker); track p.symbol) {
+                  <li><span>{{ p.symbol }}</span><strong>{{ p.qty }}</strong></li>
+                }
+              </ul>
+            } @else {
+              <p class="plain-text">Flat - no owned position.</p>
+            }
+            <details>
+              <summary>Details</summary>
+              <p class="mono">Namespace: {{ broker.bot_order_namespace }}</p>
+            </details>
+          </section>
+        }
+
+        <section class="card advanced-card" aria-labelledby="advanced-heading">
+          <details [open]="advancedOpen()" (toggle)="setAdvancedOpen($event)">
+            <summary id="advanced-heading">
+              <span>Advanced Actions</span>
+              <small>Collapsed by default</small>
+            </summary>
+            <p class="notice danger">These are advanced actions. Use only if you know what you're doing.</p>
+            <div class="advanced-actions" role="group" aria-label="Advanced actions">
+              @for (action of advancedActions; track action.verb) {
+                <button
+                  type="button"
+                  [class.danger]="action.tone === 'danger'"
+                  (click)="issueAdvancedCommand(action.verb)"
+                  [disabled]="busyVerb() !== null || !s.live_binding"
+                  [title]="!s.live_binding ? 'Cannot use this action - start the bot first.' : action.description"
+                >
+                  {{ action.label }}
+                </button>
+              }
+            </div>
+            @if (!s.live_binding) {
+              <p class="disabled-reason">Advanced actions need a live bot session. Start the bot first.</p>
+            }
+            <app-broker-operation-result [error]="commandError()" />
+            @if (commandEntries().length) {
+              <ul class="command-timeline" aria-label="Command timeline">
+                @for (c of commandEntries(); track c.seq) {
+                  <li class="cmd" [class.failed]="c.status === 'failed'" [class.queued]="c.status === 'queued'">
+                    <span class="cmd-verb">{{ c.verb }}</span>
+                    <span class="cmd-status">{{ c.status }}</span>
+                    @if (c.outcome_detail) {
+                      <span class="cmd-detail">{{ c.outcome_detail }}</span>
+                    }
+                  </li>
+                }
+              </ul>
+            }
+          </details>
+        </section>
+      </div>
     </article>
   }
 </section>
