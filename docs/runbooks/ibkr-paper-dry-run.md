@@ -176,8 +176,21 @@ daemon once from the repo root:
 $env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .
 ```
 
-Leave the daemon bound to its default `127.0.0.1:8765`; it has no remote
-auth layer because it is intended to be a local operator bridge only.
+On Windows/Mac podman, leave the daemon bound to its default
+`127.0.0.1:8765` — the container reaches it via
+`host.containers.internal` → host loopback (gvproxy). On **Linux rootless
+podman** that alias maps to the bridge gateway, which can't reach
+loopback, so add `--host 0.0.0.0` or the container sees an empty engine.
+
+The daemon authenticates every protected route with a mandatory
+`X-Live-Runner-Token` shared secret (ADR 0007), so binding `0.0.0.0` is
+safe. The token is auto-generated at startup to
+`PythonDataService/artifacts/.host-daemon-token` (`0o600`), which the
+container reads through the `./PythonDataService/artifacts:/app/artifacts`
+bind mount — no manual sync. To pin your own secret instead, set
+`LIVE_RUNNER_DAEMON_TOKEN` on **both** the daemon process and the
+`polygon-data-service` container. A direct `curl` against the daemon now
+needs `-H "X-Live-Runner-Token: $(cat PythonDataService/artifacts/.host-daemon-token)"`.
 
 Then open `/broker/paper-run`. The **Host Runner** panel calls the
 daemon at `http://127.0.0.1:8765` and starts/stops the same

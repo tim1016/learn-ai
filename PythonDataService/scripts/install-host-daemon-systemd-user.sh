@@ -9,12 +9,13 @@ SERVICE_NAME="${SERVICE_NAME:-learn-ai-host-daemon.service}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 PYTHON_EXE="${PYTHON_EXE:-$REPO_ROOT/PythonDataService/.venv/bin/python}"
 PORT="${PORT:-8765}"
-# The daemon is unauthenticated and enforces a loopback-only bind (host_daemon
-# _loopback_host rejects anything non-loopback). Do NOT change this to 0.0.0.0 —
-# the process refuses to start. The containerized data plane reaches it via
-# host.containers.internal, which forwards to host loopback on Windows/Mac podman
-# (gvproxy). On Linux rootless podman that alias maps to the bridge gateway and
-# does NOT reach host loopback — see docs for the container→daemon bridge options.
+# Bind interface. Default loopback works on Windows/Mac podman, where the
+# container reaches it via host.containers.internal -> host loopback (gvproxy).
+# On LINUX rootless podman that alias maps to the bridge gateway, which does NOT
+# reach loopback, so the container can't see a 127.0.0.1 daemon — set HOST=0.0.0.0
+# there. Non-loopback is safe now that every protected route requires the
+# X-Live-Runner-Token shared secret (ADR 0007); the token is auto-generated to
+# artifacts/.host-daemon-token, which the container reads via the bind mount.
 HOST="${HOST:-127.0.0.1}"
 USER_SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$USER_SYSTEMD_DIR/$SERVICE_NAME"

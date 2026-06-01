@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
 from app.schemas.live_runs import (
     HostRunnerActionResponse,
@@ -20,6 +21,10 @@ from app.schemas.live_runs import (
 )
 
 RUN_ID = "run-daemon-" + "a" * 53
+# Every protected route requires the shared secret (ADR 0007); tests pin a known
+# token into create_app and send it on the client via the _AUTH header.
+_TEST_TOKEN = "test-daemon-token"
+_AUTH = {TOKEN_HEADER: _TEST_TOKEN}
 
 
 class FakeProcess:
@@ -56,9 +61,9 @@ def daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
 
 async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, _ = daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.get("/health")
 
     assert response.status_code == 200
@@ -81,9 +86,9 @@ async def test_start_launches_existing_run_with_host_env(
         return fake_process
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post(
             f"/runs/{RUN_ID}/start",
             json={
@@ -115,9 +120,9 @@ async def test_start_rejects_second_active_run(
 ) -> None:
     manager, _ = daemon_context
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: FakeProcess())
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         first = await client.post(f"/runs/{RUN_ID}/start", json={})
         second = await client.post(f"/runs/{RUN_ID}/start", json={})
 
@@ -127,9 +132,9 @@ async def test_start_rejects_second_active_run(
 
 async def test_start_rejects_missing_run(daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, _ = daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post("/runs/missing-run/start", json={})
 
     assert response.status_code == 404
@@ -142,9 +147,9 @@ async def test_stop_force_kills_when_graceful_signal_does_not_exit(
     manager, _ = daemon_context
     fake_process = FakeProcess()
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         start = await client.post(f"/runs/{RUN_ID}/start", json={})
         stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": True})
 
@@ -170,9 +175,9 @@ async def test_stop_handles_process_exiting_between_poll_and_signal(
 
     fake_process = RacingProcess()
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         start = await client.post(f"/runs/{RUN_ID}/start", json={})
         stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": False})
 
@@ -201,9 +206,9 @@ async def test_instances_lists_each_managed_strategy_instance(
 
     manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: FakeProcess())
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         for run_id in runs:
             started = await client.post(f"/runs/{run_id}/start", json={})
             assert started.status_code == 200  # different instances coexist
@@ -236,9 +241,9 @@ async def test_start_falls_back_to_run_id_key_without_ledger_binding(
     surfaces on /instances with an empty instance id."""
     manager, _ = daemon_context
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: FakeProcess())
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         started = await client.post(f"/runs/{RUN_ID}/start", json={})
         listing = await client.get("/instances")
 
@@ -279,9 +284,9 @@ async def test_start_injects_sibling_managed_symbols(
         return FakeProcess()
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         await client.post(f"/runs/{ema_run}/start", json={})
         await client.post(f"/runs/{vwap_run}/start", json={})
 
@@ -342,9 +347,9 @@ async def test_sibling_symbols_resolves_relative_spec_paths_from_repo_root(
 
     monkeypatch.chdir(repo_root / "PythonDataService")
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         await client.post(f"/runs/{ema_run}/start", json={})
         await client.post(f"/runs/{vwap_run}/start", json={})
 
@@ -354,10 +359,12 @@ async def test_sibling_symbols_resolves_relative_spec_paths_from_repo_root(
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "8.8.8.8"])
-def test_build_parser_rejects_non_loopback_host(host: str) -> None:
+def test_build_parser_accepts_non_loopback_host(host: str) -> None:
+    # Non-loopback binds are allowed now that auth is mandatory (ADR 0007) — the
+    # data-plane container reaches the daemon on a non-loopback interface.
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--host", host])
+    args = parser.parse_args(["--host", host])
+    assert args.host == host
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
@@ -371,6 +378,59 @@ def test_build_parser_rejects_garbage_host() -> None:
     parser = build_parser()
     with pytest.raises((SystemExit, argparse.ArgumentTypeError)):
         parser.parse_args(["--host", "not-a-host"])
+
+
+async def test_protected_route_rejects_missing_token(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/instances")
+
+    assert response.status_code == 401
+    assert TOKEN_HEADER in response.json()["detail"]
+
+
+async def test_protected_route_rejects_wrong_token(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers={TOKEN_HEADER: "wrong"}
+    ) as client:
+        response = await client.get("/instances")
+
+    assert response.status_code == 401
+
+
+async def test_protected_route_accepts_correct_token(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.get("/instances")
+
+    assert response.status_code == 200
+
+
+async def test_health_is_open_without_token(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    # /health must stay unauthenticated so the data plane's connectivity probe
+    # works before any token is wired (ADR 0007).
+    manager, _ = daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
 
 
 # ── deploy (ADR 0006) ────────────────────────────────────────────────
@@ -443,9 +503,9 @@ def _deploy_body(**overrides: Any) -> dict[str, Any]:
 @requires_git
 async def test_deploy_creates_run(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, repo = git_daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post("/deploy", json=_deploy_body())
 
     assert response.status_code == 200
@@ -459,9 +519,9 @@ async def test_deploy_creates_run(git_daemon_context: tuple[RunnerProcessManager
 @requires_git
 async def test_deploy_is_idempotent(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, _ = git_daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         first = await client.post("/deploy", json=_deploy_body())
         second = await client.post("/deploy", json=_deploy_body())
 
@@ -474,9 +534,9 @@ async def test_deploy_is_idempotent(git_daemon_context: tuple[RunnerProcessManag
 async def test_deploy_rejects_dirty_tree(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, repo = git_daemon_context
     (repo / "PythonDataService" / "spec.json").write_text('{"strategy": "x"}', encoding="utf-8")
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post("/deploy", json=_deploy_body())
 
     assert response.status_code == 409
@@ -485,9 +545,9 @@ async def test_deploy_rejects_dirty_tree(git_daemon_context: tuple[RunnerProcess
 @requires_git
 async def test_deploy_rejects_missing_spec(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, _ = git_daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post(
             "/deploy", json=_deploy_body(strategy_spec_path="PythonDataService/nope.json")
         )
@@ -498,9 +558,9 @@ async def test_deploy_rejects_missing_spec(git_daemon_context: tuple[RunnerProce
 @requires_git
 async def test_deploy_rejects_path_escape(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, _ = git_daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post(
             "/deploy", json=_deploy_body(strategy_spec_path="../../../etc/passwd")
         )
@@ -527,9 +587,9 @@ async def test_deploy_with_start_chains_a_launch(
         return canned
 
     monkeypatch.setattr(manager, "start", fake_start)
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post("/deploy", json=_deploy_body(start=True))
 
     assert response.status_code == 200
@@ -544,9 +604,9 @@ async def test_qc_audit_copies_lists_committed_files(
     git_daemon_context: tuple[RunnerProcessManager, Path],
 ) -> None:
     manager, _ = git_daemon_context
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.get("/qc-audit-copies")
 
     assert response.status_code == 200
@@ -565,9 +625,9 @@ async def test_qc_audit_copies_excludes_untracked_files(
     manager, repo = git_daemon_context
     untracked = repo / "references" / "qc-shadow" / "UncommittedAlgorithm.py"
     untracked.write_text("# not committed\n", encoding="utf-8")
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.get("/qc-audit-copies")
 
     entries = response.json()["entries"]
@@ -581,9 +641,9 @@ async def test_qc_audit_copies_empty_when_dir_absent(tmp_path: Path) -> None:
     manager = RunnerProcessManager(
         repo_root=repo, live_runs_root=repo / "PythonDataService" / "artifacts" / "live_runs"
     )
-    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.get("/qc-audit-copies")
 
     assert response.status_code == 200
