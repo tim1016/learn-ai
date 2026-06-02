@@ -75,6 +75,14 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     assert "next_bar_open" in combined
 
 
+def test_deployment_validation_has_matching_spec_fixture():
+    from app.routers.spec_strategy import list_fixtures
+
+    fixtures = {f.name: f for f in list_fixtures()}
+    assert "deployment_validation" in fixtures
+    assert fixtures["deployment_validation"].path.endswith("deployment_validation.spec.json")
+
+
 def test_all_registered_strategies_have_algorithm_and_gotchas():
     """Every strategy must populate the two structured metadata fields.
 

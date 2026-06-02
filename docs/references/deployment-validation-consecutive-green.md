@@ -17,10 +17,18 @@ Status: internal validation strategy, not financial advice and not an alpha clai
 
 - Python canonical: `PythonDataService/app/engine/strategy/algorithms/deployment_validation.py`
 - LEAN companion template: `PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py`
+- Deployment settings fixture: `PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json`
+- QuantConnect audit copy: `references/qc-shadow/DeploymentValidationAlgorithm.py`
+
+The deployment form requires both deploy artifacts in addition to the strategy
+registry entry. Run the committed QuantConnect audit copy on quantconnect.com,
+copy that backtest id into the deployment form, and select the same committed
+audit copy under `references/qc-shadow/`.
 
 ## Validation
 
 - Engine behavior: `PythonDataService/tests/engine/test_deployment_validation_strategy.py`
+- Deployment artifacts: `PythonDataService/tests/engine/live/test_deployment_validation_deploy_artifacts.py`
 - Engine registry: `PythonDataService/tests/test_engine_strategies_endpoint.py`
 - LEAN template shape and registry: `PythonDataService/tests/lean_sidecar/test_deployment_validation_template.py`, `PythonDataService/tests/services/test_lean_sidecar_template_registry.py`
 

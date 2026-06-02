@@ -10,6 +10,7 @@ from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode
 from app.engine.strategy.algorithms.deployment_validation import (
+    DeploymentValidationAlgorithm,
     DeploymentValidationConsecutiveGreen,
 )
 
@@ -127,3 +128,7 @@ def test_stops_detecting_and_flattens_at_1545() -> None:
     _strategy, events = _run(bars)
 
     assert events == []
+
+
+def test_live_start_convention_alias_resolves_strategy_class() -> None:
+    assert DeploymentValidationAlgorithm is DeploymentValidationConsecutiveGreen
