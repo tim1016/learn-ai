@@ -45,6 +45,9 @@ from app.engine.pine_generators import (
     generate_strategy_c_pine,
 )
 from app.engine.results.statistics import summarize
+from app.engine.strategy.algorithms.deployment_validation import (
+    DeploymentValidationConsecutiveGreen,
+)
 from app.engine.strategy.algorithms.rsi_mean_reversion import (
     RsiMeanReversionAlgorithm,
 )
@@ -168,6 +171,12 @@ class OrbParams(StrategyParamsBase):
     hold_bars: int = Field(5, ge=1, le=50)
     min_range_pct: float = Field(0.30, ge=0.0, le=10.0)
     max_range_pct: float = Field(1.50, ge=0.1, le=20.0)
+
+
+class DeploymentValidationParams(StrategyParamsBase):
+    """Fixed deployment-validation strategy with configurable ticker."""
+
+    symbol: str = Field("SPY", min_length=1, max_length=20)
 
 
 class EmaCrossoverOptionsParams(StrategyParamsBase):
@@ -753,6 +762,66 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             hold_bars=p.hold_bars,  # type: ignore[attr-defined]
             min_range_pct=p.min_range_pct,  # type: ignore[attr-defined]
             max_range_pct=p.max_range_pct,  # type: ignore[attr-defined]
+        ),
+    ),
+    "deployment_validation": StrategyRegistration(
+        display_name="Deployment Validation",
+        description=(
+            "Minute-bar lifecycle validation strategy. Starting with the "
+            "09:45 ET minute close, it watches for two consecutive green "
+            "minute bars (close > open). After the second green bar it "
+            "queues a long entry intended for next-bar-open execution, holds "
+            "through the third, fourth, and fifth bars, submits a liquidation "
+            "on the fifth bar, resets the detector, and repeats. At 15:45 ET "
+            "it stops detecting new entries and flattens any open position. "
+            "This is a deployment-validation primitive, not an alpha model."
+        ),
+        algorithm_pseudocode=(
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = 1-minute bars\n"
+            "    session    = regular session data; strategy starts at 09:45 ET\n"
+            "\n"
+            "Indicators\n"
+            "    none — only bar.open and bar.close are inspected\n"
+            "\n"
+            "Entry pattern\n"
+            "    green = bar.close > bar.open\n"
+            "    if two consecutive eligible green bars occur while flat:\n"
+            "        SetHoldings(symbol, 1.0)\n"
+            "\n"
+            "Hold / exit\n"
+            "    intended fill mode is next_bar_open, so the entry fills on\n"
+            "    the third bar's open after the two green confirmation bars.\n"
+            "    Count bar closes while in position, including the entry bar.\n"
+            "    On the fifth bar: Liquidate(symbol)\n"
+            "\n"
+            "Reset\n"
+            "    after each exit fill, reset the green-bar detector. Bars from\n"
+            "    the open trade cannot seed the next entry pattern.\n"
+            "\n"
+            "Session barrier\n"
+            "    at 15:45 ET: stop detecting entries and liquidate any exposure\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0) — one open position at a time\n"
+            "\n"
+            "Execution\n"
+            "    intended fill_mode = next_bar_open"
+        ),
+        gotchas=[
+            "Run this strategy with fill_mode=next_bar_open. The global "
+            "Engine Lab default is signal_bar_close for legacy LEAN parity, "
+            "but this validation strategy's timing spec is next-bar-open.",
+            "A green bar means close > open, not close > previous close.",
+            "Detection begins on the 09:45 ET bar close and stops at 15:45 ET. "
+            "The 15:45 barrier also flattens any open position.",
+            "The detector resets after exit, so bars that occurred during an "
+            "open position cannot contribute to the next entry pattern.",
+        ],
+        param_schema=DeploymentValidationParams,
+        build=lambda p: DeploymentValidationConsecutiveGreen(
+            symbol=p.symbol,  # type: ignore[attr-defined]
         ),
     ),
     "ema_crossover_options": StrategyRegistration(

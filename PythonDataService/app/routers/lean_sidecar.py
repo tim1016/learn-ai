@@ -262,7 +262,7 @@ class TrustedRunRequestModel(BaseModel):
             "shape is what makes accepting arbitrary source safe."
         ),
     )
-    template: Literal["trusted_default", "reconciliation", "ema_crossover"] = Field(
+    template: Literal["trusted_default", "reconciliation", "ema_crossover", "deployment_validation"] = Field(
         default="trusted_default",
         description=(
             "Phase 5b — which bundled trusted sample to stage when "
