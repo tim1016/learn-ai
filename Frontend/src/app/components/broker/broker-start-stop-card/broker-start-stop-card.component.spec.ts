@@ -91,7 +91,7 @@ describe('BrokerStartStopCardComponent', () => {
     const changed = vi.fn();
     component.changed.subscribe(changed);
 
-    button(fixture, 'Start').click();
+    button(fixture, 'Start Trading').click();
     await Promise.resolve();
 
     expect(svc.startHostRunner).toHaveBeenCalledWith('run-old', {
@@ -111,8 +111,9 @@ describe('BrokerStartStopCardComponent', () => {
         live_binding: { run_id: 'run-live', run_dir: null, source: 'registry' },
       }),
     );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
-    button(fixture, 'Stop').click();
+    button(fixture, 'Stop Bot').click();
     await Promise.resolve();
 
     expect(svc.stopHostRunner).toHaveBeenCalledWith('run-live', { force: false });
@@ -122,7 +123,7 @@ describe('BrokerStartStopCardComponent', () => {
     const { fixture } = render(makeStatus(), /* daemonDown */ true);
     const el = fixture.nativeElement as HTMLElement;
 
-    expect(button(fixture, 'Start').disabled).toBe(true);
+    expect(button(fixture, 'Start Trading').disabled).toBe(true);
     expect(el.querySelector('.disabled-reason')?.textContent).toContain('Host daemon unreachable');
   });
 
@@ -130,7 +131,7 @@ describe('BrokerStartStopCardComponent', () => {
     const { fixture } = render(makeStatus(), /* daemonDown */ false, /* fleetBlocks */ true);
     const el = fixture.nativeElement as HTMLElement;
 
-    expect(button(fixture, 'Start').disabled).toBe(true);
+    expect(button(fixture, 'Start Trading').disabled).toBe(true);
     expect(el.querySelector('.disabled-reason')?.textContent).toContain('Fleet policy blocks new starts');
   });
 
@@ -138,7 +139,7 @@ describe('BrokerStartStopCardComponent', () => {
     const { fixture } = render(makeStatus({ evidence_binding: null, live_binding: null }));
     const el = fixture.nativeElement as HTMLElement;
 
-    expect(button(fixture, 'Start').disabled).toBe(true);
+    expect(button(fixture, 'Start Trading').disabled).toBe(true);
     expect(el.querySelector('.disabled-reason')?.textContent).toContain('No run to start');
   });
 

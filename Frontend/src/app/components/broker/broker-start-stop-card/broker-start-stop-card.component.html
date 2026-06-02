@@ -1,12 +1,16 @@
-<section class="start-stop" aria-label="Start / stop run">
+<section class="start-stop card-shell" aria-label="Bot controls and settings">
   <header class="head">
-    <h2>Run process</h2>
-    <span class="proc" [class.live]="isLive()">{{ status().process.state }}</span>
+    <div>
+      <h2>Bot Configuration</h2>
+      <p>Settings used when this bot starts.</p>
+    </div>
+    <span class="proc" [class.live]="isLive()">{{ isLive() ? 'RUNNING' : 'STOPPED' }}</span>
   </header>
 
   <div class="fields">
     <label class="field">
       <span>Strategy</span>
+      <small>The algorithm your bot will follow.</small>
       <input
         type="text"
         [value]="strategy()"
@@ -19,20 +23,23 @@
 
     <label class="field checkbox">
       <input type="checkbox" [checked]="readonlyFlag()" (change)="setReadonly($event)" [disabled]="isLive()" />
-      <span>Read-only (no live order submission)</span>
+      <span>Paper Trading Mode</span>
+      <strong class="paper-chip">ON - No real orders will be placed</strong>
     </label>
 
     <label class="field">
-      <span>Hydrate policy</span>
+      <span>Historical Data Loading</span>
+      <small>How much history the bot loads before it starts.</small>
       <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)" [disabled]="isLive()">
-        <option value="require">require</option>
-        <option value="optional">optional</option>
-        <option value="disabled">disabled</option>
+        <option value="require">Always load history before starting (recommended)</option>
+        <option value="optional">Try to load history, start anyway if unavailable</option>
+        <option value="disabled">Skip history loading (advanced)</option>
       </select>
     </label>
 
     <label class="field">
       <span>Max orders / day</span>
+      <small>Safety cap - bot won't place more than this many trades per day.</small>
       <input
         type="number"
         min="0"
@@ -44,16 +51,39 @@
     </label>
 
     <label class="field">
-      <span>IBKR host</span>
+      <span>Broker Connection Address</span>
+      <small>Leave as 127.0.0.1 if running locally.</small>
       <input type="text" [value]="ibkrHost()" (input)="setIbkrHost($event)" [disabled]="isLive()" autocomplete="off" />
     </label>
   </div>
 
-  <div class="actions" role="group" aria-label="Run controls">
-    <button type="button" class="primary" (click)="start()" [disabled]="!canStart()">Start</button>
-    <button type="button" class="danger" (click)="stop()" [disabled]="!canStop()">Stop</button>
+  <div class="controls">
+    <h2>Run Your Bot</h2>
+    <button
+      type="button"
+      class="primary"
+      (click)="start()"
+      [disabled]="!canStart()"
+      [title]="startBlockedReason() ?? 'Start the bot with the settings above.'"
+    >
+      <i class="pi pi-play" aria-hidden="true"></i>
+      <span>Start Trading</span>
+    </button>
+    <button
+      type="button"
+      class="danger"
+      (click)="stop()"
+      [disabled]="!canStop()"
+      title="Stop all trading activity for this bot."
+    >
+      <i class="pi pi-stop" aria-hidden="true"></i>
+      <span>Stop Bot</span>
+    </button>
     @if (runId(); as rid) {
-      <span class="target mono">→ {{ rid }}</span>
+      <details class="session-detail">
+        <summary>Last session ID: {{ rid.length > 12 ? rid.slice(0, 8) + '...' : rid }}</summary>
+        <span class="mono">{{ rid }}</span>
+      </details>
     }
   </div>
 

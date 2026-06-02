@@ -126,6 +126,8 @@ export class BrokerStartStopCardComponent {
   async stop(): Promise<void> {
     const runId = this.runId();
     if (runId === null) return;
+    const ok = window.confirm('Are you sure? This will stop all trading activity.');
+    if (!ok) return;
     this.busy.set(true);
     this.result.set(null);
     try {

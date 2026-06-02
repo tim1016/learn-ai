@@ -1,117 +1,189 @@
-.start-stop {
+:host {
+  display: block;
+}
+
+.card-shell {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  padding: 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.02);
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
 }
 
 .head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 1rem;
 
-  h2 {
+  h2,
+  p {
     margin: 0;
-    font-size: 0.95rem;
+  }
+
+  p {
+    margin-top: 0.15rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
   }
 }
 
-.proc {
-  font-size: 0.8rem;
-  padding: 0.1rem 0.5rem;
+.proc,
+.paper-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0.15rem 0.55rem;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  opacity: 0.8;
+  background: var(--bear-soft);
+  color: var(--bear);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
 
   &.live {
-    color: #2ea043;
-    border-color: #2ea043;
-    opacity: 1;
+    background: var(--bull-soft);
+    color: var(--bull);
   }
+}
+
+.paper-chip {
+  background: var(--bull-soft);
+  color: var(--bull);
 }
 
 .fields {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.85rem;
+  gap: 0.25rem;
+  font-size: 0.88rem;
+
+  > span {
+    font-weight: 800;
+  }
+
+  small {
+    color: var(--text-muted);
+    line-height: 1.3;
+  }
 
   &.checkbox {
-    flex-direction: row;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
   }
 
   input[type='text'],
   input[type='number'],
   select {
-    padding: 0.3rem 0.4rem;
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    background: rgba(0, 0, 0, 0.2);
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.45rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-sunken);
     color: inherit;
     font: inherit;
 
     &:disabled {
-      opacity: 0.5;
+      opacity: 0.65;
+      cursor: not-allowed;
     }
   }
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+
+  h2,
+  .session-detail {
+    grid-column: 1 / -1;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
 
   button {
-    padding: 0.35rem 0.9rem;
-    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-height: 2.7rem;
+    padding: 0.55rem 0.8rem;
     border: 1px solid transparent;
-    cursor: pointer;
+    border-radius: 8px;
     font: inherit;
+    font-weight: 900;
+    cursor: pointer;
 
     &:disabled {
       cursor: not-allowed;
-      opacity: 0.5;
+      opacity: 0.6;
     }
-  }
-
-  .primary {
-    background: #2ea043;
-    color: #fff;
-  }
-
-  .danger {
-    background: transparent;
-    border-color: #d73a49;
-    color: #d73a49;
   }
 }
 
-.target {
-  font-size: 0.8rem;
-  opacity: 0.7;
+// Start: solid green fill with dark text for AA contrast on the bright
+// TV-palette bull color.
+.primary {
+  background: var(--bull);
+  color: var(--bg-canvas);
+}
+
+// Stop: outline-danger so the destructive action reads as a guard, not a fill.
+.danger {
+  background: transparent;
+  border-color: var(--bear);
+  color: var(--bear);
+}
+
+.session-detail {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+
+  summary {
+    cursor: pointer;
+  }
 }
 
 .mono {
+  display: block;
+  margin-top: 0.25rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
 }
 
 .disabled-reason {
   margin: 0;
-  font-size: 0.82rem;
-  padding: 0.3rem 0.5rem;
-  border-left: 3px solid #d97706;
-  background: rgba(217, 118, 6, 0.08);
-  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 760px) {
+  .fields,
+  .controls,
+  .field.checkbox {
+    grid-template-columns: 1fr;
+  }
 }
