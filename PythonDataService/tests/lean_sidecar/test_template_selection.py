@@ -108,7 +108,7 @@ def test_reconciliation_source_class_name_is_my_algorithm() -> None:
     assert "class MyAlgorithm" in BUY_AND_HOLD_RECONCILIATION_SOURCE
 
 
-@pytest.mark.parametrize("template", ["trusted_default", "reconciliation"])
+@pytest.mark.parametrize("template", ["trusted_default", "reconciliation", "ema_crossover", "deployment_validation"])
 def test_request_accepts_known_templates(template: str) -> None:
     req = _request(template=template)
     assert req.template == template

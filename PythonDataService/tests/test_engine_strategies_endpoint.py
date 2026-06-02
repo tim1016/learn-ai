@@ -30,6 +30,7 @@ EXPECTED_STRATEGY_KEYS = {
     "daily_sma_crossover",
     "rsi_mean_reversion",
     "orb",
+    "deployment_validation",
     "ema_crossover_options",
 }
 
@@ -59,6 +60,19 @@ def test_orb_is_registered_with_correct_metadata():
     props = orb["params_schema"]["properties"]
     for expected in ("symbol", "orb_bars", "hold_bars", "min_range_pct", "max_range_pct"):
         assert expected in props, f"orb params_schema missing {expected!r}"
+
+
+def test_deployment_validation_is_registered_with_fixed_rule_metadata():
+    strategies = _list_strategies()
+    names = {s["name"] for s in strategies}
+    assert "deployment_validation" in names
+
+    strategy = next(s for s in strategies if s["name"] == "deployment_validation")
+    assert strategy["display_name"] == "Deployment Validation"
+    assert "minute" in strategy["supported_resolutions"]
+    assert set(strategy["params_schema"]["properties"]) == {"symbol"}
+    combined = " ".join(strategy["gotchas"]).lower()
+    assert "next_bar_open" in combined
 
 
 def test_all_registered_strategies_have_algorithm_and_gotchas():
