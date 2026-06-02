@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "name": "Deployment Validation",
+  "description": "Deploy-control-plane fixture for the hand-coded deployment_validation strategy. The canonical algorithm lives in app.engine.strategy.algorithms.deployment_validation; this spec pins symbol, 1-minute resolution, and live runtime metadata. The strategy emits only core decision fields, so no strategy-specific decision_columns are declared here.",
+  "symbols": ["SPY"],
+  "resolution": {"period_minutes": 1},
+  "indicators": [],
+  "entry": {
+    "logic": "AND",
+    "conditions": [
+      {"kind": "TimeOfDay", "after": "09:45", "before": "15:45", "tz": "America/New_York"}
+    ],
+    "size": {"kind": "SetHoldings", "fraction": 1.0},
+    "pyramiding": 1
+  },
+  "position": {"kind": "EQUITY_LONG"},
+  "survival": [],
+  "exit": {
+    "logic": "OR",
+    "conditions": [
+      {"kind": "BarsSinceEntry", "op": ">=", "value": 3}
+    ]
+  },
+  "diagnostics": {
+    "snapshot_at_entry": []
+  },
+  "client_id": 12,
+  "submit_mode": "live_paper",
+  "bar_source_descriptor": "ibkr_paper_delayed",
+  "decision_columns": []
+}

@@ -601,6 +601,9 @@ class LiveEngine:
                     )
 
                 portfolio.update_reference_price(symbol, minute_bar.close)
+                ctx.current_time = minute_bar.end_time
+                strategy.on_minute_bar(minute_bar)
+
                 consolidated_count_before = len(ctx.consolidated_bars)
                 for consolidator in ctx.get_consolidators(symbol):
                     consolidator.update(minute_bar)

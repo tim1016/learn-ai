@@ -484,6 +484,9 @@ def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
     (repo / "references" / "qc-shadow" / "SpyEmaCrossoverAlgorithm.py").write_text(
         "# QC audit copy\n", encoding="utf-8"
     )
+    (repo / "references" / "qc-shadow" / "DeploymentValidationAlgorithm.py").write_text(
+        "# Deployment validation QC audit copy\n", encoding="utf-8"
+    )
     # Mirror the real repo: live-run artifacts are gitignored, so writing a
     # run_ledger under PythonDataService/artifacts does NOT dirty the tree (the
     # clean-tree scope includes PythonDataService). Without this, a second
@@ -495,6 +498,7 @@ def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
             "add",
             ".gitignore",
             "PythonDataService/spec.json",
+            "references/qc-shadow/DeploymentValidationAlgorithm.py",
             "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
         ],
         cwd=repo,
@@ -634,6 +638,7 @@ async def test_qc_audit_copies_lists_committed_files(
     body = response.json()
     assert body["scope_root"] == "references/qc-shadow"
     assert "references/qc-shadow/SpyEmaCrossoverAlgorithm.py" in body["entries"]
+    assert "references/qc-shadow/DeploymentValidationAlgorithm.py" in body["entries"]
 
 
 @requires_git
@@ -653,6 +658,7 @@ async def test_qc_audit_copies_excludes_untracked_files(
 
     entries = response.json()["entries"]
     assert "references/qc-shadow/SpyEmaCrossoverAlgorithm.py" in entries  # committed
+    assert "references/qc-shadow/DeploymentValidationAlgorithm.py" in entries  # committed
     assert "references/qc-shadow/UncommittedAlgorithm.py" not in entries  # untracked
 
 

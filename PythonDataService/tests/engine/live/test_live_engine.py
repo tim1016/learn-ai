@@ -46,6 +46,26 @@ class OneEntryStrategy(Strategy):
             self.ctx.set_holdings("SPY", Decimal("1"))
 
 
+class MinuteHookEntryStrategy(Strategy):
+    def __init__(self) -> None:
+        super().__init__()
+        self._entered = False
+
+    def initialize(self) -> None:
+        assert self.ctx is not None
+        self.ctx.add_equity("SPY")
+        self.ctx.register_consolidator("SPY", timedelta(minutes=15), self._noop)
+
+    def _noop(self, _bar: TradeBar) -> None:
+        return None
+
+    def on_minute_bar(self, _bar: TradeBar) -> None:
+        assert self.ctx is not None
+        if not self._entered:
+            self.ctx.set_holdings("SPY", Decimal("1"))
+            self._entered = True
+
+
 @pytest.mark.asyncio
 async def test_live_engine_processes_bar_signal_submission_and_next_bar_fill() -> None:
     broker = FakeBroker()
@@ -62,6 +82,20 @@ async def test_live_engine_processes_bar_signal_submission_and_next_bar_fill() -
     assert result.pending_orders == 0
     assert result.open_positions == {"SPY": 200}
     assert len(result.equity_curve) == len(bars)
+
+
+@pytest.mark.asyncio
+async def test_live_engine_dispatches_minute_bar_hook_before_consolidators() -> None:
+    broker = FakeBroker()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    bars = [_bar(minute, "500", "500") for minute in range(30, 33)]
+
+    result = await engine.run(MinuteHookEntryStrategy(), iter_bars(bars))
+
+    assert result.submitted_order_ids == [1]
+    assert len(result.order_events) == 1
+    assert result.order_events[0].time == bars[1].time
+    assert result.open_positions == {"SPY": 200}
 
 
 class HoldsExistingStrategy(Strategy):

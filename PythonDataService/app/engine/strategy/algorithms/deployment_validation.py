@@ -39,6 +39,13 @@ class _OpenTrade:
     signal_time: datetime
 
 
+@dataclass(frozen=True)
+class _DeploymentDecisionSnapshot:
+    bar_close_ms: int
+    signal: str
+    intended_price: float
+
+
 class DeploymentValidationConsecutiveGreen(Strategy):
     """Deterministic minute-bar strategy for validating deployment plumbing."""
 
@@ -59,6 +66,13 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
+
+    def _publish_decision(self, bar: TradeBar, signal: str) -> None:
+        self.last_decision_snapshot = _DeploymentDecisionSnapshot(
+            bar_close_ms=int(bar.end_time.timestamp() * 1000),
+            signal=signal,
+            intended_price=float(bar.close),
+        )
 
     def initialize(self) -> None:
         self.set_start_date(2024, 3, 28)
@@ -99,29 +113,37 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         if bar.end_time.time() >= _STOP_AND_FLATTEN:
             self._stopped_for_day = True
             self._reset_detection()
+            signal = "HOLD"
             if self._in_position or self._entry_pending:
                 self.ctx.liquidate(self._symbol)
                 self.ctx.log(f"SESSION FLATTEN SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')}")
                 self._in_position = False
                 self._entry_pending = False
                 self._bars_until_exit_signal = 0
+                signal = "EXIT"
+            self._publish_decision(bar, signal)
             return
 
         if self._stopped_for_day or bar.end_time.time() < _DETECTION_START:
             self._reset_detection()
+            self._publish_decision(bar, "HOLD")
             return
 
         if self._in_position:
             self._bars_until_exit_signal -= 1
+            signal = "HOLD"
             if self._bars_until_exit_signal <= 0:
                 self.ctx.liquidate(self._symbol)
                 self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
                 self._in_position = False
                 self._bars_until_exit_signal = 0
                 self._reset_detection()
+                signal = "EXIT"
+            self._publish_decision(bar, signal)
             return
 
         if self._entry_pending:
+            self._publish_decision(bar, "HOLD")
             return
 
         if bar.close > bar.open:
@@ -135,6 +157,10 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._entry_pending = True
             self._green_streak = 0
             self.ctx.log(f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
+            self._publish_decision(bar, "ENTER")
+            return
+
+        self._publish_decision(bar, "HOLD")
 
     def on_order_event(self, event: OrderEvent) -> None:
         if event.direction == Direction.LONG:
@@ -193,3 +219,8 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self.ctx.liquidate(self._symbol)
             self._in_position = False
             self._entry_pending = False
+
+
+# Live runtime dynamic import convention:
+# ``deployment_validation`` -> ``DeploymentValidationAlgorithm``.
+DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen
