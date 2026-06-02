@@ -10,7 +10,7 @@ Status: internal validation strategy, not financial advice and not an alpha clai
 - Entry pattern: two consecutive green minute bars, where `green = close > open`.
 - Entry order: after the second green bar, submit long entry. Intended Engine Lab run mode is `fill_mode=next_bar_open`, so the entry fills on the following minute bar open.
 - Position: one open position at a time via `SetHoldings(symbol, 1.0)`.
-- Exit: count bar closes while in position, including the entry bar. Submit `Liquidate(symbol)` on the fifth bar in the pattern.
+- Exit: count bar closes while in position, including the entry-fill bar. Submit `Liquidate(symbol)` on the third held bar, which is the fifth bar in the two-green-bar pattern.
 - Re-entry: after the exit fill, reset the detector. Bars from the open trade cannot seed the next pattern. Multiple trades per day are allowed.
 
 ## Implementations

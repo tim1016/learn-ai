@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "name": "Deployment Validation",
-  "description": "Deploy-control-plane fixture for the hand-coded deployment_validation strategy. The canonical algorithm lives in app.engine.strategy.algorithms.deployment_validation; this spec pins symbol, 1-minute resolution, live runtime metadata, and decision schema for deployment ledgers.",
+  "description": "Deploy-control-plane fixture for the hand-coded deployment_validation strategy. The canonical algorithm lives in app.engine.strategy.algorithms.deployment_validation; this spec pins symbol, 1-minute resolution, and live runtime metadata. The strategy emits only core decision fields, so no strategy-specific decision_columns are declared here.",
   "symbols": ["SPY"],
   "resolution": {"period_minutes": 1},
   "indicators": [],

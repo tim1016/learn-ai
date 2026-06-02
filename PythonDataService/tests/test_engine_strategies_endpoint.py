@@ -155,6 +155,7 @@ if __name__ == "__main__":
 
     tests = [
         test_orb_is_registered_with_correct_metadata,
+        test_deployment_validation_has_matching_spec_fixture,
         test_all_registered_strategies_have_algorithm_and_gotchas,
         test_orb_gotchas_include_traded_today_guard,
         test_params_schema_is_round_trippable_json,

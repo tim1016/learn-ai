@@ -30,12 +30,28 @@ def test_deployment_validation_spec_fixture_loads() -> None:
     assert json.loads(path.read_text(encoding="utf-8"))["name"] == "Deployment Validation"
 
 
+def _assert_time_call(node: ast.AST, hour: int, minute: int) -> None:
+    assert isinstance(node, ast.Call)
+    assert isinstance(node.func, ast.Name)
+    assert node.func.id == "time"
+    assert [arg.value for arg in node.args if isinstance(arg, ast.Constant)] == [hour, minute]
+
+
 def test_deployment_validation_qc_shadow_copy_is_parseable() -> None:
     path = REPO_ROOT / "references" / "qc-shadow" / "DeploymentValidationAlgorithm.py"
     source = path.read_text(encoding="utf-8")
 
-    ast.parse(source)
+    module = ast.parse(source)
+    cls = next(
+        node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "DeploymentValidationAlgorithm"
+    )
+    assigns = {
+        target.id: node.value
+        for node in cls.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
 
-    assert "class DeploymentValidationAlgorithm" in source
-    assert "START_AFTER = time(9, 45)" in source
-    assert "STOP_AND_FLATTEN = time(15, 45)" in source
+    _assert_time_call(assigns["START_AFTER"], 9, 45)
+    _assert_time_call(assigns["STOP_AND_FLATTEN"], 15, 45)

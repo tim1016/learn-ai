@@ -11,6 +11,11 @@ This QC copy mirrors the deployment-validation intent: start detecting at the
 (``close > open``), enter on the next bar, submit liquidation on the fifth bar,
 reset detection after exits, allow multiple trades per day, and stop/flatten at
 15:45 ET.
+
+LEAN note: this audit copy submits entries with ``SetHoldings`` from ``OnData``
+after the two-bar confirmation. It is the committed source artifact bound to the
+QuantConnect backtest gate; exact fill-price parity is checked by the Python
+engine, whose deployment run uses ``fill_mode=next_bar_open``.
 """
 
 # ruff: noqa: F403, F405
