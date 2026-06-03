@@ -253,6 +253,22 @@ async def test_list_open_orders_filters_to_connected_account() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_open_orders_includes_own_orders_with_empty_account() -> None:
+    """Regression (#441): orders we place don't set order.account (ib_async
+    leaves it ""), so an empty account is OUR order and must be included — not
+    filtered out as foreign. Previously /orders/open hid our own held orders."""
+    trades = [
+        _trade_namespace(order_id=44, account=""),  # our own order, account unset
+        _trade_namespace(order_id=45, account="DU9999999"),  # genuinely foreign
+    ]
+    client = _client()
+    client.ib.reqAllOpenOrdersAsync = AsyncMock(return_value=trades)
+
+    out = await list_open_orders(client)
+    assert [o.order_id for o in out] == [44]
+
+
+@pytest.mark.asyncio
 async def test_cancel_paper_order_calls_cancel_order_with_matching_trade() -> None:
     trade = _trade_namespace(order_id=42)
     client = _client()
@@ -306,6 +322,51 @@ async def test_stream_order_events_emits_status_transitions() -> None:
 
     assert out[0].status == "Submitted"
     assert out[1].status == "Filled"
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_attributes_own_orders_with_empty_account() -> None:
+    """Regression (#441): the lost-fill incident. Orders we place leave
+    order.account == "" (ib_async default), and the old filter
+    ``order.account != account_id`` dropped them ("" != "DU…") — so the engine
+    never saw its own fills, the position tally stayed 0 (→ "unattributed"
+    contamination), and a false lost-fill fatal halt fired. Our own order
+    (empty account) must be streamed, not skipped."""
+    trade_v1 = _trade_namespace(order_id=7, account="", status_str="Submitted")
+    trade_v2 = _trade_namespace(
+        order_id=7, account="", status_str="Filled", filled=1366, remaining=0
+    )
+    snapshots = iter([[trade_v1], [trade_v2], [trade_v2]])
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 2:
+            break
+
+    assert [e.status for e in out] == ["Submitted", "Filled"]
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_still_skips_genuinely_foreign_account() -> None:
+    """A *non-empty* account that differs from the connected one is a real
+    foreign order (another client on the gateway) and stays filtered."""
+    foreign = _trade_namespace(order_id=99, account="DU9999999", status_str="Filled")
+    own = _trade_namespace(order_id=7, account="", status_str="Filled", filled=10, remaining=0)
+    snapshots = iter([[foreign, own], [foreign, own], [foreign, own]])
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 1:
+            break
+
+    # Only the own (empty-account) order is streamed; the foreign one is skipped.
+    assert all(e.order_id == 7 for e in out)
 
 
 @pytest.mark.asyncio
