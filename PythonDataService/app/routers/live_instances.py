@@ -267,17 +267,23 @@ def _strategy_state(
 
 
 def _start_defaults(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+    root: Path, live_binding: LiveBinding | None, runs: list[dict], *, paper_mode: bool
 ) -> InstanceStartDefaults | None:
     """Pre-filled Start-card values for the console (#416).
 
     Resolves the same run the rest of the status view does (the visible live
     run, else the latest evidence run) and seeds ``strategy`` from that ledger's
-    ``strategy_key`` — the algorithm module the ledger is reconciled to. The
-    other four knobs use their request defaults. ``None`` when the instance has
-    no run to resolve a ledger from (nothing-deployed); a ledger without a
-    ``strategy_key`` (legacy) yields an empty ``strategy`` for the operator to
-    supply.
+    ``strategy_key`` — the algorithm module the ledger is reconciled to. ``None``
+    when the instance has no run to resolve a ledger from (nothing-deployed); a
+    ledger without a ``strategy_key`` (legacy) yields an empty ``strategy`` for
+    the operator to supply.
+
+    ``readonly`` defaults to ``False`` (place orders) **only** when IBKR is in
+    paper mode — orders are paper, so trading-by-default is safe and what the
+    operator expects. In live mode it stays ``True`` (shadow / no orders) so a
+    real-money run never auto-trades from a server-authored default; the operator
+    must opt in explicitly. ``readonly`` is the suppress-orders flag, independent
+    of account type.
     """
     run_dir: Path | None = None
     if live_binding is not None:
@@ -286,11 +292,14 @@ def _start_defaults(
         run_dir = Path(runs[0]["run_dir"])
     if run_dir is None:
         return None
+    readonly_default = not paper_mode
     try:
         ledger = _read_ledger(run_dir)
     except (OSError, ValueError, KeyError):
-        return InstanceStartDefaults()
-    return InstanceStartDefaults(strategy=str(ledger.get("strategy_key", "")))
+        return InstanceStartDefaults(readonly=readonly_default)
+    return InstanceStartDefaults(
+        strategy=str(ledger.get("strategy_key", "")), readonly=readonly_default
+    )
 
 
 @router.get("", response_model=list[LiveInstanceSummary])
@@ -550,7 +559,9 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         latest_decision=latest_decision,
         decision_columns=decision_columns,
         broker=_instance_broker(root, sid),
-        start_defaults=_start_defaults(root, live_binding, runs),
+        start_defaults=_start_defaults(
+            root, live_binding, runs, paper_mode=getattr(settings, "mode", "paper") == "paper"
+        ),
         fetched_at_ms=_now_ms(),
     )
 

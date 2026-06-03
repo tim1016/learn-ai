@@ -86,6 +86,39 @@ describe('BrokerStartStopCardComponent', () => {
     expect(strategy?.value).toBe('spy_ema_crossover');
   });
 
+  it('shows shadow-mode ON (no orders) when the server default is readonly', () => {
+    const { fixture } = render(makeStatus()); // start_defaults.readonly === true
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('no orders placed');
+  });
+
+  it('reflects a readonly=false server default as "orders will be placed" and starts non-readonly', async () => {
+    const { fixture, svc } = render(
+      makeStatus({
+        start_defaults: {
+          strategy: 'rsi_mean_reversion',
+          readonly: false,
+          hydrate_policy: 'optional',
+          max_orders_per_day: 7,
+          ibkr_host: '10.0.0.5',
+        },
+      }),
+    );
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('orders will be placed');
+    expect(text).not.toContain('no orders placed');
+
+    button(fixture, 'Start Trading').click();
+    await Promise.resolve();
+
+    expect(svc.startHostRunner).toHaveBeenCalledWith('run-old', {
+      readonly: false,
+      hydrate_policy: 'optional',
+      strategy: 'rsi_mean_reversion',
+      max_orders_per_day: 7,
+      ibkr_host: '10.0.0.5',
+    });
+  });
+
   it('starts the evidence run with the seeded request and emits changed', async () => {
     const { fixture, svc, component } = render(makeStatus());
     const changed = vi.fn();
