@@ -286,7 +286,12 @@ export class BrokerInstancesComponent {
 
   healthRows(s: LiveInstanceStatus): HealthRow[] {
     const engineOk = s.process.state === 'running' || s.process.state === 'stopping';
-    const brokerOk = s.broker !== null;
+    // Broker connectivity is a global fact (one IBKR session per gateway),
+    // sourced from the live /api/broker/health probe via the connectivity
+    // service — NOT from this instance's live_state sidecar. A bot that
+    // crashed before writing its sidecar must not make the broker read
+    // "NOT CONNECTED" while IBKR is in fact connected.
+    const broker = this.connectivity.brokerState();
     const rulesOk = s.readiness?.verdict === 'READY';
     const rulesWarn = s.readiness?.verdict === 'DEGRADED' || s.readiness?.verdict === 'UNKNOWN';
     return [
@@ -301,10 +306,10 @@ export class BrokerInstancesComponent {
       {
         icon: 'pi pi-link',
         label: 'Broker Connection (IBKR)',
-        status: brokerOk ? 'CONNECTED' : 'NOT CONNECTED',
-        tone: brokerOk ? 'ok' : 'bad',
-        technicalKey: 'broker',
-        guide: 'This shows whether the dashboard has an account slice for this bot.',
+        status: broker === 'ok' ? 'CONNECTED' : broker === 'unknown' ? 'CHECKING…' : 'NOT CONNECTED',
+        tone: broker === 'ok' ? 'ok' : broker === 'unknown' ? 'warn' : 'bad',
+        technicalKey: 'broker.connected',
+        guide: 'Whether the dashboard holds a live IBKR session. Polled every 5 seconds, independent of any single bot — a stopped or crashed bot does not turn this red.',
       },
       {
         icon: 'pi pi-list-check',
