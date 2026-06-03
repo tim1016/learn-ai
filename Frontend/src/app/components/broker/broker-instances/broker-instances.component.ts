@@ -339,12 +339,59 @@ export class BrokerInstancesComponent {
     if (s.process.state === 'running' || s.process.state === 'stopping') return null;
 
     const code = e.exit_code;
-    // Cold-start / seed-day: hydration rejected because there is no prior state.
+    // Exit-reason FIRST. The hydration receipt can read accepted=false /
+    // "missing" even on a healthy cold start (hydrate_policy=optional), so the
+    // *reason the run ended* — not the receipt — must drive the headline.
+    // Keying on the receipt first mis-reported a fatal_halt as a seed-day issue.
+
+    // Clean / operator-initiated stops — informational, not alarming.
+    if (
+      e.exit_reason === 'normal' ||
+      e.exit_reason === 'force_flat_complete' ||
+      e.exit_reason === 'keyboard_interrupt' ||
+      e.exit_reason === 'signal'
+    ) {
+      return {
+        tone: 'ok',
+        title: 'Last session ended cleanly',
+        detail: `The previous run stopped without error${code != null ? ` (exit ${code})` : ''}.`,
+        fix: 'Press Start Trading to begin a new session.',
+      };
+    }
+    // Safety halt — the engine detected a problem mid-session and stopped to
+    // protect the account. This can leave an OPEN position the bot is no
+    // longer managing, so it's the highest-priority thing to surface.
+    if (e.exit_reason === 'fatal_halt') {
+      return {
+        tone: 'bad',
+        title: 'Safety halt — the bot stopped to protect the account',
+        detail: `The engine hit a fatal halt mid-session${code != null ? ` (exit ${code})` : ''} — e.g. an order it could not reconcile. A position may still be open at the broker.`,
+        fix: 'Check the broker account, reconcile, and flatten any position the bot is no longer tracking before restarting.',
+      };
+    }
+    if (e.exit_reason === 'max_orders_exceeded') {
+      return {
+        tone: 'warn',
+        title: 'Daily order cap reached',
+        detail: 'The last run stopped after hitting its max-orders-per-day limit.',
+        fix: 'This resets next session. Raise the cap on redeploy if that was intentional.',
+      };
+    }
+    if (e.exit_reason === 'recovery_flatten') {
+      return {
+        tone: 'warn',
+        title: 'Stopped and flattened on recovery',
+        detail: 'The run hit an error and the recovery path flattened positions before exiting.',
+        fix: 'Review the run log for the underlying error before restarting.',
+      };
+    }
+    // Cold-start / seed-day: only reached for non-halt exits (e.g. an exit-4
+    // hydration rejection under hydrate_policy=require with no prior state).
     if (e.hydration_accepted === false && e.hydration_failure_reason === 'missing') {
       return {
         tone: 'warn',
         title: 'Needs a seed day (no saved indicator state)',
-        detail: 'The last run stopped because it had no saved indicator state to resume from — expected on a first run.',
+        detail: 'The run had no saved indicator state to resume from — expected on a first run.',
         fix: 'Redeploy or start with Indicator State Hydration set to Optional to run a seed day. After one clean session it can use Required.',
       };
     }
@@ -357,24 +404,7 @@ export class BrokerInstancesComponent {
         fix: 'Start with Hydration = Optional to cold-start if the saved state is no longer valid, and review the hydration receipt.',
       };
     }
-    // Clean exits — informational, not alarming.
-    if (e.exit_reason === 'normal' || e.exit_reason === 'force_flat_complete') {
-      return {
-        tone: 'ok',
-        title: 'Last session ended cleanly',
-        detail: `The previous run finished normally${code != null ? ` (exit ${code})` : ''}.`,
-        fix: 'Press Start Trading to begin a new session.',
-      };
-    }
-    if (e.exit_reason === 'max_orders_exceeded') {
-      return {
-        tone: 'warn',
-        title: 'Daily order cap reached',
-        detail: 'The last run stopped after hitting its max-orders-per-day limit.',
-        fix: 'This resets next session. Raise the cap on redeploy if that was intentional.',
-      };
-    }
-    // Generic failure (exception / signal / fatal_halt / unknown).
+    // Generic failure (exception / unknown, with no hydration cause).
     return {
       tone: 'bad',
       title: 'Last session ended unexpectedly',

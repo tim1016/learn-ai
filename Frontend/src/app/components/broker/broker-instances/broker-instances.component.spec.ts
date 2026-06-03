@@ -362,6 +362,39 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('Optional');
   });
 
+  it('reports a fatal_halt as a safety halt, not a seed-day issue, even when the receipt says missing', async () => {
+    // Regression: a healthy cold start (hydrate_policy=optional) leaves the
+    // receipt at accepted=false/"missing", so a later fatal_halt was being
+    // mis-labeled as "needs a seed day". Exit reason must win over the receipt.
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        last_exit: {
+          run_id: 'run-halt',
+          ended_at_ms: 200,
+          exit_code: 1,
+          exit_reason: 'fatal_halt',
+          hydration_accepted: false,
+          hydration_failure_reason: 'missing',
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Safety halt');
+    expect(text).toContain('position may still be open');
+    expect(text).not.toContain('seed day');
+  });
+
   it('does not show a "why it stopped" panel for a live instance', async () => {
     // last_exit is null while a run is live; the panel must stay hidden.
     const { fixture, component } = setup();
