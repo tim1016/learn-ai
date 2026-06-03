@@ -132,3 +132,14 @@ def test_stops_detecting_and_flattens_at_1545() -> None:
 
 def test_live_start_convention_alias_resolves_strategy_class() -> None:
     assert DeploymentValidationAlgorithm is DeploymentValidationConsecutiveGreen
+
+
+def test_exposes_consolidator_period_for_indicator_hydration() -> None:
+    # Regression: indicator_state.hydrate() reads ``strategy.CONSOLIDATOR_PERIOD_MIN``
+    # unconditionally during live-run startup. The class previously omitted it,
+    # so every live run of this strategy crashed with AttributeError before any
+    # bar was processed (exit_code=3). The period must match the 1-minute
+    # consolidator registered in initialize().
+    strategy = DeploymentValidationConsecutiveGreen()
+
+    assert strategy.CONSOLIDATOR_PERIOD_MIN == 1
