@@ -119,7 +119,9 @@ async function flush() {
 
 let activeFixture: { destroy(): void } | null = null;
 
-function setup() {
+type BrokerLinkState = 'ok' | 'down' | 'warn' | 'unknown';
+
+function setup(connectivityOverrides: { brokerState?: () => BrokerLinkState } = {}) {
   const svc = new FakeLiveRunsService();
   // The console embeds the connectivity strip and the start/stop card, which
   // inject BrokerConnectivityService. Provide a quiet fake so these tests don't
@@ -129,7 +131,11 @@ function setup() {
     blockers: () => [],
     daemonDown: () => false,
     fleetBlocksStarts: () => false,
+    // The broker-connection health row reads this (the real probe), not the
+    // per-instance sidecar. Default to connected; tests override per case.
+    brokerState: () => 'ok' as BrokerLinkState,
     reload: () => {},
+    ...connectivityOverrides,
   };
   TestBed.configureTestingModule({
     providers: [
@@ -285,6 +291,41 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('spy_ema_ns'); // details still expose bot_order_namespace
     expect(text).toContain('SPY'); // owned position symbol
     expect(text).toContain('1 pending');
+  });
+
+  it('keeps the broker row CONNECTED from the live probe even when the instance has no sidecar', async () => {
+    // Regression: the broker-connection row used to read `s.broker !== null`,
+    // so a bot that crashed before writing its live_state sidecar showed
+    // "NOT CONNECTED" while IBKR was in fact connected. The row now reads the
+    // global /api/broker/health probe via connectivity.brokerState().
+    const { fixture, component, svc } = setup({ brokerState: () => 'ok' });
+    svc.getInstanceStatus.mockResolvedValue(makeStatus({ broker: null }));
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('CONNECTED');
+    expect(text).not.toContain('NOT CONNECTED');
+  });
+
+  it('shows NOT CONNECTED when the broker probe is down, regardless of the sidecar', async () => {
+    // A present sidecar must not paint the broker green when IBKR is actually
+    // disconnected — the inverse of the regression above.
+    const { fixture, component } = setup({ brokerState: () => 'down' });
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('NOT CONNECTED');
   });
 
   it('renders account contamination and the inherited banner on the instance', async () => {
