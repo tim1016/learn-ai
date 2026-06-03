@@ -461,10 +461,18 @@ def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
         except (OSError, json.JSONDecodeError):
             receipt = None
         if isinstance(receipt, dict):
-            hydration_accepted = receipt.get("accepted")
+            # Type-guard before handing to the Pydantic model: a hand-edited or
+            # corrupt receipt with a non-bool ``accepted`` would raise a
+            # ValidationError and 500 the whole status endpoint. A bad receipt
+            # should degrade to "unknown", not break status.
+            accepted = receipt.get("accepted")
+            if isinstance(accepted, bool):
+                hydration_accepted = accepted
             validation = receipt.get("validation")
             if isinstance(validation, dict):
-                hydration_failure_reason = validation.get("failure_reason")
+                reason = validation.get("failure_reason")
+                if isinstance(reason, str):
+                    hydration_failure_reason = reason
 
     return InstanceLastExit(
         run_id=sidecar.run_id,

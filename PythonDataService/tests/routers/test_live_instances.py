@@ -925,3 +925,27 @@ async def test_status_last_exit_absent_while_run_is_live(
 
     assert response.status_code == 200
     assert response.json()["last_exit"] is None
+
+
+async def test_status_last_exit_tolerates_malformed_hydration_receipt(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt/hand-edited receipt (non-bool ``accepted``, non-str
+    ``failure_reason``) must not 500 the status endpoint — the hydration fields
+    degrade to None while the run's exit is still reported."""
+    app, root = app_with_root
+    _write_ledger(root, "run-badreceipt", "spy_ema_paper", 100)
+    _write_run_status(root, "run-badreceipt", ended_at_ms=200, exit_code=4, exit_reason="exception")
+    (root / "run-badreceipt" / "indicator_state_hydration.json").write_text(
+        json.dumps({"accepted": "nope", "validation": {"failure_reason": 123}}), encoding="utf-8"
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    last_exit = response.json()["last_exit"]
+    assert last_exit["exit_code"] == 4
+    assert last_exit["hydration_accepted"] is None
+    assert last_exit["hydration_failure_reason"] is None
