@@ -545,6 +545,27 @@ class InstanceStartDefaults(BaseModel):
     ibkr_host: str = "127.0.0.1"
 
 
+class InstanceLastExit(BaseModel):
+    """Why the instance's most recent run ended.
+
+    Composed from the run's ``run_status.json`` (exit code/reason) and, when
+    present, the indicator-state hydration receipt. Surfaced on a terminated
+    run so the console can explain *why* an instance is STOPPED — e.g. a cold
+    start that failed under ``hydrate_policy=require`` shows
+    ``hydration_failure_reason="missing"``, which the UI turns into seed-day
+    guidance.
+    """
+
+    run_id: str
+    ended_at_ms: int | None = None
+    exit_code: int | None = None
+    exit_reason: ExitReason | None = None
+    # From indicator_state_hydration.json, when the run wrote one. ``accepted``
+    # False with ``failure_reason="missing"`` is the cold-start/seed-day case.
+    hydration_accepted: bool | None = None
+    hydration_failure_reason: str | None = None
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -564,6 +585,10 @@ class LiveInstanceStatus(BaseModel):
     # Pre-filled Start-card values (#416); None when the instance has no run to
     # resolve a ledger from (nothing-deployed).
     start_defaults: InstanceStartDefaults | None = None
+    # Why the most recent run ended, when it has terminated. None while a run is
+    # live or when nothing was ever deployed. Lets the console explain a STOPPED
+    # instance instead of leaving the operator to read run_status.json by hand.
+    last_exit: InstanceLastExit | None = None
     fetched_at_ms: int
 
 

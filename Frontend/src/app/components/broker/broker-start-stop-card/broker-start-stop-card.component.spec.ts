@@ -24,6 +24,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       max_orders_per_day: 7,
       ibkr_host: '10.0.0.5',
     },
+    last_exit: null,
     fetched_at_ms: 1,
     ...overrides,
   };

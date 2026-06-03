@@ -53,6 +53,13 @@ interface ChecklistRow {
   fix: string;
 }
 
+interface LastExitNotice {
+  tone: 'ok' | 'warn' | 'bad';
+  title: string;
+  detail: string;
+  fix: string;
+}
+
 interface IntentChoice {
   action: DesiredStateAction;
   icon: string;
@@ -320,6 +327,60 @@ export class BrokerInstancesComponent {
         guide: 'These checks decide whether the bot is allowed to act on the next signal.',
       },
     ];
+  }
+
+  /** Human "why did the last session stop?" surface. Reads the terminated
+   * run's exit reason + hydration receipt (backend `last_exit`) so a STOPPED
+   * instance explains itself instead of leaving the operator to read logs.
+   * Returns null while the instance is live or nothing has run. */
+  lastExitNotice(s: LiveInstanceStatus): LastExitNotice | null {
+    const e = s.last_exit;
+    if (!e) return null;
+    if (s.process.state === 'running' || s.process.state === 'stopping') return null;
+
+    const code = e.exit_code;
+    // Cold-start / seed-day: hydration rejected because there is no prior state.
+    if (e.hydration_accepted === false && e.hydration_failure_reason === 'missing') {
+      return {
+        tone: 'warn',
+        title: 'Needs a seed day (no saved indicator state)',
+        detail: 'The last run stopped because it had no saved indicator state to resume from — expected on a first run.',
+        fix: 'Redeploy or start with Indicator State Hydration set to Optional to run a seed day. After one clean session it can use Required.',
+      };
+    }
+    // Other hydration rejections (corrupt / stale / identity mismatch).
+    if (e.hydration_accepted === false && e.hydration_failure_reason) {
+      return {
+        tone: 'bad',
+        title: 'Saved indicator state could not be used',
+        detail: `Indicator-state hydration was rejected (${e.hydration_failure_reason}).`,
+        fix: 'Start with Hydration = Optional to cold-start if the saved state is no longer valid, and review the hydration receipt.',
+      };
+    }
+    // Clean exits — informational, not alarming.
+    if (e.exit_reason === 'normal' || e.exit_reason === 'force_flat_complete') {
+      return {
+        tone: 'ok',
+        title: 'Last session ended cleanly',
+        detail: `The previous run finished normally${code != null ? ` (exit ${code})` : ''}.`,
+        fix: 'Press Start Trading to begin a new session.',
+      };
+    }
+    if (e.exit_reason === 'max_orders_exceeded') {
+      return {
+        tone: 'warn',
+        title: 'Daily order cap reached',
+        detail: 'The last run stopped after hitting its max-orders-per-day limit.',
+        fix: 'This resets next session. Raise the cap on redeploy if that was intentional.',
+      };
+    }
+    // Generic failure (exception / signal / fatal_halt / unknown).
+    return {
+      tone: 'bad',
+      title: 'Last session ended unexpectedly',
+      detail: `The previous run exited${code != null ? ` with code ${code}` : ''}${e.exit_reason ? ` (${e.exit_reason})` : ''}.`,
+      fix: 'Open the run log for the full detail.',
+    };
   }
 
   checklistRows(r: ReadinessVector | null): ChecklistRow[] {

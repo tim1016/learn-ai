@@ -65,6 +65,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       max_orders_per_day: 4,
       ibkr_host: '127.0.0.1',
     },
+    last_exit: null,
     fetched_at_ms: 1,
     ...overrides,
   };
@@ -326,6 +327,53 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).toContain('NOT CONNECTED');
+  });
+
+  it('explains why a stopped instance stopped, with seed-day guidance for a cold start', async () => {
+    // The console must surface *why* a run ended instead of a bare STOPPED. A
+    // cold start that exits 4 with hydration failure_reason "missing" should
+    // render the seed-day (Optional) remediation.
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        last_exit: {
+          run_id: 'run-cold',
+          ended_at_ms: 200,
+          exit_code: 4,
+          exit_reason: 'exception',
+          hydration_accepted: false,
+          hydration_failure_reason: 'missing',
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Why It Stopped');
+    expect(text).toContain('seed day');
+    expect(text).toContain('Optional');
+  });
+
+  it('does not show a "why it stopped" panel for a live instance', async () => {
+    // last_exit is null while a run is live; the panel must stay hidden.
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).not.toContain('Why It Stopped');
   });
 
   it('renders account contamination and the inherited banner on the instance', async () => {

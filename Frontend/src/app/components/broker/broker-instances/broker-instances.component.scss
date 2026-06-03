@@ -562,3 +562,29 @@
     text-align: left;
   }
 }
+
+.last-exit-card {
+  border-left-width: 4px;
+  border-left-style: solid;
+
+  &.ok {
+    border-left-color: var(--bull);
+  }
+
+  &.warn {
+    border-left-color: var(--warn);
+  }
+
+  &.bad {
+    border-left-color: var(--bear);
+  }
+
+  .exit-title {
+    margin: 0.25rem 0 0.5rem;
+  }
+
+  .exit-fix {
+    margin-top: 0.5rem;
+    color: var(--text-muted);
+  }
+}
