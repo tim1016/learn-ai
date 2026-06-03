@@ -56,6 +56,10 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         fleet_dirty_blocks_starts=False,
+        # Mirror the real default env (IBKR_MODE=paper, IBKR_READONLY=false) so
+        # start_defaults resolves to place-orders; dedicated tests override.
+        mode="paper",
+        readonly=False,
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
     from app.main import app
@@ -864,6 +868,7 @@ async def test_start_defaults_readonly_false_in_paper_mode(
         live_runner_daemon_url="http://daemon",
         fleet_dirty_blocks_starts=False,
         mode="paper",
+        readonly=False,
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
     _set_daemon(monkeypatch, process={"state": "idle"})
@@ -887,6 +892,56 @@ async def test_start_defaults_readonly_true_in_live_mode(
         live_runner_daemon_url="http://daemon",
         fleet_dirty_blocks_starts=False,
         mode="live",
+        readonly=False,
+    )
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    assert response.json()["start_defaults"]["readonly"] is True
+
+
+async def test_start_defaults_honors_ibkr_readonly_in_paper_mode(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IBKR_READONLY=true must keep the Start card in shadow even in paper mode —
+    the engine refuses orders under operator lockdown, so the UI must not promise
+    them. (CodeRabbit #436.)"""
+    app, root = app_with_root
+    _write_ledger(root, "run-lockdown", "spy_ema_paper", 100)
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        fleet_dirty_blocks_starts=False,
+        mode="paper",
+        readonly=True,
+    )
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    assert response.json()["start_defaults"]["readonly"] is True
+
+
+async def test_start_defaults_fail_closed_when_mode_missing(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing/unknown ``mode`` (config drift, partial rollout) must fail closed
+    to shadow — never default to placing orders on a possibly-live account.
+    (CodeRabbit #436.)"""
+    app, root = app_with_root
+    _write_ledger(root, "run-nomode", "spy_ema_paper", 100)
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        fleet_dirty_blocks_starts=False,
+        readonly=False,  # even with orders allowed, an absent mode stays shadow
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
     _set_daemon(monkeypatch, process={"state": "idle"})
