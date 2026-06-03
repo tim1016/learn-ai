@@ -33,24 +33,27 @@ if [[ -n "$ORPHANS" ]]; then
 fi
 
 # `compose up --no-cache` is not supported by the docker-compose plugin
-# (the flag is rejected at parse time). Build first when --no-cache is
-# requested, then up. The cached path can fold build into up as before.
+# (the flag is rejected at parse time), so both paths build as a separate
+# step. Keeping `build` separate is also what preserves build-failure
+# visibility: a genuine image-build failure aborts the script under `set -e`
+# instead of being swallowed by the `|| true` that the *up* step needs (see
+# below). Folding `--build` into `up` would hide the build's exit status.
 # NOTE: `podman compose up` exits non-zero when a `depends_on:
 # service_healthy` gate doesn't flip in time — it abandons the dependent in
 # Created (see the recovery block below). Under `set -e` that non-zero exit
 # would kill the script before the rescue logic runs, stranding the
-# dependents permanently. Guard with `|| true`: the Created-recovery blocks
-# and the 240s health-wait loop below are the authoritative verdict and will
-# exit 1 if anything is genuinely unhealthy.
+# dependents permanently. Guard *only the up* with `|| true`: the
+# Created-recovery blocks and the 240s health-wait loop below are the
+# authoritative verdict and will exit 1 if anything is genuinely unhealthy.
 if [[ -n "$NO_CACHE" ]]; then
   echo "==> Building images from scratch..."
   podman compose build --no-cache --pull
-  echo "==> Starting all services..."
-  podman compose up -d --force-recreate || true
 else
-  echo "==> Building and starting all services..."
-  podman compose up -d --build --force-recreate || true
+  echo "==> Building images..."
+  podman compose build
 fi
+echo "==> Starting all services..."
+podman compose up -d --force-recreate || true
 
 # Recover services left in Created. When a `depends_on: service_healthy`
 # target takes longer than expected to flip healthy, compose abandons the
