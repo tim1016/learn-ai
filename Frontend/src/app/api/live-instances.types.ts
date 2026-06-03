@@ -107,7 +107,23 @@ export interface LiveInstanceStatus {
   broker: InstanceBrokerView | null;
   /** Pre-filled Start-card values (#416); null when nothing is deployed. */
   start_defaults: InstanceStartDefaults | null;
+  /** Why the most recent run ended; null while a run is live or nothing was
+   * ever deployed. Drives the console's "why it stopped" surface. */
+  last_exit: InstanceLastExit | null;
   fetched_at_ms: number;
+}
+
+/** Why an instance's most recent (terminated) run ended. */
+export interface InstanceLastExit {
+  run_id: string;
+  ended_at_ms: number | null;
+  exit_code: number | null;
+  exit_reason: string | null;
+  /** From the indicator-state hydration receipt, when the run wrote one.
+   * `hydration_accepted === false` with `hydration_failure_reason === 'missing'`
+   * is the cold-start / seed-day case. */
+  hydration_accepted: boolean | null;
+  hydration_failure_reason: string | null;
 }
 
 export interface LiveInstanceSummary {

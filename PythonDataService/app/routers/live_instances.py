@@ -38,6 +38,7 @@ from app.routers.live_runs import (
     _now_ms,
     _read_ledger,
     _read_parquet_tail,
+    _read_sidecar,
     _resolve_desired_state,
     _validate_path_segment,
     build_command_timeline,
@@ -56,6 +57,7 @@ from app.schemas.live_runs import (
     HostRunnerStartRequest,
     HostRunnerStopRequest,
     InstanceBrokerView,
+    InstanceLastExit,
     InstanceProcessView,
     InstanceStartDefaults,
     IntentActuation,
@@ -430,6 +432,50 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
     return _parse_action_response(result)
 
 
+def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
+    """Why the instance's newest run ended — for the console's STOPPED-reason
+    surface. Returns None while a run is still live (no terminal ``ended_at_ms``)
+    or when nothing was ever deployed.
+
+    Reads the run's ``run_status.json`` for exit code/reason, and the
+    indicator-state hydration receipt (``indicator_state_hydration.json``) when
+    present so a cold-start rejection (``accepted=false`` /
+    ``failure_reason="missing"``) is explained rather than left as a bare exit 4.
+    """
+    if not runs:
+        return None
+    latest = runs[0]
+    run_dir = Path(latest["run_dir"])
+    sidecar = _read_sidecar(run_dir)
+    # Only surface a *terminated* run. A live run has ended_at_ms=None; showing a
+    # stale exit for it would contradict the RUNNING badge.
+    if sidecar is None or sidecar.ended_at_ms is None:
+        return None
+
+    hydration_accepted: bool | None = None
+    hydration_failure_reason: str | None = None
+    receipt_path = run_dir / "indicator_state_hydration.json"
+    if receipt_path.exists():
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            receipt = None
+        if isinstance(receipt, dict):
+            hydration_accepted = receipt.get("accepted")
+            validation = receipt.get("validation")
+            if isinstance(validation, dict):
+                hydration_failure_reason = validation.get("failure_reason")
+
+    return InstanceLastExit(
+        run_id=sidecar.run_id,
+        ended_at_ms=sidecar.ended_at_ms,
+        exit_code=sidecar.exit_code,
+        exit_reason=sidecar.exit_reason,
+        hydration_accepted=hydration_accepted,
+        hydration_failure_reason=hydration_failure_reason,
+    )
+
+
 def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     """The instance's namespace-attributed broker slice from its live-state
     sidecar (ADR 0005, #398). Ownership is keyed on bot_order_namespace;
@@ -551,6 +597,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         decision_columns=decision_columns,
         broker=_instance_broker(root, sid),
         start_defaults=_start_defaults(root, live_binding, runs),
+        last_exit=_instance_last_exit(runs),
         fetched_at_ms=_now_ms(),
     )
 

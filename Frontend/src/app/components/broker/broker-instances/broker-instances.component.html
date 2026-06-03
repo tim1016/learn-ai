@@ -110,6 +110,21 @@
           </div>
         </section>
 
+        @let exit = lastExitNotice(s);
+        @if (exit) {
+          <section class="card last-exit-card" [class.ok]="exit.tone === 'ok'" [class.warn]="exit.tone === 'warn'" [class.bad]="exit.tone === 'bad'" aria-label="Why the last session stopped">
+            <header class="card-header">
+              <div>
+                <h2>Why It Stopped</h2>
+                <p>What happened to the most recent session.</p>
+              </div>
+            </header>
+            <p class="exit-title"><strong>{{ exit.title }}</strong></p>
+            <p class="plain-text">{{ exit.detail }}</p>
+            <p class="exit-fix">{{ exit.fix }}</p>
+          </section>
+        }
+
         @let r = s.readiness;
         <section class="card checklist-card" aria-labelledby="checklist-heading">
           <header class="card-header">

@@ -847,3 +847,81 @@ async def test_start_run_rejects_unsafe_run_id_400(
 
     assert response.status_code == 400
     assert called is False
+
+
+def _write_run_status(
+    root: Path,
+    run_id: str,
+    *,
+    ended_at_ms: int | None,
+    exit_code: int | None,
+    exit_reason: str | None,
+) -> None:
+    (root / run_id / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": run_id,
+                "started_at_ms": 1,
+                "last_update_ms": 2,
+                "ended_at_ms": ended_at_ms,
+                "exit_code": exit_code,
+                "exit_reason": exit_reason,
+                "host_pid": 4242,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_hydration(root: Path, run_id: str, *, accepted: bool, failure_reason: str) -> None:
+    (root / run_id / "indicator_state_hydration.json").write_text(
+        json.dumps(
+            {"schema_version": 1, "accepted": accepted, "validation": {"failure_reason": failure_reason}}
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_status_last_exit_surfaces_cold_start_hydration_failure(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A STOPPED instance must explain *why* it stopped. A cold start that exits 4
+    under hydrate_policy=require carries the hydration receipt's failure_reason so
+    the console can render seed-day guidance instead of a bare 'STOPPED'."""
+    app, root = app_with_root
+    _write_ledger(root, "run-coldstart", "spy_ema_paper", 100)
+    _write_run_status(root, "run-coldstart", ended_at_ms=200, exit_code=4, exit_reason="exception")
+    _write_hydration(root, "run-coldstart", accepted=False, failure_reason="missing")
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    last_exit = response.json()["last_exit"]
+    assert last_exit is not None
+    assert last_exit["exit_code"] == 4
+    assert last_exit["exit_reason"] == "exception"
+    assert last_exit["hydration_accepted"] is False
+    assert last_exit["hydration_failure_reason"] == "missing"
+
+
+async def test_status_last_exit_absent_while_run_is_live(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live run (no terminal ended_at_ms) must not surface a stale last_exit —
+    that would contradict the RUNNING badge."""
+    app, root = app_with_root
+    _write_ledger(root, "run-live-ccc", "spy_ema_paper", 100)
+    _write_run_status(root, "run-live-ccc", ended_at_ms=None, exit_code=None, exit_reason=None)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-live-ccc", "pid": 7, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    assert response.json()["last_exit"] is None
