@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
@@ -19,6 +20,11 @@ from app.engine.execution.order import OrderEvent
 from app.engine.execution.portfolio import Portfolio
 from app.engine.framework.insight import Insight
 from app.engine.framework.insight_manager import InsightManager
+
+if TYPE_CHECKING:
+    # Type-only: a runtime import would create an indicator_state -> strategy
+    # cycle. The default validate_state_payload imports it locally instead.
+    from app.engine.live.indicator_state import ValidationResult
 
 
 @dataclass(frozen=True)
@@ -250,6 +256,53 @@ class Strategy(ABC):
         so the next session opens with a clean slate. Default is a
         no-op for strategies that don't opt into the session wrapper.
         """
+
+    # ------------------------------------------------------------------
+    # Indicator-state persistence contract (live engine; #435 follow-up)
+    # ------------------------------------------------------------------
+    # The live engine's hydration ladder and shutdown checkpoint call all
+    # three of these on every strategy. The defaults make a strategy with no
+    # warm-startable state (pure bar-pattern detectors like
+    # deployment_validation, and any not-yet-wired strategy) satisfy the
+    # contract safely instead of raising AttributeError mid-run. Strategies
+    # with indicator state (e.g. spy_ema_crossover) override all three.
+
+    def report_state_for_persistence(self) -> dict | None:
+        """Persistable cross-session state, or ``None`` if not warm-startable.
+
+        Default ``None``: no indicator state to carry across restarts (cold
+        start every session). Under ``hydrate_policy=require`` this surfaces as
+        a "missing" seed-day prompt, which is correct — there is nothing to
+        require. Strategies with warm-startable indicators override this.
+        """
+        return None
+
+    def restore_state_from_persistence(self, payload: dict) -> None:  # pragma: no cover
+        """Rehydrate from a persisted payload.
+
+        Default raises: the base ``report_state_for_persistence`` returns
+        ``None`` (so no payload is ever produced) and the base
+        ``validate_state_payload`` rejects, so the hydration ladder never
+        reaches restore. Reaching here means a strategy persisted state without
+        also implementing restore — a programming error, not a runtime input.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement restore_state_from_persistence; "
+            "it reports no persistable state"
+        )
+
+    def validate_state_payload(self, payload: dict) -> ValidationResult:
+        """Shape-check a persisted payload for this strategy.
+
+        Default rejects (``payload_mismatch``): a strategy that does not model
+        persistable state cannot vouch for a payload, so a stale/foreign global
+        state file is refused rather than blindly restored. Strategies that
+        persist state override this. Imported locally to avoid an
+        ``indicator_state -> strategy`` module cycle.
+        """
+        from app.engine.live.indicator_state import ValidationResult
+
+        return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
 
     def on_minute_bar(self, bar: TradeBar) -> None:  # pragma: no cover - override in subclass
         """Called for every minute bar consumed by the engine, before consolidator dispatch.

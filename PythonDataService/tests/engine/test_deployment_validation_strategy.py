@@ -143,3 +143,27 @@ def test_exposes_consolidator_period_for_indicator_hydration() -> None:
     strategy = DeploymentValidationConsecutiveGreen()
 
     assert strategy.CONSOLIDATOR_PERIOD_MIN == 1
+
+
+def test_satisfies_live_persistence_contract() -> None:
+    # Regression: the live engine's hydration ladder + shutdown checkpoint call
+    # report_state_for_persistence / validate_state_payload /
+    # restore_state_from_persistence on every strategy. This indicator-less
+    # strategy defined none, so the shutdown checkpoint crashed mid-run with
+    # AttributeError ('...has no attribute report_state_for_persistence').
+    # Base-class defaults now satisfy the contract: no persistable state.
+    strategy = DeploymentValidationConsecutiveGreen()
+
+    # No warm-startable indicator state → cold start every session.
+    assert strategy.report_state_for_persistence() is None
+
+    # A strategy that models no state must refuse a foreign/stale payload.
+    result = strategy.validate_state_payload({"anything": 1})
+    assert result.failure_reason == "payload_mismatch"
+    assert result.payload_shape_ok is False
+
+    # restore is never reached on the happy path; reaching it is a bug.
+    import pytest
+
+    with pytest.raises(NotImplementedError):
+        strategy.restore_state_from_persistence({})
