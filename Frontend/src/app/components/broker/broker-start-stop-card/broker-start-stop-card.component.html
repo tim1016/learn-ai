@@ -23,8 +23,12 @@
 
     <label class="field checkbox">
       <input type="checkbox" [checked]="readonlyFlag()" (change)="setReadonly($event)" [disabled]="isLive()" />
-      <span>Paper Trading Mode</span>
-      <strong class="paper-chip">ON - No real orders will be placed</strong>
+      <span>Shadow mode (suppress orders)</span>
+      @if (readonlyFlag()) {
+        <strong class="paper-chip live">ON - observing only, no orders placed</strong>
+      } @else {
+        <strong class="paper-chip warn">OFF - orders will be placed</strong>
+      }
     </label>
 
     <label class="field">

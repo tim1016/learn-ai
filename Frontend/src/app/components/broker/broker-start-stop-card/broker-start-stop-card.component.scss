@@ -54,6 +54,11 @@
 .paper-chip {
   background: var(--bull-soft);
   color: var(--bull);
+
+  &.warn {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
 }
 
 .fields {
