@@ -89,11 +89,11 @@
           <span>Algorithm audit copy <span class="hint" title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest.">ⓘ</span></span>
           <select [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
             <option value="" disabled>Select the committed algorithm source…</option>
-            @for (path of qcCopies.value()?.entries ?? []; track path) {
+            @for (path of qcAuditCopyOptions(); track path) {
               <option [value]="path">{{ path }}</option>
             }
           </select>
-          <small>This is the algorithm file you ran on QuantConnect, committed under <code>references/qc-shadow/</code> — not a results CSV. Empty list usually means the live engine isn't running (only git-tracked files there appear here).</small>
+          <small>This is the algorithm file you ran on QuantConnect, committed under <code>references/qc-shadow/</code> — not a results CSV. The deployment-validation copy is shown even while the daemon listing is unavailable.</small>
         </label>
       </section>
 

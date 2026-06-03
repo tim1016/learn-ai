@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>learn-ai — Broker &amp; Live Trading: User Manual</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 20mm 16mm;
+    @bottom-center { content: counter(page); }
+  }
+  :root {
+    --ink: #1a1f29;
+    --muted: #5b6573;
+    --line: #d7dce3;
+    --accent: #1f5fae;
+    --accent-soft: #eaf1fb;
+    --green: #1c7c4a;
+    --green-soft: #e6f4ec;
+    --red: #b3261e;
+    --red-soft: #fbeceb;
+    --amber: #8a6100;
+    --amber-soft: #fdf3df;
+    --code-bg: #f4f6f9;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Helvetica Neue", Arial, "Segoe UI", sans-serif;
+    color: var(--ink);
+    font-size: 10.3pt;
+    line-height: 1.5;
+    margin: 0;
+  }
+  h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; }
+  h1 { font-size: 22pt; color: var(--accent); margin: 0 0 4px; }
+  h2 {
+    font-size: 15pt; color: var(--accent);
+    margin: 26px 0 8px; padding-bottom: 5px;
+    border-bottom: 2px solid var(--accent);
+  }
+  h3 { font-size: 12pt; margin: 18px 0 5px; color: #14233a; }
+  h4 { font-size: 10.6pt; margin: 12px 0 3px; color: #2a3647; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    background: var(--code-bg); padding: 1px 4px; border-radius: 3px;
+    font-size: 9pt; color: #243049;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 9px 11px; overflow-x: auto;
+    font-family: "SFMono-Regular", Consolas, monospace; font-size: 8.6pt;
+    line-height: 1.45; color: #243049; white-space: pre-wrap; word-break: break-word;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 9px 0; font-size: 9.1pt; }
+  th, td { border: 1px solid var(--line); padding: 5px 7px; text-align: left; vertical-align: top; }
+  th { background: var(--accent-soft); font-weight: 700; color: #14233a; }
+  tr { page-break-inside: avoid; }
+  .lead { font-size: 11pt; color: var(--muted); margin: 8px 0 0; }
+  .tag { display: inline-block; font-size: 7.6pt; font-weight: 700; letter-spacing: .04em;
+         text-transform: uppercase; padding: 2px 7px; border-radius: 10px; vertical-align: middle; }
+  .tag.green { background: var(--green-soft); color: var(--green); }
+  .tag.red { background: var(--red-soft); color: var(--red); }
+  .tag.amber { background: var(--amber-soft); color: var(--amber); }
+  .tag.blue { background: var(--accent-soft); color: var(--accent); }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft);
+             padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 10px 0; }
+  .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+  .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+  .callout.ok { border-left-color: var(--green); background: var(--green-soft); }
+  .callout p { margin: 3px 0; }
+  .small { font-size: 8.8pt; color: var(--muted); }
+  .page-break { page-break-before: always; }
+  .avoid-break { page-break-inside: avoid; }
+  .cover { height: 245mm; display: flex; flex-direction: column; justify-content: center; }
+  .cover .kicker { font-size: 10pt; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+  .cover h1 { font-size: 30pt; margin-top: 10px; }
+  .cover .sub { font-size: 14pt; color: var(--ink); margin-top: 4px; font-weight: 600; }
+  .cover .meta { margin-top: 40px; font-size: 9.5pt; color: var(--muted); }
+  .cover .rule { height: 4px; width: 90px; background: var(--accent); margin: 18px 0; }
+  .toc ol { list-style: none; padding-left: 0; counter-reset: toc; }
+  .toc li { counter-increment: toc; padding: 4px 0; border-bottom: 1px dotted var(--line); }
+  .toc li::before { content: counter(toc) ".  "; color: var(--accent); font-weight: 700; }
+  .ascii { font-size: 8pt; line-height: 1.25; }
+  .two-col { display: flex; gap: 14px; }
+  .two-col > div { flex: 1; }
+  .kbd { font-family: monospace; background:#eef1f5; border:1px solid #c9d0da; border-bottom-width:2px;
+         border-radius:4px; padding:0 5px; font-size:8.6pt; }
+  .check { color: var(--green); font-weight: 700; }
+  .cross { color: var(--red); font-weight: 700; }
+  dt { font-weight: 700; color:#14233a; margin-top:6px; }
+  dd { margin: 0 0 4px 0; color: var(--ink); }
+</style>
+</head>
+<body>
+
+<!-- ============================ COVER ============================ -->
+<section class="cover">
+  <div class="kicker">learn-ai · Research Trading Platform</div>
+  <div class="rule"></div>
+  <h1>Broker &amp; Live Trading</h1>
+  <div class="sub">A plain-English user manual: architecture, the pre-trade checklist, deploying and adding strategies</div>
+  <div class="meta">
+    Audience: the operator (you) — no deep finance background assumed.<br>
+    Scope: the live-trading subsystem (Interactive Brokers <em>paper</em> account).<br>
+    Version: 1.0 &nbsp;·&nbsp; Generated 2026-06-01 &nbsp;·&nbsp; Source of truth: this repository.
+  </div>
+</section>
+
+<!-- ============================ TOC ============================ -->
+<section class="page-break">
+<h2>What's in this manual</h2>
+<div class="toc">
+<ol>
+  <li>The 60-second overview — what the broker does</li>
+  <li>Words you need (plain-English glossary)</li>
+  <li>How it's architected — the moving parts</li>
+  <li>Safety: why this only trades a paper account</li>
+  <li>The two checklists that gate a deploy</li>
+  <li>How to always have a <em>clean</em> pre-trade checklist</li>
+  <li>Deploying a strategy, step by step</li>
+  <li>Daily operation: start, pause, stop, monitor</li>
+  <li>The morning pre-flight gate (6 checks)</li>
+  <li>Adding a new strategy</li>
+  <li>Troubleshooting &amp; error messages</li>
+  <li>Quick-reference cheat sheet</li>
+</ol>
+</div>
+
+<div class="callout">
+<p><strong>How to read this.</strong> Sections 1–4 explain <em>what the system is</em>. Sections 5–9 are the
+day-to-day operator guide — this is where your question "how do I keep a clean pre-trade checklist so I can
+deploy" is answered. Section 10 is for when you (or a developer) want to <em>add a new strategy</em>.</p>
+</div>
+</section>
+
+<!-- ============================ 1. OVERVIEW ============================ -->
+<section>
+<h2>1 · The 60-second overview</h2>
+
+<p>This platform lets you take a <strong>trading strategy</strong> — a set of rules like "buy SPY when these
+indicators line up, sell when they don't" — and run it <strong>automatically</strong> against a brokerage
+account. The piece that does this is what we loosely call <em>"the broker"</em>: the live-trading subsystem.</p>
+
+<p>It does three jobs:</p>
+<ol>
+  <li><strong>Deploy</strong> — freeze an exact copy of your strategy + code into a tamper-evident record so you
+      know precisely what is running.</li>
+  <li><strong>Run</strong> — start a process that connects to <strong>Interactive Brokers (IBKR)</strong>, watches
+      live price bars, and places orders when your rules fire.</li>
+  <li><strong>Supervise</strong> — show you, at a glance, whether the bot is healthy and allowed to trade, and let
+      you pause, resume, stop, or flatten it.</li>
+</ol>
+
+<div class="callout ok">
+<p><strong>The one idea to take away:</strong> nothing trades unless a stack of safety checks is green. Those
+checks are the "pre-trade checklist." Most of this manual is about understanding those checks and keeping them
+green so a deploy goes through cleanly.</p>
+</div>
+
+<h3>Where you click</h3>
+<p>Everything operator-facing lives under the <strong>Broker</strong> area of the web app
+(<code>http://localhost:4200</code>):</p>
+<table>
+<tr><th>Page</th><th>URL path</th><th>What it's for</th></tr>
+<tr><td>Instances console</td><td><code>/broker/instances</code></td><td>Your home base — see every bot, its health, start/stop/pause.</td></tr>
+<tr><td>Deploy form</td><td><code>/broker/deploy</code></td><td>Create a new live run from a strategy (Stage 1 of deploy).</td></tr>
+<tr><td>Account monitor / orders / reconciliation</td><td><code>/broker/...</code></td><td>Account positions, order history, and trade reconciliation.</td></tr>
+</table>
+</section>
+
+<!-- ============================ 2. GLOSSARY ============================ -->
+<section>
+<h2>2 · Words you need</h2>
+<p>These terms appear everywhere. Learn these eight and the rest of the manual reads easily.</p>
+
+<dl>
+<dt>Strategy</dt>
+<dd>The trading rules themselves (which indicators, when to buy, when to sell). Lives as code or as a
+declarative <em>spec</em> file. Example: "SPY EMA(5)/EMA(10) crossover with an RSI gate."</dd>
+
+<dt>Indicator</dt>
+<dd>A number computed from price history — e.g. a moving average (EMA), RSI, MACD, ADX. Strategies combine
+indicators into buy/sell conditions. Each indicator in this repo is a faithful port of a reference
+implementation, proven equal to within a tiny tolerance.</dd>
+
+<dt>Strategy <em>instance</em></dt>
+<dd>One configured, named bot — e.g. "SPY EMA Crossover #1." It has a stable ID
+(<code>strategy_instance_id</code>) that survives restarts and crashes. <strong>This is the thing you manage.</strong></dd>
+
+<dt>Run</dt>
+<dd>One execution (one process lifetime) of an instance. If the bot restarts, it's a new run of the
+<em>same</em> instance. A run has a <code>run_id</code>.</dd>
+
+<dt>Ledger</dt>
+<dd>The file (<code>run_ledger.json</code>) that records exactly what a run is: which code commit, which strategy,
+which account, which backtest it's anchored to. It is the bot's "identity card."</dd>
+
+<dt>Readiness</dt>
+<dd>A live verdict — <span class="tag green">READY</span> <span class="tag red">BLOCKED</span>
+<span class="tag amber">DEGRADED</span> <span class="tag blue">UNKNOWN</span> — answering "is this bot allowed to
+act on the next price bar?" Computed by the engine itself and shown verbatim in the UI.</dd>
+
+<dt>The daemon</dt>
+<dd>A small always-on program running on your <em>host machine</em> (the computer where IBKR's Gateway runs),
+not inside the containers. It is the only thing allowed to start/stop bot processes and create runs.</dd>
+
+<dt>QC anchor</dt>
+<dd>A QuantConnect (QC) cloud backtest that every live run must point to, plus a committed copy of the
+algorithm that produced it. It is your independent proof that the strategy was validated. No anchor → no deploy.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Instance vs. run, in one line:</strong> the <em>instance</em> is the bot you name and manage; a
+<em>run</em> is one time it was switched on. The console is organized around instances; runs come and go
+underneath.</p>
+</div>
+</section>
+
+<!-- ============================ 3. ARCHITECTURE ============================ -->
+<section class="page-break">
+<h2>3 · How it's architected — the moving parts</h2>
+
+<p>The system is three layers. The unusual part — and the key to understanding it — is the <strong>host
+daemon</strong>, which sits <em>outside</em> the containers because the broker forces it to.</p>
+
+<pre class="ascii">
+   YOU (browser)
+       │  click Deploy / Start / Pause
+       ▼
+ ┌─────────────────────────┐
+ │  Frontend (Angular)     │   /broker/instances , /broker/deploy
+ │  localhost:4200         │   shows health, sends your intent
+ └───────────┬─────────────┘
+             │  HTTP
+             ▼
+ ┌─────────────────────────┐
+ │  Data plane (FastAPI)   │   /api/live-instances/*
+ │  polygon-data-service   │   in a container; reads run artifacts,
+ │  localhost:8000         │   forwards control actions to the daemon
+ └───────────┬─────────────┘
+             │  HTTP + secret token (X-Live-Runner-Token)
+             │  reaches the host via host.containers.internal
+             ▼
+ ┌─────────────────────────┐
+ │  Host daemon (FastAPI)  │   port 8765, runs ON THE HOST (not a container)
+ │  the control plane      │   • creates runs (writes the ledger)
+ │                         │   • starts / stops bot processes
+ │                         │   • the registry: which instance → which live process
+ └───────────┬─────────────┘
+             │  spawns a subprocess:  python -m app.engine.live.run start ...
+             ▼
+ ┌─────────────────────────┐        ┌──────────────────────────┐
+ │  Live engine (the bot)  │ ─────▶ │  IB Gateway (on the host) │ ──▶ Interactive
+ │  one process per run    │  TCP   │  paper account, port 4002 │     Brokers
+ │  watches bars, decides, │        └──────────────────────────┘
+ │  places orders, writes  │
+ │  decisions/trades files │
+ └─────────────────────────┘
+</pre>
+
+<h3>Why the daemon lives on the host</h3>
+<p>Interactive Brokers ties an API session to the same machine/IP as the login. A containerized process has a
+different network identity, so it cannot safely own the IBKR session. The daemon therefore runs natively on the
+host, right next to IB Gateway, and is the single authority over bot processes. Two consequences you'll feel:</p>
+<ul>
+  <li>The daemon and IB Gateway are <strong>not</strong> started by <code>./restart.sh</code> or
+      <code>podman compose up</code>. They are separate host programs you start yourself. If the console says
+      "Live engine unavailable," the daemon isn't running.</li>
+  <li>The container talks to the daemon over the network, so the daemon requires a <strong>shared secret</strong>
+      (auto-generated token) on every request — this is what lets it bind beyond loopback safely (ADR&nbsp;0007).</li>
+</ul>
+
+<h3>What each layer is responsible for</h3>
+<table>
+<tr><th>Layer</th><th>Owns</th><th>Does NOT do</th></tr>
+<tr><td>Frontend (Angular)</td><td>Showing health/readiness, capturing your intent, friendly error messages.</td><td>Any trading logic or git/process work.</td></tr>
+<tr><td>Data plane (FastAPI, container)</td><td>Reading run artifacts from disk; relaying control actions to the daemon; merging status.</td><td>Starting processes or touching the broker directly.</td></tr>
+<tr><td>Host daemon (FastAPI, host)</td><td>Creating runs (git check + ledger), starting/stopping processes, the instance→process registry.</td><td>Running the strategy itself.</td></tr>
+<tr><td>Live engine (subprocess)</td><td>Connecting to IBKR, consolidating bars, evaluating the strategy, placing orders, emitting readiness, writing receipts.</td><td>Deciding whether it is <em>allowed</em> to exist (that's the daemon).</td></tr>
+</table>
+
+<div class="callout">
+<p><strong>Design records.</strong> The decisions above are written up as ADRs in
+<code>docs/architecture/adrs/</code>: 0003 (host topology), 0004 (instance-addressed console), 0005
+(engine-authored readiness), 0006 (deploy control plane), 0007 (daemon shared-secret auth). Read those if you
+want the "why" behind any rule in this manual.</p>
+</div>
+</section>
+
+<!-- ============================ 4. SAFETY ============================ -->
+<section>
+<h2>4 · Safety: why this only trades a paper account</h2>
+
+<p>This subsystem is built and shipped for <strong>paper trading</strong> — a simulated IBKR account that uses
+real market data but fake money. Real-money trading is deliberately out of scope. Several independent guards
+enforce this, so a misconfiguration fails closed rather than placing a real order:</p>
+
+<table>
+<tr><th>Guard</th><th>What it enforces</th></tr>
+<tr><td>Read-only default</td><td>The deploy form defaults to <strong>paper</strong>; the engine's <code>readonly</code> mode refuses to submit orders. A "live" switch exists but is gated behind an explicit confirmation step and is not the supported path.</td></tr>
+<tr><td>Mode lock</td><td>The broker mode defaults to <code>paper</code> and refuses to silently drift to <code>live</code>.</td></tr>
+<tr><td>Port vs. mode check</td><td>Paper mode rejects live ports (and vice-versa), so you can't accidentally point at a live Gateway.</td></tr>
+<tr><td>Account sentinel</td><td>After connecting, the engine asserts the account ID starts with <code>DU</code> (IBKR's paper prefix). A mismatch disconnects immediately.</td></tr>
+<tr><td>Daily order cap</td><td>A hard <code>max_orders_per_day</code> limit (default 4) blocks runaway trading.</td></tr>
+<tr><td>Single symbol</td><td>Currently scoped to one symbol (SPY). A position in any other symbol trips a safety check.</td></tr>
+</table>
+
+<div class="callout danger">
+<p><strong>Treat the "live" option as off-limits unless you have separately validated real-money infrastructure.</strong>
+As the repository states: the backtesting engine is a research tool; live trading requires separately validated
+infrastructure. Stay on paper.</p>
+</div>
+</section>
+
+<!-- ============================ 5. THE TWO CHECKLISTS ============================ -->
+<section class="page-break">
+<h2>5 · The two checklists that gate a deploy</h2>
+
+<p>Your question — "how can I always have a clean pre-trade checklist so I can deploy" — has a precise answer,
+because there are actually <strong>two</strong> checklists at <strong>two different moments</strong>. Knowing which
+is which is half the battle.</p>
+
+<table>
+<tr><th>&nbsp;</th><th>Checklist A — Deploy readiness</th><th>Checklist B — Morning pre-flight</th></tr>
+<tr><td><strong>When</strong></td><td>On the Deploy form, <em>before</em> you create a run.</td><td>Each trading morning, <em>before</em> the bot's first decision.</td></tr>
+<tr><td><strong>Where you see it</strong></td><td><code>/broker/deploy</code> — "Now checks" and "Deploy checks" panels.</td><td>The instance console readiness panel; CLI <code>run pre-flight</code>.</td></tr>
+<tr><td><strong>Question it answers</strong></td><td>"Can I create and (optionally) start this run right now?"</td><td>"Is it safe for this already-deployed bot to trade <em>today</em>?"</td></tr>
+<tr><td><strong>If it fails</strong></td><td>Deploy is blocked; nothing is created.</td><td>The bot sits out the day; yesterday's record stays valid.</td></tr>
+</table>
+
+<h3>Checklist A — Deploy readiness (the Deploy form)</h3>
+<p>The form shows two small status panels. The first is checked continuously while you fill the form; the second
+is checked the instant you press <strong>Deploy</strong>.</p>
+
+<h4>"Now checks" (live, while you type)</h4>
+<table>
+<tr><th>Check</th><th>Green when…</th><th>If not green</th></tr>
+<tr><td><strong>Engine up</strong></td><td>The host daemon answers.</td><td>Start the daemon on the host machine, then recheck.</td></tr>
+<tr><td><strong>Broker</strong></td><td>IBKR Gateway is connected.</td><td>Log in to IB Gateway (paper) on the host.</td></tr>
+<tr><td><strong>Fields</strong></td><td>All required fields are filled.</td><td>Complete the missing fields (see §7).</td></tr>
+<tr><td><strong>Fleet clear</strong></td><td>No account-level state blocks new starts.</td><td>Either deploy-only (untick "start now") or clear the account state.</td></tr>
+</table>
+
+<h4>"Deploy checks" (verified at submit)</h4>
+<table>
+<tr><th>Check</th><th>Meaning</th><th>How to make it pass</th></tr>
+<tr><td><strong>Working tree clean</strong></td><td>No uncommitted code changes in scope (<code>PythonDataService/</code>, <code>references/qc-shadow/</code>).</td><td><code>git commit</code> or <code>git stash</code> your changes, then deploy again.</td></tr>
+<tr><td><strong>Spec matches strategy</strong></td><td>The chosen spec file exists and matches the chosen strategy.</td><td>Pick the spec that corresponds to your strategy.</td></tr>
+</table>
+
+<div class="callout">
+<p><strong>Why "working tree clean" matters.</strong> The ledger stamps the exact git commit (<code>code_sha</code>)
+into the run's identity. If your working tree has uncommitted edits, the running code wouldn't match that commit —
+so the system refuses. This is what makes "what's deployed" provable.</p>
+</div>
+
+<h3>Checklist B — Morning pre-flight (6 gates)</h3>
+<p>Once a bot is deployed, every trading morning it runs a 6-point pre-flight, like a pilot before takeoff. <strong>All
+six must pass</strong> or the bot refuses to place orders that session. These are detailed in §9; the full table
+with fixes is there.</p>
+</section>
+
+<!-- ============================ 6. KEEPING IT CLEAN ============================ -->
+<section>
+<h2>6 · How to always have a <em>clean</em> pre-trade checklist</h2>
+
+<p>This is the heart of your request. A "clean checklist" means: when you arrive at the Deploy form, every panel is
+green and the button works on the first try. The reliable way to get there is a <strong>fixed routine</strong>.
+Do these in order and a deploy almost never bounces.</p>
+
+<h3>The clean-deploy routine</h3>
+<ol>
+  <li><strong>Commit everything first.</strong> Run <code>git status</code>. If anything under
+      <code>PythonDataService/</code> or <code>references/qc-shadow/</code> is modified, commit or stash it. This
+      single habit clears the most common deploy failure (the 409 "dirty tree").</li>
+  <li><strong>Start the host pieces.</strong> On the host machine: (a) launch IB Gateway and log in to the
+      <em>paper</em> account, (b) start the host daemon. Confirm both show green on the connectivity strip before
+      you touch the form.</li>
+  <li><strong>Have your QC anchor ready.</strong> Before deploying you need two things from QuantConnect: the
+      <em>backtest ID</em> and a committed copy of the algorithm under <code>references/qc-shadow/</code>. If the
+      copy isn't committed, it won't appear in the picker and you can't deploy. (See §7 for what these are.)</li>
+  <li><strong>Fill every required field.</strong> Strategy, spec, account ID, QC backtest ID, QC audit-copy, and an
+      instance name. The "Fields" check goes green only when all are present.</li>
+  <li><strong>Decide deploy-only vs. start-now.</strong> If "Fleet clear" is amber, untick "Start trading
+      immediately" — you can create the run now and start it later from the console once the fleet is clear.</li>
+  <li><strong>Deploy.</strong> If it bounces, the error tells you exactly which gate failed and how to fix it
+      (§11). Fix that one thing and resubmit — the run ID is content-addressed, so re-submitting identical inputs
+      is a safe no-op, not a duplicate.</li>
+</ol>
+
+<div class="callout ok">
+<p><strong>Golden rule for a clean checklist:</strong> <em>commit your code, bring up the host (Gateway + daemon),
+and have your QC anchor committed — before you open the form.</em> Those three habits keep both checklists green.</p>
+</div>
+
+<h3>Keeping the morning pre-flight clean (so deployed bots actually trade)</h3>
+<p>A deploy can be clean yet the bot still sits out a morning if pre-flight fails. To keep pre-flight green:</p>
+<ul>
+  <li><strong>Don't edit code on a deployed branch mid-week.</strong> A dirty tree fails the clean-tree gate.</li>
+  <li><strong>Keep the host clock synced.</strong> The NTP gate needs the clock within ±1 second. Enable
+      automatic time sync on the host OS.</li>
+  <li><strong>Don't trade the bot's account by hand.</strong> A surprise or short position trips the
+      unexpected-position gate.</li>
+  <li><strong>Never delete a run's files.</strong> The ledger, yesterday's trade/reconciliation files, and the QC
+      exports are all verified by hash each morning. Deleting or overwriting them blocks the next session.</li>
+  <li><strong>If yesterday ended in a halt, deploy fresh.</strong> A halt flag cannot be cleared by restarting the
+      same run — read the halt reason, then create a new run.</li>
+</ul>
+</section>
+
+<!-- ============================ 7. DEPLOY STEP BY STEP ============================ -->
+<section class="page-break">
+<h2>7 · Deploying a strategy, step by step</h2>
+
+<p>Deploy is a three-stage pipeline (ADR&nbsp;0006). You drive Stage 1 from the form; Stages 2–3 happen from the
+console.</p>
+
+<table>
+<tr><th>Stage</th><th>What happens</th><th>Where</th></tr>
+<tr><td><strong>1. Create the run</strong></td><td>Git clean-tree check, capture the commit, compute a content-addressed <code>run_id</code>, write the ledger.</td><td>Deploy form → daemon</td></tr>
+<tr><td><strong>2. Launch the process</strong></td><td>Spawn the live engine subprocess that connects to IBKR.</td><td>"Start now" on the form, or Start in the console</td></tr>
+<tr><td><strong>3. Observe &amp; control</strong></td><td>Watch readiness; pause/resume/stop/flatten.</td><td>Instance console</td></tr>
+</table>
+
+<h3>The Deploy form fields, in plain English</h3>
+<table>
+<tr><th>Field</th><th>What to enter</th></tr>
+<tr><td><strong>Strategy</strong></td><td>Pick from the engine's strategy list. This also auto-selects the matching spec.</td></tr>
+<tr><td><strong>Spec</strong></td><td>The declarative strategy file (auto-filled from the strategy; can be set manually). E.g. <code>spy_ema_crossover.spec.json</code>.</td></tr>
+<tr><td><strong>Account ID</strong></td><td>Your IBKR <em>paper</em> account, e.g. <code>DU1234567</code>. Pre-filled if the broker is connected; otherwise type it.</td></tr>
+<tr><td><strong>QC backtest ID</strong></td><td>The QuantConnect cloud backtest identifier (the 32-hex Algorithm Id) that validates this strategy. Typed in by hand — there is no auto-lookup in v1.</td></tr>
+<tr><td><strong>QC audit-copy</strong></td><td>Dropdown of committed files under <code>references/qc-shadow/</code> — the exact algorithm code that ran in that QC backtest. Only committed files appear.</td></tr>
+<tr><td><strong>Instance name</strong></td><td>A stable ID for this bot, e.g. <code>spy-ema-prod-001</code>. Reuse it to manage the same bot across restarts.</td></tr>
+<tr><td><strong>Mode</strong></td><td>Paper (default, recommended) or live (guarded). Keep Paper.</td></tr>
+<tr><td><strong>Hydrate policy</strong></td><td>Whether to reuse saved indicator warmup state: <code>require</code> (default), <code>optional</code>, or <code>disabled</code>. <code>require</code> avoids re-paying the ~3h45m warmup each morning.</td></tr>
+<tr><td><strong>Max orders / day</strong></td><td>Safety cap (default 4). Only used when starting.</td></tr>
+<tr><td><strong>Start trading immediately</strong></td><td>If ticked, the run is launched right after it's created.</td></tr>
+</table>
+
+<h3>What the QC anchor is, and why it's mandatory</h3>
+<p>Every live run must point to a QuantConnect backtest <em>and</em> ship a committed copy of the algorithm that
+produced it. This gives you a three-way audit trail: <em>your engine's trades</em> ↔ <em>QuantConnect's
+trades</em> ↔ <em>the broker's fills</em>. If you don't yet have a QC backtest, you must run one first — the system
+will not let a strategy go live without this independent proof.</p>
+
+<div class="callout warn">
+<p><strong>The "audit-copy picker" gotcha.</strong> The dropdown lists only <em>git-committed</em> files in
+<code>references/qc-shadow/</code>. If you saved the copy but didn't commit it, it won't show up and the deploy
+field can't be filled. Commit it first. (Separately: on Linux/podman, an empty picker can also mean the container
+can't reach the loopback-only daemon — start/bind the daemon so the container can reach it.)</p>
+</div>
+
+<h3>Deploying from the command line (equivalent of Stage 1 + 2)</h3>
+<p>The UI form is the recommended path, but the same thing is scriptable. Stage 1 (create the run):</p>
+<pre>cd PythonDataService
+python -m app.engine.live.run init-ledger \
+  --repo-root /home/inkant/Documents/learn-ai \
+  --strategy-spec-path app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json \
+  --qc-audit-copy-path references/qc-shadow/&lt;your-copy&gt;.py \
+  --qc-cloud-backtest-id &lt;32-hex-id&gt; \
+  --account-id DU1234567 \
+  --start-date-ms &lt;int64 ms UTC&gt; \
+  --strategy-instance-id spy-ema-prod-001
+# → writes live_runs/&lt;run_id&gt;/run_ledger.json</pre>
+<p>Stage 2 (launch the engine):</p>
+<pre>python -m app.engine.live.run start --run-dir live_runs/&lt;run_id&gt;</pre>
+<p>Operator control (durable intent — survives a crash/reboot):</p>
+<pre>python -m app.engine.live.run pause   --strategy-instance-id spy-ema-prod-001
+python -m app.engine.live.run resume  --strategy-instance-id spy-ema-prod-001
+python -m app.engine.live.run stop    --strategy-instance-id spy-ema-prod-001</pre>
+</section>
+
+<!-- ============================ 8. DAILY OPERATION ============================ -->
+<section>
+<h2>8 · Daily operation: start, pause, stop, monitor</h2>
+
+<p>Day-to-day you live in the <strong>instance console</strong> (<code>/broker/instances</code>). It is organized by
+<em>instance</em>, and for each one it merges three views into a single picture:</p>
+<ul>
+  <li><strong>Process state</strong> (from the daemon): is a process alive, what's its PID, which run is it bound to?</li>
+  <li><strong>Readiness</strong> (from the engine): the verdict and the per-gate detail.</li>
+  <li><strong>Broker slice</strong>: positions and pending orders attributed to this instance.</li>
+</ul>
+
+<h3>The readiness verdict, decoded</h3>
+<table>
+<tr><th>Verdict</th><th>Meaning</th><th>Your action</th></tr>
+<tr><td><span class="tag green">READY</span></td><td>All hard gates pass; the bot may act on the next bar.</td><td>Nothing — let it run.</td></tr>
+<tr><td><span class="tag red">BLOCKED</span></td><td>A hard gate failed (e.g. broker disconnected, order cap hit, emergency stop). The bot will not trade.</td><td>Open the failing gate; follow its fix hint.</td></tr>
+<tr><td><span class="tag amber">DEGRADED</span></td><td>Hard gates pass but a soft gate warns (e.g. bars came from a fallback data source).</td><td>It can still trade; review the warning.</td></tr>
+<tr><td><span class="tag blue">UNKNOWN</span></td><td>No authoritative readiness — usually a stopped/never-started instance.</td><td>Check process state; start it if intended.</td></tr>
+</table>
+
+<h3>Controls</h3>
+<table>
+<tr><th>Action</th><th>Effect</th></tr>
+<tr><td><strong>Start</strong></td><td>Launch the engine for a deployed run.</td></tr>
+<tr><td><strong>Pause</strong></td><td>Stay connected but stop placing new orders. Durable — remembered across restarts.</td></tr>
+<tr><td><strong>Resume</strong></td><td>Return a paused bot to trading.</td></tr>
+<tr><td><strong>Stop</strong></td><td>Shut the bot down. Restarting requires Start (or a fresh deploy).</td></tr>
+<tr><td><strong>Flatten</strong></td><td>Force-close all positions immediately (emergency).</td></tr>
+<tr><td><strong>Reconcile</strong></td><td>Verify the broker's account state matches what the engine expects.</td></tr>
+</table>
+
+<div class="callout">
+<p><strong>"Desired state" is sticky.</strong> When you Pause/Stop, that intent is written to disk
+(<code>desired_state.json</code>). If the bot or machine restarts, it comes back in the state you left it — a
+paused bot boots paused; a stopped bot refuses to auto-start. You decide when it trades, not the accident of a
+reboot.</p>
+</div>
+</section>
+
+<!-- ============================ 9. PRE-FLIGHT GATES ============================ -->
+<section class="page-break">
+<h2>9 · The morning pre-flight gate (6 checks)</h2>
+
+<p>This is Checklist B in detail. It runs once at session start. A failure here is <em>not</em> a disaster — it
+just skips today; yesterday's record stays valid. Each check, what it protects, and how to clear it:</p>
+
+<table>
+<tr><th>#</th><th>Gate</th><th>Passes when…</th><th>If it fails — the fix</th></tr>
+<tr>
+  <td>1</td><td><strong>Clean tree</strong></td>
+  <td>No uncommitted changes in <code>PythonDataService/</code> or <code>references/qc-shadow/</code>.</td>
+  <td>Commit or stash your edits. (The running code must match the committed commit the ledger recorded.)</td>
+</tr>
+<tr>
+  <td>2</td><td><strong>NTP offset</strong></td>
+  <td>Host clock is within ±1 s of internet time.</td>
+  <td>Enable/repair automatic time sync on the host OS. (Accurate time is needed to match fills.)</td>
+</tr>
+<tr>
+  <td>3</td><td><strong>Unexpected position</strong></td>
+  <td>The account holds only an allowed long position in the bot's symbol.</td>
+  <td>Close any surprise/short/foreign position, or give it its own managed instance.</td>
+</tr>
+<tr>
+  <td>4</td><td><strong>Run state intact</strong></td>
+  <td><code>run_ledger.json</code> exists and is valid.</td>
+  <td>Don't delete the ledger. If corrupt, re-deploy a fresh run.</td>
+</tr>
+<tr>
+  <td>5</td><td><strong>No halt flag</strong></td>
+  <td>Yesterday did not end in a divergence halt.</td>
+  <td>Read the <code>halt.flag</code> reason, investigate, then deploy a <em>new</em> run (a halt can't resume the same run).</td>
+</tr>
+<tr>
+  <td>6</td><td><strong>Yesterday's receipts</strong></td>
+  <td>All of yesterday's trade/reconciliation/QC files still hash to their recorded values.</td>
+  <td>Don't delete or overwrite a run's output or QC exports between sessions.</td>
+</tr>
+</table>
+
+<div class="callout">
+<p><strong>Run pre-flight on demand</strong> (e.g. offline, skip the network clock check with <code>--skip-ntp</code>):</p>
+<pre>python -m app.engine.live.run pre-flight \
+  --repo-root /home/inkant/Documents/learn-ai \
+  --run-dir live_runs/&lt;run_id&gt;</pre>
+</div>
+
+<p class="small">Implementation: <code>PythonDataService/app/engine/live/pre_flight.py</code>. A separate, stricter
+"poison" sentinel exists for <em>intra-day</em> fatal divergence (in <code>halt.py</code>); it blocks trading until
+an operator clears it and never resumes on the same run.</p>
+</section>
+
+<!-- ============================ 10. ADD A STRATEGY ============================ -->
+<section>
+<h2>10 · Adding a new strategy</h2>
+
+<p>There are two ways to add a strategy. For most new ideas, use the <strong>declarative spec</strong> route — it's
+just a JSON file, no Python required. The <strong>hand-coded</strong> route is for performance-critical or unusual
+logic and is how the reference strategies were ported.</p>
+
+<h3>Route A — A declarative spec (recommended)</h3>
+<p>A spec is a JSON file that declares indicators and the buy/sell conditions. The engine reads it and runs it
+through the same backtester and live engine as hand-coded strategies — so a spec you backtest is the same thing you
+deploy.</p>
+
+<h4>Step 1 — Write the spec file</h4>
+<p>Create <code>PythonDataService/app/engine/strategy/spec/fixtures/&lt;name&gt;.spec.json</code>. Skeleton:</p>
+<pre>{
+  "schema_version": "1.0",
+  "name": "My SPY RSI strategy",
+  "symbols": ["SPY"],
+  "resolution": { "period_minutes": 15 },
+  "indicators": [
+    { "id": "rsi14", "kind": "RSI", "period": 14, "source": "close", "ma_type": "wilders" }
+  ],
+  "entry": {
+    "logic": "AND",
+    "conditions": [
+      { "kind": "IndicatorBetween", "indicator": "rsi14", "lo": 30, "hi": 70, "inclusive": true }
+    ],
+    "size": { "kind": "SetHoldings", "fraction": 1.0 },
+    "pyramiding": 1
+  },
+  "exit": {
+    "logic": "OR",
+    "conditions": [ { "kind": "BarsSinceEntry", "op": "&gt;=", "value": 20 } ]
+  },
+  "client_id": 11,
+  "submit_mode": "live_paper"
+}</pre>
+<p>Available indicator kinds include <code>SMA, EMA, RSI, ADX, MACD, SUPERTREND</code>. Condition kinds include
+<code>IndicatorComparison</code>, <code>IndicatorBetween</code>, <code>FreshCross</code> (two indicators crossing),
+<code>BarsSinceEntry</code>, <code>TimeOfDay</code>, and PnL/drawdown stops. The full, authoritative schema is the
+Pydantic model in <code>app/engine/strategy/spec/schema.py</code>; you can fetch it live at
+<code>GET /api/spec-strategy/schema</code>.</p>
+
+<h4>Step 2 — Backtest it</h4>
+<p>POST your spec to <code>/api/spec-strategy/backtest</code> (or via the strategy-lab UI) with a date range. You get
+back a trade log and statistics. Iterate the JSON until the behavior is what you want.</p>
+
+<h4>Step 3 — Validate &amp; commit</h4>
+<p>The spec is validated by Pydantic on load (unique indicator IDs, every referenced indicator declared, single
+symbol, etc.). Once happy, commit the file. It now appears via <code>GET /api/spec-strategy/fixtures</code> and in
+the Deploy form's spec picker.</p>
+
+<h4>Step 4 — Anchor &amp; deploy</h4>
+<p>Run the corresponding QuantConnect backtest, commit the audit copy under <code>references/qc-shadow/</code>, then
+deploy as in §7.</p>
+
+<h3>Route B — A hand-coded algorithm</h3>
+<ol>
+  <li>Create <code>app/engine/strategy/algorithms/&lt;name&gt;.py</code>, subclassing <code>Strategy</code> (or
+      <code>RsiRangeStrategy</code> for the A/B/C family). Implement <code>initialize()</code> (register indicators
+      and a consolidator) and the bar handler (your entry/exit logic).</li>
+  <li>Add a <strong>parity test</strong> proving it matches its reference (golden fixture, explicit tolerance) —
+      this is required for any new math in this repo.</li>
+  <li>Document the port in <code>docs/references/&lt;name&gt;.md</code> (source, commit/section, tolerance).</li>
+  <li>Backtest, then anchor &amp; deploy as in §7.</li>
+</ol>
+
+<div class="callout">
+<p><strong>Use the built-in helpers.</strong> The repo ships skills that walk these flows: <code>port-indicator</code>
+(bring math in from a reference with proven equivalence) and <code>add-fastapi-endpoint</code> (expose new output to
+the UI). The three reference strategies (A/B/C) under <code>algorithms/</code> are worked examples to copy from.</p>
+</div>
+
+<div class="callout warn">
+<p><strong>The non-negotiable for any new math.</strong> Every ported/added indicator or strategy ships with (a) a
+golden fixture, (b) a tolerance-pinned test, and (c) a note in <code>docs/references/</code>. "Looks right" is not a
+proof — see <code>.claude/rules/numerical-rigor.md</code>.</p>
+</div>
+</section>
+
+<!-- ============================ 11. TROUBLESHOOTING ============================ -->
+<section class="page-break">
+<h2>11 · Troubleshooting &amp; error messages</h2>
+
+<p>The UI never makes you parse a stack trace. Every failure maps an HTTP status + the operation into a category and
+a fix, shown inline next to the action that failed.</p>
+
+<table>
+<tr><th>Status</th><th>Category</th><th>Means</th><th>Typical fix</th></tr>
+<tr><td><strong>400</strong></td><td>Validation</td><td>An input is bad or missing (spec path, QC path).</td><td>Check the spec and QC audit-copy paths exist and are committed.</td></tr>
+<tr><td><strong>404</strong></td><td>Not found</td><td>No run/process for this instance.</td><td>Deploy a run first, then start it.</td></tr>
+<tr><td><strong>409</strong></td><td>Precondition</td><td>A gate blocked: dirty tree, run already exists, or already running.</td><td>Commit/stash; or stop the existing run before starting another.</td></tr>
+<tr><td><strong>503</strong></td><td>Infrastructure</td><td>The daemon, git, or broker is unavailable.</td><td>Start the host daemon / IB Gateway, then retry.</td></tr>
+</table>
+
+<h3>Most common situations</h3>
+<table>
+<tr><th>Symptom</th><th>Likely cause &amp; fix</th></tr>
+<tr><td>"Live engine unavailable" everywhere</td><td>The host daemon isn't running. Start it on the host. (It is not started by <code>restart.sh</code> / compose.)</td></tr>
+<tr><td>Deploy returns 409 "dirty tree"</td><td>Uncommitted code in scope. <code>git commit</code>/<code>stash</code> the listed files, redeploy.</td></tr>
+<tr><td>QC audit-copy dropdown is empty</td><td>Either no committed files in <code>references/qc-shadow/</code>, or (Linux/podman) the container can't reach the loopback-only daemon — bind/start the daemon so it's reachable.</td></tr>
+<tr><td>Bot won't trade this morning (BLOCKED)</td><td>A pre-flight gate failed. Open the readiness panel; fix the named gate (§9).</td></tr>
+<tr><td>"Fleet state blocks new starts"</td><td>Account-level state blocks a new start. Deploy-only now (untick start), or clear the account state, then start from the console.</td></tr>
+<tr><td>Halt flag set; can't resume</td><td>Yesterday diverged. Read the halt reason; deploy a fresh run (same run can't resume after a halt).</td></tr>
+</table>
+
+<div class="callout">
+<p><strong>Where to look on disk.</strong> A run's evidence lives in <code>live_runs/&lt;run_id&gt;/</code>:
+<code>run_ledger.json</code> (identity), <code>decisions.parquet</code> (one row per bar), <code>trades.parquet</code>
+(completed trades), <code>host_daemon.log</code> (process output), and <code>reconcile/</code> (daily reports +
+hash sidecars).</p>
+</div>
+</section>
+
+<!-- ============================ 12. CHEAT SHEET ============================ -->
+<section>
+<h2>12 · Quick-reference cheat sheet</h2>
+
+<div class="two-col">
+<div>
+<h4>Daily "clean deploy" routine</h4>
+<ol>
+  <li><code>git status</code> → commit/stash anything dirty.</li>
+  <li>Host: start IB Gateway (paper) + the daemon.</li>
+  <li>Confirm QC backtest ID + committed audit copy.</li>
+  <li>Open <code>/broker/deploy</code>; fill all fields.</li>
+  <li>Fleet amber? untick "start now," deploy-only.</li>
+  <li>Deploy → start from console when clear.</li>
+</ol>
+
+<h4>The two checklists</h4>
+<ul>
+  <li><strong>A · Deploy</strong> — engine up, broker, fields, fleet clear; then clean tree + spec match.</li>
+  <li><strong>B · Pre-flight</strong> — clean tree, NTP, no surprise position, ledger intact, no halt flag, yesterday's receipts.</li>
+</ul>
+
+<h4>Readiness verdicts</h4>
+<ul>
+  <li><span class="tag green">READY</span> trade allowed</li>
+  <li><span class="tag red">BLOCKED</span> hard gate failed</li>
+  <li><span class="tag amber">DEGRADED</span> soft warning, can trade</li>
+  <li><span class="tag blue">UNKNOWN</span> not running</li>
+</ul>
+</div>
+<div>
+<h4>Key commands</h4>
+<pre>run init-ledger ...   # create a run
+run start --run-dir   # launch engine
+run pre-flight ...    # morning checks
+run pause|resume|stop --strategy-instance-id ID
+run emergency-flatten # close all (panic)</pre>
+
+<h4>Key locations</h4>
+<ul>
+  <li>Console: <code>/broker/instances</code></li>
+  <li>Deploy: <code>/broker/deploy</code></li>
+  <li>Specs: <code>app/engine/strategy/spec/fixtures/</code></li>
+  <li>Algorithms: <code>app/engine/strategy/algorithms/</code></li>
+  <li>QC anchors: <code>references/qc-shadow/</code></li>
+  <li>Run output: <code>live_runs/&lt;run_id&gt;/</code></li>
+  <li>ADRs: <code>docs/architecture/adrs/</code></li>
+</ul>
+
+<h4>Status codes</h4>
+<ul>
+  <li><strong>400</strong> bad input · <strong>404</strong> not found</li>
+  <li><strong>409</strong> blocked (dirty tree / exists)</li>
+  <li><strong>503</strong> daemon/git/broker down</li>
+</ul>
+
+<h4>Remember</h4>
+<ul>
+  <li>Paper account only (<code>DU…</code>). Keep mode = paper.</li>
+  <li>No QC anchor → no deploy.</li>
+  <li>Daemon + Gateway are host programs, not containers.</li>
+  <li>Instance = the bot you manage; run = one switch-on.</li>
+</ul>
+</div>
+</div>
+
+<div class="callout ok" style="margin-top:18px;">
+<p><strong>If you remember one thing:</strong> commit your code, bring up the host (Gateway + daemon), and have your
+QC anchor committed — <em>before</em> you open the Deploy form. That keeps both checklists green and your deploys
+clean.</p>
+</div>
+
+<p class="small" style="margin-top:24px;">
+This manual describes the live-trading subsystem of the <strong>learn-ai</strong> research platform as of
+2026-06-01. It is a research/education tool; nothing here is financial advice, and real-money trading requires
+separately validated infrastructure. For the authoritative "why" behind any rule, see the ADRs in
+<code>docs/architecture/adrs/</code> and the rules in <code>.claude/rules/</code>.
+</p>
+</section>
+
+</body>
+</html>

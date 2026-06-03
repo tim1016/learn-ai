@@ -22,6 +22,16 @@ import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/b
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { type OperationError, toOperationError } from '../operation-error';
 
+// Kept in lockstep with the backend guard `identity._INSTANCE_ID_RE`
+// (and `live_instances._INSTANCE_ID_RE`): a deployment name the operate
+// endpoints reject (e.g. one with a space) must be caught here too, so the
+// operator sees the reason inline instead of a created-but-unusable instance.
+const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidationAlgorithm.py';
+const DEPLOYMENT_VALIDATION_SPEC_PATH =
+  'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
+
 /**
  * Deploy form for a live strategy instance. The UI uses plain operator words,
  * while the request still maps exactly to ADR 0006: create the run on the host,
@@ -42,6 +52,9 @@ export class BrokerDeployFormComponent {
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
   readonly qcCopies = resource({ loader: () => this.svc.getQcAuditCopies() });
+  // Used only to pre-empt the daemon's "already active" 409: a start-immediately
+  // deploy onto an instance that already has a live runner is rejected.
+  readonly instances = resource({ loader: () => this.svc.getInstances() });
   // Best-effort: the account prefill is convenience only — broker may be down,
   // in which case the operator types the account id manually.
   readonly account = resource({ loader: () => this.broker.account() });
@@ -60,6 +73,7 @@ export class BrokerDeployFormComponent {
   readonly startNow = signal<boolean>(false);
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
+  private readonly autoSelectedDeploymentValidationAuditCopy = signal<boolean>(false);
 
   readonly busy = signal<boolean>(false);
   readonly error = signal<OperationError | null>(null);
@@ -75,9 +89,44 @@ export class BrokerDeployFormComponent {
     () => this.specFixtures.value()?.find((f) => f.path === this.specPath()) ?? null,
   );
 
+  readonly qcAuditCopyOptions = computed<string[]>(() => {
+    const entries = this.qcCopies.value()?.entries ?? [];
+    if (entries.includes(DEPLOYMENT_VALIDATION_AUDIT_COPY)) return entries;
+    return [DEPLOYMENT_VALIDATION_AUDIT_COPY, ...entries];
+  });
+
   readonly launchMode = computed<'paper' | 'live'>(() => (this.readonlyFlag() ? 'paper' : 'live'));
 
+  /** True when the typed deployment name already has a live host runner. A
+   * start-immediately deploy onto it would hit the daemon's 409 "Host runner
+   * already active for … (instance …)"; deploy-only is unaffected. Matches the
+   * backend's live set (running | stopping). */
+  readonly instanceAlreadyRunning = computed<boolean>(() => {
+    const id = this.instanceId().trim();
+    if (id === '') return false;
+    const match = this.instances.value()?.find((i) => i.strategy_instance_id === id);
+    return match?.process_state === 'running' || match?.process_state === 'stopping';
+  });
+
+  /** True when a deployment name is typed but is not a valid single-segment id
+   * (e.g. contains a space). Empty is "missing", not "invalid", so the
+   * missing-fields message handles it. */
+  readonly instanceIdInvalid = computed<boolean>(() => {
+    const id = this.instanceId().trim();
+    return id !== '' && !INSTANCE_ID_RE.test(id);
+  });
+
   readonly fieldsReady = computed<boolean>(() => this.required());
+  readonly missingRequiredFields = computed<string[]>(() => {
+    const missing: string[] = [];
+    if (this.strategyKey().trim() === '') missing.push('Strategy');
+    if (this.specPath().trim() === '') missing.push('Strategy settings file');
+    if (this.accountId().trim() === '') missing.push('Brokerage account');
+    if (this.qcBacktestId().trim() === '') missing.push('Backtest ID');
+    if (this.qcAuditCopyPath().trim() === '') missing.push('Algorithm audit copy');
+    if (this.instanceId().trim() === '') missing.push('Deployment name');
+    return missing;
+  });
 
   readonly nowChecks = computed(() => [
     {
@@ -148,9 +197,27 @@ export class BrokerDeployFormComponent {
       const strategy = this.strategyKey();
       const fixtures = this.specFixtures.value() ?? [];
       const match = fixtures.find((f) => f.name === strategy);
-      if (match && this.specPath() !== match.path) {
-        this.specPath.set(match.path);
+      const fallback =
+        strategy === 'deployment_validation' ? DEPLOYMENT_VALIDATION_SPEC_PATH : null;
+      const nextPath = match?.path ?? fallback;
+      if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
+    });
+    effect(() => {
+      if (this.strategyKey() === 'deployment_validation') {
+        if (this.maxOrdersPerDay() === 4) this.maxOrdersPerDay.set(100);
+        if (this.qcAuditCopyPath().trim() === '') {
+          this.qcAuditCopyPath.set(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+          this.autoSelectedDeploymentValidationAuditCopy.set(true);
+        }
+        return;
       }
+      if (
+        this.autoSelectedDeploymentValidationAuditCopy() &&
+        this.qcAuditCopyPath() === DEPLOYMENT_VALIDATION_AUDIT_COPY
+      ) {
+        this.qcAuditCopyPath.set('');
+      }
+      this.autoSelectedDeploymentValidationAuditCopy.set(false);
     });
   }
 
@@ -173,7 +240,10 @@ export class BrokerDeployFormComponent {
     if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
       return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
     }
-    if (!this.required()) return 'Fill every required field before deploying.';
+    if (this.startNow() && this.instanceAlreadyRunning()) {
+      return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
+    }
+    if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
     return null;
   });
 
@@ -216,6 +286,9 @@ export class BrokerDeployFormComponent {
     try {
       const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
+      // A start-immediately deploy just made this instance live; refresh so the
+      // guard blocks an immediate second start rather than waiting on a 409.
+      this.instances.reload();
     } catch (err) {
       this.error.set(toOperationError('deploy', err));
     } finally {
@@ -261,6 +334,7 @@ export class BrokerDeployFormComponent {
   }
   setQcAuditCopyPath(e: Event): void {
     this.qcAuditCopyPath.set(this.text(e));
+    this.autoSelectedDeploymentValidationAuditCopy.set(false);
   }
   setInstanceId(e: Event): void {
     this.instanceId.set(this.text(e));

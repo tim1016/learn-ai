@@ -58,5 +58,8 @@
       "Bash(git push --force*)",
       "Bash(rm -rf *)"
     ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
   }
 }

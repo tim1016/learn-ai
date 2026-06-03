@@ -12,6 +12,17 @@ import between ``desired_state`` and ``live_state_sidecar``.
 
 from __future__ import annotations
 
+import re
+
+# Canonical single-segment id pattern. Kept byte-identical to
+# ``live_instances._INSTANCE_ID_RE`` (the operate-endpoint guard that keeps the
+# value off the CodeQL path-injection taint chain); a parity test pins the two
+# in lockstep. Enforcing it here is what makes a name that ``status``/``start``/
+# ``stop`` would later reject (e.g. one containing a space) fail closed at
+# *creation* time — via the CLI and the deploy seam — instead of producing an
+# instance that exists but can never be operated on.
+_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
 
 def validate_strategy_instance_id(value: str) -> str:
     """Reject a ``strategy_instance_id`` that is unsafe as a path segment.
@@ -45,5 +56,11 @@ def validate_strategy_instance_id(value: str) -> str:
     if value in ("..", "."):
         raise ValueError(
             f"strategy_instance_id must not be a path-traversal segment: {value!r}"
+        )
+    if _INSTANCE_ID_RE.fullmatch(value) is None:
+        raise ValueError(
+            "strategy_instance_id must be 1-128 chars, start with a letter or "
+            "digit, and contain only letters, digits, '_', '.', or '-' "
+            f"(no spaces): {value!r}"
         )
     return value

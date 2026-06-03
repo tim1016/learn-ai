@@ -9,12 +9,24 @@ import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void } | null = null;
 
-function setup(opts: { daemonDown?: boolean; fleetBlocks?: boolean } = {}) {
+const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidationAlgorithm.py';
+const DEPLOYMENT_VALIDATION_SPEC_PATH =
+  'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
+
+function setup(
+  opts: {
+    daemonDown?: boolean;
+    fleetBlocks?: boolean;
+    qcEntries?: string[];
+    instances?: { strategy_instance_id: string; process_state: string }[];
+  } = {},
+) {
   const svc = {
     getEngineStrategies: vi
       .fn()
       .mockResolvedValue([
         { name: 'spy_ema_crossover', display_name: 'SPY EMA Crossover', description: '' },
+        { name: 'deployment_validation', display_name: 'Deployment Validation', description: '' },
       ]),
     getSpecStrategyFixtures: vi.fn().mockResolvedValue([
       {
@@ -24,10 +36,21 @@ function setup(opts: { daemonDown?: boolean; fleetBlocks?: boolean } = {}) {
         symbols: ['SPY'],
         description: null,
       },
+      {
+        name: 'deployment_validation',
+        spec_name: 'Deployment Validation',
+        path: DEPLOYMENT_VALIDATION_SPEC_PATH,
+        symbols: ['SPY'],
+        description: null,
+      },
     ]),
     getQcAuditCopies: vi
       .fn()
-      .mockResolvedValue({ scope_root: 'references/qc-shadow', entries: ['references/qc-shadow/A.py'] }),
+      .mockResolvedValue({
+        scope_root: 'references/qc-shadow',
+        entries: opts.qcEntries ?? ['references/qc-shadow/A.py'],
+      }),
+    getInstances: vi.fn().mockResolvedValue(opts.instances ?? []),
     deployInstance: vi
       .fn()
       .mockResolvedValue({ run_id: 'run-new', run_dir: '/runs/run-new', created: true, start: null }),
@@ -129,6 +152,41 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.start_options.max_orders_per_day).toBe(4);
   });
 
+  it('keeps the deployment validation audit copy selectable when the daemon listing is empty', async () => {
+    const { fixture, component } = setup({ qcEntries: [] });
+    await flush();
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const options = Array.from(host.querySelectorAll<HTMLOptionElement>('option')).map(
+      (option) => option.textContent ?? '',
+    );
+    expect(options).toContain(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+
+    component.strategyKey.set('deployment_validation');
+    await flush();
+
+    expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
+    expect(component.maxOrdersPerDay()).toBe(100);
+
+    component.strategyKey.set('spy_ema_crossover');
+    await flush();
+
+    expect(component.qcAuditCopyPath()).toBe('');
+  });
+
+  it('lists the missing required fields in the blocked reason', async () => {
+    const { fixture, component } = setup({ qcEntries: [] });
+    await flush();
+    component.strategyKey.set('deployment_validation');
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing: Backtest ID, Deployment name.',
+    );
+  });
+
   it('asks for confirmation before starting in Live mode', async () => {
     const { fixture, svc, component } = setup();
     await flush();
@@ -219,6 +277,36 @@ describe('BrokerDeployFormComponent', () => {
 
     component.startNow.set(false);
     fixture.detectChanges();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('blocks "Deploy & start" onto an already-running instance, but allows deploy-only', async () => {
+    const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'running' }] });
+    await flush();
+    fillRequired(component);
+    component.instanceId.set('Minute');
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      '"Minute" is already running',
+    );
+
+    // Deploy-only is fine — only the immediate start would collide.
+    component.startNow.set(false);
+    fixture.detectChanges();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('allows "Deploy & start" when the instance exists but is not live', async () => {
+    const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'exited' }] });
+    await flush();
+    fillRequired(component);
+    component.instanceId.set('Minute');
+    component.startNow.set(true);
+    fixture.detectChanges();
+
     expect(deployButton(fixture).disabled).toBe(false);
   });
 });

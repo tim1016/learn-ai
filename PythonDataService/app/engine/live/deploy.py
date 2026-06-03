@@ -24,6 +24,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.pre_flight import check_clean_tree
 from app.engine.live.run_ledger import (
     LiveRunLedger,
@@ -47,6 +48,16 @@ class DirtyTreeError(DeployError):
 
 class GitUnavailableError(DeployError):
     """git HEAD could not be resolved (git missing, not a repo, empty HEAD)."""
+
+
+class InvalidInstanceIdError(DeployError):
+    """The ``strategy_instance_id`` is not a safe, operable single-segment id.
+
+    The operate endpoints (``status`` / ``start`` / ``stop``) enforce a strict
+    single-segment pattern; a name they would reject (e.g. one containing a
+    space) must be rejected at *creation* too, or it yields a run that exists
+    but can never be selected or started. Maps to HTTP 400.
+    """
 
 
 class SpecOrAuditMissingError(DeployError):
@@ -138,6 +149,15 @@ def deploy_run(params: DeployParams) -> DeployResult:
     Synchronous (subprocess + filesystem). Daemon callers run it in a
     threadpool. Raises a :class:`DeployError` subclass on every failure.
     """
+    # Validate the operator-supplied instance id first: it is cheap, deterministic,
+    # and a bad name should fail fast before any git work. Empty means "unbound"
+    # (a legacy/deploy-only run) and is left to the operate layer.
+    if params.strategy_instance_id:
+        try:
+            validate_strategy_instance_id(params.strategy_instance_id)
+        except ValueError as exc:
+            raise InvalidInstanceIdError(str(exc)) from exc
+
     repo_root = params.repo_root.resolve()
     scope_paths = [Path(p) for p in params.clean_tree_scope]
 

@@ -36,6 +36,7 @@ from app.engine.live.deploy import (
     DeployParams,
     DirtyTreeError,
     GitUnavailableError,
+    InvalidInstanceIdError,
     RunAlreadyExistsError,
     SpecOrAuditMissingError,
     deploy_run,
@@ -301,6 +302,10 @@ class RunnerProcessManager:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
                 f"Run directory already exists without a matching ledger: {exc.run_dir}",
+            ) from exc
+        except InvalidInstanceIdError as exc:
+            raise HostRunnerError(
+                status.HTTP_400_BAD_REQUEST, f"Invalid deployment name: {exc}"
             ) from exc
         except SpecOrAuditMissingError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc

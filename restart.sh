@@ -35,14 +35,21 @@ fi
 # `compose up --no-cache` is not supported by the docker-compose plugin
 # (the flag is rejected at parse time). Build first when --no-cache is
 # requested, then up. The cached path can fold build into up as before.
+# NOTE: `podman compose up` exits non-zero when a `depends_on:
+# service_healthy` gate doesn't flip in time — it abandons the dependent in
+# Created (see the recovery block below). Under `set -e` that non-zero exit
+# would kill the script before the rescue logic runs, stranding the
+# dependents permanently. Guard with `|| true`: the Created-recovery blocks
+# and the 240s health-wait loop below are the authoritative verdict and will
+# exit 1 if anything is genuinely unhealthy.
 if [[ -n "$NO_CACHE" ]]; then
   echo "==> Building images from scratch..."
   podman compose build --no-cache --pull
   echo "==> Starting all services..."
-  podman compose up -d --force-recreate
+  podman compose up -d --force-recreate || true
 else
   echo "==> Building and starting all services..."
-  podman compose up -d --build --force-recreate
+  podman compose up -d --build --force-recreate || true
 fi
 
 # Recover services left in Created. When a `depends_on: service_healthy`
@@ -56,7 +63,7 @@ STUCK=$(podman ps -a --filter status=created --format "{{.Names}}" \
 if [[ -n "$STUCK" ]]; then
   echo "==> Starting compose services left in Created:"
   echo "$STUCK" | sed 's/^/    /'
-  echo "$STUCK" | xargs -r podman start >/dev/null
+  echo "$STUCK" | xargs -r podman start >/dev/null 2>&1 || true
 fi
 
 # Wait budget: the longest healthcheck start_period in compose.yaml is the
