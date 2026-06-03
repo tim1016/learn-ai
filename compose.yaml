@@ -38,8 +38,15 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
+      # A full `./restart.sh` saturates host CPU/IO, so the `redis-cli`
+      # exec can be slow to spawn even though redis answers PONG instantly.
+      # One check was killed at the old 3s timeout (5.4s spawn), and with no
+      # start_period a dependent's `condition: service_healthy` gave up:
+      # "container my-redis is unhealthy". 5s timeout + start_period absorb
+      # the cold-rebuild window (redis itself boots in <1s).
+      timeout: 5s
       retries: 5
+      start_period: 20s
     deploy:
       resources:
         limits:

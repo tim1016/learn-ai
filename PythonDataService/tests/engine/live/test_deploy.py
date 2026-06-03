@@ -18,6 +18,7 @@ from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
     DirtyTreeError,
+    InvalidInstanceIdError,
     RunAlreadyExistsError,
     SpecOrAuditMissingError,
     deploy_run,
@@ -91,6 +92,45 @@ def test_deploy_run_creates_ledger(
     assert ledger["run_id"] == result.run_id
     assert ledger["account_id"] == "DU111"
     assert ledger["live_config"] == {"symbol": "SPY"}
+
+
+@requires_git
+def test_deploy_run_rejects_instance_id_with_space(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """Regression: a deployment name the operate endpoints reject (e.g. one with
+    a space, like "Deploy morning Jun 3") must fail at creation, not produce a
+    run that can never be selected or started. The id is validated before the
+    git work, so no run directory is written."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(InvalidInstanceIdError):
+        deploy_run(
+            _params(repo, spec, qc, run_root, strategy_instance_id="Deploy morning Jun 3")
+        )
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_accepts_valid_instance_id(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, spec, qc = repo_with_inputs
+
+    result = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            tmp_path / "live_runs",
+            strategy_instance_id="deployment-validation-jun3",
+        )
+    )
+
+    assert result.created is True
+    ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["strategy_instance_id"] == "deployment-validation-jun3"
 
 
 @requires_git
