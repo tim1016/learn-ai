@@ -441,6 +441,12 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
     exec_obj = getattr(fill, "execution", None)
     exec_id = getattr(exec_obj, "execId", None) if exec_obj is not None else None
     client_id_raw = getattr(exec_obj, "clientId", None) if exec_obj is not None else None
+    # ib_async populates ``Execution.time`` as a tz-aware UTC datetime. Carry
+    # it as ``int64 ms UTC`` so the § 7 outside-mutation floor can distinguish
+    # a stale connect-time replay from a concurrent fill. ``ts_ms`` below stays
+    # wall-clock observation time for the SSE stream's existing consumers.
+    exec_time = getattr(exec_obj, "time", None) if exec_obj is not None else None
+    exec_time_ms = int(exec_time.timestamp() * 1000) if exec_time is not None else None
     # Commission rides on the polled Fill once IBKR reports it (a beat after the
     # execution). Read it off the cached object — no eventkit subscription, per
     # this module's poll-based design. None until reported (PRD-B).
@@ -460,6 +466,7 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
+        exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
         ts_ms=_now_ms(),
     )

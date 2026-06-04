@@ -1257,6 +1257,10 @@ class LiveEngine:
                     "perm_id": event.perm_id,
                     "account_id": event.account_id,
                     "client_id": event.client_id,
+                    # Broker execution time so check_outside_mutation can floor
+                    # at session start (stale connect-time replay vs concurrent
+                    # foreign fill). None when the broker omitted the time.
+                    "exec_time_ms": event.exec_time_ms,
                     # ``remaining`` is the order's leftover quantity AFTER
                     # this execution. ``check_lost_fill`` treats an order
                     # as complete iff ``remaining == 0`` for some
@@ -1281,6 +1285,7 @@ class LiveEngine:
             owned_client_order_ids,
             halted_at_ms=now_ms_utc(),
             last_clean_bar_close_ms=last_clean_bar_close_ms,
+            session_start_ms=self._session_start_ms,
         )
         if reason is None:
             return
