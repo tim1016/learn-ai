@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pandas_market_calendars as mcal
 import pytest
 
 from app.engine.data.lean_format import LeanMinuteDataReader
@@ -22,9 +23,75 @@ from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
 LEAN_CACHE_ROOT = Path(__file__).resolve().parents[3] / "lean-cache"
 
+# Fixture window for the parity gate. MUST match
+# ``SpyEmaCrossoverAlgorithm.initialize()``'s set_start_date / set_end_date —
+# a drift assertion in the test pins them together so this can't silently fall
+# out of sync. The window is what the coverage guard checks the cache against.
+FIXTURE_START = date(2024, 3, 28)
+FIXTURE_END = date(2026, 3, 27)
+
 
 def _ms_utc(value: datetime) -> int:
     return int(value.astimezone(UTC).timestamp() * 1000)
+
+
+def _expected_nyse_sessions(start: date, end: date) -> set[date]:
+    """Authoritative NYSE trading days in ``[start, end]`` (holidays/early
+    closes honored by pandas_market_calendars — the same source the runtime
+    uses, see ``app/engine/live/nyse_calendar.py``)."""
+    schedule = mcal.get_calendar("NYSE").schedule(start_date=start, end_date=end)
+    return {ts.date() for ts in schedule.index}
+
+
+def _cached_spy_sessions(start: date, end: date) -> set[date]:
+    """SPY minute day-zips materialized in the LEAN cache within ``[start, end]``."""
+    cache_dir = LEAN_CACHE_ROOT / "equity" / "usa" / "minute" / "spy"
+    present: set[date] = set()
+    for zip_path in cache_dir.glob("2*_trade.zip"):
+        try:
+            day = datetime.strptime(zip_path.name[:8], "%Y%m%d").date()
+        except ValueError:
+            continue
+        if start <= day <= end:
+            present.add(day)
+    return present
+
+
+def _summarize_missing_ranges(missing: list[date]) -> str:
+    """Collapse a sorted list of dates into contiguous ``start..end`` ranges."""
+    if not missing:
+        return "(none)"
+    ranges: list[str] = []
+    run_start = run_prev = missing[0]
+    for day in missing[1:]:
+        if (day - run_prev).days <= 3:  # tolerate weekend/holiday gaps within a run
+            run_prev = day
+            continue
+        ranges.append(run_start.isoformat() if run_start == run_prev else f"{run_start}..{run_prev}")
+        run_start = run_prev = day
+    ranges.append(run_start.isoformat() if run_start == run_prev else f"{run_start}..{run_prev}")
+    return ", ".join(ranges)
+
+
+def _assert_window_fully_cached(start: date, end: date) -> None:
+    """Data-coverage invariant — distinct from the parity invariant.
+
+    The parity gate must never infer correctness from mutable local cache
+    state: a half-empty cache would otherwise run a two-year backtest on one
+    year of data and still pass parity (live==backtest) on the truncated
+    window. Fail early with the missing date ranges instead.
+    """
+    expected = _expected_nyse_sessions(start, end)
+    missing = sorted(expected - _cached_spy_sessions(start, end))
+    if missing:
+        pytest.fail(
+            f"fixture incomplete: {len(missing)}/{len(expected)} NYSE sessions "
+            f"missing from the SPY LEAN cache in {start}..{end}. "
+            f"Missing ranges: {_summarize_missing_ranges(missing)}. "
+            "Backfill lean-cache (Polygon→LEAN) before treating the parity "
+            "gate as authoritative, or shrink FIXTURE_START/FIXTURE_END to a "
+            "fully-covered window."
+        )
 
 
 def _assert_order_events_exact(backtest: list[OrderEvent], live: list[OrderEvent]) -> None:
@@ -127,19 +194,29 @@ async def test_live_engine_replays_spy_next_bar_open_backtest_exactly() -> None:
     # fast locally if the cache is missing while leaving CI green.
     if not LEAN_CACHE_ROOT.exists():
         pytest.skip(f"local LEAN cache missing at {LEAN_CACHE_ROOT}; run locally to exercise the parity gate")
+
+    # Data-coverage invariant first: refuse to assert parity over a cache that
+    # doesn't actually contain the intended window (see _assert_window_fully_cached).
+    _assert_window_fully_cached(FIXTURE_START, FIXTURE_END)
+
     backtest_result, backtest_strategy = _run_backtest()
+    # Drift guard: the coverage guard above checked FIXTURE_*, so they must be
+    # the dates the strategy actually runs.
+    assert backtest_strategy.start_date is not None and backtest_strategy.end_date is not None
+    assert backtest_strategy.start_date.date() == FIXTURE_START
+    assert backtest_strategy.end_date.date() == FIXTURE_END
+
     live_result, live_strategy = await _run_live_from_backtest_window(backtest_strategy)
 
     assert len(live_result.bars) == len(backtest_result.bars)
-    # Count dropped from 162 → 120 when the LeanMinuteDataReader started
-    # honoring ``data_policy.session`` (Bug B fix, 2026-05-21). Before the
-    # fix the reader returned 04:00-20:00 ET bars unconditionally and the
-    # strategy fired entries on extended-hours signal bars; now both the
-    # backtest and the replay see RTH-only bars and the trade count agrees
-    # at 120 on this window. The parity invariant (backtest == live) is
-    # asserted by ``_assert_order_events_exact`` below regardless of the
-    # absolute count.
-    assert len(live_result.order_events) == 120
+    # Parity invariant — the gate's real purpose: the live replay must match
+    # the backtest order-for-order. We derive the expected count from the
+    # backtest rather than pinning a magic number (which tracks mutable cache
+    # state and goes stale on every refresh); the deep equality is asserted by
+    # ``_assert_order_events_exact`` below. ``> 0`` keeps the gate from passing
+    # on a degenerate (zero-trade) window that slipped past the coverage guard.
+    assert len(backtest_result.order_events) > 0
+    assert len(live_result.order_events) == len(backtest_result.order_events)
     assert live_result.initial_cash == backtest_result.initial_cash
     assert live_result.final_equity - backtest_result.final_equity == Decimal("0")
     assert live_result.total_fees - backtest_result.total_fees == Decimal("0")
