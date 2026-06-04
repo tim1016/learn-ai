@@ -90,6 +90,16 @@ Rationale: four different wire formats were in flight before this rule (`int ms`
 
 No other place in the codebase converts timestamps for wire, storage, or serialization. Transient in-function timezone conversion for wall-clock semantics (see the classical rule below) is allowed, provided the result is not persisted and is converted back to canonical `int64 ms UTC` before return, write, or serialize.
 
+#### Finite ingestion vs. live subscriptions
+
+The fail-fast rule above governs **finite** ingestion — a historical fetch is a closed dataset where a duplicate or gap *is* upstream corruption, so it must halt. An **active broker subscription** is a different boundary: a long-lived stream (e.g. IBKR `reqRealTimeBars`) can legitimately *redeliver* the bar it most recently sent, and the vendor does not contractually promise duplicate-free delivery. For these and only these live subscriptions, a redelivery of the most-recently-accepted element may be absorbed **idempotently** — but it must be **surfaced, never silenced**: logged with a structured `action` and incremented on an observable counter, exactly like the fail-fast path emits an error. The relaxation is narrow:
+
+- Exact redelivery (same timestamp, same payload) → skip; do not double-count.
+- Same timestamp, *different* payload, before the aggregate it feeds is emitted → treat as a correction; recompute the open aggregate from its stored parts (never fold-and-sum).
+- Any timestamp belonging to an *already-emitted* aggregate (i.e. `< last_accepted`) → still **fatal**; downstream has already consumed a now-stale value. Non-monotonic-within-the-open-aggregate stays fatal too until a real feed demonstrates otherwise.
+
+Reference implementation: `app/broker/ibkr/bars.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder remains banned in both modes — absorbing a redelivery is not the same as repairing a feed.
+
 ### Ban list (CI-enforceable with grep)
 
 - `datetime.utcnow` — deprecated in Python 3.12; use `datetime.now(UTC)` at the ingestion boundary, then immediately convert to ms.

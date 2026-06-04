@@ -177,7 +177,7 @@ async def stream_minute_bars(
 1. **Bar source.** `client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)`. IBKR delivers 5-second TRADES bars; aggregate internally to closed 1-minute bars and yield one per minute boundary. Do **not** use `reqHistoricalData(..., keepUpToDate=True)` — its update cadence is documented as approximate and bar finalization is not guaranteed (this is the same reasoning Codex cited).
 2. **Closed bars only.** Yield only after the minute boundary has passed. Never yield in-flight aggregates.
 3. **Timestamp normalization.** `int64 ms UTC` at the boundary, per `.claude/rules/numerical-rigor.md`. Convert IB's `datetime` (which is tz-aware UTC in `ib_async`) immediately on receipt. The yielded `IbkrMinuteBar` model carries `start_ms: int64`, `end_ms: int64`.
-4. **Fail-fast on duplicates and non-monotonic timestamps.** Reject with a descriptive `IBKRBarStreamError`. Do not silently dedupe — duplicates signal upstream corruption.
+4. **Duplicate policy is boundary-specific.** `aggregate_realtime_bar` defaults to `policy="strict"` — any duplicate or non-monotonic timestamp raises `IBKRBarStreamError` (finite-historical-ingestion contract). `stream_minute_bars` passes `policy="live_idempotent"`: IBKR's docs do not promise duplicate-free delivery on an *active* `reqRealTimeBars` subscription, so a redelivery of the most-recently-accepted 5-second bar is absorbed — exact redelivery skipped, different-valued redelivery corrects the still-open minute (OHLCV recomputed, not summed). Both are logged (`extra={action: skipped_duplicate|applied_correction}`) and counted on `LiveBarCounters`, never silenced. A timestamp from an already-emitted minute is `< last_source_ms` and still fails fast as a regression, as does a non-monotonic timestamp within the open minute. This is the one sanctioned deviation from blanket fail-fast — see `.claude/rules/numerical-rigor.md` § "Live subscriptions".
 5. **Cancellation.** `try/finally` calls `client.ib.cancelRealTimeBars(bars_obj)` exactly like `market_data.stream_option_chain` cancels its `reqMktData`. No streaming-line leaks.
 6. **Pacing.** A single 5-second-bar subscription is well under the 50 msg/s and 100-line quotas. Document this; do not add per-call pacing.
 
@@ -199,8 +199,9 @@ class IbkrMinuteBar(BaseModel):
 **Tests** (`tests/broker/ibkr/test_bars.py`, ~10 tests):
 - Five 5-sec bars within the same minute are aggregated into one yielded `IbkrMinuteBar` with correct OHLCV.
 - A new minute-aligned 5-sec bar triggers the previous minute to fire.
-- A duplicate 5-sec timestamp raises `IBKRBarStreamError`.
+- A duplicate 5-sec timestamp raises `IBKRBarStreamError` under `policy="strict"`.
 - A non-monotonic 5-sec timestamp raises `IBKRBarStreamError`.
+- Under `policy="live_idempotent"`: an exact redelivery is skipped (no double-counted volume, `skipped_duplicate` counter); a different-valued redelivery before minute close corrects the open minute's OHLCV (`applied_correction` counter); a redelivery from an already-emitted minute and a non-monotonic bar within the open minute both still raise.
 - Subscriber cancellation calls `cancelRealTimeBars` exactly once.
 - `useRTH=True` is honored (mock returns RTH-only bars).
 

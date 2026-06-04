@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-05-15 (indicator-state persistence shipped — PR adds `indicator_state.py` / `nyse_calendar.py` to §6 surface table, flips §11 prereq row to SHIPPED, expands §12 item 3 with hydrate-policy expectations. See change log for full session.).
+> **Last reviewed:** 2026-06-04 (live-idempotent IBKR 5-second bar redelivery — `bars.py` gains `DuplicatePolicy` + `LiveBarCounters`; §4 surface row and §10 `test_bars.py` count updated. Prior: 2026-05-15 indicator-state persistence shipped — PR adds `indicator_state.py` / `nyse_calendar.py` to §6 surface table, flips §11 prereq row to SHIPPED, expands §12 item 3 with hydrate-policy expectations. See change log for full session.).
 
 ---
 
@@ -130,7 +130,7 @@ Twelve files. Public surface only — private helpers (prefix `_`) and the `mode
 | `client.py` | `IbkrClient`, `get_client`, `set_client`, `BrokerError`, `ConnectionRefusedDueToSentinelError`, `NotConnectedError` | `ib_async.IB` lifecycle wrapper. Owns the singleton client. Layers 1+3 of paper safety. |
 | `config.py` | `IbkrSettings`, `get_settings`, `reset_settings_for_testing`, `PAPER_PORTS`, `LIVE_PORTS` | Env-var-backed settings + Layer 2. |
 | `contracts.py` | `qualify_underlying`, `list_expirations`, `list_strikes`, `build_option_contract`, `list_qualified_strikes`, `build_chain_contracts`, `expiry_ms_to_yyyymmdd`, `yyyymmdd_to_expiry_ms` | Stock + Option contract resolution. SMART/USD only. |
-| `bars.py` | `aggregate_realtime_bar`, `stream_minute_bars`, `IBKRBarStreamError`, `IbkrMinuteBar` (model) | 5-second TRADES → closed 1-minute bar aggregation. Fail-fast on duplicate or non-monotonic timestamps. |
+| `bars.py` | `aggregate_realtime_bar`, `stream_minute_bars`, `LiveBarCounters`, `IBKRBarStreamError`, `IbkrMinuteBar` (model) | 5-second TRADES → closed 1-minute bar aggregation. Two duplicate policies: `strict` (default) fails fast on any duplicate/non-monotonic timestamp; `live_idempotent` (used by `stream_minute_bars`) absorbs IBKR redelivery of the most recent 5-second bar — exact redelivery skipped, different-valued redelivery corrects the still-open minute, both logged + counted on `LiveBarCounters`. A timestamp from an already-emitted minute is `< last_source_ms` and still fails fast as a regression. |
 | `market_data.py` | `stream_option_chain` | `reqMktData` with generic ticks `100,101,106` → debounced `IbkrChainSnapshot` SSE. Greeks selection: `model > bid > ask > last > none`. |
 | `account.py` | `fetch_account_summary`, `fetch_positions` | One-shot reads of NLV / cash / margin / per-position state. |
 | `orders.py` | `place_paper_order`, `list_open_orders`, `cancel_paper_order`, `stream_order_events`, `OrderRefusedError`, `OrderNotFoundError` | Layers 0+4 of paper safety. Idempotency cache keyed on `client_order_id` (process-local, not durable). Polling-based event stream (default 0.5s). |
@@ -311,13 +311,13 @@ Read-only: never calls `connect()` and never places orders. The frontend exposes
 
 ## 10. Test coverage
 
-As of 2026-05-04 (post PR #78):
+As of 2026-06-04 (post live-idempotent redelivery fix):
 
 | Area | File | Tests |
 |---|---|---|
-| **Broker module — 107 tests** | | |
+| **Broker module — 112 tests** | | |
 | | `tests/broker/ibkr/test_account.py` | 9 |
-| | `tests/broker/ibkr/test_bars.py` | 7 (incl. `open_` regression from PR #78) |
+| | `tests/broker/ibkr/test_bars.py` | 12 (incl. `open_` regression from PR #78 and 5 `live_idempotent`/policy tests) |
 | | `tests/broker/ibkr/test_client.py` | 14 |
 | | `tests/broker/ibkr/test_config.py` | 8 |
 | | `tests/broker/ibkr/test_contracts.py` | 8 |
