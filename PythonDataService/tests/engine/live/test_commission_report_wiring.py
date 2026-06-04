@@ -29,8 +29,10 @@ def _trade(*, order_id: int = 100, account: str = "DU1234567"):
     return SimpleNamespace(contract=contract, order=order, orderStatus=order_status)
 
 
-def _fill(*, exec_id="ex-1", shares=10.0, price=100.0, commission=1.37, currency="USD"):
-    execution = SimpleNamespace(execId=exec_id, clientId=7, shares=shares, price=price)
+def _fill(*, exec_id="ex-1", shares=10.0, price=100.0, commission=1.37, currency="USD", exec_time=None):
+    execution = SimpleNamespace(
+        execId=exec_id, clientId=7, shares=shares, price=price, time=exec_time
+    )
     commission_report = (
         None
         if commission is None
@@ -49,6 +51,44 @@ def test_fill_event_fee_is_none_when_commission_not_yet_reported() -> None:
     event = orders_module._fill_to_event(_trade(), _fill(commission=None), "DU1234567")
 
     assert event.fee is None  # not a fabricated 0.0
+
+
+def test_fill_event_captures_broker_execution_time_ms() -> None:
+    """``exec_time_ms`` is the broker execution time, not wall-clock observation
+    time — the outside-mutation session floor depends on this to tell a stale
+    connect-time replay apart from a concurrent fill."""
+    exec_time = datetime(2026, 6, 4, 13, 30, 10, tzinfo=UTC)
+    event = orders_module._fill_to_event(_trade(), _fill(exec_time=exec_time), "DU1234567")
+
+    assert event.exec_time_ms == int(exec_time.timestamp() * 1000)
+
+
+def test_fill_event_exec_time_ms_none_when_broker_omits_time() -> None:
+    event = orders_module._fill_to_event(_trade(), _fill(exec_time=None), "DU1234567")
+
+    assert event.exec_time_ms is None
+
+
+def test_extend_seen_executions_threads_exec_time_ms() -> None:
+    """The cumulative-executions dict carries ``exec_time_ms`` so the
+    outside-mutation check can apply its session floor."""
+    foreign = IbkrOrderEvent(
+        account_id="DU284968",
+        order_id=999,  # not in _order_meta → foreign
+        event_type="fill",
+        exec_id="e-foreign",
+        client_id=42,
+        fill_quantity=10.0,
+        remaining=0.0,
+        exec_time_ms=1_700_000_000_000,
+        ts_ms=1_700_000_111_111,
+    )
+    seen: list[dict] = []
+    LiveEngine._extend_seen_executions(_engine_stub(), seen, [foreign])
+
+    assert len(seen) == 1
+    assert seen[0]["client_order_id"] is None
+    assert seen[0]["exec_time_ms"] == 1_700_000_000_000
 
 
 def _engine_stub():

@@ -206,6 +206,7 @@ def check_outside_mutation(
     *,
     halted_at_ms: int,
     last_clean_bar_close_ms: int,
+    session_start_ms: int | None = None,
 ) -> PoisonedHaltReason | None:
     """Return a halt reason if any execution lacks a Python-owned ``client_order_id``.
 
@@ -218,20 +219,43 @@ def check_outside_mutation(
 
     Each ``execution`` row is the dict shape produced by the IBKR
     adapter's execution-stream channel (Phase C-2c-b2): at minimum
-    ``client_order_id``, ``exec_id``, ``perm_id``, ``account_id``.
-    The function reads only ``client_order_id`` to decide ownership;
-    ``exec_id`` / ``perm_id`` are surfaced into the halt reason's
-    ``details`` for the post-mortem operator.
+    ``client_order_id``, ``exec_id``, ``perm_id``, ``account_id``,
+    plus ``exec_time_ms`` (the broker execution time). The function
+    reads ``client_order_id`` to decide ownership and ``exec_time_ms``
+    to apply the session floor; ``exec_id`` / ``perm_id`` are surfaced
+    into the halt reason's ``details`` for the post-mortem operator.
 
-    Returns ``None`` when every execution is Python-owned; otherwise
-    a ``PoisonedHaltReason`` describing the first offender (the
-    ``details`` dict carries the foreign exec_id / perm_id /
-    client_id / account_id so the operator can correlate against TWS
-    history).
+    ``session_start_ms`` floors the check at this run's broker session:
+    IBKR replays the trading day's prior executions when the runtime
+    connects, so a foreign fill whose ``exec_time_ms`` predates session
+    start is pre-existing account history (the bot had placed nothing
+    yet, so it cannot own that fill), not concurrent contamination.
+    Such fills are skipped. The floor is fail-safe — it never
+    suppresses a halt it cannot prove stale: a foreign execution with a
+    missing ``exec_time_ms``, or any execution when ``session_start_ms``
+    is ``None``, is still policed. A foreign execution *at or after*
+    session start is genuine concurrent contamination and still halts.
+
+    Returns ``None`` when every execution is Python-owned (or provably
+    pre-session); otherwise a ``PoisonedHaltReason`` describing the
+    first offender (the ``details`` dict carries the foreign exec_id /
+    perm_id / client_id / account_id so the operator can correlate
+    against TWS history).
     """
     for execution in executions:
         client_order_id = execution.get("client_order_id")
         if client_order_id in owned_client_order_ids:
+            continue
+        # Pre-session account history is not contamination: skip a foreign
+        # execution whose broker time precedes this run's session start. Only
+        # suppresses fills we can prove are stale — unknown time or no floor
+        # falls through to the halt below.
+        exec_time_ms = execution.get("exec_time_ms")
+        if (
+            session_start_ms is not None
+            and exec_time_ms is not None
+            and exec_time_ms < session_start_ms
+        ):
             continue
         # Found a foreign execution — halt with the first offender's
         # details. Subsequent foreigns aren't enumerated here; the

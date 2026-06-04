@@ -377,6 +377,14 @@ class IbkrOrderEvent(BaseModel):
     cumulative_filled: float | None = None
     remaining: float | None = None
     last_fill_price: float | None = None
+    # Broker execution time (``int64 ms UTC``) read from the underlying
+    # ib_async ``Execution.time`` — distinct from ``ts_ms`` (wall-clock
+    # observation time). The § 7 outside-mutation check uses this to floor
+    # at session start: IBKR replays the day's prior executions at connect,
+    # and a foreign fill whose execution time predates this run's session is
+    # pre-existing account history, not concurrent contamination. ``None``
+    # for non-fill events or when the broker omits the time.
+    exec_time_ms: int | None = None
     # Commission for this fill, read from the polled ``Fill.commissionReport``
     # (PRD-B). ``None`` when IBKR has not yet reported the commission for this
     # execId — never a fabricated zero, so a missing fee stays distinguishable

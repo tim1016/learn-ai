@@ -222,6 +222,93 @@ def test_outside_mutation_flags_execution_with_no_client_order_id() -> None:
     assert reason.details["client_order_id"] is None
 
 
+def test_outside_mutation_ignores_foreign_execution_before_session_start() -> None:
+    """A foreign execution whose broker time predates session start is
+    pre-existing account history replayed at connect, not contamination.
+
+    Regression: IBKR replays the trading day's prior executions when the
+    runtime connects. A foreign fill from earlier in the session (before
+    this run's broker session began) must not fatal-halt the bot — the bot
+    had placed nothing yet, so it cannot own that fill, and the operator is
+    expected to have reconciled pre-start state at deploy time. Without the
+    ``session_start_ms`` floor this stale connect-time replay poisons the
+    run (observed 2026-06-04: a clientId=42 fill at 09:30 ET halted a bot
+    that started at 10:04 ET).
+    """
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "e-foreign-0930",
+            "perm_id": 1176469133,
+            "account_id": "DU284968",
+            "client_id": 42,
+            "exec_time_ms": 1_000,
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids={"live-1"},
+        halted_at_ms=5_000,
+        last_clean_bar_close_ms=4_900,
+        session_start_ms=2_000,
+    )
+    assert reason is None
+
+
+def test_outside_mutation_flags_foreign_execution_at_or_after_session_start() -> None:
+    """A foreign execution at/after session start is concurrent contamination
+    and still fatal-halts — the floor only suppresses provably-stale fills."""
+    from app.engine.live.halt import PoisonedHaltTrigger, check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "e-foreign-live",
+            "perm_id": 42,
+            "account_id": "DU284968",
+            "client_id": 99,
+            "exec_time_ms": 2_500,
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids={"live-1"},
+        halted_at_ms=5_000,
+        last_clean_bar_close_ms=4_900,
+        session_start_ms=2_000,
+    )
+    assert reason is not None
+    assert reason.trigger == PoisonedHaltTrigger.OUTSIDE_MUTATION
+    assert reason.details["exec_id"] == "e-foreign-live"
+
+
+def test_outside_mutation_flags_foreign_execution_with_unknown_time_under_floor() -> None:
+    """Fail-safe: a foreign execution with no broker time is still policed even
+    when a session floor is set — the floor never suppresses a halt it cannot
+    prove is stale."""
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "e-foreign-notime",
+            "perm_id": 7,
+            "account_id": "DU284968",
+            "exec_time_ms": None,
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids={"live-1"},
+        halted_at_ms=5_000,
+        last_clean_bar_close_ms=4_900,
+        session_start_ms=2_000,
+    )
+    assert reason is not None
+
+
 # ──────────────────────────── check_lost_fill ────────────────────────
 
 
