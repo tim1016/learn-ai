@@ -312,6 +312,24 @@ def _trade_to_open_order(
     )
 
 
+def _order_belongs_to_account(trade: object, account_id: str) -> bool:
+    """Whether ``trade`` belongs to the connected account.
+
+    Orders we place via ``_build_order`` (``MarketOrder``/``LimitOrder``) do not
+    set ``order.account`` — ib_async leaves it ``""``. So an empty account means
+    "this single-account client's own order" and belongs to ``account_id``; only
+    a *non-empty* account that differs is genuinely foreign (e.g. another client
+    on the same gateway).
+
+    The previous check ``order.account != account_id`` dropped our OWN orders
+    (``"" != "DU…"``), which blinded the live engine to its own fills, left the
+    position tally at zero (→ fleet "unattributed" contamination), and tripped a
+    false lost-fill fatal halt. See #441.
+    """
+    order_account = getattr(getattr(trade, "order", None), "account", "") or ""
+    return order_account in ("", account_id)
+
+
 async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
     """All open orders the connected client has placed.
 
@@ -326,7 +344,7 @@ async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
     trades = await client.ib.reqAllOpenOrdersAsync()
     out: list[IbkrOpenOrder] = []
     for trade in trades:
-        if getattr(trade.order, "account", account_id) != account_id:
+        if not _order_belongs_to_account(trade, account_id):
             continue
         try:
             out.append(_trade_to_open_order(trade, account_id, client.settings.client_id))
@@ -481,7 +499,7 @@ async def stream_order_events(
         while True:
             trades = list(client.ib.trades())
             for trade in trades:
-                if getattr(trade.order, "account", account_id) != account_id:
+                if not _order_belongs_to_account(trade, account_id):
                     continue
                 oid = int(trade.order.orderId)
 
