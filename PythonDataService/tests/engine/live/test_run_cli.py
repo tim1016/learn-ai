@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live.run import build_parser, main
+from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
+from app.engine.live.run import _build_live_state_writer, _read_owned_perm_ids, build_parser, main
 
 requires_git = pytest.mark.skipif(
     shutil.which("git") is None,
@@ -103,6 +104,61 @@ def test_parser_supports_init_ledger_and_pre_flight() -> None:
     )
     assert pre_args.command == "pre-flight"
     assert pre_args.skip_ntp is True
+
+
+def test_live_state_writer_preserves_order_trail(tmp_path: Path) -> None:
+    class _Client:
+        settings = type("_Settings", (), {"client_id": 42})()
+
+    artifacts_root = tmp_path / "artifacts"
+    path = artifacts_root / "live_state" / "spy_ema_crossover" / "live_state.json"
+    repo = LiveStateSidecarRepo(path)
+    repo.write(
+        LiveStateEnvelope(
+            strategy_instance_id="spy_ema_crossover",
+            run_id="run-fixture",
+            bot_order_namespace="learn-ai/spy_ema_crossover/v1",
+            ib_client_id=42,
+            submitted_orders={"recovery-flatten-SPY-1": {"perm_id": 1176469133}},
+            known_perm_ids=[1176469133],
+            known_exec_ids=["exec-1"],
+            last_processed_bar_ms=1_780_000_000_000,
+            last_artifact_flush_ms=1_780_000_000_500,
+        )
+    )
+    writer = _build_live_state_writer(
+        strategy_instance_id="spy_ema_crossover",
+        run_id="run-fixture",
+        client=_Client(),
+        artifacts_root=artifacts_root,
+    )
+    assert writer is not None
+
+    portfolio = type("_Portfolio", (), {"positions": {}})()
+    writer(portfolio, 1_780_000_060_000)
+
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.submitted_orders == {"recovery-flatten-SPY-1": {"perm_id": 1176469133}}
+    assert loaded.known_perm_ids == [1176469133]
+    assert loaded.known_exec_ids == ["exec-1"]
+
+
+def test_read_owned_perm_ids_hydrates_from_live_state_sidecar(tmp_path: Path) -> None:
+    path = tmp_path / "live_state.json"
+    LiveStateSidecarRepo(path).write(
+        LiveStateEnvelope(
+            strategy_instance_id="spy_ema_crossover",
+            run_id="run-fixture",
+            bot_order_namespace="learn-ai/spy_ema_crossover/v1",
+            ib_client_id=42,
+            known_perm_ids=[1176469133, 1176469134],
+            last_processed_bar_ms=1_780_000_000_000,
+            last_artifact_flush_ms=1_780_000_000_500,
+        )
+    )
+
+    assert _read_owned_perm_ids(path) == {1176469133, 1176469134}
 
 
 @requires_git

@@ -85,7 +85,11 @@ class ReplaySimBroker:
             account_id="REPLAY", is_paper=True, positions=[], fetched_at_ms=1
         )
 
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
+    async def place_order(
+        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
+    ) -> IbkrOrderAck:
+        # perm_id_wait_s accepted for BrokerAdapter parity; replay assigns
+        # deterministic ids synchronously, so there is nothing to wait for.
         order_id = self._resolve_order_id(spec)
         self.orders.append(spec)
         self._pending.append(_Pending(order_id=order_id, spec=spec))

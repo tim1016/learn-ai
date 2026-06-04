@@ -54,7 +54,13 @@ class FakeBroker:
             fetched_at_ms=1,
         )
 
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
+    async def place_order(
+        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
+    ) -> IbkrOrderAck:
+        # ``perm_id_wait_s`` is accepted for protocol parity with the real
+        # adapter (the recovery path opts into a permId wait). The base fake
+        # never assigns a permId — tests that need permId-on-wait semantics
+        # subclass and override (see DeferredPermIdBroker).
         order_id = self._resolve_order_id(spec)
         self.orders.append(spec)
         self._pending.append(_PendingSpec(order_id=order_id, spec=spec))
@@ -127,8 +133,10 @@ class CollapsedLifecycleFakeBroker(FakeBroker):
         self.internal_statuses: dict[int, list[str]] = {}
         self.yielded_statuses: dict[int, list[str]] = {}
 
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
-        ack = await super().place_order(spec)
+    async def place_order(
+        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
+    ) -> IbkrOrderAck:
+        ack = await super().place_order(spec, perm_id_wait_s=perm_id_wait_s)
         self.internal_statuses[ack.order_id] = ["PendingSubmit", "Submitted", "Filled"]
         return ack
 

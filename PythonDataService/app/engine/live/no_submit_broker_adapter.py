@@ -119,9 +119,15 @@ class NoSubmitBrokerAdapter:
             account_id=self._account_id, is_paper=True, positions=[], fetched_at_ms=1
         )
 
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
+    async def place_order(
+        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
+    ) -> IbkrOrderAck:
         """Record the shadow intent against the current bar. NEVER reaches
-        ``ib.placeOrder`` — that method does not appear anywhere in this path."""
+        ``ib.placeOrder`` — that method does not appear anywhere in this path.
+
+        ``perm_id_wait_s`` is accepted for ``BrokerAdapter`` parity and
+        ignored: shadow orders never reach IBKR, so there is no permId to
+        wait for."""
         self._order_seq += 1
         # The bar the strategy acted on is the current bar; the fill prices
         # against the next bar's open once it arrives (advance_bar).

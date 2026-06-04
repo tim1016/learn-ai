@@ -207,6 +207,7 @@ def check_outside_mutation(
     halted_at_ms: int,
     last_clean_bar_close_ms: int,
     session_start_ms: int | None = None,
+    owned_perm_ids: set[int] | None = None,
 ) -> PoisonedHaltReason | None:
     """Return a halt reason if any execution lacks a Python-owned ``client_order_id``.
 
@@ -236,15 +237,28 @@ def check_outside_mutation(
     is ``None``, is still policed. A foreign execution *at or after*
     session start is genuine concurrent contamination and still halts.
 
+    ``owned_perm_ids`` is the durable ownership layer for executions
+    replayed by IBKR after a reconnect/relaunch. IBKR's permId is stable
+    across sessions, while order ids are not; a fill whose client order id
+    is missing but whose permId is in the sidecar trail is still bot-owned.
+
     Returns ``None`` when every execution is Python-owned (or provably
     pre-session); otherwise a ``PoisonedHaltReason`` describing the
     first offender (the ``details`` dict carries the foreign exec_id /
     perm_id / client_id / account_id so the operator can correlate
     against TWS history).
     """
+    owned_perm_ids = owned_perm_ids or set()
     for execution in executions:
         client_order_id = execution.get("client_order_id")
         if client_order_id in owned_client_order_ids:
+            continue
+        perm_id = execution.get("perm_id")
+        try:
+            normalized_perm_id = int(perm_id) if perm_id is not None else None
+        except (TypeError, ValueError):
+            normalized_perm_id = None
+        if normalized_perm_id is not None and normalized_perm_id in owned_perm_ids:
             continue
         # Pre-session account history is not contamination: skip a foreign
         # execution whose broker time precedes this run's session start. Only
