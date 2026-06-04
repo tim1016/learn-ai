@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-05-15 (indicator-state persistence shipped — PR adds `indicator_state.py` / `nyse_calendar.py` to §6 surface table, flips §11 prereq row to SHIPPED, expands §12 item 3 with hydrate-policy expectations. See change log for full session.).
+> **Last reviewed:** 2026-06-04 (live-idempotent IBKR 5-second bar redelivery — `bars.py` gains `DuplicatePolicy` + `LiveBarCounters`; §4 surface row and §10 `test_bars.py` count updated. Prior: 2026-05-15 indicator-state persistence shipped — PR adds `indicator_state.py` / `nyse_calendar.py` to §6 surface table, flips §11 prereq row to SHIPPED, expands §12 item 3 with hydrate-policy expectations. See change log for full session.).
 
 ---
 
@@ -311,13 +311,13 @@ Read-only: never calls `connect()` and never places orders. The frontend exposes
 
 ## 10. Test coverage
 
-As of 2026-05-04 (post PR #78):
+As of 2026-06-04 (post live-idempotent redelivery fix):
 
 | Area | File | Tests |
 |---|---|---|
-| **Broker module — 107 tests** | | |
+| **Broker module — 112 tests** | | |
 | | `tests/broker/ibkr/test_account.py` | 9 |
-| | `tests/broker/ibkr/test_bars.py` | 7 (incl. `open_` regression from PR #78) |
+| | `tests/broker/ibkr/test_bars.py` | 12 (incl. `open_` regression from PR #78 and 5 `live_idempotent`/policy tests) |
 | | `tests/broker/ibkr/test_client.py` | 14 |
 | | `tests/broker/ibkr/test_config.py` | 8 |
 | | `tests/broker/ibkr/test_contracts.py` | 8 |

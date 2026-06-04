@@ -170,6 +170,24 @@ def test_live_correction_before_close_recomputes_ohlcv() -> None:
     assert minute.volume == 35  # 10 + corrected 25, original 15 dropped
 
 
+def test_unknown_duplicate_policy_raises() -> None:
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(0, "1", "1", "1", "1", 1),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="strict",
+    )
+    with pytest.raises(IBKRBarStreamError, match="Unknown duplicate policy"):
+        aggregate_realtime_bar(
+            current,
+            _bar(0, "1", "1", "1", "1", 1),
+            symbol="SPY",
+            last_source_ms=last_ms,
+            policy="bogus",  # type: ignore[arg-type]
+        )
+
+
 def test_live_regression_into_emitted_minute_still_fatal() -> None:
     """A bar from an already-closed minute is < last_source_ms → fatal even in live mode."""
     current, _, last_ms = aggregate_realtime_bar(

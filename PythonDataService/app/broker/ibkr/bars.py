@@ -195,6 +195,8 @@ def _handle_duplicate(
     """
     if policy == "strict":
         raise IBKRBarStreamError(f"Duplicate IBKR 5-second bar timestamp: {source_ms}.")
+    if policy != "live_idempotent":
+        raise IBKRBarStreamError(f"Unknown duplicate policy: {policy!r}.")
 
     if current is None or source_ms not in current.contributions:
         # Invariant violation: a duplicate of last_source_ms must live in
