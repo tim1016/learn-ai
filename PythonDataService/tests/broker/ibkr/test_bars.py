@@ -10,6 +10,7 @@ import pytest
 
 from app.broker.ibkr.bars import (
     IBKRBarStreamError,
+    LiveBarCounters,
     aggregate_realtime_bar,
     stream_minute_bars,
 )
@@ -97,6 +98,131 @@ def test_non_monotonic_source_timestamp_raises() -> None:
     )
     with pytest.raises(IBKRBarStreamError, match="Non-monotonic"):
         aggregate_realtime_bar(current, _bar(5, "1", "1", "1", "1", 1), symbol="SPY", last_source_ms=last_ms)
+
+
+def test_live_exact_duplicate_skips_without_double_counting() -> None:
+    counters = LiveBarCounters()
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(0, "100", "101", "99", "100.5", 10),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="live_idempotent",
+        counters=counters,
+    )
+    current, emitted, returned_ms = aggregate_realtime_bar(
+        current,
+        _bar(0, "100", "101", "99", "100.5", 10),
+        symbol="SPY",
+        last_source_ms=last_ms,
+        policy="live_idempotent",
+        counters=counters,
+    )
+
+    assert emitted is None
+    # last_source_ms stays anchored to the last distinct timestamp.
+    assert returned_ms == last_ms
+    assert counters.skipped_duplicate == 1
+    assert counters.applied_correction == 0
+    minute = current.to_model()
+    assert minute.volume == 10
+    assert minute.high == Decimal("101")
+
+
+def test_live_correction_before_close_recomputes_ohlcv() -> None:
+    counters = LiveBarCounters()
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(0, "100", "100.5", "99.5", "100.2", 10),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="live_idempotent",
+        counters=counters,
+    )
+    current, _, last_ms = aggregate_realtime_bar(
+        current,
+        _bar(5, "100.2", "101.0", "100.0", "100.8", 15),
+        symbol="SPY",
+        last_source_ms=last_ms,
+        policy="live_idempotent",
+        counters=counters,
+    )
+    # IBKR redelivers the :05 bar with corrected, higher-range values.
+    current, emitted, returned_ms = aggregate_realtime_bar(
+        current,
+        _bar(5, "100.2", "103.0", "98.0", "102.5", 25),
+        symbol="SPY",
+        last_source_ms=last_ms,
+        policy="live_idempotent",
+        counters=counters,
+    )
+
+    assert emitted is None
+    assert returned_ms == last_ms
+    assert counters.applied_correction == 1
+    assert counters.skipped_duplicate == 0
+    minute = current.to_model()
+    # OHLCV recomputed from the corrected :05 contribution, not summed onto it.
+    assert minute.open == Decimal("100")
+    assert minute.high == Decimal("103.0")
+    assert minute.low == Decimal("98.0")
+    assert minute.close == Decimal("102.5")
+    assert minute.volume == 35  # 10 + corrected 25, original 15 dropped
+
+
+def test_live_regression_into_emitted_minute_still_fatal() -> None:
+    """A bar from an already-closed minute is < last_source_ms → fatal even in live mode."""
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(55, "100", "101", "99", "100.5", 10),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="live_idempotent",
+    )
+    # Crossing into the next minute emits the closed bar.
+    current, emitted, last_ms = aggregate_realtime_bar(
+        current,
+        SimpleNamespace(
+            time=datetime(2026, 5, 4, 14, 31, 0, tzinfo=UTC),
+            open=Decimal("101"),
+            high=Decimal("102"),
+            low=Decimal("100"),
+            close=Decimal("101.5"),
+            volume=20,
+        ),
+        symbol="SPY",
+        last_source_ms=last_ms,
+        policy="live_idempotent",
+    )
+    assert emitted is not None
+
+    # IBKR redelivers a bar from the already-emitted 14:30 minute.
+    with pytest.raises(IBKRBarStreamError, match="Non-monotonic"):
+        aggregate_realtime_bar(
+            current,
+            _bar(55, "100", "101", "99", "100.5", 10),
+            symbol="SPY",
+            last_source_ms=last_ms,
+            policy="live_idempotent",
+        )
+
+
+def test_live_non_monotonic_within_open_minute_still_fatal() -> None:
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(10, "1", "1", "1", "1", 1),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="live_idempotent",
+    )
+    with pytest.raises(IBKRBarStreamError, match="Non-monotonic"):
+        aggregate_realtime_bar(
+            current,
+            _bar(5, "1", "1", "1", "1", 1),
+            symbol="SPY",
+            last_source_ms=last_ms,
+            policy="live_idempotent",
+        )
 
 
 def test_naive_datetime_raises() -> None:
