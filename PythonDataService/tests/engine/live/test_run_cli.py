@@ -1126,6 +1126,127 @@ def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> N
     assert status["ended_at_ms"] is not None
 
 
+def test_fetch_positions_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> None:
+    """A broker fetch_positions() failure (transient Gateway hiccup) must record a
+    terminal status (exit 3 / exception) and exit 3 — not leave the instance
+    looking stuck 'starting' with a blank 'Why It Stopped'. Same UX guarantee as
+    the connect-failure path (PR #449 review, bug_010)."""
+    import argparse as _argparse
+    import json as _json
+    from collections.abc import AsyncIterator
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _FetchFailsBroker(FakeBroker):
+        async def fetch_positions(self):  # type: ignore[override]
+            raise RuntimeError("gateway timeout fetching positions")
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-fetchfail-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="deployment_validation",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="optional",
+        artifacts_root=artifacts_root,
+        broker=_FetchFailsBroker(),
+        bars=_empty_bars(),
+        client=None,
+    )
+    rc = cmd_start(args)
+
+    assert rc == 3, f"fetch-positions failure should exit 3, got {rc}"
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "exception"
+    assert status["exit_code"] == 3
+    assert status["ended_at_ms"] is not None
+
+
+def test_unexpected_position_halt_writes_terminal_status_and_exits_1(tmp_path: Path) -> None:
+    """A contaminated-account halt (a foreign position) must record a terminal
+    status (exit 1 / fatal_halt) so the console explains the refusal instead of
+    showing a blank 'stuck starting' (PR #449 review, bug_010)."""
+    import argparse as _argparse
+    import json as _json
+    from collections.abc import AsyncIterator
+    from types import SimpleNamespace
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _ForeignPositionBroker(FakeBroker):
+        async def fetch_positions(self):  # type: ignore[override]
+            # A position in a symbol outside the strategy's namespace → halt.
+            return SimpleNamespace(positions=[SimpleNamespace(symbol="AAPL", quantity=10)])
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-foreign-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="deployment_validation",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="optional",
+        artifacts_root=artifacts_root,
+        broker=_ForeignPositionBroker(),
+        bars=_empty_bars(),
+        client=None,
+    )
+    rc = cmd_start(args)
+
+    assert rc == 1, f"unexpected-position halt should exit 1, got {rc}"
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "fatal_halt"
+    assert status["exit_code"] == 1
+    assert status["ended_at_ms"] is not None
+
+
 def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """Unknown strategy module surfaces as operator error (exit 2),
     not a runtime crash."""

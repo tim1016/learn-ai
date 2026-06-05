@@ -1093,7 +1093,19 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # Exit 3 per the module docstring exit-code table — a
                 # broker fetch failure is a runtime error (broker / IO),
                 # not an operator-error condition. Exit 2 would imply
-                # bad args or missing files.
+                # bad args or missing files. Record a terminal status so the
+                # console shows the reason instead of a blank "stuck starting".
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 3,
+                            "exit_reason": ExitReason.exception,
+                        }
+                    ),
+                )
                 return 3
             # The host daemon injects sibling instances' symbols via
             # --managed-symbols (ADR 0005, completes #395) so a sibling's
@@ -1113,6 +1125,20 @@ def cmd_start(args: argparse.Namespace) -> int:
                     f"(expected long-only {live_config.symbol}; operator must "
                     f"reconcile the account before starting)",
                     file=sys.stderr,
+                )
+                # A contaminated-account refusal is a halt (exit 1); record a
+                # terminal status so "Why It Stopped" explains it rather than the
+                # instance looking stuck "starting".
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.fatal_halt,
+                        }
+                    ),
                 )
                 return 1
 
