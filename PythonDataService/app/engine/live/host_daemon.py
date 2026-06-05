@@ -21,6 +21,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,6 +107,12 @@ class RunnerProcessManager:
         self.repo_root = repo_root.resolve()
         self.live_runs_root = live_runs_root.resolve()
         self._managed: dict[str, ManagedProcess] = {}
+        # Serialize emergency-flatten per account: each runs the CLI, which
+        # fetches positions then submits liquidating market orders, so two
+        # concurrent runs for one account (retry / double-click / second tab)
+        # could both act on the same pre-fill snapshot and double-liquidate.
+        self._flatten_lock = threading.Lock()
+        self._flatten_in_flight: set[str] = set()
 
     def health(self) -> HostRunnerHealth:
         """Return daemon health plus a representative active subprocess.
@@ -294,53 +301,67 @@ class RunnerProcessManager:
         reconciliation stays fail-closed (we don't best-guess broker ownership).
         """
         run_dir = self._validate_run_dir(run_id)
-        command = [
-            sys.executable,
-            "-m",
-            "app.engine.live.run",
-            "emergency-flatten",
-            "--run-dir",
-            str(run_dir),
-            "--account",
-            account,
-            "--confirm",
-        ]
-        env = os.environ.copy()
-        python_path = str(self.repo_root / "PythonDataService")
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
+        # Claim the account so a concurrent flatten for it is rejected rather than
+        # run against the same pre-fill position snapshot (double-liquidate). The
+        # CLI runs OUTSIDE the lock, so a 120s flatten never blocks the daemon.
+        with self._flatten_lock:
+            if account in self._flatten_in_flight:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    f"emergency-flatten already in progress for account {account}",
+                )
+            self._flatten_in_flight.add(account)
         try:
-            proc = subprocess.run(
-                command,
-                cwd=str(self.repo_root),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise HostRunnerError(
-                status.HTTP_504_GATEWAY_TIMEOUT,
-                f"emergency-flatten timed out after {exc.timeout}s",
-            ) from exc
-        except OSError as exc:
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE, f"could not run emergency-flatten: {exc}"
-            ) from exc
-        if proc.returncode != 0:
-            # CLI exit codes: 2 = operator precondition (account mismatch / no
-            # --confirm) -> 400; everything else (3 = broker/runtime) -> 502.
-            http_code = (
-                status.HTTP_400_BAD_REQUEST
-                if proc.returncode == 2
-                else status.HTTP_502_BAD_GATEWAY
-            )
-            detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
-                f"emergency-flatten exited {proc.returncode}"
-            )
-            raise HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
-        logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
-        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
+            command = [
+                sys.executable,
+                "-m",
+                "app.engine.live.run",
+                "emergency-flatten",
+                "--run-dir",
+                str(run_dir),
+                "--account",
+                account,
+                "--confirm",
+            ]
+            env = os.environ.copy()
+            python_path = str(self.repo_root / "PythonDataService")
+            existing = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
+            try:
+                proc = subprocess.run(
+                    command,
+                    cwd=str(self.repo_root),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise HostRunnerError(
+                    status.HTTP_504_GATEWAY_TIMEOUT,
+                    f"emergency-flatten timed out after {exc.timeout}s",
+                ) from exc
+            except OSError as exc:
+                raise HostRunnerError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE, f"could not run emergency-flatten: {exc}"
+                ) from exc
+            if proc.returncode != 0:
+                # CLI exit codes: 2 = operator precondition (account mismatch / no
+                # --confirm) -> 400; everything else (3 = broker/runtime) -> 502.
+                http_code = (
+                    status.HTTP_400_BAD_REQUEST
+                    if proc.returncode == 2
+                    else status.HTTP_502_BAD_GATEWAY
+                )
+                detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
+                    f"emergency-flatten exited {proc.returncode}"
+                )
+                raise HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
+            logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
+            return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
+        finally:
+            with self._flatten_lock:
+                self._flatten_in_flight.discard(account)
 
     def deploy(self, request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
         """Create a run on the host via ``deploy_run`` (ADR 0006), optionally

@@ -170,6 +170,41 @@ def test_emergency_flatten_broker_error_maps_to_http_502(
     assert "broker boom" in exc_info.value.detail
 
 
+def test_emergency_flatten_rejects_concurrent_same_account(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second concurrent flatten for the same account is rejected (409), not run
+    against the same pre-fill snapshot — preventing double-liquidation (Codex P1
+    on #451). The account is released after the run so a later flatten proceeds.
+    """
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.host_daemon import HostRunnerError
+
+    manager, _ = daemon_context
+    reentrant: dict[str, int] = {}
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> _Result:
+        # While the first flatten holds the account, a re-entrant one is rejected.
+        with pytest.raises(HostRunnerError) as exc_info:
+            manager.emergency_flatten(RUN_ID, "DU123")
+        reentrant["status"] = exc_info.value.status_code
+        return _Result()
+
+    monkeypatch.setattr(hd.subprocess, "run", fake_run)
+
+    resp = manager.emergency_flatten(RUN_ID, "DU123")
+
+    assert resp.accepted is True
+    assert reentrant["status"] == 409
+    # Released after completion — the in-flight set does not leak the account.
+    assert "DU123" not in manager._flatten_in_flight
+
+
 async def test_start_launches_existing_run_with_host_env(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
