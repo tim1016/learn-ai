@@ -109,6 +109,7 @@ class FakeLiveRunsService {
     poll_interval_ms: 1000,
   });
   issueInstanceCommand = vi.fn().mockResolvedValue({ accepted: true, command: null });
+  emergencyFlattenAccount = vi.fn().mockResolvedValue({ accepted: true, process: { state: 'idle' } });
 }
 
 /** Flush microtask queue and Angular effect queue (resource loads). */
@@ -408,6 +409,40 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).not.toContain('Why It Stopped');
+  });
+
+  it('runs an account-wide emergency flatten after confirm + account echo', async () => {
+    const { fixture, component, svc } = setup();
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window, 'prompt').mockReturnValue('du123');
+
+    await component.issueEmergencyFlatten();
+
+    expect(svc.emergencyFlattenAccount).toHaveBeenCalledWith('spy_ema_paper', {
+      account: 'DU123',
+      confirm: true,
+    });
+  });
+
+  it('does not flatten when the operator cancels the confirm', async () => {
+    const { fixture, component, svc } = setup();
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    await component.issueEmergencyFlatten();
+
+    expect(svc.emergencyFlattenAccount).not.toHaveBeenCalled();
   });
 
   it('explains a poisoned run and offers a re-deploy (fresh run_id) recovery link', async () => {

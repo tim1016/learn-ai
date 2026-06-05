@@ -220,6 +220,20 @@ class HostRunnerHealth(BaseModel):
     git_sha: str | None = None
 
 
+class EmergencyFlattenRequest(BaseModel):
+    """Body for the account-wide emergency flatten (§ 7.2 #6).
+
+    Reaches the daemon's one-shot ``emergency-flatten`` CLI independent of any
+    live binding, so an operator can flatten after a halt/poison (when the
+    binding-gated console FLATTEN command is unavailable). ``account`` must echo
+    the IBKR account id — defense-in-depth mirroring the CLI ``--account`` gate,
+    which refuses if it does not match the connected account.
+    """
+
+    account: str = Field(..., min_length=2, max_length=32)
+    confirm: bool = Field(..., description="Must be true; typo-proofing gate.")
+
+
 class HostRunnerInstance(BaseModel):
     """One managed strategy instance's live process binding.
 

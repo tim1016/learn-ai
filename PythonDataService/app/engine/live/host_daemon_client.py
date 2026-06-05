@@ -23,6 +23,9 @@ _TIMEOUT = httpx.Timeout(2.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
+# Emergency flatten round-trips to the broker synchronously (the daemon caps the
+# CLI at 120s); give the HTTP hop a little more so the daemon's own timeout wins.
+_FLATTEN_TIMEOUT = httpx.Timeout(130.0)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -101,10 +104,24 @@ async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
     return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
 
 
-async def _post_action(url: str, payload: dict) -> dict:
-    """Shared body for the start/stop forwards (same contract as :func:`deploy`)."""
+async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> dict:
+    """POST /runs/{run_id}/emergency-flatten to the daemon.
+
+    Same forwarding contract as :func:`start_run`, but with a longer timeout: the
+    daemon runs the one-shot flatten CLI synchronously, which round-trips to the
+    broker (connect, fetch positions, place liquidating orders, disconnect).
+    """
+    return await _post_action(
+        f"{base_url.rstrip('/')}/runs/{run_id}/emergency-flatten",
+        payload,
+        timeout=_FLATTEN_TIMEOUT,
+    )
+
+
+async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
+    """Shared body for the start/stop/flatten forwards (same contract as :func:`deploy`)."""
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=payload, headers=_auth_headers())
     except httpx.HTTPError as exc:
         logger.warning("host daemon unreachable at %s: %s", url, exc)
