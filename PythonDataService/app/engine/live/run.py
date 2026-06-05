@@ -724,6 +724,48 @@ def cmd_start(args: argparse.Namespace) -> int:
     from app.engine.strategy.spec import load_spec_from_path
     from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
+    def _record_poison_refusal() -> None:
+        # Make the poison refusal legible to the console: record a terminal
+        # `poisoned` status so the "Why It Stopped" panel shows "fresh run_id
+        # required" instead of "ended cleanly" / blank.
+        #
+        # Preserve an existing status ONLY when it already explains a real
+        # failure (e.g. fatal_halt — typically the very cause of the poison).
+        # A clean-stop status is CONTRADICTED by the poison flag and must be
+        # overwritten: MARK_POISONED writes poisoned.flag AND sets the bar
+        # loop's shutdown_event (live_engine §"STOP / MARK_POISONED"), so the
+        # run exits gracefully as `keyboard_interrupt`; skipping over that would
+        # leave the UI showing the poisoned run as cleanly stopped.
+        _EXPLANATORY_REASONS = {
+            ExitReason.fatal_halt.value,
+            ExitReason.exception.value,
+            ExitReason.max_orders_exceeded.value,
+            ExitReason.recovery_flatten.value,
+            ExitReason.poisoned.value,
+        }
+        status_path = args.run_dir / "run_status.json"
+        if status_path.exists():
+            try:
+                existing_reason = json.loads(status_path.read_text(encoding="utf-8")).get(
+                    "exit_reason"
+                )
+            except (OSError, ValueError):
+                existing_reason = None
+            if existing_reason in _EXPLANATORY_REASONS:
+                return
+        write_run_status(
+            args.run_dir,
+            RunStatusSidecar(
+                run_id=args.run_dir.name,
+                started_at_ms=now_ms(),
+                last_update_ms=now_ms(),
+                ended_at_ms=now_ms(),
+                exit_code=1,
+                exit_reason=ExitReason.poisoned,
+                host_pid=_os.getpid(),
+            ),
+        )
+
     # § 7.2 #4 refusal: a poisoned run cannot resume on its own
     # run_id. The flag is written intra-day by the LiveEngine when
     # broker-state divergence is detected; it stays in place until the
@@ -737,6 +779,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         # than silently ignore. The spec invariant is that
         # poisoned.flag is never the source of a clean restart.
         print(f"[START] poisoned.flag at {args.run_dir} is corrupted: {exc}", file=sys.stderr)
+        _record_poison_refusal()
         return 1
     if poison is not None:
         print(
@@ -745,6 +788,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             f"required after manual account reconciliation.",
             file=sys.stderr,
         )
+        _record_poison_refusal()
         return 1
 
     ledger_path = args.run_dir / "run_ledger.json"

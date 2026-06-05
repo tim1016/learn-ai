@@ -314,7 +314,14 @@ def _start_defaults(
     except (OSError, ValueError, KeyError):
         return InstanceStartDefaults(readonly=readonly_default)
     return InstanceStartDefaults(
-        strategy=str(ledger.get("strategy_key", "")), readonly=readonly_default
+        strategy=str(ledger.get("strategy_key", "")),
+        readonly=readonly_default,
+        # Deploy identity for a one-click re-deploy (fresh run_id) of a
+        # poisoned/halted instance. Empty for legacy ledgers missing the field.
+        strategy_spec_path=str(ledger.get("strategy_spec_path", "")),
+        qc_audit_copy_path=str(ledger.get("qc_audit_copy_path", "")),
+        qc_cloud_backtest_id=str(ledger.get("qc_cloud_backtest_id", "")),
+        account_id=str(ledger.get("account_id", "")),
     )
 
 

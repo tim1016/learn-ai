@@ -1247,6 +1247,139 @@ def test_unexpected_position_halt_writes_terminal_status_and_exits_1(tmp_path: P
     assert status["ended_at_ms"] is not None
 
 
+def test_poison_refusal_records_terminal_status_when_absent(tmp_path: Path) -> None:
+    """A start refused because the run is poisoned records a terminal run_status
+    (exit_reason=poisoned) when none exists, so the console "Why It Stopped"
+    panel shows "fresh run_id required" instead of a blank "ended unexpectedly".
+    """
+    import argparse as _argparse
+    import json as _json
+
+    from app.engine.live.halt import (
+        PoisonedHaltReason,
+        PoisonedHaltTrigger,
+        write_poisoned_flag,
+    )
+    from app.engine.live.run import cmd_start
+
+    run_dir = tmp_path / "poisoned-run"
+    run_dir.mkdir()
+    write_poisoned_flag(
+        run_dir,
+        PoisonedHaltReason(
+            trigger=PoisonedHaltTrigger.OUTSIDE_MUTATION,
+            halted_at_ms=1_700_000_000_000,
+            last_clean_bar_close_ms=0,
+        ),
+    )
+
+    rc = cmd_start(_argparse.Namespace(command="start", run_dir=run_dir))
+
+    assert rc == 1
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "poisoned"
+    assert status["exit_code"] == 1
+    assert status["ended_at_ms"] is not None
+
+
+def test_poison_refusal_preserves_existing_terminal_status(tmp_path: Path) -> None:
+    """The poison refusal never clobbers an existing run_status — that status
+    carries the richer original halt reason (e.g. fatal_halt) explaining WHY the
+    run poisoned. Only the genuinely-blank case is filled in.
+    """
+    import argparse as _argparse
+    import json as _json
+
+    from app.engine.live.halt import (
+        PoisonedHaltReason,
+        PoisonedHaltTrigger,
+        write_poisoned_flag,
+    )
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import ExitReason, RunStatusSidecar
+
+    run_dir = tmp_path / "poisoned-run-2"
+    run_dir.mkdir()
+    write_poisoned_flag(
+        run_dir,
+        PoisonedHaltReason(
+            trigger=PoisonedHaltTrigger.OUTSIDE_MUTATION,
+            halted_at_ms=1,
+            last_clean_bar_close_ms=0,
+        ),
+    )
+    # Pre-existing terminal status from the session that poisoned the run.
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="poisoned-run-2",
+            started_at_ms=1,
+            last_update_ms=2,
+            ended_at_ms=3,
+            exit_code=1,
+            exit_reason=ExitReason.fatal_halt,
+            host_pid=123,
+        ),
+    )
+
+    rc = cmd_start(_argparse.Namespace(command="start", run_dir=run_dir))
+
+    assert rc == 1
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    # Original halt reason preserved, not overwritten by the poison refusal.
+    assert status["exit_reason"] == "fatal_halt"
+
+
+def test_poison_refusal_overwrites_clean_stop_status(tmp_path: Path) -> None:
+    """A poison refusal MUST overwrite a CLEAN-stop status — MARK_POISONED writes
+    poisoned.flag and exits gracefully (exit_reason=keyboard_interrupt), so if the
+    refusal skipped over it the console would keep showing the poisoned run as
+    cleanly stopped instead of 'fresh deployment required' (Codex P1 on #450)."""
+    import argparse as _argparse
+    import json as _json
+
+    from app.engine.live.halt import (
+        PoisonedHaltReason,
+        PoisonedHaltTrigger,
+        write_poisoned_flag,
+    )
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import ExitReason, RunStatusSidecar
+
+    run_dir = tmp_path / "poisoned-run-3"
+    run_dir.mkdir()
+    write_poisoned_flag(
+        run_dir,
+        PoisonedHaltReason(
+            trigger=PoisonedHaltTrigger.OPERATOR_DECLARED,
+            halted_at_ms=1,
+            last_clean_bar_close_ms=0,
+        ),
+    )
+    # The graceful-shutdown status MARK_POISONED leaves behind (clean stop).
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="poisoned-run-3",
+            started_at_ms=1,
+            last_update_ms=2,
+            ended_at_ms=3,
+            exit_code=0,
+            exit_reason=ExitReason.keyboard_interrupt,
+            host_pid=123,
+        ),
+    )
+
+    rc = cmd_start(_argparse.Namespace(command="start", run_dir=run_dir))
+
+    assert rc == 1
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    # Clean-stop status overwritten — the poison is now legible to the console.
+    assert status["exit_reason"] == "poisoned"
+
+
 def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """Unknown strategy module surfaces as operator error (exit 2),
     not a runtime crash."""

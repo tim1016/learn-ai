@@ -32,6 +32,19 @@
   opacity: 0.8;
 }
 
+.code-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
+
+  code {
+    font-family: var(--font-mono, monospace);
+  }
+}
+
 .dot {
   width: 0.6rem;
   height: 0.6rem;

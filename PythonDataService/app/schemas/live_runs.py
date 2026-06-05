@@ -38,6 +38,11 @@ class ExitReason(StrEnum):
     fatal_halt = "fatal_halt"
     recovery_flatten = "recovery_flatten"
     exception = "exception"
+    # A start was refused because the run is poisoned (poisoned.flag present, or
+    # corrupted). Distinct from fatal_halt (the live engine's intra-day trip):
+    # this is the cold-start refusal, recorded so the console explains "fresh
+    # run_id required" instead of a blank "ended unexpectedly".
+    poisoned = "poisoned"
 
 
 class RunStatusSidecar(BaseModel):
@@ -547,6 +552,14 @@ class InstanceStartDefaults(BaseModel):
     hydrate_policy: HydratePolicy = "require"
     max_orders_per_day: int = 4
     ibkr_host: str = "127.0.0.1"
+    # Re-deploy prefill: the bound run's ledger deploy identity, so the console
+    # can deep-link the deploy form to recover a poisoned/halted instance with a
+    # fresh run_id (the only recovery path) without the operator re-typing it.
+    # Empty for legacy ledgers missing the field; the form then asks for it.
+    strategy_spec_path: str = ""
+    qc_audit_copy_path: str = ""
+    qc_cloud_backtest_id: str = ""
+    account_id: str = ""
 
 
 class InstanceLastExit(BaseModel):

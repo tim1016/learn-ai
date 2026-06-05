@@ -258,7 +258,14 @@ app.add_exception_handler(Exception, polygon_exception_handler)
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker"""
-    return {"status": "healthy", "service": "polygon-data-service"}
+    return {
+        "status": "healthy",
+        "service": "polygon-data-service",
+        # git HEAD baked in at build (GIT_COMMIT_SHA); None if unset. Lets the
+        # operator console confirm the data plane matches master and flag drift
+        # against the host daemon's live git_sha.
+        "git_sha": settings.GIT_COMMIT_SHA or None,
+    }
 
 
 @app.get("/")

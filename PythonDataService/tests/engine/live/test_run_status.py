@@ -113,8 +113,12 @@ def test_write_run_status_schema_version_round_trip(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_exit_reason_has_eight_values():
-    assert len(ExitReason) == 8
+def test_exit_reason_has_nine_values():
+    # 9th value: ``poisoned`` — the cold-start refusal of a poisoned run,
+    # recorded so the console explains "fresh run_id required" (distinct from
+    # the live engine's intra-day ``fatal_halt`` trip).
+    assert len(ExitReason) == 9
+    assert ExitReason.poisoned.value == "poisoned"
 
 
 @pytest.mark.parametrize(
@@ -128,6 +132,7 @@ def test_exit_reason_has_eight_values():
         "fatal_halt",
         "recovery_flatten",
         "exception",
+        "poisoned",
     ],
 )
 def test_exit_reason_literal_valid(reason: str):

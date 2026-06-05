@@ -6,11 +6,12 @@ import {
   type ConnectivityLink,
 } from '../../../services/broker-connectivity.service';
 
-function renderStrip(links: ConnectivityLink[], blockers: string[] = []) {
+function renderStrip(links: ConnectivityLink[], blockers: string[] = [], codeSha: string | null = null) {
   const fake = {
     links: () => links,
     blockers: () => blockers,
     daemonDown: () => links.some((link) => link.key === 'daemon' && link.state === 'down'),
+    daemonCodeSha: () => codeSha,
     reload: () => undefined,
   } as Partial<BrokerConnectivityService>;
   TestBed.configureTestingModule({
@@ -35,6 +36,31 @@ describe('BrokerConnectivityStripComponent', () => {
     expect(el.textContent).toContain('Reachable');
     expect(el.textContent).toContain('Connected');
     expect(el.textContent).toContain('Clear');
+  });
+
+  it('surfaces the host-daemon code SHA so the operator can confirm it runs master', () => {
+    const el = renderStrip(
+      [
+        { key: 'daemon', label: 'Live engine', state: 'ok', detail: 'Running' },
+        { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
+        { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
+      ],
+      [],
+      'a1b2c3d',
+    );
+
+    expect(el.textContent).toContain('Engine code');
+    expect(el.textContent).toContain('a1b2c3d');
+  });
+
+  it('omits the code line when the daemon SHA is unknown', () => {
+    const el = renderStrip([
+      { key: 'daemon', label: 'Live engine', state: 'ok', detail: 'Running' },
+      { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
+      { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
+    ]);
+
+    expect(el.textContent).not.toContain('Engine code');
   });
 
   it('distinguishes daemon-down from broker-down (not collapsed)', () => {
