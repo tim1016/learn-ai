@@ -17,6 +17,145 @@ vocabulary that grilling sharpened and cross-references that list.
 - **run_id** — a single execution (one process lifetime) of an instance. An
   artifact-storage key, **not** the operator's handle.
 
+## Broker-facing identity (sharpened 2026-06-04)
+
+How a fill is attributed to a strategy. The durable chain, distinct from the
+ephemeral session id:
+
+- **intent_id** — engine-generated, one per trading intent, created *before*
+  the order is placed. The write-ahead idempotency key and the intent ledger's
+  primary key.
+- **intent ledger** — a *reconstructed logical view*, **not a stored artifact**.
+  Its system of record is the run-scoped WAL (`intent_events.jsonl`) folded over
+  the instance-scoped projection (`live_state.json`'s `submitted_orders`, keyed
+  by `intent_id`); the fold replays WAL events after the projection's
+  `last_intent_wal_seq` cursor (a per-run monotonic sequence number, never a
+  wall-clock timestamp). There is no third store: ADR-0001's substrate is
+  unchanged.
+  An `intent_ledger.py` module may hold the *pure fold helpers* (append/read WAL
+  events, fold over the `LiveStateEnvelope`, build the in-memory view the
+  reconciler and halt logic read) but persists nothing of its own.
+- **bot_order_namespace** — `learn-ai/{strategy_instance_id}/v1`. The
+  per-instance ownership scope (unchanged; predates this work). The **`/v1` is
+  the `order_ref` *wire-format* version — not a strategy, config, spec, or model
+  version.** It versions only how `namespace:intent_id` is encoded into IBKR's
+  `orderRef` (delimiter/escaping, intent-id encoding, added segments, parse
+  shape). It does **not** bump for parameter changes, code changes, spec-hash
+  changes, retunes, or new run_ids — those live in `run_ledger` /
+  `strategy_instance_id`. A bump to `/v2` requires an ADR/migration note **and
+  dual-read ownership** (recognize both `/v1` and `/v2` as owned until every
+  prior-version broker order is closed/reconciled) — otherwise the bot
+  classifies its own open orders as foreign and self-poisons.
+- **order_ref** — `{bot_order_namespace}:{intent_id}`. The broker-facing
+  attribution string set on IBKR's `orderRef` and echoed back on
+  open-order/execution callbacks. **The single ownership-proof identity.**
+  _Avoid_: `client_order_id` (retired internally — the name encoded the wrong
+  model and trained the `live-{order_id}` mistake; kept only as a transitional
+  alias at external compatibility edges, if any).
+- **perm_id** — IBKR's stable per-TWS-order handle, captured post-submit.
+- **exec_id** — per-partial-fill id; dedupes fills.
+- **order_id** — IBKR's ephemeral, session-scoped order id. **Convenience for
+  same-session API calls only; never an attribution key.** Deriving ownership
+  from `live-{order_id}` is the bug class this ladder retires.
+
+### Owned orphan vs outside mutation (sharpened 2026-06-04)
+
+The reconciler's two failure attributions, kept strictly distinct because they
+route to opposite actions:
+
+- **Owned orphan** — "I lost my receipt, but the broker `orderRef` proves this
+  is mine." A broker order/fill whose parsed `order_ref` namespace exactly equals
+  *this instance's* `bot_order_namespace` but whose `intent_id` is absent from the
+  projection
+  (a crashed-submit before flush). The namespace match is **stronger evidence
+  than the stale projection** — the projection is *allowed* to lag; that lag is
+  why the WAL exists. Verdict: **adopt, do not poison.** Bounded adoption:
+  parse + verify `intent_id`/namespace, capture broker fields (`order_id`,
+  `perm_id`, status, qty, filled, avg fill), append an `ADOPTED_BROKER_ORDER`
+  event to the *new* run's WAL, fold into the projection keyed by `intent_id`,
+  and **persist `live_state.json` before allowing any new submission.**
+- **Outside mutation** — "Broker state cannot be attributed to this bot
+  instance." An order/fill with an *unknown* namespace, no `order_ref`, or a
+  foreign `perm_id`. Verdict: **poison/refuse.**
+
+Adoption is not unconditional resume: an adopted order that is still
+active/partially filled and creates **ambiguous exposure** vs expected strategy
+state → **pause / refuse new orders pending operator reconciliation** (still
+classified owned-orphan, never outside-mutation).
+
+### Submit-uncertain halt (sharpened 2026-06-04)
+
+`ACK_FAILED` is not "the order failed" — it is **"the broker side effect is
+unknown"** (Schrödinger's order: `placeOrder` may have reached IBKR before the
+ack/echo was lost; IBKR does **not** dedupe by `orderRef`). So the durable WAL
+is a **submit-lifecycle state machine**, not three flat events:
+
+- `PENDING_INTENT` → `SUBMITTED` (clean ack) **or** `ACK_FAILED_UNCERTAIN`.
+- From uncertain, an **in-session resolution** (stop all new submissions; after a
+  bounded settle, probe the broker by `order_ref` via the namespace-scoped calls)
+  yields one of three, on a `PRESENT`/`PROVABLY_ABSENT`/`NOT_PROVABLE`
+  discriminator: `SUBMITTED_RECOVERED` (any open/completed order or execution
+  carries our `order_ref` → adopt, continue only if exposure reconciles),
+  `INTENT_NOT_ACCEPTED` (**provably absent** = both probe calls returned and
+  neither carries our `order_ref` → retry **at most once** reusing the same
+  `intent_id`/`order_ref`, `RETRY_CAP = 1`; a second uncertain → halt), or
+  `SUBMIT_UNCERTAIN_HALTED` (unreachable / probe error / ambiguous → halt, defer
+  to cold-start). Halt is the default under any uncertainty.
+- Cold-start treats an unresolved `ACK_FAILED_UNCERTAIN` / unacked
+  `PENDING_INTENT` the same way: resolve by `order_ref`, then
+  adopt / discard / poison.
+
+**WAL read contract:** only a single *trailing* unterminated line is tolerated on
+read (fsync-before-`placeOrder` proves no side effect for it); any other
+malformation **poisons**, and a complete un-acked `PENDING_INTENT` is resolved,
+never dropped.
+
+**Banned:** blind re-submit. Retrying with a *new* `intent_id` double-submits if
+the order had landed; retrying with the *same* `order_ref` is safe **only** once
+the order is proven absent. The 1:1 `intent_id ↔ order_ref ↔ broker order`
+invariant is never weakened to paper over an uncertain ack.
+
+**Invariant:** when both components are present,
+`order_ref == f"{bot_order_namespace}:{intent_id}"`. For an order **we placed**,
+reconciliation stores these as separate fields and *validates* the equality — no
+parse. For a **broker-sourced** `order_ref` (orphan / outside-mutation
+classification) only the echoed string exists, so it is parsed on the **final**
+`:` and the namespace compared by **exact equality** against the allowed set
+(never `startswith` — `…/v10` must not match `…/v1`).
+
+**`intent_id` encoding & `order_ref` length:** a `uuid4` whose 16 bytes are
+base64url-encoded without padding → a 22-char token (vs 36 for the hyphenated
+form). base64url's alphabet (`A-Za-z0-9-_`) never collides with the `/` and `:`
+delimiters, so a last-`:` split parses `order_ref` unambiguously. `order_ref`
+length is **bounded, not assumed**: fixed overhead is 35 chars and
+`strategy_instance_id` may be up to 128, so once the IBKR cap `C` is verified (on
+one live paper order, before committing — truncation is silent), building over `C`
+fails closed and a broker-owned instance must satisfy
+`len(strategy_instance_id) ≤ C − 35`.
+
+### Uniform ownership ladder (sharpened 2026-06-04)
+
+**Every** broker order — strategy submit *and* every flatten/liquidation path
+(recovery, shutdown, force-flat, emergency) — enters the *same* identity ladder:
+mint `intent_id` and stamp `order_ref`. **In-process run-owned** paths also append
+to the live WAL; the **out-of-process emergency-flatten** (engine dead, no safe
+concurrent writer) instead writes a separate `emergency_flatten_audit.jsonl` — a
+later cold-start adopts it by namespace. Ownership is decided **only** by, in
+order:
+
+1. `order_ref` namespace — parsed on the final `:`, compared by **exact equality**
+   (never `startswith`; `…/v10` must not match `…/v1`) against this instance's
+   allowed-namespace set (one element, or `/v1`+`/v2` during dual-read),
+2. known `intent_id` (in projection / WAL),
+3. known `perm_id`,
+4. known `exec_id` (fill dedupe).
+
+`order_id` alone **never** proves ownership. **Provenance is not identity:**
+`intent_kind` (`STRATEGY` | `RECOVERY_FLATTEN` | `SHUTDOWN_FLATTEN` | `FORCE_FLAT`
+| `EMERGENCY_FLATTEN`) + `reason` are recorded for humans, but ownership must
+never branch on those strings. This retires `recovery-flatten-*`,
+`emergency-flatten-*`, and `live-{order_id}` as identity mechanisms.
+
 ## Sharpened by grilling (2026-05-30)
 
 - **Instance control room** — the operator console's correct shape. Its subject
