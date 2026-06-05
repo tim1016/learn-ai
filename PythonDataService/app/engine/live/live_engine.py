@@ -280,6 +280,7 @@ class LiveEngine:
         run_mode: str = "live_paper",
         bar_source: str = "ibkr_paper_delayed",
         decision_columns: tuple[str, ...] = DECISION_COLUMNS,
+        owned_perm_ids: set[int] | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -345,6 +346,7 @@ class LiveEngine:
         self._run_mode = run_mode
         self._bar_source = bar_source
         self._decision_columns = decision_columns
+        self._owned_perm_ids = owned_perm_ids or set()
         # The strategy-specific decision columns = resolved minus the core.
         self._strategy_decision_columns = tuple(
             c for c in decision_columns if c not in CORE_DECISION_COLUMNS
@@ -1286,6 +1288,7 @@ class LiveEngine:
             halted_at_ms=now_ms_utc(),
             last_clean_bar_close_ms=last_clean_bar_close_ms,
             session_start_ms=self._session_start_ms,
+            owned_perm_ids=self._owned_perm_ids,
         )
         if reason is None:
             return

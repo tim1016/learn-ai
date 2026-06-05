@@ -199,6 +199,8 @@ def _build_order(spec: IbkrOrderSpec):
 async def place_paper_order(
     client: IbkrClient,
     spec: IbkrOrderSpec,
+    *,
+    perm_id_wait_s: float = 0.0,
 ) -> IbkrOrderAck:
     """Place one paper order via ib_async.
 
@@ -210,6 +212,17 @@ async def place_paper_order(
 
     Status updates after this point arrive via Phase 3b's order event
     stream — this function doesn't wait for fills.
+
+    ``perm_id_wait_s`` bounds an optional wait for IBKR to assign the
+    order's ``permId``. ``IB.placeOrder`` returns synchronously while the
+    order is still ``PendingSubmit``, before ``permId`` exists; it arrives a
+    beat later on the ``openOrder`` callback and ib_async back-fills
+    ``trade.order.permId`` in place. The hot path leaves this at ``0.0`` (no
+    wait — the event stream carries permIds afterward). The recovery-flatten
+    path opts in: it runs *after* the engine's event stream has stopped, so
+    the synchronous ``permId`` is its only chance to capture the stable id
+    that the next same-account relaunch needs to recognize the replayed
+    recovery fill as bot-owned (see ``run._recovery_flatten``).
     """
     client.require_connected()
     account_id = _enforce_paper_safety(client, spec)
@@ -251,7 +264,19 @@ async def place_paper_order(
 
     # ib_async.placeOrder returns synchronously with a Trade whose
     # order.orderId is set. Status starts as 'PendingSubmit' and updates
-    # via events; we capture the snapshot now.
+    # via events. Optionally wait for IBKR to assign the permId: sleeping
+    # yields to the asyncio loop so ib_async can process the openOrder
+    # callback that back-fills trade.order.permId. Bounded by
+    # perm_id_wait_s so a degraded connection can't hang the caller.
+    if perm_id_wait_s > 0:
+        poll_interval_s = 0.05
+        remaining_s = perm_id_wait_s
+        while not trade.order.permId and remaining_s > 0:
+            await asyncio.sleep(min(poll_interval_s, remaining_s))
+            remaining_s -= poll_interval_s
+
+    # Capture the snapshot now (after any permId wait so status/permId
+    # reflect the post-acknowledgement state).
     order_status = getattr(trade.orderStatus, "status", "Unknown") or "Unknown"
     ack = IbkrOrderAck(
         account_id=account_id,

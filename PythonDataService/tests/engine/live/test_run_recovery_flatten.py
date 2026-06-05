@@ -13,6 +13,7 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
 from app.engine.live.run import _is_recovery_readonly, _recovery_flatten, _resolve_recovery_broker
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
@@ -60,6 +61,73 @@ async def test_recovery_flatten_submits_one_sell_per_long_position() -> None:
     assert sell_orders[0].quantity == 100
 
 
+class DeferredPermIdBroker(FakeBroker):
+    """Models real IBKR permId timing.
+
+    ``IB.placeOrder`` returns synchronously while the order is still
+    ``PendingSubmit`` — IBKR has not assigned a ``permId`` yet; it arrives a
+    beat later on the ``openOrder`` callback (together with the move out of
+    ``PendingSubmit``). So a placement that does NOT wait sees ``perm_id is
+    None``; only a caller that opts into the permId wait (``perm_id_wait_s >
+    0``) gets the stable id. The recovery path must opt in, otherwise it
+    records ``None`` and the next same-account relaunch cannot recognize the
+    replayed recovery fill as its own.
+    """
+
+    REAL_PERM_ID = 1176469133
+
+    async def place_order(self, spec, *, perm_id_wait_s: float = 0.0):
+        ack = await super().place_order(spec)  # perm_id=None, PendingSubmit
+        if perm_id_wait_s > 0:
+            return ack.model_copy(
+                update={"perm_id": self.REAL_PERM_ID, "status": "PreSubmitted"}
+            )
+        return ack
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_records_real_perm_id_to_live_state_sidecar(tmp_path) -> None:
+    """Recovery-flatten orders must be recognizable on same-account relaunch.
+
+    Regression: the recovery path recorded the *synchronous* ack's permId —
+    which IBKR has not assigned yet at PendingSubmit, so it persisted
+    ``None``. IBKR then replayed the resulting execution on relaunch with a
+    real permId and no client_order_id, and the outside-mutation guard had
+    nothing to match it against, fatal-halting the bot on its own recovery
+    fill until the session date rolled.
+
+    The fix: the recovery path opts into the permId wait, so the durable trail
+    captures the stable permId the replayed execution will carry.
+    """
+    sidecar_path = tmp_path / "live_state.json"
+    repo = LiveStateSidecarRepo(sidecar_path)
+    repo.write(
+        LiveStateEnvelope(
+            strategy_instance_id="spy_ema_crossover",
+            run_id="run-fixture",
+            bot_order_namespace="learn-ai/spy_ema_crossover/v1",
+            ib_client_id=42,
+            last_processed_bar_ms=1_780_000_000_000,
+            last_artifact_flush_ms=1_780_000_000_500,
+        )
+    )
+    broker = DeferredPermIdBroker()
+    _seed_position(broker, "SPY", 100.0)
+
+    liquidated = await _recovery_flatten(broker, live_state_path=sidecar_path)
+
+    assert liquidated == 1
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.known_perm_ids == [DeferredPermIdBroker.REAL_PERM_ID]
+    [client_order_id] = loaded.submitted_orders.keys()
+    assert client_order_id.startswith("recovery-flatten-SPY-")
+    assert (
+        loaded.submitted_orders[client_order_id]["perm_id"]
+        == DeferredPermIdBroker.REAL_PERM_ID
+    )
+
+
 @pytest.mark.asyncio
 async def test_recovery_flatten_submits_one_buy_per_short_position() -> None:
     broker = FakeBroker()
@@ -104,7 +172,7 @@ async def test_recovery_flatten_readonly_does_not_place_or_cancel_orders() -> No
         async def cancel_open_orders(self) -> list[int]:
             raise AssertionError("cancel_open_orders must not be called in readonly mode")
 
-        async def place_order(self, spec):
+        async def place_order(self, spec, *, perm_id_wait_s: float = 0.0):
             raise AssertionError("place_order must not be called in readonly mode")
 
     broker = RaisingCancelAndPlaceBroker()
@@ -148,11 +216,11 @@ async def test_recovery_flatten_per_position_place_order_failure_keeps_loop() ->
             super().__init__()
             self._calls = 0
 
-        async def place_order(self, spec):
+        async def place_order(self, spec, *, perm_id_wait_s: float = 0.0):
             self._calls += 1
             if self._calls == 1:
                 raise RuntimeError("simulated place_order failure on first call")
-            return await super().place_order(spec)
+            return await super().place_order(spec, perm_id_wait_s=perm_id_wait_s)
 
     broker = FailFirstThenSucceedBroker()
     broker.position_snapshot = IbkrPositionsSnapshot(

@@ -222,6 +222,37 @@ def test_outside_mutation_flags_execution_with_no_client_order_id() -> None:
     assert reason.details["client_order_id"] is None
 
 
+def test_outside_mutation_ignores_execution_with_owned_perm_id() -> None:
+    """A replayed fill for a prior bot-owned order may lack client_order_id.
+
+    IBKR permId is stable across sessions, unlike order id. If a recovery
+    flatten writes its permId to the durable sidecar, a later same-account
+    relaunch must recognize that replayed execution as ours rather than
+    fatal-halting as an outside mutation.
+    """
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "replayed-recovery-fill",
+            "perm_id": 1176469133,
+            "account_id": "DU284968",
+            "client_id": 42,
+            "exec_time_ms": 2_500,
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids=set(),
+        owned_perm_ids={1176469133},
+        halted_at_ms=5_000,
+        last_clean_bar_close_ms=4_900,
+        session_start_ms=2_000,
+    )
+    assert reason is None
+
+
 def test_outside_mutation_ignores_foreign_execution_before_session_start() -> None:
     """A foreign execution whose broker time predates session start is
     pre-existing account history replayed at connect, not contamination.

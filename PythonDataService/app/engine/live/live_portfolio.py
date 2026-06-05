@@ -55,7 +55,9 @@ class BrokerAdapter(Protocol):
 
     async def fetch_positions(self): ...
 
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck: ...
+    async def place_order(
+        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
+    ) -> IbkrOrderAck: ...
 
     async def cancel_open_orders(self) -> list[int]:
         """Cancel every order this runner still has open at the broker.
@@ -106,8 +108,10 @@ class IbkrBrokerAdapter(BrokerAdapter):
     async def fetch_positions(self):
         return await fetch_positions(self._client)
 
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
-        ack = await place_paper_order(self._client, spec)
+    async def place_order(
+        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
+    ) -> IbkrOrderAck:
+        ack = await place_paper_order(self._client, spec, perm_id_wait_s=perm_id_wait_s)
         self._owned_order_ids.add(int(ack.order_id))
         return ack
 

@@ -328,7 +328,60 @@ def _is_recovery_readonly(args, client) -> bool:
     return bool(getattr(settings, "readonly", False))
 
 
-async def _recovery_flatten(broker, *, readonly: bool = False) -> int:
+def _append_live_state_submitted_order(
+    live_state_path: Path,
+    *,
+    client_order_id: str,
+    perm_id: int | None,
+    order_id: int,
+    status: str,
+    symbol: str,
+) -> None:
+    """Append one submitted-order fingerprint to the live-state sidecar."""
+    from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
+
+    repo = LiveStateSidecarRepo(live_state_path)
+    existing = repo.read()
+    if existing is None:
+        return
+
+    submitted_orders = dict(existing.submitted_orders)
+    submitted_orders[client_order_id] = {
+        "perm_id": perm_id,
+        "order_id": order_id,
+        "status": status,
+        "symbol": symbol,
+    }
+    known_perm_ids = list(existing.known_perm_ids)
+    if perm_id is not None and perm_id not in known_perm_ids:
+        known_perm_ids.append(perm_id)
+
+    repo.write(
+        existing.model_copy(
+            update={
+                "submitted_orders": submitted_orders,
+                "known_perm_ids": known_perm_ids,
+                "last_artifact_flush_ms": int(time.time() * 1000),
+            }
+        )
+    )
+
+
+# Recovery flatten runs after the engine's order-event stream has stopped, so
+# the synchronous place_order ack is its only chance to capture the permId the
+# next same-account relaunch needs (see _append_live_state_submitted_order and
+# halt.check_outside_mutation). Wait briefly for IBKR to assign it. permId
+# normally arrives in well under 1s; 2s tolerates a degraded connection without
+# stalling the crash-recovery path.
+_RECOVERY_PERM_ID_WAIT_S = 2.0
+
+
+async def _recovery_flatten(
+    broker,
+    *,
+    readonly: bool = False,
+    live_state_path: Path | None = None,
+) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
 
     Different from ``cmd_emergency_flatten``: no ``--confirm`` gate,
@@ -409,7 +462,9 @@ async def _recovery_flatten(broker, *, readonly: bool = False) -> int:
             client_order_id=f"recovery-flatten-{pos.symbol}-{int(datetime.now(UTC).timestamp() * 1000)}",
         )
         try:
-            ack = await broker.place_order(spec)
+            # Wait for permId so the durable fingerprint below is recognizable
+            # on relaunch — the engine's event stream is already stopped here.
+            ack = await broker.place_order(spec, perm_id_wait_s=_RECOVERY_PERM_ID_WAIT_S)
             logger.info(
                 "Recovery flatten liquidated %s qty=%s order_id=%s",
                 pos.symbol,
@@ -417,6 +472,33 @@ async def _recovery_flatten(broker, *, readonly: bool = False) -> int:
                 ack.order_id,
                 extra={"step": "8"},
             )
+            if live_state_path is not None and spec.client_order_id is not None:
+                if ack.perm_id is None:
+                    # No permId means the relaunch guard has nothing stable to
+                    # match the replayed recovery fill against; record the
+                    # fingerprint anyway, but flag the gap for the operator.
+                    logger.warning(
+                        "Recovery flatten for %s got no permId within %.1fs; "
+                        "same-account relaunch may flag this fill as an outside "
+                        "mutation — verify via emergency-flatten before restart",
+                        pos.symbol,
+                        _RECOVERY_PERM_ID_WAIT_S,
+                        extra={"step": "8"},
+                    )
+                try:
+                    _append_live_state_submitted_order(
+                        live_state_path,
+                        client_order_id=spec.client_order_id,
+                        perm_id=ack.perm_id,
+                        order_id=ack.order_id,
+                        status=ack.status,
+                        symbol=ack.symbol,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Recovery flatten could not record submitted order fingerprint",
+                        extra={"step": "8"},
+                    )
             liquidated += 1
         except Exception:
             logger.exception(
@@ -544,20 +626,36 @@ def _build_live_state_writer(
     )
 
     def _write(portfolio, bar_close_ms: int) -> None:
+        existing = repo.read()
         envelope = LiveStateEnvelope(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
             bot_order_namespace=bot_order_namespace,
             ib_client_id=ib_client_id,
+            pending_intents=existing.pending_intents if existing is not None else [],
+            submitted_orders=existing.submitted_orders if existing is not None else {},
+            known_perm_ids=existing.known_perm_ids if existing is not None else [],
+            known_exec_ids=existing.known_exec_ids if existing is not None else [],
             last_processed_bar_ms=bar_close_ms,
             last_artifact_flush_ms=int(time.time() * 1000),
             expected_position_by_symbol={
                 sym: int(pos.quantity) for sym, pos in portfolio.positions.items()
             },
+            poisoned_reason=existing.poisoned_reason if existing is not None else None,
         )
         repo.write(envelope)
 
     return _write
+
+
+def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
+    """Load durable bot-owned permIds from the live-state sidecar."""
+    from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
+
+    envelope = LiveStateSidecarRepo(live_state_path).read()
+    if envelope is None:
+        return set()
+    return {int(perm_id) for perm_id in envelope.known_perm_ids}
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -815,6 +913,13 @@ def cmd_start(args: argparse.Namespace) -> int:
         client=client,
         artifacts_root=_artifacts_root,
     )
+    owned_perm_ids: set[int] = set()
+    if live_state_writer is not None:
+        from app.engine.live.live_state_sidecar import stable_live_state_path
+
+        owned_perm_ids = _read_owned_perm_ids(
+            stable_live_state_path(_artifacts_root, strategy_instance_id)
+        )
 
     # Operator command channel (PRD-A § 16.4 Resolution 7 / PR-D). The
     # bot polls ``<run_dir>/commands/`` at 1s, independent of the bar
@@ -849,6 +954,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         run_mode=run_mode,
         bar_source=bar_source,
         decision_columns=decision_columns,
+        owned_perm_ids=owned_perm_ids,
     )
 
     _entry_sidecar = RunStatusSidecar(
@@ -1032,7 +1138,16 @@ def cmd_start(args: argparse.Namespace) -> int:
                 if broker_for_flatten is not None:
                     is_readonly = _is_recovery_readonly(args, client)
                     try:
-                        n = await _recovery_flatten(broker_for_flatten, readonly=is_readonly)
+                        live_state_path = None
+                        if live_state_writer is not None:
+                            from app.engine.live.live_state_sidecar import stable_live_state_path
+
+                            live_state_path = stable_live_state_path(_artifacts_root, strategy_instance_id)
+                        n = await _recovery_flatten(
+                            broker_for_flatten,
+                            readonly=is_readonly,
+                            live_state_path=live_state_path,
+                        )
                         if is_readonly:
                             print(
                                 f"[START] readonly: recovery flatten skipped — "
