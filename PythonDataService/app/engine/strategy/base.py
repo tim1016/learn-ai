@@ -271,11 +271,28 @@ class Strategy(ABC):
         """Persistable cross-session state, or ``None`` if not warm-startable.
 
         Default ``None``: no indicator state to carry across restarts (cold
-        start every session). Under ``hydrate_policy=require`` this surfaces as
-        a "missing" seed-day prompt, which is correct — there is nothing to
-        require. Strategies with warm-startable indicators override this.
+        start every session). A strategy that reports no state is not
+        warm-startable (see ``is_warm_startable``), so ``hydrate_policy=require``
+        is vacuous for it — there is nothing to require and nothing to restore.
+        Strategies with warm-startable indicators override this.
         """
         return None
+
+    def is_warm_startable(self) -> bool:
+        """Whether this strategy carries cross-session indicator state to warm-start.
+
+        Derived from the persistence contract so the two can never drift: a
+        strategy is warm-startable iff it overrides ``report_state_for_persistence``
+        to return a payload. Pure bar-pattern detectors (e.g.
+        ``deployment_validation``) keep the base ``None`` and are NOT
+        warm-startable — so ``hydrate_policy=require`` is vacuous for them:
+        there is no sidecar to require and nothing to restore. The live engine
+        must therefore not exit 4 demanding a sidecar such a strategy can never
+        write; it cold-starts every session. Strategies with warm-startable
+        indicators (e.g. ``spy_ema_crossover``) override
+        ``report_state_for_persistence`` and so are warm-startable automatically.
+        """
+        return type(self).report_state_for_persistence is not Strategy.report_state_for_persistence
 
     def restore_state_from_persistence(self, payload: dict) -> None:  # pragma: no cover
         """Rehydrate from a persisted payload.

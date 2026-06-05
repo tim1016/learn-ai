@@ -40,6 +40,7 @@ from app.engine.live.deploy import (
     RunAlreadyExistsError,
     SpecOrAuditMissingError,
     deploy_run,
+    git_head_sha,
 )
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
@@ -111,6 +112,14 @@ class RunnerProcessManager:
         Back-compat for the run-spine UI: surfaces the first running
         managed process (or idle). The instance-addressed view is
         :meth:`instances`.
+
+        ``git_sha`` is the HEAD of the code this long-lived daemon is actually
+        executing. The daemon does NOT reload on ``git pull`` — it must be
+        restarted — so after a fix merges to master the daemon keeps running the
+        old code until relaunched. Surfacing the SHA lets an operator confirm
+        "the daemon is running the merged fixes" instead of guessing (the
+        handoff's open question after 8 failed sessions). Best-effort: ``None``
+        if git is unavailable (e.g. not a checkout).
         """
         return HostRunnerHealth(
             ok=True,
@@ -118,7 +127,15 @@ class RunnerProcessManager:
             live_runs_root=str(self.live_runs_root),
             fetched_at_ms=_now_ms(),
             process=self._first_process_status(),
+            git_sha=self._git_sha(),
         )
+
+    def _git_sha(self) -> str | None:
+        """HEAD of the daemon's repo_root, or None if git is unavailable."""
+        try:
+            return git_head_sha(self.repo_root)
+        except GitUnavailableError:
+            return None
 
     def instances(self) -> HostRunnerInstancesStatus:
         """All managed instances with their live binding (registry authority)."""
@@ -725,6 +742,10 @@ def main(argv: list[str] | None = None) -> int:
         TOKEN_HEADER,
         token_file_path(live_runs_root.parent),
     )
+    # Log the executing code's git SHA at startup: the daemon is long-lived and
+    # does NOT reload on `git pull`, so this is the operator's anchor for "which
+    # code is this daemon actually running" after a fix merges.
+    logger.info("host daemon code git_sha=%s (repo_root=%s)", manager._git_sha(), repo_root)
 
     import uvicorn
 

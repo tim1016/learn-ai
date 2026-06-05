@@ -364,6 +364,17 @@ def hydrate(
         )
         return
 
+    # A strategy with no warm-startable state cannot satisfy — or fail — a
+    # warm-start requirement: it never writes a sidecar (maybe_write skips a
+    # None payload) and has nothing to restore. Treating the absent sidecar as
+    # a REQUIRE "missing" failure here would exit 4 on EVERY session of such a
+    # strategy (e.g. deployment_validation), so short-circuit to an accepted
+    # cold-start receipt regardless of policy. The null global_sha256 /
+    # sidecar_last_* fields signal that no sidecar was read.
+    if not strategy.is_warm_startable():
+        _write_receipt(_base_receipt(accepted=True, validation=ValidationResult.all_passed()))
+        return
+
     # Check #1: schema parse + existence.
     try:
         envelope = repo.read()

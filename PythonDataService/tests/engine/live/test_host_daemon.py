@@ -72,6 +72,28 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     body = response.json()
     assert body["ok"] is True
     assert body["process"]["state"] == "idle"
+    # Non-git tmp repo_root degrades to None rather than raising.
+    assert body["git_sha"] is None
+
+
+async def test_health_reports_git_sha_of_executing_code() -> None:
+    """The daemon surfaces the git HEAD of the code it is executing so an
+    operator can confirm it is running the merged fixes (the daemon is
+    long-lived and does NOT reload on `git pull`). A real checkout yields the
+    40-hex SHA; a non-git root degrades to None rather than raising.
+    """
+    import re
+
+    repo_root = Path(__file__).resolve().parents[4]
+    manager = RunnerProcessManager(
+        repo_root=repo_root,
+        live_runs_root=repo_root / "PythonDataService" / "artifacts" / "live_runs",
+    )
+
+    health = manager.health()
+
+    assert health.git_sha is not None
+    assert re.fullmatch(r"[0-9a-f]{40}", health.git_sha)
 
 
 async def test_start_launches_existing_run_with_host_env(
