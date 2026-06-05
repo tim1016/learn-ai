@@ -63,6 +63,13 @@ class LiveStateEnvelope(BaseModel):
     last_processed_bar_ms: int = Field(gt=0)
     last_artifact_flush_ms: int = Field(gt=0)
 
+    # WAL fold cursor: the highest ``intent_events.jsonl`` seq already folded
+    # into ``submitted_orders`` (ADR-0008 §3/§5, PRD #446). The cold-start fold
+    # replays events *after* this seq — NOT after ``last_artifact_flush_ms``, a
+    # wall-clock value that can collide, drift, or reorder around fsync.
+    # Defaults to 0 so envelopes written before this field read back cleanly.
+    last_intent_wal_seq: int = Field(default=0, ge=0)
+
     poisoned_reason: str | None = None
 
 
