@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # Git SHA of the code this container is running, surfaced on /health so an
+    # operator can confirm the data plane matches master. The container has no
+    # .git mount, so a live `git rev-parse` won't work here — this is sourced
+    # from the GIT_COMMIT_SHA env/build-arg ("" if unset). The host daemon
+    # (which executes live sessions) computes its own SHA live on /health.
+    GIT_COMMIT_SHA: str = ""
+
     # CORS (comma-separated string)
     ALLOWED_ORIGINS: str = "http://backend:8080,http://localhost:5000,http://localhost:4200"
 

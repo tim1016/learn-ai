@@ -724,6 +724,28 @@ def cmd_start(args: argparse.Namespace) -> int:
     from app.engine.strategy.spec import load_spec_from_path
     from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
+    def _record_poison_refusal() -> None:
+        # Make the poison refusal legible to the console. If this poisoned run
+        # never wrote a terminal status, record one (exit_reason=poisoned) so
+        # the "Why It Stopped" panel shows "fresh run_id required" instead of a
+        # blank "ended unexpectedly". NEVER clobber an existing status — it
+        # carries the richer original halt reason (e.g. fatal_halt) that
+        # explains *why* the run poisoned in the first place.
+        if (args.run_dir / "run_status.json").exists():
+            return
+        write_run_status(
+            args.run_dir,
+            RunStatusSidecar(
+                run_id=args.run_dir.name,
+                started_at_ms=now_ms(),
+                last_update_ms=now_ms(),
+                ended_at_ms=now_ms(),
+                exit_code=1,
+                exit_reason=ExitReason.poisoned,
+                host_pid=_os.getpid(),
+            ),
+        )
+
     # § 7.2 #4 refusal: a poisoned run cannot resume on its own
     # run_id. The flag is written intra-day by the LiveEngine when
     # broker-state divergence is detected; it stays in place until the
@@ -737,6 +759,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         # than silently ignore. The spec invariant is that
         # poisoned.flag is never the source of a clean restart.
         print(f"[START] poisoned.flag at {args.run_dir} is corrupted: {exc}", file=sys.stderr)
+        _record_poison_refusal()
         return 1
     if poison is not None:
         print(
@@ -745,6 +768,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             f"required after manual account reconciliation.",
             file=sys.stderr,
         )
+        _record_poison_refusal()
         return 1
 
     ledger_path = args.run_dir / "run_ledger.json"

@@ -172,6 +172,62 @@ async def test_status_start_defaults_empty_strategy_for_legacy_ledger(
     assert response.json()["start_defaults"]["strategy"] == ""
 
 
+async def test_status_start_defaults_carry_redeploy_identity_from_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Start-card defaults also carry the ledger's deploy identity (spec
+    path, qc audit copy, qc backtest id, account) so the console can deep-link a
+    one-click re-deploy (fresh run_id) to recover a poisoned/halted instance
+    without the operator re-typing the deploy form."""
+    app, root = app_with_root
+    run_dir = root / "run-redeploy"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-redeploy",
+                "strategy_instance_id": "spy_ema_paper",
+                "created_at_ms": 100,
+                "strategy_key": "spy_ema_crossover",
+                "strategy_spec_path": "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json",
+                "qc_audit_copy_path": "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+                "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
+                "account_id": "DU1234567",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    defaults = response.json()["start_defaults"]
+    assert defaults["strategy_spec_path"].endswith("spy_ema_crossover.spec.json")
+    assert defaults["qc_audit_copy_path"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
+    assert defaults["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"
+    assert defaults["account_id"] == "DU1234567"
+
+
+async def test_status_start_defaults_redeploy_fields_empty_for_legacy_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy ledgers missing the deploy fields yield empty strings (the deploy
+    form then asks for them) rather than erroring."""
+    app, root = app_with_root
+    _write_ledger(root, "run-legacy-redeploy", "spy_ema_paper", 50)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    defaults = response.json()["start_defaults"]
+    assert defaults["strategy_spec_path"] == ""
+    assert defaults["qc_cloud_backtest_id"] == ""
+    assert defaults["account_id"] == ""
+
+
 async def test_instance_status_unreachable_daemon_is_not_guessed(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
