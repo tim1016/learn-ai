@@ -276,6 +276,22 @@
             @if (!s.live_binding) {
               <p class="disabled-reason">Advanced actions need a live bot session. Start the bot first.</p>
             }
+            <div class="emergency-actions" role="group" aria-label="Emergency actions">
+              <p class="notice danger">
+                Kill-switch: liquidates ALL account positions via the broker, even
+                with no live bot — use when a halted/poisoned bot may have left a
+                position open.
+              </p>
+              <button
+                type="button"
+                class="danger"
+                (click)="issueEmergencyFlatten()"
+                [disabled]="busyEmergencyFlatten()"
+                title="Place market orders to liquidate every position on the account."
+              >
+                {{ busyEmergencyFlatten() ? 'Flattening…' : 'Emergency flatten (account-wide)' }}
+              </button>
+            </div>
             <app-broker-operation-result [error]="commandError()" />
             @if (commandEntries().length) {
               <ul class="command-timeline" aria-label="Command timeline">

@@ -210,6 +210,68 @@ async def test_status_start_defaults_carry_redeploy_identity_from_ledger(
     assert defaults["account_id"] == "DU1234567"
 
 
+async def test_emergency_flatten_works_without_live_binding(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The account-wide flatten reaches the latest run's daemon emergency-flatten
+    even with NO live binding (the binding-gated console FLATTEN command can't) —
+    exactly the post-halt/poison case where flattening matters most."""
+    app, root = app_with_root
+    _write_ledger(root, "run-flat", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})  # not running -> no live binding
+
+    captured: dict = {}
+
+    async def fake_flatten(base_url: str, run_id: str, payload: dict) -> dict:
+        captured["run_id"] = run_id
+        captured["payload"] = payload
+        return {"accepted": True, "process": {"state": "idle"}}
+
+    monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", fake_flatten)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/emergency-flatten",
+            json={"account": "DU123", "confirm": True},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+    assert captured["run_id"] == "run-flat"
+    assert captured["payload"] == {"account": "DU123", "confirm": True}
+
+
+async def test_emergency_flatten_requires_confirm(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-flat2", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/emergency-flatten",
+            json={"account": "DU123", "confirm": False},
+        )
+
+    assert response.status_code == 400
+
+
+async def test_emergency_flatten_404_when_instance_has_no_run(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/ghost_instance/emergency-flatten",
+            json={"account": "DU123", "confirm": True},
+        )
+
+    assert response.status_code == 404
+
+
 async def test_status_start_defaults_redeploy_fields_empty_for_legacy_ledger(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

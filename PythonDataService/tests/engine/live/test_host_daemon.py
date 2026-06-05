@@ -96,6 +96,80 @@ async def test_health_reports_git_sha_of_executing_code() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", health.git_sha)
 
 
+def test_emergency_flatten_runs_cli_and_reports_success(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The account-wide flatten reuses the one-shot emergency-flatten CLI: the
+    manager spawns it (fixed argv, --confirm + --account), and exit 0 → accepted."""
+    from app.engine.live import host_daemon as hd
+
+    manager, run_dir = daemon_context
+    captured: dict[str, list[str]] = {}
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> _Result:
+        captured["command"] = command
+        return _Result()
+
+    monkeypatch.setattr(hd.subprocess, "run", fake_run)
+
+    resp = manager.emergency_flatten(RUN_ID, "DU123")
+
+    assert resp.accepted is True
+    cmd = captured["command"]
+    assert cmd[1:4] == ["-m", "app.engine.live.run", "emergency-flatten"]
+    assert "--confirm" in cmd
+    assert "DU123" in cmd
+    assert str(run_dir.resolve()) in cmd
+
+
+def test_emergency_flatten_account_mismatch_maps_to_http_400(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI exit 2 (operator precondition — account mismatch / no --confirm) → 400."""
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.host_daemon import HostRunnerError
+
+    manager, _ = daemon_context
+
+    class _Result:
+        returncode = 2
+        stdout = ""
+        stderr = "account mismatch"
+
+    monkeypatch.setattr(hd.subprocess, "run", lambda command, **_kwargs: _Result())
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.emergency_flatten(RUN_ID, "DU999")
+    assert exc_info.value.status_code == 400
+
+
+def test_emergency_flatten_broker_error_maps_to_http_502(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI exit 3 (broker/runtime) → 502, with the CLI stderr surfaced."""
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.host_daemon import HostRunnerError
+
+    manager, _ = daemon_context
+
+    class _Result:
+        returncode = 3
+        stdout = ""
+        stderr = "broker boom"
+
+    monkeypatch.setattr(hd.subprocess, "run", lambda command, **_kwargs: _Result())
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.emergency_flatten(RUN_ID, "DU123")
+    assert exc_info.value.status_code == 502
+    assert "broker boom" in exc_info.value.detail
+
+
 async def test_start_launches_existing_run_with_host_env(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,

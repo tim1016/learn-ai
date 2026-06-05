@@ -166,6 +166,7 @@ export class BrokerInstancesComponent {
   readonly busyAction = signal<DesiredStateAction | null>(null);
   readonly lastActuation = signal<IntentActuation | null>(null);
   readonly busyVerb = signal<CommandVerb | null>(null);
+  readonly busyEmergencyFlatten = signal<boolean>(false);
 
   // Structured inline errors (handoff: inline-only surfacing, never a toast).
   readonly intentError = signal<OperationError | null>(null);
@@ -241,6 +242,36 @@ export class BrokerInstancesComponent {
       if (typed !== 'HALT') return;
     }
     await this.issueCommand(verb);
+  }
+
+  /** Account-wide emergency flatten (§ 7.2 #6) — independent of a live binding,
+   * so it works after a halt/poison when the binding-gated FLATTEN command does
+   * not. Places real (paper) market orders, so it double-confirms: an explicit
+   * acknowledgement plus the account id echoed back (mirrors the CLI gate). */
+  async issueEmergencyFlatten(): Promise<void> {
+    const id = this.selectedInstanceId();
+    if (id === null) return;
+    const ok = window.confirm(
+      'Emergency flatten places market orders to liquidate ALL positions on your ' +
+        'account, regardless of which bot owns them. It is immediate and irreversible.\n\n' +
+        'Continue?',
+    );
+    if (!ok) return;
+    const account = window.prompt('Type your IBKR account id (e.g. DU1234567) to confirm:');
+    if (account === null || account.trim() === '') return;
+    this.busyEmergencyFlatten.set(true);
+    this.commandError.set(null);
+    try {
+      await this.svc.emergencyFlattenAccount(id, {
+        account: account.trim().toUpperCase(),
+        confirm: true,
+      });
+      if (this.selectedInstanceId() === id) this.status.reload();
+    } catch (err) {
+      if (this.selectedInstanceId() === id) this.commandError.set(toOperationError('flatten', err));
+    } finally {
+      this.busyEmergencyFlatten.set(false);
+    }
   }
 
   setAdvancedOpen(event: Event): void {

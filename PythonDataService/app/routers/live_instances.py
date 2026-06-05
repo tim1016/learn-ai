@@ -48,6 +48,7 @@ from app.schemas.live_runs import (
     CommandView,
     DesiredStateAction,
     DesiredStateRecordResponse,
+    EmergencyFlattenRequest,
     EnqueueCommandRequest,
     EvidenceBinding,
     FleetContamination,
@@ -777,3 +778,42 @@ async def issue_instance_command(
         )
     command = CommandChannel(run_dir / "commands").write_from_operator(verb)
     return CommandView(seq=command.seq, verb=command.verb.value)
+
+
+@router.post("/{strategy_instance_id}/emergency-flatten", response_model=HostRunnerActionResponse)
+async def emergency_flatten_instance(
+    strategy_instance_id: str, body: EmergencyFlattenRequest
+) -> HostRunnerActionResponse:
+    """Account-wide emergency flatten (§ 7.2 #6), independent of a live binding.
+
+    The console FLATTEN *command* needs a live binding (it writes to the run's
+    command channel for the engine to drain) — but after a halt/poison the
+    binding is gone, exactly when an operator most wants to flatten. This reaches
+    the daemon's one-shot ``emergency-flatten`` on the instance's latest run,
+    reusing the existing paper-guarded CLI. It connects its own broker session,
+    so it works with no live process. Account-wide only; namespace-attributed
+    reconciliation stays fail-closed. The operator must echo the account id
+    (defense-in-depth, mirrors the CLI ``--account`` gate).
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    if not body.confirm:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true"
+        )
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    if not runs:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"no run found for instance {sid!r} to flatten"
+        )
+    run_id = str(runs[0]["run_id"])
+    try:
+        body_json = await host_daemon_client.emergency_flatten_run(
+            settings.live_runner_daemon_url,
+            run_id,
+            {"account": body.account, "confirm": True},
+        )
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    return HostRunnerActionResponse.model_validate(body_json)

@@ -44,6 +44,7 @@ from app.engine.live.deploy import (
 )
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
+    EmergencyFlattenRequest,
     HostRunnerActionResponse,
     HostRunnerDeployRequest,
     HostRunnerDeployResponse,
@@ -279,6 +280,66 @@ class RunnerProcessManager:
         logger.info(
             "Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid
         )
+        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
+
+    def emergency_flatten(self, run_id: str, account: str) -> HostRunnerActionResponse:
+        """Account-wide emergency flatten via the existing one-shot CLI (§ 7.2 #6).
+
+        Independent of any live binding — after a halt/poison the binding is gone,
+        so the binding-gated console FLATTEN command is unavailable exactly when
+        an operator wants to flatten. This reuses ``app.engine.live.run
+        emergency-flatten`` (paper-guarded, ``--confirm`` + ``--account`` gated),
+        run synchronously so the CLI's exit code drives the HTTP response. It is
+        the blunt account-wide liquidate only; namespace-attributed
+        reconciliation stays fail-closed (we don't best-guess broker ownership).
+        """
+        run_dir = self._validate_run_dir(run_id)
+        command = [
+            sys.executable,
+            "-m",
+            "app.engine.live.run",
+            "emergency-flatten",
+            "--run-dir",
+            str(run_dir),
+            "--account",
+            account,
+            "--confirm",
+        ]
+        env = os.environ.copy()
+        python_path = str(self.repo_root / "PythonDataService")
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=str(self.repo_root),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HostRunnerError(
+                status.HTTP_504_GATEWAY_TIMEOUT,
+                f"emergency-flatten timed out after {exc.timeout}s",
+            ) from exc
+        except OSError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE, f"could not run emergency-flatten: {exc}"
+            ) from exc
+        if proc.returncode != 0:
+            # CLI exit codes: 2 = operator precondition (account mismatch / no
+            # --confirm) -> 400; everything else (3 = broker/runtime) -> 502.
+            http_code = (
+                status.HTTP_400_BAD_REQUEST
+                if proc.returncode == 2
+                else status.HTTP_502_BAD_GATEWAY
+            )
+            detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
+                f"emergency-flatten exited {proc.returncode}"
+            )
+            raise HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
+        logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
         return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
     def deploy(self, request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
@@ -631,6 +692,25 @@ def create_app(
     async def stop_run(run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
         try:
             return await run_in_threadpool(process_manager.stop, run_id, request)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+    @app.post(
+        "/runs/{run_id}/emergency-flatten",
+        response_model=HostRunnerActionResponse,
+        dependencies=auth,
+    )
+    async def emergency_flatten_run(
+        run_id: str, request: EmergencyFlattenRequest
+    ) -> HostRunnerActionResponse:
+        if not request.confirm:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true"
+            )
+        try:
+            return await run_in_threadpool(
+                process_manager.emergency_flatten, run_id, request.account
+            )
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
