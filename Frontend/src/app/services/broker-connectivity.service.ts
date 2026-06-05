@@ -118,6 +118,15 @@ export class BrokerConnectivityService {
     return out;
   });
 
+  /** Short git SHA of the code the host daemon is executing, or null. Lets the
+   * operator confirm the live executor is on master — the daemon does NOT reload
+   * on `git pull`, so a stale SHA here means it must be restarted to pick up
+   * merged fixes (#449). */
+  readonly daemonCodeSha = computed<string | null>(() => {
+    const sha = this.daemon.value()?.git_sha;
+    return sha ? sha.slice(0, 7) : null;
+  });
+
   readonly daemonReachable = computed<boolean>(() => this.daemonState() === 'ok');
   /** Explicitly down (probe failed) — distinct from 'unknown' while loading, so
    * disable-with-reason doesn't block a control mid-probe (#416). */

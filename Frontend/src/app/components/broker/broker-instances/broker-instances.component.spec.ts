@@ -135,6 +135,7 @@ function setup(connectivityOverrides: { brokerState?: () => BrokerLinkState } = 
     // The broker-connection health row reads this (the real probe), not the
     // per-instance sidecar. Default to connected; tests override per case.
     brokerState: () => 'ok' as BrokerLinkState,
+    daemonCodeSha: () => null,
     reload: () => {},
     ...connectivityOverrides,
   };
@@ -407,6 +408,75 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).not.toContain('Why It Stopped');
+  });
+
+  it('explains a poisoned run and offers a re-deploy (fresh run_id) recovery link', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        start_defaults: {
+          strategy: 'spy_ema_crossover',
+          readonly: true,
+          hydrate_policy: 'require',
+          max_orders_per_day: 4,
+          ibkr_host: '127.0.0.1',
+          strategy_spec_path:
+            'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
+          qc_audit_copy_path: 'references/qc-shadow/SpyEmaCrossoverAlgorithm.py',
+          qc_cloud_backtest_id: 'd2fe45a7142e88575f6fbd75229f8681',
+          account_id: 'DU1234567',
+        },
+        last_exit: {
+          run_id: 'run-poison',
+          ended_at_ms: 200,
+          exit_code: 1,
+          exit_reason: 'poisoned',
+          hydration_accepted: null,
+          hydration_failure_reason: null,
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('poisoned');
+    expect(text).toContain('Re-deploy (fresh run_id)');
+  });
+
+  it('builds re-deploy query params from the bound run ledger deploy identity', () => {
+    const { component } = setup();
+    const params = component.redeployQueryParams(
+      makeStatus({
+        start_defaults: {
+          strategy: 'spy_ema_crossover',
+          readonly: true,
+          hydrate_policy: 'require',
+          max_orders_per_day: 4,
+          ibkr_host: '127.0.0.1',
+          strategy_spec_path: 'spec/path.json',
+          qc_audit_copy_path: 'audit/copy.py',
+          qc_cloud_backtest_id: 'bt-hex',
+          account_id: 'DU999',
+        },
+      }),
+    );
+
+    expect(params).toEqual({
+      strategy_key: 'spy_ema_crossover',
+      spec_path: 'spec/path.json',
+      account_id: 'DU999',
+      qc_backtest_id: 'bt-hex',
+      qc_audit_copy_path: 'audit/copy.py',
+      instance_id: 'spy_ema_paper',
+    });
   });
 
   it('renders account contamination and the inherited banner on the instance', async () => {

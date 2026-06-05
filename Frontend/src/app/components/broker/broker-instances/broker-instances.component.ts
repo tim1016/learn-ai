@@ -233,7 +233,11 @@ export class BrokerInstancesComponent {
       if (!ok) return;
     }
     if (verb === 'MARK_POISONED') {
-      const typed = window.prompt('Type HALT to flag this instance as unsafe and halt trading.');
+      const typed = window.prompt(
+        'Flagging this instance as POISONED is IRREVERSIBLE: the current run can ' +
+          'never resume on its run_id. Recovery requires a fresh deployment ' +
+          '(new run_id) after you reconcile the account.\n\nType HALT to confirm.',
+      );
       if (typed !== 'HALT') return;
     }
     await this.issueCommand(verb);
@@ -385,6 +389,16 @@ export class BrokerInstancesComponent {
         fix: 'Review the run log for the underlying error before restarting.',
       };
     }
+    // Poisoned: the run refused to restart on its own run_id. Poison is sticky
+    // and run_id-scoped by design — the only recovery is a fresh deployment.
+    if (e.exit_reason === 'poisoned') {
+      return {
+        tone: 'bad',
+        title: 'Run is poisoned — a fresh deployment is required',
+        detail: `This run was flagged unsafe and refused to restart on its own run_id${code != null ? ` (exit ${code})` : ''}. The same run can never resume.`,
+        fix: 'Reconcile the broker account, then Re-deploy below to start a fresh run_id.',
+      };
+    }
     // Cold-start / seed-day: only reached for non-halt exits (e.g. an exit-4
     // hydration rejection under hydrate_policy=require with no prior state).
     if (e.hydration_accepted === false && e.hydration_failure_reason === 'missing') {
@@ -490,5 +504,29 @@ export class BrokerInstancesComponent {
   /** Account residual (unattributed) positions as rows (#399). */
   residualRows(fleet: FleetContamination): { symbol: string; qty: number }[] {
     return Object.entries(fleet.residual).map(([symbol, qty]) => ({ symbol, qty }));
+  }
+
+  /** True when a STOPPED instance can be recovered by re-deploying a fresh
+   * run_id — the only recovery path for a poisoned/halted run. Requires the
+   * bound run's ledger deploy identity (start_defaults) to prefill the form. */
+  canRedeploy(s: LiveInstanceStatus): boolean {
+    if (s.process.state === 'running' || s.process.state === 'stopping') return false;
+    return !!s.start_defaults?.strategy_spec_path;
+  }
+
+  /** Deep-link query params that prefill the deploy form from the bound run's
+   * ledger, so re-deploying (fresh run_id) doesn't make the operator re-type the
+   * deploy identity. */
+  redeployQueryParams(s: LiveInstanceStatus): Record<string, string> {
+    const d = s.start_defaults;
+    if (!d) return {};
+    return {
+      strategy_key: d.strategy ?? '',
+      spec_path: d.strategy_spec_path ?? '',
+      account_id: d.account_id ?? '',
+      qc_backtest_id: d.qc_cloud_backtest_id ?? '',
+      qc_audit_copy_path: d.qc_audit_copy_path ?? '',
+      instance_id: s.strategy_instance_id,
+    };
   }
 }

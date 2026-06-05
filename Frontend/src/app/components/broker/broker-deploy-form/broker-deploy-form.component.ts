@@ -8,7 +8,7 @@ import {
   resource,
   signal,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import type {
   HostRunnerDeployRequest,
   HostRunnerDeployResponse,
@@ -48,6 +48,7 @@ export class BrokerDeployFormComponent {
   private readonly svc = inject(LiveRunsService);
   private readonly broker = inject(BrokerService);
   protected readonly connectivity = inject(BrokerConnectivityService);
+  private readonly route = inject(ActivatedRoute);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
@@ -63,7 +64,13 @@ export class BrokerDeployFormComponent {
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
   readonly manualSpecPath = signal<boolean>(false);
-  readonly accountId = linkedSignal<string>(() => this.account.value()?.account_id ?? '');
+  // Seeded from a re-deploy deep-link (recover a poisoned/halted instance with a
+  // fresh run_id). Preferred over the broker-account prefill so the ledger's
+  // account survives even if the broker probe is down or resolves late.
+  private readonly seededAccountId = signal<string>('');
+  readonly accountId = linkedSignal<string>(
+    () => this.seededAccountId() || (this.account.value()?.account_id ?? ''),
+  );
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
   readonly instanceId = signal<string>('');
@@ -192,6 +199,29 @@ export class BrokerDeployFormComponent {
   ]);
 
   constructor() {
+    // Re-deploy prefill: seed the form from the deep-link query params the
+    // instance console builds from the bound run's ledger, so recovering a
+    // poisoned/halted instance (which needs a fresh run_id) doesn't make the
+    // operator re-type the deploy identity. Every field stays operator-editable.
+    const qp = this.route.snapshot.queryParamMap;
+    const seedStrategy = qp.get('strategy_key');
+    if (seedStrategy) this.strategyKey.set(seedStrategy);
+    const seedSpecPath = qp.get('spec_path');
+    if (seedSpecPath) {
+      // manual=true so the strategy→spec effect below doesn't override the
+      // exact spec path the prior run was reconciled to.
+      this.manualSpecPath.set(true);
+      this.specPath.set(seedSpecPath);
+    }
+    const seedAccount = qp.get('account_id');
+    if (seedAccount) this.seededAccountId.set(seedAccount);
+    const seedBacktestId = qp.get('qc_backtest_id');
+    if (seedBacktestId) this.qcBacktestId.set(seedBacktestId);
+    const seedAuditCopy = qp.get('qc_audit_copy_path');
+    if (seedAuditCopy) this.qcAuditCopyPath.set(seedAuditCopy);
+    const seedInstanceId = qp.get('instance_id');
+    if (seedInstanceId) this.instanceId.set(seedInstanceId);
+
     effect(() => {
       if (this.manualSpecPath()) return;
       const strategy = this.strategyKey();

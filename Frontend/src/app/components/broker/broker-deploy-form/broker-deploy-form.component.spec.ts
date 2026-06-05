@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
@@ -65,6 +66,7 @@ function setup(
     nothingDeployed: () => false,
     daemonDown: () => opts.daemonDown ?? false,
     fleetBlocksStarts: () => opts.fleetBlocks ?? false,
+    daemonCodeSha: () => null,
     reload: vi.fn(),
   };
   TestBed.configureTestingModule({
@@ -297,6 +299,55 @@ describe('BrokerDeployFormComponent', () => {
     component.startNow.set(false);
     fixture.detectChanges();
     expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('prefills the form from re-deploy deep-link query params', async () => {
+    const svc = {
+      getEngineStrategies: vi.fn().mockResolvedValue([]),
+      getSpecStrategyFixtures: vi.fn().mockResolvedValue([]),
+      getQcAuditCopies: vi.fn().mockResolvedValue({ scope_root: 'references/qc-shadow', entries: [] }),
+      getInstances: vi.fn().mockResolvedValue([]),
+      deployInstance: vi.fn(),
+    };
+    const broker = { account: vi.fn().mockResolvedValue(null) };
+    const connectivity = {
+      links: () => [],
+      blockers: () => [],
+      daemonState: () => 'ok',
+      brokerState: () => 'ok',
+      fleetState: () => 'ok',
+      nothingDeployed: () => false,
+      daemonDown: () => false,
+      fleetBlocksStarts: () => false,
+      daemonCodeSha: () => null,
+      reload: vi.fn(),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([
+          { path: 'broker/deploy', component: BrokerDeployFormComponent },
+        ]),
+        { provide: LiveRunsService, useValue: svc },
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerConnectivityService, useValue: connectivity },
+      ],
+    });
+    const harness = await RouterTestingHarness.create();
+    const component = await harness.navigateByUrl(
+      '/broker/deploy?strategy_key=spy_ema_crossover&spec_path=spec%2Fpath.json' +
+        '&account_id=DU777&qc_backtest_id=bt-redeploy' +
+        '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst',
+      BrokerDeployFormComponent,
+    );
+    activeFixture = harness.fixture;
+
+    expect(component.strategyKey()).toBe('spy_ema_crossover');
+    expect(component.specPath()).toBe('spec/path.json');
+    expect(component.qcBacktestId()).toBe('bt-redeploy');
+    expect(component.qcAuditCopyPath()).toBe('audit/copy.py');
+    expect(component.instanceId()).toBe('recovered_inst');
+    // Seeded account survives even with the broker prefill returning null.
+    expect(component.accountId()).toBe('DU777');
   });
 
   it('allows "Deploy & start" when the instance exists but is not live', async () => {

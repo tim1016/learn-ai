@@ -93,6 +93,12 @@ export interface InstanceStartDefaults {
   hydrate_policy: HydratePolicy;
   max_orders_per_day: number;
   ibkr_host: string;
+  /** The bound run's ledger deploy identity, for a one-click re-deploy (fresh
+   * run_id) of a poisoned/halted instance. Empty for legacy ledgers. */
+  strategy_spec_path?: string;
+  qc_audit_copy_path?: string;
+  qc_cloud_backtest_id?: string;
+  account_id?: string;
 }
 
 export interface LiveInstanceStatus {

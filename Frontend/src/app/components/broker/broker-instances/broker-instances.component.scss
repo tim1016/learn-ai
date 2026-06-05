@@ -36,6 +36,20 @@
   text-decoration: none;
 }
 
+.redeploy-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg-surface);
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .card {
   padding: 1rem;
   border: 1px solid var(--border);

@@ -10,6 +10,17 @@
     }
   </ul>
 
+  @if (connectivity.daemonCodeSha(); as sha) {
+    <p class="code-identity">
+      <span class="label">Engine code</span>
+      <code>{{ sha }}</code>
+      <span class="sr-only">
+        Host daemon git commit {{ sha }}. Confirm it matches the deployed master
+        commit; the daemon must be restarted to pick up merged fixes.
+      </span>
+    </p>
+  }
+
   @if (connectivity.blockers().length > 0) {
     <ul class="blockers" role="alert">
       @for (reason of connectivity.blockers(); track $index) {
