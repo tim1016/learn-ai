@@ -8,8 +8,11 @@ one of three verdicts:
 * ``Continue``  — broker state all matches the projection / WAL.
 * ``Adopt``     — an owned orphan (parsed ``order_ref`` namespace EXACTLY equals
                   ours, intent unknown to the projection) is recovered, not
-                  poisoned. ``pause=True`` when an adopted order is still active
-                  and creates ambiguous exposure.
+                  poisoned. A KNOWN-but-unresolved intent (``PENDING_INTENT`` /
+                  ``ACK_FAILED_UNCERTAIN``) the broker confirms is live is
+                  recovered the same way — never silently continued.
+                  ``pause=True`` when an adopted order is still active and
+                  creates ambiguous exposure.
 * ``Poison``    — outside mutation: unknown / foreign / unparseable namespace,
                   no ``order_ref``, or a foreign ``perm_id``. ``order_id`` alone
                   never proves ownership.
@@ -170,16 +173,28 @@ def classify(
             poison_reasons.add("unknown_namespace")  # exact-match, never prefix
             return
         # Namespace is exactly ours.
-        if intent_id in known_intent_ids or known_by_id:
-            return  # matches projection / WAL — nothing to do
-        # Owned orphan: our namespace, intent unknown to the projection.
+        resolved_known = (
+            intent_id in known_intent_ids
+            and intent_id not in projection.unresolved_intent_ids
+        )
+        if resolved_known or known_by_id:
+            return  # known AND resolved — a true match, nothing to do
+        # Either an UNKNOWN intent in our namespace (owned orphan), or a
+        # KNOWN-but-UNRESOLVED intent (PENDING_INTENT / ACK_FAILED_UNCERTAIN —
+        # a crash before the SUBMITTED flush) that the broker now confirms is
+        # live. Both must be recovered/adopted — never a silent Continue, or we
+        # resume with the in-flight order unresolved and reopen the double-submit
+        # window the WAL exists to close.
+        is_unresolved_known = intent_id in known_intent_ids
         orphan = OwnedOrphan(
             order_ref=order_ref,
             intent_id=intent_id,
             perm_id=perm_id,
             order_id=order_id,
             active=active,
-            source=ref_sources.get(order_ref, "broker"),
+            source="this_run_unresolved"
+            if is_unresolved_known
+            else ref_sources.get(order_ref, "broker"),
         )
         existing = orphans_by_intent.get(intent_id)
         # Keep the active variant if any (an open order beats a bare execution).

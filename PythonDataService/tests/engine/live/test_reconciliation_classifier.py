@@ -219,6 +219,67 @@ def test_foreign_ref_rescued_by_known_perm_is_continue() -> None:
     )
 
 
+def test_known_but_unresolved_intent_live_at_broker_is_recovered_not_continued() -> None:
+    # Codex P2 regression: a PENDING_INTENT folded from this run's WAL is IN
+    # submitted_orders but UNRESOLVED. A broker order carrying its order_ref must
+    # be recovered (Adopt), not silently Continue'd — else we resume with the
+    # in-flight order unresolved and reopen the double-submit window.
+    iid = mint_intent_id()
+    view = LedgerView(
+        submitted_orders={
+            iid: SubmittedOrderView(
+                intent_id=iid,
+                bot_order_namespace=NS,
+                order_ref=build_order_ref(NS, iid),
+                status=IntentEventType.PENDING_INTENT,
+            )
+        },
+        known_perm_ids=frozenset(),
+        known_exec_ids=frozenset(),
+        last_seq=1,
+        unresolved_intent_ids=frozenset({iid}),
+    )
+    snap = BrokerSnapshot(
+        open_orders=(
+            BrokerOrderView(order_ref=build_order_ref(NS, iid), status="Submitted", remaining=10.0),
+        )
+    )
+    verdict = classify(projection=view, broker_snapshot=snap, allowed_namespaces=ALLOWED)
+    assert isinstance(verdict, Adopt)
+    assert verdict.orphans[0].intent_id == iid
+    assert verdict.orphans[0].source == "this_run_unresolved"
+    assert verdict.pause is True  # still active → ambiguous exposure
+
+
+def test_known_resolved_intent_live_at_broker_continues() -> None:
+    # Contrast: a RESOLVED known intent (SUBMITTED, perm recorded) present at the
+    # broker is a true match → Continue.
+    iid = mint_intent_id()
+    view = LedgerView(
+        submitted_orders={
+            iid: SubmittedOrderView(
+                intent_id=iid,
+                bot_order_namespace=NS,
+                order_ref=build_order_ref(NS, iid),
+                status=IntentEventType.SUBMITTED,
+                perm_id=900,
+            )
+        },
+        known_perm_ids=frozenset({900}),
+        known_exec_ids=frozenset(),
+        last_seq=2,
+        unresolved_intent_ids=frozenset(),
+    )
+    snap = BrokerSnapshot(
+        open_orders=(
+            BrokerOrderView(order_ref=build_order_ref(NS, iid), perm_id=900, status="Filled"),
+        )
+    )
+    assert isinstance(
+        classify(projection=view, broker_snapshot=snap, allowed_namespaces=ALLOWED), Continue
+    )
+
+
 def test_dual_read_window_adopts_both_versions() -> None:
     allowed = frozenset({NS, build_bot_order_namespace("foo").replace("/v1", "/v2")})
     iid1, iid2 = mint_intent_id(), mint_intent_id()
