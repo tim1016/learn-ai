@@ -883,6 +883,249 @@ def test_hydration_failure_exits_code_4(tmp_path: Path) -> None:
     assert rc == 4, f"expected exit 4 (hydration failure), got {rc}"
 
 
+def test_stateless_strategy_starts_under_require_without_seed_day(tmp_path: Path) -> None:
+    """A stateless strategy (no warm-startable indicator state) must NOT exit 4
+    under the default hydrate_policy=require.
+
+    Regression for the dominant "zero clean deployment_validation sessions"
+    blocker: deployment_validation reports no persistable state, so maybe_write
+    never writes a sidecar, so under REQUIRE hydrate() previously raised
+    IndicatorStateHydrationError -> exit 4 on EVERY session before the first
+    bar. A strategy with nothing to warm-start cannot fail a warm-start
+    requirement; hydrate now short-circuits to an accepted cold-start receipt.
+    """
+    import argparse as _argparse
+    import json as _json
+    from collections.abc import AsyncIterator
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-stateless-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield  # make it an async generator
+
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="deployment_validation",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="require",
+        artifacts_root=artifacts_root,
+        broker=FakeBroker(),
+        bars=_empty_bars(),
+        client=None,
+    )
+    rc = cmd_start(args)
+
+    assert rc == 0, f"stateless strategy must not exit 4 under require, got {rc}"
+    receipt = _json.loads((run_dir / "indicator_state_hydration.json").read_text())
+    assert receipt["accepted"] is True
+    # No sidecar was read — the null lookup fields prove the cold-start path.
+    assert receipt["sidecar_last_consolidated_bar_end_ms"] is None
+    assert receipt["global_sha256"] is None
+
+
+def test_deployment_validation_completes_clean_session_offline(tmp_path: Path) -> None:
+    """Engine-correctness receipt: drive deployment_validation through cmd_start
+    + the deterministic FakeBroker over a synthetic green-bar session and prove a
+    CLEAN session — exit_reason=normal (rc 0), flat at EOD, one entry+exit
+    round-trip. This is the offline proof the live decision path produces a
+    clean reconciled session (the live receipt additionally needs a real IBKR
+    paper Gateway), and the first integration test running this canary through
+    the LiveEngine rather than the BacktestEngine unit tests.
+    """
+    import argparse as _argparse
+    import json as _json
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from zoneinfo import ZoneInfo
+
+    import pandas as pd
+
+    from app.engine.data.trade_bar import TradeBar
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
+
+    ny = ZoneInfo("America/New_York")
+
+    def _bar(hour: int, minute: int, open_: str, close: str) -> TradeBar:
+        # Session-time gates (09:45/15:45) read bar.end_time in ET, so bars must
+        # be America/New_York-localized or the gates misfire.
+        start = datetime(2026, 1, 5, hour, minute, tzinfo=ny)
+        o, c = Decimal(open_), Decimal(close)
+        return TradeBar(
+            symbol="SPY",
+            time=start,
+            end_time=start + timedelta(minutes=1),
+            open=o,
+            high=max(o, c),
+            low=min(o, c),
+            close=c,
+            volume=10_000,
+        )
+
+    # Two consecutive green bars from 09:45 -> enter (next-bar-open), hold 3
+    # bars, exit (next-bar-open). Same validated sequence as the BacktestEngine
+    # unit test, now driven through the live decision path.
+    bars = [
+        _bar(9, 43, "100", "101"),
+        _bar(9, 44, "101", "102"),
+        _bar(9, 45, "102", "103"),
+        _bar(9, 46, "104", "104.5"),
+        _bar(9, 47, "105", "105.5"),
+        _bar(9, 48, "106", "106.5"),
+        _bar(9, 49, "107", "107.5"),
+        _bar(9, 50, "108", "108.5"),
+    ]
+
+    # Use the real committed spec fixture so resolve_decision_columns yields the
+    # canary's core-only decision schema (a stub spec fails to load and falls
+    # back to the EMA columns, which the deployment_validation snapshot lacks).
+    strategy_spec = (
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "engine"
+        / "strategy"
+        / "spec"
+        / "fixtures"
+        / "deployment_validation.spec.json"
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-clean-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    broker = FakeBroker()
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="deployment_validation",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="require",
+        artifacts_root=artifacts_root,
+        broker=broker,
+        bars=iter_bars(bars),
+        client=None,
+    )
+    rc = cmd_start(args)
+
+    assert rc == 0, f"expected a clean exit 0, got {rc}"
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "normal"
+    assert status["exit_code"] == 0
+    # Flat at end of session: the entry and its exit both filled.
+    assert broker.positions.get("SPY", 0) == 0
+    # Exactly one entry + one exit fill recorded in the executions artifact.
+    execs = pd.read_parquet(run_dir / "executions.parquet")
+    assert len(execs) == 2
+
+
+def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> None:
+    """A broker connect() failure before the session starts must record a
+    terminal status sidecar (exit_code=3, exit_reason=exception) and exit 3 —
+    not crash uncaught with a blank 'Why It Stopped'.
+
+    Regression: connect() ran OUTSIDE cmd_start's try/finally, so a clientId
+    collision (IbkrClientIdInUseError) propagated through asyncio.run() leaving
+    the entry sidecar's exit_code=None and the instance looking stuck
+    'starting' in the console.
+    """
+    import argparse as _argparse
+    import json as _json
+    from collections.abc import AsyncIterator
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _ConnectFailsClient:
+        async def connect(self) -> None:
+            raise RuntimeError("client id 12 is already in use by another session")
+
+        async def disconnect(self) -> None:  # pragma: no cover - never reached
+            pass
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-connect-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield  # make it an async generator
+
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="deployment_validation",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="optional",
+        artifacts_root=artifacts_root,
+        broker=FakeBroker(),
+        bars=_empty_bars(),
+        client=_ConnectFailsClient(),
+    )
+    rc = cmd_start(args)
+
+    assert rc == 3, f"connect failure should exit 3, got {rc}"
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "exception"
+    assert status["exit_code"] == 3
+    # Terminal record written — not blank (stuck 'starting').
+    assert status["ended_at_ms"] is not None
+
+
 def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """Unknown strategy module surfaces as operator error (exit 2),
     not a runtime crash."""

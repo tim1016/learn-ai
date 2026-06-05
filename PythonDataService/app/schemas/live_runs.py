@@ -209,6 +209,10 @@ class HostRunnerHealth(BaseModel):
     live_runs_root: str
     fetched_at_ms: int
     process: HostRunnerProcessStatus
+    # git HEAD of the code the daemon is executing (None if git unavailable).
+    # The daemon does not reload on `git pull`, so this is how an operator
+    # confirms the live executor is running the merged fixes vs stale code.
+    git_sha: str | None = None
 
 
 class HostRunnerInstance(BaseModel):

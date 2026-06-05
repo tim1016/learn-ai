@@ -1033,7 +1033,37 @@ def cmd_start(args: argparse.Namespace) -> int:
         # paper account, got None". The injected-broker test path
         # skips this — FakeBroker is always "connected."
         if client is not None:
-            await client.connect()
+            try:
+                await client.connect()
+            except Exception as exc:
+                # connect() runs BEFORE the outer try/finally below, so a
+                # connect failure (clientId collision / IbkrClientIdInUseError,
+                # paper-sentinel refusal, port/broker error) would otherwise
+                # propagate uncaught through asyncio.run() and crash the process
+                # with no terminal status sidecar — the entry sidecar keeps
+                # exit_code=None, so the console "Why It Stopped" panel goes
+                # blank and the instance looks stuck "starting". Record the exit
+                # (3 = runtime broker/IO error, mirroring the position-fetch
+                # failure path below) so the operator sees the real reason.
+                logger.exception(
+                    "IBKR connect() failed before session start", extra={"step": "1"}
+                )
+                print(
+                    f"[START] could not connect to IBKR: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 3,
+                            "exit_reason": ExitReason.exception,
+                        }
+                    ),
+                )
+                return 3
         # Outer try/finally guarantees ``client.disconnect()`` runs on
         # EVERY post-connect exit path — including the early returns
         # from the unexpected-position gate (return 2 on fetch failure,

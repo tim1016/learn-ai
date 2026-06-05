@@ -145,6 +145,25 @@ def test_exposes_consolidator_period_for_indicator_hydration() -> None:
     assert strategy.CONSOLIDATOR_PERIOD_MIN == 1
 
 
+def test_is_not_warm_startable() -> None:
+    # deployment_validation reports no persistable state, so it is NOT
+    # warm-startable. The live hydration ladder must treat hydrate_policy=require
+    # as vacuous for it (no exit 4) — otherwise the canary can never start,
+    # because a stateless strategy never writes the sidecar `require` demands.
+    # Regression for the "zero clean sessions" blocker.
+    assert DeploymentValidationConsecutiveGreen().is_warm_startable() is False
+
+
+def test_spy_ema_remains_warm_startable() -> None:
+    # Contrast: a strategy that overrides report_state_for_persistence IS
+    # warm-startable, so `require` is still enforced for it (no regression to
+    # the seed-day guarantee). Derived purely from the persistence-contract
+    # override, so the two signals can never drift.
+    from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+
+    assert SpyEmaCrossoverAlgorithm().is_warm_startable() is True
+
+
 def test_satisfies_live_persistence_contract() -> None:
     # Regression: the live engine's hydration ladder + shutdown checkpoint call
     # report_state_for_persistence / validate_state_payload /
