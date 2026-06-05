@@ -725,14 +725,34 @@ def cmd_start(args: argparse.Namespace) -> int:
     from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
     def _record_poison_refusal() -> None:
-        # Make the poison refusal legible to the console. If this poisoned run
-        # never wrote a terminal status, record one (exit_reason=poisoned) so
-        # the "Why It Stopped" panel shows "fresh run_id required" instead of a
-        # blank "ended unexpectedly". NEVER clobber an existing status — it
-        # carries the richer original halt reason (e.g. fatal_halt) that
-        # explains *why* the run poisoned in the first place.
-        if (args.run_dir / "run_status.json").exists():
-            return
+        # Make the poison refusal legible to the console: record a terminal
+        # `poisoned` status so the "Why It Stopped" panel shows "fresh run_id
+        # required" instead of "ended cleanly" / blank.
+        #
+        # Preserve an existing status ONLY when it already explains a real
+        # failure (e.g. fatal_halt — typically the very cause of the poison).
+        # A clean-stop status is CONTRADICTED by the poison flag and must be
+        # overwritten: MARK_POISONED writes poisoned.flag AND sets the bar
+        # loop's shutdown_event (live_engine §"STOP / MARK_POISONED"), so the
+        # run exits gracefully as `keyboard_interrupt`; skipping over that would
+        # leave the UI showing the poisoned run as cleanly stopped.
+        _EXPLANATORY_REASONS = {
+            ExitReason.fatal_halt.value,
+            ExitReason.exception.value,
+            ExitReason.max_orders_exceeded.value,
+            ExitReason.recovery_flatten.value,
+            ExitReason.poisoned.value,
+        }
+        status_path = args.run_dir / "run_status.json"
+        if status_path.exists():
+            try:
+                existing_reason = json.loads(status_path.read_text(encoding="utf-8")).get(
+                    "exit_reason"
+                )
+            except (OSError, ValueError):
+                existing_reason = None
+            if existing_reason in _EXPLANATORY_REASONS:
+                return
         write_run_status(
             args.run_dir,
             RunStatusSidecar(
