@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
 
+from app.engine.live.order_identity import DEFAULT_ORDER_REF_MAX_LENGTH
+
 
 @dataclass(frozen=True)
 class LiveConfig:
@@ -26,4 +28,20 @@ class LiveConfig:
     consolidator_period_min: int = 15
     run_dir: Path = Path("live_runs")
     max_submit_latency_ms: int = 500
+
+    # ── Durable submit protocol (ADR-0008 / PRD #446) ──────────────────────────
+    # Master switch. Stays False until BOTH Acceptance-Gate receipts exist;
+    # ``broker_ownership_query.require_durable_submit_activation`` refuses
+    # activation otherwise, so flipping this alone cannot turn the protocol on.
+    durable_submit_enabled: bool = False
+    # Conservative cap used to bound ``build_order_ref`` and the
+    # ``strategy_instance_id`` length rule for the deterministic core. TODO(#446
+    # Gate #1): the REAL cap is ``durable_submit_verified_order_ref_cap``, set
+    # only from a live paper receipt; this fallback just gives the pure logic a
+    # bound to enforce. Truncation is silent and catastrophic.
+    durable_submit_order_ref_max_length: int = DEFAULT_ORDER_REF_MAX_LENGTH
+    # The orderRef cap PROVEN by a live paper order (Gate #1). ``None`` =
+    # unverified => activation refused (ADR-0008 §1: "C is intentionally unset
+    # until the paper-receipt gate verifies the actual echoed cap").
+    durable_submit_verified_order_ref_cap: int | None = None
 
