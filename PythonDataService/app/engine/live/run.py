@@ -50,6 +50,10 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.engine.live.live_state_sidecar import LiveStateEnvelope
 
 from app.engine.live.deploy import (
     DeployIOError,
@@ -336,6 +340,7 @@ def _append_live_state_submitted_order(
     order_id: int,
     status: str,
     symbol: str,
+    seed_envelope: LiveStateEnvelope | None = None,
 ) -> None:
     """Append one submitted-order fingerprint to the live-state sidecar."""
     from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
@@ -343,7 +348,9 @@ def _append_live_state_submitted_order(
     repo = LiveStateSidecarRepo(live_state_path)
     existing = repo.read()
     if existing is None:
-        return
+        if seed_envelope is None:
+            return
+        existing = seed_envelope
 
     submitted_orders = dict(existing.submitted_orders)
     submitted_orders[client_order_id] = {
@@ -381,6 +388,7 @@ async def _recovery_flatten(
     *,
     readonly: bool = False,
     live_state_path: Path | None = None,
+    live_state_seed: LiveStateEnvelope | None = None,
 ) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
 
@@ -493,6 +501,7 @@ async def _recovery_flatten(
                         order_id=ack.order_id,
                         status=ack.status,
                         symbol=ack.symbol,
+                        seed_envelope=live_state_seed,
                     )
                 except Exception:
                     logger.exception(
@@ -646,6 +655,33 @@ def _build_live_state_writer(
         repo.write(envelope)
 
     return _write
+
+
+def _build_live_state_seed_envelope(
+    *,
+    strategy_instance_id: str,
+    run_id: str,
+    client: object | None,
+    last_processed_bar_ms: int,
+) -> LiveStateEnvelope | None:
+    """Build the minimal envelope recovery-flatten can seed before first flush."""
+    if client is None:
+        return None
+    settings = getattr(client, "settings", None)
+    raw_client_id = getattr(settings, "client_id", None) if settings is not None else None
+    if raw_client_id is None:
+        return None
+
+    from app.engine.live.live_state_sidecar import LiveStateEnvelope
+
+    return LiveStateEnvelope(
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+        bot_order_namespace=f"learn-ai/{strategy_instance_id}/v1",
+        ib_client_id=int(raw_client_id),
+        last_processed_bar_ms=max(1, int(last_processed_bar_ms)),
+        last_artifact_flush_ms=int(time.time() * 1000),
+    )
 
 
 def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
@@ -913,6 +949,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         client=client,
         artifacts_root=_artifacts_root,
     )
+    live_state_seed = _build_live_state_seed_envelope(
+        strategy_instance_id=strategy_instance_id,
+        run_id=ledger.run_id,
+        client=client,
+        last_processed_bar_ms=ledger.start_date_ms,
+    )
     owned_perm_ids: set[int] = set()
     if live_state_writer is not None:
         from app.engine.live.live_state_sidecar import stable_live_state_path
@@ -1147,6 +1189,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                             broker_for_flatten,
                             readonly=is_readonly,
                             live_state_path=live_state_path,
+                            live_state_seed=live_state_seed,
                         )
                         if is_readonly:
                             print(

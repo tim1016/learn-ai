@@ -129,6 +129,43 @@ async def test_recovery_flatten_records_real_perm_id_to_live_state_sidecar(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_recovery_flatten_seeds_live_state_when_sidecar_missing(tmp_path) -> None:
+    """A first-crash recovery flatten must not drop its ownership trail.
+
+    Regression: when ``live_state.json`` did not exist yet, the recovery
+    fingerprint helper returned early. A crash before the first per-bar
+    sidecar flush then lost the recovery-flatten permId, so the next relaunch
+    could not recognize its own recovery fill.
+    """
+    sidecar_path = tmp_path / "live_state.json"
+    repo = LiveStateSidecarRepo(sidecar_path)
+    seed = LiveStateEnvelope(
+        strategy_instance_id="spy_ema_crossover",
+        run_id="run-fixture",
+        bot_order_namespace="learn-ai/spy_ema_crossover/v1",
+        ib_client_id=42,
+        last_processed_bar_ms=1_780_000_000_000,
+        last_artifact_flush_ms=1_780_000_000_500,
+    )
+    broker = DeferredPermIdBroker()
+    _seed_position(broker, "SPY", 100.0)
+
+    liquidated = await _recovery_flatten(
+        broker,
+        live_state_path=sidecar_path,
+        live_state_seed=seed,
+    )
+
+    assert liquidated == 1
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.strategy_instance_id == "spy_ema_crossover"
+    assert loaded.known_perm_ids == [DeferredPermIdBroker.REAL_PERM_ID]
+    [client_order_id] = loaded.submitted_orders.keys()
+    assert client_order_id.startswith("recovery-flatten-SPY-")
+
+
+@pytest.mark.asyncio
 async def test_recovery_flatten_submits_one_buy_per_short_position() -> None:
     broker = FakeBroker()
     _seed_position(broker, "SPY", -50.0)
