@@ -103,38 +103,50 @@ async def test_health_reports_git_sha_of_executing_code() -> None:
     assert health.commits_behind is None
 
 
-async def test_health_flags_stale_code_when_launch_sha_behind_head() -> None:
+def test_health_flags_stale_code_when_launch_sha_behind_head(tmp_path: Path) -> None:
     """When the running (launch) SHA differs from the on-disk HEAD — the operator
     git-pulled but didn't restart the daemon — health flags code_stale and counts
     how far behind, so the UI can say 'restart to apply fixes'. This is the core
     of the freshness verdict; computing the SHA live (the old behavior) would
     have masked it by always reporting the on-disk HEAD.
+
+    Uses a hermetic 4-commit tmp repo so commits_behind is deterministic and the
+    test does not depend on the real repo's history depth (CI checks out a
+    shallow clone, so HEAD~3 would not exist there).
     """
     import subprocess as _sp
 
-    repo_root = Path(__file__).resolve().parents[4]
-    manager = RunnerProcessManager(
-        repo_root=repo_root,
-        live_runs_root=repo_root / "PythonDataService" / "artifacts" / "live_runs",
-    )
-    # Simulate the daemon having launched 3 commits ago, then a pull moved HEAD.
-    older = _sp.run(
-        ["git", "rev-parse", "HEAD~3"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    manager._launch_git_sha = older
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        _sp.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t.local")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    shas: list[str] = []
+    for i in range(4):  # 4 linear commits → c0..c3, no merges
+        (repo / "f.txt").write_text(str(i), encoding="utf-8")
+        git("add", "f.txt")
+        git("commit", "-q", "-m", f"c{i}", "--no-gpg-sign")
+        shas.append(
+            _sp.run(
+                ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+            ).stdout.strip()
+        )
+
+    manager = RunnerProcessManager(repo_root=repo, live_runs_root=repo / "live_runs")
+    # Daemon launched at the first commit; HEAD is now 3 commits ahead.
+    manager._launch_git_sha = shas[0]
 
     health = manager.health()
 
-    assert health.git_sha == older  # running = the (older) launch SHA
-    assert health.repo_head_sha != older  # on-disk = current HEAD
+    assert health.git_sha == shas[0]  # running = the (older) launch SHA
+    assert health.repo_head_sha == shas[3]  # on-disk = current HEAD
     assert health.code_stale is True
-    # rev-list count of older..HEAD: at least the 3 first-parent hops (more when
-    # merge commits pulled in branch commits) — the contract is a positive count.
-    assert health.commits_behind is not None and health.commits_behind >= 3
+    assert health.commits_behind == 3  # linear history → exact
 
 
 def test_emergency_flatten_runs_cli_and_reports_success(
