@@ -113,10 +113,30 @@ export interface LiveInstanceStatus {
   broker: InstanceBrokerView | null;
   /** Pre-filled Start-card values (#416); null when nothing is deployed. */
   start_defaults: InstanceStartDefaults | null;
+  /** What the run's content-addressed identity attests to (the hashed deploy
+   * inputs); null when nothing is deployed. Drives the "what this proves" card. */
+  provenance: InstanceProvenance | null;
   /** Why the most recent run ended; null while a run is live or nothing was
    * ever deployed. Drives the console's "why it stopped" surface. */
   last_exit: InstanceLastExit | null;
   fetched_at_ms: number;
+}
+
+/** What a run's content-addressed identity (`run_id`) fingerprints — so the UI
+ * can explain the hashes rather than dump them. Empty strings for fields a
+ * legacy ledger did not record. */
+export interface InstanceProvenance {
+  run_id: string;
+  schema_version: string;
+  code_sha: string;
+  strategy_spec_path: string;
+  strategy_spec_sha256: string;
+  qc_audit_copy_path: string;
+  qc_audit_copy_sha256: string;
+  qc_cloud_backtest_id: string;
+  account_id: string;
+  start_date_ms: number | null;
+  created_at_ms: number | null;
 }
 
 /** Why an instance's most recent (terminated) run ended. */

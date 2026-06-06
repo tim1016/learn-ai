@@ -210,6 +210,64 @@ async def test_status_start_defaults_carry_redeploy_identity_from_ledger(
     assert defaults["account_id"] == "DU1234567"
 
 
+async def test_status_provenance_attests_the_run_identity(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The status carries what the run's content-addressed identity attests to —
+    the hashed inputs (commit, spec+SHA, QC audit copy+SHA, backtest id, account)
+    — so the console can explain the hashes ("what this proves") not dump them."""
+    app, root = app_with_root
+    run_dir = root / "run-prov"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-prov",
+                "schema_version": "1.2",
+                "strategy_instance_id": "spy_ema_paper",
+                "strategy_key": "spy_ema_crossover",
+                "code_sha": "c0ffee1234deadbeef",
+                "strategy_spec_path": "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json",
+                "strategy_spec_sha256": "aaaaspec",
+                "qc_audit_copy_path": "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+                "qc_audit_copy_sha256": "bbbbaudit",
+                "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
+                "account_id": "DU1234567",
+                "start_date_ms": 1714838400000,
+                "created_at_ms": 1714838400500,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    prov = response.json()["provenance"]
+    assert prov["run_id"] == "run-prov"
+    assert prov["code_sha"] == "c0ffee1234deadbeef"
+    assert prov["strategy_spec_sha256"] == "aaaaspec"
+    assert prov["qc_audit_copy_sha256"] == "bbbbaudit"
+    assert prov["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"
+    assert prov["account_id"] == "DU1234567"
+    assert prov["start_date_ms"] == 1714838400000
+
+
+async def test_status_provenance_none_when_nothing_deployed(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/ghost_instance/status")
+
+    assert response.status_code == 200
+    assert response.json()["provenance"] is None
+
+
 async def test_emergency_flatten_works_without_live_binding(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

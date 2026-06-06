@@ -17,6 +17,7 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
+import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 
 // Advanced command verb -> operation kind for the error map.
@@ -133,6 +134,7 @@ function titleizeKey(key: string): string {
     BrokerConnectivityStripComponent,
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
+    BrokerProvenanceCardComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',

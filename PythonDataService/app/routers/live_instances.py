@@ -60,6 +60,7 @@ from app.schemas.live_runs import (
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
+    InstanceProvenance,
     InstanceStartDefaults,
     IntentActuation,
     LiveBinding,
@@ -288,6 +289,21 @@ def _resolve_readonly_default(settings: object) -> bool:
     return operator_readonly or mode != "paper"
 
 
+def _resolve_evidence_run_dir(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> Path | None:
+    """The run dir the status view describes: the visible live run, else the
+    latest evidence run, else None (nothing deployed). Shared by start-defaults
+    and provenance so they always read the same ledger."""
+    if live_binding is not None:
+        run_dir = _visible_live_run_dir(root, live_binding)
+        if run_dir is not None:
+            return run_dir
+    if runs:
+        return Path(runs[0]["run_dir"])
+    return None
+
+
 def _start_defaults(
     root: Path, live_binding: LiveBinding | None, runs: list[dict], *, readonly_default: bool
 ) -> InstanceStartDefaults | None:
@@ -303,11 +319,7 @@ def _start_defaults(
     ``readonly_default`` is resolved by :func:`_resolve_readonly_default` (paper
     mode + ``IBKR_READONLY`` unset → place orders; everything else → shadow).
     """
-    run_dir: Path | None = None
-    if live_binding is not None:
-        run_dir = _visible_live_run_dir(root, live_binding)
-    if run_dir is None and runs:
-        run_dir = Path(runs[0]["run_dir"])
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
     if run_dir is None:
         return None
     try:
@@ -323,6 +335,40 @@ def _start_defaults(
         qc_audit_copy_path=str(ledger.get("qc_audit_copy_path", "")),
         qc_cloud_backtest_id=str(ledger.get("qc_cloud_backtest_id", "")),
         account_id=str(ledger.get("account_id", "")),
+    )
+
+
+def _provenance(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> InstanceProvenance | None:
+    """What the bound/evidence run's content-addressed identity attests to (the
+    hashed deploy inputs), so the console can explain the hashes instead of
+    dumping them. ``None`` when nothing is deployed or the ledger is unreadable;
+    legacy ledgers contribute whatever fields they carry."""
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+
+    def _opt_int(key: str) -> int | None:
+        value = ledger.get(key)
+        return int(value) if isinstance(value, int) else None
+
+    return InstanceProvenance(
+        run_id=str(ledger.get("run_id") or run_dir.name),
+        schema_version=str(ledger.get("schema_version", "")),
+        code_sha=str(ledger.get("code_sha", "")),
+        strategy_spec_path=str(ledger.get("strategy_spec_path", "")),
+        strategy_spec_sha256=str(ledger.get("strategy_spec_sha256", "")),
+        qc_audit_copy_path=str(ledger.get("qc_audit_copy_path", "")),
+        qc_audit_copy_sha256=str(ledger.get("qc_audit_copy_sha256", "")),
+        qc_cloud_backtest_id=str(ledger.get("qc_cloud_backtest_id", "")),
+        account_id=str(ledger.get("account_id", "")),
+        start_date_ms=_opt_int("start_date_ms"),
+        created_at_ms=_opt_int("created_at_ms"),
     )
 
 
@@ -638,6 +684,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         start_defaults=_start_defaults(
             root, live_binding, runs, readonly_default=_resolve_readonly_default(settings)
         ),
+        provenance=_provenance(root, live_binding, runs),
         last_exit=_instance_last_exit(runs),
         fetched_at_ms=_now_ms(),
     )

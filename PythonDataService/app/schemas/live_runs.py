@@ -583,6 +583,31 @@ class InstanceStartDefaults(BaseModel):
     account_id: str = ""
 
 
+class InstanceProvenance(BaseModel):
+    """What a run's content-addressed identity attests to (ADR 0006).
+
+    The ``run_id`` is ``sha256`` over a clean-tree git commit, the strategy spec
+    + its SHA, the QC audit copy + its SHA, the QC backtest id, the account, and
+    the start date — so identical inputs always yield the same id. Surfacing the
+    inputs lets the console explain *what each fingerprint proves* (e.g. "the
+    running algorithm is byte-identical to backtest X") instead of showing a bare
+    hash. Sourced from the bound/evidence run's ledger; fields are empty/legacy
+    ledgers contribute what they have.
+    """
+
+    run_id: str
+    schema_version: str = ""
+    code_sha: str = ""
+    strategy_spec_path: str = ""
+    strategy_spec_sha256: str = ""
+    qc_audit_copy_path: str = ""
+    qc_audit_copy_sha256: str = ""
+    qc_cloud_backtest_id: str = ""
+    account_id: str = ""
+    start_date_ms: int | None = None
+    created_at_ms: int | None = None
+
+
 class InstanceLastExit(BaseModel):
     """Why the instance's most recent run ended.
 
@@ -623,6 +648,10 @@ class LiveInstanceStatus(BaseModel):
     # Pre-filled Start-card values (#416); None when the instance has no run to
     # resolve a ledger from (nothing-deployed).
     start_defaults: InstanceStartDefaults | None = None
+    # What the run's content-addressed identity attests to (commit, spec+SHA, QC
+    # audit copy+SHA, backtest id, account). None when nothing is deployed. Lets
+    # the console explain the hashes ("what this proves") instead of dumping them.
+    provenance: InstanceProvenance | None = None
     # Why the most recent run ended, when it has terminated. None while a run is
     # live or when nothing was ever deployed. Lets the console explain a STOPPED
     # instance instead of leaving the operator to read run_status.json by hand.
