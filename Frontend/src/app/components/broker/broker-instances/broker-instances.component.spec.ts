@@ -65,6 +65,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       max_orders_per_day: 4,
       ibkr_host: '127.0.0.1',
     },
+    provenance: null,
     last_exit: null,
     fetched_at_ms: 1,
     ...overrides,
@@ -409,6 +410,40 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).not.toContain('Why It Stopped');
+  });
+
+  it('renders the provenance card explaining what the run identity proves', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        provenance: {
+          run_id: 'abcdef0123456789',
+          schema_version: '1.2',
+          code_sha: 'c0ffee1234deadbeef',
+          strategy_spec_path: 'spec/spy_ema_crossover.spec.json',
+          strategy_spec_sha256: 'specsha',
+          qc_audit_copy_path: 'references/qc-shadow/SpyEmaCrossoverAlgorithm.py',
+          qc_audit_copy_sha256: 'auditsha',
+          qc_cloud_backtest_id: 'd2fe45a7142e88575f6fbd75229f8681',
+          account_id: 'DU1234567',
+          start_date_ms: 1714838400000,
+          created_at_ms: 1714838400500,
+          live_config: { symbol: 'SPY' },
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Identity & Provenance');
+    expect(text).toContain('Byte-identical to backtest');
+    expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
   });
 
   it('runs an account-wide emergency flatten after confirm + account echo', async () => {

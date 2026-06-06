@@ -110,6 +110,10 @@
           </div>
         </section>
 
+        @if (s.provenance) {
+          <app-broker-provenance-card [provenance]="s.provenance" />
+        }
+
         @let exit = lastExitNotice(s);
         @if (exit) {
           <section class="card last-exit-card" [class.ok]="exit.tone === 'ok'" [class.warn]="exit.tone === 'warn'" [class.bad]="exit.tone === 'bad'" aria-label="Why the last session stopped">
