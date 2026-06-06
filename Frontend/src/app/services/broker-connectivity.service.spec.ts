@@ -8,17 +8,20 @@ interface SetupOpts {
   instances: unknown[];
   fleetVerdict?: 'clean' | 'contaminated';
   policyBlocks?: boolean;
+  daemonHealth?: Record<string, unknown>;
 }
 
 function setup(opts: SetupOpts) {
   const svc = {
-    getHostRunnerHealth: vi.fn().mockResolvedValue({
-      ok: true,
-      repo_root: '/repo',
-      live_runs_root: '/runs',
-      fetched_at_ms: 1,
-      process: { state: 'idle' },
-    }),
+    getHostRunnerHealth: vi.fn().mockResolvedValue(
+      opts.daemonHealth ?? {
+        ok: true,
+        repo_root: '/repo',
+        live_runs_root: '/runs',
+        fetched_at_ms: 1,
+        process: { state: 'idle' },
+      },
+    ),
     getAccountFleet: vi.fn().mockResolvedValue({
       net_positions: null,
       explained_total: {},
@@ -87,5 +90,48 @@ describe('BrokerConnectivityService fleet state', () => {
     expect(service.fleetState()).toBe('warn');
     expect(service.fleetBlocksStarts()).toBe(true);
     expect(fleetLink(service)?.detail).toBe('Contaminated — new starts blocked');
+  });
+});
+
+describe('BrokerConnectivityService daemonFreshness', () => {
+  const base = { ok: true, repo_root: '/repo', live_runs_root: '/runs', fetched_at_ms: 1, process: { state: 'idle' } };
+
+  it('reads up-to-date when the running SHA matches the working tree', async () => {
+    const service = setup({
+      instances: [],
+      daemonHealth: { ...base, git_sha: 'abc1234def', repo_head_sha: 'abc1234def', code_stale: false },
+    });
+    await flush();
+
+    const f = service.daemonFreshness();
+    expect(f.state).toBe('fresh');
+    expect(f.sha).toBe('abc1234');
+  });
+
+  it('reads stale with the behind-count when the daemon predates the working tree', async () => {
+    const service = setup({
+      instances: [],
+      daemonHealth: { ...base, git_sha: 'old1234aaa', repo_head_sha: 'new5678bbb', code_stale: true, commits_behind: 3 },
+    });
+    await flush();
+
+    const f = service.daemonFreshness();
+    expect(f.state).toBe('stale');
+    expect(f.commitsBehind).toBe(3);
+  });
+
+  it('does NOT read fresh for a legacy daemon that omits the freshness contract', async () => {
+    // Pre-change daemon: only git_sha (its on-disk HEAD), no repo_head_sha /
+    // code_stale. Treating missing code_stale as falsy would falsely show
+    // "up to date" in exactly the stale scenario this detects (Codex P1).
+    const service = setup({
+      instances: [],
+      daemonHealth: { ...base, git_sha: 'legacy123ff' },
+    });
+    await flush();
+
+    const f = service.daemonFreshness();
+    expect(f.state).toBe('unknown');
+    expect(f.sha).toBe('legacy1'); // still shown so the strip can prompt a restart
   });
 });

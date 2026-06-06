@@ -66,7 +66,7 @@ function setup(
     nothingDeployed: () => false,
     daemonDown: () => opts.daemonDown ?? false,
     fleetBlocksStarts: () => opts.fleetBlocks ?? false,
-    daemonCodeSha: () => null,
+    daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
     reload: vi.fn(),
   };
   TestBed.configureTestingModule({
@@ -319,7 +319,7 @@ describe('BrokerDeployFormComponent', () => {
       nothingDeployed: () => false,
       daemonDown: () => false,
       fleetBlocksStarts: () => false,
-      daemonCodeSha: () => null,
+      daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
       reload: vi.fn(),
     };
     TestBed.configureTestingModule({

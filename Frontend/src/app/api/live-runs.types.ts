@@ -205,10 +205,16 @@ export interface HostRunnerHealth {
   live_runs_root: string;
   fetched_at_ms: number;
   process: HostRunnerProcessStatus;
-  /** git HEAD of the code the daemon is executing (null if git unavailable).
-   * The daemon does not reload on `git pull`, so this confirms the live
-   * executor is running the merged fixes vs stale code. */
+  /** The SHA the daemon process is actually RUNNING (captured at launch; null if
+   * git unavailable). The daemon does not reload on `git pull`. */
   git_sha?: string | null;
+  /** The live on-disk HEAD — what a restart would run. */
+  repo_head_sha?: string | null;
+  /** True when the running code differs from the working tree (restart to apply). */
+  code_stale?: boolean;
+  /** Best-effort count of how many commits behind the working tree the running
+   * code is (null when equal/unknown). */
+  commits_behind?: number | null;
 }
 
 export interface HostRunnerStartRequest {
