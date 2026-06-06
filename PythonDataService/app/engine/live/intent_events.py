@@ -72,8 +72,15 @@ class IntentEvent(BaseModel):
     # retry can re-place the SAME intent. Opaque to the pure modules.
     order_spec: dict[str, Any] | None = None
 
-    # Human-facing provenance. NEVER the fold cursor (use seq).
-    ts_ms: int | None = None
+    # Human-facing provenance. NEVER the fold cursor (use seq). Bounded to
+    # int64 ms UTC: it is serialized into the WAL, so it must honor the repo's
+    # int64-ms boundary contract rather than accept an arbitrary-width Python int.
+    ts_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=9_223_372_036_854_775_807,
+        description="int64 ms UTC epoch timestamp (provenance only).",
+    )
 
     @model_validator(mode="after")
     def _check_order_ref_invariant(self) -> IntentEvent:

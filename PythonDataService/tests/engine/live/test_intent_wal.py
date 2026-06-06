@@ -39,6 +39,30 @@ def test_append_assigns_monotonic_seq(tmp_path: Path) -> None:
     assert [_pending(wal).seq for _ in range(3)] == [1, 2, 3]
 
 
+def test_intent_event_ts_ms_bounded_to_int64() -> None:
+    """ts_ms is serialized into the WAL, so it must honor the repo's int64-ms
+    boundary contract rather than accept an arbitrary-width int (CodeRabbit
+    review on the #448 re-merge)."""
+    from pydantic import ValidationError
+
+    iid = mint_intent_id()
+    common = {
+        "seq": 1,
+        "event_type": IntentEventType.PENDING_INTENT,
+        "intent_id": iid,
+        "bot_order_namespace": NS,
+        "order_ref": build_order_ref(NS, iid),
+    }
+
+    # In-range is accepted.
+    assert IntentEvent(**common, ts_ms=1_780_000_000_000).ts_ms == 1_780_000_000_000
+    # Above int64 max and negative are rejected at the boundary.
+    with pytest.raises(ValidationError):
+        IntentEvent(**common, ts_ms=9_223_372_036_854_775_808)
+    with pytest.raises(ValidationError):
+        IntentEvent(**common, ts_ms=-1)
+
+
 def test_pending_intent_fsynced_before_place_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
