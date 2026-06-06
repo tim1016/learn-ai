@@ -107,6 +107,14 @@ class RunnerProcessManager:
         self.repo_root = repo_root.resolve()
         self.live_runs_root = live_runs_root.resolve()
         self._managed: dict[str, ManagedProcess] = {}
+        # The git SHA of the code THIS process is running, captured ONCE at
+        # launch. The daemon does not reload on `git pull`, so the running code
+        # is frozen at startup even as the working tree advances — comparing this
+        # frozen SHA to the live HEAD is how an operator sees "restart needed to
+        # apply merged fixes". Computing it live on every /health would instead
+        # report the on-disk HEAD (which moves on pull), masking stale code —
+        # the bug this fixes.
+        self._launch_git_sha = self._compute_git_sha()
         # Serialize emergency-flatten per account: each runs the CLI, which
         # fetches positions then submits liquidating market orders, so two
         # concurrent runs for one account (retry / double-click / second tab)
@@ -121,29 +129,58 @@ class RunnerProcessManager:
         managed process (or idle). The instance-addressed view is
         :meth:`instances`.
 
-        ``git_sha`` is the HEAD of the code this long-lived daemon is actually
-        executing. The daemon does NOT reload on ``git pull`` — it must be
-        restarted — so after a fix merges to master the daemon keeps running the
-        old code until relaunched. Surfacing the SHA lets an operator confirm
-        "the daemon is running the merged fixes" instead of guessing (the
-        handoff's open question after 8 failed sessions). Best-effort: ``None``
-        if git is unavailable (e.g. not a checkout).
+        Code-freshness fields let an operator confirm "the daemon is running the
+        merged fixes" instead of eyeballing a hash. The daemon does NOT reload on
+        ``git pull`` — it must be restarted — so:
+          * ``git_sha`` — the SHA of the code this process is actually running
+            (captured at launch).
+          * ``repo_head_sha`` — the live on-disk HEAD (what a restart would run).
+          * ``code_stale`` — ``True`` when the two differ: restart to apply.
+          * ``commits_behind`` — best-effort count of how far behind the working
+            tree the running code is.
+        All best-effort: ``None``/``False`` if git is unavailable.
         """
+        running = self._launch_git_sha
+        on_disk = self._compute_git_sha()
         return HostRunnerHealth(
             ok=True,
             repo_root=str(self.repo_root),
             live_runs_root=str(self.live_runs_root),
             fetched_at_ms=_now_ms(),
             process=self._first_process_status(),
-            git_sha=self._git_sha(),
+            git_sha=running,
+            repo_head_sha=on_disk,
+            code_stale=bool(running and on_disk and running != on_disk),
+            commits_behind=self._commits_behind(running, on_disk),
         )
 
-    def _git_sha(self) -> str | None:
-        """HEAD of the daemon's repo_root, or None if git is unavailable."""
+    def _compute_git_sha(self) -> str | None:
+        """Live HEAD of the daemon's repo_root, or None if git is unavailable."""
         try:
             return git_head_sha(self.repo_root)
         except GitUnavailableError:
             return None
+
+    def _commits_behind(self, running: str | None, on_disk: str | None) -> int | None:
+        """How many commits the running code is behind the working-tree HEAD.
+
+        Best-effort: ``None`` when equal/unknown or git can't compute it (e.g.
+        the running SHA isn't an ancestor of HEAD after a rebase)."""
+        if not running or not on_disk or running == on_disk:
+            return None
+        try:
+            proc = subprocess.run(
+                ["git", "rev-list", "--count", f"{running}..{on_disk}"],
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        out = proc.stdout.strip()
+        return int(out) if proc.returncode == 0 and out.isdigit() else None
 
     def instances(self) -> HostRunnerInstancesStatus:
         """All managed instances with their live binding (registry authority)."""
@@ -846,7 +883,9 @@ def main(argv: list[str] | None = None) -> int:
     # Log the executing code's git SHA at startup: the daemon is long-lived and
     # does NOT reload on `git pull`, so this is the operator's anchor for "which
     # code is this daemon actually running" after a fix merges.
-    logger.info("host daemon code git_sha=%s (repo_root=%s)", manager._git_sha(), repo_root)
+    logger.info(
+        "host daemon code git_sha=%s (repo_root=%s)", manager._launch_git_sha, repo_root
+    )
 
     import uvicorn
 

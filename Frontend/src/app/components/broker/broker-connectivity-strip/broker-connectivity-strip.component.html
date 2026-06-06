@@ -10,15 +10,34 @@
     }
   </ul>
 
-  @if (connectivity.daemonCodeSha(); as sha) {
-    <p class="code-identity">
+  @let fresh = connectivity.daemonFreshness();
+  @if (fresh.state !== 'unknown') {
+    <div class="code-identity" [class.stale]="fresh.state === 'stale'">
       <span class="label">Engine code</span>
-      <code>{{ sha }}</code>
+      @if (fresh.state === 'stale') {
+        <span class="verdict stale">
+          Stale —
+          @if (fresh.commitsBehind) {
+            {{ fresh.commitsBehind }} commit{{ fresh.commitsBehind === 1 ? '' : 's' }} behind;
+          }
+          restart to apply fixes
+        </span>
+      } @else {
+        <span class="verdict fresh">Up to date</span>
+      }
+      <code>{{ fresh.sha }}</code>
       <span class="sr-only">
-        Host daemon git commit {{ sha }}. Confirm it matches the deployed master
-        commit; the daemon must be restarted to pick up merged fixes.
+        Host daemon is running commit {{ fresh.sha }}.
+        {{ fresh.state === 'stale'
+            ? 'The working tree has newer code — restart the daemon to apply it.'
+            : 'It matches the working tree.' }}
       </span>
-    </p>
+      @if (fresh.state === 'stale') {
+        <button type="button" class="restart-hint" (click)="copyStartCommand()">
+          {{ copied() ? 'Copied' : 'Copy restart command' }}
+        </button>
+      }
+    </div>
   }
 
   @if (connectivity.blockers().length > 0) {

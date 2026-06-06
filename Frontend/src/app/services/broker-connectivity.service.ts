@@ -11,6 +11,15 @@ export interface ConnectivityLink {
   detail: string;
 }
 
+/** Whether the host daemon is running the latest code. `unknown` while loading
+ * or when git is unavailable; `stale` means the working tree is ahead of the
+ * running process and it must be restarted to apply merged fixes. */
+export interface DaemonFreshness {
+  state: 'fresh' | 'stale' | 'unknown';
+  sha: string | null;
+  commitsBehind: number | null;
+}
+
 /**
  * Single source of truth for broker "is the plumbing up?" (handoff: shared
  * connectivity strip). Composes the three signals that today collapse into one
@@ -118,13 +127,19 @@ export class BrokerConnectivityService {
     return out;
   });
 
-  /** Short git SHA of the code the host daemon is executing, or null. Lets the
-   * operator confirm the live executor is on master — the daemon does NOT reload
-   * on `git pull`, so a stale SHA here means it must be restarted to pick up
-   * merged fixes (#449). */
-  readonly daemonCodeSha = computed<string | null>(() => {
-    const sha = this.daemon.value()?.git_sha;
-    return sha ? sha.slice(0, 7) : null;
+  /** Verdict on whether the host daemon is running the latest code, so the
+   * operator gets an answer ("up to date" / "restart to apply") instead of a
+   * bare hash to eyeball. The daemon does NOT reload on `git pull`: the engine
+   * reports the SHA it is RUNNING (git_sha) and the on-disk HEAD; when they
+   * differ it is stale and must be restarted (#449). */
+  readonly daemonFreshness = computed<DaemonFreshness>(() => {
+    const h = this.daemon.value();
+    if (!h || !h.git_sha) return { state: 'unknown', sha: null, commitsBehind: null };
+    return {
+      state: h.code_stale ? 'stale' : 'fresh',
+      sha: h.git_sha.slice(0, 7),
+      commitsBehind: h.commits_behind ?? null,
+    };
   });
 
   readonly daemonReachable = computed<boolean>(() => this.daemonState() === 'ok');

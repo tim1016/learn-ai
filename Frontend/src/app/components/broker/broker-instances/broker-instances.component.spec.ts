@@ -136,7 +136,7 @@ function setup(connectivityOverrides: { brokerState?: () => BrokerLinkState } = 
     // The broker-connection health row reads this (the real probe), not the
     // per-instance sidecar. Default to connected; tests override per case.
     brokerState: () => 'ok' as BrokerLinkState,
-    daemonCodeSha: () => null,
+    daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
     reload: () => {},
     ...connectivityOverrides,
   };

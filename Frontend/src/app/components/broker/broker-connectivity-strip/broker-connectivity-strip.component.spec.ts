@@ -4,14 +4,21 @@ import { BrokerConnectivityStripComponent } from './broker-connectivity-strip.co
 import {
   BrokerConnectivityService,
   type ConnectivityLink,
+  type DaemonFreshness,
 } from '../../../services/broker-connectivity.service';
 
-function renderStrip(links: ConnectivityLink[], blockers: string[] = [], codeSha: string | null = null) {
+const UNKNOWN: DaemonFreshness = { state: 'unknown', sha: null, commitsBehind: null };
+
+function renderStrip(
+  links: ConnectivityLink[],
+  blockers: string[] = [],
+  freshness: DaemonFreshness = UNKNOWN,
+) {
   const fake = {
     links: () => links,
     blockers: () => blockers,
     daemonDown: () => links.some((link) => link.key === 'daemon' && link.state === 'down'),
-    daemonCodeSha: () => codeSha,
+    daemonFreshness: () => freshness,
     reload: () => undefined,
   } as Partial<BrokerConnectivityService>;
   TestBed.configureTestingModule({
@@ -38,7 +45,7 @@ describe('BrokerConnectivityStripComponent', () => {
     expect(el.textContent).toContain('Clear');
   });
 
-  it('surfaces the host-daemon code SHA so the operator can confirm it runs master', () => {
+  it('shows an "up to date" verdict when the running code matches the working tree', () => {
     const el = renderStrip(
       [
         { key: 'daemon', label: 'Live engine', state: 'ok', detail: 'Running' },
@@ -46,14 +53,32 @@ describe('BrokerConnectivityStripComponent', () => {
         { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
       ],
       [],
-      'a1b2c3d',
+      { state: 'fresh', sha: 'a1b2c3d', commitsBehind: null },
     );
 
     expect(el.textContent).toContain('Engine code');
+    expect(el.textContent).toContain('Up to date');
     expect(el.textContent).toContain('a1b2c3d');
   });
 
-  it('omits the code line when the daemon SHA is unknown', () => {
+  it('flags stale code with a behind-count and a restart affordance', () => {
+    const el = renderStrip(
+      [
+        { key: 'daemon', label: 'Live engine', state: 'ok', detail: 'Running' },
+        { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
+        { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
+      ],
+      [],
+      { state: 'stale', sha: 'deadbee', commitsBehind: 3 },
+    );
+
+    expect(el.textContent).toContain('Stale');
+    expect(el.textContent).toContain('3 commits behind');
+    expect(el.textContent).toContain('restart to apply fixes');
+    expect(el.textContent).toContain('Copy restart command');
+  });
+
+  it('omits the code line when freshness is unknown', () => {
     const el = renderStrip([
       { key: 'daemon', label: 'Live engine', state: 'ok', detail: 'Running' },
       { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
