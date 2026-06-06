@@ -24,7 +24,7 @@
     }
   </ul>
 
-  @if (p.start_date_ms) {
+  @if (p.start_date_ms !== null) {
     <p class="deployed">Session start: {{ p.start_date_ms | date: 'medium' : 'UTC' }} UTC</p>
   }
 

@@ -55,8 +55,18 @@ export class BrokerProvenanceCardComponent {
     if (p.account_id) {
       rows.push({ label: 'Account', statement: p.account_id, mono: null });
     }
+    const config = configSummary(p.live_config);
+    if (config) {
+      rows.push({ label: 'Runtime config', statement: config, mono: null });
+    }
     return rows;
   });
+}
+
+function configSummary(config: Record<string, unknown>): string {
+  return Object.entries(config)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .join(', ');
 }
 
 function shortSha(value: string): string {

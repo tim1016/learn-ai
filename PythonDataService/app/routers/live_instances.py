@@ -369,6 +369,7 @@ def _provenance(
         account_id=str(ledger.get("account_id", "")),
         start_date_ms=_opt_int("start_date_ms"),
         created_at_ms=_opt_int("created_at_ms"),
+        live_config=dict(ledger.get("live_config") or {}),
     )
 
 

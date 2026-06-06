@@ -606,6 +606,10 @@ class InstanceProvenance(BaseModel):
     account_id: str = ""
     start_date_ms: int | None = None
     created_at_ms: int | None = None
+    # Runtime config hashed into run_id alongside the code/spec/QC inputs (symbol,
+    # force_flat_at, consolidator_period_min, …). Surfaced so two runs that differ
+    # ONLY in live_config don't show identical "proofs" despite distinct run_ids.
+    live_config: dict = Field(default_factory=dict)
 
 
 class InstanceLastExit(BaseModel):

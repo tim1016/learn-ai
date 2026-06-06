@@ -137,6 +137,9 @@ export interface InstanceProvenance {
   account_id: string;
   start_date_ms: number | null;
   created_at_ms: number | null;
+  /** Runtime config hashed into run_id (symbol, force_flat_at, …); surfaced so
+   * runs differing only in config don't show identical proofs. */
+  live_config: Record<string, unknown>;
 }
 
 /** Why an instance's most recent (terminated) run ended. */

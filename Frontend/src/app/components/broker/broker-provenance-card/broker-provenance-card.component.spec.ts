@@ -17,6 +17,7 @@ function makeProv(overrides: Partial<InstanceProvenance> = {}): InstanceProvenan
     account_id: 'DU1234567',
     start_date_ms: 1714838400000,
     created_at_ms: 1714838400500,
+    live_config: { symbol: 'SPY', consolidator_period_min: 15 },
     ...overrides,
   };
 }
@@ -41,6 +42,9 @@ describe('BrokerProvenanceCardComponent', () => {
     expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
     expect(text).toContain('SpyEmaCrossoverAlgorithm.py'); // audit-copy filename
     expect(text).toContain('DU1234567');
+    // live_config is part of the identity hash — surface it as a proof row.
+    expect(text).toContain('Runtime config');
+    expect(text).toContain('symbol=SPY');
   });
 
   it('keeps the full fingerprints behind a disclosure', () => {

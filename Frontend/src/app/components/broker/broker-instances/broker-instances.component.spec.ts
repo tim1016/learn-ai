@@ -428,6 +428,7 @@ describe('BrokerInstancesComponent', () => {
           account_id: 'DU1234567',
           start_date_ms: 1714838400000,
           created_at_ms: 1714838400500,
+          live_config: { symbol: 'SPY' },
         },
       }),
     );

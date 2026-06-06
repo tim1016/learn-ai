@@ -235,6 +235,7 @@ async def test_status_provenance_attests_the_run_identity(
                 "account_id": "DU1234567",
                 "start_date_ms": 1714838400000,
                 "created_at_ms": 1714838400500,
+                "live_config": {"symbol": "SPY", "consolidator_period_min": 15},
             }
         ),
         encoding="utf-8",
@@ -253,6 +254,8 @@ async def test_status_provenance_attests_the_run_identity(
     assert prov["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"
     assert prov["account_id"] == "DU1234567"
     assert prov["start_date_ms"] == 1714838400000
+    # live_config is part of the identity hash, so it must be in the provenance.
+    assert prov["live_config"] == {"symbol": "SPY", "consolidator_period_min": 15}
 
 
 async def test_status_provenance_none_when_nothing_deployed(
