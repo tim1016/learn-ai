@@ -11,32 +11,47 @@
   </ul>
 
   @let fresh = connectivity.daemonFreshness();
-  @if (fresh.state !== 'unknown') {
-    <div class="code-identity" [class.stale]="fresh.state === 'stale'">
+  @if (fresh.state === 'fresh') {
+    <div class="code-identity">
       <span class="label">Engine code</span>
-      @if (fresh.state === 'stale') {
-        <span class="verdict stale">
-          Stale —
-          @if (fresh.commitsBehind) {
-            {{ fresh.commitsBehind }} commit{{ fresh.commitsBehind === 1 ? '' : 's' }} behind;
-          }
-          restart to apply fixes
-        </span>
-      } @else {
-        <span class="verdict fresh">Up to date</span>
-      }
+      <span class="verdict fresh">Up to date</span>
+      <code>{{ fresh.sha }}</code>
+      <span class="sr-only">Host daemon is running commit {{ fresh.sha }}; it matches the working tree.</span>
+    </div>
+  } @else if (fresh.state === 'stale') {
+    <div class="code-identity stale">
+      <span class="label">Engine code</span>
+      <span class="verdict stale">
+        Stale —
+        @if (fresh.commitsBehind) {
+          {{ fresh.commitsBehind }} commit{{ fresh.commitsBehind === 1 ? '' : 's' }} behind;
+        }
+        restart to apply fixes
+      </span>
       <code>{{ fresh.sha }}</code>
       <span class="sr-only">
-        Host daemon is running commit {{ fresh.sha }}.
-        {{ fresh.state === 'stale'
-            ? 'The working tree has newer code — restart the daemon to apply it.'
-            : 'It matches the working tree.' }}
+        Host daemon is running commit {{ fresh.sha }}; the working tree has newer
+        code — restart the daemon to apply it.
       </span>
-      @if (fresh.state === 'stale') {
-        <button type="button" class="restart-hint" (click)="copyStartCommand()">
-          {{ copied() ? 'Copied' : 'Copy restart command' }}
-        </button>
-      }
+      <button type="button" class="restart-hint" (click)="copyRestartCommand()">
+        {{ copied() ? 'Copied' : 'Copy restart command' }}
+      </button>
+    </div>
+  } @else if (fresh.sha) {
+    <!-- 'unknown' WITH a sha = a legacy daemon that predates the freshness
+         contract; we can't verify it, so prompt a restart to a current build
+         rather than falsely claiming it is up to date. -->
+    <div class="code-identity stale">
+      <span class="label">Engine code</span>
+      <span class="verdict stale">Can't verify — restart to a current engine</span>
+      <code>{{ fresh.sha }}</code>
+      <span class="sr-only">
+        The host daemon predates the code-freshness check; restart it to a current
+        build so its running code can be verified.
+      </span>
+      <button type="button" class="restart-hint" (click)="copyRestartCommand()">
+        {{ copied() ? 'Copied' : 'Copy restart command' }}
+      </button>
     </div>
   }
 

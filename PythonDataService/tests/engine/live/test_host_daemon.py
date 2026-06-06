@@ -28,6 +28,11 @@ RUN_ID = "run-daemon-" + "a" * 53
 _TEST_TOKEN = "test-daemon-token"
 _AUTH = {TOKEN_HEADER: _TEST_TOKEN}
 
+requires_git = pytest.mark.skipif(
+    shutil.which("git") is None,
+    reason="git binary not available in this environment",
+)
+
 
 class FakeProcess:
     def __init__(self) -> None:
@@ -79,6 +84,7 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     assert body["commits_behind"] is None
 
 
+@requires_git
 async def test_health_reports_git_sha_of_executing_code() -> None:
     """The daemon surfaces the SHA of the code it is RUNNING (captured at launch)
     so an operator can confirm it is running the merged fixes — the daemon is
@@ -103,6 +109,7 @@ async def test_health_reports_git_sha_of_executing_code() -> None:
     assert health.commits_behind is None
 
 
+@requires_git
 def test_health_flags_stale_code_when_launch_sha_behind_head(tmp_path: Path) -> None:
     """When the running (launch) SHA differs from the on-disk HEAD — the operator
     git-pulled but didn't restart the daemon — health flags code_stale and counts

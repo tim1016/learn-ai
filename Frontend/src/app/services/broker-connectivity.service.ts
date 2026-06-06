@@ -134,10 +134,19 @@ export class BrokerConnectivityService {
    * differ it is stale and must be restarted (#449). */
   readonly daemonFreshness = computed<DaemonFreshness>(() => {
     const h = this.daemon.value();
-    if (!h || !h.git_sha) return { state: 'unknown', sha: null, commitsBehind: null };
+    const sha = h?.git_sha ? h.git_sha.slice(0, 7) : null;
+    // A daemon that supports the freshness contract ALWAYS reports repo_head_sha.
+    // A legacy (pre-change) daemon sends only git_sha — computed from the on-disk
+    // HEAD — which is exactly the misleading value this feature exists to catch
+    // (old daemon still running after a pull). So when repo_head_sha is absent we
+    // must read 'unknown', never 'fresh'. ('unknown' WITH a sha = legacy daemon;
+    // the strip prompts a restart to a current build.)
+    if (!h || !h.git_sha || h.repo_head_sha === null || h.repo_head_sha === undefined) {
+      return { state: 'unknown', sha, commitsBehind: null };
+    }
     return {
       state: h.code_stale ? 'stale' : 'fresh',
-      sha: h.git_sha.slice(0, 7),
+      sha,
       commitsBehind: h.commits_behind ?? null,
     };
   });
