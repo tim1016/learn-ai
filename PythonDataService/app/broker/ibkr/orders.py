@@ -481,7 +481,9 @@ def _trade_to_status_event(
     )
 
 
-def _fill_to_event(trade, fill, account_id: str, *, fills_through: list) -> IbkrOrderEvent:
+def _fill_to_event(
+    trade, fill, account_id: str, *, fills_through: list | None = None
+) -> IbkrOrderEvent:
     """Translate one Fill into a fill-type event.
 
     ``exec_id`` and ``client_id`` come from the underlying ib_async
@@ -496,7 +498,12 @@ def _fill_to_event(trade, fill, account_id: str, *, fills_through: list) -> Ibkr
     reflects the order's *final* state, so a collapsed partial fill (two
     executions between polls) would otherwise stamp the first event with the
     order's terminal totals instead of the values true after that execution.
+    Defaults to ``[fill]`` (this execution only) when the caller has no broader
+    context.
     """
+    if fills_through is None:
+        fills_through = [fill]
+
     exec_obj = getattr(fill, "execution", None)
     exec_id = getattr(exec_obj, "execId", None) if exec_obj is not None else None
     client_id_raw = getattr(exec_obj, "clientId", None) if exec_obj is not None else None
