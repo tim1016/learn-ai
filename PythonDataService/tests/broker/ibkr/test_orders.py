@@ -7,6 +7,7 @@ flips one layer to a bad value and asserts ``OrderRefusedError`` before
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -213,6 +214,37 @@ async def test_place_paper_order_no_client_order_id_does_not_dedupe() -> None:
     await place_paper_order(client, _spec())
     await place_paper_order(client, _spec())
     assert client.ib.placeOrder.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_concurrent_same_id_places_once() -> None:
+    """Regression (B-01): two concurrent requests carrying the same
+    client_order_id must place exactly one order.
+
+    Before the per-key lock, both coroutines passed the empty-cache lookup,
+    both awaited qualify (a real suspension point), and both reached
+    placeOrder — submitting two real orders for one intended order. The
+    sleeping qualify below forces the interleave the production await causes.
+    """
+    client = _client()
+
+    async def _slow_qualify(contract):
+        # A real suspension so the two placements genuinely interleave under
+        # asyncio.gather, reproducing the production qualify round-trip.
+        await asyncio.sleep(0)
+        contract.conId = 12345
+        return [contract]
+
+    client.ib.qualifyContractsAsync = _slow_qualify
+    spec = _spec(client_order_id="dup-1")
+
+    acks = await asyncio.gather(
+        place_paper_order(client, spec),
+        place_paper_order(client, spec),
+    )
+
+    assert client.ib.placeOrder.call_count == 1
+    assert acks[0].order_id == acks[1].order_id == 42
 
 
 # ── Phase 3b: list_open_orders / cancel ───────────────────────────────
