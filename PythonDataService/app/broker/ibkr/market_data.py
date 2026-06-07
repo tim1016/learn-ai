@@ -58,6 +58,23 @@ def _now_ms() -> int:
     return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
+def _coerce_size(value) -> int | None:
+    """Coerce an IBKR bid/ask size to ``int`` or ``None``.
+
+    IBKR uses NaN and a negative sentinel (``-1``) for "no size available" on
+    the L1 top-of-book line, the same way it uses ``-1.0`` for "no quote" on
+    the price fields (see ``models._coerce_quote``). Sizes were previously only
+    NaN-checked, so a ``-1`` leaked through to the wire as a negative depth.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if value < 0:
+        return None
+    return int(value)
+
+
 def _greeks_block(ticker, attr: Literal["modelGreeks", "bidGreeks", "askGreeks", "lastGreeks"]):
     """Return the named Greeks block from ``ticker`` or None."""
     return getattr(ticker, attr, None)
@@ -102,12 +119,8 @@ def _ticker_to_quote(
     bid = _coerce_quote(getattr(ticker, "bid", None))
     ask = _coerce_quote(getattr(ticker, "ask", None))
     last = _coerce_quote(getattr(ticker, "last", None))
-    bid_size = getattr(ticker, "bidSize", None)
-    ask_size = getattr(ticker, "askSize", None)
-    if bid_size is not None and (isinstance(bid_size, float) and math.isnan(bid_size)):
-        bid_size = None
-    if ask_size is not None and (isinstance(ask_size, float) and math.isnan(ask_size)):
-        ask_size = None
+    bid_size = _coerce_size(getattr(ticker, "bidSize", None))
+    ask_size = _coerce_size(getattr(ticker, "askSize", None))
 
     greeks_source: Literal["model", "bid", "ask", "last", "none"] = "none"
     iv = delta = gamma = theta = vega = underlying = None
@@ -132,12 +145,21 @@ def _ticker_to_quote(
         greeks_source = label  # type: ignore[assignment]
         break
 
-    # ib_async stamps Ticker.time when ticks land. Fall back to wall
-    # clock so the snapshot always carries a timestamp.
+    # ib_async stamps Ticker.time when ticks land. Only a tz-aware datetime is
+    # trustworthy: .timestamp() on a naive datetime interprets it as process-
+    # local time, yielding a ts_ms off by the UTC offset (timestamp-rigor ban,
+    # and inconsistent with bars._to_utc_ms which rejects naive outright).
+    # Convert tz-aware → UTC ms; otherwise fall back to wall clock.
     t = getattr(ticker, "time", None)
-    if isinstance(t, datetime):
-        ts_ms = int(t.timestamp() * 1000)
+    if isinstance(t, datetime) and t.tzinfo is not None:
+        ts_ms = int(t.astimezone(UTC).timestamp() * 1000)
     else:
+        if isinstance(t, datetime):
+            logger.warning(
+                "Ignoring naive Ticker.time for %s; using wall clock",
+                symbol,
+                extra={"action": "naive_ticker_time"},
+            )
         ts_ms = _now_ms()
 
     return IbkrOptionQuote(
@@ -148,8 +170,8 @@ def _ticker_to_quote(
         bid=bid,
         ask=ask,
         last=last,
-        bid_size=int(bid_size) if bid_size is not None else None,
-        ask_size=int(ask_size) if ask_size is not None else None,
+        bid_size=bid_size,
+        ask_size=ask_size,
         iv=iv,
         delta=delta,
         gamma=gamma,

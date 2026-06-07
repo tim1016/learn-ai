@@ -200,3 +200,61 @@ def test_resolve_market_price_handles_method_raising() -> None:
 def test_resolve_market_price_handles_missing_attribute() -> None:
     ticker = SimpleNamespace()
     assert _resolve_market_price(ticker) is None
+
+
+# ── B-10: naive Ticker.time must not be trusted ────────────────────────
+
+
+def test_ticker_naive_time_falls_back_to_wall_clock() -> None:
+    """Regression (B-10): a naive Ticker.time would be read by .timestamp() as
+    process-local time, producing a ts_ms off by the UTC offset. The conversion
+    now ignores naive datetimes and stamps wall-clock time instead.
+
+    The naive value is dated year 2000; before the fix ts_ms landed near that
+    (~9.46e11), after the fix it lands at "now" (well past 2023)."""
+    ticker = SimpleNamespace(
+        bid=1.0, ask=1.1, last=None, bidSize=None, askSize=None,
+        modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
+        time=datetime(2000, 1, 1, 12, 0),  # naive — no tzinfo
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    assert q.ts_ms > 1_700_000_000_000  # wall clock, not the year-2000 naive value
+
+
+def test_ticker_tz_aware_non_utc_time_converts_to_utc_ms() -> None:
+    """A tz-aware non-UTC Ticker.time is converted to the correct UTC epoch."""
+    from datetime import timedelta, timezone
+
+    aware = datetime(2026, 5, 2, 9, 30, tzinfo=timezone(timedelta(hours=-4)))
+    ticker = SimpleNamespace(
+        bid=1.0, ask=1.1, last=None, bidSize=None, askSize=None,
+        modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
+        time=aware,
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    assert q.ts_ms == int(aware.astimezone(UTC).timestamp() * 1000)
+
+
+# ── B-12: IBKR negative "no size" sentinel must be stripped ─────────────
+
+
+def test_ticker_negative_size_sentinel_coerced_to_none() -> None:
+    """Regression (B-12): IBKR sends -1 for "no size available". It was only
+    NaN-checked, so a -1 leaked through as a negative depth on the wire."""
+    ticker = SimpleNamespace(
+        bid=1.20, ask=1.25, last=None, bidSize=-1.0, askSize=-1,
+        modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    assert q.bid_size is None
+    assert q.ask_size is None
+
+
+def test_ticker_positive_size_passes_through() -> None:
+    ticker = SimpleNamespace(
+        bid=1.20, ask=1.25, last=None, bidSize=7, askSize=9.0,
+        modelGreeks=None, bidGreeks=None, askGreeks=None, lastGreeks=None,
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    assert q.bid_size == 7
+    assert q.ask_size == 9
