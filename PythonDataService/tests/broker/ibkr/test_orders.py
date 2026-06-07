@@ -70,6 +70,7 @@ def _client(
         connected_account=account,
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
 
 
@@ -236,6 +237,37 @@ async def test_place_paper_order_no_client_order_id_does_not_dedupe() -> None:
     await place_paper_order(client, _spec())
     await place_paper_order(client, _spec())
     assert client.ib.placeOrder.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_concurrent_same_id_places_once() -> None:
+    """Regression (B-01): two concurrent requests carrying the same
+    client_order_id must place exactly one order.
+
+    Before the per-key lock, both coroutines passed the empty-cache lookup,
+    both awaited qualify (a real suspension point), and both reached
+    placeOrder — submitting two real orders for one intended order. The
+    sleeping qualify below forces the interleave the production await causes.
+    """
+    client = _client()
+
+    async def _slow_qualify(contract):
+        # A real suspension so the two placements genuinely interleave under
+        # asyncio.gather, reproducing the production qualify round-trip.
+        await asyncio.sleep(0)
+        contract.conId = 12345
+        return [contract]
+
+    client.ib.qualifyContractsAsync = _slow_qualify
+    spec = _spec(client_order_id="dup-1")
+
+    acks = await asyncio.gather(
+        place_paper_order(client, spec),
+        place_paper_order(client, spec),
+    )
+
+    assert client.ib.placeOrder.call_count == 1
+    assert acks[0].order_id == acks[1].order_id == 42
 
 
 # ── Phase 3b: list_open_orders / cancel ───────────────────────────────
@@ -490,6 +522,30 @@ async def test_stream_order_events_partial_fills_report_running_totals() -> None
     assert fills[1].cumulative_filled == 200.0
     assert fills[1].remaining == 0.0
     assert fills[1].avg_fill_price == 10.5
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_halts_on_disconnect() -> None:
+    """Regression (B-03): a mid-stream disconnect must surface, not be hidden
+    by an idle poll of a frozen trades() cache.
+
+    ib_async's ``trades()`` never raises when disconnected, so the loop now
+    calls ``require_live()`` each iteration. When that raises, the order-event
+    stream stops and the engine learns the feed is dead instead of believing
+    in-flight orders are still pending forever."""
+    from app.broker.ibkr.client import NotConnectedError
+
+    client = _client()
+    # Connection drops before the first poll.
+    client.require_live = MagicMock(side_effect=NotConnectedError("connection lost"))
+    client.ib.trades = MagicMock(return_value=[])
+
+    with pytest.raises(NotConnectedError):
+        async for _event in stream_order_events(client, poll_seconds=0.001):
+            pass
+
+    # The frozen cache was never polled once liveness failed.
+    client.ib.trades.assert_not_called()
 
 
 @pytest.mark.asyncio

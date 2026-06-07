@@ -52,6 +52,14 @@ _QUALIFY_TIMEOUT_S = 10.0
 # Redis or Postgres-backed cache — Phase 3.5 follow-up.
 _IDEMPOTENCY_CACHE: dict[str, IbkrOrderAck] = {}
 
+# Per-client_order_id locks guarding the check→place→store window. The cache
+# read and write straddle the qualify/place awaits, so two concurrent retries
+# carrying the same id could both miss the cache and both place a real order
+# (the idempotency guarantee was sequential-only). Get-or-create below is
+# atomic under asyncio — there is no await between the ``get`` and the ``set``
+# — so concurrent callers for the same id observe the same lock.
+_IDEMPOTENCY_LOCKS: dict[str, asyncio.Lock] = {}
+
 
 def _idempotency_lookup(client_order_id: str | None) -> IbkrOrderAck | None:
     if client_order_id is None:
@@ -65,9 +73,18 @@ def _idempotency_store(client_order_id: str | None, ack: IbkrOrderAck) -> None:
     _IDEMPOTENCY_CACHE[client_order_id] = ack
 
 
+def _idempotency_lock(client_order_id: str) -> asyncio.Lock:
+    lock = _IDEMPOTENCY_LOCKS.get(client_order_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _IDEMPOTENCY_LOCKS[client_order_id] = lock
+    return lock
+
+
 def _idempotency_clear_for_testing() -> None:
-    """Test-only helper. Clear the idempotency cache between tests."""
+    """Test-only helper. Clear the idempotency cache and locks between tests."""
     _IDEMPOTENCY_CACHE.clear()
+    _IDEMPOTENCY_LOCKS.clear()
 
 
 class OrderRefusedError(BrokerError):
@@ -236,18 +253,47 @@ async def place_paper_order(
     client.require_connected()
     account_id = _enforce_paper_safety(client, spec)
 
-    # Idempotency check: if the same client_order_id has been seen, return
-    # the cached ack and don't place a second order. The cache lives on the
-    # uvicorn worker for the process lifetime — see _IDEMPOTENCY_CACHE.
-    cached = _idempotency_lookup(spec.client_order_id)
-    if cached is not None:
-        logger.info(
-            "[PAPER ORDER] idempotent replay: client_order_id=%s → order_id=%d",
-            spec.client_order_id,
-            cached.order_id,
+    # Without an idempotency key each call is independent — place directly.
+    if spec.client_order_id is None:
+        return await _place_and_build_ack(
+            client, spec, account_id, perm_id_wait_s=perm_id_wait_s
         )
-        return cached
 
+    # Serialize the check→place→store window per client_order_id. The cache
+    # read and write straddle the qualify/place awaits below, so without this
+    # lock two concurrent retries with the same id would both miss the cache
+    # and both place a real order. The lock makes the second caller wait and
+    # return the first caller's cached ack instead of placing a duplicate.
+    async with _idempotency_lock(spec.client_order_id):
+        cached = _idempotency_lookup(spec.client_order_id)
+        if cached is not None:
+            logger.info(
+                "[PAPER ORDER] idempotent replay: client_order_id=%s → order_id=%d",
+                spec.client_order_id,
+                cached.order_id,
+            )
+            return cached
+
+        ack = await _place_and_build_ack(
+            client, spec, account_id, perm_id_wait_s=perm_id_wait_s
+        )
+        _idempotency_store(spec.client_order_id, ack)
+        return ack
+
+
+async def _place_and_build_ack(
+    client: IbkrClient,
+    spec: IbkrOrderSpec,
+    account_id: str,
+    *,
+    perm_id_wait_s: float,
+) -> IbkrOrderAck:
+    """Qualify, submit, and snapshot one order into an ``IbkrOrderAck``.
+
+    Extracted from ``place_paper_order`` so the idempotency lock can wrap the
+    cache read/write around the placement without holding both in one block.
+    Carries no idempotency logic itself — the caller owns the cache.
+    """
     contract = _build_contract(spec)
     try:
         qualified = await asyncio.wait_for(
@@ -296,7 +342,7 @@ async def place_paper_order(
     # Capture the snapshot now (after any permId wait so status/permId
     # reflect the post-acknowledgement state).
     order_status = getattr(trade.orderStatus, "status", "Unknown") or "Unknown"
-    ack = IbkrOrderAck(
+    return IbkrOrderAck(
         account_id=account_id,
         is_paper=True,  # already enforced by safety layers
         order_id=int(trade.order.orderId),
@@ -311,8 +357,6 @@ async def place_paper_order(
         status=order_status,
         placed_at_ms=_now_ms(),
     )
-    _idempotency_store(spec.client_order_id, ack)
-    return ack
 
 
 # ── Phase 3b: cancel, list open, event stream ──────────────────────────
@@ -587,6 +631,11 @@ async def stream_order_events(
 
     try:
         while True:
+            # ib_async's ``trades()`` is an in-memory cache that never raises
+            # when the connection drops, so without this gate a mid-stream
+            # disconnect would freeze the cache and we'd poll it forever,
+            # silently missing fills while the engine keeps submitting orders.
+            client.require_live()
             trades = list(client.ib.trades())
             for trade in trades:
                 if not _order_belongs_to_account(trade, account_id):

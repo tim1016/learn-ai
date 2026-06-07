@@ -16,6 +16,7 @@ from app.broker.ibkr.client import (
     ConnectionRefusedDueToSentinelError,
     IbkrClient,
     IbkrClientIdInUseError,
+    NotConnectedError,
     _detect_host_gateway,
     _is_paper_account,
     _resolve_host,
@@ -277,6 +278,66 @@ async def test_connect_does_not_misclassify_non_326_errors_as_client_id_in_use()
             await client_under_test.connect()
 
     assert not isinstance(excinfo.value, IbkrClientIdInUseError)
+
+
+# ── connectivity-loss handling (errorEvent + require_live) ──────────────
+
+
+def _client_with_fake_ib(settings_paper: IbkrSettings) -> IbkrClient:
+    fake_ib, fake_class = _patched_ib_class()
+    with patch("ib_async.IB", fake_class):
+        client = IbkrClient(settings_paper)
+    # Keep a handle on the underlying mock so tests can flip isConnected.
+    client._fake_ib = fake_ib  # type: ignore[attr-defined]
+    return client
+
+
+def test_on_ib_error_marks_connection_lost_on_1100(settings_paper: IbkrSettings) -> None:
+    """Regression (B-04): TWS 1100 ("connectivity lost") must be captured into
+    client state and counted, not dropped on the floor like every non-326 code
+    used to be."""
+    client = _client_with_fake_ib(settings_paper)
+    assert client.connection_lost is False
+
+    client._on_ib_error(-1, 1100, "Connectivity between IB and TWS has been lost.", None)
+
+    assert client.connection_lost is True
+    assert client.connectivity_lost_count == 1
+
+
+def test_on_ib_error_clears_connection_lost_on_restore(settings_paper: IbkrSettings) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._on_ib_error(-1, 1100, "lost", None)
+    assert client.connection_lost is True
+
+    client._on_ib_error(-1, 1101, "Connectivity restored - data maintained.", None)
+    assert client.connection_lost is False
+
+
+def test_on_ib_error_ignores_unrelated_codes(settings_paper: IbkrSettings) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._on_ib_error(-1, 2104, "Market data farm connection is OK", None)
+    assert client.connection_lost is False
+    assert client.connectivity_lost_count == 0
+
+
+def test_require_live_raises_on_soft_connectivity_loss(settings_paper: IbkrSettings) -> None:
+    """A soft 1100 leaves the socket open (isConnected True) but the feed dead.
+    require_live must still raise so streaming loops halt."""
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True  # socket still open
+    client._on_ib_error(-1, 1100, "lost", None)
+
+    with pytest.raises(NotConnectedError, match="connectivity lost"):
+        client.require_live()
+
+
+def test_require_live_raises_when_socket_closed(settings_paper: IbkrSettings) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = False
+
+    with pytest.raises(NotConnectedError):
+        client.require_live()
 
 
 @pytest.mark.asyncio

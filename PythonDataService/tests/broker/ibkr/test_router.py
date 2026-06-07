@@ -89,6 +89,34 @@ async def test_chain_returns_400_when_strike_is_non_positive() -> None:
 
 
 @pytest.mark.asyncio
+async def test_strikes_rejects_non_positive_expiry_ms() -> None:
+    """Regression (B-13): expiry_ms <= 0 must be rejected at the boundary with
+    a 422, not flow into expiry_ms_to_yyyymmdd to produce a 1970 date that
+    silently matches nothing."""
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/strikes/SPY", params={"expiry_ms": 0})
+
+    # Query validation (gt=0) runs before the handler / connection check.
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_chain_rejects_non_positive_expiry_ms() -> None:
+    """Regression (B-13): same boundary guard on the option-chain stream."""
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-chain/SPY",
+            params=[("expiry_ms", -5), ("strikes", 420)],
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_strikes_endpoint_returns_503_when_disconnected() -> None:
     set_client(None)
 

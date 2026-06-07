@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import threading
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
@@ -158,20 +160,64 @@ class ParquetTickWriter(TickWriter):
         await self.flush()
 
 
+# Per-output-path locks. ``_write_parquet_partition`` runs inside
+# ``asyncio.to_thread`` (a thread pool), and two SSE consumers of the same
+# account each build their own writer, so two threads can target one partition
+# concurrently. Without serialization both read the same baseline and the later
+# write clobbers the earlier append — silent data loss with no exception. These
+# are threading.Locks (not asyncio.Lock) because the contended code runs off the
+# event loop.
+_PARTITION_LOCKS: dict[str, threading.Lock] = {}
+_PARTITION_LOCKS_GUARD = threading.Lock()
+
+
+def _partition_lock(out_path: Path) -> threading.Lock:
+    key = str(out_path)
+    with _PARTITION_LOCKS_GUARD:
+        lock = _PARTITION_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PARTITION_LOCKS[key] = lock
+        return lock
+
+
 def _write_parquet_partition(out_path: Path, part) -> None:
-    """Append ``part`` to ``out_path``, reading + concatenating if it exists.
+    """Atomically append ``part`` to ``out_path``, reading + concatenating if it exists.
 
     Synchronous helper invoked from ``asyncio.to_thread`` so the heavy
     pandas / pyarrow I/O never runs on the event loop.
+
+    Two correctness properties, both previously missing (bug-hunt B-07):
+
+    * **Serialized per path.** The read-modify-write is held under a per-path
+      lock so concurrent writers to the same partition can't clobber each
+      other's appends (last-writer-wins → silent row loss).
+    * **Crash-atomic.** The combined frame is written to a sibling ``.tmp``,
+      fsynced, then ``os.replace``'d over the destination (and the directory is
+      fsynced). A crash mid-write leaves the old complete file, never a
+      truncated one that would poison every subsequent read. Mirrors the
+      tmp+fsync+replace contract used by live_state_sidecar / desired_state.
     """
     import pandas as pd
 
-    if out_path.exists():
-        existing = pd.read_parquet(out_path)
-        combined = pd.concat([existing, part], ignore_index=True)
-    else:
-        combined = part
-    combined.to_parquet(out_path, index=False)
+    with _partition_lock(out_path):
+        if out_path.exists():
+            existing = pd.read_parquet(out_path)
+            combined = pd.concat([existing, part], ignore_index=True)
+        else:
+            combined = part
+
+        tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+        combined.to_parquet(tmp_path, index=False)
+        with open(tmp_path, "rb") as fh:
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, out_path)
+        # fsync the directory so the rename itself survives a crash.
+        dir_fd = os.open(str(out_path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def make_writer(persist: bool, persist_dir: str) -> TickWriter:
