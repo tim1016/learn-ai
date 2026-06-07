@@ -81,6 +81,7 @@ async def test_stream_account_pnl_emits_initial_then_iterates() -> None:
         connected_account="DU1234567",
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
 
     out = []
@@ -111,6 +112,7 @@ async def test_stream_account_pnl_cancels_even_on_consumer_break() -> None:
         connected_account="DU1234567",
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
 
     async with aclosing(stream_account_pnl(client, debounce_seconds=0.001)) as stream:
@@ -121,6 +123,43 @@ async def test_stream_account_pnl_cancels_even_on_consumer_break() -> None:
 
 
 # ── stream_position_pnl ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stream_account_pnl_halts_on_disconnect() -> None:
+    """Regression (B-08): after a disconnect the PnL object freezes but
+    ib_async raises nothing, so the old loop streamed plausible-but-stale risk
+    forever. require_live() now halts the stream instead."""
+    from app.broker.ibkr.client import NotConnectedError
+
+    pnl_obj = SimpleNamespace(dailyPnL=1.0, unrealizedPnL=2.0, realizedPnL=3.0)
+    cancel_calls: list[str] = []
+
+    def _require_live() -> None:
+        raise NotConnectedError("connectivity lost")
+
+    ib = SimpleNamespace(
+        reqPnL=lambda account, *args, **kw: pnl_obj,
+        cancelPnL=lambda account: cancel_calls.append(account),
+    )
+    client = SimpleNamespace(
+        ib=ib,
+        connected_account="DU1234567",
+        is_connected=lambda: True,
+        require_connected=lambda: None,
+        require_live=_require_live,
+    )
+
+    out = []
+    with pytest.raises(NotConnectedError):
+        async with aclosing(stream_account_pnl(client, debounce_seconds=0.001)) as stream:
+            async for tick in stream:
+                out.append(tick)
+
+    # The initial snapshot still emitted; the stream then halted rather than
+    # yielding a second, stale tick. The subscription was cancelled in finally.
+    assert len(out) == 1
+    assert cancel_calls == ["DU1234567"]
 
 
 @pytest.mark.asyncio
@@ -147,6 +186,7 @@ async def test_stream_position_pnl_emits_one_tick_per_contract_per_pass() -> Non
         connected_account="DU1234567",
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
 
     out = []
@@ -188,6 +228,7 @@ async def test_stream_position_pnl_continues_on_subscribe_failure() -> None:
         connected_account="DU1234567",
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
 
     out = []
