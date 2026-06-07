@@ -7,6 +7,7 @@ flips one layer to a bad value and asserts ``OrderRefusedError`` before
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -168,6 +169,28 @@ async def test_place_paper_order_lmt_requires_limit_price() -> None:
 
 
 @pytest.mark.asyncio
+async def test_place_paper_order_qualify_timeout_raises_and_does_not_place(monkeypatch) -> None:
+    """Regression (B-06): a hung qualifyContractsAsync must time out into a
+    BrokerError instead of hanging the caller (and the live bar loop) forever.
+    Before the fix the await had no timeout."""
+    from app.broker.ibkr import orders as orders_mod
+    from app.broker.ibkr.client import BrokerError
+
+    monkeypatch.setattr(orders_mod, "_QUALIFY_TIMEOUT_S", 0.01)
+    client = _client()
+
+    async def _hanging_qualify(contract):
+        await asyncio.sleep(1.0)  # never completes within the timeout
+        return [contract]
+
+    client.ib.qualifyContractsAsync = _hanging_qualify
+
+    with pytest.raises(BrokerError, match="timed out"):
+        await place_paper_order(client, _spec())
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_place_paper_order_refuses_in_live_mode() -> None:
     client = _client(mode="live", port=4001)
     with pytest.raises(OrderRefusedError):
@@ -278,6 +301,22 @@ async def test_cancel_paper_order_calls_cancel_order_with_matching_trade() -> No
     out = await cancel_paper_order(client, order_id=42)
     assert out.order_id == 42
     client.ib.cancelOrder.assert_called_once_with(trade.order)
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_refuses_foreign_order_on_same_account() -> None:
+    """Regression (B-05): a matching orderId belonging to another client on the
+    same DU account must NOT be cancelled. ib_async's trades() cache can hold
+    foreign orders, and orderIds are small per-client integers that collide, so
+    cancel must apply the same ownership guard list/stream already use."""
+    foreign = _trade_namespace(order_id=42, account="DU9999999")
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[foreign])
+    client.ib.cancelOrder = MagicMock()
+
+    with pytest.raises(OrderNotFoundError):
+        await cancel_paper_order(client, order_id=42)
+    client.ib.cancelOrder.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -407,6 +446,50 @@ async def test_stream_order_events_populates_exec_id_and_client_id_on_fill() -> 
     assert fill_event.client_id == 42
     assert fill_event.fill_quantity == 10.0
     assert fill_event.last_fill_price == 500.5
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_partial_fills_report_running_totals() -> None:
+    """Regression (B-09): when two executions land in one poll window, each
+    fill event must carry the running totals true *after that execution*, not
+    the order's terminal orderStatus snapshot.
+
+    Before the fix both collapsed events read cumulative_filled/remaining/
+    avg_fill_price off the final orderStatus (200/0), so the first partial was
+    mis-stamped as fully filled."""
+    from itertools import chain, repeat
+
+    trade_v1 = _trade_namespace(
+        order_id=42, quantity=200, status_str="Submitted", filled=0.0, remaining=200.0
+    )
+    # Terminal snapshot: fully filled via two 100-share executions at 10 and 11.
+    trade_v2 = _trade_namespace(
+        order_id=42, quantity=200, status_str="Filled", filled=200.0, remaining=0.0
+    )
+    trade_v2.fills = [
+        SimpleNamespace(execution=SimpleNamespace(execId="e1", clientId=1, shares=100.0, price=10.0)),
+        SimpleNamespace(execution=SimpleNamespace(execId="e2", clientId=1, shares=100.0, price=11.0)),
+    ]
+    snapshots = chain([[trade_v1]], repeat([trade_v2]))
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len([e for e in out if e.event_type == "fill"]) >= 2:
+            break
+
+    fills = [e for e in out if e.event_type == "fill"]
+    # First execution: 100 filled, 100 remaining, avg = 10.
+    assert fills[0].cumulative_filled == 100.0
+    assert fills[0].remaining == 100.0
+    assert fills[0].avg_fill_price == 10.0
+    assert fills[0].fill_quantity == 100.0
+    # Second execution: 200 filled, 0 remaining, running avg = (10+11)/2 = 10.5.
+    assert fills[1].cumulative_filled == 200.0
+    assert fills[1].remaining == 0.0
+    assert fills[1].avg_fill_price == 10.5
 
 
 @pytest.mark.asyncio

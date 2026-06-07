@@ -37,6 +37,15 @@ from app.broker.ibkr.models import (
 logger = logging.getLogger(__name__)
 
 
+# Bound on the IBKR contract-qualification round-trip. ib_async resolves this
+# via reqContractDetailsAsync, whose future only completes on the Gateway's
+# contractDetailsEnd callback; on a half-open/app-silent connection that
+# callback never arrives and the await would hang forever — and this call sits
+# inline on the live engine's bar-processing coroutine, so a hang stalls the
+# whole loop. Per .claude/rules/python.md: "Timeouts on all external calls."
+_QUALIFY_TIMEOUT_S = 10.0
+
+
 # Process-level idempotency cache: maps client_order_id → previously-issued
 # IbkrOrderAck. Survives across requests within a single uvicorn worker;
 # does NOT survive container restart. For durable idempotency we'd need a
@@ -240,7 +249,16 @@ async def place_paper_order(
         return cached
 
     contract = _build_contract(spec)
-    qualified = await client.ib.qualifyContractsAsync(contract)
+    try:
+        qualified = await asyncio.wait_for(
+            client.ib.qualifyContractsAsync(contract), timeout=_QUALIFY_TIMEOUT_S
+        )
+    except TimeoutError as exc:
+        raise BrokerError(
+            f"IBKR contract qualification for {spec.symbol} ({spec.sec_type}) "
+            f"timed out after {_QUALIFY_TIMEOUT_S:.0f}s; the Gateway connection "
+            "may be half-open. Order not placed."
+        ) from exc
     if not qualified:
         raise BrokerError(
             f"IBKR could not qualify contract for {spec.symbol} "
@@ -419,6 +437,15 @@ async def cancel_paper_order(
             f"No open order with order_id={order_id} on this client."
         )
     trade = matching[0]
+    # Ownership guard: ib_async's trades() cache can hold orders from other
+    # clients (or manual TWS) on the same DU account, and orderIds are small
+    # per-client integers that can collide. Without this check a caller-supplied
+    # order_id could cancel a foreign order. Mirrors the guard list_open_orders
+    # and stream_order_events already apply.
+    if not _order_belongs_to_account(trade, account_id):
+        raise OrderNotFoundError(
+            f"No open order with order_id={order_id} owned by this client."
+        )
     client.ib.cancelOrder(trade.order)
     return _trade_to_open_order(trade, account_id, client.settings.client_id)
 
@@ -454,7 +481,7 @@ def _trade_to_status_event(
     )
 
 
-def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
+def _fill_to_event(trade, fill, account_id: str, *, fills_through: list) -> IbkrOrderEvent:
     """Translate one Fill into a fill-type event.
 
     ``exec_id`` and ``client_id`` come from the underlying ib_async
@@ -462,6 +489,13 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
     live-runtime § 7 fatal-halt check needs to detect outside-mutation
     (any execution under our DU account whose clientId is not ours,
     or whose execId we never originated, is foreign).
+
+    ``fills_through`` is the list of executions up to and including this one.
+    The running cumulative_filled / remaining / avg_fill_price are derived
+    from it rather than read off ``trade.orderStatus`` — that single snapshot
+    reflects the order's *final* state, so a collapsed partial fill (two
+    executions between polls) would otherwise stamp the first event with the
+    order's terminal totals instead of the values true after that execution.
     """
     exec_obj = getattr(fill, "execution", None)
     exec_id = getattr(exec_obj, "execId", None) if exec_obj is not None else None
@@ -477,6 +511,23 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
     # this module's poll-based design. None until reported (PRD-B).
     commission_obj = getattr(fill, "commissionReport", None)
     fee = getattr(commission_obj, "commission", None) if commission_obj is not None else None
+
+    # Running totals from the executions up to and including this fill (see
+    # docstring) — not the terminal orderStatus snapshot.
+    running_shares = 0.0
+    running_notional = 0.0
+    for prior in fills_through:
+        prior_exec = getattr(prior, "execution", None)
+        if prior_exec is None:
+            continue
+        shares = float(getattr(prior_exec, "shares", 0.0) or 0.0)
+        price = float(getattr(prior_exec, "price", 0.0) or 0.0)
+        running_shares += shares
+        running_notional += shares * price
+    total_qty = float(getattr(trade.order, "totalQuantity", 0.0) or 0.0)
+    running_remaining = max(total_qty - running_shares, 0.0)
+    running_avg = (running_notional / running_shares) if running_shares else None
+
     return IbkrOrderEvent(
         account_id=account_id,
         order_id=int(trade.order.orderId),
@@ -487,9 +538,9 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
         exec_id=str(exec_id) if exec_id else None,
         client_id=int(client_id_raw) if client_id_raw is not None else None,
         fill_quantity=float(getattr(exec_obj, "shares", 0.0) or 0.0),
-        avg_fill_price=float(getattr(trade.orderStatus, "avgFillPrice", 0.0) or 0.0) or None,
-        cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
-        remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
+        avg_fill_price=running_avg,
+        cumulative_filled=running_shares,
+        remaining=running_remaining,
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
@@ -545,8 +596,10 @@ async def stream_order_events(
                 fills = list(getattr(trade, "fills", []) or [])
                 prev = last_fill_count.get(oid, 0)
                 if len(fills) > prev:
-                    for fill in fills[prev:]:
-                        yield _fill_to_event(trade, fill, account_id)
+                    for i in range(prev, len(fills)):
+                        yield _fill_to_event(
+                            trade, fills[i], account_id, fills_through=fills[: i + 1]
+                        )
                     last_fill_count[oid] = len(fills)
 
             await asyncio.sleep(poll_seconds)
