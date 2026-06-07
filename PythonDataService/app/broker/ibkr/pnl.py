@@ -96,6 +96,10 @@ async def stream_account_pnl(
         yield _account_pnl_to_tick(pnl, account_id)
         while True:
             await asyncio.sleep(debounce_seconds)
+            # ib_async mutates ``pnl`` in place; on a disconnect it simply stops
+            # updating, so re-reading it would emit plausible-but-frozen P&L
+            # forever. Halt instead of streaming stale risk numbers.
+            client.require_live()
             yield _account_pnl_to_tick(pnl, account_id)
     finally:
         try:
@@ -146,6 +150,9 @@ async def stream_position_pnl(
             yield _position_pnl_to_tick(pnl_single, account_id, con_id)
         while True:
             await asyncio.sleep(debounce_seconds)
+            # See stream_account_pnl: a disconnect freezes these PnLSingle
+            # objects, so halt rather than emit stale per-position risk.
+            client.require_live()
             for con_id, pnl_single in subscriptions.items():
                 yield _position_pnl_to_tick(pnl_single, account_id, con_id)
     finally:

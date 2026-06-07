@@ -299,6 +299,16 @@ async def stream_minute_bars(
     try:
         while True:
             if index >= len(bars):
+                # No new 5-second bar yet. Before sleeping, confirm the feed is
+                # still live: ib_async stops appending to ``bars`` on a Gateway
+                # disconnect and raises nothing, so without this check the loop
+                # would spin forever yielding no bars and the live engine would
+                # go silently blind. Surface a fatal error instead.
+                if not client.is_connected() or client.connection_lost:
+                    raise IBKRBarStreamError(
+                        f"IBKR connection lost while streaming {symbol} 5-second "
+                        "bars; halting rather than hanging on a dead feed."
+                    )
                 await asyncio.sleep(0.1)
                 continue
             raw_bar = bars[index]
@@ -314,7 +324,15 @@ async def stream_minute_bars(
             if emitted is not None:
                 yield emitted
     finally:
-        client.ib.cancelRealTimeBars(bars)
+        # Guard the cancel like every other subscription-cancel path in this
+        # package (market_data, pnl): if the stream is unwinding because the
+        # connection dropped, cancelRealTimeBars itself can raise — and as the
+        # first statement of ``finally`` that would mask the original exception
+        # the operator needs to see, and skip the counters log below.
+        try:
+            client.ib.cancelRealTimeBars(bars)
+        except Exception as exc:
+            logger.debug("cancelRealTimeBars(%s) raised on shutdown: %s", symbol, exc)
         logger.debug(
             "Cancelled reqRealTimeBars for %s (skipped_duplicate=%d, applied_correction=%d)",
             symbol,

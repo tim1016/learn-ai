@@ -289,11 +289,16 @@ class _FakeIb:
 
 
 class _FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, *, connected: bool = True, connection_lost: bool = False) -> None:
         self.ib = _FakeIb()
+        self._connected = connected
+        self.connection_lost = connection_lost
 
     def require_connected(self) -> None:
         return
+
+    def is_connected(self) -> bool:
+        return self._connected
 
 
 @pytest.mark.asyncio
@@ -306,6 +311,45 @@ async def test_stream_minute_bars_yields_closed_bar_and_cancels() -> None:
     assert emitted.close == Decimal("100.5")
     assert client.ib.use_rth_seen is True
     assert client.ib.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_stream_minute_bars_halts_on_connection_lost() -> None:
+    """Regression (B-02): a mid-stream disconnect must surface a fatal error,
+    not hang forever on a frozen bar list.
+
+    Before the fix the loop only checked ``index >= len(bars)`` and slept,
+    spinning indefinitely while the live engine went silently blind. Now an
+    empty/stalled feed with a lost connection raises ``IBKRBarStreamError``.
+    """
+    client = _FakeClient(connection_lost=True)
+    client.ib.bars = []  # no bars ever arrive → loop reaches the liveness gate
+
+    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    with pytest.raises(IBKRBarStreamError, match="connection lost"):
+        await stream.__anext__()
+    # The cancel still ran in finally despite the raise.
+    assert client.ib.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_stream_minute_bars_cancel_exception_does_not_mask_original() -> None:
+    """Regression (B-11): cancelRealTimeBars in ``finally`` must be guarded so
+    a cancel that raises on a dead connection does not replace the real error
+    propagating out of the generator."""
+    client = _FakeClient(connection_lost=True)
+    client.ib.bars = []
+
+    def _raising_cancel(bars) -> None:
+        raise ConnectionError("socket already closed")
+
+    client.ib.cancelRealTimeBars = _raising_cancel  # type: ignore[assignment]
+
+    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    # The connectivity-lost error survives; the cancel's ConnectionError is
+    # swallowed (logged at debug) rather than masking it.
+    with pytest.raises(IBKRBarStreamError, match="connection lost"):
+        await stream.__anext__()
 
 
 def test_aggregate_handles_ib_async_open_underscore_attribute() -> None:

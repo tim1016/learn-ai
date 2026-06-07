@@ -30,6 +30,16 @@ from app.broker.ibkr.models import IbkrConnectionHealth
 logger = logging.getLogger(__name__)
 
 
+# TWS/IB connectivity error codes that the ``errorEvent`` handler reacts to.
+# 1100 = "Connectivity between IB and TWS has been lost"; 504 = "Not
+# connected". Both mean the data feed is dead even though the API socket to
+# TWS may still report ``isConnected() == True``. 1101 = connectivity restored
+# (data maintained); 1102 = connectivity restored (data lost). See
+# https://interactivebrokers.github.io/tws-api/message_codes.html.
+_CONNECTIVITY_LOST_CODES = frozenset({1100, 504})
+_CONNECTIVITY_RESTORED_CODES = frozenset({1101, 1102})
+
+
 # Sentinel value for ``IBKR_HOST`` that triggers default-gateway detection.
 # The container's default gateway is, by container-runtime convention, the
 # host machine — this is the most reliable way to reach the Windows host
@@ -162,12 +172,54 @@ class IbkrClient:
         # hiding the actionable cause. Hook errorEvent so connect() can
         # fast-fail with the real remediation message.
         self._client_id_in_use_seen: bool = False
+        # Soft connectivity loss (TWS 1100) leaves the API socket open, so
+        # ``isConnected()`` keeps returning True while the data feed is dead.
+        # Track that condition explicitly so streaming loops can halt instead
+        # of hanging on a silently-frozen feed. Cleared on connect and on a
+        # restore event (1101/1102). The counter is observable (logged + read
+        # by diagnostics) per numerical-rigor's "surfaced, never silenced".
+        self._connection_lost: bool = False
+        self._connectivity_lost_count: int = 0
         self._ib.errorEvent += self._on_ib_error
 
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
-        """ib_async errorEvent handler — captures TWS error 326."""
+        """ib_async errorEvent handler.
+
+        Reacts to three classes of code and ignores the rest:
+
+        * ``326`` — clientId already in use (captured for ``connect()``'s
+          fast-fail).
+        * ``1100`` / ``504`` — connectivity to TWS/IB lost. Mark the
+          connection degraded so streaming loops surface a fatal error rather
+          than hanging on a feed that has gone dark. ``isConnected()`` can
+          still report True here because the API socket stays open.
+        * ``1101`` / ``1102`` — connectivity restored. Clear the flag.
+        """
         if errorCode == 326:
             self._client_id_in_use_seen = True
+            return
+        if errorCode in _CONNECTIVITY_LOST_CODES:
+            self._connection_lost = True
+            self._connectivity_lost_count += 1
+            logger.warning(
+                "IBKR connectivity lost",
+                extra={
+                    "error_code": errorCode,
+                    "error": errorString,
+                    "action": "connection_lost",
+                },
+            )
+            return
+        if errorCode in _CONNECTIVITY_RESTORED_CODES:
+            self._connection_lost = False
+            logger.info(
+                "IBKR connectivity restored",
+                extra={
+                    "error_code": errorCode,
+                    "error": errorString,
+                    "action": "connection_restored",
+                },
+            )
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -186,6 +238,7 @@ class IbkrClient:
 
         for attempt in range(1, s.connect_attempts + 1):
             self._client_id_in_use_seen = False
+            self._connection_lost = False
             try:
                 logger.info(
                     "[STEP 1/3] IBKR connect attempt %d/%d → %s:%d (mode=%s, clientId=%d)",
@@ -300,9 +353,39 @@ class IbkrClient:
     def is_connected(self) -> bool:
         return bool(self._ib.isConnected())
 
+    @property
+    def connection_lost(self) -> bool:
+        """True between a TWS connectivity-lost (1100/504) and its restore.
+
+        ``isConnected()`` can still be True in this window because the API
+        socket to TWS stays open while TWS's own uplink to IB is down.
+        """
+        return self._connection_lost
+
+    @property
+    def connectivity_lost_count(self) -> int:
+        """Observable count of connectivity-lost events seen this process."""
+        return self._connectivity_lost_count
+
     def require_connected(self) -> None:
         if not self.is_connected():
             raise NotConnectedError("IBKR client is not connected.")
+
+    def require_live(self) -> None:
+        """Stricter than ``require_connected``: also fails on a soft loss.
+
+        Streaming loops call this every iteration so a mid-session disconnect
+        — hard (socket closed) or soft (TWS 1100, socket open but feed dead) —
+        surfaces as a fatal error instead of an indefinite silent hang.
+        """
+        if not self.is_connected():
+            raise NotConnectedError("IBKR client is not connected.")
+        if self._connection_lost:
+            raise NotConnectedError(
+                "IBKR connectivity lost (TWS error 1100): the API socket is "
+                "open but the data feed is down. Halting rather than streaming "
+                "stale values."
+            )
 
     def health(self) -> IbkrConnectionHealth:
         connected = self.is_connected()

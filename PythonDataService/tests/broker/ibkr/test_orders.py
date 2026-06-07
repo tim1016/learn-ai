@@ -69,6 +69,7 @@ def _client(
         connected_account=account,
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
 
 
@@ -407,6 +408,30 @@ async def test_stream_order_events_populates_exec_id_and_client_id_on_fill() -> 
     assert fill_event.client_id == 42
     assert fill_event.fill_quantity == 10.0
     assert fill_event.last_fill_price == 500.5
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_halts_on_disconnect() -> None:
+    """Regression (B-03): a mid-stream disconnect must surface, not be hidden
+    by an idle poll of a frozen trades() cache.
+
+    ib_async's ``trades()`` never raises when disconnected, so the loop now
+    calls ``require_live()`` each iteration. When that raises, the order-event
+    stream stops and the engine learns the feed is dead instead of believing
+    in-flight orders are still pending forever."""
+    from app.broker.ibkr.client import NotConnectedError
+
+    client = _client()
+    # Connection drops before the first poll.
+    client.require_live = MagicMock(side_effect=NotConnectedError("connection lost"))
+    client.ib.trades = MagicMock(return_value=[])
+
+    with pytest.raises(NotConnectedError):
+        async for _event in stream_order_events(client, poll_seconds=0.001):
+            pass
+
+    # The frozen cache was never polled once liveness failed.
+    client.ib.trades.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -529,6 +529,11 @@ async def stream_order_events(
 
     try:
         while True:
+            # ib_async's ``trades()`` is an in-memory cache that never raises
+            # when the connection drops, so without this gate a mid-stream
+            # disconnect would freeze the cache and we'd poll it forever,
+            # silently missing fills while the engine keeps submitting orders.
+            client.require_live()
             trades = list(client.ib.trades())
             for trade in trades:
                 if not _order_belongs_to_account(trade, account_id):
