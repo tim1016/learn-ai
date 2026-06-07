@@ -353,7 +353,7 @@ async def list_expirations_endpoint(symbol: str) -> dict:
 @router.get("/strikes/{symbol}", response_model=IbkrStrikeList)
 async def list_strikes_endpoint(
     symbol: str,
-    expiry_ms: Annotated[int, Query(..., description="Expiry timestamp in int64 ms UTC.")],
+    expiry_ms: Annotated[int, Query(..., gt=0, description="Expiry timestamp in int64 ms UTC.")],
 ) -> IbkrStrikeList:
     """Strikes that IBKR can actually qualify for one (symbol, expiry).
 
@@ -384,7 +384,7 @@ async def list_strikes_endpoint(
 @router.get("/option-chain/{symbol}")
 async def option_chain_stream(
     symbol: str,
-    expiry_ms: Annotated[int, Query(..., description="Expiry timestamp in int64 ms UTC.")],
+    expiry_ms: Annotated[int, Query(..., gt=0, description="Expiry timestamp in int64 ms UTC.")],
     strikes: Annotated[
         list[float] | None,
         Query(
