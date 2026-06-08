@@ -126,11 +126,17 @@ else
     echo "==> Stopping $MACHINE_NAME to apply resource settings..."
     podman machine stop "$MACHINE_NAME"
   fi
+  # Apply CPU/memory strictly — a failure here is a real provisioning error
+  # (bad value, podman error) and must abort, not be masked.
   podman machine set "$MACHINE_NAME" \
     --cpus "$VM_CPUS" \
-    --memory "$VM_MEM_MB" \
-    --disk-size "$VM_DISK_GB" || \
-    echo "    (resource set skipped/partial — disk can only grow; continuing)"
+    --memory "$VM_MEM_MB"
+  # Disk resize is best-effort: an existing machine's disk can only grow, so a
+  # smaller/equal --disk-size is rejected. Tolerate ONLY that, scoped to the
+  # disk call, instead of swallowing every `set` failure.
+  if ! podman machine set "$MACHINE_NAME" --disk-size "$VM_DISK_GB"; then
+    echo "    (disk resize skipped — existing Podman machines can only grow disk)"
+  fi
 fi
 
 if ! podman machine inspect "$MACHINE_NAME" --format '{{.State}}' 2>/dev/null | grep -qi running; then
@@ -156,6 +162,11 @@ copy_env_if_missing() {
   elif [[ -f "$example" ]]; then
     cp "$example" "$target"
     echo "==> Created $target from $(basename "$example")"
+  else
+    # A missing template is a real repo/checkout problem — fail loudly now
+    # rather than booting the stack with no env and debugging it later.
+    echo "ERROR: missing template $example (cannot create $target)" >&2
+    exit 1
   fi
 }
 
