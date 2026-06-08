@@ -398,10 +398,11 @@ export class BrokerInstancesComponent {
 
     // Clean / operator-initiated stops — informational, not alarming.
     if (
-      e.exit_reason === 'normal' ||
-      e.exit_reason === 'force_flat_complete' ||
-      e.exit_reason === 'keyboard_interrupt' ||
-      e.exit_reason === 'signal'
+      !e.halt_trigger &&
+      (e.exit_reason === 'normal' ||
+        e.exit_reason === 'force_flat_complete' ||
+        e.exit_reason === 'keyboard_interrupt' ||
+        e.exit_reason === 'signal')
     ) {
       return {
         tone: 'ok',
@@ -470,6 +471,20 @@ export class BrokerInstancesComponent {
         title: 'Saved indicator state could not be used',
         detail: `Indicator-state hydration was rejected (${e.hydration_failure_reason}).`,
         fix: 'Start with Hydration = Optional to cold-start if the saved state is no longer valid, and review the hydration receipt.',
+      };
+    }
+    // A run that left a halt_trigger but exited via an otherwise-clean path
+    // (an operator MARK_POISONED writes poisoned.flag and then stops as
+    // keyboard_interrupt/signal). The clean-exit branch above already excluded
+    // these, so surface the trigger here rather than letting it fall through to
+    // the generic "ended unexpectedly" notice.
+    const trigger = this.haltTriggerStory(e);
+    if (trigger) {
+      return {
+        tone: 'bad',
+        title: 'Run flagged unsafe — a fresh deployment is required',
+        detail: `${trigger} The same run can never resume on its run_id.`,
+        fix: 'Reconcile the broker account, then Re-deploy below to start a fresh run_id.',
       };
     }
     // Generic failure (exception / unknown, with no hydration cause).

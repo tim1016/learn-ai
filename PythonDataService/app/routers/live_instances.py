@@ -562,7 +562,15 @@ def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
     halt_detail: dict | None = None
     try:
         poison = read_poisoned_flag(run_dir)
-    except ValueError:
+    except ValueError as exc:
+        # A corrupt poisoned.flag must not 500 the status call, but it is a
+        # forensic signal during incident response — surface it, don't swallow.
+        logger.warning(
+            "Invalid poisoned.flag for run %s (%s): %s",
+            sidecar.run_id,
+            run_dir,
+            exc,
+        )
         poison = None
     if poison is not None:
         halt_trigger = poison.trigger.value
