@@ -111,6 +111,10 @@ class FakeLiveRunsService {
   });
   issueInstanceCommand = vi.fn().mockResolvedValue({ accepted: true, command: null });
   emergencyFlattenAccount = vi.fn().mockResolvedValue({ accepted: true, process: { state: 'idle' } });
+  getLogTail = vi.fn().mockResolvedValue([
+    { ts_ms: 1_700_000_000_000, raw_text: 'bar 09:45 SPY 624.10', event_type: 'bar', consolidator_emitted: 1, snapshot_set: '{}' },
+    { ts_ms: 1_700_000_001_000, raw_text: 'HALT outside_mutation: unexpected SPY +50', event_type: 'raw', consolidator_emitted: null, snapshot_set: null },
+  ]);
 }
 
 /** Flush microtask queue and Angular effect queue (resource loads). */
@@ -658,5 +662,172 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).toContain('UNRECOGNIZED POSITIONS DETECTED');
+  });
+
+  function reconcileGateStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceStatus {
+    return makeStatus({
+      readiness: {
+        kind: 'live_readiness',
+        as_of_ms: 1,
+        source: 'engine',
+        verdict: 'BLOCKED',
+        summary: 'Account not reconciled today.',
+        gates: [
+          { name: 'latest_reconcile', status: 'fail', severity: 'hard', detail: 'No reconcile recorded today' },
+        ],
+      },
+      ...overrides,
+    });
+  }
+
+  function findFixButton(fixture: { nativeElement: HTMLElement }, text: string): HTMLElement | undefined {
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll('.fix-button'));
+    return buttons.find((b) => b.textContent?.includes(text)) as HTMLElement | undefined;
+  }
+
+  it('issues RECONCILE and confirms inline when "Re-sync now" is clicked on the reconcile gate', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(reconcileGateStatus());
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const btn = findFixButton(fixture, 'Re-sync now');
+    expect(btn).toBeTruthy();
+    btn?.click();
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.issueInstanceCommand).toHaveBeenCalledWith('spy_ema_paper', { verb: 'RECONCILE' });
+    expect(fixture.nativeElement.textContent).toContain('Re-sync requested');
+  });
+
+  it('does not issue RECONCILE for the reconcile gate when the bot is not live — it reveals start-first guidance', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      reconcileGateStatus({ process: { state: 'idle' }, live_binding: null }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const btn = findFixButton(fixture, 'How to fix');
+    expect(btn).toBeTruthy();
+    btn?.click();
+    fixture.detectChanges();
+
+    expect(svc.issueInstanceCommand).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).toContain('Start the bot first');
+  });
+
+  it('opens the run-log modal from the persistent toolbar and renders log lines', async () => {
+    const { fixture, component, svc } = setup();
+    // A stopped instance shows its last/evidence run, fetched once (the static
+    // path), so the tail renders within the microtask flush — the live path
+    // polls on a timer, which a microtask flush would not advance.
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        evidence_binding: { run_id: 'run-old', state: 'latest_run_by_ledger', is_live: false },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const toolbarBtn = fixture.nativeElement.querySelector('.panel-toolbar .runlog-link');
+    expect(toolbarBtn).toBeTruthy();
+    toolbarBtn?.click();
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.getLogTail).toHaveBeenCalledWith('run-old', expect.any(Number));
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Run log');
+    expect(text).toContain('HALT outside_mutation');
+  });
+
+  it('closes the run-log modal on its close output', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    component.openRunLog({ runId: 'run-live', live: true });
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.runlog-dialog')).toBeTruthy();
+
+    component.closeRunLog();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.runlog-dialog')).toBeNull();
+  });
+
+  it('offers "View run log" as the fix for a halt gate and opens the modal', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        evidence_binding: { run_id: 'run-old', state: 'latest_run_by_ledger', is_live: false },
+        last_exit: {
+          run_id: 'run-old',
+          ended_at_ms: 200,
+          exit_code: 1,
+          exit_reason: 'fatal_halt',
+          hydration_accepted: null,
+          hydration_failure_reason: null,
+          halt_trigger: 'outside_mutation',
+          halt_at_ms: 1_700_000_000_000,
+          halt_detail: {},
+        },
+        readiness: {
+          kind: 'start_readiness',
+          as_of_ms: 1,
+          source: 'backend_derived',
+          verdict: 'BLOCKED',
+          summary: 'Emergency stop active.',
+          gates: [
+            { name: 'poison_sentinel', status: 'fail', severity: 'hard', detail: 'poisoned.flag present' },
+          ],
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const btn = findFixButton(fixture, 'View run log');
+    expect(btn).toBeTruthy();
+    btn?.click();
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    // The crashed run's log is fetched once (not the live poll path).
+    expect(svc.getLogTail).toHaveBeenCalledWith('run-old', expect.any(Number));
+    expect(fixture.nativeElement.querySelector('.runlog-dialog')).toBeTruthy();
   });
 });

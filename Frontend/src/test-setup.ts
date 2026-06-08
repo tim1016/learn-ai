@@ -5,6 +5,12 @@
   disconnect() {}
 };
 
+// jsdom lacks Element.scrollIntoView — no-op so components that scroll a card
+// into view (e.g. broker checklist "Fix this") don't crash under test.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 // jsdom lacks HTMLCanvasElement.getContext — return a no-op 2d-context shim
 // so canvas-using components (edge-charts) can be instantiated without
 // crashing. lightweight-charts is already module-mocked in
