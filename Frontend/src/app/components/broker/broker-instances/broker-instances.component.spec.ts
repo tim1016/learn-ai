@@ -437,6 +437,42 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('A trade the bot did not place');
   });
 
+  it('flags an operator-poisoned run as unsafe even when it exited via a clean path', async () => {
+    // MARK_POISONED writes poisoned.flag (halt_trigger=operator_declared) and
+    // then stops through the normal shutdown path as keyboard_interrupt. The
+    // run must NOT be reported as "ended cleanly".
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        last_exit: {
+          run_id: 'run-poison',
+          ended_at_ms: 300,
+          exit_code: 0,
+          exit_reason: 'keyboard_interrupt',
+          hydration_accepted: null,
+          hydration_failure_reason: null,
+          halt_trigger: 'operator_declared',
+          halt_at_ms: 1_700_000_000_000,
+          halt_detail: {},
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).not.toContain('Last session ended cleanly');
+    expect(text).toContain('Run flagged unsafe');
+    expect(text).toContain('An operator manually flagged this run unsafe');
+  });
+
   it('marks a hard-failing readiness gate as Blocking', async () => {
     // makeStatus's default readiness has orders_cap failing with severity 'hard'.
     const { fixture, component } = setup();
