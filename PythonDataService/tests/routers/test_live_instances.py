@@ -271,6 +271,57 @@ async def test_status_provenance_none_when_nothing_deployed(
     assert response.json()["provenance"] is None
 
 
+async def test_status_last_exit_surfaces_the_specific_halt_trigger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A halted run leaves a poisoned.flag carrying the SPECIFIC safety trigger.
+    The status surfaces it (+ forensic details) so the console can explain *what*
+    the engine detected, not just a generic 'Safety halt'."""
+    from app.engine.live.halt import (
+        PoisonedHaltReason,
+        PoisonedHaltTrigger,
+        write_poisoned_flag,
+    )
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import ExitReason, RunStatusSidecar
+
+    app, root = app_with_root
+    _write_ledger(root, "run-halt", "spy_ema_paper", 100)
+    run_dir = root / "run-halt"
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="run-halt",
+            started_at_ms=1,
+            last_update_ms=2,
+            ended_at_ms=3,
+            exit_code=1,
+            exit_reason=ExitReason.fatal_halt,
+            host_pid=7,
+        ),
+    )
+    write_poisoned_flag(
+        run_dir,
+        PoisonedHaltReason(
+            trigger=PoisonedHaltTrigger.OUTSIDE_MUTATION,
+            halted_at_ms=1_700_000_000_000,
+            last_clean_bar_close_ms=0,
+            details={"client_order_id": "live-42", "symbol": "SPY"},
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    last_exit = response.json()["last_exit"]
+    assert last_exit["exit_reason"] == "fatal_halt"
+    assert last_exit["halt_trigger"] == "outside_mutation"
+    assert last_exit["halt_at_ms"] == 1_700_000_000_000
+    assert last_exit["halt_detail"]["symbol"] == "SPY"
+
+
 async def test_emergency_flatten_works_without_live_binding(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

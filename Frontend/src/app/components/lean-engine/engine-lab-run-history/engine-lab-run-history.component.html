@@ -57,7 +57,7 @@
 </div>
 
 <app-run-history
-  [rows]="rows() ?? []"
+  [rows]="rows()"
   [allowCompare]="true"
   (compareRequested)="onCompare($event)"
   (runSelected)="onRowSelected($event)"

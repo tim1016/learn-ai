@@ -25,6 +25,7 @@ from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredStateRepo
 from app.engine.live.fleet import compute_fleet_contamination
+from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
@@ -552,6 +553,22 @@ def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
                 if isinstance(reason, str):
                     hydration_failure_reason = reason
 
+    # The specific safety trigger, when the run left a poisoned.flag (written on
+    # both a fatal_halt and an operator MARK_POISONED). A corrupt flag degrades to
+    # no detail rather than 500-ing status — the poison_sentinel gate still flags
+    # the run as unsafe.
+    halt_trigger: str | None = None
+    halt_at_ms: int | None = None
+    halt_detail: dict | None = None
+    try:
+        poison = read_poisoned_flag(run_dir)
+    except ValueError:
+        poison = None
+    if poison is not None:
+        halt_trigger = poison.trigger.value
+        halt_at_ms = poison.halted_at_ms
+        halt_detail = dict(poison.details)
+
     return InstanceLastExit(
         run_id=sidecar.run_id,
         ended_at_ms=sidecar.ended_at_ms,
@@ -559,6 +576,9 @@ def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
         exit_reason=sidecar.exit_reason,
         hydration_accepted=hydration_accepted,
         hydration_failure_reason=hydration_failure_reason,
+        halt_trigger=halt_trigger,
+        halt_at_ms=halt_at_ms,
+        halt_detail=halt_detail,
     )
 
 

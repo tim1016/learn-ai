@@ -116,6 +116,25 @@
   border: 1px solid var(--bear-soft);
 }
 
+.severity {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: middle;
+
+  &.hard {
+    background: var(--bear-soft);
+    color: var(--bear);
+  }
+
+  &.soft {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+}
+
 .account-card.problem {
   border-color: var(--bear);
 }

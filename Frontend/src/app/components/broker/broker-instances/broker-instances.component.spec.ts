@@ -348,6 +348,9 @@ describe('BrokerInstancesComponent', () => {
           exit_reason: 'exception',
           hydration_accepted: false,
           hydration_failure_reason: 'missing',
+          halt_trigger: null,
+          halt_at_ms: null,
+          halt_detail: null,
         },
       }),
     );
@@ -381,6 +384,9 @@ describe('BrokerInstancesComponent', () => {
           exit_reason: 'fatal_halt',
           hydration_accepted: false,
           hydration_failure_reason: 'missing',
+          halt_trigger: null,
+          halt_at_ms: null,
+          halt_detail: null,
         },
       }),
     );
@@ -396,6 +402,53 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('Safety halt');
     expect(text).toContain('position may still be open');
     expect(text).not.toContain('seed day');
+  });
+
+  it('names the specific safety trigger when the halt left a poison flag', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        last_exit: {
+          run_id: 'run-halt',
+          ended_at_ms: 200,
+          exit_code: 1,
+          exit_reason: 'fatal_halt',
+          hydration_accepted: null,
+          hydration_failure_reason: null,
+          halt_trigger: 'outside_mutation',
+          halt_at_ms: 1_700_000_000_000,
+          halt_detail: { symbol: 'SPY' },
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Safety halt');
+    // The specific trigger story, not a generic "could not reconcile".
+    expect(text).toContain('A trade the bot did not place');
+  });
+
+  it('marks a hard-failing readiness gate as Blocking', async () => {
+    // makeStatus's default readiness has orders_cap failing with severity 'hard'.
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Blocking');
   });
 
   it('does not show a "why it stopped" panel for a live instance', async () => {
@@ -505,6 +558,9 @@ describe('BrokerInstancesComponent', () => {
           exit_reason: 'poisoned',
           hydration_accepted: null,
           hydration_failure_reason: null,
+          halt_trigger: null,
+          halt_at_ms: null,
+          halt_detail: null,
         },
       }),
     );

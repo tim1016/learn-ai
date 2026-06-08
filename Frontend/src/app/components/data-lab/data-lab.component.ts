@@ -15,7 +15,6 @@ import { DataLabSessionService, DataLabSessionSummary, DataLabSessionChartSnapsh
 import { MarketMonitorService } from '../../services/market-monitor.service';
 import { RunSessionService } from '../../services/run-session.service';
 import { MarketHolidayEvent } from '../../models/market-monitor';
-import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indicator-tooltip.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { ActiveIndicatorCardComponent } from './active-indicator-card/active-indicator-card.component';
 import { ActiveIndicatorGroupComponent, IndicatorGroupItem } from './active-indicator-group/active-indicator-group.component';
@@ -324,7 +323,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
   imports: [
     CommonModule, FormsModule, RouterModule,
     DataLabChartComponent, SharedModule, Tooltip,
-    IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent,
+    PageHeaderComponent, TickerRangePickerComponent,
     ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent,
     PastChainInspectorComponent, RunDockComponent, IndicatorPickerComponent,
   ],

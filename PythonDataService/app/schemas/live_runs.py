@@ -631,6 +631,13 @@ class InstanceLastExit(BaseModel):
     # False with ``failure_reason="missing"`` is the cold-start/seed-day case.
     hydration_accepted: bool | None = None
     hydration_failure_reason: str | None = None
+    # From poisoned.flag, when present: the SPECIFIC safety trigger that halted
+    # the run (OUTSIDE_MUTATION / LOST_FILL / COLD_START_DIVERGENCE /
+    # OPERATOR_DECLARED) + its forensic details, so the console can explain *what*
+    # the engine detected rather than a generic "Safety halt".
+    halt_trigger: str | None = None
+    halt_at_ms: int | None = None
+    halt_detail: dict | None = None
 
 
 class LiveInstanceStatus(BaseModel):
