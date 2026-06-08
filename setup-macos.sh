@@ -178,7 +178,14 @@ fi
 # ---------------------------------------------------------------------------
 echo "==> Building and starting containers (first build is slow)..."
 export COMPOSE_BAKE=false   # match restart.sh: avoid the bake fallback warning
-podman compose up -d --build
+# Build and up are separated (as restart.sh does): a real build failure must
+# abort under `set -e`, but `up` can exit non-zero merely because a
+# `depends_on: service_healthy` dependency misses the compose startup window on
+# a cold/slow first run. Tolerate that here (`|| true`) so the health-wait loop
+# below — not compose's startup race — is the authoritative readiness gate and
+# containers aren't left stranded in `Created`.
+podman compose build
+podman compose up -d || true
 
 # ---------------------------------------------------------------------------
 # 6. Wait for health and report.
@@ -197,12 +204,23 @@ wait_for() {
   return 1
 }
 
-wait_for "python-service" "http://localhost:8000/health" || true
-wait_for "backend (GraphQL)" "http://localhost:5000/graphql?sdl" || true
+# Track failures rather than swallowing them with `|| true`: a one-shot setup
+# script must not report success while the API is unusable (bad env value, port
+# conflict, migration failure, crashed service).
+health_failures=0
+wait_for "python-service" "http://localhost:8000/health" || health_failures=$((health_failures + 1))
+wait_for "backend (GraphQL)" "http://localhost:5000/graphql?sdl" || health_failures=$((health_failures + 1))
 
 echo ""
 echo "==> Container status:"
 podman compose ps
+
+if (( health_failures > 0 )); then
+  echo ""
+  echo "  ❌ $health_failures required service(s) never became healthy — the stack is NOT usable."
+  echo "      Inspect logs (podman compose logs) and re-run this script after fixing the cause."
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # 7. Frontend.
