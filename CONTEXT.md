@@ -338,3 +338,146 @@ backend recompute).
   `artifacts/live_runs/<run_id>/commands/`. One-shot verbs only (post-redesign).
 - **Safety flags** (`halt.flag`, `poisoned.flag`) — run-scoped artifacts,
   distinct from durable desired state.
+
+## Sizing authority (resolved 2026-06-08)
+
+Where a live bot's position-*size* decision lives and what it claims. Separates
+*who decides quantity* from *who decides the signal*. Sizing the magnitude is a
+distinct concern from the alpha/entry logic, and for a **live** bot the two have
+different homes.
+
+- **live sizing policy** — the **canonical** sizing authority for a *live* bot:
+  `run_ledger.live_config.sizing`. Because `live_config` is hashed into `run_id`,
+  any sizing change mints a new audited deployment identity (no extra hashing
+  work — the hasher is already nested-dict-stable). The **launch page is the
+  operator boundary** where this account-risk decision is set; **Angular only
+  *selects* the policy, Python *resolves* the quantity** — Python stays the math
+  authority.
+- **reference / spec sizing** — the sizing declared in the strategy *spec*
+  (`spec.entry.size`, the existing `SetHoldings | FixedContracts` `SizeRule`) or
+  baked into a hand-coded algorithm (`ctx.set_holdings(symbol, 1.0)`). This is
+  **reference/default metadata, not the live authority.** The live runtime
+  executes hand-coded algorithms and does **not** run the spec, so treating
+  `spec.entry.size` as canonical-for-live would be a false source of truth
+  ("architectural theater — hashed but not executed"). `spec.entry.size` becomes
+  canonical *only* for a bot whose live runtime actually executes `SpecAlgorithm`
+  (a future state).
+- **sized-live derivative** — a live run whose **signal logic is QC-anchored** but
+  whose **sizing was overridden** by `live_config` (its sizing differs from the
+  bound QC audit algorithm's). It is **not** the exact QC execution anchor; the
+  ledger / reconciliation report must say so explicitly — *signal logic anchored
+  to QC, sizing overridden by live config.* Contrast a run whose live sizing
+  matches the QC audit algorithm, which **may** claim the QC execution anchor.
+- **`sizing_provenance`** — an **engine-derived** audit stamp on the ledger,
+  **never operator-supplied.** Records what the resolved live sizing claims
+  against the bound QC audit copy. The operator sends only
+  `live_config.sizing.{kind, value}`; the Python deploy/start boundary derives and
+  stamps `sizing_provenance`. Values:
+  - `reference_native` — resolved live sizing is equivalent (same sizing *rule*,
+    not a coincidental share count) to the bound QC audit copy's sizing.
+  - `live_override` — resolved live sizing differs from the QC audit copy, **or**
+    equivalence cannot be *proven* (**fail-closed default** — never over-claim
+    `reference_native`).
+  - `spec_default` — **reserved**: only when the live runtime executes
+    `SpecAlgorithm` and uses `spec.entry.size` with no live override. Not emitted
+    today.
+  Provenance is verified, not asserted (same spirit as "Provenance is not
+  identity" above): the operator never types it, so there is **no mismatch path**
+  today. A *future* optional "expected provenance" guard must **block** the deploy
+  on mismatch — never silently downgrade `reference_native` → `live_override`
+  (silent downgrade is bad audit UX: the operator believed they shipped a
+  reference-native run, the system quietly shipped a derivative).
+- **Sizing interception contract** — the deploy-page `live sizing policy` governs
+  **`set_holdings` only.** `set_holdings(symbol, fraction)` is a *target-position
+  intent* (direction + go-to-target); the policy reinterprets the **magnitude**:
+  `SetHoldings(f)` → fraction path; `FixedShares(n)` → target `n` shares
+  (`fraction > 0` → `n`, `fraction == 0` → flat; **long-only in v1**, no accidental
+  short); `FixedNotional(v)` → `floor(v / price)` shares. `market_order(symbol,
+  qty)` is **explicit strategy sizing, never overridden** (TradingView doctrine:
+  explicit qty wins); `liquidate(symbol)` is **always target-flat, never
+  size-policy modified.** A blanket quantity cap is **not** position sizing — if
+  ever needed it is a separately-named **risk overlay**, not this policy.
+- **`governed_by`** — engine-derived ledger metadata (not operator input),
+  *orthogonal* to `sizing_provenance`: `live_config` (quantity set by the
+  deploy-page policy through `set_holdings`) vs `strategy_explicit` (quantity set
+  by the strategy's own `market_order` / `contracts_per_trade` — e.g.
+  `spy_vwap_reversion`, the options strategy). A `strategy_explicit` run can still
+  be `reference_native` if its explicit quantity matches the bound QC audit copy.
+  Self-sized strategy registrations **disable the launch sizing control** in the
+  deploy form.
+- **Honest `reference_native` requires LEAN sizing.** A live `SetHoldings(1.0)`
+  claiming `reference_native` must resolve through `LeanSetHoldingsSizing`
+  (buffered, fee-aware — what QC's `SetHoldings` actually does), **not** the
+  current live default `SimpleFloorSizing`, or the quantity boundary is not
+  honestly LEAN-native. (`SimpleFloorSizing` leaves the live path entirely and
+  remains a research/backtest model only.)
+- **sizing skip** — when a policy resolves to a **zero** share target while flat
+  (e.g. `FixedNotional(v)` where `floor(v / price) == 0`, or a percent target too
+  small to buy one share), the engine **does not submit a zero order**; it logs a
+  *sizing skip* diagnostic so the operator can see why no entry fired.
+  Fail-loud-but-don't-crash; applies to every `kind`, not just `FixedNotional`.
+- **sizing deploy default** — every new live deploy **always writes an explicit**
+  `live_config.sizing`; the canonical default is `FixedShares(1)` (the safe
+  canary). **Absence** of `sizing` means **legacy/unknown** (pre-policy
+  `SimpleFloorSizing` all-in), *never* `FixedShares(1)` — so old empty-`live_config`
+  runs never hash-collide with the new safe default. All-in (`SetHoldings(1.0)`) is
+  **explicit opt-in**, never the default.
+- **sizing preset** — a named launch-page choice that fills `live_config.sizing`:
+  *Safe canary* (`FixedShares(1)`, the default) or *Reference parity*
+  (`SetHoldings(1.0)`). A preset may carry an **expected-provenance contract**:
+  *Reference parity* asserts `reference_native`, so if Python cannot **prove** the
+  resolved sizing matches the bound QC audit copy, the deploy is **blocked** —
+  never silently stamped `live_override`. The preset name is a promise; breaking it
+  silently is the bad audit UX the provenance design exists to prevent.
+- **canary fix is config-only** — switching `deployment_validation` to 1 share is a
+  pure `live_config.sizing = FixedShares(1)` deploy: **no strategy `.py` edit, no
+  spec edit, no QC re-cut.** The QC anchor stays `SetHoldings(1.0)`; the run is
+  stamped `governed_by = live_config`, `sizing_provenance = live_override`. (This
+  retires the handoff doc's assumption that a sizing change needs a fresh QC
+  parity anchor — that was an artifact of sizing being fused into the algorithm.)
+- **audit-copy sizing allow-list** — the **receipt** that backs a `reference_native`
+  claim: a narrow map `qc_audit_copy_sha256 → known sizing rule` (e.g.
+  `SetHoldings(1.0)`), **not** AST-parsing of arbitrary LEAN code. The proof has
+  three outcomes — *proven match* / *proven mismatch* / *cannot prove (sha absent)*
+  — and the **Reference parity** preset proceeds **only on proven match**; both
+  other outcomes block. An audit copy absent from the allow-list makes Reference
+  parity unavailable until its sha + rule are registered.
+- **`sizing_surface`** — a declarative `StrategyRegistration` attribute
+  (`"policy" | "explicit"`) naming *which boundary sizes the strategy* (named for
+  the boundary, not a bare `self_sized` bool — leaves room for a future `mixed` /
+  `portfolio_model`). `policy`: the strategy targets via `set_holdings`, so
+  `live_config.sizing` (`FixedShares | FixedNotional | SetHoldings`) governs and
+  the deploy form's sizing control is **enabled**. `explicit`: the strategy
+  supplies its own quantity/contracts (`market_order` / internal accounting), so
+  the required `live_config.sizing` is `StrategyExplicit` and the deploy form's
+  sizing control is **disabled + labeled "self-sized"** (e.g.
+  `spy_vwap_reversion`, `spy_ema_crossover_options`).
+- **`StrategyExplicit`** — the `live_config.sizing.kind` meaning "the algorithm
+  supplied explicit quantity/contract sizing; `live_config` imposed no policy."
+  The **honest** sizing value for an `explicit`-surface registration — never a
+  misleading `FixedShares(1)`. It governs **who sized** (→ `governed_by =
+  strategy_explicit`), **not** whether it matches the QC anchor: `reference_native`
+  still requires a proven audit-copy allow-list match.
+- **order-surface mismatch** — the runtime records the actual order surface used
+  (`set_holdings | market_order | liquidate | internal_strategy_accounting`) and
+  compares it to the registration's `sizing_surface`. A mismatch on an **entry**
+  order is a registration bug → **fail-fast on the first mismatched entry order**,
+  never continue with a misleading ledger. `liquidate()` is a **flatten command,
+  not a sizing surface** — never a violation in either mode.
+- **capital sleeve** *(future — not v1)* — a Python **live buying-power budget**
+  that scopes the portfolio value a single strategy's percent sizing may target.
+  It will sit at the **portfolio-value provider** feeding `order_sizer`'s
+  `SetHoldings` path (whole account today → per-strategy sleeve later →
+  `LeanSetHoldingsSizing`); `FixedShares` / `FixedNotional` never read it. **Do not
+  conflate with `allocation`** — `allocation` (`.NET`/Postgres
+  `StrategyAllocation.CapitalAllocated`) is an after-the-fact attribution /
+  reporting record; `capital sleeve` is a live pre-trade sizing input. The two
+  words must stay distinct across stacks.
+- **all-in coexistence guard** — the interim v1 stand-in for the capital-sleeve
+  layer: a start / pre-flight **refusal**. If resolved sizing is `SetHoldings(1.0)`
+  (Reference parity) **and** the account is non-flat or another managed all-in bot
+  is active → **block start** ("all-in coexistence requires the capital-sleeve
+  layer, not built yet"); the deploy page surfaces the same state best-effort.
+  `FixedShares` / `FixedNotional` are **never** blocked — an oversized custom
+  notional fails loudly through broker / reconciliation, never via silent
+  budget-clamping.
