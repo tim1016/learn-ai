@@ -76,6 +76,7 @@
   @let s = status.value();
   @if (s) {
     @let hero = heroStatus(s);
+    @let runLogTarget = logTarget(s);
     <article class="control-panel" aria-label="Instance status">
       <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
         <div class="hero-copy">
@@ -87,6 +88,16 @@
           {{ hero.label }}
         </span>
       </header>
+
+      @if (runLogTarget) {
+        <div class="panel-toolbar">
+          <button type="button" class="runlog-link" (click)="openRunLog(runLogTarget)">
+            <i class="pi pi-file" aria-hidden="true"></i>
+            <span>View run log</span>
+            <small>{{ runLogTarget.live ? 'live session' : 'last session' }} {{ shortId(runLogTarget.runId) }}</small>
+          </button>
+        </div>
+      }
 
       <div class="dashboard-grid">
         <section class="card system-health" aria-labelledby="health-heading">
@@ -126,16 +137,24 @@
             <p class="exit-title"><strong>{{ exit.title }}</strong></p>
             <p class="plain-text">{{ exit.detail }}</p>
             <p class="exit-fix">{{ exit.fix }}</p>
-            @if (canRedeploy(s)) {
-              <a
-                class="redeploy-link"
-                routerLink="/broker/deploy"
-                [queryParams]="redeployQueryParams(s)"
-              >
-                <i class="pi pi-replay" aria-hidden="true"></i>
-                <span>Re-deploy (fresh run_id)</span>
-              </a>
-            }
+            <div class="exit-actions">
+              @if (canRedeploy(s)) {
+                <a
+                  class="redeploy-link"
+                  routerLink="/broker/deploy"
+                  [queryParams]="redeployQueryParams(s)"
+                >
+                  <i class="pi pi-replay" aria-hidden="true"></i>
+                  <span>Re-deploy (fresh run_id)</span>
+                </a>
+              }
+              @if (runLogTarget) {
+                <button type="button" class="runlog-link" (click)="openRunLog(runLogTarget)">
+                  <i class="pi pi-file" aria-hidden="true"></i>
+                  <span>View run log</span>
+                </button>
+              }
+            </div>
           </section>
         }
 
@@ -174,16 +193,34 @@
                   <small>{{ row.detail }}</small>
                 </div>
                 @if (row.status !== 'pass') {
-                  <button type="button" class="link-button" [title]="row.fix">Fix this</button>
+                  @let action = fixAction(row, s);
+                  <button
+                    type="button"
+                    class="fix-button"
+                    (click)="runFix(row, s)"
+                    [disabled]="action.disabled ?? false"
+                    [attr.aria-expanded]="action.kind === 'reveal' ? expandedGate() === row.key : null"
+                    [attr.aria-controls]="action.kind === 'reveal' ? 'fix-guidance-' + row.key : null"
+                    [title]="action.hint ?? row.fix"
+                  >
+                    {{ action.label }}
+                  </button>
+                  @if (expandedGate() === row.key) {
+                    <p class="fix-guidance" [id]="'fix-guidance-' + row.key">{{ action.hint ?? row.fix }}</p>
+                  }
                 }
               </li>
             }
           </ul>
+          <app-broker-operation-result [error]="fixError()" />
+          @if (fixNotice()) {
+            <p class="actuation live" role="status">{{ fixNotice() }}</p>
+          }
         </section>
 
         <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
 
-        <section class="card behavior-card" aria-labelledby="behavior-heading">
+        <section #behaviorCard tabindex="-1" class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">
             <div>
               <h2 id="behavior-heading">Bot Behavior</h2>
@@ -321,5 +358,10 @@
         </section>
       </div>
     </article>
+
+    @let log = runLog();
+    @if (log) {
+      <app-broker-run-log-modal [runId]="log.runId" [live]="log.live" (closed)="closeRunLog()" />
+    }
   }
 </section>

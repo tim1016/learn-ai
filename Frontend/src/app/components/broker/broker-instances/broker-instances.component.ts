@@ -1,4 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  computed,
+  inject,
+  resource,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 import type {
   DecisionColumnDescriptor,
@@ -19,6 +28,7 @@ import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/b
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
 import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
+import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 
 // Advanced command verb -> operation kind for the error map.
@@ -55,6 +65,26 @@ interface ChecklistRow {
   detail: string;
   meaning: string;
   fix: string;
+}
+
+/** What the per-gate "Fix this" button does. `reconcile` fires the safe RECONCILE
+ * command; `set-intent` scrolls to Bot Behavior; `view-log` opens the run-log
+ * modal to inspect a halt; `reveal` just expands the written guidance when no
+ * one-click remedy exists. */
+type GateActionKind = 'reconcile' | 'set-intent' | 'view-log' | 'reveal';
+
+interface GateAction {
+  kind: GateActionKind;
+  label: string;
+  disabled?: boolean;
+  /** Overrides `row.fix` as the button tooltip when the action is gated. */
+  hint?: string;
+}
+
+/** The run a log view should target, plus whether it's still being written. */
+interface LogTarget {
+  runId: string;
+  live: boolean;
 }
 
 // Plain-language stories for the engine's safety halt triggers (poisoned.flag),
@@ -150,6 +180,7 @@ function titleizeKey(key: string): string {
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
     BrokerProvenanceCardComponent,
+    BrokerRunLogModalComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -192,11 +223,28 @@ export class BrokerInstancesComponent {
   readonly intentChoices = INTENT_CHOICES;
   readonly advancedActions = ADVANCED_ACTIONS;
 
+  // Run-log modal: the run currently shown, or null when closed.
+  readonly runLog = signal<LogTarget | null>(null);
+
+  // Checklist "Fix this" state: which gate's written guidance is expanded, and
+  // the busy/result of a one-click reconcile fix (kept separate from the
+  // Advanced-card command error so each surface owns its own feedback).
+  readonly expandedGate = signal<string | null>(null);
+  readonly busyFixKey = signal<string | null>(null);
+  readonly fixError = signal<OperationError | null>(null);
+  readonly fixNotice = signal<string | null>(null);
+
+  private readonly behaviorCard = viewChild<ElementRef<HTMLElement>>('behaviorCard');
+
   select(instanceId: string): void {
     this.selectedInstanceId.set(instanceId);
     this.lastActuation.set(null);
     this.intentError.set(null);
     this.commandError.set(null);
+    this.runLog.set(null);
+    this.expandedGate.set(null);
+    this.fixError.set(null);
+    this.fixNotice.set(null);
   }
 
   /**
@@ -606,5 +654,116 @@ export class BrokerInstancesComponent {
       qc_audit_copy_path: d.qc_audit_copy_path ?? '',
       instance_id: s.strategy_instance_id,
     };
+  }
+
+  /** Which run a log view should open for this instance: the live run when one
+   * is bound (still being written), else the run that just exited, else the
+   * ledger's latest evidence run. Null when nothing has ever run. */
+  logTarget(s: LiveInstanceStatus): LogTarget | null {
+    if (s.live_binding) return { runId: s.live_binding.run_id, live: true };
+    if (s.last_exit) return { runId: s.last_exit.run_id, live: false };
+    if (s.evidence_binding) return { runId: s.evidence_binding.run_id, live: false };
+    return null;
+  }
+
+  openRunLog(target: LogTarget): void {
+    this.runLog.set(target);
+  }
+
+  closeRunLog(): void {
+    this.runLog.set(null);
+  }
+
+  /** What "Fix this" does for a given gate. Resolved against live status because
+   * the right remedy depends on whether the bot is running (reconcile routes to
+   * a live binding) and whether a run log exists to inspect. */
+  fixAction(row: ChecklistRow, s: LiveInstanceStatus): GateAction {
+    switch (row.key) {
+      case 'latest_reconcile':
+        // RECONCILE is a command on the live binding — it can't run against a
+        // stopped bot, so fall back to revealing the start-first guidance.
+        if (!s.live_binding) {
+          return {
+            kind: 'reveal',
+            label: 'How to fix',
+            hint: 'Start the bot first — re-sync runs against the live session.',
+          };
+        }
+        return {
+          kind: 'reconcile',
+          label: this.busyFixKey() === row.key ? 'Re-syncing…' : 'Re-sync now',
+          disabled: this.busyFixKey() !== null,
+        };
+      case 'desired_state':
+        return { kind: 'set-intent', label: 'Set bot intent' };
+      case 'poison_sentinel':
+      case 'prior_day_halt':
+        // Reviewing the run log is the actual first step for a halt / carried-
+        // over issue. Only offer it when there's a run to read.
+        return this.logTarget(s)
+          ? { kind: 'view-log', label: 'View run log' }
+          : { kind: 'reveal', label: 'How to fix' };
+      default:
+        return { kind: 'reveal', label: 'How to fix' };
+    }
+  }
+
+  /** Dispatch the gate's "Fix this" action. */
+  runFix(row: ChecklistRow, s: LiveInstanceStatus): void {
+    const action = this.fixAction(row, s);
+    switch (action.kind) {
+      case 'reconcile':
+        void this.runReconcileFix();
+        return;
+      case 'set-intent':
+        this.scrollToBehavior();
+        return;
+      case 'view-log': {
+        const target = this.logTarget(s);
+        if (target) this.openRunLog(target);
+        else this.toggleGuidance(row.key);
+        return;
+      }
+      case 'reveal':
+        this.toggleGuidance(row.key);
+        return;
+    }
+  }
+
+  /** One-click remedy for the Account-Reconciled gate: issue RECONCILE to the
+   * bound run and report the outcome inline on the checklist (not in the
+   * Advanced card, where the operator who clicked "Re-sync now" wouldn't see it). */
+  private async runReconcileFix(): Promise<void> {
+    const id = this.selectedInstanceId();
+    if (id === null) return;
+    this.busyFixKey.set('latest_reconcile');
+    this.fixError.set(null);
+    this.fixNotice.set(null);
+    try {
+      await this.svc.issueInstanceCommand(id, { verb: 'RECONCILE' });
+      if (this.selectedInstanceId() === id) {
+        this.fixNotice.set('Re-sync requested — the bot refreshes account balances on its next loop.');
+        this.commands.reload();
+        this.status.reload();
+      }
+    } catch (err) {
+      if (this.selectedInstanceId() === id) this.fixError.set(toOperationError('reconcile', err));
+    } finally {
+      this.busyFixKey.set(null);
+    }
+  }
+
+  /** Bring the Bot Behavior card into view and move focus to the card itself
+   * (not its first segment — that would nudge the operator toward Pause and
+   * no-op while a save is in flight and the buttons are disabled). */
+  private scrollToBehavior(): void {
+    const el = this.behaviorCard()?.nativeElement;
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.focus({ preventScroll: true });
+  }
+
+  toggleGuidance(key: string): void {
+    this.expandedGate.update((current) => (current === key ? null : key));
   }
 }

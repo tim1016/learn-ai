@@ -1,0 +1,68 @@
+<button type="button" class="runlog-backdrop" tabindex="-1" (click)="closed.emit()" aria-label="Dismiss run log"></button>
+<div class="runlog-dialog" role="dialog" aria-modal="true" aria-labelledby="runlog-title">
+  <header class="runlog-header">
+    <div class="runlog-titles">
+      <h2 id="runlog-title">Run log</h2>
+      <p class="runlog-runid">
+        <span class="mono" [title]="runId()">{{ runId() }}</span>
+        <button
+          type="button"
+          class="runlog-copy"
+          (click)="copyRunId()"
+          [attr.aria-label]="'Copy run id ' + runId()"
+        >
+          <i class="pi" [class.pi-copy]="!copied()" [class.pi-check]="copied()" aria-hidden="true"></i>
+          <span>{{ copied() ? 'Copied' : 'Copy run id' }}</span>
+        </button>
+      </p>
+    </div>
+    <div class="runlog-actions">
+      <button
+        type="button"
+        class="runlog-refresh"
+        (click)="refresh()"
+        [disabled]="logTail.isLoading()"
+        aria-label="Refresh run log"
+      >
+        <i class="pi pi-refresh" aria-hidden="true"></i>
+        <span>Refresh</span>
+      </button>
+      <button
+        #closeBtn
+        type="button"
+        class="runlog-close"
+        (click)="closed.emit()"
+        aria-label="Close run log"
+      >
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </div>
+  </header>
+
+  @let tail = logTail.value();
+  <div #logBody class="runlog-body">
+    @if (logTail.isLoading() && !tail?.length) {
+      <p class="runlog-muted">Loading log…</p>
+    } @else if (logTail.error()) {
+      <p class="runlog-muted" role="alert">Could not load the run log for this run.</p>
+    } @else if (tail?.length) {
+      <ul class="log-lines" aria-label="Run log lines">
+        @for (line of tail; track $index) {
+          <li class="log-line" [class.bar-event]="line.event_type === 'bar'">
+            <span class="log-ts mono">{{ line.ts_ms !== null ? fmtTimestampNy(line.ts_ms) : '—' }}</span>
+            <span class="log-text mono">{{ line.raw_text }}</span>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="runlog-muted">No log lines recorded for this run yet.</p>
+    }
+  </div>
+
+  @if (live()) {
+    <footer class="runlog-foot">
+      <span class="runlog-live-dot" aria-hidden="true"></span>
+      <span>Live session — refreshing every 5 seconds.</span>
+    </footer>
+  }
+</div>
