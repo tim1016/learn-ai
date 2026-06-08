@@ -153,6 +153,12 @@ export interface InstanceLastExit {
    * is the cold-start / seed-day case. */
   hydration_accepted: boolean | null;
   hydration_failure_reason: string | null;
+  /** From poisoned.flag: the specific safety trigger that halted the run
+   * (outside_mutation / lost_fill / cold_start_divergence / operator_declared)
+   * + its forensic details. Null when the run left no poison flag. */
+  halt_trigger: string | null;
+  halt_at_ms: number | null;
+  halt_detail: Record<string, unknown> | null;
 }
 
 export interface LiveInstanceSummary {

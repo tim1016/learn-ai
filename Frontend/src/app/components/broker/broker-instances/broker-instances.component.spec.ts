@@ -348,6 +348,9 @@ describe('BrokerInstancesComponent', () => {
           exit_reason: 'exception',
           hydration_accepted: false,
           hydration_failure_reason: 'missing',
+          halt_trigger: null,
+          halt_at_ms: null,
+          halt_detail: null,
         },
       }),
     );
@@ -381,6 +384,9 @@ describe('BrokerInstancesComponent', () => {
           exit_reason: 'fatal_halt',
           hydration_accepted: false,
           hydration_failure_reason: 'missing',
+          halt_trigger: null,
+          halt_at_ms: null,
+          halt_detail: null,
         },
       }),
     );
@@ -396,6 +402,89 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('Safety halt');
     expect(text).toContain('position may still be open');
     expect(text).not.toContain('seed day');
+  });
+
+  it('names the specific safety trigger when the halt left a poison flag', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        last_exit: {
+          run_id: 'run-halt',
+          ended_at_ms: 200,
+          exit_code: 1,
+          exit_reason: 'fatal_halt',
+          hydration_accepted: null,
+          hydration_failure_reason: null,
+          halt_trigger: 'outside_mutation',
+          halt_at_ms: 1_700_000_000_000,
+          halt_detail: { symbol: 'SPY' },
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Safety halt');
+    // The specific trigger story, not a generic "could not reconcile".
+    expect(text).toContain('A trade the bot did not place');
+  });
+
+  it('flags an operator-poisoned run as unsafe even when it exited via a clean path', async () => {
+    // MARK_POISONED writes poisoned.flag (halt_trigger=operator_declared) and
+    // then stops through the normal shutdown path as keyboard_interrupt. The
+    // run must NOT be reported as "ended cleanly".
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'idle' },
+        live_binding: null,
+        last_exit: {
+          run_id: 'run-poison',
+          ended_at_ms: 300,
+          exit_code: 0,
+          exit_reason: 'keyboard_interrupt',
+          hydration_accepted: null,
+          hydration_failure_reason: null,
+          halt_trigger: 'operator_declared',
+          halt_at_ms: 1_700_000_000_000,
+          halt_detail: {},
+        },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).not.toContain('Last session ended cleanly');
+    expect(text).toContain('Run flagged unsafe');
+    expect(text).toContain('An operator manually flagged this run unsafe');
+  });
+
+  it('marks a hard-failing readiness gate as Blocking', async () => {
+    // makeStatus's default readiness has orders_cap failing with severity 'hard'.
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Blocking');
   });
 
   it('does not show a "why it stopped" panel for a live instance', async () => {
@@ -505,6 +594,9 @@ describe('BrokerInstancesComponent', () => {
           exit_reason: 'poisoned',
           hydration_accepted: null,
           hydration_failure_reason: null,
+          halt_trigger: null,
+          halt_at_ms: null,
+          halt_detail: null,
         },
       }),
     );

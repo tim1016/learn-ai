@@ -5,6 +5,7 @@ import type {
   DesiredStateAction,
   FleetContamination,
   InstanceBrokerView,
+  InstanceLastExit,
   IntentActuation,
   LiveInstanceSummary,
   LiveInstanceStatus,
@@ -49,10 +50,24 @@ interface ChecklistRow {
   key: string;
   label: string;
   status: 'pass' | 'fail' | 'unknown';
+  /** 'hard' fails block trading; 'soft' fails are advisory (degrade, don't block). */
+  severity: 'hard' | 'soft';
   detail: string;
   meaning: string;
   fix: string;
 }
+
+// Plain-language stories for the engine's safety halt triggers (poisoned.flag),
+// so "Safety halt" can say *what* the engine detected.
+const HALT_TRIGGER_COPY: Record<string, string> = {
+  outside_mutation:
+    'A trade the bot did not place was seen on the account (a manual order, another bot, or a leftover) — it halted rather than trade against an unknown position.',
+  lost_fill:
+    'An order the bot placed never confirmed a fill within its window — it halted rather than act on an uncertain position.',
+  cold_start_divergence:
+    "On startup the bot couldn't reconcile its own records against the broker — it refused to resume rather than risk acting on stale state.",
+  operator_declared: 'An operator manually flagged this run unsafe.',
+};
 
 interface LastExitNotice {
   tone: 'ok' | 'warn' | 'bad';
@@ -383,10 +398,11 @@ export class BrokerInstancesComponent {
 
     // Clean / operator-initiated stops — informational, not alarming.
     if (
-      e.exit_reason === 'normal' ||
-      e.exit_reason === 'force_flat_complete' ||
-      e.exit_reason === 'keyboard_interrupt' ||
-      e.exit_reason === 'signal'
+      !e.halt_trigger &&
+      (e.exit_reason === 'normal' ||
+        e.exit_reason === 'force_flat_complete' ||
+        e.exit_reason === 'keyboard_interrupt' ||
+        e.exit_reason === 'signal')
     ) {
       return {
         tone: 'ok',
@@ -399,10 +415,13 @@ export class BrokerInstancesComponent {
     // protect the account. This can leave an OPEN position the bot is no
     // longer managing, so it's the highest-priority thing to surface.
     if (e.exit_reason === 'fatal_halt') {
+      const trigger = this.haltTriggerStory(e);
       return {
         tone: 'bad',
         title: 'Safety halt — the bot stopped to protect the account',
-        detail: `The engine hit a fatal halt mid-session${code != null ? ` (exit ${code})` : ''} — e.g. an order it could not reconcile. A position may still be open at the broker.`,
+        detail: trigger
+          ? `${trigger} A position may still be open at the broker.`
+          : `The engine hit a fatal halt mid-session${code != null ? ` (exit ${code})` : ''} — e.g. an order it could not reconcile. A position may still be open at the broker.`,
         fix: 'Check the broker account, reconcile, and flatten any position the bot is no longer tracking before restarting.',
       };
     }
@@ -425,10 +444,13 @@ export class BrokerInstancesComponent {
     // Poisoned: the run refused to restart on its own run_id. Poison is sticky
     // and run_id-scoped by design — the only recovery is a fresh deployment.
     if (e.exit_reason === 'poisoned') {
+      const trigger = this.haltTriggerStory(e);
       return {
         tone: 'bad',
         title: 'Run is poisoned — a fresh deployment is required',
-        detail: `This run was flagged unsafe and refused to restart on its own run_id${code != null ? ` (exit ${code})` : ''}. The same run can never resume.`,
+        detail: trigger
+          ? `${trigger} The same run can never resume on its run_id.`
+          : `This run was flagged unsafe and refused to restart on its own run_id${code != null ? ` (exit ${code})` : ''}. The same run can never resume.`,
         fix: 'Reconcile the broker account, then Re-deploy below to start a fresh run_id.',
       };
     }
@@ -451,6 +473,20 @@ export class BrokerInstancesComponent {
         fix: 'Start with Hydration = Optional to cold-start if the saved state is no longer valid, and review the hydration receipt.',
       };
     }
+    // A run that left a halt_trigger but exited via an otherwise-clean path
+    // (an operator MARK_POISONED writes poisoned.flag and then stops as
+    // keyboard_interrupt/signal). The clean-exit branch above already excluded
+    // these, so surface the trigger here rather than letting it fall through to
+    // the generic "ended unexpectedly" notice.
+    const trigger = this.haltTriggerStory(e);
+    if (trigger) {
+      return {
+        tone: 'bad',
+        title: 'Run flagged unsafe — a fresh deployment is required',
+        detail: `${trigger} The same run can never resume on its run_id.`,
+        fix: 'Reconcile the broker account, then Re-deploy below to start a fresh run_id.',
+      };
+    }
     // Generic failure (exception / unknown, with no hydration cause).
     return {
       tone: 'bad',
@@ -460,6 +496,13 @@ export class BrokerInstancesComponent {
     };
   }
 
+  /** Plain-language story for the engine's safety halt trigger (poisoned.flag),
+   * or '' when the run left no trigger. */
+  private haltTriggerStory(e: InstanceLastExit): string {
+    if (!e.halt_trigger) return '';
+    return HALT_TRIGGER_COPY[e.halt_trigger] ?? `Safety trigger: ${e.halt_trigger}.`;
+  }
+
   checklistRows(r: ReadinessVector | null): ChecklistRow[] {
     if (!r) {
       return [
@@ -467,6 +510,7 @@ export class BrokerInstancesComponent {
           key: 'readiness',
           label: 'Pre-Trade Status Loaded',
           status: 'unknown',
+          severity: 'soft',
           detail: 'No checklist is available yet.',
           meaning: 'The bot has not reported whether it can trade.',
           fix: 'Refresh the page or start the bot to load readiness.',
@@ -486,6 +530,7 @@ export class BrokerInstancesComponent {
       key: gate.name,
       label: copy.label,
       status: gate.status,
+      severity: gate.severity,
       detail: gate.detail,
       meaning: copy.meaning,
       fix: copy.fix,

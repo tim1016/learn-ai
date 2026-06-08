@@ -162,7 +162,14 @@
               <li [class.pass]="row.status === 'pass'" [class.fail]="row.status === 'fail'" [class.unknown]="row.status === 'unknown'">
                 <span class="check-mark">{{ row.status === 'pass' ? 'PASS' : row.status === 'fail' ? 'FAIL' : 'UNKNOWN' }}</span>
                 <div>
-                  <strong [title]="'Technical key: ' + row.key">{{ row.label }}</strong>
+                  <strong [title]="'Technical key: ' + row.key">
+                    {{ row.label }}
+                    @if (row.status === 'fail') {
+                      <span class="severity" [class.hard]="row.severity === 'hard'" [class.soft]="row.severity === 'soft'">
+                        {{ row.severity === 'hard' ? 'Blocking' : 'Advisory' }}
+                      </span>
+                    }
+                  </strong>
                   <p>{{ row.meaning }}</p>
                   <small>{{ row.detail }}</small>
                 </div>
