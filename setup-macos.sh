@@ -7,8 +7,12 @@
 # duplicates.
 #
 # Usage:
-#   ./setup-macos.sh            # full setup, leaves frontend for you to start
-#   ./setup-macos.sh --serve    # also runs `npm install` + `ng serve` at the end
+#   ./setup-macos.sh                         # full setup, leaves frontend for you to start
+#   ./setup-macos.sh --serve                 # also runs `npm install` + `ng serve` at the end
+#   ./setup-macos.sh --with-host-daemon      # also bootstrap the host venv + start the
+#                                             live-engine daemon (needed for /broker/* pages
+#                                             — kept opt-in because the venv install adds
+#                                             ~3 min to a fresh setup). Composable with --serve.
 #
 # Resource overrides (env vars, optional — defaults are auto-computed):
 #   PODMAN_CPUS=8 PODMAN_MEMORY_MB=16384 PODMAN_DISK_GB=120 ./setup-macos.sh
@@ -19,9 +23,22 @@
 set -euo pipefail
 
 SERVE=false
-if [[ "${1:-}" == "--serve" ]]; then
-  SERVE=true
-fi
+WITH_HOST_DAEMON=false
+for arg in "$@"; do
+  case "$arg" in
+    --serve)             SERVE=true ;;
+    --with-host-daemon)  WITH_HOST_DAEMON=true ;;
+    -h|--help)
+      sed -n '2,17p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      echo "       Try --help." >&2
+      exit 2
+      ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # 0. Sanity: this script is macOS-only.
@@ -234,7 +251,24 @@ if (( health_failures > 0 )); then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Frontend.
+# 7. Host live-engine daemon (opt-in: --with-host-daemon).
+#
+#    /broker/* UI surfaces poll a HOST process at 127.0.0.1:8765 — it cannot
+#    live in a container because IBKR Gateway binds reqRealTimeBars to the
+#    login-session source IP (error 420). Without it, /broker/instances
+#    renders "Live engine unavailable" with no working Recheck.
+#
+#    Delegated to ./bootstrap-host-daemon.sh so the venv setup and daemon
+#    lifecycle live in one place; this hook just opts a fresh machine in.
+# ---------------------------------------------------------------------------
+if [[ "$WITH_HOST_DAEMON" == "true" ]]; then
+  echo ""
+  echo "==> Bootstrapping host venv + starting live-engine daemon..."
+  "$ROOT_DIR/bootstrap-host-daemon.sh"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Frontend.
 # ---------------------------------------------------------------------------
 if [[ "$SERVE" == "true" ]]; then
   echo "==> Installing frontend deps + starting ng serve (foreground)..."
@@ -256,5 +290,12 @@ else
   echo "   GraphQL      http://localhost:5000/graphql"
   echo "   Python API   http://localhost:8000/health"
   echo "   Postgres     localhost:5432"
+  if [[ "$WITH_HOST_DAEMON" == "true" ]]; then
+    echo "   Host daemon  http://127.0.0.1:8765/health"
+  else
+    echo ""
+    echo " /broker/* pages need the host daemon. Start it with:"
+    echo "   ./bootstrap-host-daemon.sh"
+  fi
   echo "============================================================"
 fi
