@@ -40,12 +40,58 @@ _CONNECTIVITY_LOST_CODES = frozenset({1100, 504})
 _CONNECTIVITY_RESTORED_CODES = frozenset({1101, 1102})
 
 
-# Sentinel value for ``IBKR_HOST`` that triggers default-gateway detection.
-# The container's default gateway is, by container-runtime convention, the
-# host machine — this is the most reliable way to reach the Windows host
-# from inside Podman, where ``host.docker.internal`` does not work the
-# same way it does under Docker Desktop.
+# Sentinel value for ``IBKR_HOST`` that triggers host auto-resolution.
+#
+# Resolution order (first usable wins):
+#   1. The Podman host alias ``host.containers.internal`` if it resolves.
+#      Compose registers it via ``extra_hosts: host-gateway`` and it points
+#      to the actual host machine in EVERY runtime that supports it:
+#      macOS Podman (gvproxy bridges to host loopback), Linux Podman
+#      rootless (bridge gateway), Docker Desktop, native Docker. Using the
+#      alias rather than the bridge gateway IP makes the macOS path work
+#      out of the box, where the default gateway is the Podman VM's
+#      loopback — NOT the macOS host — and a bare ``IBKR_HOST=auto`` would
+#      otherwise resolve to the wrong machine.
+#   2. ``host.docker.internal`` if the canonical Podman name isn't
+#      registered (older compose setups, plain Docker without an explicit
+#      ``extra_hosts``).
+#   3. ``/proc/net/route`` default-gateway parsing. This is the original
+#      auto-resolution, kept as a fallback for bare-metal Podman where
+#      the host aliases aren't registered.
+#   4. Literal ``auto`` — surfaces as a clear DNS-style failure at the
+#      wire rather than this helper silently returning a wrong host.
 HOST_AUTO_SENTINEL = "auto"
+
+# In preference order. Both names point to the host machine on every Podman /
+# Docker runtime that registers them; we try ``host.containers.internal`` first
+# because it is the Podman-native spelling (the project's compose.yaml ships
+# it on ``python-service``).
+_PREFERRED_HOST_ALIASES: tuple[str, ...] = (
+    "host.containers.internal",
+    "host.docker.internal",
+)
+
+
+def _resolve_host_alias(aliases: tuple[str, ...] = _PREFERRED_HOST_ALIASES) -> str | None:
+    """Return the first ``aliases`` entry that resolves to an IP, else None.
+
+    Resolution goes through ``socket.gethostbyname`` — these aliases are
+    registered in ``/etc/hosts`` by Podman/Docker's ``extra_hosts`` config,
+    so the lookup is a local file read, not a DNS round-trip. We return the
+    alias *name* rather than the resolved IP so logs/diagnostics read as
+    e.g. ``host.containers.internal`` (operator-recognizable) instead of
+    ``192.168.127.254`` (gvproxy's bridge address, which means nothing to a
+    human). ``ib_async.connectAsync`` re-resolves at connect time anyway.
+    """
+    import socket  # local import: stdlib, no runtime cost to defer
+
+    for alias in aliases:
+        try:
+            socket.gethostbyname(alias)
+        except OSError:
+            continue
+        return alias
+    return None
 
 
 def _detect_host_gateway(route_file: str | Path = "/proc/net/route") -> str | None:
@@ -87,24 +133,36 @@ def _detect_host_gateway(route_file: str | Path = "/proc/net/route") -> str | No
 
 
 def _resolve_host(configured: str) -> str:
-    """If the configured host is the AUTO sentinel, resolve to the gateway.
+    """If the configured host is the AUTO sentinel, resolve to the host machine.
 
-    Falls back to the literal sentinel string on detection failure so the
-    underlying ``ib_async.connectAsync`` produces a clear DNS-style error
-    rather than this helper silently returning a wrong host.
+    See the ``HOST_AUTO_SENTINEL`` docstring for the full resolution order.
+    The alias path is preferred because on macOS Podman applehv the bridge
+    gateway resolves to the *Podman VM's* loopback rather than the actual
+    macOS host where IB Gateway runs — every fresh macOS bootstrap hit
+    ``ConnectionRefusedError(111)`` until the operator manually set
+    ``IBKR_HOST=host.containers.internal``.
     """
     if configured != HOST_AUTO_SENTINEL:
         return configured
+    alias = _resolve_host_alias()
+    if alias is not None:
+        logger.info("IBKR_HOST=auto resolved via container host alias %s", alias)
+        return alias
     detected = _detect_host_gateway()
-    if detected is None:
-        logger.error(
-            "IBKR_HOST=auto but default gateway could not be detected from "
-            "/proc/net/route. Falling back to the literal 'auto', which will "
-            "fail at the wire — set IBKR_HOST explicitly in your .env."
+    if detected is not None:
+        logger.info(
+            "IBKR_HOST=auto: no container host alias registered, fell back to "
+            "default gateway %s",
+            detected,
         )
-        return configured
-    logger.info("IBKR_HOST=auto resolved to default gateway %s", detected)
-    return detected
+        return detected
+    logger.error(
+        "IBKR_HOST=auto but neither a container host alias (host.containers.internal "
+        "/ host.docker.internal) nor a default gateway in /proc/net/route could be "
+        "resolved. Falling back to the literal 'auto', which will fail at the wire — "
+        "set IBKR_HOST explicitly in your .env."
+    )
+    return configured
 
 
 class BrokerError(Exception):

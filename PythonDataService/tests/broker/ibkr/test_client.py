@@ -20,6 +20,7 @@ from app.broker.ibkr.client import (
     _detect_host_gateway,
     _is_paper_account,
     _resolve_host,
+    _resolve_host_alias,
 )
 from app.broker.ibkr.config import IbkrSettings
 
@@ -118,6 +119,11 @@ def test_resolve_host_resolves_auto_via_route_file(monkeypatch, tmp_path) -> Non
         "eth0\t00000000\t01001FAC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
     )
     route = _write_route_file(tmp_path, body)
+    # No container host alias registered → must fall back to the gateway path.
+    monkeypatch.setattr(
+        "app.broker.ibkr.client._resolve_host_alias",
+        lambda aliases=("host.containers.internal", "host.docker.internal"): None,
+    )
     monkeypatch.setattr(
         "app.broker.ibkr.client._detect_host_gateway",
         lambda route_file="/proc/net/route": "172.31.0.1",
@@ -132,10 +138,65 @@ def test_resolve_host_resolves_auto_via_route_file(monkeypatch, tmp_path) -> Non
 
 def test_resolve_host_falls_back_to_literal_when_detection_fails(monkeypatch) -> None:
     monkeypatch.setattr(
+        "app.broker.ibkr.client._resolve_host_alias",
+        lambda aliases=("host.containers.internal", "host.docker.internal"): None,
+    )
+    monkeypatch.setattr(
         "app.broker.ibkr.client._detect_host_gateway",
         lambda route_file="/proc/net/route": None,
     )
     assert _resolve_host("auto") == "auto"
+
+
+def test_resolve_host_prefers_container_alias_over_gateway(monkeypatch) -> None:
+    """The macOS Podman applehv case: the bridge gateway points at the VM, not
+    the host. ``host.containers.internal`` (registered via ``extra_hosts``) is
+    the only address that reaches the actual macOS host where IB Gateway runs.
+    Auto-resolution must prefer the alias whenever it resolves, regardless of
+    whether a gateway is also detectable.
+    """
+    monkeypatch.setattr(
+        "app.broker.ibkr.client._resolve_host_alias",
+        lambda aliases=("host.containers.internal", "host.docker.internal"): "host.containers.internal",
+    )
+    # Even if a gateway is detectable, the alias path wins.
+    monkeypatch.setattr(
+        "app.broker.ibkr.client._detect_host_gateway",
+        lambda route_file="/proc/net/route": "10.89.0.1",
+    )
+    assert _resolve_host("auto") == "host.containers.internal"
+
+
+def test_resolve_host_alias_returns_first_resolvable(monkeypatch) -> None:
+    """Resolution walks aliases in preference order — the first one that
+    resolves wins. Verifies the Docker-Desktop-only case where the canonical
+    Podman name isn't registered but ``host.docker.internal`` is.
+    """
+    import socket
+
+    def fake_gethostbyname(name: str) -> str:
+        if name == "host.containers.internal":
+            raise OSError("name resolution failed")
+        if name == "host.docker.internal":
+            return "192.168.65.2"
+        raise AssertionError(f"unexpected lookup: {name}")
+
+    monkeypatch.setattr(socket, "gethostbyname", fake_gethostbyname)
+    assert _resolve_host_alias() == "host.docker.internal"
+
+
+def test_resolve_host_alias_returns_none_when_no_alias_resolves(monkeypatch) -> None:
+    """Bare-metal Podman with no ``extra_hosts`` registered: every alias lookup
+    fails. ``_resolve_host_alias`` returns None so ``_resolve_host`` falls back
+    to the gateway path instead of asserting a host the wire can't reach.
+    """
+    import socket
+
+    def fake_gethostbyname(name: str) -> str:
+        raise OSError("name resolution failed")
+
+    monkeypatch.setattr(socket, "gethostbyname", fake_gethostbyname)
+    assert _resolve_host_alias() is None
 
 
 @pytest.mark.asyncio
