@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import (
+    _PREFERRED_HOST_ALIASES,
     BrokerError,
     NotConnectedError,
     _resolve_host,
@@ -108,22 +109,36 @@ def _check_host_resolution() -> tuple[DiagnosticCheck, str]:
                 name="host_resolution",
                 label="IBKR_HOST",
                 status="warn",
-                detail="IBKR_HOST=auto but the container's default gateway could not be detected; using literal 'auto' will fail at the wire.",
+                detail=(
+                    "IBKR_HOST=auto but neither a container host alias "
+                    "(host.containers.internal / host.docker.internal) nor a "
+                    "default gateway could be resolved; using literal 'auto' "
+                    "will fail at the wire."
+                ),
                 fix=(
-                    "Set IBKR_HOST to the Windows host IP explicitly. From PowerShell: "
-                    "Get-NetIPAddress -AddressFamily IPv4 | "
+                    "Set IBKR_HOST to the host IP explicitly, OR add a "
+                    "host-gateway alias in compose (extra_hosts). On Windows "
+                    "from PowerShell: Get-NetIPAddress -AddressFamily IPv4 | "
                     "Where-Object { $_.InterfaceAlias -match 'WSL|vEthernet' }."
                 ),
             ),
             resolved,
         )
     if s.host == "auto":
+        # Distinguish the alias path from the legacy gateway path in the
+        # diagnostic — operators reading "via host.containers.internal" get
+        # a recognizable hostname instead of a bridge IP they can't act on.
+        via = (
+            f"via container host alias {resolved}"
+            if resolved in _PREFERRED_HOST_ALIASES
+            else f"to default gateway {resolved}"
+        )
         return (
             DiagnosticCheck(
                 name="host_resolution",
                 label="IBKR_HOST",
                 status="pass",
-                detail=f"IBKR_HOST=auto resolved to default gateway {resolved}",
+                detail=f"IBKR_HOST=auto resolved {via}",
             ),
             resolved,
         )

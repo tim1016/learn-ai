@@ -122,10 +122,14 @@ services:
       # docs/architecture/ibkr-integration-phase1.md). Defaults match
       # IbkrSettings; surfaced here so they're greppable in compose.
       - IBKR_MODE=${IBKR_MODE:-paper}
-      # ``auto`` resolves to the container's default gateway, which is the
-      # host machine in every container runtime (Podman, Docker Desktop,
-      # plain Docker). Override to a specific IP only when pinning to a
-      # particular interface.
+      # ``auto`` first tries the Podman/Docker host alias
+      # ``host.containers.internal`` (registered above via ``extra_hosts``),
+      # then ``host.docker.internal``, then the container's default gateway
+      # from /proc/net/route — see app/broker/ibkr/client.py:_resolve_host.
+      # The alias path matters on macOS Podman applehv, where the default
+      # gateway is the Podman VM's loopback rather than the macOS host
+      # where IB Gateway runs. Override to a specific IP only when pinning
+      # to a particular interface.
       - IBKR_HOST=${IBKR_HOST:-auto}
       - IBKR_PORT=${IBKR_PORT:-4002}
       - IBKR_CLIENT_ID=${IBKR_CLIENT_ID:-1}
