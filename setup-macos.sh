@@ -291,7 +291,9 @@ else
   echo "   Python API   http://localhost:8000/health"
   echo "   Postgres     localhost:5432"
   if [[ "$WITH_HOST_DAEMON" == "true" ]]; then
-    echo "   Host daemon  http://127.0.0.1:8765/health"
+    # Mirror the bootstrap script's default and honor the same env override —
+    # otherwise this line lies when HOST_DAEMON_PORT is set (CodeRabbit).
+    echo "   Host daemon  http://127.0.0.1:${HOST_DAEMON_PORT:-8765}/health"
   else
     echo ""
     echo " /broker/* pages need the host daemon. Start it with:"

@@ -15,7 +15,9 @@
 #   ./bootstrap-host-daemon.sh                 # ensure venv exists, then start (default)
 #   ./bootstrap-host-daemon.sh --setup-only    # venv + pip install, no daemon launch
 #   ./bootstrap-host-daemon.sh --restart       # pkill running daemon, then start
-#   ./bootstrap-host-daemon.sh --stop          # pkill running daemon, exit
+#   ./bootstrap-host-daemon.sh --stop          # graceful stop: refuse if managed runs are live
+#   ./bootstrap-host-daemon.sh --stop --force  # stop daemon even if managed runs are still live
+#                                             # (those runners will be orphaned — see Codex P1)
 #   ./bootstrap-host-daemon.sh --status        # report whether daemon is up
 #
 # Override the daemon port with HOST_DAEMON_PORT (default 8765 — matches
@@ -46,25 +48,34 @@ LOG_FILE="$ARTIFACTS_DIR/host_daemon.log"
 PID_FILE="$ARTIFACTS_DIR/host_daemon.pid"
 PORT="${HOST_DAEMON_PORT:-8765}"
 HEALTH_URL="http://127.0.0.1:${PORT}/health"
-DAEMON_MATCH="app.engine.live.host_daemon"   # pgrep -f pattern
+# Repo-scoped pgrep pattern: the daemon's argv carries `--repo-root $ROOT_DIR`,
+# so this match only finds the daemon launched for THIS checkout. Without the
+# scope, a second checkout's daemon (or any other process whose argv happens to
+# contain `app.engine.live.host_daemon`) would be pgrep'd / pkill'd by mistake.
+DAEMON_MATCH="app.engine.live.host_daemon --repo-root $ROOT_DIR"
+TOKEN_FILE="$ROOT_DIR/PythonDataService/artifacts/.host-daemon-token"
 
 MODE="start"
-case "${1:-}" in
-  ""|--start)     MODE="start" ;;
-  --setup-only)   MODE="setup-only" ;;
-  --restart)      MODE="restart" ;;
-  --stop)         MODE="stop" ;;
-  --status)       MODE="status" ;;
-  -h|--help)
-    sed -n '2,21p' "$0"
-    exit 0
-    ;;
-  *)
-    echo "ERROR: unknown argument: $1" >&2
-    echo "       Try --help." >&2
-    exit 2
-    ;;
-esac
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --start)        MODE="start" ;;
+    --setup-only)   MODE="setup-only" ;;
+    --restart)      MODE="restart" ;;
+    --stop)         MODE="stop" ;;
+    --status)       MODE="status" ;;
+    --force)        FORCE=true ;;
+    -h|--help)
+      sed -n '2,23p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      echo "       Try --help." >&2
+      exit 2
+      ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # Helpers.
@@ -73,11 +84,77 @@ daemon_running() {
   pgrep -f "$DAEMON_MATCH" >/dev/null 2>&1
 }
 
+# List run_ids of managed runs whose process is still alive. The daemon launches
+# each runner with start_new_session=True (host_daemon.py), so the runner is its
+# OWN session leader and survives an unconditional pkill of the daemon — Codex
+# P1 on the first review. We query /instances (with the shared-secret token) and
+# return the run_ids whose process.state is not a terminal state. If the daemon
+# is unreachable, or the token file is absent, return "unknown" so the caller
+# can warn rather than silently assume "no active runs".
+active_run_ids() {
+  if ! curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+    echo "unknown"
+    return 0
+  fi
+  if [[ ! -r "$TOKEN_FILE" ]]; then
+    echo "unknown"
+    return 0
+  fi
+  local token instances
+  token="$(cat "$TOKEN_FILE")"
+  if ! instances="$(curl -fsS -H "X-Live-Runner-Token: $token" "http://127.0.0.1:${PORT}/instances" 2>/dev/null)"; then
+    echo "unknown"
+    return 0
+  fi
+  # parse JSON: emit one run_id per line for non-terminal process states.
+  # 'idle' / 'exited' / 'failed' are terminal; anything else (running, stopping,
+  # ...) means the runner is still alive. System python3 (>=3.7) is sufficient
+  # — the stop path may run before the venv is created.
+  printf '%s' "$instances" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+terminal = {"idle", "exited", "failed"}
+for inst in data.get("instances", []):
+    state = (inst.get("process") or {}).get("state")
+    if state and state not in terminal:
+        print(inst.get("run_id"))
+'
+}
+
 stop_daemon() {
   if ! daemon_running; then
     echo "==> No host daemon process to stop."
     rm -f "$PID_FILE"
     return 0
+  fi
+  # Before pkill: refuse to kill the daemon while it manages live runners.
+  # `start_new_session=True` decouples them from the daemon's process group,
+  # so a bare pkill orphans them — the UI loses its only control path while a
+  # paper/live runner can keep trading. --force overrides for cases where the
+  # operator has already stopped the runner some other way.
+  local actives
+  actives="$(active_run_ids || true)"
+  if [[ "$actives" == "unknown" ]]; then
+    if ! $FORCE; then
+      echo "ERROR: Daemon is running but /instances is unreachable — cannot tell" >&2
+      echo "       whether managed runners are still live. Refusing to stop." >&2
+      echo "       Re-run with --force to stop anyway (any live runner will be orphaned)," >&2
+      echo "       or run --status to inspect, or restart the daemon and retry." >&2
+      return 1
+    fi
+    echo "==> /instances unreachable; --force given, proceeding."
+  elif [[ -n "$actives" ]]; then
+    if ! $FORCE; then
+      echo "ERROR: Daemon is still managing live runners; refusing to stop." >&2
+      echo "       Stop each run via the UI (or POST /runs/<id>/stop on the daemon)" >&2
+      echo "       before halting the daemon, OR re-run with --force to abandon" >&2
+      echo "       them (they will continue running and be orphaned)." >&2
+      echo "       Active runs:" >&2
+      echo "$actives" | sed 's/^/         /' >&2
+      return 1
+    fi
+    echo "==> Daemon has active runs; --force given, proceeding (runners will be orphaned):"
+    echo "$actives" | sed 's/^/    /'
   fi
   echo "==> Stopping running host daemon (pkill -f $DAEMON_MATCH)..."
   pkill -f "$DAEMON_MATCH" || true
@@ -196,9 +273,20 @@ fi
 #    exit cleanly and the daemon survives the shell.
 # ---------------------------------------------------------------------------
 if daemon_running; then
-  echo "==> Daemon is already running. Use --restart to relaunch, or --stop to halt."
-  report_status
-  exit 0
+  # An existing process whose health endpoint is also responding is the
+  # happy case — print status and exit 0. But if the process exists and
+  # /health is not responding, the daemon is stuck; reporting "already
+  # running" + exit 0 lies to the caller (CodeRabbit). Exit non-zero so
+  # setup-macos.sh fails loudly and the operator can --restart.
+  if curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+    echo "==> Daemon is already running. Use --restart to relaunch, or --stop to halt."
+    report_status
+    exit 0
+  fi
+  echo "ERROR: Daemon process exists but $HEALTH_URL is not responding." >&2
+  echo "       Run ./bootstrap-host-daemon.sh --restart to recover." >&2
+  report_status >&2
+  exit 1
 fi
 
 if curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
