@@ -191,6 +191,26 @@ services:
       - DOTNET_USE_POLLING_FILE_WATCHER=true
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
+      # csc (Roslyn) SIGILLs with exit 132 on Apple Silicon under Podman
+      # applehv. cpuinfo advertises sve2/sme2/sme2p1, but the AppleHV-
+      # virtualized CPU can't actually execute every SVE/SME sequence the
+      # .NET 10 SDK's R2R-precompiled images contain. The single runtime
+      # intrinsic toggles (DOTNET_EnableHWIntrinsic, DOTNET_EnableArm64Sve,
+      # DOTNET_EnableArm64Sme) don't help individually — bisected with all
+      # 10.0.x SDK tags tested (10.0.100, 10.0.300; Ubuntu and AzureLinux
+      # base images). Minimum stable combo to bypass R2R-baked code:
+      #   - ReadyToRun=0 — forces JIT instead of R2R-baked native code
+      #   - TieredCompilation=0 — skips tier-0 quick-JIT (still hits SME)
+      # These two flags MUST be paired with the 3G memory limit below — at
+      # 1G csc still SIGILLs even with both flags set (an unlimited-memory
+      # one-shot `podman run` hides this and falsely "passes"). HotChocolate
+      # source generators + EF Core code-gen on a 134-file project push the
+      # build process past 1G, and the OOM-adjacent JIT path re-enters the
+      # SVE/SME failure mode the flags otherwise avoid.
+      # Cost: slower cold start (R2R) and no adaptive optimization (TC).
+      # Acceptable for dev container; production builds elsewhere unaffected.
+      - DOTNET_ReadyToRun=0
+      - DOTNET_TieredCompilation=0
     command: ["dotnet", "watch", "run", "--non-interactive"]
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
@@ -206,7 +226,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          # See env comment above: 1G is not enough to clear the csc SIGILL
+          # window even with R2R=0 + TieredCompilation=0. HotChocolate's
+          # source generators on this project's 134 files push the build
+          # process past 1G and re-enter the SVE/SME-baked code path.
+          memory: 3G
     depends_on:
       db:
         condition: service_healthy
