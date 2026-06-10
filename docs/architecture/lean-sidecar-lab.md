@@ -16,8 +16,20 @@ fixture, the security-flag viability matrix, and three end-to-end
 sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
 `--read-only` documented in the security section).
 
-**Pinned LEAN image digest (Phase 1b):**
-`sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
+**Pinned LEAN image (Phase 1c derivative):**
+`localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d`
+
+Built locally from upstream base
+`docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
+via `PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109`. The
+derivative keeps the upstream LEAN payload at `lean_version=17748`,
+relaxes `/root` from mode 0700 to 0755 so the Phase-1c
+`--user=10001:10001 --read-only` sandbox can exec
+`/root/.dotnet/dotnet`, and installs .NET Host/Runtime 10.0.9 from
+`mcr.microsoft.com/dotnet/runtime@sha256:62b592e657ceebbfd24203430542232559dcb7b73e45cc3ebb48c7bba8c2e2f0`
+side-by-side with the image's original 10.0.2 runtime. The 10.0.9
+runtime is the accepted AppleHV/CoreCLR SIGILL fix for wide-window
+native arm64 LEAN runs on this host.
 
 ---
 
@@ -76,7 +88,7 @@ The non-negotiable shape of every LEAN sidecar invocation:
 podman run --rm \
   --network=none \
   --cpus=2 \
-  --memory=2g \
+  --memory=3g \
   --pids-limit=512 \
   --security-opt=no-new-privileges \
   --cap-drop=ALL \
@@ -93,6 +105,7 @@ Additional flags applied **if compatible** with the chosen LEAN image (validated
 - `--read-only` — root filesystem read-only
 - `--tmpfs /tmp:rw,noexec,nosuid,size=256m`
 - `--user <host-uid>` — drop root inside the container; paired with `--userns=keep-id` on rootless podman so the container UID actually maps to the host UID that owns the workspace files (without it, container UID 1000 maps to a `/etc/subuid` sub-UID like 100999 and POSIX permissions reject every write to `output/`, crashing LEAN inside `BacktestingResultHandler.Exit()`).
+- `--env DOTNET_ReadyToRun=0`, `--env DOTNET_TieredCompilation=0` — retained AppleHV-podman experiment scaffolding, **not enabled by default for trusted-runs**. The 2026-06-09 bisection showed Backend's csc workaround does not transfer to LEAN's runtime assembly load: the wide-window SIGILL persisted with these env flags set, and more aggressive `DOTNET_EnableHWIntrinsic=0` / `DOTNET_JitDisableSimdHWIntrinsic=1` combinations did not help. The accepted fix is the default arm64 derivative's .NET Host/Runtime 10.0.9 side-by-side install. **The allow-list pins literal `KEY=VAL` strings, not patterns** — adding a new DOTNET_* knob requires an explicit edit to `ALLOWED_HARDENING_TOKENS` (and this ADR), preserving the no-arbitrary-flag property the Phase 1c security review signed off on.
 - `--storage-opt size=<cap>` — defense-in-depth for writes to the container overlay, when supported
 
 Phase 1's runner spike must record which of these flags the LEAN image actually tolerates. If `--read-only`, `--cap-drop=ALL`, or non-root breaks LEAN, the doc gets updated with the smallest accepted relaxation. The workspace-only mount, no-network rule, no-secrets rule, and hard CPU/memory/time/disk ceilings remain mandatory.
@@ -105,6 +118,7 @@ The launcher enforces an outer timeout (kill the container) **in addition to** a
 - Log capture cap: **8 MB** truncated tail returned in the API; persisted logs count against the per-run disk cap.
 - Per-run source-size cap: **256 KB** for `algorithm_source` (rejects oversized payloads at request validation).
 - Per-run workspace-size cap: enforced by the launcher by monitoring the bind-mounted workspace directory and killing the container when the cap is exceeded. `podman --storage-opt size=...` does **not** cap bind-mounted output and is only defense-in-depth for non-mounted writes. The cap is recorded in `manifest.json`.
+- Per-run memory floor: **3 GiB** (`DEFAULT_RUN_LIMITS.memory_mb = 3072`). The floor remains the default wide-window envelope for LEAN under podman applehv. The prior 2 GiB SIGILL investigation is now superseded by the .NET 10.0.9 runtime-patched arm64 derivative; lower memory ceilings remain valid per-request overrides for tight environments, but the default is 3 GiB.
 
 ---
 
@@ -268,7 +282,15 @@ are often blocked by host firewalls.
 The plan explicitly asks whether `lean backtest` (the official CLI from `lean-cli`) is acceptable. Decision:
 
 - **Use the Docker image directly,** not the CLI, for the first implementation.
-- Pinned image: `quantconnect/lean` at a specific digest resolved in Phase 1 and recorded here. The plan calls for `:latest` initially — that is acceptable for the Phase 1 spike, but the merged Phase 1 PR replaces `:latest` with a `sha256:...` digest in code and in this doc.
+- Pinned image: a thin local derivative `learn-ai/lean-sandbox` of
+  `quantconnect/lean`, at the digest in the callout above. Upstream
+  `:latest` is never resolved at runtime. Phase 1c added the
+  derivative because the upstream image we pinned ships `/root` as
+  0700, incompatible with `--user=10001:10001`. The derivative
+  `FROM`s the upstream digest (not `:latest`) so every rebuild is
+  bit-deterministic w.r.t. upstream. Upgrades are deliberate: bump
+  the `FROM` digest, rebuild, capture the new derivative digest,
+  update `config.py` + this section in one PR.
 - The official `lean-cli` is a convenience wrapper that ultimately invokes the same image, and it adds account/auth steps and login state we don't want in a CI/server flow. Calling the image directly keeps the dependency surface to "podman + a pinned image digest".
 
 ### LEAN compatibility posture

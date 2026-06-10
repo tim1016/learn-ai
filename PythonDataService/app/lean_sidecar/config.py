@@ -26,13 +26,76 @@ from pathlib import Path
 # tests to skip with a clear message rather than silently running an
 # unpinned image.
 
-LEAN_IMAGE_REPO = "quantconnect/lean"
+# The image we run is a thin derivative of upstream quantconnect/lean.
+# See:
+#
+# - ``PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109``:
+#   arm64, lean_version 17748, upstream LEAN payload unchanged, .NET
+#   Host/Runtime patched from 10.0.2 to 10.0.9 to avoid the AppleHV
+#   SME/SVE CoreCLR SIGILL on wider windows.
+# - ``PythonDataService/lean_sidecar/Dockerfile.amd64``: amd64,
+#   lean_version 17764, opt-in only for native x86_64 execution
+#   surfaces. Rosetta on this Apple Silicon host crashes LEAN's JIT'd
+#   workload, so amd64 is deliberately not the default.
+#
+# The arm64 derivatives relax ``/root`` to mode 0755 so the Phase-1c
+# ``--user=10001:10001`` sandbox can traverse to
+# ``/root/.dotnet/dotnet``. Upstream
+# ``quantconnect/lean@sha256:4934c22c…`` ships ``/root`` as 0700 which
+# is incompatible with non-root execution.
+LEAN_IMAGE_REPO = "localhost/learn-ai/lean-sandbox"
 
 # Resolved by Phase 1 spike on first successful pull. See
 # docs/architecture/lean-sidecar-lab.md §"Runner choice" for the policy.
-PINNED_LEAN_IMAGE_DIGEST: str | None = "sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b"
+#
+# ``PINNED_LEAN_IMAGE_DIGEST`` is the default pin the orchestrator
+# passes to the launcher. The arm64 .NET-10.0.9 derivative is the
+# default: it keeps the pinned LEAN engine payload on lean_version
+# 17748 and fixes the wide-window AppleHV SIGILL by side-by-side
+# installing the patched .NET Host/Runtime 10.0.9 into /root/.dotnet.
+#
+# ``PINNED_LEAN_IMAGE_DIGEST_AMD64`` is published as opt-in for
+# environments where the amd64 LEAN build can actually run (native
+# Linux/amd64, or a future Rosetta release that translates this
+# image's JIT'd code without segfaulting). It is NOT the default —
+# the 2026-06-09 empirical bisection on this host (podman applehv
+# rootless, Rosetta enabled) showed Rosetta 2 consistently
+# segfaulting LEAN's JIT'd code path (``qemu: uncaught target signal
+# 11``) during ``TextSubscriptionDataSourceReader.SetCacheSize``, and
+# also producing an unrelated managed NRE
+# (``Newtonsoft.Json.Converters.StringEnumConverter()``) inside
+# ``MarketHoursDatabase.FromFile()`` on the staged-workspace path.
+# Multiple DOTNET_* env combinations (ReadyToRun=0,
+# TieredCompilation=0, gcServer=0, EnableHWIntrinsic=0,
+# JitDisableSimdHWIntrinsic=1) did not move the failure point.
+#
+# The amd64 image is also the x86_64-arch closest reproduction of the
+# Windows-validated SPY EMA-crossover bit-exact baseline at
+# ``app/engine/tests/fixtures/spy_lean_trades.csv``; once an
+# execution surface for it exists, the parity-against-Windows claim
+# can be re-validated end-to-end.
+PINNED_LEAN_IMAGE_DIGEST_AMD64: str | None = "sha256:bdb7c7aa3bd5f196905442706f9ebd6d22de08e21cf6ac5cc74b621690005a75"
+PINNED_LEAN_IMAGE_DIGEST_ARM64: str | None = "sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
 
-ALLOWED_IMAGE_DIGESTS: frozenset[str] = frozenset(d for d in (PINNED_LEAN_IMAGE_DIGEST,) if d is not None)
+PINNED_LEAN_IMAGE_DIGEST: str | None = PINNED_LEAN_IMAGE_DIGEST_ARM64
+
+ALLOWED_IMAGE_DIGESTS: frozenset[str] = frozenset(
+    d for d in (PINNED_LEAN_IMAGE_DIGEST_AMD64, PINNED_LEAN_IMAGE_DIGEST_ARM64) if d is not None
+)
+
+# Per-digest container platform. The runner derives ``--platform <value>``
+# from this mapping at ``podman run`` time so an image pulled with one
+# platform is always run on that same platform — eliminating a class of
+# silent mismatches where podman warns ("image platform (linux/amd64)
+# does not match the expected platform (linux/arm64)") but the
+# container runs anyway with surprising semantics. Digests not keyed
+# here run on the host's native platform (the default podman behavior,
+# no ``--platform`` flag passed).
+DIGEST_PLATFORMS: dict[str, str] = {
+    d: "linux/amd64"
+    for d in (PINNED_LEAN_IMAGE_DIGEST_AMD64,)
+    if d is not None
+}
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +145,12 @@ class RunLimits:
 
 DEFAULT_RUN_LIMITS = RunLimits(
     cpus=2.0,
-    memory_mb=2048,
+    # 3 GiB remains the default wide-window envelope for LEAN under
+    # podman applehv. The prior exit-132/SIGILL investigation is now
+    # resolved by the arm64 .NET-10.0.9 derivative pinned above, not by
+    # the ``HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX``
+    # env flags.
+    memory_mb=3072,
     pids_limit=512,
     # 2 hours. Sized to match the router's ``_MAX_TRADING_DAYS = 504``
     # (~2 calendar years of US-equity minute data, Polygon.io Starter

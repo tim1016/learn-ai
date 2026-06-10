@@ -28,6 +28,16 @@ The slice is split into four PRs:
 4. **Phase 5g.4** — frontend UI ("Cross-engine reconcile" button on the
    run detail panel)
 
+## Current status (2026-06-10)
+
+Phase 5g.3 is wired in `app/routers/lean_sidecar.py`: `POST
+/api/lean-sidecar/runs/{run_id}/cross-reconcile` now loads the LEAN
+normalized result, extracts symbol/date/cash inputs from the run
+manifest, runs the caller-named Engine Lab strategy on the same staged
+workspace data, and returns a real
+`CrossEngineReconciliationReportModel`. The old 501 scaffold contract
+below is retained as Phase 5g.1 history only.
+
 ## Phase 5g.1 (this PR) — endpoint scaffold + request/response shape
 
 The cross-reconcile endpoint exists and validates the request, but the

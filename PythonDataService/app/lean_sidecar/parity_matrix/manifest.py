@@ -68,7 +68,14 @@ class BrokerSpec(BaseModel):
 
 class LeanRuntimeSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    container_image_digest: str = Field(..., pattern=r"^docker\.io/quantconnect/lean@sha256:[a-f0-9]{64}$")
+    # Accepts either the upstream-pinned form (older parity matrices
+    # captured before the Phase 1c sandbox derivative) or the current
+    # local derivative ``learn-ai/lean-sandbox`` (see ``config.py``
+    # and ``PythonDataService/lean_sidecar/Dockerfile``).
+    container_image_digest: str = Field(
+        ...,
+        pattern=r"^(?:docker\.io/quantconnect/lean|localhost/learn-ai/lean-sandbox)@sha256:[a-f0-9]{64}$",
+    )
 
 
 class PinnedArtifactHashes(BaseModel):

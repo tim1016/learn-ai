@@ -1,0 +1,44 @@
+# Derivative LEAN image used by the LEAN Sidecar launcher — amd64 / Rosetta path.
+#
+# Why this exists: the arm64 derivative (./Dockerfile, FROM 4934c22c…)
+# SIGILLs at LEAN assembly-load time on Apple Silicon + podman applehv
+# on any window staging more than ~12 trade/quote zips. The 2026-06-10
+# Codex investigation in
+# ``docs/handoffs/2026-06-09-applehv-sigill-codex-investigation.md``
+# traces the bug to CoreCLR 10.0.2's AArch64 signal-context capture
+# path (dotnet/runtime PR #127398), not yet shipped in a 10.0.x
+# servicing release. The amd64 CoreCLR codepath does not contain that
+# bug — running the amd64 LEAN image under Rosetta 2 translation on
+# Apple Silicon bypasses the SIGILL entirely. Smoke verified
+# 2026-06-09: ``dotnet --info`` runs clean on a Linux/amd64 .NET 10
+# runtime under Rosetta on this host.
+#
+# This is also the platform the SPY EMA-crossover bit-exact LEAN
+# baseline at ``app/engine/tests/fixtures/spy_lean_trades.csv`` was
+# originally captured on (Windows = x86_64), so the amd64 derivative
+# is the closest possible reproduction of the parity baseline the
+# Python engine is validated against.
+#
+# Build (from the repo root):
+#   podman build \\
+#     --platform linux/amd64 \\
+#     -t learn-ai/lean-sandbox:applehv-amd64 \\
+#     -f PythonDataService/lean_sidecar/Dockerfile.amd64 \\
+#     PythonDataService/lean_sidecar
+#
+# After building, capture the local digest and pin it in
+# ``app/lean_sidecar/config.py`` (PINNED_LEAN_IMAGE_DIGEST_AMD64).
+# The launcher rejects any image whose digest is not in
+# ALLOWED_IMAGE_DIGESTS, so the tag above is purely human-readable.
+#
+# The FROM is pinned by digest to the amd64 platform manifest of
+# quantconnect/lean:latest as resolved 2026-06-09
+# (lean_version=17764, net10.0). The arm64 derivative pins
+# lean_version=17748 — Docker Hub has rotated since the arm64 pin was
+# captured, so version-matched bases are not retrievable. The version
+# delta should not affect zip/factor format, but is intentionally
+# documented in the ADR for audit; if test_buy_and_hold_runs_with_*
+# regresses on amd64, revisit.
+FROM --platform=linux/amd64 docker.io/quantconnect/lean@sha256:a21369b90a5b1da4c5f458da8e956f5c1f091c4e2ed5a2b5d5eac8f04cdd9bf5
+
+RUN chmod 0755 /root

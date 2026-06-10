@@ -1,0 +1,32 @@
+# Arm64 LEAN derivative with a patched .NET 10 runtime.
+#
+# Why this exists: the pinned arm64 LEAN image bundles .NET Host/Runtime
+# 10.0.2 under /root/.dotnet. On Apple Silicon + podman applehv, that
+# CoreCLR build SIGILLs during LEAN assembly load on wider staged-data
+# windows (SME-only CPU surface exposes an SVE signal-frame record; the
+# old CoreCLR signal-context path executes the SVE rdvl instruction).
+# dotnet/runtime PR #127398 fixes that class of crash; the Microsoft
+# runtime:10.0 image currently resolves to .NET Runtime 10.0.9.
+#
+# This derivative keeps the audited LEAN payload unchanged and installs
+# the 10.0.9 host/runtime side-by-side into /root/.dotnet. The launcher
+# runtimeconfig targets Microsoft.NETCore.App 10.0.0, so normal .NET
+# patch roll-forward selects 10.0.9 at launch.
+#
+# Build:
+#   podman build \
+#     -t localhost/learn-ai/lean-sandbox:arm64-dotnet109 \
+#     -f PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109 \
+#     PythonDataService/lean_sidecar
+#
+# After validation, capture the local digest and pin it in
+# app/lean_sidecar/config.py.
+FROM mcr.microsoft.com/dotnet/runtime@sha256:62b592e657ceebbfd24203430542232559dcb7b73e45cc3ebb48c7bba8c2e2f0 AS dotnet-runtime
+
+FROM docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b
+
+COPY --from=dotnet-runtime /usr/share/dotnet/dotnet /root/.dotnet/dotnet
+COPY --from=dotnet-runtime /usr/share/dotnet/host/fxr/10.0.9 /root/.dotnet/host/fxr/10.0.9
+COPY --from=dotnet-runtime /usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.9 /root/.dotnet/shared/Microsoft.NETCore.App/10.0.9
+
+RUN chmod 0755 /root
