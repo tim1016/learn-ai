@@ -37,7 +37,6 @@ from app.lean_sidecar.config import (
 )
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher_client import post_launch
-from app.lean_sidecar.runner import HardeningProfile
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,

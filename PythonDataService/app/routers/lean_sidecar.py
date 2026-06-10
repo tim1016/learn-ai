@@ -1222,10 +1222,10 @@ async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
 # Engine Lab's fills for the caller-named strategy class on the same
 # workspace data.
 #
-# Phase 5g.1 (this file): endpoint + Pydantic request/response shapes
-# exist, but the engine-lab cross-run call is not wired yet. The endpoint
-# returns 501 NOT_IMPLEMENTED with a structured detail. Phase 5g.2 will
-# replace the 501 with the real engine-lab → DivergenceCategory diff.
+# Phase 5g.3: endpoint + Pydantic request/response shapes are wired to
+# the Engine-Lab cross-run primitive and the DivergenceCategory diff.
+# Earlier Phase 5g.1 scaffold returned 501; this route now returns a
+# real CrossEngineReconciliationReportModel on the happy path.
 #
 # Design notes (resolved via mission-critical doc D3, 2026-05-18):
 #   * Pairing is caller-supplied — no auto-derivation. The request names

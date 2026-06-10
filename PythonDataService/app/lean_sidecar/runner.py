@@ -26,6 +26,7 @@ from pathlib import Path
 from app.lean_sidecar.config import (
     ALLOWED_IMAGE_DIGESTS,
     DEFAULT_RUN_LIMITS,
+    DIGEST_PLATFORMS,
     LEAN_IMAGE_REPO,
     RunLimits,
 )
@@ -321,6 +322,25 @@ def _require_image_in_allowlist(image_digest: str) -> str:
     return f"{LEAN_IMAGE_REPO}@{bare}"
 
 
+def _platform_for_digest(image_digest: str) -> str | None:
+    """Return the ``--platform`` value pinned for ``image_digest``, or None.
+
+    Looks up the digest in :data:`app.lean_sidecar.config.DIGEST_PLATFORMS`.
+    Returns ``None`` when the digest is not keyed there — those images
+    run on the host's native platform (the default podman behavior, no
+    ``--platform`` flag passed).
+
+    The amd64 LEAN derivative is keyed to ``linux/amd64`` so it runs
+    under Rosetta 2 translation on Apple Silicon hosts rather than
+    triggering the podman platform-mismatch warning + ambiguous
+    semantics. The arm64 derivative is intentionally unkeyed: it runs
+    natively on Apple Silicon and on any native-arm64 Linux host
+    without needing a platform flag.
+    """
+    bare = image_digest.split("@", 1)[-1]
+    return DIGEST_PLATFORMS.get(bare)
+
+
 def _validate_hardening_flags(hardening_flags: tuple[str, ...]) -> None:
     """Reject hardening tokens not on the allow-list and malformed pairs.
 
@@ -415,6 +435,7 @@ def build_command(
         raise RunnerConfigurationError(f"workspace path is not a directory: {workspace.workspace_dir}")
 
     image_reference = _require_image_in_allowlist(image_digest)
+    platform = _platform_for_digest(image_digest)
     podman = _require_podman()
 
     # ``--cidfile`` writes the container id to a host-side file on
@@ -454,19 +475,30 @@ def build_command(
         podman,
         "run",
         "--rm",
-        "--network=none",
-        "--security-opt=no-new-privileges",
-        "--cap-drop=ALL",
-        "--read-only",
-        *_userns_flags(podman),
-        f"--user={_container_user_spec()}",
-        f"--cpus={limits.cpus}",
-        f"--memory={limits.memory_mb}m",
-        f"--pids-limit={limits.pids_limit}",
-        f"--cidfile={cidfile_path}",
-        "-v",
-        f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
     ]
+    # ``--platform`` follows ``--rm`` so it lands at the top of the
+    # constructed argv (matching how operators typically write the
+    # flag on the command line). Only emitted when the pinned digest
+    # has an explicit platform in ``DIGEST_PLATFORMS``; native-host
+    # digests omit the flag and let podman pick the matching variant.
+    if platform is not None:
+        argv.append(f"--platform={platform}")
+    argv.extend(
+        [
+            "--network=none",
+            "--security-opt=no-new-privileges",
+            "--cap-drop=ALL",
+            "--read-only",
+            *_userns_flags(podman),
+            f"--user={_container_user_spec()}",
+            f"--cpus={limits.cpus}",
+            f"--memory={limits.memory_mb}m",
+            f"--pids-limit={limits.pids_limit}",
+            f"--cidfile={cidfile_path}",
+            "-v",
+            f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
+        ]
+    )
     # Optional hardening flags survive only if the security-flag matrix
     # proved the pinned image tolerates them. Already validated against
     # ALLOWED_HARDENING_TOKENS above.

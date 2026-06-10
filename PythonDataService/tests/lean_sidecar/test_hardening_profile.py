@@ -177,8 +177,14 @@ class TestLaunchRequestModel:
 
     def test_hardening_profile_accepts_applehv_dotnet_fix_value(self) -> None:
         """The composite profile must be accepted at the launcher API
-        boundary; lean_sidecar_service.py now defaults trusted-runs to
-        this profile to unblock Apple Silicon wider-window runs."""
+        boundary even though ``lean_sidecar_service.py`` does not wire it
+        as a default — the 2026-06-09 empirical bisection showed both
+        ``DOTNET_*=0`` env flags neither unblock the wide-window SIGILL
+        nor preserve the clean 6-day baseline (a separate GIL-finalizer
+        race surfaces at shutdown). The plumbing stays in place so a
+        future investigator can opt into the profile per-run without
+        re-adding scaffolding, but the service intentionally does not
+        default to it."""
         req = LaunchRequest.model_validate(
             self._good_payload(hardening_profile="with_tmpfs_256m_and_applehv_dotnet_fix")
         )

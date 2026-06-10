@@ -17,14 +17,19 @@ sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
 `--read-only` documented in the security section).
 
 **Pinned LEAN image (Phase 1c derivative):**
-`localhost/learn-ai/lean-sandbox@sha256:e2186f2e3e3e2c1ffb579c8cdbd4f74211a9c453893cb8273685555031b8187e`
+`localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d`
 
 Built locally from upstream base
 `docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
-via `PythonDataService/lean_sidecar/Dockerfile`. The derivative only
+via `PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109`. The
+derivative keeps the upstream LEAN payload at `lean_version=17748`,
 relaxes `/root` from mode 0700 to 0755 so the Phase-1c
 `--user=10001:10001 --read-only` sandbox can exec
-`/root/.dotnet/dotnet`. No other modification.
+`/root/.dotnet/dotnet`, and installs .NET Host/Runtime 10.0.9 from
+`mcr.microsoft.com/dotnet/runtime@sha256:62b592e657ceebbfd24203430542232559dcb7b73e45cc3ebb48c7bba8c2e2f0`
+side-by-side with the image's original 10.0.2 runtime. The 10.0.9
+runtime is the accepted AppleHV/CoreCLR SIGILL fix for wide-window
+native arm64 LEAN runs on this host.
 
 ---
 
@@ -100,7 +105,7 @@ Additional flags applied **if compatible** with the chosen LEAN image (validated
 - `--read-only` — root filesystem read-only
 - `--tmpfs /tmp:rw,noexec,nosuid,size=256m`
 - `--user <host-uid>` — drop root inside the container; paired with `--userns=keep-id` on rootless podman so the container UID actually maps to the host UID that owns the workspace files (without it, container UID 1000 maps to a `/etc/subuid` sub-UID like 100999 and POSIX permissions reject every write to `output/`, crashing LEAN inside `BacktestingResultHandler.Exit()`).
-- `--env DOTNET_ReadyToRun=0`, `--env DOTNET_TieredCompilation=0` — AppleHV-podman work-around scaffolding. The .NET 10 SDK ships R2R-precompiled images containing SVE/SME intrinsic sequences that the AppleHV-virtualized CPU cannot execute, even though cpuinfo advertises sve2/sme2/sme2p1. The flags + literal KEY=VAL values are in the allow-list and the composite profile `HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX` is wired through the runner, **but they are NOT enabled by default for trusted-runs**. The 2026-06-09 in-session bisection showed Backend's csc fix does not transfer to LEAN's runtime assembly load — the wide-window SIGILL persists with the flags set (verified at runner argv + container env levels; also tested `DOTNET_JitDisableSimdHWIntrinsic=1` and `DOTNET_EnableHWIntrinsic=0`, no help), and the flags introduce a `Python.Runtime.Py.GILState.Finalize` race in `GC.RunFinalizers` at shutdown that regresses the previously-clean 6-day window. The plumbing stays in place for a follow-up bisection that finds the right env values (or a different fix path: coredump-driven SIMD instruction trace, LEAN image rebuild with crossgen2 R2R off, or upstream image bump). **The allow-list pins literal `KEY=VAL` strings, not patterns** — adding a new DOTNET_* knob requires an explicit edit to `ALLOWED_HARDENING_TOKENS` (and this ADR), preserving the no-arbitrary-flag property the Phase 1c security review signed off on.
+- `--env DOTNET_ReadyToRun=0`, `--env DOTNET_TieredCompilation=0` — retained AppleHV-podman experiment scaffolding, **not enabled by default for trusted-runs**. The 2026-06-09 bisection showed Backend's csc workaround does not transfer to LEAN's runtime assembly load: the wide-window SIGILL persisted with these env flags set, and more aggressive `DOTNET_EnableHWIntrinsic=0` / `DOTNET_JitDisableSimdHWIntrinsic=1` combinations did not help. The accepted fix is the default arm64 derivative's .NET Host/Runtime 10.0.9 side-by-side install. **The allow-list pins literal `KEY=VAL` strings, not patterns** — adding a new DOTNET_* knob requires an explicit edit to `ALLOWED_HARDENING_TOKENS` (and this ADR), preserving the no-arbitrary-flag property the Phase 1c security review signed off on.
 - `--storage-opt size=<cap>` — defense-in-depth for writes to the container overlay, when supported
 
 Phase 1's runner spike must record which of these flags the LEAN image actually tolerates. If `--read-only`, `--cap-drop=ALL`, or non-root breaks LEAN, the doc gets updated with the smallest accepted relaxation. The workspace-only mount, no-network rule, no-secrets rule, and hard CPU/memory/time/disk ceilings remain mandatory.
@@ -113,7 +118,7 @@ The launcher enforces an outer timeout (kill the container) **in addition to** a
 - Log capture cap: **8 MB** truncated tail returned in the API; persisted logs count against the per-run disk cap.
 - Per-run source-size cap: **256 KB** for `algorithm_source` (rejects oversized payloads at request validation).
 - Per-run workspace-size cap: enforced by the launcher by monitoring the bind-mounted workspace directory and killing the container when the cap is exceeded. `podman --storage-opt size=...` does **not** cap bind-mounted output and is only defense-in-depth for non-mounted writes. The cap is recorded in `manifest.json`.
-- Per-run memory floor: **3 GiB** (`DEFAULT_RUN_LIMITS.memory_mb = 3072`). Matches the floor Backend's `compose.yaml` documents for csc SIGILL on Apple Silicon under podman applehv. At 2 GiB the LEAN sidecar reproducibly SIGILLs (exit 132) on wider trade-zip windows (~91+ zips), even with the `DOTNET_ReadyToRun=0` / `DOTNET_TieredCompilation=0` env flags set; Backend's comment is explicit that the flags + floor are paired. Lower memory ceilings remain valid per-request overrides for tight environments, but the default is 3 GiB.
+- Per-run memory floor: **3 GiB** (`DEFAULT_RUN_LIMITS.memory_mb = 3072`). The floor remains the default wide-window envelope for LEAN under podman applehv. The prior 2 GiB SIGILL investigation is now superseded by the .NET 10.0.9 runtime-patched arm64 derivative; lower memory ceilings remain valid per-request overrides for tight environments, but the default is 3 GiB.
 
 ---
 

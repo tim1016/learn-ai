@@ -256,3 +256,219 @@ A fix is accepted when:
 | `compose.yaml` (backend block) | Source of the documented (and inapplicable to LEAN) Backend csc fix |
 | `docs/architecture/lean-sidecar-lab.md` | The ADR; § "Container execution boundary" |
 | `docs/handoffs/2026-06-09-lean-sidecar-applehv-sigill-and-parity-gates.md` | Predecessor handoff with the original failure table |
+
+---
+
+## Addendum — 2026-06-10 Codex investigation
+
+### What changed in the diagnosis
+
+The best current explanation is no longer "LEAN assembly R2R contains a bad SVE/SME intrinsic." It is more specific: the pinned LEAN image runs CoreCLR 10.0.2 on an AppleHV-exposed ARM64 CPU feature set that advertises SME/SME2 but not standalone SVE. dotnet/runtime issue `#122608` documents the same macOS Virtualization.Framework/M4/container failure shape, and dotnet/runtime PR `#127398` fixes it by removing a CoreCLR signal-context path that executed the SVE `rdvl` instruction when an SVE signal-frame record was present on SME-only hardware.
+
+Relevant upstream evidence:
+
+- `https://github.com/dotnet/runtime/issues/122608` — `.NET 10 SDK ARM64: Illegal instruction (SIGILL) on Apple M4 with macOS Virtualization.Framework`, closed 2026-04-28.
+- `https://github.com/dotnet/runtime/pull/127398` — `Fix SIGILL crash on ARM64 platforms with SME but no SVE`, merged to `main` on 2026-04-28. The PR body says CoreCLR was calling `CONTEXT_GetSveLengthFromOS()`, which executes `rdvl`, from signal context handling; on Apple M4 + Virtualization.Framework the kernel may provide an SVE context record because of SME streaming SVE even though standalone SVE instructions are illegal.
+
+Local facts from this host:
+
+- Host: podman 5.8.2, rootless AppleHV machine, Rosetta enabled.
+- Pinned derivative image: `localhost/learn-ai/lean-sandbox@sha256:e2186f2e3e3e2c1ffb579c8cdbd4f74211a9c453893cb8273685555031b8187e`.
+- Pinned image architecture/runtime:
+  - `uname -m`: `aarch64`
+  - `.NET SDK`: `10.0.102`
+  - `.NET host/runtime`: `10.0.2`
+  - LEAN labels: `lean_version=17748`, `target_framework=net10.0`
+  - `/proc/cpuinfo` includes `sme`, `sme2`, `sme2p1`; it does not list `sve`/`sve2`.
+- Latest pulled `docker.io/quantconnect/lean:latest` arm64 image is still `.NET host 10.0.2` with LEAN label `lean_version=17764`, so a normal latest-base bump is unlikely to contain PR `#127398`.
+- `quantconnect/lean:latest` is multi-arch. Manifest inspection shows an `amd64/linux` digest (`sha256:a21369b90a5b1da4c5f458da8e956f5c1f091c4e2ed5a2b5d5eac8f04cdd9bf5`) and an `arm64/linux` digest (`sha256:780427dc35095e6986a80d4ae68dee2593c33f5cd46184275923ca03b08e03ce`). A full amd64 pull was started as a probe but stopped because it was large and not needed for this diagnosis.
+
+### Implications
+
+1. `DOTNET_ReadyToRun=0`, `DOTNET_TieredCompilation=0`, `DOTNET_EnableHWIntrinsic=0`, and `DOTNET_JitDisableSimdHWIntrinsic=1` are probably the wrong fix class. The upstream bug is in CoreCLR signal-context capture, not in managed SIMD codegen or R2R payload selection. That matches the empirical result: the env flags did not unblock the 2-month run and introduced the separate Python.Runtime GIL-finalizer crash on the 6-day baseline.
+2. Rebuilding LEAN assemblies with `PublishReadyToRun=false` may also be a lower-value path than it looked. If the trap is CoreCLR 10.0.2's `libcoreclr.so` signal handler, replacing LEAN DLLs will not remove it.
+3. The highest-value fix path is to run LEAN on a .NET runtime that contains dotnet/runtime PR `#127398`, or avoid native arm64 CoreCLR under AppleHV by running the amd64 LEAN image via Rosetta.
+
+### Concrete next experiments
+
+Recommended order:
+
+1. **Runtime-patch derivative image**: build a new `localhost/learn-ai/lean-sandbox:*` derivative that starts from the current pinned LEAN image but replaces `/root/.dotnet/shared/Microsoft.NETCore.App/10.0.2` and host/fxr components with the first .NET 10 servicing build that contains PR `#127398` once available. Before doing this, verify the servicing version/changelog or inspect `libcoreclr.so` symbols/source package so the image change is not guesswork. Then pin the new derivative digest and run both gates:
+   - 2-month SPY EMA crossover: expect `exit_code=0`, `is_clean=true`, `lean_total_fills > 0`.
+   - 6-day baseline: expect `exit_code=0`, `is_clean=true`.
+2. **amd64/Rosetta fallback probe**: build the same thin derivative from `quantconnect/lean@sha256:a21369b90a5b1da4c5f458da8e956f5c1f091c4e2ed5a2b5d5eac8f04cdd9bf5` with `--platform linux/amd64`, add an explicit platform field to the runner or a separate pinned image repo name, and run the two gates. This is likely slower but avoids the ARM64 CoreCLR/AppleHV bug entirely and is supported by the upstream issue's reported workaround.
+3. **Coredump only if the two image-level paths fail**: if a patched CoreCLR or amd64 image still SIGILLs, then add the `DIAGNOSTICS_COREDUMP` profile from Path A and capture the trapping PC. At that point the failure is likely not PR `#127398` and needs instruction-level evidence.
+
+### Small cleanup noticed
+
+`PythonDataService/tests/lean_sidecar/test_hardening_profile.py::TestLaunchRequestModel.test_hardening_profile_accepts_applehv_dotnet_fix_value` has a stale docstring saying `lean_sidecar_service.py now defaults trusted-runs to this profile`. The service intentionally does not wire that profile because it regresses the 6-day baseline. The test behavior is fine; the comment should be corrected in the follow-up PR.
+
+---
+
+## Addendum — 2026-06-09 amd64/Rosetta empirical bisection (rules out Path 2)
+
+### TL;DR
+
+Codex's Path 2 (amd64 LEAN via Rosetta as a workaround for the AArch64 SIGILL) is **empirically ruled out** on this host (podman 5.8.2 applehv rootless on Apple Silicon, Rosetta enabled, podman machine 16 CPU / 32 GiB / 100 GiB). The .NET 10 runtime itself runs cleanly under Rosetta, but LEAN's JIT'd code path consistently crashes Rosetta during startup. The bisection in this addendum should save the next investigator the ~30 minutes of pull/build/restart needed to reproduce.
+
+Codex's Path 1 (replace CoreCLR with a servicing build containing dotnet/runtime PR #127398) and the broader **external x86_64 Linux** option (cloud VM, native amd64 hardware, Windows host) remain the only known paths to wide-window LEAN execution on Apple Silicon.
+
+### What was tried, what landed in the repo
+
+PR-quality plumbing for the amd64 path was authored and is **deliberately kept in place as opt-in** (`PINNED_LEAN_IMAGE_DIGEST_AMD64`, `DIGEST_PLATFORMS`, `_platform_for_digest`, `--platform=linux/amd64` argv derivation, `Dockerfile.amd64`). The default pin (`PINNED_LEAN_IMAGE_DIGEST`) was switched back to the arm64 derivative after the empirical findings below; the arm64 6-day baseline was re-verified as clean (`exit 0`, 4.7s) after the revert.
+
+- `PythonDataService/lean_sidecar/Dockerfile.amd64` — pins `quantconnect/lean@sha256:a21369b9…` (lean_version 17764, net10.0). FROM stanza uses `--platform=linux/amd64`. Mirrors the arm64 derivative's `chmod 0755 /root` (no-op on the amd64 image whose `/root` already ships 0755, retained for build uniformity).
+- `PythonDataService/app/lean_sidecar/config.py`:
+  - `PINNED_LEAN_IMAGE_DIGEST_AMD64 = "sha256:bdb7c7aa3bd5f196905442706f9ebd6d22de08e21cf6ac5cc74b621690005a75"` (the locally-built amd64 derivative).
+  - `PINNED_LEAN_IMAGE_DIGEST_ARM64` retains the prior arm64 pin.
+  - `ALLOWED_IMAGE_DIGESTS` is the union of both.
+  - `DIGEST_PLATFORMS: dict[str, str]` keys the amd64 digest to `"linux/amd64"` so callers that opt in get a deterministic `--platform` flag at `podman run` time.
+- `PythonDataService/app/lean_sidecar/runner.py`:
+  - `_platform_for_digest(image_digest)` reads `DIGEST_PLATFORMS`. Returns `None` for native-arch digests.
+  - `build_command` appends `--platform=<value>` immediately after `--rm` when the lookup is non-`None`; existing native-arm64 callers (and all `DUMMY_DIGEST` tests) get the same argv they got before.
+
+### Empirical findings on amd64/Rosetta
+
+Host: podman 5.8.2, applehv rootless, Rosetta enabled (`podman machine inspect` → `"Rosetta": true`).
+
+| Smoke | Image / cmd | Result |
+|---|---|---|
+| `--platform linux/amd64 alpine:3.20 uname -m` | tiny | ✓ `x86_64` (Rosetta translates) |
+| `--platform linux/amd64 debian:bookworm-slim` + Microsoft's `dotnet-install.sh` (.NET 10.0.9) | tiny | ✓ `dotnet --info` clean, `linux-x64` RID, exit 0 |
+| amd64 LEAN derivative, `dotnet --info` inside the image | full LEAN image | ✓ .NET SDK 10.0.101 / Host 10.0.1 / `Ubuntu 22.04 / linux-x64`, no SIGILL |
+| amd64 LEAN derivative + staged 6-day SPY EMA workspace (`amd64_repro_6day`) via real trusted-runs path | full | ✗ `exit_code=1`, `duration_ms=74149`. LEAN booted (Composer ✓, Python.Runtime ✓, Engine.Main ✓), then **NRE creating `Newtonsoft.Json.Converters.StringEnumConverter`** inside `QuantConnect.Util.MarketHoursDatabaseJsonConverter.Create` → `MarketHoursDatabase.FromFile`. Workspace JSON sha matches the amd64 image's `/Lean/Data/market-hours/market-hours-database.json` byte-for-byte (sha1 `7a27a324…`), so the input is not the cause. |
+| amd64 LEAN derivative, **built-in BasicTemplate CSharp algorithm, no workspace mount** | image-internal | ✗ `qemu: uncaught target signal 11 (Segmentation fault) - core dumped` after `TextSubscriptionDataSourceReader.SetCacheSize(): Setting cache size to 71582788 items`. LEAN booted to the same point as above before crashing. |
+| Same BasicTemplate run + `DOTNET_ReadyToRun=0 DOTNET_TieredCompilation=0` | image-internal | ✗ same segfault, same point |
+| Same BasicTemplate run + `DOTNET_gcServer=0 DOTNET_EnableHWIntrinsic=0 DOTNET_JitDisableSimdHWIntrinsic=1 DOTNET_ReadyToRun=0` | image-internal | ✗ segfault even earlier — immediately after `Composer.LoadPartsSafely` |
+
+Earliest TRACE noise in every LEAN-amd64 run is identical:
+```
+TRACE:: Composer.LoadPartsSafely(/Lean/Launcher/bin/Debug/System.Private.ServiceModel.dll):
+  Skipping FileLoadException: ... assembly's manifest definition does not match the
+  assembly reference. (0x80131040)
+```
+This warning is present on arm64 too and is not the proximate cause — but the upstream `quantconnect/lean` amd64 build does ship at least one mismatched assembly reference.
+
+Diagnostic notes:
+- Image is genuinely amd64 (`podman image inspect` → `Architecture: amd64`), and the JIT confirms `x64` host architecture at startup. The `qemu: uncaught target signal 11` is Apple Rosetta's qemu-user component surfacing a SIGSEGV it could not translate / deliver to the guest; this is a Rosetta-translation crash, not a managed .NET fault.
+- The staged-workspace path's managed NRE (`StringEnumConverter()` constructor → `NullReferenceException` inside `JsonTypeReflector.GetCreator`'s compiled `Expression.New(...)` delegate) is also consistent with Rosetta-emitted x86_64 misbehaving on a specific reflection-emit code path: the constructor itself takes no args and does nothing reachable that could legitimately NRE; the failure is the JIT'd / Rosetta-translated call site, not the constructor body.
+- The two failures (Rosetta SIGSEGV in BasicTemplate; managed NRE in the staged path) happen at different stages because the staged path needs `MarketHoursDatabase` deserialized before any data-feed code runs, so the Newtonsoft path is exercised first; the BasicTemplate path bypasses that and reaches `TextSubscriptionDataSourceReader.SetCacheSize` before Rosetta hits a different bad-translation site.
+
+### Implications
+
+1. **Path 2 (amd64 + Rosetta) is not viable on this host.** The .NET runtime itself works under Rosetta, but LEAN's specific JIT'd / reflection-heavy startup code does not. No subset of `DOTNET_ReadyToRun`, `DOTNET_TieredCompilation`, `DOTNET_gcServer`, `DOTNET_EnableHWIntrinsic`, or `DOTNET_JitDisableSimdHWIntrinsic` moves the failure point in a useful direction.
+2. **Path 1 (runtime-patch derivative) remains the only known path to wide-window LEAN on Apple Silicon**, and is gated on a `.NET 10.0.x` servicing build that contains dotnet/runtime PR #127398.
+3. **External x86_64 Linux is now the only known path that does not require waiting on Microsoft**: a cloud VM, a native amd64 workstation, or Windows on x86_64 hardware. This also happens to be the closest reproduction of the Windows-validated SPY EMA-crossover bit-exact baseline at `app/engine/tests/fixtures/spy_lean_trades.csv` — the parity claim the Python engine is meant to be validated against.
+4. **The arm64 narrow-window path is unaffected.** The 6-day baseline (`exit 0`, ~5s) remains the only clean LEAN execution surface on this host today. Anything that can be reconciled at ≤ 12-zip windows can be validated against Python here and now; Phase 5g.3 (the `cross_runner` → `cross_reconciler` HTTP endpoint, currently a 501 stub) is the unblocked next step for that scope.
+
+### Recommended next experiments
+
+Priority order, given today's evidence:
+
+1. **Wire Phase 5g.3 `POST /api/lean-sidecar/runs/{id}/cross-reconcile` (currently a 501 stub) to the existing `cross_runner` + `cross_reconciler` modules.** Run the SAME 6-day SPY EMA-crossover window through both engines on the SAME staged data, classify divergences with the existing 8-category taxonomy, and write the report to `docs/references/reconciliations/`. This is the path most aligned with the user's stated goal ("make LEAN match Python on the same data") that is unblocked on this host today. It will not exercise wide-window strategy state, but it does close the methodology gap.
+2. **External x86_64 Linux for wide-window LEAN.** Pick a substrate that runs the amd64 derivative natively (cloud VM is cheapest to validate; a colleague's x86_64 Linux box is fastest). Re-run the 2-month gate. If clean, capture the trade log and start a wide-window reconciliation against Python.
+3. **Watch dotnet/runtime PR #127398 for a 10.0.x servicing release.** When it lands, build a Path-1 derivative against the patched runtime, re-pin, and the arm64 wide-window SIGILL gate is cleared on this host without external infrastructure. No periodic polling required — the dotnet/runtime issue tracker (`#122608`) will surface the release.
+
+### What was NOT tried (and why)
+
+- **Older `quantconnect/lean` amd64 tags.** A version-matched amd64 base for `lean_version=17748` is not retrievable from Docker Hub (the multi-arch index for `:latest` has rotated). Pulling older arbitrary tags would be ~13 GB per probe with no a-priori reason to expect a working substrate. Not net-positive for this investigation; documented for completeness.
+- **Coredump-driven instruction trace (Codex Path 3).** Punted to follow-up because the SIGSEGV happens in Rosetta-emitted code, not in CoreCLR-emitted code — symbolizing the trapping PC requires Rosetta's internal symbols, which Apple does not ship. The `dotnet-dump` path would yield managed-only frames and is unlikely to identify the root cause. The user message attached to the segfault (`qemu: uncaught target signal 11`) is already the strongest classifier available.
+
+### Small cleanup landed in this work
+
+- `PythonDataService/tests/lean_sidecar/test_hardening_profile.py::TestLaunchRequestModel.test_hardening_profile_accepts_applehv_dotnet_fix_value` — docstring corrected to reflect that `lean_sidecar_service.py` intentionally does **not** wire the AppleHV-DOTNET-FIX profile (its env flags do not unblock the wide-window SIGILL and introduce a separate GIL-finalizer race on the 6-day baseline). Behavior unchanged.
+
+---
+
+## Addendum — 2026-06-10 long-window SPY EMA check
+
+User request: run a longer-duration SPY EMA-crossover check (6 months or 1 year) to see whether LEAN and Python have matching trades.
+
+### Six-month run
+
+- Run ID: `spy_ema_6mo_20260610_cx1`
+- Window: 2025-12-10 09:30 ET through exclusive end 2026-06-10 09:30 ET
+- Template / strategy: LEAN `ema_crossover`; Python `SpyEmaCrossoverAlgorithm`
+- Staged data: 124 trade zips and 124 quote zips
+- LEAN result: `exit_code=132`, `is_clean=false`, `duration_ms=724`
+- LEAN crash point:
+  ```text
+  TRACE:: Using /lean-run/project/config.json as configuration file
+  TRACE:: Composer(): Loading Assemblies from /Lean/Launcher/bin/Debug/
+  TRACE:: Python for .NET Assembly: Python.Runtime, Version=2.0.54.0, Culture=neutral, PublicKeyToken=5000fea6cba702dd
+  ```
+- Normalized LEAN result: absent (`normalized_path=null`)
+- Cross-reconcile endpoint result: 404 `normalized_missing`
+- Python-on-same-staged-data result: 44 order events
+
+First Python events:
+
+```text
+2025-12-10T14:15:00Z Buy 145 @ 684.75 fee 1.00
+2025-12-10T15:30:00Z Sell 145 @ 688.12 fee 1.00
+2025-12-18T14:45:00Z Buy 148 @ 676.28 fee 1.00
+2025-12-18T16:00:00Z Sell 148 @ 680.03 fee 1.00
+```
+
+### One-year run
+
+- Run ID: `spy_ema_1yr_20260610_cx1`
+- Window: 2025-06-10 09:30 ET through exclusive end 2026-06-10 09:30 ET
+- Template / strategy: LEAN `ema_crossover`; Python `SpyEmaCrossoverAlgorithm`
+- Staged data: 251 trade zips and 251 quote zips
+- LEAN result: `exit_code=132`, `is_clean=false`, `duration_ms=892`
+- LEAN crash point:
+  ```text
+  TRACE:: Using /lean-run/project/config.json as configuration file
+  TRACE:: Composer(): Loading Assemblies from /Lean/Launcher/bin/Debug/
+  TRACE:: Python for .NET Assembly: Python.Runtime, Version=2.0.54.0, Culture=neutral, PublicKeyToken=5000fea6cba702dd
+  TRACE:: Composer.LoadPartsSafely(/Lean/Launcher/bin/Debug/System.Private.ServiceModel.dll): Skipping FileLoadException: ...
+  ```
+- Normalized LEAN result: absent (`normalized_path=null`)
+- Cross-reconcile endpoint result: 404 `normalized_missing`
+- Python-on-same-staged-data result: 70 order events
+
+First and last Python events:
+
+```text
+2025-06-18T10:15:00-04:00 Buy 166 @ 600.08 fee 1.00
+2025-06-18T11:30:00-04:00 Sell 166 @ 600.10 fee 1.00
+2025-06-30T09:45:00-04:00 Buy 161 @ 616.39 fee 1.00
+2025-06-30T11:00:00-04:00 Sell 161 @ 616.01 fee 1.00
+...
+2026-05-28T10:15:00-04:00 Buy 137 @ 753.06 fee 1.00
+2026-05-28T11:30:00-04:00 Sell 137 @ 753.94 fee 1.00
+2026-06-09T09:45:00-04:00 Buy 139 @ 745.3598 fee 1.00
+2026-06-09T11:00:00-04:00 Sell 139 @ 737.75 fee 1.00
+```
+
+### Conclusion
+
+The long-window data and Python strategy are meaningful: Python emits trades on both 6-month and 1-year windows when run against the exact staged LEAN workspace data. LEAN still crashes before producing `log.txt` or normalized order events, so there is no LEAN trade list to compare. The blocker remains the native arm64 AppleHV/CoreCLR SIGILL described above; this host cannot prove long-window trade parity until either a patched .NET runtime image is available or the same runs are executed on external native x86_64 Linux.
+
+---
+
+## Addendum — 2026-06-10 runtime-patched arm64 fix
+
+The native arm64 path is now unblocked on this host. A thin derivative image keeps the pinned LEAN engine payload at `lean_version=17748` and installs .NET Host/Runtime 10.0.9 side-by-side with the image's original 10.0.2 runtime:
+
+- Dockerfile: `PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109`
+- Upstream LEAN base: `docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
+- Runtime source: `mcr.microsoft.com/dotnet/runtime@sha256:62b592e657ceebbfd24203430542232559dcb7b73e45cc3ebb48c7bba8c2e2f0`
+- New pinned default digest: `localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d`
+
+The runtimeconfig for LEAN targets `Microsoft.NETCore.App` version `10.0.0`, so normal patch roll-forward selects the installed 10.0.9 runtime. The amd64/Rosetta digest remains allow-listed and platform-keyed as opt-in only; it is not the default.
+
+### Acceptance runs
+
+All runs below used the normal `POST /api/lean-sidecar/trusted-runs` path through the host launcher and the data-plane container.
+
+| Run ID | Window | LEAN result | Data requests | Trade reconciliation |
+|---|---:|---:|---:|---:|
+| `spy_ema_6day_dotnet109_cx1` | 2026-06-02 09:30 ET to 2026-06-09 09:30 ET exclusive | `exit_code=0`, `is_clean=true`, 0 orders, end equity 100000.00 | 12/12 succeeded | not needed; no fills |
+| `spy_ema_6mo_dotnet109_cx1` | 2025-12-10 09:30 ET to 2026-06-10 09:30 ET exclusive | `exit_code=0`, `is_clean=true`, 44 LEAN orders, end equity 101254.03, `OrderListHash 34dc2c99a2b3cc6f92130b7976e76e29` | 250/250 succeeded | passed: 44 LEAN fills, 44 Python fills, 44 matched, 0 divergences |
+| `spy_ema_1yr_dotnet109_cx1` | 2025-06-10 09:30 ET to 2026-06-10 09:30 ET exclusive | `exit_code=0`, `is_clean=true`, 70 LEAN orders, end equity 103222.54, `OrderListHash b4ef267072771c561a86673d484765f8` | 504/504 succeeded | passed: 70 LEAN fills, 70 Python fills, 70 matched, 0 divergences |
+
+### Conclusion
+
+Path 1 is accepted: the crash was fixed by replacing CoreCLR 10.0.2 with a 10.0.9 runtime inside the native arm64 LEAN derivative. The DOTNET env-flag profile remains diagnostic scaffolding only and should not be enabled for trusted runs. Rosetta remains ruled out on this host.
