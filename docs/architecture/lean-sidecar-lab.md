@@ -83,7 +83,7 @@ The non-negotiable shape of every LEAN sidecar invocation:
 podman run --rm \
   --network=none \
   --cpus=2 \
-  --memory=2g \
+  --memory=3g \
   --pids-limit=512 \
   --security-opt=no-new-privileges \
   --cap-drop=ALL \
@@ -100,6 +100,7 @@ Additional flags applied **if compatible** with the chosen LEAN image (validated
 - `--read-only` — root filesystem read-only
 - `--tmpfs /tmp:rw,noexec,nosuid,size=256m`
 - `--user <host-uid>` — drop root inside the container; paired with `--userns=keep-id` on rootless podman so the container UID actually maps to the host UID that owns the workspace files (without it, container UID 1000 maps to a `/etc/subuid` sub-UID like 100999 and POSIX permissions reject every write to `output/`, crashing LEAN inside `BacktestingResultHandler.Exit()`).
+- `--env DOTNET_ReadyToRun=0`, `--env DOTNET_TieredCompilation=0` — AppleHV-podman work-around. The .NET 10 SDK ships R2R-precompiled images containing SVE/SME intrinsic sequences that the AppleHV-virtualized CPU cannot execute, even though cpuinfo advertises sve2/sme2/sme2p1. Forcing JIT over R2R (`DOTNET_ReadyToRun=0`) and skipping tier-0 quick-JIT (`DOTNET_TieredCompilation=0`) is the same fix Backend's `compose.yaml` applies for csc SIGILL (exit 132). On Linux x86_64 both flags are no-ops. **The allow-list pins literal `KEY=VAL` strings, not patterns** — adding a new DOTNET_* knob requires an explicit edit to `ALLOWED_HARDENING_TOKENS` (and this ADR), preserving the no-arbitrary-flag property the Phase 1c security review signed off on.
 - `--storage-opt size=<cap>` — defense-in-depth for writes to the container overlay, when supported
 
 Phase 1's runner spike must record which of these flags the LEAN image actually tolerates. If `--read-only`, `--cap-drop=ALL`, or non-root breaks LEAN, the doc gets updated with the smallest accepted relaxation. The workspace-only mount, no-network rule, no-secrets rule, and hard CPU/memory/time/disk ceilings remain mandatory.
@@ -112,6 +113,7 @@ The launcher enforces an outer timeout (kill the container) **in addition to** a
 - Log capture cap: **8 MB** truncated tail returned in the API; persisted logs count against the per-run disk cap.
 - Per-run source-size cap: **256 KB** for `algorithm_source` (rejects oversized payloads at request validation).
 - Per-run workspace-size cap: enforced by the launcher by monitoring the bind-mounted workspace directory and killing the container when the cap is exceeded. `podman --storage-opt size=...` does **not** cap bind-mounted output and is only defense-in-depth for non-mounted writes. The cap is recorded in `manifest.json`.
+- Per-run memory floor: **3 GiB** (`DEFAULT_RUN_LIMITS.memory_mb = 3072`). Matches the floor Backend's `compose.yaml` documents for csc SIGILL on Apple Silicon under podman applehv. At 2 GiB the LEAN sidecar reproducibly SIGILLs (exit 132) on wider trade-zip windows (~91+ zips), even with the `DOTNET_ReadyToRun=0` / `DOTNET_TieredCompilation=0` env flags set; Backend's comment is explicit that the flags + floor are paired. Lower memory ceilings remain valid per-request overrides for tight environments, but the default is 3 GiB.
 
 ---
 

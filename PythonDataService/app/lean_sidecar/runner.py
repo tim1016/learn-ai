@@ -51,15 +51,25 @@ CONTAINER_WORKSPACE_MOUNT = "/lean-run"
 #
 # Phase 1c promoted ``--read-only`` and ``--user=10001:10001`` into the
 # mandatory shape, so the only callers-supply hardening surface left
-# is ``--tmpfs <spec>``. Keeping the allow-list (rather than removing
-# it) means a caller passing ``--privileged``,
-# ``--security-opt=seccomp=unconfined``, etc. still aborts the run
-# with ``RunnerConfigurationError`` rather than silently widening the
-# sandbox.
+# is ``--tmpfs <spec>`` and ``--env <DOTNET_*=value>``. Keeping the
+# allow-list (rather than removing it) means a caller passing
+# ``--privileged``, ``--security-opt=seccomp=unconfined``, etc. still
+# aborts the run with ``RunnerConfigurationError`` rather than silently
+# widening the sandbox.
 #
 # The set lists individual argv tokens, not full flag strings, because
-# ``--tmpfs <spec>`` splits across two argv entries. Adding a new flag
-# is a deliberate change this set documents.
+# the paired flags (``--tmpfs <spec>``, ``--env KEY=VAL``) split across
+# two argv entries. Adding a new flag — or a new VALUE for a paired
+# flag — is a deliberate change this set documents.
+#
+# ``--env`` is a more powerful primitive than ``--tmpfs`` (it can set
+# any container-side env var). Safety is preserved by pinning literal
+# ``KEY=VAL`` strings, NOT patterns: a caller cannot smuggle
+# ``DOTNET_EnableDiagnostics=1`` or any other DOTNET_* value by going
+# through this allow-list. The two pinned values are the AppleHV-podman
+# R2R/SME work-around documented in ``compose.yaml`` for the Backend
+# service (csc SIGILL on Apple Silicon under podman applehv); see
+# ``HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX`` below.
 ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
     {
         # --tmpfs takes a second token; allow the flag plus the
@@ -67,6 +77,12 @@ ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=256m",
         "/tmp:rw,noexec,nosuid,size=64m",
+        # --env takes a second token; allow the flag plus exact
+        # KEY=VAL strings — never patterns. New DOTNET_* values
+        # require an explicit allow-list edit + ADR update.
+        "--env",
+        "DOTNET_ReadyToRun=0",
+        "DOTNET_TieredCompilation=0",
     }
 )
 
@@ -94,12 +110,34 @@ class HardeningProfile(StrEnum):
     WITH_TMPFS_256M = "with_tmpfs_256m"
     # Smaller variant for memory-tight environments.
     WITH_TMPFS_64M = "with_tmpfs_64m"
+    # AppleHV-podman work-around on Apple Silicon: the .NET 10 SDK ships
+    # R2R-precompiled images that contain SVE/SME intrinsic sequences
+    # the AppleHV-virtualized CPU cannot execute, even though cpuinfo
+    # advertises sve2/sme2/sme2p1. ``DOTNET_ReadyToRun=0`` forces JIT
+    # over R2R; ``DOTNET_TieredCompilation=0`` skips tier-0 quick-JIT.
+    # Backend's ``compose.yaml`` documents the same pair as the fix for
+    # csc SIGILL (exit 132); the LEAN sidecar exhibits the identical
+    # crash signature on wider trade-zip windows.
+    #
+    # Paired with ``DEFAULT_RUN_LIMITS.memory_mb >= 3072``. Backend's
+    # comment is explicit that at 1 GiB csc still SIGILLs even with
+    # both env flags set — the memory floor is part of the fix, not a
+    # separate concern.
+    WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX = "with_tmpfs_256m_and_applehv_dotnet_fix"
 
 
 HARDENING_PROFILE_TOKENS: dict[HardeningProfile, tuple[str, ...]] = {
     HardeningProfile.MINIMAL: (),
     HardeningProfile.WITH_TMPFS_256M: ("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m"),
     HardeningProfile.WITH_TMPFS_64M: ("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"),
+    HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX: (
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=256m",
+        "--env",
+        "DOTNET_ReadyToRun=0",
+        "--env",
+        "DOTNET_TieredCompilation=0",
+    ),
 }
 
 
@@ -306,11 +344,15 @@ def _validate_hardening_flags(hardening_flags: tuple[str, ...]) -> None:
         )
     # Pair-structure check: each flag-name token (those starting with
     # ``--`` and not self-contained like ``--read-only``) must be
-    # followed by a value token.
+    # followed by a value token. The value token is also checked
+    # against ALLOWED_HARDENING_TOKENS above, so this only catches the
+    # structural shape — ``--tmpfs`` (or ``--env``) without a value
+    # token would let podman consume the next argv entry (the image
+    # reference) as the value, which is the opposite of fail-fast.
     i = 0
     while i < len(hardening_flags):
         token = hardening_flags[i]
-        needs_value = token in {"--tmpfs"}
+        needs_value = token in {"--tmpfs", "--env"}
         if needs_value:
             if i + 1 >= len(hardening_flags):
                 raise RunnerConfigurationError(f"hardening flag {token!r} requires a value token after it; got nothing")

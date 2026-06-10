@@ -60,6 +60,21 @@ class TestProfileMapping:
         expanded = tokens_for_profile(HardeningProfile.WITH_TMPFS_64M)
         assert expanded == ("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m")
 
+    def test_with_applehv_dotnet_fix_expands_to_six_tokens(self) -> None:
+        """Composite profile: tmpfs + the two pinned DOTNET_* env flags
+        that unblock the Apple Silicon / podman-applehv SIGILL on wider
+        trade-zip windows. Token order is load-bearing — ``--env`` is a
+        paired flag and the value must immediately follow the flag."""
+        expanded = tokens_for_profile(HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX)
+        assert expanded == (
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=256m",
+            "--env",
+            "DOTNET_ReadyToRun=0",
+            "--env",
+            "DOTNET_TieredCompilation=0",
+        )
+
     @pytest.mark.parametrize("profile", list(HardeningProfile))
     def test_every_profile_expands_only_to_allow_listed_tokens(self, profile: HardeningProfile) -> None:
         """Regression catch: if a future profile adds a token not in
@@ -109,6 +124,32 @@ class TestBuildCommandWithProfile:
         plan = build_command(workspace, DUMMY_DIGEST, hardening_profile=HardeningProfile.WITH_TMPFS_64M)
         assert "/tmp:rw,noexec,nosuid,size=64m" in plan.argv
 
+    def test_applehv_dotnet_fix_profile_places_env_after_tmpfs(self, workspace: Workspace) -> None:
+        """Pin both the presence AND ordering of the composite profile's
+        argv tokens: ``--env`` is a paired flag so its value must
+        immediately follow it, and the ``--tmpfs`` pair comes first.
+        Regression catch for a future refactor that reorders the
+        HARDENING_PROFILE_TOKENS tuple or interleaves tokens."""
+        plan = build_command(
+            workspace,
+            DUMMY_DIGEST,
+            hardening_profile=HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX,
+        )
+        argv = plan.argv
+        # Both DOTNET_* values reach the constructed argv.
+        assert "DOTNET_ReadyToRun=0" in argv
+        assert "DOTNET_TieredCompilation=0" in argv
+        # ``--env`` value tokens are positioned immediately after each
+        # ``--env`` flag. Walk every ``--env`` index and assert the
+        # next entry is a known DOTNET_* value (not another flag).
+        env_indices = [i for i, tok in enumerate(argv) if tok == "--env"]
+        assert len(env_indices) == 2, f"expected exactly 2 --env flags, got {env_indices}"
+        for idx in env_indices:
+            value = argv[idx + 1]
+            assert value in {"DOTNET_ReadyToRun=0", "DOTNET_TieredCompilation=0"}, (
+                f"--env at index {idx} is followed by {value!r}, not a pinned DOTNET_* value"
+            )
+
 
 class TestLaunchRequestModel:
     def _good_payload(self, **overrides) -> dict:
@@ -133,6 +174,15 @@ class TestLaunchRequestModel:
     def test_hardening_profile_accepts_valid_enum_value(self) -> None:
         req = LaunchRequest.model_validate(self._good_payload(hardening_profile="with_tmpfs_256m"))
         assert req.hardening_profile == "with_tmpfs_256m"
+
+    def test_hardening_profile_accepts_applehv_dotnet_fix_value(self) -> None:
+        """The composite profile must be accepted at the launcher API
+        boundary; lean_sidecar_service.py now defaults trusted-runs to
+        this profile to unblock Apple Silicon wider-window runs."""
+        req = LaunchRequest.model_validate(
+            self._good_payload(hardening_profile="with_tmpfs_256m_and_applehv_dotnet_fix")
+        )
+        assert req.hardening_profile == "with_tmpfs_256m_and_applehv_dotnet_fix"
 
     def test_hardening_profile_rejects_unknown_value(self) -> None:
         with pytest.raises(ValidationError):

@@ -37,6 +37,7 @@ from app.lean_sidecar.config import (
 )
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher_client import post_launch
+from app.lean_sidecar.runner import HardeningProfile
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
@@ -601,6 +602,14 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         wall_clock_timeout_s=DEFAULT_RUN_LIMITS.wall_clock_timeout_s,
         workspace_max_mb=DEFAULT_RUN_LIMITS.workspace_max_mb,
         log_tail_bytes=DEFAULT_RUN_LIMITS.log_tail_bytes,
+        # AppleHV-podman work-around: pair --tmpfs with the
+        # ``DOTNET_ReadyToRun=0`` / ``DOTNET_TieredCompilation=0``
+        # env flags. On Linux x86_64 the env flags are no-ops; on
+        # Apple Silicon under podman applehv they unblock wider
+        # trade-zip windows that otherwise SIGILL (exit 132) at
+        # Composer/Python.Runtime assembly load. See the handoff
+        # ``docs/handoffs/2026-06-09-lean-sidecar-applehv-sigill-and-parity-gates.md``.
+        hardening_profile=HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX.value,
     )
     # Reviewer P1.3: write a manifest on EVERY exit path — success,
     # launcher-rejected, launcher-unreachable, even unexpected errors

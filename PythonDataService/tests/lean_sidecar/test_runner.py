@@ -408,6 +408,107 @@ class TestBuildCommand:
                 hardening_flags=("--tmpfs", "--tmpfs"),
             )
 
+    def test_accepts_pinned_dotnet_env_pair(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        """The AppleHV-podman work-around: ``--env DOTNET_ReadyToRun=0``
+        and ``--env DOTNET_TieredCompilation=0`` must pass the allow-
+        list + pair validator and reach the constructed argv.
+
+        Backend's ``compose.yaml`` documents the same pair as the fix
+        for csc SIGILL (exit 132) on Apple Silicon; the LEAN sidecar
+        exhibits the identical crash on wider trade-zip windows.
+        """
+        ws = resolve_workspace("run_dotnet_env", tmp_artifacts_root)
+        ws.ensure_layout()
+        plan = build_command(
+            ws,
+            DUMMY_DIGEST,
+            hardening_flags=(
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,size=256m",
+                "--env",
+                "DOTNET_ReadyToRun=0",
+                "--env",
+                "DOTNET_TieredCompilation=0",
+            ),
+        )
+        argv = plan.argv
+        assert "--env" in argv
+        assert "DOTNET_ReadyToRun=0" in argv
+        assert "DOTNET_TieredCompilation=0" in argv
+
+    @pytest.mark.parametrize(
+        "smuggled_value",
+        [
+            # Other DOTNET_* knobs an attacker might try to bypass the
+            # allow-list with — the runner must reject every one.
+            "DOTNET_EnableDiagnostics=1",
+            "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0",
+            # Generic env smuggling attempts.
+            "LD_PRELOAD=/tmp/evil.so",
+            "PATH=/tmp",
+            # Right key + wrong value still rejected — the allow-list
+            # pins literal KEY=VAL strings, not patterns.
+            "DOTNET_ReadyToRun=1",
+            "DOTNET_TieredCompilation=1",
+        ],
+    )
+    def test_refuses_unpinned_env_value(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        smuggled_value: str,
+    ) -> None:
+        """``--env`` is more powerful than ``--tmpfs`` (it can set any
+        container-side env var). Safety is preserved by pinning literal
+        KEY=VAL strings in the allow-list, NOT patterns. A caller
+        passing ``--env DOTNET_EnableDiagnostics=1`` or any other
+        non-allow-listed value must be rejected before podman runs.
+        """
+        ws = resolve_workspace("run_env_smuggle", tmp_artifacts_root)
+        ws.ensure_layout()
+        with pytest.raises(RunnerConfigurationError, match="not on the allow-list"):
+            build_command(
+                ws,
+                DUMMY_DIGEST,
+                hardening_flags=("--env", smuggled_value),
+            )
+
+    def test_rejects_env_without_value(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        """``--env`` on its own must fail before podman sees it.
+        Without this check the next token would be the image
+        reference, which podman would treat as the env spec.
+        """
+        ws = resolve_workspace("run_env_no_value", tmp_artifacts_root)
+        ws.ensure_layout()
+        with pytest.raises(RunnerConfigurationError, match="requires a value"):
+            build_command(ws, DUMMY_DIGEST, hardening_flags=("--env",))
+
+    def test_rejects_env_followed_by_another_flag(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        """Structural-validator twin of the ``--tmpfs`` case: ``--env``
+        must be followed by a value token, not another flag. Using
+        ``--env --env`` exercises the pair validator rather than the
+        allow-list."""
+        ws = resolve_workspace("run_env_flag_after_flag", tmp_artifacts_root)
+        ws.ensure_layout()
+        with pytest.raises(RunnerConfigurationError, match="expects a value"):
+            build_command(
+                ws,
+                DUMMY_DIGEST,
+                hardening_flags=("--env", "--env"),
+            )
+
 
 class TestExecuteTimeoutKillsContainer:
     """Review-fix (P1.1): on wall-clock timeout, ``execute`` must read

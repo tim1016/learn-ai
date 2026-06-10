@@ -88,7 +88,17 @@ class RunLimits:
 
 DEFAULT_RUN_LIMITS = RunLimits(
     cpus=2.0,
-    memory_mb=2048,
+    # 3 GiB matches Backend's csc-SIGILL floor in ``compose.yaml``. At
+    # 2 GiB the LEAN sidecar crashes with exit 132 on wider trade-zip
+    # windows (Apple Silicon under podman applehv): the .NET 10 R2R
+    # images contain SVE/SME intrinsic sequences AppleHV cannot run,
+    # and the JIT-fallback path (``DOTNET_ReadyToRun=0`` +
+    # ``DOTNET_TieredCompilation=0``) needs more headroom than 2 GiB.
+    # Backend's comment is explicit that the env flags do not work in
+    # isolation — pairing the floor with the flags is what unblocks
+    # multi-month windows. See
+    # ``HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX``.
+    memory_mb=3072,
     pids_limit=512,
     # 2 hours. Sized to match the router's ``_MAX_TRADING_DAYS = 504``
     # (~2 calendar years of US-equity minute data, Polygon.io Starter
