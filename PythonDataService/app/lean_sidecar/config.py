@@ -26,11 +26,17 @@ from pathlib import Path
 # tests to skip with a clear message rather than silently running an
 # unpinned image.
 
-LEAN_IMAGE_REPO = "quantconnect/lean"
+# The image we run is a thin derivative of upstream quantconnect/lean —
+# see ``PythonDataService/lean_sidecar/Dockerfile``. The derivative only
+# relaxes ``/root`` to mode 0755 so the Phase-1c ``--user=10001:10001``
+# sandbox can traverse to ``/root/.dotnet/dotnet``. Upstream
+# ``quantconnect/lean@sha256:4934c22c…`` (the base) ships ``/root`` as
+# 0700 which is incompatible with non-root execution.
+LEAN_IMAGE_REPO = "localhost/learn-ai/lean-sandbox"
 
 # Resolved by Phase 1 spike on first successful pull. See
 # docs/architecture/lean-sidecar-lab.md §"Runner choice" for the policy.
-PINNED_LEAN_IMAGE_DIGEST: str | None = "sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b"
+PINNED_LEAN_IMAGE_DIGEST: str | None = "sha256:e2186f2e3e3e2c1ffb579c8cdbd4f74211a9c453893cb8273685555031b8187e"
 
 ALLOWED_IMAGE_DIGESTS: frozenset[str] = frozenset(d for d in (PINNED_LEAN_IMAGE_DIGEST,) if d is not None)
 

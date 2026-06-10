@@ -16,8 +16,15 @@ fixture, the security-flag viability matrix, and three end-to-end
 sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
 `--read-only` documented in the security section).
 
-**Pinned LEAN image digest (Phase 1b):**
-`sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
+**Pinned LEAN image (Phase 1c derivative):**
+`localhost/learn-ai/lean-sandbox@sha256:e2186f2e3e3e2c1ffb579c8cdbd4f74211a9c453893cb8273685555031b8187e`
+
+Built locally from upstream base
+`docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
+via `PythonDataService/lean_sidecar/Dockerfile`. The derivative only
+relaxes `/root` from mode 0700 to 0755 so the Phase-1c
+`--user=10001:10001 --read-only` sandbox can exec
+`/root/.dotnet/dotnet`. No other modification.
 
 ---
 
@@ -268,7 +275,15 @@ are often blocked by host firewalls.
 The plan explicitly asks whether `lean backtest` (the official CLI from `lean-cli`) is acceptable. Decision:
 
 - **Use the Docker image directly,** not the CLI, for the first implementation.
-- Pinned image: `quantconnect/lean` at a specific digest resolved in Phase 1 and recorded here. The plan calls for `:latest` initially — that is acceptable for the Phase 1 spike, but the merged Phase 1 PR replaces `:latest` with a `sha256:...` digest in code and in this doc.
+- Pinned image: a thin local derivative `learn-ai/lean-sandbox` of
+  `quantconnect/lean`, at the digest in the callout above. Upstream
+  `:latest` is never resolved at runtime. Phase 1c added the
+  derivative because the upstream image we pinned ships `/root` as
+  0700, incompatible with `--user=10001:10001`. The derivative
+  `FROM`s the upstream digest (not `:latest`) so every rebuild is
+  bit-deterministic w.r.t. upstream. Upgrades are deliberate: bump
+  the `FROM` digest, rebuild, capture the new derivative digest,
+  update `config.py` + this section in one PR.
 - The official `lean-cli` is a convenience wrapper that ultimately invokes the same image, and it adds account/auth steps and login state we don't want in a CI/server flow. Calling the image directly keeps the dependency surface to "podman + a pinned image digest".
 
 ### LEAN compatibility posture
