@@ -2,7 +2,7 @@
   "artifacts": {
     "observations_sha256": "6c49ec61b987824537b9d1a7d89bddb9d3bb08df0fd9adcb7c3e275f168099c2",
     "orders_sha256": "031ccde856c09e6895e638e998ccd1d5c245104fbb2ac03600a7330910102359",
-    "reconciliation_sha256": "eea2692db70817fe84df10ca8a12aff1b53b422abb1cadfbc67acbfe1fab9cb3",
+    "reconciliation_sha256": "7a07df11b71a9bc1e9517bbfbf20fe92131c725188300d870685d5afd92965e5",
     "state_sha256": "08b0970f64ebfbfbdc91aac443f01fc148a226ed200f3b5574e7c44671473167"
   },
   "broker": {
@@ -11,19 +11,19 @@
     "fee_model": "InteractiveBrokersFeeModel",
     "fill_model": "ImmediateFillModel"
   },
-  "captured_at_ms_utc": 1781070230547,
+  "captured_at_ms_utc": 1781078392952,
   "captured_by": "Inkant Awasthi",
   "cell_id": "QQQ_W12mo_2025-05-01_to_2026-04-30",
   "data": {
     "data_contract_hash": "a20fe2d320b22ecd0ee60948f597c062006f42365c0be0e6babb06e27d6155c4",
     "lean_data_capture_ref": "_lean_data_capture/QQQ"
   },
-  "fixture_git_commit": "be29c948e7e3aa935e33f83c8122a87f5871cd31",
-  "generator_script_sha256": "fd6c3ca88d94225d89d8d4857a9e0e6a65f87ee33d8c7a78ecae933b3c1da3b6",
+  "fixture_git_commit": "78096b760e26a8bce64f3f636acd8bc5356fbf7f",
+  "generator_script_sha256": "b8017fcaf4b2c14dcd792e0aa042c06b2f3d83effbf57a3df6624e4fda3d731c",
   "lean_runtime": {
-    "container_image_digest": "docker.io/quantconnect/lean@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
+    "container_image_digest": "localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
   },
-  "python_data_service_commit": "be29c948e7e3aa935e33f83c8122a87f5871cd31",
+  "python_data_service_commit": "78096b760e26a8bce64f3f636acd8bc5356fbf7f",
   "schema_version": 1,
   "state_csv_schema": {
     "column_types": {

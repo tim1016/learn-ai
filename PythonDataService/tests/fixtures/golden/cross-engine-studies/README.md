@@ -23,7 +23,7 @@ Workflow: `python scripts/regenerate_cross_engine_study.py --cell <id> | --ticke
 ## Tests
 
 - Smoke (every PR): `pytest -m cross_engine_smoke` — runs the four W6mo cells.
-- Full (pre-push / nightly): `pytest -m slow tests/research/parity/test_cross_engine_study.py` — runs all 12 (W6mo cells use the smoke marker but are still selected here via the matrix iteration).
+- Full (pre-push / nightly): `pytest -m 'cross_engine_smoke or slow' tests/research/parity/test_cross_engine_study.py` — runs all 12 cells. Plain `-m slow` would skip the W6mo cells because they carry only the `cross_engine_smoke` marker, not `slow`.
 
 ## Acceptance status
 
