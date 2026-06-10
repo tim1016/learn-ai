@@ -47,6 +47,7 @@ from zoneinfo import ZoneInfo  # noqa: E402
 from app.lean_sidecar.config import (  # noqa: E402
     DEFAULT_ARTIFACTS_ROOT,
     DEFAULT_RUN_LIMITS,
+    LEAN_IMAGE_REPO,
     PINNED_LEAN_IMAGE_DIGEST,
 )
 from app.lean_sidecar.cross_runner import CrossRunOrderEvent, run_engine_lab_on_workspace  # noqa: E402
@@ -355,10 +356,17 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
     trading_days_expected = len(_capture_session_dates(cell))
 
     # --- LEAN image digest in the required format ---
+    # Match the actual image that was just run: both pinned digests
+    # (ARM64 and AMD64) are local derivatives under LEAN_IMAGE_REPO,
+    # not upstream ``docker.io/quantconnect/lean``. Recording the
+    # upstream prefix would conflate the two and falsely promise
+    # upstream-image reproducibility. The CellManifest pattern admits
+    # both prefixes; W6mo cells were captured against the upstream
+    # image and keep the docker.io prefix in their committed manifests.
     bare_digest = PINNED_LEAN_IMAGE_DIGEST  # "sha256:..."
     if not bare_digest.startswith("sha256:"):
         raise RuntimeError(f"PINNED_LEAN_IMAGE_DIGEST unexpected format: {bare_digest!r}")
-    container_image_digest = f"docker.io/quantconnect/lean@{bare_digest}"
+    container_image_digest = f"{LEAN_IMAGE_REPO}@{bare_digest}"
 
     # --- strategy constants and runtime parameters (mirror EMA_CROSSOVER_SOURCE) ---
     parameters_constants: dict[str, int | float] = {

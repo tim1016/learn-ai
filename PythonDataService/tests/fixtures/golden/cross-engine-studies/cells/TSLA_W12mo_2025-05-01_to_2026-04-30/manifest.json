@@ -1,0 +1,79 @@
+{
+  "artifacts": {
+    "observations_sha256": "a4ccf021b1e8e0e0762416d34dbb0fba2c9029f6cf6f2c47bece89420bd1e6de",
+    "orders_sha256": "9a5f3ed9a8eab3d32c318e4bc5e52b3e3bc2635b7e7bf508deee4bc07c79c5c3",
+    "reconciliation_sha256": "0e3d09d8d87619ffd3c0b4249345e682622c682c205f58730fb7b2b4d63ccfe8",
+    "state_sha256": "5ec6aad0213d87e5a78448d87daa37b5d350d04845ed1128090b451d4e91abdf"
+  },
+  "broker": {
+    "account_type": "Margin",
+    "brokerage_model": "InteractiveBrokersBrokerage",
+    "fee_model": "InteractiveBrokersFeeModel",
+    "fill_model": "ImmediateFillModel"
+  },
+  "captured_at_ms_utc": 1781078453568,
+  "captured_by": "Inkant Awasthi",
+  "cell_id": "TSLA_W12mo_2025-05-01_to_2026-04-30",
+  "data": {
+    "data_contract_hash": "2a25d5513f1e2bb821d224324346426e49c91ad55473b3f48493ad18ea10a264",
+    "lean_data_capture_ref": "_lean_data_capture/TSLA"
+  },
+  "fixture_git_commit": "78096b760e26a8bce64f3f636acd8bc5356fbf7f",
+  "generator_script_sha256": "b8017fcaf4b2c14dcd792e0aa042c06b2f3d83effbf57a3df6624e4fda3d731c",
+  "lean_runtime": {
+    "container_image_digest": "localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
+  },
+  "python_data_service_commit": "78096b760e26a8bce64f3f636acd8bc5356fbf7f",
+  "schema_version": 1,
+  "state_csv_schema": {
+    "column_types": {
+      "close": "float64",
+      "cross_state": "str",
+      "ema_fast": "float64",
+      "ema_slow": "float64",
+      "rsi": "float64",
+      "signal": "str",
+      "ts_ms_utc": "int64"
+    },
+    "columns": [
+      "ts_ms_utc",
+      "close",
+      "ema_fast",
+      "ema_slow",
+      "rsi",
+      "cross_state",
+      "signal"
+    ]
+  },
+  "strategy": {
+    "parameters_constants": {
+      "EXIT_BARS": 5,
+      "FAST_PERIOD": 5,
+      "GAP_MIN": 0.2,
+      "RSI_HI": 70,
+      "RSI_LO": 50,
+      "RSI_PERIOD": 14,
+      "SLOW_PERIOD": 10
+    },
+    "runtime_parameters": {
+      "adjustment": "raw",
+      "bar_minutes": 15,
+      "session": "regular",
+      "sizing_model": "lean_set_holdings",
+      "starting_cash": 100000,
+      "symbol": "TSLA"
+    },
+    "trusted_sample": "EMA_CROSSOVER_SOURCE",
+    "trusted_sample_source_sha256": "7bd99036d8e98526bc5b75c6760b67960ae676c6dfc667c9b442df95a2c6d581"
+  },
+  "ticker": "TSLA",
+  "timestamp_convention": "int64_ms_utc",
+  "timezone": "America/New_York",
+  "window": {
+    "end_date": "2026-04-30",
+    "label": "W12mo",
+    "session": "regular",
+    "start_date": "2025-05-01",
+    "trading_days_expected": 251
+  }
+}
