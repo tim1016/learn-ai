@@ -23,7 +23,7 @@ Workflow: `python scripts/regenerate_cross_engine_study.py --cell <id> | --ticke
 ## Tests
 
 - Smoke (every PR): `pytest -m cross_engine_smoke` — runs the four W6mo cells.
-- Full (pre-push / nightly): `pytest -m slow tests/research/parity/test_cross_engine_study.py` — runs all 12.
+- Full (pre-push / nightly): `pytest -m slow tests/research/parity/test_cross_engine_study.py` — runs all 12 (W6mo cells use the smoke marker but are still selected here via the matrix iteration).
 
 ## Acceptance status
 
@@ -39,6 +39,10 @@ Current state:
   gained the LEAN stale-signal fill policy for cross-session exits. All
   three pass Gate 3 with zero gating divergences under the IBKR-margin
   contract.
+- **SPY / QQQ / AAPL / TSLA W12mo** — pinned on 2026-06-10 after the
+  AppleHV SIGILL fix (PR #466) made the wide-window LEAN runs reachable on
+  arm64. All four W12mo cells pass Gate 3 with zero gating divergences
+  under the same IBKR-margin contract.
 
-The smoke marker now covers all four W6mo cells. The 12-cell full sweep
-remains slow-gated because W12mo / W24mo cells are not yet pinned.
+The smoke marker covers the four W6mo cells. The W12mo cells are
+slow-marked per the design spec; W24mo cells remain unpinned.

@@ -1,0 +1,79 @@
+{
+  "artifacts": {
+    "observations_sha256": "5a4bcd9b815d6d08566a4c78b323e1d84bd4c2b615c1fb6dafe20d385e410dfa",
+    "orders_sha256": "91372ffba65d3415a63bbc9daf9de0604d207bcb90d3a9838a8ba347740fff15",
+    "reconciliation_sha256": "63d68afdf50ddb2d9f508dea13d3eba785249e1ad13391fe34e0252212e6800d",
+    "state_sha256": "be01e02f7a127dc3176f0d5e8685d80f6767484af5b59c98edf16bff824d29bc"
+  },
+  "broker": {
+    "account_type": "Margin",
+    "brokerage_model": "InteractiveBrokersBrokerage",
+    "fee_model": "InteractiveBrokersFeeModel",
+    "fill_model": "ImmediateFillModel"
+  },
+  "captured_at_ms_utc": 1781070261153,
+  "captured_by": "Inkant Awasthi",
+  "cell_id": "AAPL_W12mo_2025-05-01_to_2026-04-30",
+  "data": {
+    "data_contract_hash": "de64c0845a91510d8f5937b97caeec8b5e8204e2e488029c521b658d01ad945d",
+    "lean_data_capture_ref": "_lean_data_capture/AAPL"
+  },
+  "fixture_git_commit": "be29c948e7e3aa935e33f83c8122a87f5871cd31",
+  "generator_script_sha256": "fd6c3ca88d94225d89d8d4857a9e0e6a65f87ee33d8c7a78ecae933b3c1da3b6",
+  "lean_runtime": {
+    "container_image_digest": "docker.io/quantconnect/lean@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
+  },
+  "python_data_service_commit": "be29c948e7e3aa935e33f83c8122a87f5871cd31",
+  "schema_version": 1,
+  "state_csv_schema": {
+    "column_types": {
+      "close": "float64",
+      "cross_state": "str",
+      "ema_fast": "float64",
+      "ema_slow": "float64",
+      "rsi": "float64",
+      "signal": "str",
+      "ts_ms_utc": "int64"
+    },
+    "columns": [
+      "ts_ms_utc",
+      "close",
+      "ema_fast",
+      "ema_slow",
+      "rsi",
+      "cross_state",
+      "signal"
+    ]
+  },
+  "strategy": {
+    "parameters_constants": {
+      "EXIT_BARS": 5,
+      "FAST_PERIOD": 5,
+      "GAP_MIN": 0.2,
+      "RSI_HI": 70,
+      "RSI_LO": 50,
+      "RSI_PERIOD": 14,
+      "SLOW_PERIOD": 10
+    },
+    "runtime_parameters": {
+      "adjustment": "raw",
+      "bar_minutes": 15,
+      "session": "regular",
+      "sizing_model": "lean_set_holdings",
+      "starting_cash": 100000,
+      "symbol": "AAPL"
+    },
+    "trusted_sample": "EMA_CROSSOVER_SOURCE",
+    "trusted_sample_source_sha256": "7bd99036d8e98526bc5b75c6760b67960ae676c6dfc667c9b442df95a2c6d581"
+  },
+  "ticker": "AAPL",
+  "timestamp_convention": "int64_ms_utc",
+  "timezone": "America/New_York",
+  "window": {
+    "end_date": "2026-04-30",
+    "label": "W12mo",
+    "session": "regular",
+    "start_date": "2025-05-01",
+    "trading_days_expected": 251
+  }
+}

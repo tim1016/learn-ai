@@ -1,0 +1,79 @@
+{
+  "artifacts": {
+    "observations_sha256": "6c49ec61b987824537b9d1a7d89bddb9d3bb08df0fd9adcb7c3e275f168099c2",
+    "orders_sha256": "031ccde856c09e6895e638e998ccd1d5c245104fbb2ac03600a7330910102359",
+    "reconciliation_sha256": "eea2692db70817fe84df10ca8a12aff1b53b422abb1cadfbc67acbfe1fab9cb3",
+    "state_sha256": "08b0970f64ebfbfbdc91aac443f01fc148a226ed200f3b5574e7c44671473167"
+  },
+  "broker": {
+    "account_type": "Margin",
+    "brokerage_model": "InteractiveBrokersBrokerage",
+    "fee_model": "InteractiveBrokersFeeModel",
+    "fill_model": "ImmediateFillModel"
+  },
+  "captured_at_ms_utc": 1781070230547,
+  "captured_by": "Inkant Awasthi",
+  "cell_id": "QQQ_W12mo_2025-05-01_to_2026-04-30",
+  "data": {
+    "data_contract_hash": "a20fe2d320b22ecd0ee60948f597c062006f42365c0be0e6babb06e27d6155c4",
+    "lean_data_capture_ref": "_lean_data_capture/QQQ"
+  },
+  "fixture_git_commit": "be29c948e7e3aa935e33f83c8122a87f5871cd31",
+  "generator_script_sha256": "fd6c3ca88d94225d89d8d4857a9e0e6a65f87ee33d8c7a78ecae933b3c1da3b6",
+  "lean_runtime": {
+    "container_image_digest": "docker.io/quantconnect/lean@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
+  },
+  "python_data_service_commit": "be29c948e7e3aa935e33f83c8122a87f5871cd31",
+  "schema_version": 1,
+  "state_csv_schema": {
+    "column_types": {
+      "close": "float64",
+      "cross_state": "str",
+      "ema_fast": "float64",
+      "ema_slow": "float64",
+      "rsi": "float64",
+      "signal": "str",
+      "ts_ms_utc": "int64"
+    },
+    "columns": [
+      "ts_ms_utc",
+      "close",
+      "ema_fast",
+      "ema_slow",
+      "rsi",
+      "cross_state",
+      "signal"
+    ]
+  },
+  "strategy": {
+    "parameters_constants": {
+      "EXIT_BARS": 5,
+      "FAST_PERIOD": 5,
+      "GAP_MIN": 0.2,
+      "RSI_HI": 70,
+      "RSI_LO": 50,
+      "RSI_PERIOD": 14,
+      "SLOW_PERIOD": 10
+    },
+    "runtime_parameters": {
+      "adjustment": "raw",
+      "bar_minutes": 15,
+      "session": "regular",
+      "sizing_model": "lean_set_holdings",
+      "starting_cash": 100000,
+      "symbol": "QQQ"
+    },
+    "trusted_sample": "EMA_CROSSOVER_SOURCE",
+    "trusted_sample_source_sha256": "7bd99036d8e98526bc5b75c6760b67960ae676c6dfc667c9b442df95a2c6d581"
+  },
+  "ticker": "QQQ",
+  "timestamp_convention": "int64_ms_utc",
+  "timezone": "America/New_York",
+  "window": {
+    "end_date": "2026-04-30",
+    "label": "W12mo",
+    "session": "regular",
+    "start_date": "2025-05-01",
+    "trading_days_expected": 251
+  }
+}
