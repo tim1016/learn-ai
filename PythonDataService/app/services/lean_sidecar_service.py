@@ -602,14 +602,22 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         wall_clock_timeout_s=DEFAULT_RUN_LIMITS.wall_clock_timeout_s,
         workspace_max_mb=DEFAULT_RUN_LIMITS.workspace_max_mb,
         log_tail_bytes=DEFAULT_RUN_LIMITS.log_tail_bytes,
-        # AppleHV-podman work-around: pair --tmpfs with the
-        # ``DOTNET_ReadyToRun=0`` / ``DOTNET_TieredCompilation=0``
-        # env flags. On Linux x86_64 the env flags are no-ops; on
-        # Apple Silicon under podman applehv they unblock wider
-        # trade-zip windows that otherwise SIGILL (exit 132) at
-        # Composer/Python.Runtime assembly load. See the handoff
-        # ``docs/handoffs/2026-06-09-lean-sidecar-applehv-sigill-and-parity-gates.md``.
-        hardening_profile=HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX.value,
+        # Intentionally NOT setting hardening_profile until we have a
+        # verified fix for the wide-window SIGILL. The plumbing is in
+        # place (HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX
+        # composes the tmpfs + the two ``DOTNET_*=0`` env flags) but
+        # the 2026-06-09 in-session empirical bisection showed:
+        # - Composer SIGILL on wide windows (2-month+) persists even
+        #   with both DOTNET_* env flags set (verified at runner argv +
+        #   container env levels). Backend's csc fix did not transfer
+        #   to LEAN's runtime assembly load.
+        # - The DOTNET_* flags introduce a GIL race in
+        #   ``GC.RunFinalizers`` at shutdown on the previously-clean
+        #   6-day window. Wiring them in by default would regress a
+        #   working baseline.
+        # The follow-up that finds the right env values (or a
+        # different fix path — coredump, image rebuild, version bump)
+        # should re-add ``hardening_profile=...`` here.
     )
     # Reviewer P1.3: write a manifest on EVERY exit path — success,
     # launcher-rejected, launcher-unreachable, even unexpected errors
