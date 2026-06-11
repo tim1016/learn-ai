@@ -210,7 +210,7 @@ export class EngineReplayV2Component {
    *  Minimal API default JSON casing is camelCase, but the `PnL` property
    *  serializes as `pnL` (lowercase first char only) — hence the remap. */
   private fetchStudyTrades(studyId: number): Observable<BacktestTrade[]> {
-    const backendBase = (environment.backendUrl ?? 'http://localhost:5000').replace(/\/graphql$/, '');
+    const backendBase = environment.backendUrl.replace(/\/graphql$/, '');
     return this.http
       .get<StudyDetailResponse>(`${backendBase}/api/studies/${studyId}`)
       .pipe(map(detail => (detail.trades ?? []).map(t => ({

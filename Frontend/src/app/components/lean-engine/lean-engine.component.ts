@@ -1262,7 +1262,7 @@ export class LeanEngineComponent implements OnInit {
   // History → load past study into Results tab
   // ------------------------------------------------------------------
   async onStudySelected(studyId: number): Promise<void> {
-    const backendBase = (environment.backendUrl ?? 'http://localhost:5000').replace(/\/graphql$/, '');
+    const backendBase = environment.backendUrl.replace(/\/graphql$/, '');
     try {
       const detail = await firstValueFrom(
         this.http.get<any>(`${backendBase}/api/studies/${studyId}`)
