@@ -808,13 +808,22 @@ export class LeanEngineComponent implements OnInit {
       // (``lean_sidecar_service.run_trusted_sample``) is unchanged —
       // see #470. The synchronous ``/api/lean-sidecar/trusted-runs``
       // endpoint stays callable for test infra and reconcile scripts.
+      // The internal job route expects the trusted-run body under a
+      // ``request`` sub-object (mirrors how ``engine_backtest`` wraps
+      // its EngineBacktestRequest under ``backtest``) so the existing
+      // ``TrustedRunRequestModel`` Pydantic schema stays the single
+      // source of truth for shape validation. Without this wrapper the
+      // python-side ``model_validate(req.request)`` would see ``{}``
+      // and 400 with missing-fields.
       const id = await this.jobsService.startJob("lean_engine_run", {
-        run_id: this.composeRunId(),
-        algorithm_source: this.leanSource(),
-        starting_cash: this.initialCash(),
-        start_ms_utc: this.composeStartMs(),
-        end_ms_utc: endResolution.session_open_ms_utc,
-        data_policy: this.composeDataPolicy(),
+        request: {
+          run_id: this.composeRunId(),
+          algorithm_source: this.leanSource(),
+          starting_cash: this.initialCash(),
+          start_ms_utc: this.composeStartMs(),
+          end_ms_utc: endResolution.session_open_ms_utc,
+          data_policy: this.composeDataPolicy(),
+        },
       });
       this.leanJobId.set(id);
       // ``wireLeanJobEffect`` drives the rest of the UI from the SSE

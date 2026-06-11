@@ -285,7 +285,12 @@ describe('LeanEngineComponent engine selector', () => {
     expect(nextTradingDayOpen).toHaveBeenCalledTimes(1);
     expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-17');
 
-    const payload = startJob.mock.calls[0][1] as TrustedRunRequest;
+    // The body is wrapped under ``request`` to match the existing
+    // ``backtest`` / ``dataset`` envelope pattern other job types use —
+    // ``LeanEngineRunJobRequest`` validates the sub-object through the
+    // existing ``TrustedRunRequestModel`` Pydantic schema.
+    const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
+    const payload = envelope.request;
     expect(payload.algorithm_source).toBe('class MyAlgorithm: pass');
     expect(payload.starting_cash).toBe(100_000);
     expect(payload.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
@@ -328,7 +333,8 @@ describe('LeanEngineComponent engine selector', () => {
     await component.run();
 
     expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-13');
-    const payload = startJob.mock.calls[0][1] as TrustedRunRequest;
+    const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
+    const payload = envelope.request;
     expect(payload.start_ms_utc).toBe(Date.UTC(2025, 0, 13, 14, 30, 0));
     expect(payload.end_ms_utc).toBe(nextOpen);
     expect(payload.end_ms_utc).toBeGreaterThan(payload.start_ms_utc);
