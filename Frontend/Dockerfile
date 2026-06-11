@@ -2,8 +2,12 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Install curl for healthcheck
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# curl: healthcheck. python3 + build-essential: node-gyp toolchain for
+# native deps without prebuilt binaries for linux/arm64 (e.g. bufferutil
+# transitively pulled in by ws). Removed once the native build runs in npm ci.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl python3 build-essential \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy package files and install dependencies (cached unless package*.json changes)
 COPY package.json package-lock.json ./

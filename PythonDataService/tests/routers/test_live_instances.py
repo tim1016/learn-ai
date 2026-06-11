@@ -152,7 +152,7 @@ async def test_status_start_defaults_seed_strategy_from_ledger_key(
     # explicit mode → treated as paper); see the dedicated paper/live tests.
     assert defaults["readonly"] is False
     assert defaults["hydrate_policy"] == "require"
-    assert defaults["max_orders_per_day"] == 4
+    assert defaults["max_orders_per_day"] == 50_000
     assert defaults["ibkr_host"] == "127.0.0.1"
 
 

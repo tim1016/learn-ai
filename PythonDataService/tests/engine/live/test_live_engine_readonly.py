@@ -266,6 +266,97 @@ async def test_max_orders_per_day_includes_force_flat_liquidations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_max_orders_per_day_does_not_leak_cap_tripping_order_to_broker() -> None:
+    """Regression: the cap-tripping order must NEVER reach the broker.
+
+    Pre-fix the cap was checked AFTER ``_submit_pending_with_meta``, so a
+    runaway strategy with cap=N would land N+1 orders at the broker
+    (the N+1th raising right after submission). When IBKR filled the
+    leaked order asynchronously, the engine had already disconnected and
+    never wrote the fill to ``executions.parquet`` — the position
+    orphaned at the broker as "unrecognized" (orphan-fill recovery, in
+    the conversation that produced this fix).
+
+    Post-fix: the predictive check refuses to submit a batch that would
+    cross the cap, so the broker sees AT MOST ``cap`` orders.
+    """
+
+    class _CapTestStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=15), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            assert self.ctx is not None
+            self.ctx.portfolio.submit_market_order(
+                "SPY", 1, self.ctx.current_time, tag="cap-test"
+            )
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        max_orders_per_day=2,
+    )
+    bars = [_bar(minute, "500") for minute in range(30, 80)]
+    with pytest.raises(MaxOrdersPerDayExceeded):
+        await engine.run(_CapTestStrategy(), iter_bars(bars))
+
+    # The cap is 2. Without the fix, the broker would have received 3
+    # orders (one over). With the fix, exactly 2 orders should reach
+    # the wire — the third bar's pending submission is dropped before
+    # it ever leaves the engine.
+    assert len(broker.orders) == 2, (
+        f"cap-tripping order leaked to broker: {len(broker.orders)} orders "
+        f"submitted but cap was 2"
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_orders_per_day_batch_over_cap_drops_entire_batch() -> None:
+    """When a single bar queues a batch that would push past the cap, the
+    entire batch is dropped (not partially submitted).
+
+    Cap=2, batch of 3 on the first bar → broker sees zero orders, engine
+    raises immediately. This is intentionally conservative — refusing to
+    enter a "partially submitted" state is easier to reason about than
+    the alternative (submit the first 2 and drop the 3rd, leaving the
+    strategy with an inconsistent view of its own portfolio).
+    """
+
+    class _BatchStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=15), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            assert self.ctx is not None
+            for _ in range(3):
+                self.ctx.portfolio.submit_market_order(
+                    "SPY", 1, self.ctx.current_time, tag="batch"
+                )
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        max_orders_per_day=2,
+    )
+    bars = [_bar(minute, "500") for minute in range(30, 80)]
+    with pytest.raises(MaxOrdersPerDayExceeded, match="would push total to 3"):
+        await engine.run(_BatchStrategy(), iter_bars(bars))
+
+    assert len(broker.orders) == 0, (
+        f"batch over cap partially submitted: {len(broker.orders)} orders "
+        f"reached the broker before the predictive check fired"
+    )
+
+
+@pytest.mark.asyncio
 async def test_max_orders_per_day_none_disables_cap() -> None:
     """``max_orders_per_day=None`` (default) means no cap — the engine
     should never raise MaxOrdersPerDayExceeded."""

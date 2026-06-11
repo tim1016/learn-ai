@@ -659,14 +659,33 @@ class LiveEngine:
                 # flag and the next bar's queue gets submitted normally.
                 if self._paused:
                     portfolio.pending_orders.clear()
+                # Predictive cap check: refuse to submit the pending batch if
+                # it would push the day's total past ``max_orders_per_day``,
+                # rather than submitting first and raising afterwards.
+                # The post-submission variant of this check raced with IBKR
+                # fill delivery: the engine sent the cap-tripping order,
+                # raised on the next line, started shutdown, and IBKR
+                # delivered the fill milliseconds later — the engine was
+                # already disconnected, so the fill never reached
+                # ``executions.parquet`` and the position became orphaned
+                # at the broker (fleet check then flagged "unrecognized
+                # positions"). Predicting before the wire guarantees the
+                # broker never sees an order the engine won't reconcile.
+                pending_count = len(portfolio.pending_orders)
+                if (
+                    self._max_orders_per_day is not None
+                    and pending_count > 0
+                    and orders_submitted_today + pending_count > self._max_orders_per_day
+                ):
+                    portfolio.pending_orders.clear()
+                    raise MaxOrdersPerDayExceeded(
+                        f"would push total to {orders_submitted_today + pending_count} on "
+                        f"{current_session_date} (cap={self._max_orders_per_day}); "
+                        f"dropped {pending_count} pending order(s) without submission"
+                    )
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
-                if self._max_orders_per_day is not None and orders_submitted_today > self._max_orders_per_day:
-                    raise MaxOrdersPerDayExceeded(
-                        f"submitted {orders_submitted_today} orders on {current_session_date} "
-                        f"(cap={self._max_orders_per_day})"
-                    )
 
                 current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
                 ctx.insight_manager.step(minute_bar.end_time, current_prices)

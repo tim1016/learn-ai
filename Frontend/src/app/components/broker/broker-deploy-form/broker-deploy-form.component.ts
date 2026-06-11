@@ -76,7 +76,7 @@ export class BrokerDeployFormComponent {
   readonly instanceId = signal<string>('');
   readonly readonlyFlag = signal<boolean>(true);
   readonly hydratePolicy = signal<HydratePolicy>('require');
-  readonly maxOrdersPerDay = signal<number>(4);
+  readonly maxOrdersPerDay = signal<number>(50_000);
   readonly startNow = signal<boolean>(false);
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
@@ -234,7 +234,6 @@ export class BrokerDeployFormComponent {
     });
     effect(() => {
       if (this.strategyKey() === 'deployment_validation') {
-        if (this.maxOrdersPerDay() === 4) this.maxOrdersPerDay.set(100);
         if (this.qcAuditCopyPath().trim() === '') {
           this.qcAuditCopyPath.set(DEPLOYMENT_VALIDATION_AUDIT_COPY);
           this.autoSelectedDeploymentValidationAuditCopy.set(true);
@@ -309,7 +308,7 @@ export class BrokerDeployFormComponent {
         readonly: this.readonlyFlag(),
         hydrate_policy: this.hydratePolicy(),
         strategy: strategyKey,
-        max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : 4,
+        max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : 50_000,
         ibkr_host: '127.0.0.1',
       };
     }

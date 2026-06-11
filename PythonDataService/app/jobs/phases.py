@@ -88,11 +88,29 @@ ENGINE_BACKTEST_PHASES: tuple[Phase, ...] = (
 )
 
 
+# ── LEAN sidecar run (external reference runner) ────────────────────────
+# Coarse phases emitted by ``app.services.lean_sidecar_service.run_trusted_sample``
+# when invoked through the ``lean_engine_run`` job worker. ``sidecar_running``
+# is opaque elapsed-time (no sub-bar progress in v1 — the LEAN container
+# is a black box from our side). Pairs with the canonical engine's
+# ENGINE_BACKTEST_PHASES so the Engine Lab run dock shows consistent
+# terminology across engines.
+LEAN_ENGINE_RUN_PHASES: tuple[Phase, ...] = (
+    Phase("staging_data", "Staging LEAN data fixtures", 2),
+    Phase("launching_sidecar", "Submitting launch request", 1),
+    Phase("sidecar_running", "LEAN container running", 5),
+    Phase("parsing_results", "Parsing LEAN output", 1),
+    Phase("persisting", "Persisting run to history", 1),
+    Phase("done", "Run complete", 1),
+)
+
+
 JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,
     "engine_backtest": ENGINE_BACKTEST_PHASES,
+    "lean_engine_run": LEAN_ENGINE_RUN_PHASES,
 }
 
 

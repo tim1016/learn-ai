@@ -286,7 +286,7 @@ class HostRunnerStartRequest(BaseModel):
     readonly: bool = True
     hydrate_policy: HydratePolicy = "require"
     strategy: str = Field(default="spy_ema_crossover", pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    max_orders_per_day: int = Field(default=4, ge=0, le=100)
+    max_orders_per_day: int = Field(default=50_000, ge=0, le=100_000)
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
 
 
@@ -589,7 +589,7 @@ class InstanceStartDefaults(BaseModel):
     strategy: str = ""
     readonly: bool = True
     hydrate_policy: HydratePolicy = "require"
-    max_orders_per_day: int = 4
+    max_orders_per_day: int = 50_000
     ibkr_host: str = "127.0.0.1"
     # Re-deploy prefill: the bound run's ledger deploy identity, so the console
     # can deep-link the deploy form to recover a poisoned/halted instance with a
