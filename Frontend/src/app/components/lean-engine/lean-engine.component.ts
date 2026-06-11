@@ -551,8 +551,11 @@ export class LeanEngineComponent implements OnInit {
   });
 
   constructor() {
-    // Bridge JobsService events → run banner state.
+    // Bridge JobsService events → run banner state. One effect per
+    // engine; both react to the same SSE stream but read different
+    // jobId signals so a Python run and a LEAN run can't tangle.
     this.wireEngineJobEffect();
+    this.wireLeanJobEffect();
 
     // Keep the legacy per-field signals in sync with the picker's
     // writable ``rangeState``. These signals are what the availability
@@ -722,6 +725,10 @@ export class LeanEngineComponent implements OnInit {
   //      the JSON result blob and render Results / Replay as before.
   // ------------------------------------------------------------------
   private engineJobId = signal<string | null>(null);
+  /** Active ``lean_engine_run`` job id (#470). Separate from
+   *  ``engineJobId`` so the dock can show whichever engine is in
+   *  flight without the two effects fighting over the run banner. */
+  private leanJobId = signal<string | null>(null);
 
   async run(): Promise<void> {
     if (this.engine() === "lean") {
@@ -816,35 +823,41 @@ export class LeanEngineComponent implements OnInit {
       const endResolution = await this.leanSidecarService.nextTradingDayOpen(
         this.endDate(),
       );
-      const response = await this.leanSidecarService.startTrustedRun({
-        run_id: this.composeRunId(),
-        algorithm_source: this.leanSource(),
-        starting_cash: this.initialCash(),
-        start_ms_utc: this.composeStartMs(),
-        end_ms_utc: endResolution.session_open_ms_utc,
-        data_policy: this.composeDataPolicy(),
+      // Route through the Jobs API instead of the blocking
+      // ``startTrustedRun`` POST so the run dock surfaces phase
+      // progress (staging_data → launching_sidecar → sidecar_running →
+      // parsing_results → persisting) and the History tab auto-refresh
+      // (#468) picks up the new ``StrategyExecution`` row the moment
+      // ``job.completed`` fires. The underlying orchestrator
+      // (``lean_sidecar_service.run_trusted_sample``) is unchanged —
+      // see #470. The synchronous ``/api/lean-sidecar/trusted-runs``
+      // endpoint stays callable for test infra and reconcile scripts.
+      // The internal job route expects the trusted-run body under a
+      // ``request`` sub-object (mirrors how ``engine_backtest`` wraps
+      // its EngineBacktestRequest under ``backtest``) so the existing
+      // ``TrustedRunRequestModel`` Pydantic schema stays the single
+      // source of truth for shape validation. Without this wrapper the
+      // python-side ``model_validate(req.request)`` would see ``{}``
+      // and 400 with missing-fields.
+      const id = await this.jobsService.startJob("lean_engine_run", {
+        request: {
+          run_id: this.composeRunId(),
+          algorithm_source: this.leanSource(),
+          starting_cash: this.initialCash(),
+          start_ms_utc: this.composeStartMs(),
+          end_ms_utc: endResolution.session_open_ms_utc,
+          data_policy: this.composeDataPolicy(),
+        },
       });
-      // A "clean" run with the benign benchmark-unavailable bucket
-      // populated produced trades and STATISTICS:: but LEAN's
-      // post-strategy housekeeping (default SPY benchmark) failed.
-      // Surface that to the operator inline so alpha/beta zeros in the
-      // stats panel aren't read as a strategy result.
-      const benchmarkMissing =
-        (response.lean_errors?.benchmark_unavailable?.length ?? 0) > 0;
-      this.setRunStatus(
-        response.is_clean ? "completed" : "failed",
-        response.is_clean
-          ? benchmarkMissing
-            ? `LEAN run finished cleanly (run id ${response.run_id}). Note: SPY benchmark was unavailable, so alpha/beta in stats are zero.`
-            : `LEAN run finished cleanly (run id ${response.run_id}).`
-          : `LEAN run finished with errors (exit ${response.exit_code}).`,
-      );
+      this.leanJobId.set(id);
+      // ``wireLeanJobEffect`` drives the rest of the UI from the SSE
+      // stream — setRunStatus updates per phase, terminal events
+      // mirror the runPython terminal handling.
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "LEAN run request failed";
       this.runError.set(message);
       this.setRunStatus("failed", "LEAN run request failed", message);
-    } finally {
       this.running.set(false);
     }
   }
@@ -997,6 +1010,82 @@ export class LeanEngineComponent implements OnInit {
         // effect during the async fetch don't double-handle.
         this.engineJobId.set(null);
         void this.handleEngineJobCompleted(id);
+      }
+    }, { allowSignalWrites: true });
+  }
+
+  /**
+   * Mirror of ``wireEngineJobEffect`` for the LEAN sidecar's
+   * ``lean_engine_run`` job (#470). The terminal handling diverges:
+   * LEAN returns a ``TrustedRunResult`` shape that the Results tab's
+   * ``EngineBacktestResponse`` renderer can't consume directly. v1
+   * keeps the user on the Configure tab with a "completed" headline
+   * — the new ``StrategyExecution`` row appears on the History tab
+   * via #468's auto-refresh, which is where LEAN runs were always
+   * inspected anyway. A LEAN-specific Results renderer is a follow-up.
+   */
+  private wireLeanJobEffect(): void {
+    effect(() => {
+      const id = this.leanJobId();
+      if (!id) return;
+      const job = this.jobsService.job(id);
+      if (!job) return;
+
+      const lastLog = job.recentLogs[job.recentLogs.length - 1]?.message ?? "";
+
+      if (job.status === "queued" || job.status === "running") {
+        const phase = job.phase ?? "connecting";
+        const leanHeadlines: Record<string, string> = {
+          connecting: "Submitting LEAN run…",
+          staging_data: "Staging LEAN data fixtures…",
+          launching_sidecar: "Submitting launch request to the LEAN sidecar…",
+          sidecar_running: "LEAN container running…",
+          parsing_results: "Parsing LEAN output…",
+          persisting: "Persisting run to history…",
+        };
+        const headline = leanHeadlines[phase] ?? `Phase: ${phase}`;
+        // The local ``RunPhase`` union doesn't enumerate every LEAN
+        // phase id, but ``setRunStatus`` only uses it as a CSS hook —
+        // cast through the same coarse states the Python engine uses.
+        const coarsePhase: RunPhase =
+          phase === "connecting"
+            ? "connecting"
+            : phase === "persisting"
+              ? "computing_stats"
+              : phase === "parsing_results"
+                ? "computing_stats"
+                : "simulating";
+        this.setRunStatus(coarsePhase, headline, lastLog);
+        return;
+      }
+
+      if (job.status === "failed") {
+        const message = job.errorMessage ?? "LEAN run failed";
+        this.runError.set(message);
+        this.setRunStatus("failed", "LEAN run failed", message);
+        this.running.set(false);
+        this.leanJobId.set(null);
+        this.jobsService.dismiss(id);
+        return;
+      }
+
+      if (job.status === "cancelled") {
+        this.setRunStatus("failed", "LEAN run cancelled", job.message ?? "");
+        this.running.set(false);
+        this.leanJobId.set(null);
+        this.jobsService.dismiss(id);
+        return;
+      }
+
+      if (job.status === "completed") {
+        // v1: announce completion and rely on History (auto-refreshed
+        // by #468) for the run summary. The LEAN result envelope
+        // ``TrustedRunResult`` is best inspected on the row itself
+        // rather than shoehorned into the Python engine's Results tab.
+        this.setRunStatus("completed", "LEAN run finished — see History for details");
+        this.running.set(false);
+        this.leanJobId.set(null);
+        this.jobsService.dismiss(id);
       }
     }, { allowSignalWrites: true });
   }

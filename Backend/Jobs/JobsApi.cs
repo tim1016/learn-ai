@@ -38,6 +38,7 @@ public static class JobsApi
         ["backtest"] = "/api/jobs-internal/backtest",
         ["dataset-zip"] = "/api/jobs-internal/dataset-zip",
         ["engine_backtest"] = "/api/jobs-internal/engine-backtest",
+        ["lean_engine_run"] = "/api/jobs-internal/lean-engine-run",
         ["cross_sectional"] = "/api/jobs-internal/cross-sectional",
         ["feature_research"] = "/api/jobs-internal/feature-research",
         ["signal_engine"] = "/api/jobs-internal/signal-engine",

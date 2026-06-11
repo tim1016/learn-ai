@@ -21,6 +21,7 @@ tests using snake_case kwargs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import asdict
 from typing import Any
@@ -183,6 +184,20 @@ class EngineBacktestJobRequest(_CamelCaseModel):
 
     job_id: str = Field(..., min_length=1)
     backtest: dict[str, Any] = Field(default_factory=dict)
+
+
+class LeanEngineRunJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/lean-engine-run.
+
+    Wraps the existing synchronous ``TrustedRunRequestModel`` shape as a
+    ``request`` sub-object so the lean-sidecar router's Pydantic
+    validation remains the single source of truth for the payload. The
+    .NET JobsApi forwards the Engine Lab POST body verbatim plus an
+    injected ``job_id``.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    request: dict[str, Any] = Field(default_factory=dict)
 
 
 class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
@@ -442,6 +457,117 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
         return response.model_dump(mode="json")
 
     run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}")
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/lean-engine-run", status_code=status.HTTP_202_ACCEPTED)
+async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
+    """Kick off a LEAN-sidecar run in a worker thread. Returns 202.
+
+    Wraps ``app.services.lean_sidecar_service.run_trusted_sample`` so the
+    Engine Lab's ``runLean()`` path shares the same SSE-driven progress
+    surface as the canonical Python engine. The underlying orchestrator
+    receives ``on_phase`` / ``on_log`` callbacks bound to this job's
+    progress emitter, so the dock and history-auto-refresh wiring need
+    no LEAN-specific code paths.
+
+    The synchronous ``/api/lean-sidecar/trusted-runs`` endpoint stays
+    available for test infra and reconcile scripts that target it
+    directly — it shares the same orchestrator, just without the
+    job-framework envelope.
+    """
+    # Defer imports so the router module doesn't pull the lean-sidecar
+    # subsystem into every test that touches ``jobs``.
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.lean_sidecar.launcher_client import (
+        LauncherClientError,
+        LauncherRejected,
+        LauncherUnreachable,
+    )
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+    from app.services.lean_sidecar_service import (
+        LeanSidecarServiceError,
+        RunIdAlreadyUsedError,
+        TrustedRunRequest,
+        run_trusted_sample,
+    )
+
+    try:
+        payload = TrustedRunRequestModel.model_validate(req.request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"invalid lean-engine-run payload: {exc}"
+        ) from exc
+
+    assert payload.data_policy is not None  # _normalize_to_data_policy guarantees
+    dp = payload.data_policy
+    data_policy = DataPolicy(
+        source=dp.source,
+        symbol=dp.symbol,
+        adjusted=dp.adjusted,
+        session=dp.session,
+        input_bars=BarsSpec(timespan=dp.input_bars.timespan, multiplier=dp.input_bars.multiplier),
+        strategy_bars=BarsSpec(
+            timespan=dp.strategy_bars.timespan,
+            multiplier=dp.strategy_bars.multiplier,
+        ),
+        timestamp_policy=dp.timestamp_policy,
+        timezone=dp.timezone,
+        provider_kind=dp.provider_kind,
+        fixture_id=dp.fixture_id,
+        fixture_sha256=dp.fixture_sha256,
+    )
+    trusted_request = TrustedRunRequest(
+        run_id=payload.run_id,
+        start_ms_utc=payload.start_ms_utc,
+        end_ms_utc=payload.end_ms_utc,
+        starting_cash=payload.starting_cash,
+        algorithm_source=payload.algorithm_source,
+        template=payload.template,
+        data_policy=data_policy,
+    )
+
+    def work(emit: ProgressEmitter, cancel) -> dict | None:
+        cancel.raise_if_cancelled()
+
+        async def _do() -> dict:
+            result = await run_trusted_sample(
+                trusted_request,
+                on_phase=emit.phase,
+                on_log=emit.log,
+            )
+            return result.model_dump(mode="json")
+
+        try:
+            # ``run_trusted_sample`` is async because the launcher and
+            # the .NET persist hop use ``httpx.AsyncClient``. The job
+            # framework runs ``work`` in a thread, so each job gets its
+            # own event loop here — no contention with the FastAPI
+            # request loop.
+            return asyncio.run(_do())
+        except RunIdAlreadyUsedError as e:
+            # The launcher boundary never saw this — fail with a
+            # caller-friendly reason without invoking the launcher's
+            # rejection vocabulary.
+            emit.failed(code="run_id_already_used", message=str(e))
+            return None
+        except LauncherRejected as e:
+            emit.failed(code=e.reason, message=e.message)
+            return None
+        except LauncherUnreachable as e:
+            emit.failed(code="launcher_unreachable", message=str(e))
+            return None
+        except LauncherClientError as e:
+            emit.failed(code="launcher_protocol_error", message=str(e))
+            return None
+        except LeanSidecarServiceError as e:
+            emit.failed(code="lean_sidecar_service_error", message=str(e))
+            return None
+        # All other exceptions propagate; ``run_in_thread`` converts
+        # them to ``job.failed(code=<class>, message=<str>)`` via its
+        # terminal sink.
+
+    run_in_thread(req.job_id, work, thread_name=f"lean-{req.job_id[:8]}")
     return {"job_id": req.job_id, "status": "queued"}
 
 
