@@ -77,10 +77,10 @@
               </li>
               <li>
                 <strong>Client ID conflict.</strong> If another session is
-                holding <code>IBKR_CLIENT_ID</code> (default <code>42</code>),
-                Gateway accepts the socket then drops the handshake. Pick a
-                different ID in <code>.env</code> or restart Gateway to clear
-                stale sessions.
+                holding the same <code>IBKR_CLIENT_ID</code> (the compose +
+                settings default is <code>1</code>), Gateway accepts the
+                socket then drops the handshake. Pick a different ID in
+                <code>.env</code> or restart Gateway to clear stale sessions.
               </li>
             </ol>
             <p class="connect-help-decoder">
