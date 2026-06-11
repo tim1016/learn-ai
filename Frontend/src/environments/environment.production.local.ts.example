@@ -1,11 +1,15 @@
 // Local-machine production environment override.
 // Copy this file to `environment.production.local.ts` (gitignored) before
-// running production builds (`ng build`, `ng build --configuration=production`).
+// running the `production-local` build:
+//   ng build --configuration=production-local
 //
-// Why this file exists: the production build config in angular.json
-// substitutes `environment.ts` with this file at compile time, so per-developer
-// settings (e.g. a remapped backend host port to dodge macOS AirPlay on :5000)
-// don't have to be committed.
+// The default `ng build` / `ng build --configuration=production` keeps using
+// the checked-in `environment.ts` so a fresh checkout and CI both build
+// cleanly without any local-only file. The `production-local` configuration
+// swaps in this file via angular.json's `fileReplacements`, giving each
+// developer a place to record per-machine settings — e.g. a backend host
+// port remapped to dodge macOS AirPlay on :5000 — that should never land
+// in git.
 
 export const environment = {
   production: true,

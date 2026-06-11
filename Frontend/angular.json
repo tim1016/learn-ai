@@ -39,6 +39,16 @@
                   "maximumError": "3MB"
                 }
               ],
+              "outputHashing": "all"
+            },
+            "production-local": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "2MB",
+                  "maximumError": "3MB"
+                }
+              ],
               "outputHashing": "all",
               "fileReplacements": [
                 {
