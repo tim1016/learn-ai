@@ -1,0 +1,22 @@
+<section class="card chart-card" aria-labelledby="bot-chart-heading-{{ resolution() }}">
+  @let m = meta();
+  <header class="card-header">
+    <div>
+      <h2 [id]="'bot-chart-heading-' + resolution()">{{ m.title }}</h2>
+      <p>{{ m.subtitle }}</p>
+    </div>
+    @let tone = statusTone();
+    <span
+      class="status-chip"
+      [class.ok]="tone === 'ok'"
+      [class.warn]="tone === 'warn'"
+      [class.bad]="tone === 'bad'"
+    >
+      {{ symbol() }} · {{ statusLabel() }}
+      @if (tradeCount() > 0) {
+        · {{ tradeCount() }} trades
+      }
+    </span>
+  </header>
+  <div class="chart-wrap" [style.height.px]="m.chartHeight" #container></div>
+</section>

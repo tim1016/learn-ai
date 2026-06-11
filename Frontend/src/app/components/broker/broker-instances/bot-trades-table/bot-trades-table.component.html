@@ -1,0 +1,49 @@
+<section class="card trades-card" aria-labelledby="bot-trades-heading">
+  <header class="card-header">
+    <div>
+      <h2 id="bot-trades-heading">Trade History</h2>
+      <p>Every closed entry/exit pair, newest at the bottom.</p>
+    </div>
+    @if (hasData()) {
+      @let totalPts = totalPnl();
+      <span class="status-chip" [class.ok]="totalPts >= 0" [class.bad]="totalPts < 0">
+        Σ {{ fmtSignedPnl(totalPts) }} pts
+      </span>
+    }
+  </header>
+
+  @if (tradesResource.isLoading() && !hasData()) {
+    <p class="muted">Loading trades…</p>
+  } @else if (!runId()) {
+    <p class="muted">Select a bot to see its trades.</p>
+  } @else if (!hasData()) {
+    <p class="muted">No closed trades for this run yet.</p>
+  } @else {
+    <table class="trades">
+      <thead>
+        <tr>
+          <th>Entry (NY)</th>
+          <th>Exit (NY)</th>
+          <th class="num">Entry $</th>
+          <th class="num">Exit $</th>
+          <th class="num">Qty</th>
+          <th class="num">Fees</th>
+          <th class="num">PnL (pts)</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (t of joinedRows(); track trackTrade($index, t)) {
+          <tr [class.up]="t.pnl_points >= 0" [class.down]="t.pnl_points < 0">
+            <td class="mono">{{ fmtTimeNy(t.entry_time_ms) }}</td>
+            <td class="mono">{{ fmtTimeNy(t.exit_time_ms) }}</td>
+            <td class="mono num">{{ fmtPrice(t.entry_price) }}</td>
+            <td class="mono num">{{ fmtPrice(t.exit_price) }}</td>
+            <td class="mono num">{{ t.qty || '—' }}</td>
+            <td class="mono num">{{ t.fees.toFixed(2) }}</td>
+            <td class="mono num">{{ fmtSignedPnl(t.pnl_points) }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</section>
