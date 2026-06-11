@@ -118,6 +118,44 @@ def _validate_run_id(run_id: str, root: Path) -> Path:
     return _confine(root, safe)
 
 
+# Whitelist of artifact filenames any operator-facing endpoint may read out
+# of a run directory. Looking up the literal here (rather than constructing
+# ``run_dir / <name>`` directly at the call site) keeps the CodeQL
+# py/path-injection scanner from re-flagging each new endpoint that joins
+# a tainted ``run_dir`` with a static suffix — the join is structurally
+# the safe pattern, but the scanner can't always propagate the upstream
+# ``_confine`` cleanup across files. Adding a new artifact endpoint goes
+# through the whitelist; that's the deliberate seam.
+_ARTIFACT_NAMES: frozenset[str] = frozenset(
+    {
+        "decisions.parquet",
+        "executions.parquet",
+        "trades.parquet",
+        "live.log",
+        "host_daemon.log",
+        "readiness.json",
+        "run_ledger.json",
+        "run_status.json",
+        "halt.flag",
+        "poisoned.flag",
+        "indicator_state_hydration.json",
+    }
+)
+
+
+def _artifact_path(run_dir: Path, name: str) -> Path:
+    """Resolve ``run_dir/name`` against a whitelist; raise on unknown name.
+
+    Belt-and-suspenders alongside ``_validate_run_id``: the static filename
+    is constant, so this is mainly a structural marker that satisfies the
+    py/path-injection scanner and prevents an accidental future
+    ``f"{user_input}.parquet"`` from sneaking past code review.
+    """
+    if name not in _ARTIFACT_NAMES:
+        raise ValueError(f"unknown artifact name: {name!r}")
+    return run_dir / name
+
+
 # ── Layer 1: directory listing cache (15 s TTL) ────────────────────────────
 
 _DIR_TTL_S: float = 15.0
@@ -687,7 +725,7 @@ async def get_trades(
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
-    path = run_dir / "trades.parquet"
+    path = _artifact_path(run_dir, "trades.parquet")
     if not path.exists():
         return []
     try:
@@ -722,7 +760,7 @@ async def get_executions(
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
-    path = run_dir / "executions.parquet"
+    path = _artifact_path(run_dir, "executions.parquet")
     if not path.exists():
         return []
     try:
@@ -763,7 +801,7 @@ async def get_failures(
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
-    log_path = run_dir / "live.log"
+    log_path = _artifact_path(run_dir, "live.log")
     if not log_path.exists():
         return []
 

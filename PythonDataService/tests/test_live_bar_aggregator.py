@@ -106,6 +106,55 @@ async def test_snapshot_unknown_symbol_returns_empty(
     assert (status, last_error, last_bar_ms) == ("idle", None, None)
 
 
+async def test_stream_error_survives_across_resubscribe_polls(
+    fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the snapshot-hides-error bug.
+
+    The earlier implementation cleared ``last_error`` + reset status
+    to 'subscribing' inside ``ensure_subscribed`` whenever the prior
+    task had completed (errored). Combined with the snapshot endpoint
+    that calls ``ensure_subscribed`` before reading the state, every
+    poll after a failed stream returned ``status='subscribing',
+    last_error=None`` — the operator panel never saw the broker
+    disconnect. The new ``_pump`` clears ``last_error`` only on the
+    first successful bar; the resubscribe path leaves the prior
+    failure visible until then.
+    """
+    raise_count = 0
+
+    async def fake_stream(_client, _symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
+        nonlocal raise_count
+        raise_count += 1
+        if False:
+            yield  # pragma: no cover
+        raise RuntimeError("IBKR connection lost")
+
+    monkeypatch.setattr(agg_mod, "stream_minute_bars", fake_stream)
+
+    # First poll: task starts, hits the raise, transitions to errored.
+    state = await fresh_aggregator.ensure_subscribed("SPY")
+    for _ in range(20):
+        if state.status == "errored":
+            break
+        await asyncio.sleep(0.01)
+    first_error = state.last_error
+
+    # Second poll: simulates the next 5-second snapshot. The prior
+    # task is done — ensure_subscribed restarts it — but the snapshot
+    # endpoint must still see the prior failure, not "subscribing".
+    state_again = await fresh_aggregator.ensure_subscribed("SPY")
+    assert state_again is state
+    assert state.status == "errored", (
+        "resubscribe must preserve 'errored' until the new task yields a bar"
+    )
+    assert state.last_error == first_error, (
+        "resubscribe must preserve the prior last_error message"
+    )
+
+    await fresh_aggregator.shutdown()
+
+
 async def test_stream_error_marks_errored_without_raising(
     fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
 ) -> None:

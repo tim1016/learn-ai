@@ -84,6 +84,13 @@ class LiveBarAggregator:
         Returns the symbol's state regardless of whether the task was
         already alive. Caller may inspect ``state.status`` and
         ``state.last_error`` to surface subscription health.
+
+        Failure stickiness: when a prior task ended with ``status='errored'``
+        (e.g. broker disconnected at task start), the state's
+        ``last_error`` is preserved here so a snapshot poll between
+        restart and the new task's first bar still surfaces the failure
+        to the operator. ``_pump`` clears ``last_error`` and flips
+        ``status`` to ``streaming`` on the first successful bar.
         """
         key = self._key(symbol)
         async with self._lock:
@@ -92,8 +99,11 @@ class LiveBarAggregator:
                 state.task = asyncio.create_task(
                     self._run_stream(key, state), name=f"live-bar-stream:{key}"
                 )
-                state.status = "subscribing"
-                state.last_error = None
+                # Only nudge ``status`` back to 'subscribing' when there is
+                # no prior failure to remember. The pump clears ``last_error``
+                # on its first successful bar (see ``_pump``).
+                if state.last_error is None:
+                    state.status = "subscribing"
             return state
 
     async def ensure_subscribed_5s(self, symbol: str) -> _SymbolState:
@@ -101,6 +111,8 @@ class LiveBarAggregator:
 
         Independent of ``ensure_subscribed`` (the 1-min path) — they own
         separate buffers and separate ``reqRealTimeBars`` subscriptions.
+        Preserves ``last_error`` across restart for the same reason
+        documented on ``ensure_subscribed``.
         """
         key = self._key(symbol)
         async with self._lock:
@@ -112,8 +124,8 @@ class LiveBarAggregator:
                     self._run_stream_5s(key, state),
                     name=f"live-bar-stream-5s:{key}",
                 )
-                state.status = "subscribing"
-                state.last_error = None
+                if state.last_error is None:
+                    state.status = "subscribing"
             return state
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[IbkrMinuteBar]:
@@ -186,10 +198,17 @@ class LiveBarAggregator:
     ) -> None:
         try:
             client = self._resolve_client()
-            state.status = "streaming"
+            # Hold off on flipping to 'streaming' until the first bar
+            # actually arrives — a healthy reqRealTimeBars subscription
+            # still takes up to the bar's window for that first emission,
+            # and a sticky ``last_error`` from a prior failed task must
+            # remain visible to the snapshot endpoint until then.
             async for bar in source_factory(client, symbol):
                 state.bars.append(bar)
                 state.last_bar_ms = bar.start_ms
+                if state.status != "streaming":
+                    state.status = "streaming"
+                    state.last_error = None
         except NotConnectedError as exc:
             state.status = "errored"
             state.last_error = f"broker not connected: {exc}"
