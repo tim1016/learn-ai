@@ -20,7 +20,11 @@ import { ActiveIndicatorCardComponent } from './active-indicator-card/active-ind
 import { ActiveIndicatorGroupComponent, IndicatorGroupItem } from './active-indicator-group/active-indicator-group.component';
 import { PastChainInspectorComponent } from './past-chain-inspector/past-chain-inspector.component';
 import { IndicatorConfigModalComponent } from './indicator-config-modal/indicator-config-modal.component';
-import { RunDockComponent } from './run-dock/run-dock.component';
+import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
+import {
+  RUN_DOCK_SOURCE,
+  RUN_DOCK_STORAGE_KEY,
+} from '../../shared/run-dock/run-dock-source';
 import { INDICATOR_REFERENCE } from '../../shared/indicators/indicator-reference';
 import {
   IndicatorPickerAdd,
@@ -330,6 +334,12 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  providers: [
+    // Wire data-lab's RunSessionService into the shared dock's source slot.
+    // Unique storage key so data-lab and engine-lab don't share dock state.
+    { provide: RUN_DOCK_SOURCE, useExisting: RunSessionService },
+    { provide: RUN_DOCK_STORAGE_KEY, useValue: 'run-dock-expanded:data-lab' },
+  ],
 })
 export class DataLabComponent {
   private http = inject(HttpClient);
