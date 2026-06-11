@@ -22,11 +22,19 @@ import {
   toRunHistoryRow,
   UPDATE_BACKTEST_RUN_NOTES_MUTATION,
 } from "../../../graphql/backtest-runs.query";
+import { JobsService } from "../../../services/jobs.service";
 
 /** Persisted filter selection. ``ALL`` keeps the GraphQL variable null. */
 type EngineFilter = "ALL" | Engine;
 
 const COLUMN_PREF_KEY = "engine-lab-history.columns.v1";
+
+/** Job types whose successful completion should refresh the History table.
+ *  ``engine_backtest`` is the Python engine path today. ``lean_engine_run``
+ *  is the planned LEAN sidecar path (issue #470) — listing it here now
+ *  means the auto-refresh starts working for LEAN runs the moment that
+ *  ships, with no change to this component. */
+const ENGINE_JOB_TYPES = new Set<string>(["engine_backtest", "lean_engine_run"]);
 
 /**
  * PR B.3 (2026-05-19) — unified history surface. Hosts the Engine filter
@@ -46,6 +54,12 @@ const COLUMN_PREF_KEY = "engine-lab-history.columns.v1";
 export class EngineLabRunHistoryComponent {
   private readonly apollo = inject(Apollo);
   private readonly router = inject(Router);
+  private readonly jobsService = inject(JobsService);
+  /** Job ids we've already refetched for. Without this, every signal tick
+   *  while a completed engine job sits in `JobsService.jobs` would refire
+   *  the refetch — the user would see a refetch storm on subsequent filter
+   *  changes or recentLogs ticks. */
+  private readonly seenCompletedIds = new Set<string>();
 
   /** Active engine filter — drives the GraphQL ``engine`` variable. */
   readonly engineFilter = signal<EngineFilter>("ALL");
@@ -102,6 +116,27 @@ export class EngineLabRunHistoryComponent {
         engine: filter === "ALL" ? null : filter,
         first: 50,
       });
+    });
+
+    // Re-fetch whenever an engine-type job transitions to ``completed``.
+    // The runs persist before the SSE ``job.completed`` event fires (see
+    // ``lean_sidecar_service.run_trusted_sample`` and the Python engine
+    // job worker), so the row is already in the DB by the time we refetch.
+    // The seen-ids set is mutated as a non-signal side effect so the
+    // effect doesn't re-trigger on its own writes.
+    effect(() => {
+      const allJobs = this.jobsService.jobs();
+      const newlyCompleted = allJobs.filter(
+        (j) =>
+          ENGINE_JOB_TYPES.has(j.type) &&
+          j.status === "completed" &&
+          !this.seenCompletedIds.has(j.id),
+      );
+      if (newlyCompleted.length === 0) return;
+      newlyCompleted.forEach((j) => this.seenCompletedIds.add(j.id));
+      // ``refetch()`` with no args reuses the last-set variables — the
+      // current engine filter / pagination is preserved.
+      void this.queryRef.refetch();
     });
   }
 
