@@ -21,6 +21,7 @@ Phase 2a constraints (per ``docs/architecture/lean-sidecar-lab.md``):
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -473,7 +474,12 @@ def _hash_paths_in_workspace(workspace: Workspace, paths: list[Path]) -> tuple:
     return hash_staged_files(workspace.data_dir, paths)
 
 
-async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
+async def run_trusted_sample(
+    request: TrustedRunRequest,
+    *,
+    on_phase: Callable[[str], None] | None = None,
+    on_log: Callable[[str], None] | None = None,
+) -> TrustedRunResult:
     """End-to-end trusted-sample run: stage → launch → write manifest.
 
     Pre-conditions:
@@ -489,7 +495,18 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
       * the launcher's response is materialized as ``TrustedRunResult``;
       * the LEAN container is gone (``--rm``) and any leftover state
         lives entirely under the workspace.
+
+    ``on_phase`` and ``on_log`` are optional progress hooks; the
+    ``lean_engine_run`` job worker (:func:`app.routers.jobs.start_lean_engine_run_job`)
+    passes the SSE stream emitters here so the Engine Lab run dock can
+    surface coarse phase transitions in flight. Both callbacks must be
+    cheap and non-blocking. When omitted the function behaves exactly
+    as before — the existing ``/api/lean-sidecar/trusted-run`` endpoint
+    (used by test infra and reconcile scripts) calls it with no hooks.
     """
+    _emit_phase = on_phase or (lambda _name: None)
+    _emit_log = on_log or (lambda _msg: None)
+
     if PINNED_LEAN_IMAGE_DIGEST is None:
         raise LeanSidecarServiceError(
             "PINNED_LEAN_IMAGE_DIGEST is not set; run scripts/lean_sidecar_pin_image.py first"
@@ -512,6 +529,9 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
             "default ``runId`` field regenerates on every submit)."
         )
     workspace.ensure_layout()
+
+    _emit_phase("staging_data")
+    _emit_log(f"Staging LEAN fixtures for {request.symbol} {request.start_date}..{request.end_date}")
 
     # PR B: data-provenance knobs (source/session/adjusted) live on
     # ``request.data_policy``. ``data_policy.adjusted`` records the
@@ -633,6 +653,16 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     response: LaunchResponse | None = None
     failure_reason: str | None = None
     launcher_exc: LauncherClientError | None = None
+    _emit_phase("launching_sidecar")
+    _emit_log(f"Submitting launch request to LEAN sidecar (image {PINNED_LEAN_IMAGE_DIGEST[:19]}…)")
+    # ``sidecar_running`` is a back-to-back marker — ``post_launch`` is a
+    # single blocking HTTP call that returns only after the launcher has
+    # spawned, waited on, and reaped the container. From our side we
+    # can't observe the launcher-accepted/container-started boundary,
+    # but emitting the phase here lets the dock surface "the sidecar is
+    # running now" elapsed-time UX rather than holding on
+    # ``launching_sidecar`` for the entire run.
+    _emit_phase("sidecar_running")
     try:
         response = await post_launch(launch_request)
     except LauncherClientError as e:
@@ -655,6 +685,8 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     normalized: NormalizedResult | None = None
     normalized_path: Path | None = None
     if response is not None and response.exit_code == 0:
+        _emit_phase("parsing_results")
+        _emit_log("Parsing LEAN output")
         try:
             normalized = parse_workspace(workspace)
             normalized_path = write_normalized_result(workspace, normalized)
@@ -714,6 +746,8 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         # reconciliation runs.
         manifest=manifest,
     )
+    _emit_phase("persisting")
+    _emit_log("Persisting run to history")
     strategy_execution_id = await persist_via_dotnet(
         payload=persist_payload,
         base_url=settings.BACKEND_URL,

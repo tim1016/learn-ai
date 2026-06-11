@@ -260,7 +260,7 @@ describe('LeanEngineComponent engine selector', () => {
     });
   });
 
-  it('submit routes to leanSidecarService.startTrustedRun for the LEAN engine and includes algorithm_source', async () => {
+  it('submit routes to jobsService.startJob with type lean_engine_run for the LEAN engine and includes algorithm_source', async () => {
     const { startJob, startTrustedRun, nextTradingDayOpen } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
@@ -274,26 +274,29 @@ describe('LeanEngineComponent engine selector', () => {
 
     await component.run();
 
-    expect(startTrustedRun).toHaveBeenCalledTimes(1);
-    expect(startJob).not.toHaveBeenCalled();
+    // #470: LEAN runs go through the Jobs API. The legacy blocking
+    // POST is no longer the UI entry point.
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(startTrustedRun).not.toHaveBeenCalled();
+    expect(startJob.mock.calls[0][0]).toBe('lean_engine_run');
     // The component must resolve the half-open exclusive end via the
     // server-side calendar before submitting; the operator's chosen
     // end date is the input to that call.
     expect(nextTradingDayOpen).toHaveBeenCalledTimes(1);
     expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-17');
 
-    const req = startTrustedRun.mock.calls[0][0] as TrustedRunRequest;
-    expect(req.algorithm_source).toBe('class MyAlgorithm: pass');
-    expect(req.starting_cash).toBe(100_000);
-    expect(req.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
-    expect(req.start_ms_utc).toBe(component.composeStartMs());
+    const payload = startJob.mock.calls[0][1] as TrustedRunRequest;
+    expect(payload.algorithm_source).toBe('class MyAlgorithm: pass');
+    expect(payload.starting_cash).toBe(100_000);
+    expect(payload.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
+    expect(payload.start_ms_utc).toBe(component.composeStartMs());
     // end_ms_utc must be the NEXT trading day's session-open — Fri
     // 2025-01-17 → Tue 2025-01-21 (skipping MLK Mon 2025-01-20). The
     // half-open ``[start, end)`` contract makes 2025-01-17 trading
     // activity included rather than silently excluded.
-    expect(req.end_ms_utc).toBe(Date.UTC(2025, 0, 21, 14, 30, 0));
-    expect(req.end_ms_utc).not.toBe(component.composeEndMs());
-    expect(req.data_policy).toMatchObject({
+    expect(payload.end_ms_utc).toBe(Date.UTC(2025, 0, 21, 14, 30, 0));
+    expect(payload.end_ms_utc).not.toBe(component.composeEndMs());
+    expect(payload.data_policy).toMatchObject({
       source: 'polygon',
       symbol: 'SPY',
       adjusted: true,
@@ -311,7 +314,7 @@ describe('LeanEngineComponent engine selector', () => {
       next_trading_date: '2025-01-14',
       session_open_ms_utc: nextOpen,
     });
-    const { startTrustedRun } = configureTestBed({ nextTradingDayOpen });
+    const { startJob } = configureTestBed({ nextTradingDayOpen });
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
     const component = fixture.componentInstance;
@@ -325,10 +328,10 @@ describe('LeanEngineComponent engine selector', () => {
     await component.run();
 
     expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-13');
-    const req = startTrustedRun.mock.calls[0][0] as TrustedRunRequest;
-    expect(req.start_ms_utc).toBe(Date.UTC(2025, 0, 13, 14, 30, 0));
-    expect(req.end_ms_utc).toBe(nextOpen);
-    expect(req.end_ms_utc).toBeGreaterThan(req.start_ms_utc);
+    const payload = startJob.mock.calls[0][1] as TrustedRunRequest;
+    expect(payload.start_ms_utc).toBe(Date.UTC(2025, 0, 13, 14, 30, 0));
+    expect(payload.end_ms_utc).toBe(nextOpen);
+    expect(payload.end_ms_utc).toBeGreaterThan(payload.start_ms_utc);
   });
 
   it('composeStartMs/composeEndMs encode 09:30 ET as int64 ms UTC (EST=UTC-5)', () => {
@@ -390,58 +393,18 @@ describe('LeanEngineComponent engine selector', () => {
     };
   }
 
-  async function runLeanWithResponse(response: TrustedRunResponse) {
-    const startTrustedRun = vi.fn().mockResolvedValue(response);
-    configureTestBed({ startTrustedRun });
-    const fixture = TestBed.createComponent(LeanEngineComponent);
-    fixture.detectChanges();
-    const component = fixture.componentInstance;
-    component.engine.set('lean');
-    component.leanSource.set('class MyAlgorithm: pass');
-    component.startDate.set('2025-01-13');
-    component.endDate.set('2025-01-17');
-    component.initialCash.set(100_000);
-    await component.run();
-    return component;
-  }
-
-  it('status banner surfaces the benchmark-missing note when is_clean and benchmark_unavailable is non-empty', async () => {
-    const component = await runLeanWithResponse(leanResponse({
-      run_id: 'engine_lab_spy_abc',
-      is_clean: true,
-      lean_errors: {
-        analysis_failed: [],
-        failed_data_requests: [],
-        runtime_error: [],
-        benchmark_unavailable: ['SubscriptionDataSourceReader.InvalidSource: daily/spy.zip'],
-        other: [],
-      },
-    }));
-    expect(component.runPhase()).toBe('completed');
-    expect(component.runStatusBanner()).toContain('engine_lab_spy_abc');
-    expect(component.runStatusBanner()).toContain('SPY benchmark was unavailable');
-  });
-
-  it('status banner stays terse when is_clean and no error buckets are populated', async () => {
-    const component = await runLeanWithResponse(leanResponse({
-      run_id: 'engine_lab_spy_clean',
-      is_clean: true,
-    }));
-    expect(component.runPhase()).toBe('completed');
-    expect(component.runStatusBanner()).toContain('engine_lab_spy_clean');
-    expect(component.runStatusBanner()).not.toContain('SPY benchmark was unavailable');
-  });
-
-  it('status banner reports failed and includes the exit code when is_clean is false', async () => {
-    const component = await runLeanWithResponse(leanResponse({
-      run_id: 'engine_lab_spy_fail',
-      is_clean: false,
-      exit_code: 1,
-    }));
-    expect(component.runPhase()).toBe('failed');
-    expect(component.runStatusBanner()).toContain('exit 1');
-    expect(component.runStatusBanner()).not.toContain('SPY benchmark was unavailable');
-  });
+  // After #470, ``runLean`` no longer awaits a ``TrustedRunResponse``
+  // synchronously — the result envelope is now consumed by the SSE
+  // ``job.completed`` handler. The pre-#470 ``runLeanWithResponse``
+  // helper (which mocked ``startTrustedRun`` resolving with a
+  // TrustedRunResponse to drive runPhase/banner assertions) doesn't
+  // apply to the new wiring. Granular completion/failure UI is now
+  // driven by the run dock (#469) reading ``JobsService.recentLogs``;
+  // a thin SSE-driven banner check would be redundant with the
+  // existing dock tests. ``leanResponse`` is retained for future tests
+  // that exercise a LEAN-specific results renderer when one ships.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  void leanResponse;
 });
 
 // Regression: defaultStart() and setPresetRange() previously did raw
