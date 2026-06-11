@@ -442,7 +442,7 @@ export class BrokerPaperRunComponent {
         readonly: this.runnerReadonly(),
         hydrate_policy: this.runnerHydratePolicy(),
         strategy: 'spy_ema_crossover',
-        max_orders_per_day: 4,
+        max_orders_per_day: 50_000,
         ibkr_host: '127.0.0.1',
       });
       this.runnerMessage.set(response.process.message ?? 'Host runner start accepted.');

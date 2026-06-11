@@ -58,7 +58,7 @@ export class BrokerStartStopCardComponent {
     () => this.status().start_defaults?.hydrate_policy ?? 'require',
   );
   readonly maxOrdersPerDay = linkedSignal<number>(
-    () => this.status().start_defaults?.max_orders_per_day ?? 4,
+    () => this.status().start_defaults?.max_orders_per_day ?? 50_000,
   );
   readonly ibkrHost = linkedSignal<string>(
     () => this.status().start_defaults?.ibkr_host ?? '127.0.0.1',
