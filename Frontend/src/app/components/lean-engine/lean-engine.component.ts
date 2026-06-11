@@ -87,6 +87,15 @@ type EngineResolution = "minute" | "daily";
 type RunPhase =
   | "idle"
   | "connecting"
+  // ── Python engine phase ids (post-#471 unified taxonomy) ────────
+  | "fetching_data"
+  | "consolidating_bars"
+  | "running_indicators"
+  | "aggregating_results"
+  | "persisting"
+  // ── Legacy ids kept for transient cross-deploy compatibility.
+  //    Will be removed once all environments have shipped the
+  //    #471 backend changes.
   | "loading_bars"
   | "simulating"
   | "computing_stats"
@@ -943,8 +952,19 @@ export class LeanEngineComponent implements OnInit {
 
       if (job.status === "queued" || job.status === "running") {
         const phase = (job.phase ?? "connecting") as RunPhase;
+        // Headline mappings for the unified phase taxonomy (#471). The
+        // legacy ids stay here for the deploy window where the .NET
+        // layer is forwarding events from a python-service that hasn't
+        // shipped the new emissions yet.
         const headlines: Record<string, string> = {
           connecting: "Submitting backtest…",
+          // ── #471 taxonomy ────────────────────────────────────────
+          fetching_data: "Fetching bars from data provider…",
+          consolidating_bars: "Consolidating bars to strategy resolution…",
+          running_indicators: "Running indicators and strategy logic…",
+          aggregating_results: "Aggregating results and statistics…",
+          persisting: "Persisting run to history…",
+          // ── pre-#471 legacy ids (transient) ──────────────────────
           loading_bars: "Loading bars from cache & Polygon…",
           simulating: "Running engine — consolidating bars and evaluating signals…",
           computing_stats: "Computing statistics & saving study…",

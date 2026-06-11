@@ -1876,7 +1876,7 @@ def execute_engine_backtest(
         start_override = request.from_date
         end_override = request.to_date
         if symbol and start_override and end_override:
-            on_phase("loading_bars")
+            on_phase("fetching_data")
             on_log(f"Ensuring {symbol} {request.resolution} bars {start_override} → {end_override}")
             try:
                 from app.services.polygon_client import PolygonClientService
@@ -1952,7 +1952,14 @@ def execute_engine_backtest(
 
     strategy.initialize = _wrapped_initialize  # type: ignore[assignment]
 
-    on_phase("simulating")
+    # Decompose the old monolithic "simulating" phase into the two stages
+    # the engine walks through during ``engine.run``. The engine itself
+    # is a single call from our side, so both phases fire back-to-back
+    # immediately before invocation — they're contractually-ordered
+    # markers, not progress checkpoints inside the engine loop.
+    on_phase("consolidating_bars")
+    on_log("Consolidating raw bars to strategy resolution")
+    on_phase("running_indicators")
     on_log(f"Running {request.strategy_name} on {getattr(validated_params, 'symbol', '?')} ({request.resolution})")
 
     try:
@@ -1975,8 +1982,8 @@ def execute_engine_backtest(
             error=str(exc),
         )
 
-    on_phase("computing_stats")
-    on_log(f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; computing statistics")
+    on_phase("aggregating_results")
+    on_log(f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics")
 
     trades = getattr(strategy, "trade_log", []) or []
     formatted = [_format_trade(i + 1, t) for i, t in enumerate(trades)]
@@ -2127,6 +2134,8 @@ def execute_engine_backtest(
     # without an extra round-trip to /api/studies?latest=true. The save
     # itself is best-effort — a backend hiccup leaves study_id=None and
     # logs the failure but does not fail the backtest response.
+    on_phase("persisting")
+    on_log("Persisting run to history")
     response.study_id = _save_study_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
