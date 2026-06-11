@@ -153,9 +153,13 @@ export class RunDockComponent {
       const raw = localStorage.getItem(this.storageKey);
       if (raw === 'true') return true;
       if (raw === 'false') return false;
-    } catch {
-      // localStorage unavailable (private mode, quota); fall through to
-      // the collapsed default.
+    } catch (err) {
+      // localStorage unavailable (private mode, denied permission,
+      // detached document). Log so the failure is observable in
+      // devtools, then fall back to the collapsed default — the dock
+      // still works for the session, just without cross-reload
+      // persistence.
+      console.warn('[RunDock] localStorage read failed for', this.storageKey, err);
     }
     return false;
   }
@@ -163,8 +167,11 @@ export class RunDockComponent {
   private _persistExpanded(value: boolean): void {
     try {
       localStorage.setItem(this.storageKey, String(value));
-    } catch {
-      // No persistence — state still works for the current session.
+    } catch (err) {
+      // Quota exceeded or write blocked (private mode). The expand /
+      // collapse state still applies for this session; only persistence
+      // across reloads is lost.
+      console.warn('[RunDock] localStorage write failed for', this.storageKey, err);
     }
   }
 }

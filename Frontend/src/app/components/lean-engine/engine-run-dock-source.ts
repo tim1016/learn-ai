@@ -29,10 +29,13 @@ export class EngineRunDockSource implements RunDockSource {
   private readonly jobs = inject(JobsService);
 
   private readonly _log = signal<readonly RunLogEntry[]>([]);
-  /** Per-job set of log sequence numbers we've already folded in. Lets
-   *  us dedupe when `JobsService.recentLogs` updates by appending the
-   *  newest entry on top of the previous rolling window. */
-  private readonly _seenSeqByJob = new Map<string, Set<number>>();
+  /** Per-job high-water-mark for log sequence numbers we've already
+   *  folded in. Lets us dedupe when ``JobsService.recentLogs`` updates
+   *  by appending the newest entry on top of the previous rolling
+   *  window — without growing memory unbounded as the run's seq
+   *  counter climbs. `recentLogs` entries arrive in increasing-seq
+   *  order, so a single ``maxSeen`` per job is sufficient. */
+  private readonly _maxSeqByJob = new Map<string, number>();
 
   private readonly currentJob = computed<JobState | null>(() => {
     const jobs = this.jobs.jobs().filter((j) => ENGINE_JOB_TYPES.has(j.type));
@@ -81,7 +84,11 @@ export class EngineRunDockSource implements RunDockSource {
     if (j.current === undefined || j.total === undefined || j.total === 0) {
       return null;
     }
-    return Math.round((j.current / j.total) * 100);
+    // Clamp to [0,100] — a worker that briefly reports current > total
+    // (off-by-one at boundaries, late progress event after the run
+    // exited, etc.) shouldn't make the dock render an invalid bar.
+    const pct = Math.round((j.current / j.total) * 100);
+    return Math.min(100, Math.max(0, pct));
   });
 
   readonly etaText = computed<string | null>(() => {
@@ -109,7 +116,7 @@ export class EngineRunDockSource implements RunDockSource {
 
   clearLog(): void {
     this._log.set([]);
-    // Leave _seenSeqByJob populated so already-folded entries from the
+    // Leave _maxSeqByJob populated so already-folded entries from the
     // current job's rolling window don't re-appear on the next update.
   }
 
@@ -125,11 +132,15 @@ export class EngineRunDockSource implements RunDockSource {
     effect(() => {
       const j = this.currentJob();
       if (!j) return;
-      const seen = this._seenSeqByJob.get(j.id) ?? new Set<number>();
-      const fresh = j.recentLogs.filter((l) => !seen.has(l.seq));
+      const maxSeen = this._maxSeqByJob.get(j.id) ?? -1;
+      const fresh = j.recentLogs.filter((l) => l.seq > maxSeen);
       if (fresh.length === 0) return;
-      fresh.forEach((l) => seen.add(l.seq));
-      this._seenSeqByJob.set(j.id, seen);
+      // ``recentLogs`` arrives in seq order — take the last entry's
+      // seq as the new high-water-mark in one O(1) lookup. Falls back
+      // to a defensive max over the fresh slice in case a future
+      // change relaxes the ordering guarantee.
+      const newMax = fresh.reduce((m, l) => (l.seq > m ? l.seq : m), maxSeen);
+      this._maxSeqByJob.set(j.id, newMax);
       const entries: RunLogEntry[] = fresh.map((l) => ({
         id: `${j.id}-${l.seq}`,
         timestamp: l.ts,
