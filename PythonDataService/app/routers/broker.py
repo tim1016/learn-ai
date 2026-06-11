@@ -13,6 +13,7 @@ Endpoints (Phase 1 + Phase 2 + Phase 3):
 * ``POST /api/broker/reconnect`` — disconnect-then-connect.
 * ``GET /api/broker/expirations/{symbol}`` — list expiries.
 * ``GET /api/broker/option-chain/{symbol}`` — SSE chain stream.
+* ``GET /api/broker/option-surface/{symbol}`` — SSE multi-expiry surface stream.
 * ``GET /api/broker/account`` — one-shot account summary (Phase 2a).
 * ``GET /api/broker/positions`` — open positions (Phase 2a).
 * ``GET /api/broker/pnl/stream`` — account-level P&L SSE (Phase 2b).
@@ -60,6 +61,7 @@ from app.broker.ibkr.models import (
     IbkrPnLTick,
     IbkrPositionsSnapshot,
     IbkrStrikeList,
+    IbkrSurfaceSnapshot,
 )
 from app.broker.ibkr.orders import (
     OrderNotFoundError,
@@ -78,6 +80,12 @@ from app.broker.ibkr.pnl import (
     DEFAULT_PNL_DEBOUNCE_S,
     stream_account_pnl,
     stream_position_pnl,
+)
+from app.broker.ibkr.surface import (
+    DEFAULT_MAX_LINES as SURFACE_DEFAULT_MAX_LINES,
+)
+from app.broker.ibkr.surface import (
+    stream_option_surface,
 )
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -453,6 +461,108 @@ async def option_chain_stream(
     )
 
 
+# ── /option-surface (SSE) ──────────────────────────────────────────────
+
+
+@router.get("/option-surface/{symbol}")
+async def option_surface_stream(
+    symbol: str,
+    expiry_ms: Annotated[
+        list[int] | None,
+        Query(
+            description=(
+                "Expirations to fan over (repeated). Each value is an int64 "
+                "ms UTC timestamp from /api/broker/expirations/{symbol}."
+            ),
+        ),
+    ] = None,
+    strikes: Annotated[
+        list[float] | None,
+        Query(
+            description=(
+                "Strike band applied at every expiry (repeated). Pick from "
+                "/api/broker/strikes/{symbol} so every value qualifies."
+            ),
+        ),
+    ] = None,
+    debounce_ms: Annotated[int, Query(ge=50, le=5000)] = 250,
+    max_lines: Annotated[
+        int,
+        Query(
+            ge=2,
+            le=200,
+            description=(
+                "Hard cap on streaming market-data lines. Default 100 "
+                "matches IBKR's documented per-client quota; do not raise "
+                "without confirming the gateway has been granted more."
+            ),
+        ),
+    ] = SURFACE_DEFAULT_MAX_LINES,
+) -> StreamingResponse:
+    """SSE stream of multi-expiry option-surface snapshots.
+
+    The surface is the same strike band applied to every requested
+    expiry, both call and put sides — used by the /broker/options-surface
+    page to render the 3D ECharts ``bar3D`` view.
+    """
+    if not expiry_ms:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "expiry_ms must be non-empty.",
+        )
+    if any(e <= 0 for e in expiry_ms):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "expiry_ms entries must be positive.",
+        )
+    if not strikes:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "strikes must be non-empty.",
+        )
+    if any(k <= 0 for k in strikes):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "strikes entries must be positive.",
+        )
+
+    client = _require_connected_or_503()
+    sym = symbol.upper()
+    band = sorted(set(float(k) for k in strikes))
+    expiries = sorted(set(int(e) for e in expiry_ms))
+
+    debounce_seconds = debounce_ms / 1000.0
+
+    async def event_source():
+        try:
+            async for snapshot in stream_option_surface(
+                client,
+                sym,
+                expiries,
+                band,
+                debounce_seconds=debounce_seconds,
+                max_lines=max_lines,
+            ):
+                payload = _surface_snapshot_to_json(snapshot)
+                yield f"event: surface\ndata: {payload}\n\n"
+        except asyncio.CancelledError:
+            raise
+        except BrokerError as exc:
+            logger.error("Broker error in option-surface stream: %s", exc)
+            err = json.dumps({"error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
+        except ValueError as exc:
+            logger.error("Invalid option-surface request: %s", exc)
+            err = json.dumps({"error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── /pnl/stream and /pnl/positions/stream (Phase 2b + 2c) ──────────────
 
 
@@ -639,4 +749,8 @@ def _require_connected_or_503():
 
 
 def _snapshot_to_json(snapshot: IbkrChainSnapshot) -> str:
+    return snapshot.model_dump_json()
+
+
+def _surface_snapshot_to_json(snapshot: IbkrSurfaceSnapshot) -> str:
     return snapshot.model_dump_json()

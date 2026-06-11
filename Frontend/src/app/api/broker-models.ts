@@ -83,6 +83,20 @@ export interface IbkrChainSnapshot {
   as_of_ms: number;
 }
 
+export interface IbkrSurfaceExpiry {
+  expiry_ms: number;
+  quotes: IbkrOptionQuote[];
+}
+
+export interface IbkrSurfaceSnapshot {
+  symbol: string;
+  underlying_price: number | null;
+  expiries: IbkrSurfaceExpiry[];
+  /** Total IBKR streaming market-data lines this surface holds open. */
+  line_count: number;
+  as_of_ms: number;
+}
+
 export interface IbkrPnLTick {
   account_id: string;
   con_id: number | null;

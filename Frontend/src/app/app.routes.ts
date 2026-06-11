@@ -184,6 +184,13 @@ export const routes: Routes = [
       ).then((m) => m.BrokerOptionsChainComponent),
   },
   {
+    path: "broker/options-surface",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-options-surface/broker-options-surface.component"
+      ).then((m) => m.BrokerOptionsSurfaceComponent),
+  },
+  {
     path: "broker/account-monitor",
     loadComponent: () =>
       import(

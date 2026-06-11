@@ -1,0 +1,158 @@
+<app-page-header
+  title="Options Surface (3D)"
+  eyebrow="IBKR live option surface"
+  subtitle="Live multi-expiry call + put surfaces driven straight from IBKR's modelGreeks stream. Y = strikes, X = expiries, Z = a selectable metric."
+>
+  <app-page-guide
+    slot="guide"
+    pulls="Live IBKR option-surface SSE stream (one underlying + N×M×2 option lines, capped at 100). Two echarts-gl bar3D canvases — calls on the left, puts on the right."
+    why="See the entire near-the-money landscape at once: which strikes are bid up, where IV is fat, where delta drops off. The 2D chain ladder buries this; the 3D view surfaces it."
+    [steps]="[
+      'Pick a symbol, days-out window, and strikes-band.',
+      'Click Setup — we intersect qualifiable strikes across every expiry in the window.',
+      'Watch the line-count badge; if it goes red, narrow the band or disable streaming.',
+      'Click Load Surface to open the stream.'
+    ]"
+    [related]="[
+      { label: 'Options Chain (2D ladder)', route: '/broker/options-chain' },
+      { label: 'Pricing Lab', route: '/pricing-lab' }
+    ]"
+  />
+</app-page-header>
+
+@if (bannerState() === 'disabled-host-runner-active') {
+  <div class="disabled-banner" role="status">
+    <i class="pi pi-info-circle" aria-hidden="true"></i>
+    The host runner owns IBKR for this paper window. IBKR broker features are disabled.
+    <a routerLink="/broker/paper-run">View the Paper Run Observer</a>.
+  </div>
+}
+
+@if (!canStream()) {
+  <p class="muted">
+    Broker is disconnected. Connect IB Gateway to a paper account and refresh the Status page.
+  </p>
+} @else {
+  <section class="controls" aria-label="Surface configuration">
+    <label class="control">
+      <span class="control-label">Symbol</span>
+      <input
+        class="control-input mono"
+        type="text"
+        [value]="symbol()"
+        (input)="symbol.set($any($event.target).value)"
+        aria-label="Symbol"
+      />
+    </label>
+
+    <label class="control">
+      <span class="control-label">Days out</span>
+      <input
+        class="control-input mono short"
+        type="number"
+        min="1"
+        max="365"
+        [ngModel]="daysOut()"
+        (ngModelChange)="daysOut.set($event)"
+        aria-label="Days out"
+      />
+    </label>
+
+    <label class="control">
+      <span class="control-label">Strikes ±</span>
+      <input
+        class="control-input mono short"
+        type="number"
+        min="1"
+        max="25"
+        [ngModel]="strikesBand()"
+        (ngModelChange)="strikesBand.set($event)"
+        aria-label="Strikes band"
+      />
+    </label>
+
+    <label class="control">
+      <span class="control-label">Z metric</span>
+      <select
+        class="control-input"
+        [ngModel]="zMetric()"
+        (ngModelChange)="zMetric.set($event)"
+        aria-label="Z-axis metric"
+      >
+        @for (m of zMetrics; track m.value) {
+          <option [ngValue]="m.value">{{ m.label }}</option>
+        }
+      </select>
+    </label>
+
+    <label class="control checkbox">
+      <input
+        type="checkbox"
+        [checked]="monthliesOnly()"
+        (change)="monthliesOnly.set($any($event.target).checked)"
+        aria-label="Monthlies only"
+      />
+      <span class="control-label">Monthlies only</span>
+    </label>
+
+    <button
+      type="button"
+      class="ghost-btn"
+      (click)="setupSurface()"
+      [disabled]="setupLoading()"
+    >
+      @if (setupLoading()) { Setting up… } @else { Setup }
+    </button>
+
+    <button
+      type="button"
+      class="primary-btn"
+      (click)="startStream()"
+      [disabled]="readyExpiries().length === 0 || readyStrikes().length === 0 || overCap()"
+    >
+      Load Surface
+    </button>
+
+    @if (currentStreamActive()) {
+      <button type="button" class="ghost-btn" (click)="togglePause()">
+        @if (paused()) { Resume } @else { Pause }
+      </button>
+    }
+  </section>
+
+  <section class="status-row" aria-label="Surface status">
+    <span class="badge" [class.bad]="overCap()" [class.ok]="!overCap() && projectedLines() > 0">
+      Lines: {{ projectedLines() }} / 100
+    </span>
+    @if (readyExpiries().length > 0) {
+      <span class="badge">
+        {{ readyExpiries().length }} expiries × {{ readyStrikes().length }} strikes × 2 sides
+      </span>
+    }
+    @if (underlyingPrice() !== null) {
+      <span class="badge">Spot {{ fmtCurrency(underlyingPrice()) }}</span>
+    }
+    @if (latestSnapshot()) {
+      <span class="badge">
+        Last tick {{ fmtTimestampNy(latestSnapshot()!.as_of_ms) }}
+      </span>
+    }
+    <span class="badge stream-{{ streamStatus() }}">stream: {{ streamStatus() }}</span>
+  </section>
+
+  @if (setupError(); as err) {
+    <app-section-error [error]="err" label="Setup failed" />
+  }
+  @if (streamError(); as err) {
+    <app-section-error [error]="err" label="Stream error" />
+  }
+
+  <section class="surface-grid" aria-label="3D option surfaces">
+    <div class="surface-pane">
+      <div #callHost class="surface-canvas" role="img" aria-label="Call surface"></div>
+    </div>
+    <div class="surface-pane">
+      <div #putHost class="surface-canvas" role="img" aria-label="Put surface"></div>
+    </div>
+  </section>
+}

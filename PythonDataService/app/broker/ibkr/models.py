@@ -252,6 +252,46 @@ class IbkrChainSnapshot(BaseModel):
     as_of_ms: int
 
 
+class IbkrSurfaceExpiry(BaseModel):
+    """One expiry's slice of an option surface.
+
+    Emitted as part of :class:`IbkrSurfaceSnapshot` — wraps the same
+    per-contract quotes as :class:`IbkrChainSnapshot` but groups them by
+    expiry so the surface UI can index ``(expiry, strike, right)`` in
+    one pass.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    expiry_ms: int
+    quotes: list[IbkrOptionQuote]
+
+
+class IbkrSurfaceSnapshot(BaseModel):
+    """Point-in-time slice of a multi-expiry option surface.
+
+    Emitted by the option-surface stream once per debounce window. The
+    surface is a fan-out across N expiries × M strikes × 2 sides; this
+    snapshot carries every contract's quote in one envelope so the 3D
+    visualizer can re-render without coalescing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    underlying_price: float | None = None
+    expiries: list[IbkrSurfaceExpiry]
+    line_count: int = Field(
+        ...,
+        description=(
+            "Number of streaming market-data lines this surface holds open "
+            "(underlying + every option contract). Surfaced for the client "
+            "so it can warn when nearing IBKR's ~100-line per-client cap."
+        ),
+    )
+    as_of_ms: int
+
+
 class IbkrMinuteBar(BaseModel):
     """One closed 1-minute TRADES bar from IBKR real-time bars.
 
@@ -569,6 +609,8 @@ __all__ = [
     "IbkrPosition",
     "IbkrPositionsSnapshot",
     "IbkrStrikeList",
+    "IbkrSurfaceExpiry",
+    "IbkrSurfaceSnapshot",
     "OptionRight",
     "OrderAction",
     "OrderEventType",
