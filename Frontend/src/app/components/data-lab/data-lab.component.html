@@ -1077,6 +1077,27 @@
 </div>
 
 <!-- Bottom-docked run UI: replaces the previous in-flow progress card.
-     Always present; toggles between expanded panel and collapsed strip. -->
-<app-run-dock />
+     Always present; toggles between expanded panel and collapsed strip.
+     The metric chips (Polygon raw / processed / indicator cols) are
+     data-lab-specific and projected into the dock's runDockMetrics slot. -->
+<app-run-dock>
+  @if (runSession.fetchSummary(); as fs) {
+    <div runDockMetrics class="run-dock__metrics">
+      <span class="run-dock__metric">
+        <span class="run-dock__metric-label">Polygon raw</span>
+        <span class="run-dock__metric-value mono">{{ fs.rawBars.toLocaleString() }}</span>
+      </span>
+      <span class="run-dock__metric-sep" aria-hidden="true">·</span>
+      <span class="run-dock__metric">
+        <span class="run-dock__metric-label">After processing</span>
+        <span class="run-dock__metric-value mono">{{ fs.processedBars.toLocaleString() }}</span>
+      </span>
+      <span class="run-dock__metric-sep" aria-hidden="true">·</span>
+      <span class="run-dock__metric">
+        <span class="run-dock__metric-label">Indicator cols</span>
+        <span class="run-dock__metric-value mono">{{ fs.indicatorColumns }}</span>
+      </span>
+    </div>
+  }
+</app-run-dock>
 

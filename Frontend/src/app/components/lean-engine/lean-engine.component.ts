@@ -35,6 +35,12 @@ import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import type { DataPolicy } from "../../models/data-policy";
+import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
+import {
+  RUN_DOCK_SOURCE,
+  RUN_DOCK_STORAGE_KEY,
+} from "../../shared/run-dock/run-dock-source";
+import { EngineRunDockSource } from "./engine-run-dock-source";
 import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
 import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
@@ -206,10 +212,19 @@ interface DataAvailability {
     PageHeaderComponent,
     TickerRangePickerComponent,
     LeanScriptEditorComponent,
+    RunDockComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
   styleUrls: ["./lean-engine.component.scss"],
+  providers: [
+    // Engine Lab's own dock source — maps JobsService state for engine-type
+    // jobs onto the generic dock contract. Provided component-level so the
+    // service lifecycle stays scoped to this page.
+    EngineRunDockSource,
+    { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
+    { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:engine-lab" },
+  ],
 })
 export class LeanEngineComponent implements OnInit {
   private http = inject(HttpClient);
