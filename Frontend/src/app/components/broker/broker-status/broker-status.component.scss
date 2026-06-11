@@ -217,7 +217,118 @@
 
 .lifecycle-actions {
   display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.connect-help {
+  position: relative;
+
+  > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.65rem;
+    border-radius: 6px;
+    border: 1px dashed var(--border-strong, #d1d5db);
+    background: transparent;
+    color: var(--text-secondary, #4b5563);
+    font-size: 0.82rem;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover, #f9fafb);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent, #2563eb);
+      outline-offset: 2px;
+    }
+
+    > .pi {
+      font-size: 0.95rem;
+    }
+  }
+
+  &[open] > summary {
+    color: var(--text-primary);
+    border-style: solid;
+  }
+}
+
+.connect-help-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 20;
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 0.9rem 1rem 0.85rem;
+  background: var(--bg-elevated, #ffffff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.connect-help-lead {
+  margin: 0 0 0.6rem;
+  color: var(--text-secondary, #4b5563);
+}
+
+.connect-help-list {
+  margin: 0 0 0.65rem;
+  padding-left: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+
+  li {
+    line-height: 1.35;
+  }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.82em;
+    padding: 0.05rem 0.3rem;
+    border-radius: 4px;
+    background: var(--bg-canvas-alt, #f3f4f6);
+  }
+}
+
+.connect-help-decoder {
+  margin: 0 0 0.55rem;
+  padding: 0.5rem 0.65rem;
+  background: var(--bg-canvas-alt, #f9fafb);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.connect-help-decoder-line {
+  display: block;
+  color: var(--text-secondary, #4b5563);
+
+  em {
+    color: var(--text-primary);
+    font-style: normal;
+    font-weight: 600;
+  }
+}
+
+.connect-help-runbook {
+  margin: 0;
+  color: var(--text-secondary, #4b5563);
 }
 
 .positions-table {

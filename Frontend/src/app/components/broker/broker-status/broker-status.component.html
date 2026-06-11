@@ -45,6 +45,61 @@
           <i class="pi pi-link" aria-hidden="true"></i>
           <span>{{ action === 'connect' ? 'Connecting…' : 'Connect' }}</span>
         </button>
+        <details class="connect-help">
+          <summary aria-label="Why won't Connect work?">
+            <i class="pi pi-question-circle" aria-hidden="true"></i>
+            <span>Why won't this connect?</span>
+          </summary>
+          <div class="connect-help-panel">
+            <p class="connect-help-lead">
+              Connect opens a socket to IB Gateway and runs the API handshake.
+              If either step fails you'll see an error above — these are the
+              usual fixes, in order.
+            </p>
+            <ol class="connect-help-list">
+              <li>
+                <strong>Is IB Gateway running?</strong> Launch it on this Mac,
+                log into a paper account, and confirm the API port (paper:
+                <code>4002</code>, live: <code>4001</code>) is listening.
+              </li>
+              <li>
+                <strong><code>IBKR_HOST</code> in <code>.env</code> must reach this
+                Mac.</strong> A pinned LAN IP will rot when DHCP reassigns —
+                prefer <code>host.containers.internal</code> so the container
+                always finds the host gateway.
+              </li>
+              <li>
+                <strong>Gateway → Configure → Settings → API:</strong> turn on
+                <em>Enable ActiveX and Socket Clients</em>, then either uncheck
+                <em>Allow connections from localhost only</em> or add the
+                container's source IP under <em>Trusted IPs</em>. Save and
+                restart Gateway.
+              </li>
+              <li>
+                <strong>Client ID conflict.</strong> If another session is
+                holding <code>IBKR_CLIENT_ID</code> (default <code>42</code>),
+                Gateway accepts the socket then drops the handshake. Pick a
+                different ID in <code>.env</code> or restart Gateway to clear
+                stale sessions.
+              </li>
+            </ol>
+            <p class="connect-help-decoder">
+              <strong>Error decoder.</strong>
+              <span class="connect-help-decoder-line">
+                <em>Connection refused</em> → nothing listening (Gateway down,
+                wrong host or port).
+              </span>
+              <span class="connect-help-decoder-line">
+                <em>Connects then disconnects / TimeoutError</em> → Gateway-side
+                rejection (Trusted IPs or Client ID).
+              </span>
+            </p>
+            <p class="connect-help-runbook">
+              Still stuck? Click <strong>Diagnose</strong> above — it runs the
+              same checks server-side and reports which one fails.
+            </p>
+          </div>
+        </details>
       }
       @if (connected) {
         <button
