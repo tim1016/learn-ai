@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from app.services.live_log_failures import parse_failures
 
 
@@ -111,9 +115,6 @@ def test_parse_failures_on_run_157b11c0_live_log_extracts_real_failure() -> None
     The run died from IBKR Error 1100 and an unhandled exception in
     _drive_engine. Both must appear; ib_async warnings must not.
     """
-    import pytest
-    from pathlib import Path
-
     run_id = "157b11c0b35de5a3e8ed9313e94434c14eea918475b5ee87890e39f20e7a06e5"
     # Containerised tests see /app/artifacts; host tests see PythonDataService/artifacts.
     candidates = [

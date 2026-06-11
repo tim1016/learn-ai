@@ -178,7 +178,7 @@ class LiveBarAggregator:
         for t in tasks:
             try:
                 await t
-            except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
+            except (asyncio.CancelledError, Exception) as exc:
                 logger.debug("Aggregator task ended on shutdown: %s", exc)
 
     async def _run_stream(self, symbol: str, state: _SymbolState) -> None:
@@ -216,7 +216,7 @@ class LiveBarAggregator:
         except asyncio.CancelledError:
             state.status = "idle"
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             state.status = "errored"
             state.last_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
