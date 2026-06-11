@@ -1,4 +1,4 @@
-import { provideZonelessChangeDetection } from "@angular/core";
+import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Router } from "@angular/router";
 import { Apollo } from "apollo-angular";
@@ -10,6 +10,24 @@ import {
   BacktestRunNode,
   UPDATE_BACKTEST_RUN_NOTES_MUTATION,
 } from "../../../graphql/backtest-runs.query";
+import { JobsService, JobState } from "../../../services/jobs.service";
+
+/** Writable signal the auto-refresh tests use to drive JobsService state.
+ *  Reset in the outer `beforeEach` so cross-test pollution doesn't trip
+ *  the seen-ids dedupe set. */
+const fakeJobsSignal = signal<JobState[]>([]);
+const jobsServiceMock = { jobs: () => fakeJobsSignal() };
+
+function makeJob(over: Partial<JobState>): JobState {
+  return {
+    id: "job-1",
+    type: "engine_backtest",
+    status: "running",
+    recentLogs: [],
+    logSeq: 0,
+    ...over,
+  };
+}
 
 function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
   return {
@@ -89,6 +107,7 @@ async function setup(
       provideZonelessChangeDetection(),
       { provide: Apollo, useValue: apolloStub },
       { provide: Router, useValue: { navigate: navigateSpy } },
+      { provide: JobsService, useValue: jobsServiceMock },
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(EngineLabRunHistoryComponent);
@@ -99,6 +118,7 @@ async function setup(
 describe("EngineLabRunHistoryComponent", () => {
   beforeEach(() => {
     localStorage.clear();
+    fakeJobsSignal.set([]);
   });
 
   it("queries backtestRuns with engine=null by default (All filter)", async () => {
@@ -281,6 +301,106 @@ describe("EngineLabRunHistoryComponent — CSV export (PR B.3)", () => {
       URL.createObjectURL = originalCreate;
       URL.revokeObjectURL = originalRevoke;
     }
+  });
+});
+
+describe("EngineLabRunHistoryComponent — auto-refresh on job.completed (#468)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    fakeJobsSignal.set([]);
+  });
+
+  it("refetches when an engine_backtest job transitions to completed", async () => {
+    const apollo = makeApollo();
+    const fixture = await setup(apollo);
+    // The filter effect fires one refetch on init; clear so we can assert
+    // exactly what the job-completed effect produces.
+    apollo._refetch.mockClear();
+
+    fakeJobsSignal.set([makeJob({ id: "py-1", type: "engine_backtest", status: "completed" })]);
+    fixture.detectChanges();
+
+    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches when a lean_engine_run job transitions to completed", async () => {
+    const apollo = makeApollo();
+    const fixture = await setup(apollo);
+    apollo._refetch.mockClear();
+
+    fakeJobsSignal.set([makeJob({ id: "lean-1", type: "lean_engine_run", status: "completed" })]);
+    fixture.detectChanges();
+
+    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refetch when a non-engine job (dataset-zip) completes", async () => {
+    const apollo = makeApollo();
+    const fixture = await setup(apollo);
+    apollo._refetch.mockClear();
+
+    fakeJobsSignal.set([makeJob({ id: "ds-1", type: "dataset-zip", status: "completed" })]);
+    fixture.detectChanges();
+
+    expect(apollo._refetch).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch for running/failed/cancelled engine jobs", async () => {
+    const apollo = makeApollo();
+    const fixture = await setup(apollo);
+    apollo._refetch.mockClear();
+
+    fakeJobsSignal.set([
+      makeJob({ id: "r-1", type: "engine_backtest", status: "running" }),
+      makeJob({ id: "f-1", type: "engine_backtest", status: "failed" }),
+      makeJob({ id: "c-1", type: "engine_backtest", status: "cancelled" }),
+    ]);
+    fixture.detectChanges();
+
+    expect(apollo._refetch).not.toHaveBeenCalled();
+  });
+
+  it("does not re-refetch on subsequent signal ticks for the same completed job", async () => {
+    const apollo = makeApollo();
+    const fixture = await setup(apollo);
+    apollo._refetch.mockClear();
+
+    // Initial completion → one refetch.
+    fakeJobsSignal.set([makeJob({ id: "py-2", type: "engine_backtest", status: "completed" })]);
+    fixture.detectChanges();
+    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+
+    // Same job reported again with a fresh recentLogs entry → should not
+    // refire the refetch. (Real-world trigger: recentLogs rolls after
+    // completion as the worker drains its log queue.)
+    fakeJobsSignal.set([
+      makeJob({
+        id: "py-2",
+        type: "engine_backtest",
+        status: "completed",
+        recentLogs: [{ level: "info", message: "drained", ts: 1, seq: 1 }],
+        logSeq: 1,
+      }),
+    ]);
+    fixture.detectChanges();
+    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches separately for two distinct engine jobs that complete in sequence", async () => {
+    const apollo = makeApollo();
+    const fixture = await setup(apollo);
+    apollo._refetch.mockClear();
+
+    fakeJobsSignal.set([makeJob({ id: "first", type: "engine_backtest", status: "completed" })]);
+    fixture.detectChanges();
+    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+
+    fakeJobsSignal.set([
+      makeJob({ id: "first", type: "engine_backtest", status: "completed" }),
+      makeJob({ id: "second", type: "lean_engine_run", status: "completed" }),
+    ]);
+    fixture.detectChanges();
+    expect(apollo._refetch).toHaveBeenCalledTimes(2);
   });
 });
 
