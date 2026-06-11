@@ -71,13 +71,30 @@ SIGNAL_ENGINE_PHASES: tuple[Phase, ...] = (
 )
 
 
+# ── Engine Lab Python backtest (canonical engine) ───────────────────────
+# Coarse phases emitted by ``execute_engine_backtest`` in
+# ``app/routers/engine.py``. Matches the LEAN sidecar's coarse taxonomy
+# (#470) so the Engine Lab run dock shows consistent terminology
+# regardless of which engine the user picked. ``fetching_data`` only
+# fires when ``auto_fetch=True``; the other phases always fire on the
+# success path.
+ENGINE_BACKTEST_PHASES: tuple[Phase, ...] = (
+    Phase("fetching_data", "Fetching bars from data provider", 2),
+    Phase("consolidating_bars", "Consolidating bars to strategy resolution", 1),
+    Phase("running_indicators", "Running indicators and strategy logic", 4),
+    Phase("aggregating_results", "Aggregating results and statistics", 1),
+    Phase("persisting", "Persisting run to history", 1),
+    Phase("done", "Run complete", 1),
+)
+
+
 # ── LEAN sidecar run (external reference runner) ────────────────────────
 # Coarse phases emitted by ``app.services.lean_sidecar_service.run_trusted_sample``
 # when invoked through the ``lean_engine_run`` job worker. ``sidecar_running``
 # is opaque elapsed-time (no sub-bar progress in v1 — the LEAN container
 # is a black box from our side). Pairs with the canonical engine's
-# taxonomy (see ENGINE_BACKTEST_PHASES once #471 merges) so the Engine
-# Lab run dock shows consistent terminology across engines.
+# ENGINE_BACKTEST_PHASES so the Engine Lab run dock shows consistent
+# terminology across engines.
 LEAN_ENGINE_RUN_PHASES: tuple[Phase, ...] = (
     Phase("staging_data", "Staging LEAN data fixtures", 2),
     Phase("launching_sidecar", "Submitting launch request", 1),
@@ -92,6 +109,7 @@ JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,
+    "engine_backtest": ENGINE_BACKTEST_PHASES,
     "lean_engine_run": LEAN_ENGINE_RUN_PHASES,
 }
 

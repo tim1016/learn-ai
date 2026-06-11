@@ -81,6 +81,10 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
             startJob: () => Promise.resolve('job-id'),
             job: () => null,
             dismiss: () => undefined,
+            // EngineRunDockSource reads this signal-shaped getter to drive
+            // the run dock; tests don't exercise a live job here so an
+            // empty list is enough to keep the dock idle.
+            jobs: () => [],
           },
         },
       ],
@@ -193,6 +197,7 @@ describe('LeanEngineComponent engine selector', () => {
             job: () => null,
             dismiss: () => undefined,
             fetchResult: () => Promise.resolve({}),
+            jobs: () => [],
           },
         },
         {
@@ -428,7 +433,12 @@ describe('LeanEngineComponent default-date weekend handling', () => {
         provideRouter([]),
         {
           provide: JobsService,
-          useValue: { startJob: () => Promise.resolve('id'), job: () => null, dismiss: () => undefined },
+          useValue: {
+            startJob: () => Promise.resolve('id'),
+            job: () => null,
+            dismiss: () => undefined,
+            jobs: () => [],
+          },
         },
       ],
     });

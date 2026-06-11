@@ -1,5 +1,10 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { JobsService } from './jobs.service';
+import type {
+  RunDockLevel,
+  RunDockSource,
+  RunDockState,
+} from '../shared/run-dock/run-dock-source';
 
 /**
  * State machine for the unified Fetch & bundle flow. Mirrors the design
@@ -104,7 +109,7 @@ const RUN_LOG_MAX_LINES = 500;
  * ``job.completed``, …).
  */
 @Injectable({ providedIn: 'root' })
-export class RunSessionService {
+export class RunSessionService implements RunDockSource {
   private readonly jobs = inject(JobsService);
 
   private readonly _state = signal<RunState>('idle');
@@ -213,6 +218,73 @@ export class RunSessionService {
     if (elapsedMs < 5000) return null;
     const total = elapsedMs / fraction;
     return Math.max(1, Math.round((total - elapsedMs) / 1000));
+  });
+
+  // ── RunDockSource contract ─────────────────────────────────────────
+  // These computeds project this service's internal state machine onto
+  // the generic shape the shared run dock consumes. The dock is
+  // deliberately unaware of "fetching" vs "bundling" — that's a
+  // data-lab concern. The dock only sees idle / active / done / error.
+
+  readonly dockState = computed<RunDockState>(() => {
+    const s = this._state();
+    if (s === 'idle') return 'idle';
+    if (s === 'done') return 'done';
+    if (s === 'error') return 'error';
+    return 'active';
+  });
+
+  readonly headline = computed<string>(() => {
+    const state = this._state();
+    const result = this._result();
+    const error = this._error();
+    const chunks = this._chunks();
+    const components = this._bundleComponents();
+    if (state === 'idle') return 'idle — no run in flight';
+    if (state === 'fetching') {
+      if (chunks.length === 0) return 'fetching · planning chunks';
+      const done = chunks.filter((c) => c.status === 'done').length;
+      const fetching = chunks.find((c) => c.status === 'fetching');
+      const idx = fetching?.index ?? Math.min(done + 1, chunks.length);
+      return `fetching · chunk ${idx} of ${chunks.length}`;
+    }
+    if (state === 'bundling') {
+      if (components.length === 0) return 'bundling · packaging';
+      const done = components.filter((c) => c.status === 'done').length;
+      return `bundling · ${done} of ${components.length} components`;
+    }
+    if (state === 'done' && result) return `done · ${result.filename}`;
+    if (state === 'error' && error) return `error · ${error.message}`;
+    return state;
+  });
+
+  readonly headlineLevel = computed<RunDockLevel>(() => {
+    const state = this._state();
+    if (state === 'done') return 'success';
+    if (state === 'error') {
+      return this._error()?.kind === 'cancelled' ? 'warn' : 'error';
+    }
+    return 'info';
+  });
+
+  readonly progressPercent = computed<number | null>(() => {
+    const s = this._state();
+    if (s === 'idle' || s === 'error') return null;
+    return Math.round(this.progressFraction() * 100);
+  });
+
+  readonly etaText = computed<string | null>(() => {
+    const eta = this.etaSeconds();
+    if (eta === null) return null;
+    if (eta < 60) return `~${eta} s`;
+    const mins = Math.floor(eta / 60);
+    const secs = eta % 60;
+    return `~${mins} m ${secs.toString().padStart(2, '0')} s`;
+  });
+
+  readonly canCancel = computed<boolean>(() => {
+    const s = this._state();
+    return s === 'fetching' || s === 'bundling';
   });
 
   /** Start a run. Resolves once the stream is closed and (if applicable)
