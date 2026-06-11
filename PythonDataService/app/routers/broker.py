@@ -62,7 +62,6 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
     IbkrStrikeList,
 )
-from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 from app.broker.ibkr.orders import (
     OrderNotFoundError,
     OrderRefusedError,
@@ -81,6 +80,7 @@ from app.broker.ibkr.pnl import (
     stream_account_pnl,
     stream_position_pnl,
 )
+from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)

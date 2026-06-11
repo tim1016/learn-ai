@@ -147,13 +147,16 @@ def _artifact_path(run_dir: Path, name: str) -> Path:
     """Resolve ``run_dir/name`` against a whitelist; raise on unknown name.
 
     Belt-and-suspenders alongside ``_validate_run_id``: the static filename
-    is constant, so this is mainly a structural marker that satisfies the
-    py/path-injection scanner and prevents an accidental future
-    ``f"{user_input}.parquet"`` from sneaking past code review.
+    is constant, so this is mainly a structural marker that prevents an
+    accidental future ``f"{user_input}.parquet"`` from sneaking past code
+    review. Routes through the existing ``_confine`` helper — the explicit
+    ``resolve() + relative_to()`` check is what the CodeQL py/path-injection
+    scanner recognizes as a sanitizer (the bare ``run_dir / name`` operator
+    propagates taint even though the right-hand side is a static literal).
     """
     if name not in _ARTIFACT_NAMES:
         raise ValueError(f"unknown artifact name: {name!r}")
-    return run_dir / name
+    return _confine(run_dir, name)
 
 
 # ── Layer 1: directory listing cache (15 s TTL) ────────────────────────────
