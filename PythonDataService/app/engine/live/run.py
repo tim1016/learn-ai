@@ -1656,9 +1656,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument(
         "--max-orders-per-day",
         type=int,
-        default=4,
+        default=50_000,
         help=(
-            "§ 9 cap. Crossing this halts the run with exit 1. Default 4 (≤ 1 entry + 1 exit + 1 retry + 1 force-flat)."
+            "§ 9 cap. Crossing this halts the run with exit 1. Default 50,000 — kept in sync "
+            "with the daemon's HostRunnerStartRequest default so a direct CLI launch matches "
+            "the control-plane behaviour."
         ),
     )
     start.add_argument(
