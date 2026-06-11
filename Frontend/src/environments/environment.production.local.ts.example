@@ -1,0 +1,25 @@
+// Local-machine production environment override.
+// Copy this file to `environment.production.local.ts` (gitignored) before
+// running the `production-local` build:
+//   ng build --configuration=production-local
+//
+// The default `ng build` / `ng build --configuration=production` keeps using
+// the checked-in `environment.ts` so a fresh checkout and CI both build
+// cleanly without any local-only file. The `production-local` configuration
+// swaps in this file via angular.json's `fileReplacements`, giving each
+// developer a place to record per-machine settings — e.g. a backend host
+// port remapped to dodge macOS AirPlay on :5000 — that should never land
+// in git.
+
+export const environment = {
+  production: true,
+  polygonApiKey: '', // Leave empty — use backend proxy in production
+  useBackendProxy: true, // Always use backend in production
+  backendUrl: 'http://localhost:5000/graphql',
+  polygonProxyUrl: 'http://localhost:5000/api/polygon', // Backend proxy endpoint
+  pythonServiceUrl: 'http://localhost:8000',
+  liveRunnerDaemonUrl: 'http://127.0.0.1:8765',
+  flags: {
+    replayInLeanEngine: true,
+  },
+};

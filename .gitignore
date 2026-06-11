@@ -8,11 +8,16 @@ obj/
 appsettings.Development.json
 .claude/worktrees/
 
+# Local compose overrides (per-developer port remaps, mounts, etc.)
+compose.override.yaml
+compose.override.yml
+
 # Environment variables (contains API keys)
 .env
 
 # Angular environment files (may contain API keys for development)
 **/environments/environment.development.ts
+**/environments/environment.production.local.ts
 **/environments/.env*
 
 # Python
@@ -81,3 +86,8 @@ PythonDataService/tests/fixtures/golden/cross-engine-studies/.failed/
 
 # Local Polygon captures used during fixture/debug work.
 PythonDataService/tests/fixtures/polygon_capture/
+
+# host_daemon / launcher runtime artifacts (PID file + rotating launch log).
+# Recreated on every launcher start; should never be committed.
+PythonDataService/.launcher.log
+PythonDataService/.launcher.pid
