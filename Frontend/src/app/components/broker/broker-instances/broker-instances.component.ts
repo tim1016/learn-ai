@@ -30,6 +30,9 @@ import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-s
 import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
 import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
+import { BotTradeChartCardComponent } from './bot-trade-chart-card/bot-trade-chart-card.component';
+import { BotTradesTableComponent } from './bot-trades-table/bot-trades-table.component';
+import { BotFailuresTableComponent } from './bot-failures-table/bot-failures-table.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -181,6 +184,9 @@ function titleizeKey(key: string): string {
     BrokerStartStopCardComponent,
     BrokerProvenanceCardComponent,
     BrokerRunLogModalComponent,
+    BotTradeChartCardComponent,
+    BotTradesTableComponent,
+    BotFailuresTableComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',

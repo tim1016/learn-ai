@@ -49,6 +49,7 @@ from app.schemas.live_runs import (
     DesiredStateView,
     EnqueueCommandRequest,
     ExecutionsSummary,
+    FailureRecord,
     FlagsSummary,
     LiveRunStatus,
     LiveRunSummary,
@@ -58,6 +59,7 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     TradesSummary,
 )
+from app.services.live_log_failures import parse_failures
 from app.services.live_log_parser import BarEvent, parse_log_tail
 from app.services.live_run_state import infer_state
 
@@ -114,6 +116,47 @@ def _validate_run_id(run_id: str, root: Path) -> Path:
     # Use the validated literal — regex + confinement breaks the CodeQL
     # py/path-injection taint chain.
     return _confine(root, safe)
+
+
+# Whitelist of artifact filenames any operator-facing endpoint may read out
+# of a run directory. Looking up the literal here (rather than constructing
+# ``run_dir / <name>`` directly at the call site) keeps the CodeQL
+# py/path-injection scanner from re-flagging each new endpoint that joins
+# a tainted ``run_dir`` with a static suffix — the join is structurally
+# the safe pattern, but the scanner can't always propagate the upstream
+# ``_confine`` cleanup across files. Adding a new artifact endpoint goes
+# through the whitelist; that's the deliberate seam.
+_ARTIFACT_NAMES: frozenset[str] = frozenset(
+    {
+        "decisions.parquet",
+        "executions.parquet",
+        "trades.parquet",
+        "live.log",
+        "host_daemon.log",
+        "readiness.json",
+        "run_ledger.json",
+        "run_status.json",
+        "halt.flag",
+        "poisoned.flag",
+        "indicator_state_hydration.json",
+    }
+)
+
+
+def _artifact_path(run_dir: Path, name: str) -> Path:
+    """Resolve ``run_dir/name`` against a whitelist; raise on unknown name.
+
+    Belt-and-suspenders alongside ``_validate_run_id``: the static filename
+    is constant, so this is mainly a structural marker that prevents an
+    accidental future ``f"{user_input}.parquet"`` from sneaking past code
+    review. Routes through the existing ``_confine`` helper — the explicit
+    ``resolve() + relative_to()`` check is what the CodeQL py/path-injection
+    scanner recognizes as a sanitizer (the bare ``run_dir / name`` operator
+    propagates taint even though the right-hand side is a static literal).
+    """
+    if name not in _ARTIFACT_NAMES:
+        raise ValueError(f"unknown artifact name: {name!r}")
+    return _confine(run_dir, name)
 
 
 # ── Layer 1: directory listing cache (15 s TTL) ────────────────────────────
@@ -663,6 +706,120 @@ async def get_log_tail(
             )
 
     return result
+
+
+@router.get("/{run_id}/trades", response_model=list[dict])
+async def get_trades(
+    run_id: str,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+    since_ms: Annotated[int | None, Query(ge=0)] = None,
+) -> list[dict]:
+    """Return rows from trades.parquet (entry/exit pairs).
+
+    Columns: entry_time_ms, exit_time_ms, entry_price, exit_price, pnl_points.
+    ``since_ms`` filters to rows with ``exit_time_ms > since_ms`` for
+    incremental polling on the closed-trades stream.
+    """
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+
+    path = _artifact_path(run_dir, "trades.parquet")
+    if not path.exists():
+        return []
+    try:
+        rows = pq.read_table(path).to_pylist()
+    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
+        return []
+    if since_ms is not None:
+        rows = [r for r in rows if int(r.get("exit_time_ms", 0)) > since_ms]
+    if len(rows) > limit:
+        rows = rows[-limit:]
+    return rows
+
+
+@router.get("/{run_id}/executions", response_model=list[dict])
+async def get_executions(
+    run_id: str,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+    since_ms: Annotated[int | None, Query(ge=0)] = None,
+) -> list[dict]:
+    """Return rows from executions.parquet (per-fill events).
+
+    Columns: ts_ms, exec_id, perm_id, client_order_id, account_id, symbol,
+    fill_quantity, fill_price, fee, execution_source, fill_model,
+    source_bar_close_ms. ``since_ms`` filters to rows with
+    ``ts_ms > since_ms``.
+    """
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+
+    path = _artifact_path(run_dir, "executions.parquet")
+    if not path.exists():
+        return []
+    try:
+        rows = pq.read_table(path).to_pylist()
+    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
+        return []
+    if since_ms is not None:
+        rows = [r for r in rows if int(r.get("ts_ms", 0)) > since_ms]
+    if len(rows) > limit:
+        rows = rows[-limit:]
+    return rows
+
+
+@router.get("/{run_id}/failures", response_model=list[FailureRecord])
+async def get_failures(
+    run_id: str,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    since_ms: Annotated[int | None, Query(ge=0)] = None,
+) -> list[FailureRecord]:
+    """Return parsed ERROR / CRITICAL records from live.log.
+
+    Each record absorbs the contiguous traceback block that follows its header
+    line. Use ``since_ms`` to fetch only failures newer than the last poll.
+
+    Args:
+        run_id: 64-char hex run identifier.
+        limit: Cap on returned records (newest-first slice when more than limit).
+        since_ms: Optional UTC ms cutoff; only failures with ts_ms > since_ms.
+
+    Returns:
+        Failures in source order (oldest first within the returned window).
+    """
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+
+    log_path = _artifact_path(run_dir, "live.log")
+    if not log_path.exists():
+        return []
+
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("Could not read %s: %s", log_path, exc)
+        return []
+
+    rows = [FailureRecord.model_validate(r.model_dump()) for r in parse_failures(text)]
+    if since_ms is not None:
+        rows = [r for r in rows if r.ts_ms > since_ms]
+    if len(rows) > limit:
+        rows = rows[-limit:]
+    return rows
 
 
 def _status_sid(run_dir: Path) -> str:
