@@ -221,8 +221,10 @@
         <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
 
         @let chartRunId = s.live_binding?.run_id ?? s.evidence_binding?.run_id ?? null;
-        <app-bot-trade-chart-card [runId]="chartRunId" resolution="1m" />
-        <app-bot-trade-chart-card [runId]="chartRunId" resolution="5s" />
+        <app-bot-trade-chart-card
+          [strategyInstanceId]="s.strategy_instance_id"
+          [symbol]="s.symbol"
+        />
         <app-bot-trades-table [runId]="chartRunId" />
         <app-bot-failures-table [runId]="chartRunId" />
 

@@ -119,6 +119,11 @@ export interface LiveInstanceStatus {
   /** Why the most recent run ended; null while a run is live or nothing was
    * ever deployed. Drives the console's "why it stopped" surface. */
   last_exit: InstanceLastExit | null;
+  /** Traded symbol sourced from the ledger's ``live_config.symbol`` (Slice 2).
+   * ``null`` when nothing is deployed or the ledger predates the symbol field —
+   * consumers must treat null as "unknown" and NOT fall back to a hardcoded
+   * default (the prior 'SPY' default was the bug Slice 2 closes). */
+  symbol: string | null;
   fetched_at_ms: number;
 }
 

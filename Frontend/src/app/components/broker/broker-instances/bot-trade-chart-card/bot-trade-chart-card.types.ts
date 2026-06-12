@@ -63,6 +63,38 @@ export interface ExecutionRow {
   source_bar_close_ms: number | null;
 }
 
+/** Slice 6 — one date the operator can pick from the chart's date selector.
+ * ``has_bars=false`` means the instance ran that day but the bars pre-date
+ * the persistence layer; the chart shows trade markers + a "bars
+ * unavailable" badge. */
+export interface ActiveDateEntry {
+  date: string;
+  run_count: number;
+  has_bars: boolean;
+}
+
+/** Slice 5 — one run's contribution to the aggregated chart payload. */
+export interface ChartSnapshotRun {
+  run_id: string;
+  started_at_ms: number | null;
+  ended_at_ms: number | null;
+  is_current: boolean;
+  color_index: number;
+  trades: TradeRow[];
+  executions: ExecutionRow[];
+}
+
+/** Slice 5 — aggregated chart payload for one (instance, date, resolution). */
+export interface ChartSnapshotResponse {
+  date: string;
+  symbol: string;
+  resolution: '1m' | '5s';
+  has_bars: boolean;
+  now_ms: number;
+  bars: IbkrMinuteBar[];
+  runs: ChartSnapshotRun[];
+}
+
 /** One parsed ERROR/CRITICAL block from live.log. ``raw_ts`` is the
  * literal log string (host-local TZ); ``ts_ms`` parses it as if UTC and
  * is only valid for sequencing. */

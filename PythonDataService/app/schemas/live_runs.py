@@ -685,7 +685,65 @@ class LiveInstanceStatus(BaseModel):
     # live or when nothing was ever deployed. Lets the console explain a STOPPED
     # instance instead of leaving the operator to read run_status.json by hand.
     last_exit: InstanceLastExit | None = None
+    # The traded symbol, sourced from the ledger's ``live_config.symbol`` so the
+    # operator console (chart card, etc.) doesn't fall back to a hardcoded 'SPY'
+    # for a non-SPY strategy. ``None`` when nothing is deployed or when the
+    # ledger predates the symbol field — the UI must treat null as "unknown"
+    # rather than substituting a default.
+    symbol: str | None = None
     fetched_at_ms: int
+
+
+class ChartSnapshotRun(BaseModel):
+    """One run's contribution to a chart snapshot (Slice 5).
+
+    ``started_at_ms`` / ``ended_at_ms`` come from ``run_status.json`` and
+    drive the chart's inactive-interval shading; ``is_current`` is true for
+    the run that owns the live binding so the chart can scope the active-
+    entry line to it. ``color_index`` is a small integer the frontend maps
+    to a stable per-run color tag for the trade markers.
+    """
+
+    run_id: str
+    started_at_ms: int | None = None
+    ended_at_ms: int | None = None
+    is_current: bool = False
+    color_index: int = 0
+    trades: list[dict] = Field(default_factory=list)
+    executions: list[dict] = Field(default_factory=list)
+
+
+class ChartSnapshotResponse(BaseModel):
+    """Aggregated chart payload for one (instance, date, resolution).
+
+    Replaces the prior split of ``/bars/snapshot`` + per-run
+    ``/trades`` + per-run ``/executions`` calls on the chart card —
+    returns the day's bars and every run for that instance in a single
+    envelope so the frontend doesn't have to know how many runs exist.
+    """
+
+    date: str = Field(..., description="YYYY-MM-DD UTC date the snapshot covers.")
+    symbol: str
+    resolution: str
+    has_bars: bool
+    now_ms: int
+    bars: list[dict] = Field(default_factory=list)
+    runs: list[ChartSnapshotRun] = Field(default_factory=list)
+
+
+class ActiveDateEntry(BaseModel):
+    """Slice 6 — one date the operator can select on the chart.
+
+    ``has_bars`` distinguishes dates with persisted OHLCV (Slice 4
+    onwards) from dates that pre-date persistence. The latter still
+    appear in the picker because the instance ran on that date, but the
+    chart renders a "bars unavailable" badge alongside whatever trade
+    markers the per-run parquets carry.
+    """
+
+    date: str = Field(..., description="YYYY-MM-DD UTC date.")
+    run_count: int = Field(..., ge=0, description="Number of runs touching the date.")
+    has_bars: bool = Field(..., description="True when persisted bars exist for the date.")
 
 
 class LiveInstanceSummary(BaseModel):

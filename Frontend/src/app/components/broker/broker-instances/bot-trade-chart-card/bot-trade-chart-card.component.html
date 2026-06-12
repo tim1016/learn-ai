@@ -1,22 +1,71 @@
-<section class="card chart-card" aria-labelledby="bot-chart-heading-{{ resolution() }}">
+<section class="card chart-card" aria-labelledby="bot-chart-heading">
   @let m = meta();
   <header class="card-header">
-    <div>
-      <h2 [id]="'bot-chart-heading-' + resolution()">{{ m.title }}</h2>
+    <div class="header-copy">
+      <h2 id="bot-chart-heading">Price &amp; Trades</h2>
       <p>{{ m.subtitle }}</p>
     </div>
-    @let tone = statusTone();
-    <span
-      class="status-chip"
-      [class.ok]="tone === 'ok'"
-      [class.warn]="tone === 'warn'"
-      [class.bad]="tone === 'bad'"
-    >
-      {{ symbol() }} · {{ statusLabel() }}
-      @if (tradeCount() > 0) {
-        · {{ tradeCount() }} trades
+    <div class="header-controls">
+      @if (activeDates().length > 0) {
+        <select
+          class="date-picker"
+          aria-label="Chart date"
+          [value]="chartDate() ?? ''"
+          (change)="onDateSelected(($any($event.target).value || null))"
+        >
+          <option value="">Today</option>
+          @for (d of activeDates(); track d.date) {
+            <option [value]="d.date">
+              {{ d.date }}{{ d.has_bars ? '' : ' (no bars)' }}
+              @if (d.run_count > 0) {
+                · {{ d.run_count }} run{{ d.run_count === 1 ? '' : 's' }}
+              }
+            </option>
+          }
+        </select>
       }
-    </span>
+      <div class="resolution-toggle" role="group" aria-label="Bar resolution">
+        @for (r of resolutionOptions; track r) {
+          <button
+            type="button"
+            [class.active]="resolution() === r"
+            (click)="setResolution(r)"
+            [attr.aria-pressed]="resolution() === r"
+            [title]="r === '1m' ? '1-minute candles' : '5-second candles'"
+          >
+            {{ r }}
+          </button>
+        }
+      </div>
+      @if (!isPastDate()) {
+        <button
+          type="button"
+          class="live-pill"
+          [class.dim]="!liveAtEdge()"
+          (click)="resumeLive()"
+          [attr.aria-pressed]="liveAtEdge()"
+          [title]="liveAtEdge() ? 'Chart is following the live edge.' : 'Click to resume following the live edge.'"
+        >
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>LIVE</span>
+        </button>
+      }
+      @if (missingBarsForSelectedDate()) {
+        <span class="status-chip warn" role="status">Bars unavailable for this date</span>
+      }
+      @let tone = statusTone();
+      <span
+        class="status-chip"
+        [class.ok]="tone === 'ok'"
+        [class.warn]="tone === 'warn'"
+        [class.bad]="tone === 'bad'"
+      >
+        {{ symbol() || '—' }} · {{ statusLabel() }}
+        @if (tradeCount() > 0) {
+          · {{ tradeCount() }} trades
+        }
+      </span>
+    </div>
   </header>
-  <div class="chart-wrap" [style.height.px]="m.chartHeight" #container></div>
+  <div class="chart-wrap" [style.height.px]="chartHeightPx" #container></div>
 </section>

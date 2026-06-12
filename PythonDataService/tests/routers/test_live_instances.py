@@ -8,6 +8,7 @@ server-side and the serialized response carries both `live_binding` and
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -210,6 +211,292 @@ async def test_status_start_defaults_carry_redeploy_identity_from_ledger(
     assert defaults["account_id"] == "DU1234567"
 
 
+async def test_chart_snapshot_today_returns_bars_and_runs(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5: ``GET /chart-snapshot`` returns the day's bars + every run
+    of the instance that touched the day. ``has_bars`` is True iff the
+    response carries at least one bar."""
+    app, root = app_with_root
+
+    # Run with sidecar started_at_ms so it counts as "active today".
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date()
+    today_start_ms = int(datetime(today.year, today.month, today.day, tzinfo=UTC).timestamp() * 1000)
+
+    run_dir = root / "run-chart"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-chart",
+                "strategy_instance_id": "spy_chart",
+                "created_at_ms": today_start_ms,
+                "live_config": {"symbol": "SPY"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-chart",
+                "started_at_ms": today_start_ms + 1_000,
+                "last_update_ms": today_start_ms + 60_000,
+                "ended_at_ms": None,
+                "exit_code": None,
+                "exit_reason": None,
+                "host_pid": 7,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_chart/chart-snapshot")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["date"] == today.isoformat()
+    assert body["symbol"] == "SPY"
+    assert body["resolution"] == "1m"
+    assert body["has_bars"] is False  # no live aggregator data in this test
+    assert isinstance(body["now_ms"], int)
+    assert len(body["runs"]) == 1
+    run = body["runs"][0]
+    assert run["run_id"] == "run-chart"
+    assert run["started_at_ms"] == today_start_ms + 1_000
+    assert run["is_current"] is False
+    assert run["color_index"] == 0
+
+
+async def test_chart_snapshot_rejects_invalid_resolution(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5: only ``1m`` and ``5s`` resolutions are accepted; anything else
+    is a 400, not a silent default."""
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_chart/chart-snapshot", params={"resolution": "15m"}
+        )
+    assert response.status_code == 400
+
+
+async def test_chart_snapshot_past_date_omits_live_buffer(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5: a past-date request ignores the live aggregator buffer. With
+    no persistence data and no runs touching that day, ``has_bars`` is
+    False and ``runs`` is empty — the frontend renders the "bars
+    unavailable" badge from this state."""
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_chart/chart-snapshot", params={"date": "2025-01-01"}
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["date"] == "2025-01-01"
+    assert body["has_bars"] is False
+    assert body["runs"] == []
+
+
+async def test_chart_snapshot_rejects_malformed_date(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5: a malformed date string is a 400; never silently coerced."""
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_chart/chart-snapshot", params={"date": "not-a-date"}
+        )
+    assert response.status_code == 400
+
+
+async def test_active_dates_returns_run_dates_with_no_bars_marker(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 6: dates the instance ran on but pre-date persistence still
+    appear in the picker with ``has_bars=False``."""
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import RunStatusSidecar
+
+    app, root = app_with_root
+    run_dir = root / "run-day1"
+    run_dir.mkdir(parents=True)
+    started_ms = int(datetime(2026, 1, 5, tzinfo=UTC).timestamp() * 1000)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-day1",
+                "strategy_instance_id": "spy_dates",
+                "created_at_ms": started_ms,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="run-day1",
+            started_at_ms=started_ms,
+            last_update_ms=started_ms + 60_000,
+            ended_at_ms=started_ms + 3_600_000,
+            exit_code=0,
+            host_pid=11,
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_dates/active-dates")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    entry = body[0]
+    assert entry["date"] == "2026-01-05"
+    assert entry["run_count"] == 1
+    assert entry["has_bars"] is False
+
+
+async def test_active_dates_counts_every_utc_day_a_run_overlaps(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 6 (PR #483 review): a run spanning midnight UTC must appear on
+    BOTH dates the picker shows, not just its start day. Anchoring solely
+    on started_at_ms previously hid the later day."""
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import RunStatusSidecar
+
+    app, root = app_with_root
+    run_dir = root / "run-overnight"
+    run_dir.mkdir(parents=True)
+    started_ms = int(datetime(2026, 1, 5, 22, 0, tzinfo=UTC).timestamp() * 1000)
+    ended_ms = int(datetime(2026, 1, 7, 4, 0, tzinfo=UTC).timestamp() * 1000)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-overnight",
+                "strategy_instance_id": "spy_overnight",
+                "created_at_ms": started_ms,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="run-overnight",
+            started_at_ms=started_ms,
+            last_update_ms=ended_ms,
+            ended_at_ms=ended_ms,
+            exit_code=0,
+            host_pid=12,
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_overnight/active-dates")
+
+    assert response.status_code == 200
+    body = response.json()
+    dates = [entry["date"] for entry in body]
+    # Spans 2026-01-05 22:00 UTC → 2026-01-07 04:00 UTC, so all three UTC
+    # days must appear.
+    assert dates == ["2026-01-05", "2026-01-06", "2026-01-07"]
+    for entry in body:
+        assert entry["run_count"] == 1
+
+
+async def test_chart_snapshot_filters_trades_to_requested_utc_day(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5 (PR #483 review): a multi-day run's trades from other UTC
+    days must NOT project onto a per-date /chart-snapshot response."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    app, root = app_with_root
+    run_dir = root / "run-spans"
+    run_dir.mkdir(parents=True)
+    day_a_ms = int(datetime(2026, 1, 5, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    day_b_ms = int(datetime(2026, 1, 6, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-spans",
+                "strategy_instance_id": "spy_spans",
+                "created_at_ms": day_a_ms,
+                "live_config": {"symbol": "SPY"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import RunStatusSidecar
+
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="run-spans",
+            started_at_ms=day_a_ms,
+            last_update_ms=day_b_ms,
+            ended_at_ms=day_b_ms + 3_600_000,
+            exit_code=0,
+            host_pid=14,
+        ),
+    )
+    # Trades from two different UTC days under the same run.
+    table = pa.table(
+        {
+            "entry_time_ms": pa.array([day_a_ms, day_b_ms], type=pa.int64()),
+            "exit_time_ms": pa.array([day_a_ms + 60_000, day_b_ms + 60_000], type=pa.int64()),
+            "entry_price": pa.array([100.0, 200.0], type=pa.float64()),
+            "exit_price": pa.array([101.0, 201.0], type=pa.float64()),
+            "pnl_points": pa.array([1.0, 1.0], type=pa.float64()),
+        }
+    )
+    pq.write_table(table, run_dir / "trades.parquet")
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_spans/chart-snapshot", params={"date": "2026-01-05"}
+        )
+
+    assert response.status_code == 200
+    runs = response.json()["runs"]
+    assert len(runs) == 1
+    trades = runs[0]["trades"]
+    assert len(trades) == 1
+    assert trades[0]["entry_time_ms"] == day_a_ms
+
+
+async def test_active_dates_rejects_invalid_resolution(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 6: only 1m / 5s accepted at the boundary."""
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_dates/active-dates", params={"resolution": "10s"}
+        )
+    assert response.status_code == 400
+
+
 async def test_status_provenance_attests_the_run_identity(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -256,6 +543,80 @@ async def test_status_provenance_attests_the_run_identity(
     assert prov["start_date_ms"] == 1714838400000
     # live_config is part of the identity hash, so it must be in the provenance.
     assert prov["live_config"] == {"symbol": "SPY", "consolidator_period_min": 15}
+
+
+async def test_status_exposes_symbol_from_ledger_live_config(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 2: the chart card needs the traded symbol to drop its 'SPY' default.
+    Symbol is sourced from the ledger's ``live_config.symbol`` so two strategies
+    that differ only in symbol don't have to plumb it through the URL."""
+    app, root = app_with_root
+    run_dir = root / "run-sym"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-sym",
+                "strategy_instance_id": "qqq_strategy",
+                "created_at_ms": 1714838400500,
+                "live_config": {"symbol": "QQQ", "consolidator_period_min": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/qqq_strategy/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "QQQ"
+
+
+async def test_status_symbol_is_null_when_nothing_deployed(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ledger → no symbol. The frontend must treat ``null`` as 'unknown' and
+    not fall back to a hardcoded ticker — the prior 'SPY' default was the bug
+    Slice 2 closes."""
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/ghost_instance/status")
+
+    assert response.status_code == 200
+    assert response.json()["symbol"] is None
+
+
+async def test_status_symbol_is_null_when_live_config_missing_symbol(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy ledger that predates the symbol field must not crash — the field
+    surfaces ``null`` and the UI handles that explicitly."""
+    app, root = app_with_root
+    run_dir = root / "run-legacy"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-legacy",
+                "strategy_instance_id": "legacy_strategy",
+                "created_at_ms": 1714838400500,
+                # No live_config — pre-symbol ledger.
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/legacy_strategy/status")
+
+    assert response.status_code == 200
+    assert response.json()["symbol"] is None
 
 
 async def test_status_provenance_none_when_nothing_deployed(

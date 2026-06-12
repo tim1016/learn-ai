@@ -15,9 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Response, status
+import pyarrow.parquet as pq
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
 from app.broker.ibkr.config import get_settings
@@ -45,6 +48,9 @@ from app.routers.live_runs import (
     build_command_timeline,
 )
 from app.schemas.live_runs import (
+    ActiveDateEntry,
+    ChartSnapshotResponse,
+    ChartSnapshotRun,
     CommandsTimeline,
     CommandView,
     DesiredStateAction,
@@ -337,6 +343,39 @@ def _start_defaults(
         qc_cloud_backtest_id=str(ledger.get("qc_cloud_backtest_id", "")),
         account_id=str(ledger.get("account_id", "")),
     )
+
+
+def _resolve_symbol(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> str | None:
+    """Traded symbol for the instance, read from ``live_config.symbol`` on the
+    visible live run, else the latest evidence run.
+
+    Slice 2: the operator console reads this on the chart card instead of
+    hardcoding 'SPY'. Returns ``None`` when nothing is deployed, when the
+    ledger is unreadable, or when the ledger predates the symbol field; the
+    UI treats null as "unknown" rather than substituting a default.
+
+    TODO(PR #483 review): when an instance is redeployed with a different
+    symbol (e.g. ``QQQ`` -> ``SPY``), a historical ``/chart-snapshot`` for
+    a pre-redeploy date queries persistence with the new symbol and either
+    misses bars or returns the wrong partition. Acceptable for the current
+    one-strategy-per-instance fleet; revisit by accepting a ``target_date``
+    here and resolving the symbol from the run(s) that overlap that date,
+    returning ``None`` on a mixed-symbol day.
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+    live_config = ledger.get("live_config") or {}
+    symbol = live_config.get("symbol") if isinstance(live_config, dict) else None
+    if isinstance(symbol, str) and symbol:
+        return symbol
+    return None
 
 
 def _provenance(
@@ -715,8 +754,290 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         ),
         provenance=_provenance(root, live_binding, runs),
         last_exit=_instance_last_exit(runs),
+        symbol=_resolve_symbol(root, live_binding, runs),
         fetched_at_ms=_now_ms(),
     )
+
+
+def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_ms") -> list[dict]:
+    """Read a Parquet artifact's rows; optionally filter by a ms cursor.
+
+    A missing file legitimately returns ``[]`` (run had no trades yet). A
+    read failure logs with context and still returns ``[]`` rather than
+    500-ing the chart — but the warning makes corruption visible during
+    incident response (PR #483 review).
+    """
+    if not path.is_file():
+        return []
+    try:
+        rows = pq.read_table(path).to_pylist()
+    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid) as exc:
+        logger.warning("parquet read failed for %s: %s", path, exc, exc_info=True)
+        return []
+    if since_ms is not None:
+        rows = [r for r in rows if int(r.get(key, 0)) > since_ms]
+    return rows
+
+
+def _filter_rows_to_utc_day(rows: list[dict], day: date, key: str = "ts_ms") -> list[dict]:
+    """Keep only rows whose ``key`` (int64 ms UTC) falls within ``day``.
+
+    Used by ``/chart-snapshot`` so a multi-day run doesn't project the
+    other days' markers onto every per-date response (PR #483 review).
+    """
+    day_start_ms = int(datetime.combine(day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000)
+    day_end_ms = day_start_ms + 86_400_000
+    return [r for r in rows if day_start_ms <= int(r.get(key, -1)) < day_end_ms]
+
+
+def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | None) -> list[dict]:
+    """Subset of ``runs`` whose session overlaps the given UTC date.
+
+    A run "touches" the day when its ``started_at_ms`` ≤ end-of-day AND its
+    ``ended_at_ms`` (or now) ≥ start-of-day. Live binding's run is always
+    considered active on today regardless of sidecar contents.
+    """
+    day_start_ms = int(datetime.combine(day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000)
+    day_end_ms = day_start_ms + 86_400_000
+    out: list[dict] = []
+    for run in runs:
+        run_dir = Path(run["run_dir"])
+        sidecar = _read_sidecar(run_dir)
+        started = sidecar.started_at_ms if sidecar is not None else None
+        ended = sidecar.ended_at_ms if sidecar is not None else None
+        if started is None:
+            # Fall back to created_at_ms when no sidecar yet.
+            started = int(run.get("created_at_ms") or 0)
+        effective_end = ended if ended is not None else day_end_ms
+        if started < day_end_ms and effective_end >= day_start_ms:
+            out.append({**run, "started_at_ms": started, "ended_at_ms": ended, "sidecar_started": sidecar is not None})
+        elif live_binding is not None and run.get("run_id") == live_binding.run_id and day == _today_utc():
+            out.append({**run, "started_at_ms": started, "ended_at_ms": None, "sidecar_started": False})
+    return out
+
+
+def _today_utc() -> date:
+    """Today as UTC date — the partition key for live bars."""
+    return datetime.now(UTC).date()
+
+
+def _bar_to_dict(bar) -> dict:
+    """Serialize an ``IbkrMinuteBar`` for the chart payload (Decimal → str)."""
+    return bar.model_dump(mode="json")
+
+
+def _resolve_chart_bars(
+    *,
+    symbol: str | None,
+    resolution: str,
+    day: date,
+    is_today: bool,
+) -> list[dict]:
+    """Resolve the bars for a chart snapshot.
+
+    Today's path consults the live aggregator (which itself replays from
+    persistence on subscribe) for the freshest buffer, then falls back to
+    persistence when the buffer is empty. Past-date paths consult
+    persistence only — they ignore the aggregator entirely so a stopped
+    daemon doesn't make yesterday's chart disappear.
+    """
+    if symbol is None:
+        return []
+    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+    if is_today:
+        bars = (
+            LIVE_BAR_AGGREGATOR.snapshot(symbol)
+            if resolution == "1m"
+            else LIVE_BAR_AGGREGATOR.snapshot_5s(symbol)
+        )
+        if bars:
+            return [_bar_to_dict(b) for b in bars]
+
+    persistence = LIVE_BAR_AGGREGATOR._persistence
+    if persistence is None:
+        return []
+    # Past dates: prefer compacted Parquet; fall back to JSONL when the
+    # day's first compaction hasn't run yet (still streaming or the
+    # nightly compaction job hasn't fired).
+    bars = persistence.read_parquet(symbol, resolution, day)
+    if not bars:
+        bars = persistence.replay(symbol, resolution, day)
+    return [_bar_to_dict(b) for b in bars]
+
+
+@router.get(
+    "/{strategy_instance_id}/chart-snapshot",
+    response_model=ChartSnapshotResponse,
+)
+async def get_chart_snapshot(
+    strategy_instance_id: str,
+    date_str: Annotated[str | None, Query(alias="date")] = None,
+    resolution: Annotated[str, Query()] = "1m",
+) -> ChartSnapshotResponse:
+    """Aggregated chart payload for one (instance, date, resolution) — Slice 5.
+
+    Replaces the chart card's prior split between ``/bars/snapshot``,
+    per-run ``/trades`` and per-run ``/executions`` calls. Returns the
+    day's bars + every run of the instance that touched the day so the
+    frontend renders per-run trade markers and inactive-interval shading
+    without knowing how many runs exist.
+
+    ``date`` defaults to today (UTC). A past date stops polling on the
+    frontend; the absence of ``has_bars`` lets the UI surface a "bars
+    unavailable" badge for pre-persistence dates (Slice 6).
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    if resolution not in ("1m", "5s"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="resolution must be '1m' or '5s'")
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    try:
+        day = date.fromisoformat(date_str) if date_str else _today_utc()
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid date") from None
+
+    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    runs = _scan_runs_by_instance(root).get(sid, [])
+
+    symbol = _resolve_symbol(root, live_binding, runs)
+    is_today = day == _today_utc()
+
+    # Today's path: nudge the live aggregator so a fresh operator session
+    # after a deploy/restart starts the IBKR stream — the chart card no
+    # longer hits the legacy /api/broker/bars*/snapshot endpoints that
+    # used to lazily call ensure_subscribed (PR #483 review).
+    if is_today and symbol is not None:
+        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+        try:
+            if resolution == "1m":
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
+            else:
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
+        except Exception as exc:
+            # The stream may legitimately be unavailable (broker offline,
+            # subsystem disabled). Surface as a log; the response still
+            # carries has_bars=false from persistence.
+            logger.info("ensure_subscribed for %s/%s declined: %s", symbol, resolution, exc)
+
+    bars = _resolve_chart_bars(
+        symbol=symbol, resolution=resolution, day=day, is_today=is_today
+    )
+
+    runs_today = _runs_active_on(runs, day, live_binding=live_binding)
+    snapshot_runs: list[ChartSnapshotRun] = []
+    # Color index is assigned by sort order (oldest run first) so a fresh
+    # deployment doesn't shift the color of older runs.
+    for color_index, run in enumerate(sorted(runs_today, key=lambda r: r.get("started_at_ms") or 0)):
+        run_dir = Path(run["run_dir"])
+        is_current = live_binding is not None and run["run_id"] == live_binding.run_id
+        # Filter to the requested UTC day — a multi-day run otherwise leaks
+        # other days' markers onto every per-date response (PR #483 review).
+        trades = _filter_rows_to_utc_day(_read_parquet_rows(run_dir / "trades.parquet"), day, key="entry_time_ms")
+        executions = _filter_rows_to_utc_day(_read_parquet_rows(run_dir / "executions.parquet"), day, key="ts_ms")
+        snapshot_runs.append(
+            ChartSnapshotRun(
+                run_id=run["run_id"],
+                started_at_ms=run.get("started_at_ms"),
+                ended_at_ms=run.get("ended_at_ms"),
+                is_current=is_current,
+                color_index=color_index,
+                trades=trades,
+                executions=executions,
+            )
+        )
+
+    return ChartSnapshotResponse(
+        date=day.isoformat(),
+        # Symbol is the resolved ticker for the day, or empty if unresolved
+        # (legacy ledger, nothing deployed). The frontend treats both `null`
+        # and empty as "unknown" with a single `||` fallback (PR #483 review).
+        symbol=symbol or "",
+        resolution=resolution,
+        has_bars=bool(bars),
+        now_ms=_now_ms(),
+        bars=bars,
+        runs=snapshot_runs,
+    )
+
+
+@router.get(
+    "/{strategy_instance_id}/active-dates",
+    response_model=list[ActiveDateEntry],
+)
+async def get_active_dates(
+    strategy_instance_id: str,
+    resolution: Annotated[str, Query()] = "1m",
+) -> list[ActiveDateEntry]:
+    """All dates the operator can pick for this instance (Slice 6).
+
+    Returns the union of:
+      * dates with at least one run touching them (from the run-dir scan)
+      * dates with persisted bars under the BarPersistence root
+    so a date that has bars but no run-dir (rare; future seed-bar import)
+    still appears, and a date the instance ran on but pre-dates
+    persistence appears with ``has_bars=False``.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    if resolution not in ("1m", "5s"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="resolution must be '1m' or '5s'")
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    runs = _scan_runs_by_instance(root).get(sid, [])
+
+    # Bar-bearing dates come from the live aggregator's persistence — the
+    # one process-wide store. Symbol is sourced from the latest run's ledger.
+    symbol = _resolve_symbol(root, None, runs)
+    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+    bar_dates: set[date] = set()
+    persistence = LIVE_BAR_AGGREGATOR._persistence
+    if persistence is not None and symbol is not None:
+        try:
+            bar_dates = set(persistence.active_dates(symbol, resolution))
+        except Exception as exc:
+            logger.warning("active_dates lookup failed for %s/%s: %s", symbol, resolution, exc)
+
+    # Run-bearing dates: count every UTC day a run overlaps (PR #483 review).
+    # A run spanning midnight must appear on both UTC dates the picker
+    # shows — anchoring only on started_at_ms hid the later days unless
+    # persistence happened to carry bars for them.
+    now_ms = _now_ms()
+    runs_by_date: dict[date, int] = {}
+    for run in runs:
+        run_dir = Path(run["run_dir"])
+        sidecar = _read_sidecar(run_dir)
+        started = (
+            sidecar.started_at_ms
+            if sidecar is not None and sidecar.started_at_ms is not None
+            else int(run.get("created_at_ms") or 0)
+        )
+        if started <= 0:
+            continue
+        # End at the sidecar's ended_at_ms when present (terminated run)
+        # else now (still live). A live run's "last touched" day is today.
+        ended = sidecar.ended_at_ms if sidecar is not None and sidecar.ended_at_ms is not None else now_ms
+        start_day = datetime.fromtimestamp(started / 1000.0, tz=UTC).date()
+        end_day = datetime.fromtimestamp(ended / 1000.0, tz=UTC).date()
+        cursor_day = start_day
+        while cursor_day <= end_day:
+            runs_by_date[cursor_day] = runs_by_date.get(cursor_day, 0) + 1
+            cursor_day = cursor_day + timedelta(days=1)
+
+    all_dates = sorted(set(runs_by_date) | bar_dates)
+    return [
+        ActiveDateEntry(
+            date=d.isoformat(),
+            run_count=runs_by_date.get(d, 0),
+            has_bars=d in bar_dates,
+        )
+        for d in all_dates
+    ]
 
 
 @router.post("/{strategy_instance_id}/desired-state", response_model=SetInstanceDesiredStateResponse)
