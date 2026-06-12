@@ -60,7 +60,7 @@
         [class.warn]="tone === 'warn'"
         [class.bad]="tone === 'bad'"
       >
-        {{ symbol() ?? '—' }} · {{ statusLabel() }}
+        {{ symbol() || '—' }} · {{ statusLabel() }}
         @if (tradeCount() > 0) {
           · {{ tradeCount() }} trades
         }

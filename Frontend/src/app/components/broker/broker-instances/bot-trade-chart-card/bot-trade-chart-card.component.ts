@@ -205,7 +205,17 @@ export class BotTradeChartCardComponent {
   protected readonly isPastDate = computed<boolean>(() => {
     const date = this.chartDate();
     if (!date) return false;
-    const today = new Date().toISOString().slice(0, 10);
+    // Local-calendar comparison — the chart renders times in the browser's
+    // local TZ, so the "is this today?" check must use the operator's
+    // wall-clock day (PR #483 review). ``toISOString`` would compare the
+    // UTC day and misclassify "today" for operators west of UTC around
+    // local midnight.
+    const now = new Date();
+    const today = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    ].join('-');
     return date < today;
   });
 

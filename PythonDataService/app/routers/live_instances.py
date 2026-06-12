@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -355,6 +355,14 @@ def _resolve_symbol(
     hardcoding 'SPY'. Returns ``None`` when nothing is deployed, when the
     ledger is unreadable, or when the ledger predates the symbol field; the
     UI treats null as "unknown" rather than substituting a default.
+
+    TODO(PR #483 review): when an instance is redeployed with a different
+    symbol (e.g. ``QQQ`` -> ``SPY``), a historical ``/chart-snapshot`` for
+    a pre-redeploy date queries persistence with the new symbol and either
+    misses bars or returns the wrong partition. Acceptable for the current
+    one-strategy-per-instance fleet; revisit by accepting a ``target_date``
+    here and resolving the symbol from the run(s) that overlap that date,
+    returning ``None`` on a mixed-symbol day.
     """
     run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
     if run_dir is None:
@@ -752,16 +760,34 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
 
 
 def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_ms") -> list[dict]:
-    """Read a Parquet artifact's rows; optionally filter by a ms cursor."""
+    """Read a Parquet artifact's rows; optionally filter by a ms cursor.
+
+    A missing file legitimately returns ``[]`` (run had no trades yet). A
+    read failure logs with context and still returns ``[]`` rather than
+    500-ing the chart — but the warning makes corruption visible during
+    incident response (PR #483 review).
+    """
     if not path.is_file():
         return []
     try:
         rows = pq.read_table(path).to_pylist()
-    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
+    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid) as exc:
+        logger.warning("parquet read failed for %s: %s", path, exc, exc_info=True)
         return []
     if since_ms is not None:
         rows = [r for r in rows if int(r.get(key, 0)) > since_ms]
     return rows
+
+
+def _filter_rows_to_utc_day(rows: list[dict], day: date, key: str = "ts_ms") -> list[dict]:
+    """Keep only rows whose ``key`` (int64 ms UTC) falls within ``day``.
+
+    Used by ``/chart-snapshot`` so a multi-day run doesn't project the
+    other days' markers onto every per-date response (PR #483 review).
+    """
+    day_start_ms = int(datetime.combine(day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000)
+    day_end_ms = day_start_ms + 86_400_000
+    return [r for r in rows if day_start_ms <= int(r.get(key, -1)) < day_end_ms]
 
 
 def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | None) -> list[dict]:
@@ -880,6 +906,24 @@ async def get_chart_snapshot(
     symbol = _resolve_symbol(root, live_binding, runs)
     is_today = day == _today_utc()
 
+    # Today's path: nudge the live aggregator so a fresh operator session
+    # after a deploy/restart starts the IBKR stream — the chart card no
+    # longer hits the legacy /api/broker/bars*/snapshot endpoints that
+    # used to lazily call ensure_subscribed (PR #483 review).
+    if is_today and symbol is not None:
+        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+        try:
+            if resolution == "1m":
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
+            else:
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
+        except Exception as exc:
+            # The stream may legitimately be unavailable (broker offline,
+            # subsystem disabled). Surface as a log; the response still
+            # carries has_bars=false from persistence.
+            logger.info("ensure_subscribed for %s/%s declined: %s", symbol, resolution, exc)
+
     bars = _resolve_chart_bars(
         symbol=symbol, resolution=resolution, day=day, is_today=is_today
     )
@@ -891,8 +935,10 @@ async def get_chart_snapshot(
     for color_index, run in enumerate(sorted(runs_today, key=lambda r: r.get("started_at_ms") or 0)):
         run_dir = Path(run["run_dir"])
         is_current = live_binding is not None and run["run_id"] == live_binding.run_id
-        trades = _read_parquet_rows(run_dir / "trades.parquet")
-        executions = _read_parquet_rows(run_dir / "executions.parquet")
+        # Filter to the requested UTC day — a multi-day run otherwise leaks
+        # other days' markers onto every per-date response (PR #483 review).
+        trades = _filter_rows_to_utc_day(_read_parquet_rows(run_dir / "trades.parquet"), day, key="entry_time_ms")
+        executions = _filter_rows_to_utc_day(_read_parquet_rows(run_dir / "executions.parquet"), day, key="ts_ms")
         snapshot_runs.append(
             ChartSnapshotRun(
                 run_id=run["run_id"],
@@ -907,6 +953,9 @@ async def get_chart_snapshot(
 
     return ChartSnapshotResponse(
         date=day.isoformat(),
+        # Symbol is the resolved ticker for the day, or empty if unresolved
+        # (legacy ledger, nothing deployed). The frontend treats both `null`
+        # and empty as "unknown" with a single `||` fallback (PR #483 review).
         symbol=symbol or "",
         resolution=resolution,
         has_bars=bool(bars),
@@ -954,9 +1003,11 @@ async def get_active_dates(
         except Exception as exc:
             logger.warning("active_dates lookup failed for %s/%s: %s", symbol, resolution, exc)
 
-    # Run-bearing dates come from the run-dir sidecars (started_at_ms is the
-    # canonical "the bot ran on this UTC date" signal). Created_at_ms is a
-    # reasonable fallback for runs without a sidecar yet.
+    # Run-bearing dates: count every UTC day a run overlaps (PR #483 review).
+    # A run spanning midnight must appear on both UTC dates the picker
+    # shows — anchoring only on started_at_ms hid the later days unless
+    # persistence happened to carry bars for them.
+    now_ms = _now_ms()
     runs_by_date: dict[date, int] = {}
     for run in runs:
         run_dir = Path(run["run_dir"])
@@ -968,8 +1019,15 @@ async def get_active_dates(
         )
         if started <= 0:
             continue
-        day = datetime.fromtimestamp(started / 1000.0, tz=UTC).date()
-        runs_by_date[day] = runs_by_date.get(day, 0) + 1
+        # End at the sidecar's ended_at_ms when present (terminated run)
+        # else now (still live). A live run's "last touched" day is today.
+        ended = sidecar.ended_at_ms if sidecar is not None and sidecar.ended_at_ms is not None else now_ms
+        start_day = datetime.fromtimestamp(started / 1000.0, tz=UTC).date()
+        end_day = datetime.fromtimestamp(ended / 1000.0, tz=UTC).date()
+        cursor_day = start_day
+        while cursor_day <= end_day:
+            runs_by_date[cursor_day] = runs_by_date.get(cursor_day, 0) + 1
+            cursor_day = cursor_day + timedelta(days=1)
 
     all_dates = sorted(set(runs_by_date) | bar_dates)
     return [

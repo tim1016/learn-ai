@@ -369,6 +369,120 @@ async def test_active_dates_returns_run_dates_with_no_bars_marker(
     assert entry["has_bars"] is False
 
 
+async def test_active_dates_counts_every_utc_day_a_run_overlaps(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 6 (PR #483 review): a run spanning midnight UTC must appear on
+    BOTH dates the picker shows, not just its start day. Anchoring solely
+    on started_at_ms previously hid the later day."""
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import RunStatusSidecar
+
+    app, root = app_with_root
+    run_dir = root / "run-overnight"
+    run_dir.mkdir(parents=True)
+    started_ms = int(datetime(2026, 1, 5, 22, 0, tzinfo=UTC).timestamp() * 1000)
+    ended_ms = int(datetime(2026, 1, 7, 4, 0, tzinfo=UTC).timestamp() * 1000)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-overnight",
+                "strategy_instance_id": "spy_overnight",
+                "created_at_ms": started_ms,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="run-overnight",
+            started_at_ms=started_ms,
+            last_update_ms=ended_ms,
+            ended_at_ms=ended_ms,
+            exit_code=0,
+            host_pid=12,
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_overnight/active-dates")
+
+    assert response.status_code == 200
+    body = response.json()
+    dates = [entry["date"] for entry in body]
+    # Spans 2026-01-05 22:00 UTC → 2026-01-07 04:00 UTC, so all three UTC
+    # days must appear.
+    assert dates == ["2026-01-05", "2026-01-06", "2026-01-07"]
+    for entry in body:
+        assert entry["run_count"] == 1
+
+
+async def test_chart_snapshot_filters_trades_to_requested_utc_day(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5 (PR #483 review): a multi-day run's trades from other UTC
+    days must NOT project onto a per-date /chart-snapshot response."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    app, root = app_with_root
+    run_dir = root / "run-spans"
+    run_dir.mkdir(parents=True)
+    day_a_ms = int(datetime(2026, 1, 5, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    day_b_ms = int(datetime(2026, 1, 6, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-spans",
+                "strategy_instance_id": "spy_spans",
+                "created_at_ms": day_a_ms,
+                "live_config": {"symbol": "SPY"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    from app.engine.live.run_status import write_run_status
+    from app.schemas.live_runs import RunStatusSidecar
+
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id="run-spans",
+            started_at_ms=day_a_ms,
+            last_update_ms=day_b_ms,
+            ended_at_ms=day_b_ms + 3_600_000,
+            exit_code=0,
+            host_pid=14,
+        ),
+    )
+    # Trades from two different UTC days under the same run.
+    table = pa.table(
+        {
+            "entry_time_ms": pa.array([day_a_ms, day_b_ms], type=pa.int64()),
+            "exit_time_ms": pa.array([day_a_ms + 60_000, day_b_ms + 60_000], type=pa.int64()),
+            "entry_price": pa.array([100.0, 200.0], type=pa.float64()),
+            "exit_price": pa.array([101.0, 201.0], type=pa.float64()),
+            "pnl_points": pa.array([1.0, 1.0], type=pa.float64()),
+        }
+    )
+    pq.write_table(table, run_dir / "trades.parquet")
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_spans/chart-snapshot", params={"date": "2026-01-05"}
+        )
+
+    assert response.status_code == 200
+    runs = response.json()["runs"]
+    assert len(runs) == 1
+    trades = runs[0]["trades"]
+    assert len(trades) == 1
+    assert trades[0]["entry_time_ms"] == day_a_ms
+
+
 async def test_active_dates_rejects_invalid_resolution(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

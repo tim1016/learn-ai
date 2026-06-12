@@ -211,6 +211,10 @@ class BarPersistence:
                 return AppendOutcome.APPLIED_CORRECTION
 
             if bar.start_ms < cursor.last_start_ms:
+                # Capture the prior cursor BEFORE reset (PR #483 review): the
+                # error message previously read ``last_accepted=None`` because
+                # the f-string ran after the field was cleared.
+                prior_start_ms = cursor.last_start_ms
                 self._quarantine(jsonl)
                 cursor.counters.regression_quarantined += 1
                 logger.error(
@@ -219,7 +223,7 @@ class BarPersistence:
                         "symbol": symbol,
                         "resolution": resolution,
                         "incoming_start_ms": bar.start_ms,
-                        "last_accepted_start_ms": cursor.last_start_ms,
+                        "last_accepted_start_ms": prior_start_ms,
                         "action": "regression_quarantined",
                     },
                 )
@@ -229,7 +233,7 @@ class BarPersistence:
                 cursor.last_payload_key = None
                 raise BarPersistenceRegressionError(
                     f"non-monotonic bar for {symbol}/{resolution}: "
-                    f"incoming start_ms={bar.start_ms} < last_accepted={cursor.last_start_ms}"
+                    f"incoming start_ms={bar.start_ms} < last_accepted={prior_start_ms}"
                 )
 
             # Strict forward progress.
