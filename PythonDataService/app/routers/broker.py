@@ -51,6 +51,7 @@ from app.broker.ibkr.models import (
     DiagnosticReport,
     DiagnosticReportDisabled,
     IbkrAccountSummary,
+    IbkrBarsSnapshot,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
     IbkrOpenOrder,
@@ -79,6 +80,7 @@ from app.broker.ibkr.pnl import (
     stream_account_pnl,
     stream_position_pnl,
 )
+from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
@@ -605,6 +607,57 @@ async def order_events_stream_endpoint(
         event_source(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/bars/snapshot", response_model=IbkrBarsSnapshot)
+async def bars_snapshot_endpoint(
+    symbol: Annotated[str, Query(min_length=1, max_length=12)],
+    since_ms: Annotated[int | None, Query(ge=0)] = None,
+) -> IbkrBarsSnapshot:
+    """Return the live 1-min OHLCV buffer for ``symbol``.
+
+    Idempotent: first call lazily subscribes to ``reqRealTimeBars`` on the
+    public broker session; subsequent calls return the current buffer.
+    ``since_ms`` filters bars to ``start_ms > since_ms`` for incremental
+    polling. ``status`` reflects subscription health so the UI can
+    distinguish "no bars yet" (subscribing) from "broker disconnected"
+    (errored).
+    """
+    _raise_if_disabled()
+    sym = symbol.strip().upper()
+    state = await LIVE_BAR_AGGREGATOR.ensure_subscribed(sym)
+    bars = LIVE_BAR_AGGREGATOR.snapshot(sym, since_ms=since_ms)
+    return IbkrBarsSnapshot(
+        symbol=sym,
+        status=state.status,
+        last_error=state.last_error,
+        last_bar_ms=state.last_bar_ms,
+        bars=bars,
+    )
+
+
+@router.get("/bars-5s/snapshot", response_model=IbkrBarsSnapshot)
+async def bars_5s_snapshot_endpoint(
+    symbol: Annotated[str, Query(min_length=1, max_length=12)],
+    since_ms: Annotated[int | None, Query(ge=0)] = None,
+) -> IbkrBarsSnapshot:
+    """Return the live raw 5-sec OHLCV buffer for ``symbol``.
+
+    Mirror of ``/bars/snapshot`` for the high-resolution chart. Opens its
+    own ``reqRealTimeBars`` subscription independent of the 1-min one;
+    they share no state. Each bar's ``end_ms - start_ms`` window is 5 000.
+    """
+    _raise_if_disabled()
+    sym = symbol.strip().upper()
+    state = await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(sym)
+    bars = LIVE_BAR_AGGREGATOR.snapshot_5s(sym, since_ms=since_ms)
+    return IbkrBarsSnapshot(
+        symbol=sym,
+        status=state.status,
+        last_error=state.last_error,
+        last_bar_ms=state.last_bar_ms,
+        bars=bars,
     )
 
 

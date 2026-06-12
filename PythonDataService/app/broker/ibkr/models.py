@@ -273,6 +273,21 @@ class IbkrMinuteBar(BaseModel):
     fetched_at_ms: int
 
 
+class IbkrBarsSnapshot(BaseModel):
+    """A snapshot of the live 1-min OHLCV ring buffer for one symbol.
+
+    ``status`` reports the aggregator's subscription health so the UI can
+    show "Subscribing…" / "Streaming" / "Error: …" instead of an
+    inscrutable empty chart.
+    """
+
+    symbol: str
+    status: Literal["idle", "subscribing", "streaming", "errored"]
+    last_error: str | None = None
+    last_bar_ms: int | None = None
+    bars: list[IbkrMinuteBar] = Field(default_factory=list)
+
+
 OrderAction = Literal["BUY", "SELL"]
 OrderType = Literal["MKT", "LMT"]
 OrderTimeInForce = Literal["DAY", "GTC", "IOC", "OPG"]

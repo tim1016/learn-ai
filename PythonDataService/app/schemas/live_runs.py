@@ -172,6 +172,24 @@ class LogLine(BaseModel):
     snapshot_set: str | None = None
 
 
+class FailureRecord(BaseModel):
+    """One ERROR/CRITICAL block parsed from live.log.
+
+    ``raw_ts`` is the literal timestamp string as written by the engine's
+    logger (host-local TZ); ``ts_ms`` is the same value parsed as if it
+    were UTC, suitable for sequencing and the ``since_ms`` cursor but not
+    guaranteed to equal wall-clock UTC ms when the engine host's TZ ≠ UTC.
+    See :mod:`app.services.live_log_failures` for the timestamp caveat.
+    """
+
+    ts_ms: int
+    raw_ts: str
+    level: Literal["ERROR", "CRITICAL"]
+    logger: str
+    message: str
+    traceback: str | None = None
+
+
 HydratePolicy = Literal["require", "optional", "disabled"]
 
 

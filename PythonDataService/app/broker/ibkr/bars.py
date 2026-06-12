@@ -275,6 +275,69 @@ def aggregate_realtime_bar(
     return _MinuteAccumulator(symbol, start_ms, {source_ms: incoming}), emitted, source_ms
 
 
+async def stream_raw_5s_bars(
+    client: IbkrClient,
+    symbol: str,
+    *,
+    use_rth: bool = True,
+) -> AsyncIterator[IbkrMinuteBar]:
+    """Yield raw 5-second TRADES bars from IBKR's ``reqRealTimeBars``.
+
+    No minute aggregation. Each yielded model carries ``start_ms`` =
+    source timestamp ms and ``end_ms`` = ``start_ms + 5_000``. The OHLCV
+    fields come straight from the raw 5-sec bar (no folding, no
+    correction-replacement bookkeeping — every yielded bar is a verbatim
+    snapshot of what IBKR delivered).
+
+    The model is reused as :class:`IbkrMinuteBar` (its schema is
+    bar-resolution-agnostic; only the name is minute-flavoured). Live
+    consumers distinguish 1-min vs 5-sec by the ``end_ms - start_ms``
+    window or by which endpoint sourced the data.
+
+    Note on concurrent subscriptions: this opens a SECOND ``reqRealTimeBars``
+    subscription on the same contract when ``stream_minute_bars`` is also
+    running for that symbol. IBKR accepts that within the per-session
+    subscription cap (50 simultaneous real-time-bar subs); each one gets
+    its own reqId. If the cap becomes a real concern at scale, the two
+    paths can be unified onto a single source iterator that bifurcates.
+    """
+    client.require_connected()
+    contract = await qualify_underlying(client, symbol)
+    bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    sym = symbol.upper()
+    index = 0
+    try:
+        while True:
+            if index >= len(bars):
+                if not client.is_connected() or client.connection_lost:
+                    raise IBKRBarStreamError(
+                        f"IBKR connection lost while streaming {symbol} 5-second "
+                        "raw bars; halting rather than hanging on a dead feed."
+                    )
+                await asyncio.sleep(0.1)
+                continue
+            raw_bar = bars[index]
+            index += 1
+            source_ms = _bar_time_ms(raw_bar)
+            contribution = _contribution(raw_bar)
+            yield IbkrMinuteBar(
+                symbol=sym,
+                start_ms=source_ms,
+                end_ms=source_ms + 5_000,
+                open=contribution.open,
+                high=contribution.high,
+                low=contribution.low,
+                close=contribution.close,
+                volume=contribution.volume,
+                fetched_at_ms=_now_ms(),
+            )
+    finally:
+        try:
+            client.ib.cancelRealTimeBars(bars)
+        except Exception as exc:
+            logger.debug("cancelRealTimeBars(%s, raw5s) raised on shutdown: %s", symbol, exc)
+
+
 async def stream_minute_bars(
     client: IbkrClient,
     symbol: str,
