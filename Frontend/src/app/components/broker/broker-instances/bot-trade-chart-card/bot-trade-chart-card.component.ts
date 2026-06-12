@@ -213,6 +213,7 @@ export class BotTradeChartCardComponent {
     });
     effect(() => {
       this.tradesResource.value();
+      this.executionsResource.value();
       if (this.chart) this.syncActiveLine();
     });
 
