@@ -852,6 +852,41 @@ describe('BrokerInstancesComponent', () => {
     expect((fixture.nativeElement.textContent ?? '')).not.toContain('Reset paper account');
   });
 
+  it('keeps the roster chip consistent with the hero badge for the selected instance', async () => {
+    // Repro for the prod sighting (2026-06-12 smoke run): the fleet roster
+    // loaded with process_state='running' (cached daemon view), then the
+    // bot exited (IBKR connection lost). The per-instance status returned
+    // process.state='exited' and the hero badge correctly flipped to
+    // STOPPED — but the roster chip kept saying RUNNING. The chip must
+    // prefer the freshest known state for the selected row.
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        process: { state: 'exited' },
+        live_binding: null,
+        evidence_binding: { run_id: 'run-old', state: 'latest_run_by_ledger', is_live: false },
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    // Sanity: the fleet roster fixture has spy_ema_paper as RUNNING.
+    const fleetRoster = fixture.nativeElement.querySelector('.fleet');
+    expect(fleetRoster?.textContent).toContain('RUNNING');
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    // After selection, the chip for spy_ema_paper must read STOPPED
+    // (matching the just-loaded per-instance status), even though the
+    // cached fleet summary still says 'running'.
+    const selectedBtn = fixture.nativeElement.querySelector('.fleet .selected');
+    expect(selectedBtn?.textContent).toContain('STOPPED');
+    expect(selectedBtn?.textContent).not.toContain('RUNNING');
+  });
+
   it('shows the Reset Paper Account button + how-to when the session is on paper', async () => {
     const { fixture, component } = setup({ isPaper: () => true } as never);
     await flush();

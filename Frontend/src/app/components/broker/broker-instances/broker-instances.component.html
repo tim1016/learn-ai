@@ -58,7 +58,8 @@
               (click)="select(inst.strategy_instance_id)"
             >
               <span class="bot-name" [title]="inst.strategy_instance_id">{{ inst.strategy_instance_id }}</span>
-              <span class="state-chip" [class.live]="inst.process_state === 'running'">{{ inst.process_state === 'running' ? 'RUNNING' : 'STOPPED' }}</span>
+              @let effState = effectiveProcessState(inst);
+              <span class="state-chip" [class.live]="effState === 'running'">{{ effState === 'running' ? 'RUNNING' : 'STOPPED' }}</span>
               @if (inst.bound_run_id) {
                 <span class="bound">Live session {{ shortId(inst.bound_run_id) }}</span>
               } @else if (inst.latest_run_id) {
