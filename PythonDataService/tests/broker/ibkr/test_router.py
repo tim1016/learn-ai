@@ -273,3 +273,80 @@ async def test_order_event_stream_returns_503_when_disconnected() -> None:
         resp = await ac.get("/api/broker/orders/stream")
 
     assert resp.status_code == 503
+
+
+# ── /option-surface boundary checks ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_surface_returns_422_when_expiries_missing() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-surface/SPY",
+            params=[("strikes", 420)],
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_surface_returns_422_when_strikes_missing() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-surface/SPY",
+            params=[("expiry_ms", 1_800_000_000_000)],
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_surface_rejects_non_positive_expiry_ms() -> None:
+    """expiry_ms validation runs before the connection check, so a
+    negative expiry must always come back as 400 — not 503 — even with
+    no client installed. Guards the ordering inside the handler."""
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-surface/SPY",
+            params=[("expiry_ms", -1), ("strikes", 420)],
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_surface_rejects_nan_strikes() -> None:
+    """NaN slips past Pydantic's float coercion; the boundary guard must
+    catch it before it reaches contract qualification."""
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-surface/SPY",
+            params=[("expiry_ms", 1_800_000_000_000), ("strikes", "nan")],
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_surface_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-surface/SPY",
+            params=[
+                ("expiry_ms", 1_800_000_000_000),
+                ("strikes", 420),
+                ("strikes", 425),
+            ],
+        )
+
+    assert resp.status_code == 503

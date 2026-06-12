@@ -81,6 +81,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Broker Status', route: '/broker' },
       { label: 'Options Chain (Live)', route: '/broker/options-chain' },
+      { label: 'Options Surface (3D)', route: '/broker/options-surface' },
       { label: 'Account Monitor', route: '/broker/account-monitor' },
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },
