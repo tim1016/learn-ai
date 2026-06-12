@@ -288,6 +288,78 @@ def test_outside_mutation_ignores_foreign_execution_before_session_start() -> No
     assert reason is None
 
 
+def test_outside_mutation_floor_only_works_when_session_start_is_wall_clock() -> None:
+    """Pins the *wiring* contract from the 2026-06-12 smoke-run incident.
+
+    ``session_start_ms`` MUST be the wall-clock moment the broker session
+    began — not the ledger's ``start_date_ms`` (the trading-date anchor
+    hashed into the run_id). If a caller mis-wires the trading anchor in
+    here, a foreign execution that happened *minutes before* the run
+    actually started will slip past the floor: the anchor (e.g. midnight
+    UTC) is much earlier than the exec, so the ``exec_time_ms <
+    session_start_ms`` branch suppresses the halt.
+
+    This isn't a bug in ``check_outside_mutation`` — it's a wiring
+    contract. The test demonstrates the failure mode so a future caller
+    can't regress to the same mis-wiring (run.py L1030, fixed 2026-06-12)
+    without seeing this scenario in the test trace.
+    """
+    from app.engine.live.halt import check_outside_mutation
+
+    # The 2026-06-12 conditions:
+    midnight_utc_anchor = 1_781_222_400_000  # 2026-06-12 00:00:00 UTC
+    wall_clock_session_start = 1_781_288_484_940  # 2026-06-12 18:21:24 UTC
+    foreign_exec_at = 1_781_288_413_000  # 2026-06-12 18:20:13 UTC (~70 s before start)
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "e-foreign-pre-start",
+            "perm_id": 482102749,
+            "account_id": "DUM284968",
+            "client_id": 42,
+            "exec_time_ms": foreign_exec_at,
+        },
+    ]
+
+    # MIS-WIRED: floor set to the trading-date anchor (the bug). The
+    # exec at 18:20 is "after" 00:00, so the halt is suppressed when it
+    # should fire — except in this case the exec actually IS before the
+    # wall-clock session, so the floor would correctly suppress it IF
+    # set to the wall clock.
+    miswired = check_outside_mutation(
+        executions,
+        owned_client_order_ids=set(),
+        halted_at_ms=wall_clock_session_start + 60_000,
+        last_clean_bar_close_ms=wall_clock_session_start,
+        session_start_ms=midnight_utc_anchor,
+    )
+    # The bug had the OPPOSITE consequence in production: a foreign exec
+    # at 18:20 vs a midnight anchor → exec is AFTER anchor → halt fires
+    # incorrectly. Verify that scenario:
+    assert miswired is not None, (
+        "miswired floor at midnight should still halt the 18:20 exec — "
+        "the production bug was exactly this halt firing on a fill that "
+        "happened seconds before the wall-clock session start"
+    )
+
+    # CORRECTLY WIRED: floor at wall-clock session start. The exec is
+    # before the session start, so it's correctly suppressed as
+    # pre-session replay.
+    correctly_wired = check_outside_mutation(
+        executions,
+        owned_client_order_ids=set(),
+        halted_at_ms=wall_clock_session_start + 60_000,
+        last_clean_bar_close_ms=wall_clock_session_start,
+        session_start_ms=wall_clock_session_start,
+    )
+    assert correctly_wired is None, (
+        "correctly wired floor at wall-clock session start should suppress "
+        "the pre-session replay (the operator-initiated flatten that ran "
+        "70s before the run process started)"
+    )
+
+
 def test_outside_mutation_flags_foreign_execution_at_or_after_session_start() -> None:
     """A foreign execution at/after session start is concurrent contamination
     and still fatal-halts — the floor only suppresses provably-stale fills."""

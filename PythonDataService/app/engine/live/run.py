@@ -1017,6 +1017,18 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     command_channel = CommandChannel(args.run_dir / "commands")
 
+    # session_start_ms is the WALL-CLOCK moment this broker session began —
+    # the floor for the outside-mutation check (halt.check_outside_mutation).
+    # Distinct from ledger.start_date_ms, which is the trading-date anchor
+    # hashed into the run_id; that value comes from the deploy request and
+    # can be any moment of "today" (e.g. midnight UTC for a date-aligned
+    # convention). Wiring the trading-date anchor here would let a fill that
+    # happened *minutes before this run started* slip past the floor whenever
+    # the operator anchored start_date_ms to midnight — exactly the bug the
+    # 2026-06-12 smoke run hit (foreign sell at 18:20 UTC was treated as
+    # "after session start 00:00 UTC" and tripped a false outside_mutation
+    # halt).
+    session_start_ms = int(time.time() * 1000)
     engine = LiveEngine(
         client,
         live_config,
@@ -1027,7 +1039,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         max_orders_per_day=args.max_orders_per_day,
         artifacts_root=_artifacts_root,
         hydrate_policy=hydrate_policy,
-        session_start_ms=ledger.start_date_ms,
+        session_start_ms=session_start_ms,
         code_sha=ledger.code_sha,
         strategy_spec_sha=ledger.strategy_spec_sha256,
         live_state_writer=live_state_writer,
