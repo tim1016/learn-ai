@@ -347,6 +347,28 @@
               >
                 {{ busyEmergencyFlatten() ? 'Flattening…' : 'Emergency flatten (account-wide)' }}
               </button>
+              @if (isPaperAccount()) {
+                <p class="notice">
+                  Paper-only: the IBKR paper account replays its day's execution
+                  history at every connect. A foreign fill earlier today (e.g. a
+                  manual flatten) can trip the engine's outside-mutation halt on
+                  the next start. Reset the paper account in IBKR's Account
+                  Management to clear today's history and start clean.
+                </p>
+                <button
+                  type="button"
+                  class="reset-paper"
+                  (click)="openPaperAccountReset()"
+                  title="Open IBKR Account Management. Path inside: Settings → Account Settings → Paper Trading Account Reset."
+                >
+                  Reset paper account (opens IBKR)…
+                </button>
+                <small class="reset-paper-hint">
+                  In the portal: <strong>Settings → Account Settings → Paper Trading Account Reset</strong>.
+                  Resets cash to $1,000,000, clears positions and execution history. IBKR-side only —
+                  no API available, so we can't trigger it for you.
+                </small>
+              }
             </div>
             <app-broker-operation-result [error]="commandError()" />
             @if (commandEntries().length) {

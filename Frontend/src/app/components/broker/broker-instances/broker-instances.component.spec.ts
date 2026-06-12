@@ -143,6 +143,10 @@ function setup(connectivityOverrides: { brokerState?: () => BrokerLinkState } = 
     // per-instance sidecar. Default to connected; tests override per case.
     brokerState: () => 'ok' as BrokerLinkState,
     daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
+    // Default: not paper (suppresses the Reset Paper Account row in tests
+    // that don't explicitly opt in). Tests for the paper-only surface
+    // override this to return true.
+    isPaper: () => null as boolean | null,
     reload: () => {},
     ...connectivityOverrides,
   };
@@ -830,5 +834,38 @@ describe('BrokerInstancesComponent', () => {
     // The crashed run's log is fetched once (not the live poll path).
     expect(svc.getLogTail).toHaveBeenCalledWith('run-old', expect.any(Number));
     expect(fixture.nativeElement.querySelector('.runlog-dialog')).toBeTruthy();
+  });
+
+  it('hides the Reset Paper Account button when the session is not on paper', async () => {
+    // Default fake's isPaper() returns null (unknown) — the row stays hidden.
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+    component.setAdvancedOpen({
+      target: Object.assign(document.createElement('details'), { open: true }),
+    } as unknown as Event);
+    fixture.detectChanges();
+    expect((fixture.nativeElement.textContent ?? '')).not.toContain('Reset paper account');
+  });
+
+  it('shows the Reset Paper Account button + how-to when the session is on paper', async () => {
+    const { fixture, component } = setup({ isPaper: () => true } as never);
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+    component.setAdvancedOpen({
+      target: Object.assign(document.createElement('details'), { open: true }),
+    } as unknown as Event);
+    fixture.detectChanges();
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Reset paper account');
+    expect(text).toContain('Paper Trading Account Reset');
   });
 });

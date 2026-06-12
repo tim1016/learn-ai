@@ -351,6 +351,26 @@ export class BrokerInstancesComponent {
     }
   }
 
+  /** True when the connected IBKR session is the paper account. Paper-only
+   * surfaces (the Reset Paper Account button, the foreign-exec-replay
+   * notice) appear only in this case — there is no "reset" on a live
+   * account, and the warning would be misleading there. */
+  isPaperAccount(): boolean {
+    return this.connectivity.isPaper() === true;
+  }
+
+  /** Open IBKR's Account Management portal in a new tab so the operator can
+   * trigger Paper Trading Account Reset from there. IBKR exposes no API
+   * for this — the button is a deep-link + inline how-to, not a
+   * server-side action. Documented as a workaround for the
+   * connect-time execution-replay halt observed 2026-06-12. */
+  openPaperAccountReset(): void {
+    // The portal hostname differs by region; the public Account Management
+    // landing page redirects to the right one after login, so we link there.
+    const url = 'https://www.interactivebrokers.com/portal';
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   heroStatus(s: LiveInstanceStatus): HeroStatus {
     if (s.process.state === 'unreachable') {
       return {
