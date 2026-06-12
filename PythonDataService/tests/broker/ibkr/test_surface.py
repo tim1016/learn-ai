@@ -161,6 +161,43 @@ async def test_surface_rejects_empty_expiries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_surface_counts_lines_after_input_dedup() -> None:
+    """A caller passing the same expiry / strike twice translates into
+    one subscription downstream, so the cap check must dedupe up front —
+    otherwise an over-cap projection would block a request that the
+    backend would actually be able to handle."""
+    client = _FakeClient()
+    # Without dedup: 4 expiries × 12 strikes × 2 + 1 = 97 — fits under 100
+    # only because dedupe collapses to 2 × 6.
+    duplicated_expiries = [
+        1_800_000_000_000,
+        1_800_000_000_000,
+        1_802_592_000_000,
+        1_802_592_000_000,
+    ]
+    duplicated_strikes = [420.0, 420.0, 421.0, 421.0, 422.0, 422.0, 423.0, 423.0,
+                          424.0, 424.0, 425.0, 425.0]
+
+    agen = stream_option_surface(
+        client,
+        "SPY",
+        duplicated_expiries,
+        duplicated_strikes,
+        debounce_seconds=0.0,
+        max_lines=100,
+    )
+    snap = await asyncio.wait_for(agen.__anext__(), timeout=1.0)
+
+    # Deduped: 2 expiries × 6 strikes × 2 + 1 = 25.
+    assert snap.line_count == 1 + 2 * 6 * 2
+    assert [e.expiry_ms for e in snap.expiries] == [1_800_000_000_000, 1_802_592_000_000]
+    for group in snap.expiries:
+        assert {q.strike for q in group.quotes} == {420.0, 421.0, 422.0, 423.0, 424.0, 425.0}
+
+    await agen.aclose()
+
+
+@pytest.mark.asyncio
 async def test_surface_rejects_empty_strikes() -> None:
     client = _FakeClient()
     agen = stream_option_surface(

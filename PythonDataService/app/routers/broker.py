@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from typing import Annotated
 
@@ -520,10 +521,13 @@ async def option_surface_stream(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "strikes must be non-empty.",
         )
-    if any(k <= 0 for k in strikes):
+    # Reject NaN/inf as well as non-positive: FastAPI's float coercion
+    # accepts them, and propagating either downstream blows up contract
+    # qualification with an opaque IBKR error instead of a clean 4xx.
+    if any((not math.isfinite(k)) or k <= 0 for k in strikes):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "strikes entries must be positive.",
+            "strikes entries must be finite and positive.",
         )
 
     client = _require_connected_or_503()

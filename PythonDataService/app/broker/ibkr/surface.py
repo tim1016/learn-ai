@@ -99,15 +99,22 @@ async def stream_option_surface(
     if not strikes:
         raise BrokerError("stream_option_surface: strikes must be non-empty.")
 
+    # Normalise inputs up front: the same expiry or strike passed twice
+    # would only translate into one subscription downstream, so the cap
+    # check has to count what we will actually subscribe, not raw caller
+    # arity.
+    sorted_expiries = sorted(set(int(e) for e in expiry_ms_list))
+    unique_strikes = sorted(set(float(k) for k in strikes))
+
     # Project the line budget: 1 underlying + N expiries × M strikes × 2 sides.
     # Reject up front rather than letting IBKR's gateway start silently
     # dropping subscriptions past its 100-line per-client quota.
-    projected = 1 + len(expiry_ms_list) * len(strikes) * 2
+    projected = 1 + len(sorted_expiries) * len(unique_strikes) * 2
     if projected > max_lines:
         raise BrokerError(
             f"stream_option_surface: projected {projected} market-data lines "
             f"exceeds cap of {max_lines}. Narrow the strike band or expiry "
-            f"window (N={len(expiry_ms_list)} expiries × M={len(strikes)} "
+            f"window (N={len(sorted_expiries)} expiries × M={len(unique_strikes)} "
             f"strikes × 2 sides + 1 underlying)."
         )
 
@@ -118,10 +125,9 @@ async def stream_option_surface(
     # subscription opens. If qualification drops a leg on any expiry, fail
     # fast so we don't half-subscribe a surface and have to cancel midway.
     qualified_by_expiry: dict[int, list] = {}
-    sorted_expiries = sorted(set(int(e) for e in expiry_ms_list))
     for exp in sorted_expiries:
-        contracts = await build_chain_contracts(client, symbol, exp, strikes)
-        expected = len(strikes) * 2
+        contracts = await build_chain_contracts(client, symbol, exp, unique_strikes)
+        expected = len(unique_strikes) * 2
         if len(contracts) != expected:
             raise BrokerError(
                 f"Contract qualification dropped {expected - len(contracts)} of "
@@ -154,7 +160,7 @@ async def stream_option_surface(
             "Subscribed surface: symbol=%s expiries=%d strikes=%d lines=%d",
             symbol,
             len(sorted_expiries),
-            len(strikes),
+            len(unique_strikes),
             projected,
         )
 
