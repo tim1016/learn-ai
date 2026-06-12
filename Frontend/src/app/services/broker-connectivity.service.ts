@@ -59,6 +59,18 @@ export class BrokerConnectivityService {
     return h.connected ? 'ok' : 'down';
   });
 
+  /** Whether the connected session is the paper account. Paper-only UI
+   * surfaces (Reset Paper Account, foreign-exec-replay warnings) gate on
+   * this. ``null`` when the health probe hasn't returned yet — callers
+   * should treat null as "unknown, don't render the paper-only thing
+   * yet" rather than substituting a default. */
+  isPaper(): boolean | null {
+    const h = this.brokerHealth.health();
+    if (h === null) return null;
+    if (!h.connected) return null;
+    return h.is_paper === true;
+  }
+
   readonly fleetState = computed<LinkState>(() => {
     if (this.fleet.isLoading() || this.instances.isLoading()) return 'unknown';
     // Nothing deployed reads as neutral (grey), not a healthy "Clear" green —

@@ -348,13 +348,23 @@ def _start_defaults(
 def _resolve_symbol(
     root: Path, live_binding: LiveBinding | None, runs: list[dict]
 ) -> str | None:
-    """Traded symbol for the instance, read from ``live_config.symbol`` on the
-    visible live run, else the latest evidence run.
+    """Traded symbol for the instance.
+
+    Resolution order:
+      1. ``ledger.live_config.symbol`` (operator-set, hashed into run_id)
+      2. ``strategy_spec.symbols[0]`` (the spec the ledger is reconciled to —
+         the canonical "this is what the algorithm trades")
 
     Slice 2: the operator console reads this on the chart card instead of
-    hardcoding 'SPY'. Returns ``None`` when nothing is deployed, when the
-    ledger is unreadable, or when the ledger predates the symbol field; the
-    UI treats null as "unknown" rather than substituting a default.
+    hardcoding 'SPY'. Returns ``None`` only when nothing is deployed, the
+    ledger is unreadable, OR neither the live_config nor the spec carry a
+    symbol; the UI treats null as "unknown" rather than substituting a
+    default.
+
+    The spec fallback (added post-Slice-2 — see deployment validation
+    smoke run 2026-06-12) is what closes the gap where a clean-tree deploy
+    leaves ``live_config: {}`` because the operator didn't pass a symbol
+    override.
 
     TODO(PR #483 review): when an instance is redeployed with a different
     symbol (e.g. ``QQQ`` -> ``SPY``), a historical ``/chart-snapshot`` for
@@ -375,7 +385,50 @@ def _resolve_symbol(
     symbol = live_config.get("symbol") if isinstance(live_config, dict) else None
     if isinstance(symbol, str) and symbol:
         return symbol
+    # Spec fallback — read the strategy spec the ledger pins and pick the
+    # first symbol. A multi-symbol strategy (none in the fleet today) would
+    # surface here as the first one; the per-day TODO above lays out the
+    # eventual generalization.
+    spec_path = ledger.get("strategy_spec_path")
+    if isinstance(spec_path, str) and spec_path:
+        for candidate in _container_resolve_repo_path(spec_path):
+            try:
+                spec = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            symbols = spec.get("symbols")
+            if isinstance(symbols, list) and symbols:
+                first = symbols[0]
+                if isinstance(first, str) and first:
+                    return first
+            break
     return None
+
+
+def _container_resolve_repo_path(path: str) -> list[Path]:
+    """Yield candidate container paths for a host-recorded repo path.
+
+    The host daemon writes absolute host paths into the ledger (e.g.
+    ``/Users/.../learn-ai/PythonDataService/app/engine/strategy/spec/...``)
+    because *its* process sees the repo at the host root. The data plane
+    runs inside a container where the same file lives under ``/app/app/...``
+    (compose volume ``./PythonDataService/app:/app/app``).
+
+    Try the literal first, then translate by anchoring on common repo
+    sub-roots — the same path eventually resolves under one of them. The
+    caller stops at the first existing file.
+    """
+    candidates = [Path(path)]
+    for marker, container_root in (
+        ("PythonDataService/app/", "/app/app/"),
+        ("PythonDataService/", "/app/"),
+        ("references/", "/app/references/"),
+    ):
+        idx = path.find(marker)
+        if idx >= 0:
+            translated = container_root + path[idx + len(marker) :]
+            candidates.append(Path(translated))
+    return [c for c in candidates if c.is_file()] or candidates
 
 
 def _provenance(

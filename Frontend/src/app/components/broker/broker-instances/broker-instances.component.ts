@@ -351,6 +351,49 @@ export class BrokerInstancesComponent {
     }
   }
 
+  /** True when the connected IBKR session is the paper account. Paper-only
+   * surfaces (the Reset Paper Account button, the foreign-exec-replay
+   * notice) appear only in this case — there is no "reset" on a live
+   * account, and the warning would be misleading there. */
+  isPaperAccount(): boolean {
+    return this.connectivity.isPaper() === true;
+  }
+
+  /** The freshest known process state for a roster row. The fleet roster
+   * is a 15-s cached account-level summary — when an instance exits
+   * (broker disconnect, halt, manual stop) the summary stays stale until
+   * the next reload. The full status payload for the *selected* instance
+   * is loaded on-click and reflects the daemon's live view, so for that
+   * one row we prefer the status payload over the summary.
+   *
+   * Other rows fall back to the summary (we don't load a status for them).
+   * The hero badge and the roster chip therefore agree on whichever row
+   * the operator is actually looking at — closing the bug where the
+   * roster said RUNNING while the hero said STOPPED. */
+  effectiveProcessState(inst: LiveInstanceSummary): string {
+    if (inst.strategy_instance_id !== this.selectedInstanceId()) {
+      return inst.process_state;
+    }
+    const live = this.status.value();
+    if (!live) return inst.process_state;
+    // The summary uses 'running' as the daemon-process word; the per-
+    // instance status uses the same vocabulary, so a direct comparison is safe.
+    return live.process.state;
+  }
+
+
+  /** Open IBKR's Account Management portal in a new tab so the operator can
+   * trigger Paper Trading Account Reset from there. IBKR exposes no API
+   * for this — the button is a deep-link + inline how-to, not a
+   * server-side action. Documented as a workaround for the
+   * connect-time execution-replay halt observed 2026-06-12. */
+  openPaperAccountReset(): void {
+    // The portal hostname differs by region; the public Account Management
+    // landing page redirects to the right one after login, so we link there.
+    const url = 'https://www.interactivebrokers.com/portal';
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   heroStatus(s: LiveInstanceStatus): HeroStatus {
     if (s.process.state === 'unreachable') {
       return {
