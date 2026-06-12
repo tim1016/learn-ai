@@ -121,6 +121,19 @@ class IbkrSettings(BaseSettings):
     # parameterise it. Container default: /app/artifacts/live_runs.
     live_runs_root: str = "/app/artifacts/live_runs"
 
+    # Persistent JSONL + Parquet root for live bars (Slice 4). The
+    # ``LiveBarAggregator`` writes every emitted bar here and replays
+    # today's bars from here on subscribe so a restart hands the chart
+    # today's bars before the stream produces a single new one. Shares the
+    # ``artifacts/`` mount so retention and disk-usage live with the run
+    # artifacts.
+    live_bars_root: str = "/app/artifacts/live_bars"
+
+    # Retention window for the live-bar persistence layer. Files older than
+    # this are removed by the periodic retention sweep; quarantined files
+    # are kept regardless as forensic evidence (see BarPersistence).
+    live_bars_retention_days: int = 30
+
     # Host-side live-run daemon (ADR 0004). The instance-status endpoint queries
     # it for the authoritative live strategy_instance_id -> run_id binding —
     # "live" is a process fact only the registry can prove. The container reaches

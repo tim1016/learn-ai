@@ -67,6 +67,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
     },
     provenance: null,
     last_exit: null,
+    symbol: 'SPY',
     fetched_at_ms: 1,
     ...overrides,
   };
