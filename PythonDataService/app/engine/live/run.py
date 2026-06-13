@@ -65,6 +65,7 @@ from app.engine.live.deploy import (
     deploy_run,
 )
 from app.engine.live.pre_flight import (
+    check_all_in_coexistence,
     check_clean_tree,
     check_no_halt_flag,
     check_ntp_offset,
@@ -1184,6 +1185,41 @@ def cmd_start(args: argparse.Namespace) -> int:
             position_check = check_unexpected_position(
                 positions, expected_symbol=live_config.symbol, managed_symbols=managed_symbols
             )
+            # ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence
+            # guard. The sibling symbol list is the same one --managed-symbols
+            # ships; we restrict it here to siblings that are themselves
+            # SetHoldings(1.0) live — the daemon passes that subset via
+            # --sibling-all-in-symbols. Absent ⇒ no siblings (a single-instance
+            # run). The check is a hard halt on its own; positions are already
+            # in flight on the same broker probe, so we don't re-fetch.
+            sibling_all_in = (
+                {s.strip() for s in args.sibling_all_in_symbols.split(",") if s.strip()}
+                if getattr(args, "sibling_all_in_symbols", None)
+                else None
+            )
+            coexistence_check = check_all_in_coexistence(
+                proposed_symbol=live_config.symbol,
+                proposed_sizing=live_config.sizing,
+                broker_positions=positions,
+                sibling_all_in_symbols=sibling_all_in,
+            )
+            if not coexistence_check.passed:
+                print(
+                    f"[START] HALT all_in_coexistence: {coexistence_check.detail}",
+                    file=sys.stderr,
+                )
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.fatal_halt,
+                        }
+                    ),
+                )
+                return 1
             if not position_check.passed:
                 print(
                     f"[START] HALT unexpected_position: {position_check.detail} "

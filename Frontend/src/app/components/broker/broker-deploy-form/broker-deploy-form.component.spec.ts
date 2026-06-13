@@ -26,6 +26,7 @@ function setup(
       expected_rule: unknown;
       actual_rule: unknown;
     };
+    positions?: { symbol: string; quantity: number }[];
   } = {},
 ) {
   const svc = {
@@ -70,7 +71,12 @@ function setup(
       },
     ),
   };
-  const broker = { account: vi.fn().mockResolvedValue({ account_id: 'DU123' }) };
+  const broker = {
+    account: vi.fn().mockResolvedValue({ account_id: 'DU123' }),
+    positions: vi
+      .fn()
+      .mockResolvedValue({ positions: opts.positions ?? [] }),
+  };
   const connectivity = {
     links: () => [],
     blockers: () => [],
@@ -251,6 +257,27 @@ describe('BrokerDeployFormComponent', () => {
     await component.submit();
     expect(svc.deployInstance).not.toHaveBeenCalled();
     expect(component.busy()).toBe(false);
+  });
+
+  it('blocks Reference parity when the strategy symbol already has exposure', async () => {
+    const { fixture, component } = setup({
+      parityGate: {
+        verdict: 'proven_match',
+        detail: 'audit copy proves SetHoldings(1.0)',
+        expected_rule: { kind: 'SetHoldings', fraction: '1.0' },
+        actual_rule: null,
+      },
+      positions: [{ symbol: 'SPY', quantity: 37 }],
+    });
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    fillRequired(component);
+    await flush();
+    await flush();
+    await flush();
+    component.sizingPreset.set('reference_parity');
+    fixture.detectChanges();
+
+    expect(component.blockedReason()).toMatch(/already holds 37/);
   });
 
   it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {

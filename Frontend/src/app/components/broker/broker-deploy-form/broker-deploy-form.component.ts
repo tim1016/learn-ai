@@ -66,6 +66,11 @@ export class BrokerDeployFormComponent {
   // Best-effort: the account prefill is convenience only — broker may be down,
   // in which case the operator types the account id manually.
   readonly account = resource({ loader: () => this.broker.account() });
+  // ADR 0009 § 9 — broker positions for the symbol-scoped all-in coexistence
+  // guard (Decision 13). Loaded once on form open; the guard only consults it
+  // when Reference parity is selected, so a broker outage doesn't block other
+  // presets.
+  readonly positions = resource({ loader: () => this.broker.positions() });
 
   // Form fields.
   readonly strategyKey = signal<string>('');
@@ -322,12 +327,37 @@ export class BrokerDeployFormComponent {
       this.instanceId().trim() !== '',
   );
 
+  /** ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence guard
+   * surfaced client-side from the broker positions snapshot. Refuses
+   * Reference parity (the only all-in preset) when the strategy's symbol
+   * carries any exposure on the connected broker account. Cross-symbol
+   * all-in concurrency is permitted-but-unsafe (the capital-sleeve layer
+   * closes it later), so this guard intentionally only blocks the trade
+   * symbol's own exposure.
+   */
+  readonly allInCoexistenceBlock = computed<string | null>(() => {
+    if (this.sizingPreset() !== 'reference_parity') return null;
+    const symbol = this.selectedFixture()?.symbols?.[0]?.toUpperCase();
+    if (!symbol) return null;
+    const snap = this.positions.value();
+    if (!snap) return null;
+    const own = snap.positions.find((p) => p.symbol.toUpperCase() === symbol);
+    if (!own || Number(own.quantity) === 0) return null;
+    return (
+      `Reference parity blocked: ${symbol} already holds ${own.quantity} share(s) on this account. ` +
+      'Flatten the position, or pick Safe canary / Custom — the capital-sleeve layer that would let ' +
+      'two all-in bots coexist on one symbol is not built yet.'
+    );
+  });
+
   /** Why Deploy can't be submitted, sourced from the connectivity strip + form.
    * Null = ready. */
   readonly blockedReason = computed<string | null>(() => {
     if (this.connectivity.daemonDown()) {
       return 'Live engine unavailable. Start it on this machine, then recheck.';
     }
+    const coexistence = this.allInCoexistenceBlock();
+    if (coexistence !== null) return coexistence;
     if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
       return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
     }
