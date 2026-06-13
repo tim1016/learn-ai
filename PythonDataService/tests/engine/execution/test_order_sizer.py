@@ -131,7 +131,6 @@ def test_order_sizer_rejects_negative_fraction_for_fixed_shares() -> None:
 @pytest.mark.parametrize(
     ("policy", "lands_in"),
     [
-        (FixedNotional(value=Decimal("100")), "PR4"),
         (StrategyExplicit(), "PR7"),
     ],
 )
@@ -142,6 +141,42 @@ def test_order_sizer_raises_for_unwired_kinds(policy, lands_in) -> None:
             target_fraction=Decimal("1.0"), reference_price=Decimal("500")
         )
     assert exc.value.lands_in_pr == lands_in
+
+
+# ─────────────────────────── OrderSizer (FixedNotional) — PR4 ──────────────
+
+
+def test_fixed_notional_floors_value_over_price() -> None:
+    sizer = OrderSizer(FixedNotional(value=Decimal("10000")))
+    qty = sizer.resolve_set_holdings_quantity(
+        target_fraction=Decimal("1.0"), reference_price=Decimal("500")
+    )
+    assert qty == 20
+
+
+def test_fixed_notional_value_below_one_share_resolves_to_zero() -> None:
+    """ADR 0009 § 4 — a 'sizing skip' case: the policy resolves to zero
+    shares, so the engine should log a skip and submit nothing. OrderSizer
+    returns 0; the engine handles the skip-vs-submit decision."""
+    sizer = OrderSizer(FixedNotional(value=Decimal("100")))
+    qty = sizer.resolve_set_holdings_quantity(
+        target_fraction=Decimal("1.0"), reference_price=Decimal("500")
+    )
+    assert qty == 0
+
+
+def test_fixed_notional_zero_fraction_is_flat() -> None:
+    sizer = OrderSizer(FixedNotional(value=Decimal("10000")))
+    qty = sizer.resolve_set_holdings_quantity(
+        target_fraction=Decimal("0"), reference_price=Decimal("500")
+    )
+    assert qty == 0
+
+
+def test_fixed_notional_requires_reference_price() -> None:
+    sizer = OrderSizer(FixedNotional(value=Decimal("10000")))
+    with pytest.raises(ValueError, match="reference price"):
+        sizer.resolve_set_holdings_quantity(target_fraction=Decimal("1.0"))
 
 
 # ─────────────────────────── OrderSizer (SetHoldings) — PR2 ────────────────
