@@ -282,6 +282,9 @@ class LiveEngine:
         bar_source: str = "ibkr_paper_delayed",
         decision_columns: tuple[str, ...] = DECISION_COLUMNS,
         owned_perm_ids: set[int] | None = None,
+        # ADR 0009 § 6 — propagated registered sizing surface. ``None`` ⇒
+        # legacy / unregistered (no fail-fast applies).
+        sizing_surface: str | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -348,6 +351,7 @@ class LiveEngine:
         self._bar_source = bar_source
         self._decision_columns = decision_columns
         self._owned_perm_ids = owned_perm_ids or set()
+        self._sizing_surface = sizing_surface
         # The strategy-specific decision columns = resolved minus the core.
         self._strategy_decision_columns = tuple(
             c for c in decision_columns if c not in CORE_DECISION_COLUMNS
@@ -411,6 +415,7 @@ class LiveEngine:
                     portfolio.total_value
                 ),
             )
+        portfolio.registered_sizing_surface = self._sizing_surface
         await portfolio.refresh_from_broker()
         initial_cash = portfolio.cash
         ctx = LiveContext(

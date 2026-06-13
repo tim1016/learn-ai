@@ -99,11 +99,25 @@
 
       <section class="group" aria-labelledby="sizing-section">
         <h2 id="sizing-section">Position sizing</h2>
-        <p class="plain-help">
-          How big should each entry be? Safe canary is the default — every signal trades one share, so a misconfigured
-          bot can't surprise your account. Reference parity and Custom land in upcoming PRs.
-        </p>
-        <fieldset class="sizing-presets" role="radiogroup" aria-labelledby="sizing-section">
+        @if (sizingSurfaceIsExplicit()) {
+          <p class="plain-help self-sized" role="status">
+            <strong>Self-sized strategy.</strong> {{ strategyKey() }} supplies its own quantity / contracts
+            (options accounting, explicit market orders). <code>live_config.sizing</code> is recorded as
+            <code>StrategyExplicit</code> — the deploy-form sizing selector below is disabled because no
+            policy can meaningfully reinterpret this strategy's quantity.
+          </p>
+        } @else {
+          <p class="plain-help">
+            How big should each entry be? Safe canary is the default — every signal trades one share, so a misconfigured
+            bot can't surprise your account.
+          </p>
+        }
+        <fieldset
+          class="sizing-presets"
+          role="radiogroup"
+          aria-labelledby="sizing-section"
+          [disabled]="sizingSurfaceIsExplicit()"
+        >
           <label class="sizing-option" [class.selected]="sizingPreset() === 'safe_canary'">
             <input
               type="radio"

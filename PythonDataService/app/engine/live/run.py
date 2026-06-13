@@ -519,6 +519,20 @@ async def _recovery_flatten(
     return liquidated
 
 
+def _lookup_sizing_surface(strategy_key: str) -> str | None:
+    """Resolve the strategy's registered ``sizing_surface`` (ADR 0009 § 6).
+
+    Tolerates an unregistered ``strategy_key`` (returns ``None`` so the
+    fail-fast in LivePortfolio doesn't fire on legacy/test runs).
+    """
+    try:
+        from app.routers.engine import _STRATEGY_REGISTRY  # local import: lazy
+    except Exception:
+        return None
+    reg = _STRATEGY_REGISTRY.get(strategy_key)
+    return getattr(reg, "sizing_surface", None) if reg is not None else None
+
+
 def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     """Build a LiveConfig from the ledger's serialized live_config dict.
 
@@ -1092,6 +1106,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         bar_source=bar_source,
         decision_columns=decision_columns,
         owned_perm_ids=owned_perm_ids,
+        sizing_surface=_lookup_sizing_surface(args.strategy),
     )
 
     _entry_sidecar = RunStatusSidecar(

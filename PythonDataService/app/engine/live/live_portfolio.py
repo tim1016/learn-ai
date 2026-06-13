@@ -242,6 +242,12 @@ class LivePortfolio:
     # (decimal-stringified), sized_via. The engine flushes this into the
     # live_state sidecar at each bar so the cockpit can read it.
     sizing_resolutions: list[dict] = field(default_factory=list)
+    # ADR 0009 § 6 — registered sizing surface. ``None`` = unknown (legacy
+    # callers / tests). When ``"explicit"`` is registered AND the strategy
+    # invokes ``set_holdings`` (the policy surface), the first such call is
+    # a fail-fast registration bug — the order will fire with a misleading
+    # ledger otherwise.
+    registered_sizing_surface: str | None = None
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -324,6 +330,18 @@ class LivePortfolio:
         if price is None:
             raise RuntimeError(f"Cannot set_holdings on {sym}: no reference price.")
         current_pos = self.get_position(sym)
+        # ADR 0009 § 6 — order-surface fail-fast. A strategy registered as
+        # ``explicit`` invoking ``set_holdings`` (a policy surface) is a
+        # registration bug; halting here prevents a misleading ledger entry.
+        # ``liquidate`` is exempt (it's a flatten command, not a sizing
+        # surface), so we only enforce this on the entry path.
+        if self.registered_sizing_surface == "explicit":
+            raise RuntimeError(
+                f"Order-surface mismatch (ADR 0009 § 6): strategy registered "
+                f"with sizing_surface='explicit' invoked set_holdings on {sym}. "
+                "Re-register as sizing_surface='policy' or change the strategy "
+                "to use market_order; halting before the misleading entry."
+            )
         if self.order_sizer is not None:
             target_quantity = self.order_sizer.resolve_set_holdings_quantity(
                 target_fraction=target_fraction,

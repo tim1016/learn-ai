@@ -361,6 +361,16 @@ class StrategyRegistration:
     # complete Pine script. When present, the frontend can download the
     # script via ``GET /api/engine/strategies/{name}/pine``.
     pine_generator: Callable[[StrategyParamsBase], str] | None = None
+    # ADR 0009 § 6 — which boundary sizes this strategy.
+    # ``"policy"`` (default) — the strategy targets via ``set_holdings``;
+    # the deploy-form sizing selector is enabled, and
+    # ``live_config.sizing`` ∈ {FixedShares, FixedNotional, SetHoldings}
+    # governs the magnitude.
+    # ``"explicit"`` — the strategy supplies its own quantity/contracts
+    # (``market_order``, ``contracts_per_trade``, internal accounting); the
+    # deploy-form sizing selector is disabled + labelled "self-sized" and
+    # the required ``live_config.sizing`` is ``StrategyExplicit``.
+    sizing_surface: Literal["policy", "explicit"] = "policy"
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -963,6 +973,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             default_iv=p.default_iv,  # type: ignore[attr-defined]
             half_spread_pct=p.half_spread_pct,  # type: ignore[attr-defined]
         ),
+        # ADR 0009 § 6 — this strategy sizes itself via
+        # ``contracts_per_trade`` (an internal options-accounting surface);
+        # ``live_config.sizing`` cannot meaningfully override it. The deploy
+        # form disables the sizing control + labels it "self-sized".
+        sizing_surface="explicit",
     ),
     "rsi_range_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
@@ -1601,6 +1616,11 @@ class StrategyInfo(BaseModel):
     # True when a Pine v6 generator is registered for this strategy.
     # The frontend uses this to show/hide the Pine-download button.
     pine_available: bool = False
+    # ADR 0009 § 6 — the boundary that sizes this strategy. ``"policy"`` =
+    # set_holdings via live_config.sizing; ``"explicit"`` = strategy supplies
+    # its own quantity/contracts and the deploy form's sizing control is
+    # disabled + labelled "self-sized".
+    sizing_surface: Literal["policy", "explicit"] = "policy"
 
 
 @router.get("/strategies", response_model=list[StrategyInfo])
@@ -1624,6 +1644,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 algorithm_pseudocode=reg.algorithm_pseudocode,
                 gotchas=list(reg.gotchas),
                 pine_available=reg.pine_generator is not None,
+                sizing_surface=reg.sizing_surface,
             )
         )
     return result

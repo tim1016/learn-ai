@@ -27,15 +27,37 @@ function setup(
       actual_rule: unknown;
     };
     positions?: { symbol: string; quantity: number }[];
+    strategies?: {
+      name: string;
+      display_name: string;
+      description: string;
+      sizing_surface: 'policy' | 'explicit';
+    }[];
   } = {},
 ) {
   const svc = {
-    getEngineStrategies: vi
-      .fn()
-      .mockResolvedValue([
-        { name: 'spy_ema_crossover', display_name: 'SPY EMA Crossover', description: '' },
-        { name: 'deployment_validation', display_name: 'Deployment Validation', description: '' },
-      ]),
+    getEngineStrategies: vi.fn().mockResolvedValue(
+      opts.strategies ?? [
+        {
+          name: 'spy_ema_crossover',
+          display_name: 'SPY EMA Crossover',
+          description: '',
+          sizing_surface: 'policy',
+        },
+        {
+          name: 'deployment_validation',
+          display_name: 'Deployment Validation',
+          description: '',
+          sizing_surface: 'policy',
+        },
+        {
+          name: 'ema_crossover_options',
+          display_name: 'EMA Crossover Options',
+          description: '',
+          sizing_surface: 'explicit',
+        },
+      ],
+    ),
     getSpecStrategyFixtures: vi.fn().mockResolvedValue([
       {
         name: 'spy_ema_crossover',
@@ -199,6 +221,25 @@ describe('BrokerDeployFormComponent', () => {
       'references/qc-shadow/A.py',
       { kind: 'SetHoldings', fraction: '1.0' },
     );
+  });
+
+  it('submits StrategyExplicit and disables the sizing selector for an explicit-surface strategy', async () => {
+    const { svc, component, fixture } = setup();
+    await flush();
+    component.strategyKey.set('ema_crossover_options');
+    component.specPath.set('PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json');
+    component.accountId.set('DU123');
+    component.qcBacktestId.set('bt-1');
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    component.instanceId.set('opt-paper-1');
+    fixture.detectChanges();
+    await flush();
+
+    expect(component.sizingSurfaceIsExplicit()).toBe(true);
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'StrategyExplicit' } });
   });
 
   it('emits a Custom FixedShares policy from the kind/value inputs', async () => {

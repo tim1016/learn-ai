@@ -153,6 +153,20 @@ export class BrokerDeployFormComponent {
     () => this.specFixtures.value()?.find((f) => f.path === this.specPath()) ?? null,
   );
 
+  /** ADR 0009 § 6 — the strategy's sizing surface. `"explicit"` (e.g.
+   * `ema_crossover_options`) means the algorithm sizes itself via internal
+   * accounting (contracts_per_trade / market_order) and the live policy must
+   * be `StrategyExplicit`; the sizing controls are disabled + labelled. */
+  readonly selectedSizingSurface = computed<'policy' | 'explicit' | null>(() => {
+    const strategy = this.strategyKey().trim();
+    if (!strategy) return null;
+    return this.strategies.value()?.find((s) => s.name === strategy)?.sizing_surface ?? null;
+  });
+
+  readonly sizingSurfaceIsExplicit = computed<boolean>(
+    () => this.selectedSizingSurface() === 'explicit',
+  );
+
   readonly qcAuditCopyOptions = computed<string[]>(() => {
     const entries = this.qcCopies.value()?.entries ?? [];
     if (entries.includes(DEPLOYMENT_VALIDATION_AUDIT_COPY)) return entries;
@@ -542,6 +556,11 @@ export class BrokerDeployFormComponent {
    * so this method only runs when validation already passed and never
    * throws. */
   private resolveSizingPolicy(): SizingPolicy {
+    // ADR 0009 § 6 — explicit-surface strategies submit the honest
+    // `StrategyExplicit` policy, never a misleading FixedShares(1).
+    if (this.sizingSurfaceIsExplicit()) {
+      return { kind: 'StrategyExplicit' };
+    }
     const preset = this.sizingPreset();
     if (preset === 'reference_parity') {
       return REFERENCE_PARITY_POLICY;
