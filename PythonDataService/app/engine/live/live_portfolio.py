@@ -302,6 +302,8 @@ class LivePortfolio:
         if self.order_sizer is not None:
             target_quantity = self.order_sizer.resolve_set_holdings_quantity(
                 target_fraction=target_fraction,
+                reference_price=price,
+                order_fee=self.order_fee,
             )
         else:
             target_quantity = self.sizing_model.target_quantity(

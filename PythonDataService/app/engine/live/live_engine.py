@@ -30,7 +30,7 @@ from app.broker.ibkr.models import IbkrMinuteBar, IbkrOrderEvent
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
-from app.engine.execution.order_sizer import OrderSizer
+from app.engine.execution.order_sizer import OrderSizer, WholeAccountPortfolioValueProvider
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
@@ -400,12 +400,17 @@ class LiveEngine:
         # construct the policy-application adapter and attach it to the
         # portfolio. ``set_holdings`` then routes through the adapter; legacy
         # callers (no policy in live_config) keep the prior SimpleFloorSizing
-        # path. PR1 wires FixedShares only; the percent and notional paths land
-        # in later PRs.
-        order_sizer: OrderSizer | None = None
+        # path. PR2 wires the SetHoldings percent path through
+        # LeanSetHoldingsSizing via a callable portfolio-value provider —
+        # the seam where the future capital-sleeve layer will drop in.
+        portfolio = LivePortfolio(self._broker)
         if self._config.sizing is not None:
-            order_sizer = OrderSizer(self._config.sizing)
-        portfolio = LivePortfolio(self._broker, order_sizer=order_sizer)
+            portfolio.order_sizer = OrderSizer(
+                self._config.sizing,
+                portfolio_value_provider=WholeAccountPortfolioValueProvider(
+                    portfolio.total_value
+                ),
+            )
         await portfolio.refresh_from_broker()
         initial_cash = portfolio.cash
         ctx = LiveContext(
