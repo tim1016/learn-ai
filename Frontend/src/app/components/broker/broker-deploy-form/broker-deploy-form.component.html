@@ -117,17 +117,23 @@
               <small>1 share per signal — proves the wiring without risking capital.</small>
             </span>
           </label>
-          <label class="sizing-option disabled" [class.selected]="sizingPreset() === 'reference_parity'">
+          <label
+            class="sizing-option"
+            [class.disabled]="!referenceParityAvailable()"
+            [class.selected]="sizingPreset() === 'reference_parity'"
+          >
             <input
               type="radio"
               name="sizing-preset"
               value="reference_parity"
-              disabled
+              [disabled]="!referenceParityAvailable()"
               [checked]="sizingPreset() === 'reference_parity'"
+              (change)="setSizingPreset($event)"
             />
             <span class="sizing-label">
               <strong>Reference parity</strong>
-              <small>Matches the QC audit copy's <code>SetHoldings(1.0)</code> all-in target. Ships in PR3.</small>
+              <small>Matches the QC audit copy's all-in target. Routes through LEAN's buffered sizing.</small>
+              <small class="gate" [class.gate-pass]="referenceParityAvailable()">{{ referenceParityBanner() }}</small>
             </span>
           </label>
           <label class="sizing-option disabled" [class.selected]="sizingPreset() === 'custom'">

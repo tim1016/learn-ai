@@ -45,6 +45,7 @@ from app.engine.live.deploy import (
 )
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
+    AuditCopySizingLookup,
     EmergencyFlattenRequest,
     HostRunnerActionResponse,
     HostRunnerDeployRequest,
@@ -489,6 +490,41 @@ class RunnerProcessManager:
             raise RuntimeError(f"git ls-files failed: rc={proc.returncode} stderr={proc.stderr!r}")
         return [p for p in proc.stdout.split("\0") if p]
 
+    def lookup_audit_copy_sizing(
+        self, audit_copy_path: str, proposed_sizing: dict | None
+    ) -> dict:
+        """ADR 0009 § 3 — Reference parity gate status for the deploy form.
+
+        Resolves the operator's audit-copy choice against
+        ``docs/references/audit-copy-sizing-allow-list.json``, re-verifying the
+        file's sha. ``proposed_sizing`` is the canonical ``live_config.sizing``
+        dict; pass ``None`` to query the registered rule without proposing one
+        (the deploy form's initial render uses this to populate the gate
+        banner).
+        """
+        from app.engine.execution.audit_copy_allow_list import lookup as _lookup
+        from app.engine.execution.order_sizer import (
+            parse_sizing_policy,
+            policy_to_ledger_dict,
+        )
+
+        proposed_policy = parse_sizing_policy(proposed_sizing) if proposed_sizing else None
+        verdict = _lookup(
+            audit_copy_path=audit_copy_path,
+            proposed_policy=proposed_policy,
+            repo_root=self.repo_root,
+        )
+        return {
+            "verdict": verdict.verdict,
+            "detail": verdict.detail,
+            "expected_rule": policy_to_ledger_dict(verdict.expected_rule)
+            if verdict.expected_rule is not None
+            else None,
+            "actual_rule": policy_to_ledger_dict(verdict.actual_rule)
+            if verdict.actual_rule is not None
+            else None,
+        }
+
     def list_qc_audit_copies(self) -> QcAuditCopyListing:
         """List committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
 
@@ -731,6 +767,42 @@ def create_app(
     @app.get("/qc-audit-copies", response_model=QcAuditCopyListing, dependencies=auth)
     async def qc_audit_copies() -> QcAuditCopyListing:
         return process_manager.list_qc_audit_copies()
+
+    @app.get(
+        "/audit-copy-sizing-lookup",
+        response_model=AuditCopySizingLookup,
+        dependencies=auth,
+    )
+    async def audit_copy_sizing_lookup(
+        audit_copy_path: str,
+        proposed_sizing: str | None = None,
+    ) -> AuditCopySizingLookup:
+        """ADR 0009 § 3 — Reference parity gate status for the deploy form.
+
+        ``proposed_sizing`` is a URL-encoded JSON object (the same dict the
+        deploy submits as ``live_config.sizing``). Pass nothing for an
+        informational lookup of the registered rule.
+        """
+        import json as _json
+
+        sizing: dict | None = None
+        if proposed_sizing:
+            try:
+                parsed = _json.loads(proposed_sizing)
+            except _json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail=f"proposed_sizing must be JSON: {exc}",
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail="proposed_sizing must be a JSON object",
+                )
+            sizing = parsed
+        return AuditCopySizingLookup.model_validate(
+            process_manager.lookup_audit_copy_sizing(audit_copy_path, sizing)
+        )
 
     @app.post("/deploy", response_model=HostRunnerDeployResponse, dependencies=auth)
     async def deploy(request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:

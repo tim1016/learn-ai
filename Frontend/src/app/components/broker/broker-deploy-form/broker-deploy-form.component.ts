@@ -82,8 +82,33 @@ export class BrokerDeployFormComponent {
   readonly startNow = signal<boolean>(false);
   // ADR 0009 § 7 — position-sizing preset. Defaults to Safe canary
   // (FixedShares(1)); the $250k surprise from the first deployment-validation
-  // run is opt-in from PR1 forward. Reference parity + Custom ship in PR3/PR4.
+  // run is opt-in. Reference parity is gated by the audit-copy allow-list
+  // (ADR § 3); Custom ships in PR4.
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
+
+  // ADR 0009 § 3 — Reference parity gate. Refetched whenever the chosen audit
+  // copy changes; surfaces the verdict (`proven_match` / `proven_mismatch` /
+  // `cannot_prove`) inline so the operator sees *why* Reference parity is
+  // available or not before clicking.
+  readonly referenceParityGate = resource({
+    params: () => ({ auditCopyPath: this.qcAuditCopyPath().trim() }),
+    loader: async ({ params }) => {
+      if (!params.auditCopyPath) return null;
+      return this.svc.getAuditCopySizingLookup(params.auditCopyPath);
+    },
+    defaultValue: null,
+  });
+
+  readonly referenceParityAvailable = computed<boolean>(() => {
+    const gate = this.referenceParityGate.value();
+    return gate?.verdict === 'proven_match';
+  });
+
+  readonly referenceParityBanner = computed<string>(() => {
+    const gate = this.referenceParityGate.value();
+    if (!gate) return 'Pick an audit copy to check Reference parity availability.';
+    return gate.detail;
+  });
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
   private readonly autoSelectedDeploymentValidationAuditCopy = signal<boolean>(false);
@@ -238,6 +263,16 @@ export class BrokerDeployFormComponent {
       const nextPath = match?.path ?? fallback;
       if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
     });
+    // Reference parity must not silently downgrade — if the audit-copy choice
+    // changes such that the gate is no longer proven_match, reset the preset to
+    // Safe canary so the operator re-confirms the choice (ADR 0009 § 3 "the
+    // preset's name is a promise, breaking it silently is bad audit UX").
+    effect(() => {
+      if (this.sizingPreset() === 'reference_parity' && !this.referenceParityAvailable()) {
+        this.sizingPreset.set('safe_canary');
+      }
+    });
+
     effect(() => {
       if (this.strategyKey() === 'deployment_validation') {
         if (this.qcAuditCopyPath().trim() === '') {
@@ -395,12 +430,15 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  /** ADR 0009 PR1 — preset selector. Reference parity ships in PR3 (gated by
-   * the audit-copy allow-list); Custom in PR4. The radio binds onlyOnSafeCanary
-   * so a stray click can't quietly switch to a disabled option. */
+  /** ADR 0009 — preset selector. Reference parity is gated by the audit-copy
+   * allow-list (PR3); Custom ships in PR4. The radio rejects a stray switch to
+   * a disabled option and refuses Reference parity when the gate isn't open. */
   setSizingPreset(e: Event): void {
     if (!(e.target instanceof HTMLInputElement)) return;
     const next = e.target.value;
+    if (next === 'reference_parity' && !this.referenceParityAvailable()) {
+      return;
+    }
     if (next === 'safe_canary' || next === 'reference_parity' || next === 'custom') {
       this.sizingPreset.set(next);
     }
