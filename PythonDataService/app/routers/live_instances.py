@@ -49,6 +49,7 @@ from app.routers.live_runs import (
 )
 from app.schemas.live_runs import (
     ActiveDateEntry,
+    AuditCopySizingLookup,
     ChartSnapshotResponse,
     ChartSnapshotRun,
     CommandsTimeline,
@@ -780,6 +781,60 @@ async def _fetch_net_positions() -> dict[str, int] | None:
         symbol = str(pos.symbol).upper()
         net[symbol] = net.get(symbol, 0) + int(pos.quantity)
     return net
+
+
+@router.get("/audit-copy-sizing-lookup", response_model=AuditCopySizingLookup)
+async def get_audit_copy_sizing_lookup(
+    audit_copy_path: str,
+    proposed_sizing: str | None = None,
+) -> AuditCopySizingLookup:
+    """ADR 0009 § 3 — proxy the daemon's Reference parity gate to the cockpit.
+
+    The deploy form calls this on (1) initial audit-copy pick (no
+    ``proposed_sizing``, to learn the registered rule) and (2) on the
+    Reference parity preset click (with ``proposed_sizing``). The daemon
+    returns one of three verdicts (proven_match / proven_mismatch /
+    cannot_prove); we propagate it verbatim.
+
+    Fails closed when the daemon is unreachable — the response carries
+    ``cannot_prove`` so the deploy form's gate banner reads "Reference
+    parity unavailable" rather than silently enabling a preset that the
+    operator believes is gated.
+    """
+    import json as _json
+
+    settings = get_settings()
+    sizing_payload: dict | None = None
+    if proposed_sizing:
+        try:
+            parsed = _json.loads(proposed_sizing)
+        except _json.JSONDecodeError as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"proposed_sizing must be JSON: {exc}",
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="proposed_sizing must be a JSON object",
+            )
+        sizing_payload = parsed
+    body = await host_daemon_client.fetch_audit_copy_sizing_lookup(
+        settings.live_runner_daemon_url, audit_copy_path, sizing_payload
+    )
+    if body is None:
+        return AuditCopySizingLookup(
+            verdict="cannot_prove",
+            detail="Reference parity gate unavailable: host daemon unreachable",
+        )
+    try:
+        return AuditCopySizingLookup.model_validate(body)
+    except ValidationError as exc:
+        logger.warning("invalid audit-copy-sizing-lookup payload from daemon: %s", exc)
+        return AuditCopySizingLookup(
+            verdict="cannot_prove",
+            detail=f"Reference parity gate unavailable: {exc}",
+        )
 
 
 @router.get("/qc-audit-copies", response_model=QcAuditCopyListing)

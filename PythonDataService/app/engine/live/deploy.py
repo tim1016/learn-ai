@@ -167,6 +167,11 @@ def deploy_run(params: DeployParams) -> DeployResult:
 
     code_sha = git_head_sha(repo_root)
 
+    # ADR 0009 — record the audit copy path relative to the repo so a
+    # later read (the start gate, the cockpit) can re-verify against the
+    # canonical allow-list. The on-disk allow-list lives under the host
+    # repo root, so the build_ledger lookup needs the same repo_root the
+    # clean-tree check used.
     try:
         ledger = build_ledger(
             code_sha=code_sha,
@@ -178,6 +183,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
             live_config=params.live_config,
             strategy_instance_id=params.strategy_instance_id,
             strategy_key=params.strategy_key,
+            audit_copy_allow_list_root=repo_root,
         )
     except FileNotFoundError as exc:
         raise SpecOrAuditMissingError(str(exc)) from exc
