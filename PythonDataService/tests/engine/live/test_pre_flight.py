@@ -524,3 +524,99 @@ def test_run_pre_flight_halts_when_any_fails() -> None:
     ]
     all_passed, _ = run_pre_flight(checks)
     assert all_passed is False
+
+
+# ────────────────── ADR 0009 PR5 — all-in coexistence guard ─────────────
+
+
+def _positions_snapshot(positions: list[dict]) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        positions=[SimpleNamespace(**p) for p in positions]
+    )
+
+
+def test_all_in_coexistence_passes_for_non_all_in_policies() -> None:
+    from decimal import Decimal as _Decimal
+
+    from app.engine.execution.order_sizer import FixedNotional, FixedShares, SetHoldings
+    from app.engine.live.pre_flight import check_all_in_coexistence
+
+    snapshot = _positions_snapshot([{"symbol": "SPY", "quantity": 999}])
+    assert check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing=FixedShares(value=1),
+        broker_positions=snapshot,
+    ).passed
+    assert check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing=FixedNotional(value=_Decimal("100")),
+        broker_positions=snapshot,
+    ).passed
+    assert check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing=None,
+        broker_positions=snapshot,
+    ).passed
+    # SetHoldings(0.5) is also non-all-in (the 0<f<1 fractional case is
+    # deferred but the guard only refuses 1.0).
+    assert check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing=SetHoldings(fraction=_Decimal("0.5")),
+        broker_positions=snapshot,
+    ).passed
+
+
+def test_all_in_coexistence_blocks_when_symbol_not_flat() -> None:
+    from app.engine.live.pre_flight import check_all_in_coexistence
+
+    snapshot = _positions_snapshot([{"symbol": "SPY", "quantity": 199}])
+    result = check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing={"kind": "SetHoldings", "fraction": "1.0"},
+        broker_positions=snapshot,
+    )
+    assert not result.passed
+    assert result.data["reason"] == "symbol_exposure_present"
+
+
+def test_all_in_coexistence_passes_when_symbol_flat() -> None:
+    from app.engine.live.pre_flight import check_all_in_coexistence
+
+    snapshot = _positions_snapshot([{"symbol": "QQQ", "quantity": 50}])
+    result = check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing={"kind": "SetHoldings", "fraction": "1.0"},
+        broker_positions=snapshot,
+    )
+    assert result.passed, (
+        "Cross-symbol all-in is permitted-but-unsafe in v1 (Decision 13); the "
+        "guard only refuses when the trade symbol itself is non-flat"
+    )
+
+
+def test_all_in_coexistence_blocks_on_sibling_all_in_same_symbol() -> None:
+    from app.engine.live.pre_flight import check_all_in_coexistence
+
+    snapshot = _positions_snapshot([])
+    result = check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing={"kind": "SetHoldings", "fraction": "1.0"},
+        broker_positions=snapshot,
+        sibling_all_in_symbols={"SPY"},
+    )
+    assert not result.passed
+    assert result.data["reason"] == "sibling_all_in"
+
+
+def test_all_in_coexistence_fails_when_broker_unreachable() -> None:
+    from app.engine.live.pre_flight import check_all_in_coexistence
+
+    result = check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing={"kind": "SetHoldings", "fraction": "1.0"},
+        broker_positions=None,
+    )
+    assert not result.passed
+    assert result.data["reason"] == "broker_unreachable"
