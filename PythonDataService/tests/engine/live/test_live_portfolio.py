@@ -102,6 +102,36 @@ def test_set_holdings_with_fixed_shares_policy_zero_fraction_is_flat() -> None:
     assert order is None
 
 
+def test_set_holdings_with_set_holdings_policy_routes_through_lean() -> None:
+    """ADR 0009 PR2 — a SetHoldings(1.0) live policy resolves through
+    LeanSetHoldingsSizing (buffered, fee-aware), producing one fewer share
+    than the legacy SimpleFloor portfolio default would. The contrast is the
+    point of the cutover: live runs become honestly LEAN-native.
+    """
+    from app.engine.execution.order_sizer import (
+        OrderSizer,
+        SetHoldings,
+        WholeAccountPortfolioValueProvider,
+    )
+
+    portfolio = LivePortfolio(FakeBroker())
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.order_sizer = OrderSizer(
+        SetHoldings(fraction=Decimal("1.0")),
+        portfolio_value_provider=WholeAccountPortfolioValueProvider(portfolio.total_value),
+    )
+
+    order = portfolio.set_holdings(
+        "SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC)
+    )
+
+    assert order is not None
+    # Lean buffered + IBKR fee: 199 shares (not 200 the legacy SimpleFloor buys).
+    assert order.quantity == 199
+    assert order.tag == "SetHoldings"
+
+
 @pytest.mark.asyncio
 async def test_submit_pending_orders_routes_through_paper_order_spec() -> None:
     broker = FakeBroker()

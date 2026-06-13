@@ -32,10 +32,14 @@ and validate cleanly; calling ``resolve_set_holdings_quantity`` on them raises
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.engine.execution.commission import IbkrEquityCommissionModel
+from app.engine.execution.sizing import LeanSetHoldingsSizing
 
 
 class SizingKindNotWiredError(NotImplementedError):
@@ -205,17 +209,20 @@ class PortfolioValueProvider(Protocol):
 class WholeAccountPortfolioValueProvider:
     """PR1 default: the whole-account portfolio value, no sleeve.
 
-    The capital-sleeve layer will drop in at this seam (ADR 0009 § 9) without
-    a runtime API change for ``OrderSizer``.
+    Takes a ``callable`` that resolves the current portfolio value on every
+    invocation — ``LivePortfolio.total_value`` walks cash + positions at
+    the latest reference price, so the percent path always reads fresh data.
+    The capital-sleeve layer will drop in at this seam (ADR 0009 § 9)
+    without a runtime API change for ``OrderSizer``.
     """
 
     name: str = "whole_account"
 
-    def __init__(self, total_value: Decimal) -> None:
-        self._total_value = total_value
+    def __init__(self, get_total: Callable[[], Decimal]) -> None:
+        self._get_total = get_total
 
     def portfolio_value(self) -> Decimal:
-        return self._total_value
+        return self._get_total()
 
 
 class OrderSizer:
@@ -223,7 +230,7 @@ class OrderSizer:
 
     Holds the resolved ``SizingPolicy`` and the (future-sleeve-ready) portfolio
     value provider. The percent path delegates to ``LeanSetHoldingsSizing``
-    in PR2; PR1 wires ``FixedShares`` only.
+    (PR2 wire-up) — the canonical golden-fixture-pinned quantity-math authority.
     """
 
     def __init__(
@@ -233,17 +240,32 @@ class OrderSizer:
     ) -> None:
         self._policy = policy
         self._portfolio_value_provider = portfolio_value_provider
+        # PR2 — the canonical percent-path resolver. Single instance per
+        # ``OrderSizer`` so the IBKR commission model isn't re-constructed
+        # on every bar.
+        self._lean_sizing = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())
 
     @property
     def policy(self) -> SizingPolicy:
         return self._policy
 
-    def resolve_set_holdings_quantity(self, *, target_fraction: Decimal) -> int:
+    def resolve_set_holdings_quantity(
+        self,
+        *,
+        target_fraction: Decimal,
+        reference_price: Decimal | None = None,
+        order_fee: Decimal = Decimal(0),
+    ) -> int:
         """Translate ``set_holdings(symbol, fraction)`` into a target share count.
 
         ``target_fraction`` carries the strategy's *direction intent* (``> 0``
         ⇒ long target, ``== 0`` ⇒ flat). The policy reinterprets the magnitude
         per kind.
+
+        ``reference_price`` is required for the ``SetHoldings`` percent path
+        (the Lean resolver needs the price + portfolio_value to compute the
+        buffered share count) and for ``FixedNotional`` (which floors
+        ``value / price``). ``FixedShares`` ignores it.
 
         Returns ``0`` for a flat target. The caller (``LivePortfolio.set_holdings``)
         is responsible for converting target → delta and skipping submission
@@ -272,7 +294,28 @@ class OrderSizer:
             # passing through.
             raise SizingKindNotWiredError("StrategyExplicit", "PR7")
         if isinstance(policy, SetHoldings):
-            raise SizingKindNotWiredError("SetHoldings", "PR2 / PR3")
+            if target_fraction == Decimal(0):
+                return 0
+            if reference_price is None:
+                raise ValueError(
+                    "SetHoldings sizing requires a reference price; "
+                    "LivePortfolio must update_reference_price(...) before set_holdings."
+                )
+            if self._portfolio_value_provider is None:
+                raise RuntimeError(
+                    "SetHoldings sizing requires a PortfolioValueProvider; "
+                    "construct OrderSizer with WholeAccountPortfolioValueProvider(...)."
+                )
+            # Magnitude is the policy fraction, NOT the caller's direction
+            # signal — the strategy passes ``1`` to mean "go long, target the
+            # SetHoldings policy"; the policy maps that to its own fraction.
+            policy_fraction = policy.fraction
+            return self._lean_sizing.target_quantity(
+                portfolio_value=self._portfolio_value_provider.portfolio_value(),
+                price=reference_price,
+                target_fraction=policy_fraction,
+                order_fee=order_fee,
+            )
         if isinstance(policy, FixedNotional):
             raise SizingKindNotWiredError("FixedNotional", "PR4")
         raise SizingKindNotWiredError(type(policy).__name__, "unknown")

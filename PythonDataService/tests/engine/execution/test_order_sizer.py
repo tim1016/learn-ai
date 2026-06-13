@@ -13,11 +13,13 @@ from app.engine.execution.order_sizer import (
     SetHoldings,
     SizingKindNotWiredError,
     StrategyExplicit,
+    WholeAccountPortfolioValueProvider,
     default_sizing_provenance,
     governed_by,
     parse_sizing_policy,
     policy_to_ledger_dict,
 )
+from app.engine.execution.sizing import SimpleFloorSizing
 
 # ─────────────────────────── parse_sizing_policy ───────────────────────────
 
@@ -129,7 +131,6 @@ def test_order_sizer_rejects_negative_fraction_for_fixed_shares() -> None:
 @pytest.mark.parametrize(
     ("policy", "lands_in"),
     [
-        (SetHoldings(fraction=Decimal("1.0")), "PR2 / PR3"),
         (FixedNotional(value=Decimal("100")), "PR4"),
         (StrategyExplicit(), "PR7"),
     ],
@@ -137,5 +138,90 @@ def test_order_sizer_rejects_negative_fraction_for_fixed_shares() -> None:
 def test_order_sizer_raises_for_unwired_kinds(policy, lands_in) -> None:
     sizer = OrderSizer(policy)
     with pytest.raises(SizingKindNotWiredError) as exc:
-        sizer.resolve_set_holdings_quantity(target_fraction=Decimal("1.0"))
+        sizer.resolve_set_holdings_quantity(
+            target_fraction=Decimal("1.0"), reference_price=Decimal("500")
+        )
     assert exc.value.lands_in_pr == lands_in
+
+
+# ─────────────────────────── OrderSizer (SetHoldings) — PR2 ────────────────
+
+
+def _set_holdings_sizer(
+    *, portfolio_value: Decimal, fraction: str = "1.0"
+) -> OrderSizer:
+    """Build an OrderSizer with a static whole-account provider for the test."""
+
+    def _value() -> Decimal:
+        return portfolio_value
+
+    return OrderSizer(
+        SetHoldings(fraction=Decimal(fraction)),
+        portfolio_value_provider=WholeAccountPortfolioValueProvider(_value),
+    )
+
+
+def test_set_holdings_routes_through_lean_buffered_fee_aware_resolver() -> None:
+    """ADR 0009 PR2 — SetHoldings(1.0) routes through the LEAN-equivalent
+    resolver: portfolio_value * (1 - 0.0025) − IBKR per-share fee, NOT the
+    legacy SimpleFloor path that bought one share more on every trade.
+    """
+    portfolio_value = Decimal("100000")
+    price = Decimal("500")
+    sizer = _set_holdings_sizer(portfolio_value=portfolio_value)
+
+    qty = sizer.resolve_set_holdings_quantity(
+        target_fraction=Decimal("1.0"), reference_price=price
+    )
+
+    # SimpleFloor would buy floor(100_000 / 500) = 200 shares.
+    # Lean buffered: floor((100_000 * 0.9975 - fee(qty,500)) / 500). With
+    # IBKR's tiered $0.005/share at qty around 200, fee ≈ $1.00, so
+    # buying_power = 99_750, budget = 99_749, qty = 199.
+    legacy = SimpleFloorSizing().target_quantity(
+        portfolio_value=portfolio_value,
+        price=price,
+        target_fraction=Decimal("1.0"),
+        order_fee=Decimal(0),
+    )
+    assert legacy == 200, "SimpleFloor baseline pinned for the contrast"
+    assert qty == 199, "Lean path should buy 199, not 200 — the documented cutover"
+
+
+def test_set_holdings_zero_fraction_is_flat() -> None:
+    sizer = _set_holdings_sizer(portfolio_value=Decimal("100000"))
+    assert (
+        sizer.resolve_set_holdings_quantity(
+            target_fraction=Decimal("0"), reference_price=Decimal("500")
+        )
+        == 0
+    )
+
+
+def test_set_holdings_requires_reference_price() -> None:
+    sizer = _set_holdings_sizer(portfolio_value=Decimal("100000"))
+    with pytest.raises(ValueError, match="reference price"):
+        sizer.resolve_set_holdings_quantity(target_fraction=Decimal("1.0"))
+
+
+def test_set_holdings_requires_portfolio_value_provider() -> None:
+    sizer = OrderSizer(SetHoldings(fraction=Decimal("1.0")))
+    with pytest.raises(RuntimeError, match="PortfolioValueProvider"):
+        sizer.resolve_set_holdings_quantity(
+            target_fraction=Decimal("1.0"), reference_price=Decimal("500")
+        )
+
+
+def test_whole_account_provider_reads_fresh_value_each_call() -> None:
+    """The seam the future capital sleeve drops into — value resolves at call
+    time, not at construction (so changes to portfolio mid-session register).
+    """
+    portfolio_value = Decimal("100000")
+
+    def _value() -> Decimal:
+        return portfolio_value
+
+    provider = WholeAccountPortfolioValueProvider(_value)
+    assert provider.portfolio_value() == Decimal("100000")
+    portfolio_value = Decimal("110000")
+    assert provider.portfolio_value() == Decimal("110000")
