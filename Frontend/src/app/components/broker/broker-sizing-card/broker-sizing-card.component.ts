@@ -1,3 +1,4 @@
+import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import type { InstanceSizing } from '../../../api/live-instances.types';
 
@@ -32,6 +33,7 @@ interface SizingFact {
 @Component({
   selector: 'app-broker-sizing-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [DatePipe],
   templateUrl: './broker-sizing-card.component.html',
   styleUrl: './broker-sizing-card.component.scss',
 })

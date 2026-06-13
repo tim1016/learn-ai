@@ -644,8 +644,24 @@ def _build_live_state_writer(
         stable_live_state_path(artifacts_root, strategy_instance_id)
     )
 
+    # ADR 0009 § 11 — bounded ring-buffer for the per-trade audit list. Keeps
+    # the sidecar size predictable on a long-running bot; the cockpit only
+    # renders the most recent rows anyway.
+    SIZING_AUDIT_CAP = 200
+
     def _write(portfolio, bar_close_ms: int) -> None:
         existing = repo.read()
+        # Merge the prior-flush audit rows with whatever the portfolio captured
+        # since, then keep only the last SIZING_AUDIT_CAP. The portfolio's
+        # in-memory list resets per process so it doesn't grow unbounded
+        # across multi-day runs; the sidecar is the persistent home.
+        prior_audit = existing.sizing_resolutions if existing is not None else []
+        new_audit = list(getattr(portfolio, "sizing_resolutions", []))
+        combined_audit = (prior_audit + new_audit)[-SIZING_AUDIT_CAP:]
+        # Drain the portfolio's buffer so the next flush captures only fresh
+        # resolutions (otherwise we'd persist the same row on every bar).
+        if hasattr(portfolio, "sizing_resolutions"):
+            portfolio.sizing_resolutions.clear()
         envelope = LiveStateEnvelope(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
@@ -660,6 +676,7 @@ def _build_live_state_writer(
             expected_position_by_symbol={
                 sym: int(pos.quantity) for sym, pos in portfolio.positions.items()
             },
+            sizing_resolutions=combined_audit,
             poisoned_reason=existing.poisoned_reason if existing is not None else None,
         )
         repo.write(envelope)

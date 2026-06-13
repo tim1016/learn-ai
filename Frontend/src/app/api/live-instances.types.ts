@@ -137,6 +137,18 @@ export interface LiveInstanceStatus {
   fetched_at_ms: number;
 }
 
+/** ADR 0009 § 11 — one row of the per-trade audit list. The cockpit renders
+ * these in the Sizing card's bottom section. */
+export interface SizingAuditRow {
+  ts_ms: number;
+  symbol: string;
+  policy_kind: string;
+  policy_value: string;
+  intended_qty: number;
+  reference_price: string;
+  sized_via: string;
+}
+
 /** ADR 0009 — the bound (or evidence) run's sizing surface for the Sizing card.
  * `policy` is null for a legacy/pre-policy run (ledger has no `sizing` key); the
  * UI renders the honest "Pre-policy run" degraded badge in that case. */
@@ -153,6 +165,9 @@ export interface InstanceSizing {
   /** Engine-derived stamp: does the resolved sizing match the bound QC audit
    * copy? `live_override` = fail-closed default until PR3 wires the allow-list. */
   sizing_provenance: SizingProvenance;
+  /** Per-trade audit list (newest first, capped at 50). Empty for runs that
+   * predate the audit log. */
+  per_trade_audit: SizingAuditRow[];
 }
 
 /** What a run's content-addressed identity (`run_id`) fingerprints — so the UI

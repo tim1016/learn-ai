@@ -68,6 +68,14 @@ class IntentWal:
         exec_id: str | None = None,
         order_spec: dict[str, Any] | None = None,
         ts_ms: int | None = None,
+        # ADR 0009 § 11 — sizing-decision payload, populated only on
+        # SIZING_RESOLVED events.
+        policy_kind: str | None = None,
+        policy_value: str | None = None,
+        intended_qty: int | None = None,
+        reference_price: str | None = None,
+        sizing_provenance_at_resolve_time: str | None = None,
+        sized_via: str | None = None,
     ) -> IntentEvent:
         """Append one event with the next per-run ``seq`` and **fsync before
         returning**. The caller may call ``placeOrder`` only after this returns.
@@ -86,6 +94,12 @@ class IntentWal:
             exec_id=exec_id,
             order_spec=order_spec,
             ts_ms=ts_ms,
+            policy_kind=policy_kind,
+            policy_value=policy_value,
+            intended_qty=intended_qty,
+            reference_price=reference_price,
+            sizing_provenance_at_resolve_time=sizing_provenance_at_resolve_time,
+            sized_via=sized_via,
         )
         self._path.parent.mkdir(parents=True, exist_ok=True)
         line = event.model_dump_json() + "\n"

@@ -79,6 +79,7 @@ from app.schemas.live_runs import (
     ReadinessVector,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
+    SizingAuditRow,
 )
 
 # The instance command channel is reserved for one-shot operations; PAUSE/
@@ -433,8 +434,30 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
     return [c for c in candidates if c.is_file()] or candidates
 
 
+def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
+    """Read the per-trade sizing audit log from the instance's live-state sidecar.
+
+    Returns the most recent 50 rows (newest first). Empty when the sidecar
+    is absent or the field predates the audit log. Never raises.
+    """
+    settings = get_settings()
+    artifacts_root = Path(settings.live_runs_root).parent
+    sidecar_path = artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
+    if not sidecar_path.is_file():
+        return []
+    try:
+        envelope = LiveStateSidecarRepo(sidecar_path).read()
+    except (LiveStateSidecarCorruptError, OSError):
+        return []
+    if envelope is None:
+        return []
+    rows = list(envelope.sizing_resolutions or [])
+    rows.reverse()  # newest first for the UI
+    return rows[:50]
+
+
 def _sizing(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+    root: Path, live_binding: LiveBinding | None, runs: list[dict], strategy_instance_id: str
 ) -> InstanceSizing | None:
     """ADR 0009 — surface the bound (or latest evidence) run's sizing surface
     to the instance console's Sizing card.
@@ -479,6 +502,11 @@ def _sizing(
         sizing_provenance=sizing_provenance
         if sizing_provenance in ("reference_native", "live_override", "spec_default")
         else "live_override",
+        per_trade_audit=[
+            SizingAuditRow.model_validate(row)
+            for row in _sizing_audit_rows(strategy_instance_id)
+            if isinstance(row, dict)
+        ],
     )
 
 
@@ -911,7 +939,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             root, live_binding, runs, readonly_default=_resolve_readonly_default(settings)
         ),
         provenance=_provenance(root, live_binding, runs),
-        sizing=_sizing(root, live_binding, runs),
+        sizing=_sizing(root, live_binding, runs, sid),
         last_exit=_instance_last_exit(runs),
         symbol=_resolve_symbol(root, live_binding, runs),
         fetched_at_ms=_now_ms(),

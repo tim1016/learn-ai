@@ -25,8 +25,35 @@
         </div>
       }
     </dl>
-    <p class="future-note">
-      Live derivation (resolved share count at the latest price) and the per-trade audit list land in PR4 / PR6.
-    </p>
+    @let audit = sizing().per_trade_audit;
+    @if (audit.length > 0) {
+      <details class="audit-list" open>
+        <summary>Per-trade audit ({{ audit.length }})</summary>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Symbol</th>
+              <th>Policy</th>
+              <th>Qty</th>
+              <th>Reference price</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of audit; track row.ts_ms + ':' + row.symbol) {
+              <tr>
+                <td>{{ row.ts_ms | date: 'short' }}</td>
+                <td>{{ row.symbol }}</td>
+                <td>{{ row.policy_kind }}({{ row.policy_value }})</td>
+                <td>{{ row.intended_qty }}</td>
+                <td>{{ row.reference_price }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </details>
+    } @else {
+      <p class="future-note">No per-trade audit rows yet — they appear here once the bot sizes its first order.</p>
+    }
   }
 </section>

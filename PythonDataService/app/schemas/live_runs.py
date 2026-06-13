@@ -709,6 +709,18 @@ class InstanceLastExit(BaseModel):
     halt_detail: dict | None = None
 
 
+class SizingAuditRow(BaseModel):
+    """ADR 0009 § 11 — one row of the per-trade audit list."""
+
+    ts_ms: int
+    symbol: str
+    policy_kind: str
+    policy_value: str
+    intended_qty: int
+    reference_price: str
+    sized_via: str
+
+
 class InstanceSizing(BaseModel):
     """ADR 0009 — sizing surface for the instance console's Sizing card.
 
@@ -717,9 +729,6 @@ class InstanceSizing(BaseModel):
     is ``None`` for a **legacy/pre-policy run** (the ledger has no ``sizing``
     key); the Sizing card renders the degraded "Pre-policy run" badge variant
     in that case (ADR 0009 § 14).
-
-    PR1 surfaces static facts only. PR4 adds the *live derivation* (resolved
-    shares at the latest price); PR6 adds the *per-trade audit list*.
     """
 
     # Canonical policy form (the same shape the operator submitted, after
@@ -732,6 +741,9 @@ class InstanceSizing(BaseModel):
     preset: Literal["safe_canary", "reference_parity", "custom", "explicit"] | None = None
     governed_by: Literal["live_config", "strategy_explicit"]
     sizing_provenance: Literal["reference_native", "live_override", "spec_default"]
+    # ADR 0009 § 11 — per-trade audit rows, newest first (capped server-side
+    # at 50 rows). Empty for runs that predate the audit log.
+    per_trade_audit: list[SizingAuditRow] = Field(default_factory=list)
 
 
 class LiveInstanceStatus(BaseModel):

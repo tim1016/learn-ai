@@ -28,9 +28,28 @@ from app.broker.ibkr.orders import (
     stream_order_events,
 )
 from app.engine.execution.order import Direction, Order, OrderEvent, OrderType
-from app.engine.execution.order_sizer import OrderSizer
+from app.engine.execution.order_sizer import (
+    FixedNotional,
+    FixedShares,
+    OrderSizer,
+    SetHoldings,
+    StrategyExplicit,
+)
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+
+
+def _describe_policy_value(policy: object) -> str:
+    """Stringify the policy's principal value (decimal-safe) for the audit row."""
+    if isinstance(policy, FixedShares):
+        return str(policy.value)
+    if isinstance(policy, SetHoldings):
+        return str(policy.fraction)
+    if isinstance(policy, FixedNotional):
+        return str(policy.value)
+    if isinstance(policy, StrategyExplicit):
+        return ""
+    return ""
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +236,12 @@ class LivePortfolio:
     # ``market_order`` and ``liquidate`` are unaffected (explicit strategy
     # sizing wins; liquidate is a flatten command, not a sizing surface).
     order_sizer: OrderSizer | None = None
+    # ADR 0009 § 11 — captured per-trade audit list. Each row is the sizing
+    # decision the policy made for one set_holdings call: policy_kind,
+    # policy_value (decimal-stringified), intended_qty, reference_price
+    # (decimal-stringified), sized_via. The engine flushes this into the
+    # live_state sidecar at each bar so the cockpit can read it.
+    sizing_resolutions: list[dict] = field(default_factory=list)
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -304,6 +329,23 @@ class LivePortfolio:
                 target_fraction=target_fraction,
                 reference_price=price,
                 order_fee=self.order_fee,
+            )
+            # ADR 0009 § 11 — record the resolution before computing the delta
+            # so the audit log captures BOTH skip cases (delta == 0) and
+            # submitted orders. The cockpit later joins by intent_id when the
+            # WAL is fully wired; until then, the row is timestampable by the
+            # bar's ``time`` and surfaced verbatim.
+            policy = self.order_sizer.policy
+            self.sizing_resolutions.append(
+                {
+                    "ts_ms": int(time.timestamp() * 1000),
+                    "symbol": sym,
+                    "policy_kind": policy.kind,
+                    "policy_value": _describe_policy_value(policy),
+                    "intended_qty": int(target_quantity),
+                    "reference_price": str(price),
+                    "sized_via": "policy_set_holdings",
+                }
             )
         else:
             target_quantity = self.sizing_model.target_quantity(
