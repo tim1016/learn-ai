@@ -122,6 +122,14 @@ export class BrokerDeployFormComponent {
     if (!gate) return 'Pick an audit copy to check Reference parity availability.';
     return gate.detail;
   });
+
+  // PR4 — Custom expansion. The operator picks a kind (FixedShares or
+  // FixedNotional) and a value. The kind dropdown is the canonical name; the
+  // value field accepts plain numbers (FixedShares) or decimal-string-friendly
+  // numbers (FixedNotional). Decimal-on-the-wire is enforced at submit time so
+  // the operator never sees a float at the API boundary.
+  readonly customKind = signal<'FixedShares' | 'FixedNotional'>('FixedShares');
+  readonly customValue = signal<string>('1');
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
   private readonly autoSelectedDeploymentValidationAuditCopy = signal<boolean>(false);
@@ -457,22 +465,50 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  /** Map the selected preset into the canonical `SizingPolicy`. Reference parity
-   * resolves to `SetHoldings(1.0)` once PR3 lights it up; Custom expands to the
-   * kind dropdown in PR4. For PR1, only Safe canary actually emits a runnable
-   * policy — the others are visually disabled in the template.
-   */
+  /** Map the selected preset into the canonical `SizingPolicy`. Reference
+   * parity routes through `SetHoldings(1.0)` (gated server-side). Custom
+   * resolves the operator's kind + value, validating that the value parses
+   * as a positive number for FixedShares (integer ≥ 1) and as a positive
+   * decimal string for FixedNotional. */
   private resolveSizingPolicy(): SizingPolicy {
     const preset = this.sizingPreset();
     if (preset === 'reference_parity') {
       return REFERENCE_PARITY_POLICY;
     }
     if (preset === 'custom') {
-      // Placeholder: PR4 wires the custom expansion with the actual operator
-      // input. Until then, Custom is disabled in the template; this branch is
-      // unreachable from the UI.
-      return { kind: 'FixedShares', value: 1 };
+      const raw = this.customValue().trim();
+      if (this.customKind() === 'FixedShares') {
+        const n = Number.parseInt(raw, 10);
+        if (!Number.isFinite(n) || n < 1) {
+          throw new Error(`FixedShares value must be an integer ≥ 1, got "${raw}"`);
+        }
+        return { kind: 'FixedShares', value: n };
+      }
+      // FixedNotional ships the decimal as a string verbatim — Python's
+      // Pydantic discriminated union rejects raw floats. We only sanity-check
+      // here that the value parses as a positive number.
+      const n = Number.parseFloat(raw);
+      if (!Number.isFinite(n) || n <= 0) {
+        throw new Error(`FixedNotional value must be a positive number, got ${raw}`);
+      }
+      return { kind: 'FixedNotional', value: raw };
     }
     return { kind: 'FixedShares', value: 1 };
+  }
+
+  setCustomKind(e: Event): void {
+    if (!(e.target instanceof HTMLSelectElement)) return;
+    const v = e.target.value;
+    if (v === 'FixedShares' || v === 'FixedNotional') {
+      this.customKind.set(v);
+      // Re-default the value to a sane shape for the kind (1 share / 100 dollars).
+      this.customValue.set(v === 'FixedShares' ? '1' : '100');
+    }
+  }
+
+  setCustomValue(e: Event): void {
+    if (e.target instanceof HTMLInputElement) {
+      this.customValue.set(e.target.value);
+    }
   }
 }

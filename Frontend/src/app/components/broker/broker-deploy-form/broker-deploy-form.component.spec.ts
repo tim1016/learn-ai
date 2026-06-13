@@ -195,6 +195,34 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
+  it('emits a Custom FixedShares policy from the kind/value inputs', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedShares');
+    component.customValue.set('25');
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedShares', value: 25 } });
+  });
+
+  it('emits a Custom FixedNotional policy with the value as a decimal string', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedNotional');
+    component.customValue.set('1500.50');
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedNotional', value: '1500.50' } });
+  });
+
   it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {
     const { component } = setup({
       parityGate: {
