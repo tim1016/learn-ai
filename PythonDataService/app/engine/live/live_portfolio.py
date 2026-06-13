@@ -28,6 +28,7 @@ from app.broker.ibkr.orders import (
     stream_order_events,
 )
 from app.engine.execution.order import Direction, Order, OrderEvent, OrderType
+from app.engine.execution.order_sizer import OrderSizer
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 
@@ -210,6 +211,12 @@ class LivePortfolio:
     # mirroring LEAN sets LeanSetHoldingsSizing + order_fee.
     sizing_model: SizingModel = field(default_factory=SimpleFloorSizing)
     order_fee: Decimal = Decimal(0)
+    # ADR 0009 — when set, ``set_holdings`` consults the policy-application
+    # adapter instead of the percent path. ``None`` ⇒ legacy ``SimpleFloorSizing``
+    # path (pre-policy era). Wired only for the ``set_holdings`` surface;
+    # ``market_order`` and ``liquidate`` are unaffected (explicit strategy
+    # sizing wins; liquidate is a flatten command, not a sizing surface).
+    order_sizer: OrderSizer | None = None
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -272,19 +279,37 @@ class LivePortfolio:
         time: datetime,
         tag: str = "",
     ) -> Order | None:
-        """Mirror simulated Portfolio.set_holdings sizing via self.sizing_model."""
+        """Resolve a target position via the sizing policy (ADR 0009).
+
+        When ``order_sizer`` is set, ``set_holdings`` consults the policy
+        adapter — ``FixedShares`` returns the integer share count directly,
+        ``SetHoldings`` delegates to ``LeanSetHoldingsSizing`` (wired in PR2),
+        ``FixedNotional`` floors notional / price (wired in PR4). When unset,
+        falls back to the legacy ``sizing_model`` path so existing replay and
+        test setups (which never configured a policy) keep their prior behavior
+        until they are migrated.
+
+        A resolved target that matches the current position is a no-op (returns
+        ``None``); the engine logs a *sizing skip* upstream when the policy
+        resolves to a zero target while flat (ADR 0009 § 4).
+        """
         sym = symbol.upper()
         target_fraction = Decimal(str(target_fraction))
         price = self.reference_price.get(sym)
         if price is None:
             raise RuntimeError(f"Cannot set_holdings on {sym}: no reference price.")
         current_pos = self.get_position(sym)
-        target_quantity = self.sizing_model.target_quantity(
-            portfolio_value=self.total_value(),
-            price=price,
-            target_fraction=target_fraction,
-            order_fee=self.order_fee,
-        )
+        if self.order_sizer is not None:
+            target_quantity = self.order_sizer.resolve_set_holdings_quantity(
+                target_fraction=target_fraction,
+            )
+        else:
+            target_quantity = self.sizing_model.target_quantity(
+                portfolio_value=self.total_value(),
+                price=price,
+                target_fraction=target_fraction,
+                order_fee=self.order_fee,
+            )
         delta = target_quantity - current_pos.quantity
         if delta == 0:
             return None

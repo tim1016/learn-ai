@@ -184,7 +184,7 @@ def test_build_ledger_stores_strategy_instance_id_and_bumps_schema(tmp_path: Pat
         strategy_instance_id="spy-ema-paper-1",
     )
     assert ledger.strategy_instance_id == "spy-ema-paper-1"
-    assert ledger.schema_version == "1.2"
+    assert ledger.schema_version == "1.3"
 
 
 def test_strategy_instance_id_not_in_run_id_hash(tmp_path: Path) -> None:
@@ -253,13 +253,14 @@ def test_write_read_round_trips_strategy_instance_id(tmp_path: Path) -> None:
 
     loaded = read_ledger(out)
     assert loaded.strategy_instance_id == "spy-ema-paper-1"
-    assert loaded.schema_version == "1.2"
+    assert loaded.schema_version == "1.3"
     assert loaded.run_id == ledger.run_id
 
 
-def test_default_ledger_is_schema_1_2() -> None:
-    """A freshly constructed ledger (no instance id / strategy key) defaults to
-    schema 1.2 with empty bindings — the new baseline."""
+def test_default_ledger_is_latest_schema() -> None:
+    """A freshly constructed ledger (no instance id / strategy key, no sizing)
+    defaults to the current schema with empty bindings — the new baseline.
+    """
     ledger = LiveRunLedger(
         run_id="x" * 64,
         code_sha="abc",
@@ -272,9 +273,12 @@ def test_default_ledger_is_schema_1_2() -> None:
         start_date_ms=1_700_000_000_000,
         live_config={},
     )
-    assert ledger.schema_version == "1.2"
+    assert ledger.schema_version == "1.3"
     assert ledger.strategy_instance_id == ""
     assert ledger.strategy_key == ""
+    # ADR 0009 — defaults for an empty/legacy live_config.
+    assert ledger.governed_by == "live_config"
+    assert ledger.sizing_provenance == "live_override"
 
 
 # ──────────────────── algorithm-module binding (strategy_key, #416) ────
@@ -293,7 +297,7 @@ def test_build_ledger_stores_strategy_key(tmp_path: Path) -> None:
         strategy_key="spy_ema_crossover",
     )
     assert ledger.strategy_key == "spy_ema_crossover"
-    assert ledger.schema_version == "1.2"
+    assert ledger.schema_version == "1.3"
 
 
 def test_strategy_key_not_in_run_id_hash(tmp_path: Path) -> None:
@@ -362,3 +366,101 @@ def test_write_read_round_trips_strategy_key(tmp_path: Path) -> None:
     loaded = read_ledger(out)
     assert loaded.strategy_key == "spy_ema_crossover"
     assert loaded.run_id == ledger.run_id
+
+
+# ──────────────────── ADR 0009 sizing stamps + run_id stability ─────
+
+
+def test_build_ledger_derives_governed_by_from_sizing_kind(tmp_path: Path) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    common = dict(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+    )
+    canary = build_ledger(
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}}, **common
+    )
+    explicit = build_ledger(live_config={"sizing": {"kind": "StrategyExplicit"}}, **common)
+    legacy = build_ledger(live_config={}, **common)
+
+    assert canary.governed_by == "live_config"
+    assert canary.sizing_provenance == "live_override"  # fail-closed default until PR3
+    assert explicit.governed_by == "strategy_explicit"
+    assert legacy.governed_by == "live_config"
+    assert legacy.sizing_provenance == "live_override"
+
+
+def test_sizing_changes_run_id_via_live_config_hash(tmp_path: Path) -> None:
+    """ADR 0009 — live_config.sizing is hashed into run_id through live_config,
+    so two deploys differing only in sizing kind mint different run_ids."""
+    spec, qc_copy = _make_inputs(tmp_path)
+    common = dict(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+    )
+    canary_id = build_ledger(
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}}, **common
+    ).run_id
+    legacy_id = build_ledger(live_config={}, **common).run_id
+    assert canary_id != legacy_id, (
+        "Safe-canary must mint a different run_id than an empty live_config "
+        "so a sizing-aware deploy never collides with a legacy empty-config run."
+    )
+
+
+def test_governed_by_and_provenance_not_in_run_id_hash(tmp_path: Path) -> None:
+    """ADR 0009 — the engine-derived stamps are NOT hashed; only the operator
+    choice (live_config.sizing) is. Two ledgers with the same live_config but
+    different stamps would never exist in practice, but the hash must not
+    depend on them, so a future stamp-default change leaves run_ids stable.
+    """
+    payload = {
+        "code_sha": "abc123",
+        "strategy_spec_sha256": "deadbeef",
+        "qc_audit_copy_sha256": "cafe",
+        "qc_cloud_backtest_id": "bt-1",
+        "account_id": "DU111",
+        "start_date_ms": 1_700_000_000_000,
+        "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+    }
+    # compute_run_id signature does NOT take governed_by / sizing_provenance —
+    # this test pins that contract explicitly.
+    assert "governed_by" not in payload
+    assert "sizing_provenance" not in payload
+    assert len(compute_run_id(**payload)) == 64
+
+
+def test_legacy_1_2_ledger_reads_with_default_sizing_stamps(tmp_path: Path) -> None:
+    """A 1.2 ledger persisted before ADR 0009 has no governed_by or
+    sizing_provenance keys. Reading it falls to the defaults, never errors."""
+    spec, qc_copy = _make_inputs(tmp_path)
+    legacy = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_key="spy_ema_crossover",
+    )
+    payload = legacy.model_dump(mode="json")
+    payload["schema_version"] = "1.2"
+    del payload["governed_by"]
+    del payload["sizing_provenance"]
+    out = tmp_path / "legacy12" / "run_ledger.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = read_ledger(out)
+    assert loaded.schema_version == "1.2"
+    assert loaded.governed_by == "live_config"
+    assert loaded.sizing_provenance == "live_override"

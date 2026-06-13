@@ -66,6 +66,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       ibkr_host: '127.0.0.1',
     },
     provenance: null,
+    sizing: null,
     last_exit: null,
     symbol: 'SPY',
     fetched_at_ms: 1,

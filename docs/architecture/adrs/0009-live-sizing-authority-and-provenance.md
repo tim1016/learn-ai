@@ -1,6 +1,6 @@
 # ADR 0009 — Live position sizing is a `live_config` policy resolved in Python, with engine-derived provenance; the strategy spec is **not** the live sizing authority
 
-**Status:** Proposed 2026-06-08 — resolved in a grilling session (`grill-with-docs`, 2026-06-08) that walked the full decision tree; vocabulary recorded in `CONTEXT.md` § "Sizing authority". Load-bearing code claims adversarially verified against the tree before this ADR was written.
+**Status:** Proposed 2026-06-08 — re-opened 2026-06-13 for a **UI re-think** after the broker control panel cockpit grew significantly (provenance card, instance console, paper-run, candlestick + trades, run-log "Fix this"). **Substance** — engine plumbing, allow-list mechanism, provenance stamps, four kinds, `FixedShares(1)` default, fail-closed Reference parity — **is unchanged**. The deltas are UI placement, the per-trade audit mechanism, the allow-list file shape, the coexistence guard's scope, and PR sequencing — captured in the **Updated 2026-06-13 — UI re-think** section below. Vocabulary recorded in `CONTEXT.md` § "Sizing authority". Original grilling: `grill-with-docs` 2026-06-08; re-grill: `grill-with-docs` 2026-06-13. Load-bearing code claims adversarially verified before each session.
 **Decision drivers:** The first live deployment-validation run sized with `set_holdings(SPY, 1.0)` (target **fraction 1.0 = 100% of equity**) and bought ~336 shares (~$250k) — the entire paper account — on one signal (`docs/position-sizing-research-handoff.md`). Nine of the equity strategies target 100% of equity; two are self-sized; **none can coexist on one account**. Sizing is fused into each strategy's signal code, so it cannot change without editing (and re-reconciling) the algorithm. A grilling session designed the fix and surfaced two traps a naïve version would hit: (1) the **live runtime executes hand-coded algorithms, not the strategy spec**, so "make sizing a declarative spec field" alone changes nothing live; (2) a declarative `SizeRule` **already exists** in the spec (`SetHoldings | FixedContracts`), so a parallel sizing vocabulary would violate the single-source-of-truth rule (`CLAUDE.md` guiding principle #5).
 **Related:** ADR 0006 (deploy / content-addressed `run_id` / `live_config` hashing — **directly extended**), ADR 0001 (JSON/Parquet substrate), ADR 0008 (durable submit & order identity), `CONTEXT.md` § "Sizing authority", `.claude/rules/numerical-rigor.md` ("numerical claims require receipts"), `docs/position-sizing-research-handoff.md` (this ADR resolves its open briefs and **supersedes its § 3**).
 
@@ -135,3 +135,88 @@ This is only true **after** this ADR is implemented. Today, with no `live_config
 - `Frontend/src/app/api/live-runs.types.ts:272` / `Frontend/src/app/services/live-runs.service.ts:214` — trimmed `EngineStrategyInfo` the deploy form reads (must be widened for `sizing_surface`).
 - `CONTEXT.md` § "Sizing authority" — the operator vocabulary this ADR implements.
 - `docs/position-sizing-research-handoff.md` — research briefs A–E; § 3 superseded by Decision 8.
+
+## Updated 2026-06-13 — UI re-think
+
+Re-grilled in a `grill-with-docs` session after the broker control panel grew (provenance card, instance console with `bot-trades-table` / `bot-failures-table` / `bot-trade-chart-card`, paper-run page, run-log "Fix this" modal, freshness verdict, last-exit halt-trigger, options surface). **None of that changed any sizing assumption** — verified by code reading: `live_config.sizing` still does not exist, `_live_config_from_ledger` still rejects unknown keys at `run.py:540`, `LivePortfolio.sizing_model` still defaults to `SimpleFloorSizing` and is never overridden, `LeanSetHoldingsSizing` is still wired only in `cross_runner.py`. The ADR's engine work is exactly as load-bearing as it was on 2026-06-08. The re-think is about *where* the operator sees this and *what order* to land it.
+
+### 10. UI placement — dedicated Sizing card, deploy-form preset selector, provenance card stays scoped
+
+The cockpit has three potential surfaces for the sizing concept: the deploy form (pre-deploy choice), the provenance card (run-identity fingerprints), and the instance console (operator's day-to-day view). We picked **three slots, each with a tight scope**:
+
+- **Deploy form** — a **3-option radio + inline Custom expansion** (Safe canary / Reference parity / Custom) inserted between the QC binding section and the "start trading immediately" toggle. The Reference parity option carries an **inline gate status** rendered server-side from the allow-list lookup for the bound `qc_audit_copy_path` ("audit copy proves SetHoldings(1.0)" / "audit copy not in allow-list" / "audit copy is `SetHoldings(0.5)`, not the v1-supported `SetHoldings(1.0)`"). Selecting Custom expands a kind dropdown (`FixedShares` | `FixedNotional`) + value input. For `sizing_surface=explicit` registrations, the whole control is disabled and labelled "self-sized" (Decision 6, unchanged).
+- **Provenance card** stays **scoped to run-identity fingerprints** (`run_id`, `code_sha`, `strategy_spec_sha256`, `qc_audit_copy_sha256`, `qc_cloud_backtest_id`). It is **not** the home for sizing detail. Adding sizing would conflate identity-fingerprint provenance with sizing provenance; they are orthogonal stamps that deserve orthogonal surfaces.
+- **Sizing card** — a **new dedicated card** on the instance console, next to the provenance card, with three sections:
+  1. **Static facts** (run-bound): preset name, `live_config.sizing.{kind, value}`, `governed_by`, `sizing_provenance`, and the **audit-copy verdict** with the diff spelled out for *proven mismatch* and *cannot prove* outcomes ("audit copy rule is `SetHoldings(1.0)`; your live sizing is `FixedShares(1)`" — sized-live derivative narrative).
+  2. **Live derivation** (refreshed at the latest price): resolved share count this policy would produce *right now* (for `SetHoldings` / `FixedNotional`; for `FixedShares` it's static), and the **sizing-skip** counter for the session.
+  3. **Per-trade audit list** (Decision 11).
+- **Instance binding** — the card mounts only when a live binding exists for the instance; for completed runs or dead instances it shows from the latest evidence-binding run, clearly labelled. Stale evidence is never a control surface (CONTEXT § "Binding authority", unchanged).
+
+### 11. Per-trade audit — a new `SIZING_RESOLVED` WAL event
+
+The per-trade audit list joins each broker fill to the sizing decision that produced its order. This requires persisting the sizer's resolved `(policy_kind, intended_qty, reference_price, sizing_provenance_at_resolve_time)` tuple alongside the eventual fill so the join is on `intent_id`. The canonical home is the WAL.
+
+- A new **`SIZING_RESOLVED`** event in `intent_events.jsonl`, appended **before** `SUBMITTED` / `ACK_FAILED_UNCERTAIN`, carrying `{ts_ms_utc, intent_id, policy_kind, policy_value, intended_qty, reference_price (str/decimal), sizing_provenance_at_resolve_time, sized_via}`. The event captures the sizing decision at the moment the order was constructed — not at fill time, not at session boundary.
+- The fold extends `submitted_orders[intent_id]` in the projection (`live_state.json`) with a **`sizing_resolution`** field of the same shape. The trades query joins on `intent_id`.
+- **`sized_via`** values: `policy_set_holdings` (the policy intercepted `set_holdings`), `policy_market_order` (reserved for future migration), `strategy_explicit_market_order`, `strategy_explicit_contracts`. For v1, only `policy_set_holdings` and the two `strategy_explicit_*` values are emitted. Adding the others does not bump the WAL contract (Decision 6's `sizing_surface` already distinguishes them).
+- **No backfill.** Legacy runs (pre-PR1) have no `SIZING_RESOLVED` events; the Sizing card hides the per-trade audit list for them (Decision 13).
+- The fail-fast on `order-surface mismatch` (Decision 6) runs against the recorded `sized_via` value, so a `set_holdings`-using strategy registered as `explicit` halts on the first entry order with the misleading-ledger error the ADR already specifies.
+
+### 12. Allow-list location — a single indexed JSON file, sha-verified at load
+
+The audit-copy sizing allow-list lives at **`docs/references/audit-copy-sizing-allow-list.json`** — a single index file:
+
+```jsonc
+[
+  {
+    "audit_copy_path": "references/qc-shadow/DeploymentValidationAlgorithm.py",
+    "audit_copy_sha256": "abcd…",
+    "rule": { "kind": "SetHoldings", "fraction": "1.0" },  // decimal string; never float
+    "registered_at_ms": 1718268000000,
+    "registered_by": "inkant"
+  }
+]
+```
+
+The lookup is server-side at the deploy/start boundary. **The entry's `audit_copy_sha256` is re-verified against the on-disk audit copy at load** — a mismatch is *cannot prove*, never a silent override. Adding a new audit copy without an entry is *cannot prove*; adding an entry whose `rule.kind` is not yet wired (e.g. `SetHoldings(0.5)` while v1 only supports `SetHoldings(1.0)`) is *proven mismatch* against the selected preset, so Reference parity remains blocked with the specific reason surfaced in the deploy form's inline gate status. We rejected per-audit-copy sidecar files because the index puts all sizing claims behind one PR-reviewable surface; we rejected a Python module constant because data and code coupling is too tight; we rejected a Postgres table because it adds a runtime dependency for a static lookup.
+
+### 13. Coexistence guard — symbol-scoped, not account-wide
+
+Decision 9's coexistence guard is **narrowed to the trade symbol**:
+
+- Block `SetHoldings(1.0)` start when *either* (a) the bound trade symbol has non-zero exposure in the broker account (any source — managed or not), *or* (b) another managed live binding on this account holds `SetHoldings(1.0)` on the same symbol.
+- `FixedShares` / `FixedNotional` are still **never** blocked (unchanged from Decision 9).
+- **Permitted-but-unsafe**: two all-in bots on *different* symbols (SPY all-in + AAPL all-in) deploy successfully and *will* fight for shared cash buying power. This is an accepted v1 trade-off, not an oversight — the capital-sleeve layer (still deferred, Decision 9) closes it. The deploy form does not warn on cross-symbol all-in concurrency in v1; the fleet readiness gate may surface it as inherited `DEGRADED` once the fleet-level signal is wired (CONTEXT § "Broker-observed state & position ownership").
+
+The narrower scope was accepted because account-wide blocking would refuse a `SetHoldings(1.0)` SPY-EMA deploy onto an account that holds stray foreign exposure (e.g. an unrelated manual position), which is operationally too strict for the existing baseline run that the QC parity matrix depends on.
+
+### 14. Legacy / pre-policy run rendering
+
+Every existing run today has `live_config = {}` (or 5 keys, none being `sizing`). After PR1 ships, those runs read as **`absence ⇒ legacy/unknown`** (the ADR is already explicit that absence is *not* `FixedShares(1)`). The UI is correspondingly honest:
+
+- The provenance card adds **no sizing row** for legacy runs (the provenance card stays scoped to identity fingerprints anyway).
+- The Sizing card renders a **degraded "Pre-policy run" variant**: badge + a one-line explanation ("sized by the historical `SimpleFloorSizing` model; sizing provenance, audit-copy verdict, and per-trade audit are unavailable for pre-policy runs"). Static facts (kind/preset/`governed_by`/`sizing_provenance`/verdict), live derivation, and the per-trade audit list are all suppressed.
+- **No ledger backfill** — synthetic `live_config.sizing` would mutate hashed `run_id`s. Absence stays absence.
+- **Re-deploy from a legacy run defaults to Safe canary**, not "previously used" — the safe default applies on the first sizing-aware deploy. Operators see and confirm the change inline; the deploy form's deep-link prefill (strategy/spec/account/QC fields) is unchanged.
+
+### 15. Implementation order — tracer-bullet Safe canary first
+
+The original PR sequence (Decision §"v1 PR sequence") was logical but engine-first, which back-loaded operator-facing safety to PR4. The re-think flips to a **tracer-bullet** ordering — Safe canary lands end-to-end first, then later kinds and surfaces layer on. This puts the `$250k surprise can't recur silently` win in the operator's hands as early as possible, and isolates the deliberate `SimpleFloor → Lean` share-count shift to a later PR with the deploy-form UI already explaining it:
+
+1. **PR1 — Safe canary tracer.** `engine/execution/order_sizer.py` with `FixedShares` only; Pydantic discriminated union over `{FixedShares, SetHoldings, FixedNotional, StrategyExplicit}` with `FixedShares` as the only currently-implemented runtime path (others validate but reject with a clear "not yet wired" error if selected); `_live_config_from_ledger` allow-list extension; pass-through portfolio-value provider seam (for the eventual capital sleeve); `LiveEngine` / `LivePortfolio` sizing injection; deploy form's 3-option radio with **Safe canary as the only enabled option** (Reference parity disabled "ships in PR3"; Custom disabled "ships in PR4"); Sizing card static facts (preset / kind / `governed_by` / `sizing_provenance=live_override`); engine-derived stamps in the ledger. **No `SimpleFloor → Lean` cutover yet** — the percent path is not exercised by Safe canary.
+2. **PR2 — Lean cutover + regression note.** Wire `LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())` as the percent-path resolver inside `order_sizer.py`; retire `SimpleFloorSizing` from the live path; pinned regression test documenting the intentional share-count shift; `docs/references/lean-set-holdings.md` provenance note. No deploy form change (Reference parity still disabled — the math is wired but the gate isn't).
+3. **PR3 — Reference parity end-to-end.** `docs/references/audit-copy-sizing-allow-list.json` with the two existing entries (`DeploymentValidationAlgorithm.py`, `SpyEmaCrossoverAlgorithm.py`); server-side lookup endpoint feeding the deploy form's inline gate status; deploy form enables Reference parity (gate-aware); `sizing_provenance` verdict logic (`reference_native` on *proven match*, `live_override` on *proven mismatch* and *cannot prove*); Sizing card audit-copy verdict + diff line.
+4. **PR4 — Custom.** Deploy form Custom expansion (kind dropdown + value input); engine wires the remaining `FixedShares(n>1)` and `FixedNotional` paths; Sizing card live derivation (resolved-shares-at-latest-price) for `SetHoldings` / `FixedNotional`.
+5. **PR5 — Coexistence guard.** Symbol-scoped pre-flight refusal (Decision 13); deploy form `blockedReason` integration; connectivity strip's `nowChecks` integration.
+6. **PR6 — Per-trade audit list.** `SIZING_RESOLVED` WAL event + projection field (Decision 11); trades query join; Sizing card bottom section.
+7. **PR7 — `sizing_surface` registry + explicit-strategy disable.** `StrategyRegistration.sizing_surface`; widened trimmed `EngineStrategyInfo`; deploy form sizing control disabled + "self-sized" label for explicit strategies; order-surface fail-fast (Decision 6).
+
+Decision 8 ("the canary fix is config-only") becomes available end-to-end at the end of PR1. The deliberate behaviour change to `LeanSetHoldingsSizing` is isolated to PR2 with its regression test. Reference parity's all-in foot-gun protection ships in PR5, between Custom and audit. The ordering is justified by **user value per PR**, not by tidiness of subsystem coverage.
+
+### Non-changes to revisit later (named but not v1)
+
+- `FixedShares` long-only / no-accidental-short stays from Decision 4 (no v1 strategy shorts).
+- Arbitrary fractional `SetHoldings(0<f<1)` stays deferred (no v1 strategy uses it).
+- `spy_vwap_reversion` and `spy_ema_crossover_options` both stay `sizing_surface=explicit` for v1; the equity strategy's literal `100` and the options strategy's `contracts_per_trade` migrate to `policy` in a future PR once operator UX is validated on the equity preset path.
+- The `LiveConfig`-dataclass full Pydantic rewrite stays out of scope (Decision 2 unchanged — extend the allow-list narrowly).
+- Capital sleeve, risk overlays, ATR/Kelly/vol-targeting stay deferred (Decision 9 unchanged).

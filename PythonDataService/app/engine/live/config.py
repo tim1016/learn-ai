@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
 
+from app.engine.execution.order_sizer import SizingPolicy
 from app.engine.live.order_identity import DEFAULT_ORDER_REF_MAX_LENGTH
 
 
@@ -28,6 +29,14 @@ class LiveConfig:
     consolidator_period_min: int = 15
     run_dir: Path = Path("live_runs")
     max_submit_latency_ms: int = 500
+
+    # ADR 0009 — live position-sizing policy. ``None`` ⇒ legacy/unknown
+    # (pre-policy ``SimpleFloorSizing`` all-in); a sizing-aware deploy ALWAYS
+    # writes an explicit policy (the canonical safe default is FixedShares(1)),
+    # so a fresh empty-``live_config`` run never hash-collides with the safe
+    # canary. Hashed into ``run_id`` through ``live_config`` like every other
+    # field on this dataclass.
+    sizing: SizingPolicy | None = None
 
     # ── Durable submit protocol (ADR-0008 / PRD #446) ──────────────────────────
     # Master switch. Stays False until BOTH Acceptance-Gate receipts exist;

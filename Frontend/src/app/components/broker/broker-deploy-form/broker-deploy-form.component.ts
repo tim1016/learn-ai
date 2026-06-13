@@ -13,6 +13,8 @@ import type {
   HostRunnerDeployRequest,
   HostRunnerDeployResponse,
   HydratePolicy,
+  SizingPolicy,
+  SizingPreset,
   SpecStrategyFixture,
 } from '../../../api/live-runs.types';
 import { BrokerService } from '../../../services/broker.service';
@@ -78,6 +80,10 @@ export class BrokerDeployFormComponent {
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(50_000);
   readonly startNow = signal<boolean>(false);
+  // ADR 0009 § 7 — position-sizing preset. Defaults to Safe canary
+  // (FixedShares(1)); the $250k surprise from the first deployment-validation
+  // run is opt-in from PR1 forward. Reference parity + Custom ship in PR3/PR4.
+  readonly sizingPreset = signal<SizingPreset>('safe_canary');
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
   private readonly autoSelectedDeploymentValidationAuditCopy = signal<boolean>(false);
@@ -297,6 +303,7 @@ export class BrokerDeployFormComponent {
       start_date_ms: this.startDateMs,
       strategy_instance_id: this.instanceId().trim(),
       strategy_key: strategyKey,
+      live_config: { sizing: this.resolveSizingPolicy() },
       start: this.startNow(),
     };
     // Only attach launch knobs when actually starting — otherwise a deploy-only
@@ -386,5 +393,38 @@ export class BrokerDeployFormComponent {
       this.startNow.set(e.target.checked);
       this.liveConfirmed.set(false);
     }
+  }
+
+  /** ADR 0009 PR1 — preset selector. Reference parity ships in PR3 (gated by
+   * the audit-copy allow-list); Custom in PR4. The radio binds onlyOnSafeCanary
+   * so a stray click can't quietly switch to a disabled option. */
+  setSizingPreset(e: Event): void {
+    if (!(e.target instanceof HTMLInputElement)) return;
+    const next = e.target.value;
+    if (next === 'safe_canary' || next === 'reference_parity' || next === 'custom') {
+      this.sizingPreset.set(next);
+    }
+  }
+
+  /** Map the selected preset into the canonical `SizingPolicy`. Reference parity
+   * resolves to `SetHoldings(1.0)` once PR3 lights it up; Custom expands to the
+   * kind dropdown in PR4. For PR1, only Safe canary actually emits a runnable
+   * policy — the others are visually disabled in the template.
+   */
+  private resolveSizingPolicy(): SizingPolicy {
+    const preset = this.sizingPreset();
+    if (preset === 'reference_parity') {
+      // Reference parity preset = SetHoldings(1.0). Disabled in PR1's template,
+      // but the resolver is included so a future PR enabling the radio doesn't
+      // also have to change submission code.
+      return { kind: 'SetHoldings', fraction: '1.0' };
+    }
+    if (preset === 'custom') {
+      // Placeholder: PR4 wires the custom expansion with the actual operator
+      // input. Until then, Custom is disabled in the template; this branch is
+      // unreachable from the UI.
+      return { kind: 'FixedShares', value: 1 };
+    }
+    return { kind: 'FixedShares', value: 1 };
   }
 }

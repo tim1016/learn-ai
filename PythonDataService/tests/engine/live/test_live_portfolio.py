@@ -67,6 +67,41 @@ def test_liquidate_submits_opposite_quantity() -> None:
     assert order.tag == "Liquidate"
 
 
+def test_set_holdings_with_fixed_shares_policy_targets_value_directly() -> None:
+    """ADR 0009 PR1 — when an OrderSizer carrying FixedShares is attached, the
+    set_holdings call resolves to the policy's share count, bypassing the
+    percent-based sizing_model entirely.
+    """
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+
+    portfolio = LivePortfolio(FakeBroker(), order_sizer=OrderSizer(FixedShares(value=1)))
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("501.25"))
+
+    # A positive fraction is a "go long" intent; the FixedShares policy
+    # reinterprets it as "target 1 share" — not 199 (the percent-path value).
+    order = portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert order is not None
+    assert order.quantity == 1
+    assert order.tag == "SetHoldings"
+
+
+def test_set_holdings_with_fixed_shares_policy_zero_fraction_is_flat() -> None:
+    """A flat target through FixedShares submits no order when already flat
+    (delta == 0); the sizing-skip diagnostic is logged upstream by the engine.
+    """
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+
+    portfolio = LivePortfolio(FakeBroker(), order_sizer=OrderSizer(FixedShares(value=1)))
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("501.25"))
+
+    order = portfolio.set_holdings("SPY", Decimal("0"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert order is None
+
+
 @pytest.mark.asyncio
 async def test_submit_pending_orders_routes_through_paper_order_spec() -> None:
     broker = FakeBroker()

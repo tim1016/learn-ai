@@ -62,11 +62,13 @@ class LiveRunLedger(BaseModel):
 
     # 1.1 adds ``strategy_instance_id`` (UI-0 identity binding). 1.2 adds
     # ``strategy_key`` (#416 — the hand-coded algorithm module the run starts
-    # under). Both are NOT part of the ``run_id`` hash, so existing 1.0/1.1
-    # run_ids, run directories, and fixtures stay byte-identical. A legacy
-    # ledger that predates a field has no key for it; the empty-string default
-    # lets it read cleanly as "unknown / legacy".
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    # under). 1.3 adds ADR 0009's engine-derived sizing stamps
+    # (``governed_by`` + ``sizing_provenance``). NONE of the added fields are
+    # part of the ``run_id`` hash, so existing 1.0–1.2 run_ids, run directories,
+    # and fixtures stay byte-identical. A legacy ledger that predates a field
+    # has no key for it; the defaults below let it read cleanly as
+    # "unknown / legacy".
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
 
     run_id: str
     code_sha: str
@@ -101,6 +103,24 @@ class LiveRunLedger(BaseModel):
     # Resolved live config (not raw env vars). Kept as a dict so the
     # ledger remains stable across LiveConfig field additions.
     live_config: dict
+
+    # ADR 0009 § 3 — two engine-derived sizing stamps. Neither is hashed into
+    # ``run_id`` (the policy choice IS hashed via ``live_config.sizing``; these
+    # stamps are derivative facts about *who/what authorized* the resolved
+    # sizing). The operator never types these; ``build_ledger`` derives them.
+    # ``governed_by`` ∈ {live_config, strategy_explicit} — who set the quantity.
+    # ``sizing_provenance`` ∈ {reference_native, live_override, spec_default} —
+    # does the resolved live sizing equal the bound QC audit copy's sizing rule?
+    # PR1 always emits ``live_override`` (the fail-closed default); PR3 wires
+    # ``reference_native`` via the audit-copy allow-list. ``spec_default`` is
+    # reserved (ADR § 3) and not emitted today. Empty strings here are NOT a
+    # legal in-band value — a 1.0/1.1/1.2 ledger that predates the fields lacks
+    # the keys entirely and ``model_validate`` falls back to the defaults,
+    # which lets old fixtures read cleanly.
+    governed_by: Literal["live_config", "strategy_explicit"] = "live_config"
+    sizing_provenance: Literal["reference_native", "live_override", "spec_default"] = (
+        "live_override"
+    )
 
     created_at_ms: int = Field(default_factory=_now_ms_utc)
 
@@ -174,6 +194,20 @@ def build_ledger(
         start_date_ms=start_date_ms,
         live_config=live_config,
     )
+    # ADR 0009 § 3 — engine-derive the two sizing stamps from the resolved
+    # ``live_config.sizing`` (when present). Absence ⇒ legacy/unknown, which
+    # carries the conservative defaults on the ledger model (governed_by =
+    # live_config since the legacy ``SimpleFloorSizing`` was de facto the
+    # ``set_holdings`` path; sizing_provenance = live_override since there is
+    # no proof path until PR3).
+    from app.engine.execution.order_sizer import (
+        default_sizing_provenance,
+        governed_by,
+        parse_sizing_policy,
+    )
+
+    sizing_payload = live_config.get("sizing") if isinstance(live_config, dict) else None
+    resolved_policy = parse_sizing_policy(sizing_payload) if sizing_payload else None
     return LiveRunLedger(
         run_id=run_id,
         code_sha=code_sha,
@@ -187,6 +221,8 @@ def build_ledger(
         live_config=live_config,
         strategy_instance_id=strategy_instance_id,
         strategy_key=strategy_key,
+        governed_by=governed_by(resolved_policy),
+        sizing_provenance=default_sizing_provenance(resolved_policy),
     )
 
 

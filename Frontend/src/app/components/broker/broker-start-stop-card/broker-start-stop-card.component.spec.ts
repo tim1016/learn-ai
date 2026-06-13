@@ -25,6 +25,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
       ibkr_host: '10.0.0.5',
     },
     provenance: null,
+    sizing: null,
     last_exit: null,
     symbol: null,
     fetched_at_ms: 1,
