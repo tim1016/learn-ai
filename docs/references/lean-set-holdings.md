@@ -104,3 +104,27 @@ exit-fill-mode gap).
 
 None. Exact reproduction across the 20-entry fixture (legacy path) and
 the fee-aware path's SPY parity case.
+
+## 2026-06-13 — Live-path cutover (PR2 of ADR 0009)
+
+`LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel())` is now the
+*live* `SetHoldings` resolver too — wired through
+`app/engine/execution/order_sizer.py::OrderSizer` and called from
+`LivePortfolio.set_holdings` when the live `live_config.sizing.kind ==
+"SetHoldings"`. `SimpleFloorSizing` stays as a `LivePortfolio.sizing_model`
+default for replay paths that never attach an `OrderSizer`, but a
+sizing-aware live deploy never touches `SimpleFloorSizing` again.
+
+**Intentional behavior change**: every live `SetHoldings` run will now buy
+**fewer shares** than the previous live default (1–2 shares fewer per
+entry, depending on price). The shift is the same one the cross-engine
+parity matrix already documents — see "Why this matters" above. It is the
+*honest* LEAN-native quantity; the prior 1-share-extra was the
+`SimpleFloorSizing` bug Gate 3 surfaced. The regression test in
+`tests/engine/execution/test_order_sizer.py` pins the new live-path
+output to `LeanSetHoldingsSizing`'s share count and explicitly contrasts
+it with `SimpleFloorSizing` so any future drift surfaces immediately.
+
+No new fixture is required — `LeanSetHoldingsSizing` is the canonical
+quantity-math authority (pinned at `atol=0` by the 20-entry SPY golden);
+this cutover only changes *which path the live engine takes through it*.
