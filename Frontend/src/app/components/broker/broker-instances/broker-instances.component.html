@@ -90,6 +90,24 @@
         </span>
       </header>
 
+      <!--
+        VCR-0002 / VCR-0008 / Phase 4 — until ADR 0008's durable-submit /
+        cold-start reconciler is wired into the production order flow, the
+        cockpit must not imply that "Re-sync" or runtime RECONCILE refreshes
+        broker state. The honest banner replaces the old button.
+      -->
+      @if (s.live_binding) {
+        <aside class="banner adr-not-wired" role="status" data-testid="adr-0008-not-wired-banner">
+          <p>
+            <strong>Runtime reconcile is not wired yet.</strong>
+            After a crash / restart or any suspected broker drift, stop the
+            bot, verify the broker positions match the cockpit, and only then
+            restart. The bot does not refresh broker state during a live
+            session.
+          </p>
+        </aside>
+      }
+
       @if (runLogTarget) {
         <div class="panel-toolbar">
           <button type="button" class="runlog-link" (click)="openRunLog(runLogTarget)">

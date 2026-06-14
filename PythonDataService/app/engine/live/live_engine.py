@@ -1212,10 +1212,21 @@ class LiveEngine:
                 shutdown_event.set()
                 return {"status": "success", "effect": effect}
             if cmd.verb is CommandVerb.RECONCILE:
-                # Cold-start reconciliation is a boot-time gate; the
-                # bar loop has no runtime equivalent. Ack with noop so
-                # the operator-side surface sees the verb was received.
-                return {"status": "noop_at_runtime", "effect": "reconcile_is_boot_only"}
+                # VCR-0002 / VCR-0008 / Phase 4 — runtime RECONCILE is not
+                # wired. ADR 0008's durable-submit / cold-start reconciler is
+                # implemented but not in the production order flow. Until
+                # Phase 5B promotes this to a real durable "reconcile on next
+                # restart" affordance, this verb is honestly a no-op:
+                # operators must manually verify broker state after restart.
+                #
+                # The verb stays as a backend-compat surface (CLI / panic /
+                # older runners) but the cockpit no longer renders a button
+                # that promises a runtime refresh.
+                return {
+                    "result": "accepted_noop",
+                    "reason": "runtime_reconcile_not_wired",
+                    "manual_action": "restart_required_no_broker_refresh_occurred",
+                }
             return {"status": "error", "effect": f"unknown_verb_{cmd.verb.value}"}
         except Exception as exc:
             logger.exception("command dispatch failed for verb=%s", cmd.verb.value)

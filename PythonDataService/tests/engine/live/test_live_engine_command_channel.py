@@ -207,3 +207,37 @@ async def test_corrupt_command_halts_engine(tmp_path: Path) -> None:
     assert consumed < total_bars // 2, f"consumed {consumed}/{total_bars}; expected early halt"
     # The corrupt file is left in place for the operator to inspect.
     assert (commands_dir / "command.1.PAUSE.pending.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_returns_accepted_noop(tmp_path: Path) -> None:
+    """VCR-0002 / Phase 4 — runtime ``RECONCILE`` is not wired. The bar loop's
+    dispatcher must ack with the structured ``accepted_noop`` shape from the
+    PRD so the cockpit and CLI both stop treating a backend no-op as a
+    successful reconcile. ADR 0008's durable-submit / cold-start reconciler
+    will be promoted to a real "reconcile on next restart" affordance in
+    Phase 5B."""
+    commands_dir = tmp_path / "commands"
+    channel = CommandChannel(commands_dir)
+    channel.write_from_operator(CommandVerb.RECONCILE)
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        command_channel=channel,
+    )
+
+    bars = [_bar(minute) for minute in range(30, 200)]
+    await asyncio.wait_for(engine.run(_NoopStrategy(), iter_bars(bars)), timeout=10.0)
+
+    ack_files = sorted(commands_dir.glob("command.*.RECONCILE.ack.json"))
+    assert ack_files, "RECONCILE pending file must be acked to the .ack.json sidecar"
+    payload = _json.loads(ack_files[0].read_text(encoding="utf-8"))
+    outcome = payload["outcome"]
+    assert outcome["result"] == "accepted_noop"
+    assert outcome["reason"] == "runtime_reconcile_not_wired"
+    assert "restart_required" in outcome["manual_action"]
