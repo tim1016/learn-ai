@@ -369,6 +369,59 @@ class LiveEngine:
         if account_id is None or not account_id.upper().startswith("DU"):
             raise RuntimeError(f"LiveEngine paper runtime requires a DU paper account, got {account_id!r}.")
 
+        # VCR-0006 / Phase 3 — strict ledger↔broker account identity. The
+        # ledger hashes ``account_id`` into ``run_id``, so a deploy-time
+        # identity that disagrees with the runtime-bound account would
+        # silently corrupt every downstream attestation (executions row,
+        # provenance card, reconciliation). Refuse to start; the operator's
+        # next step is to fix IBKR_HOST/client_id or redeploy with the
+        # correct account.
+        from app.engine.live.account_identity import verify_account_match
+
+        verify_account_match(
+            ledger_account_id=self._account_id,
+            connected_account=account_id,
+        )
+
+    def _write_session_metadata_on_start(self) -> None:
+        """VCR-0006 / Phase 3 — persist the verified identity pair to
+        ``session_metadata.json`` so a later audit can reconstruct who the
+        run was actually placing orders for.
+
+        Best-effort: ``_validate_paper_client`` has already enforced the
+        match, so a failure to write the sidecar is a forensic gap but
+        not a runtime hazard. Log loudly and continue.
+        """
+        if self._client is None or self._output_dir is None:
+            return
+        connected_account = self._client.connected_account
+        if not connected_account or not self._account_id:
+            return
+        from app.engine.live.session_metadata import (
+            SESSION_METADATA_SCHEMA_VERSION,
+            SessionMetadata,
+            read_session_metadata,
+            write_session_metadata,
+        )
+
+        existing = read_session_metadata(self._output_dir)
+        connection_epoch = (existing.connection_epoch + 1) if existing else 1
+        metadata = SessionMetadata(
+            schema_version=SESSION_METADATA_SCHEMA_VERSION,
+            ledger_account_id=self._account_id,
+            connected_account=connected_account,
+            session_started_ms=self._session_start_ms,
+            session_ended_ms=None,
+            connection_epoch=connection_epoch,
+        )
+        try:
+            write_session_metadata(self._output_dir, metadata)
+        except OSError:
+            logger.exception(
+                "session_metadata.json write failed; forensic record degraded "
+                "but engine will continue (identity check already passed)"
+            )
+
     async def run(
         self,
         strategy: Strategy,
@@ -400,6 +453,7 @@ class LiveEngine:
             raise ValueError("supply at most one of bars or ibkr_bars")
 
         self._validate_paper_client()
+        self._write_session_metadata_on_start()
         # ADR 0009 — when the resolved live_config carries a sizing policy,
         # construct the policy-application adapter and attach it to the
         # portfolio. ``set_holdings`` then routes through the adapter; legacy

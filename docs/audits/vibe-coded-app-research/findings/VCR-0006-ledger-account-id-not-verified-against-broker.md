@@ -1,15 +1,83 @@
 ---
 id: VCR-0006
 severity: P1
-status: open
+status: partially_remediated
 area: run-ledger
 canonical_file: PythonDataService/app/engine/live/live_engine.py:360
 reference: docs/architecture/adrs/0006-deploy-control-plane-host-daemon-init-ledger.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#495 — Phase 3 — strict ledger↔broker account identity (start-time)"
+follow_up_required: "reconnect re-validation (PRD §11 C) deferred — requires IbkrClient reconnect-lifecycle changes"
 lens: run-ledger-identity-provenance
 dedupe_with_F: none
 confidence: high
+---
+
+## Remediation (#495 / Phase 3) — start-time gate
+
+Closed at the **start path** by issue #495. The reconnect re-validation
+path (PRD §11 C) is captured as a follow-up because hooking the IBKR
+client's auto-reconnect lifecycle requires non-trivial changes to
+``IbkrClient`` that warrant a focused PR; the start-time gate already
+eliminates the primary risk (misconfigured-deploy → wrong-account fills).
+
+What ships:
+
+- ``app/engine/live/account_identity.py`` — pure helpers and typed
+  errors:
+  - ``normalize_account_id`` — ``raw.strip().upper()`` + regex
+    ``^[A-Z][A-Z0-9]+$``. Raises ``InvalidAccountIdError`` on empty /
+    internal whitespace / non-alphanumeric / leading-digit.
+  - ``verify_account_match`` — refuses to proceed unless the normalized
+    ledger and broker accounts agree. Raises
+    ``AccountIdentityMismatchError`` carrying both raw values so the
+    operator's failure list surfaces deploy-time and runtime-bound
+    identities side by side.
+- ``app/engine/live/live_engine.py`` — ``_validate_paper_client`` calls
+  ``verify_account_match`` AFTER the existing paper-sentinel checks but
+  BEFORE strategy initialization (PRD §11 B).
+- ``app/engine/live/session_metadata.py`` — ``SessionMetadata`` +
+  atomic writer / reader. ``LiveEngine`` writes
+  ``artifacts/live_runs/<run_id>/session_metadata.json`` after the
+  identity gate passes; ``connection_epoch`` increments on each
+  subsequent successful session in the same ``run_dir``.
+- ``app/engine/live/run.py`` — ``cmd_start`` catches the two new typed
+  errors AHEAD of the generic ``except Exception``. Exits 1 with
+  ``ExitReason.fatal_halt`` and emits no recovery flatten (touching
+  orders on the wrong account is exactly what the gate prevents).
+
+Regression tests:
+
+- ``tests/engine/live/test_account_identity.py`` — 13 tests covering
+  normalization (case, whitespace, internal whitespace, non-alphanumeric,
+  empty, leading digit), comparison (match, mismatch, no prefix shortcut,
+  malformed either side), and ``LiveEngine`` integration (refuses to
+  start on mismatch, writes session_metadata on match, increments
+  connection_epoch).
+- ``tests/engine/live/test_session_metadata.py`` — round-trip, overwrite,
+  missing-file, corrupt-file, raw-values-persisted.
+
+## Follow-up (deferred to a separate issue)
+
+The reconnect re-check (PRD §11 C) requires:
+
+- A connection-epoch counter on ``IbkrClient`` that increments on each
+  successful (re)connect.
+- A polling hook in ``LiveEngine``'s bar loop (or a callback wired
+  through the error-event handler at codes 1101/1102) that calls
+  ``verify_account_match`` against the broker's currently-bound account.
+- A new ``RECONNECT_ACCOUNT_MISMATCH_HALT`` WAL event (extends
+  ``IntentEventType``) and a ``BROKER_RECONNECTED`` event on a clean
+  rebind.
+- A durable ``desired_state = PAUSED`` write on mismatch, paired with
+  ``halt.flag``.
+
+These pieces depend on the broader ADR-0008 / Phase 5 wiring landing
+first (intent WAL + ownership query). The start-time gate, which is
+where the original $250k-class drift is materially blocked, is the
+high-value half and ships now.
+
 ---
 
 ## What
