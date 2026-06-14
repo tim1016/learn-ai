@@ -651,17 +651,23 @@ def _build_live_state_writer(
 
     def _write(portfolio, bar_close_ms: int) -> None:
         existing = repo.read()
-        # Merge the prior-flush audit rows with whatever the portfolio captured
-        # since, then keep only the last SIZING_AUDIT_CAP. The portfolio's
-        # in-memory list resets per process so it doesn't grow unbounded
-        # across multi-day runs; the sidecar is the persistent home.
-        prior_audit = existing.sizing_resolutions if existing is not None else []
+        # ADR 0009 § 14 + PR6 reviewer fix — the live-state sidecar is keyed
+        # by ``strategy_instance_id``, not ``run_id``. When the operator
+        # re-deploys the same instance with a fresh ``run_id``, the prior
+        # run's audit rows linger on disk and would otherwise pollute the
+        # new Sizing card. Discard them on run_id mismatch; honest empty
+        # beats stale rows from a different policy.
+        if existing is not None and existing.run_id != run_id:
+            prior_audit: list[dict] = []
+        else:
+            prior_audit = existing.sizing_resolutions if existing is not None else []
         new_audit = list(getattr(portfolio, "sizing_resolutions", []))
+        # Merge the prior-flush audit rows with whatever the portfolio
+        # captured since, then keep only the last SIZING_AUDIT_CAP. The
+        # portfolio's in-memory list resets per process so it doesn't grow
+        # unbounded across multi-day runs; the sidecar is the persistent
+        # home.
         combined_audit = (prior_audit + new_audit)[-SIZING_AUDIT_CAP:]
-        # Drain the portfolio's buffer so the next flush captures only fresh
-        # resolutions (otherwise we'd persist the same row on every bar).
-        if hasattr(portfolio, "sizing_resolutions"):
-            portfolio.sizing_resolutions.clear()
         envelope = LiveStateEnvelope(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
@@ -680,6 +686,12 @@ def _build_live_state_writer(
             poisoned_reason=existing.poisoned_reason if existing is not None else None,
         )
         repo.write(envelope)
+        # PR6 reviewer fix — only drain the portfolio's buffer after the
+        # write succeeded. If repo.write raised, the rows stay in memory and
+        # the next flush retries them; clearing pre-write would have lost
+        # them on a transient sidecar I/O failure.
+        if hasattr(portfolio, "sizing_resolutions"):
+            portfolio.sizing_resolutions.clear()
 
     return _write
 
