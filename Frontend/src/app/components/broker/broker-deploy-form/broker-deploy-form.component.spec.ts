@@ -195,6 +195,64 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
+  it('emits a Custom FixedShares policy from the kind/value inputs', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedShares');
+    component.customValue.set('25');
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedShares', value: 25 } });
+  });
+
+  it('emits a Custom FixedNotional policy with the value as a decimal string', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedNotional');
+    component.customValue.set('1500.50');
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedNotional', value: '1500.50' } });
+  });
+
+  it('rejects Custom FixedShares values that parseInt would silently truncate', async () => {
+    const { component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedShares');
+
+    for (const bad of ['1.9', '25abc', '-3', '0', ' 5 5', '']) {
+      component.customValue.set(bad);
+      expect(component.blockedReason()).not.toBeNull();
+      expect(component.canSubmit()).toBe(false);
+    }
+    component.customValue.set('25');
+    expect(component.customSizingError()).toBeNull();
+  });
+
+  it('keeps the submit path safe when Custom sizing is invalid (no busy wedge)', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedNotional');
+    component.customValue.set('not-a-number');
+
+    // submit() short-circuits via canSubmit(); it never throws or sets busy.
+    await component.submit();
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+    expect(component.busy()).toBe(false);
+  });
+
   it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {
     const { component } = setup({
       parityGate: {

@@ -317,5 +317,14 @@ class OrderSizer:
                 order_fee=order_fee,
             )
         if isinstance(policy, FixedNotional):
-            raise SizingKindNotWiredError("FixedNotional", "PR4")
+            if target_fraction == Decimal(0):
+                return 0
+            if reference_price is None:
+                raise ValueError(
+                    "FixedNotional sizing requires a reference price; "
+                    "LivePortfolio must update_reference_price(...) before set_holdings."
+                )
+            qty = int(policy.value / reference_price)
+            # Long-only in v1 — match the FixedShares contract.
+            return max(qty, 0)
         raise SizingKindNotWiredError(type(policy).__name__, "unknown")

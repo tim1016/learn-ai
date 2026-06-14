@@ -122,6 +122,14 @@ export class BrokerDeployFormComponent {
     if (!gate) return 'Pick an audit copy to check Reference parity availability.';
     return gate.detail;
   });
+
+  // PR4 — Custom expansion. The operator picks a kind (FixedShares or
+  // FixedNotional) and a value. The kind dropdown is the canonical name; the
+  // value field accepts plain numbers (FixedShares) or decimal-string-friendly
+  // numbers (FixedNotional). Decimal-on-the-wire is enforced at submit time so
+  // the operator never sees a float at the API boundary.
+  readonly customKind = signal<'FixedShares' | 'FixedNotional'>('FixedShares');
+  readonly customValue = signal<string>('1');
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
   private readonly autoSelectedDeploymentValidationAuditCopy = signal<boolean>(false);
@@ -327,6 +335,11 @@ export class BrokerDeployFormComponent {
       return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
     }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
+    // button disables BEFORE submit() runs; throwing inside submit() would
+    // leave busy=true and the form wedged.
+    const customError = this.customSizingError();
+    if (customError !== null) return customError;
     return null;
   });
 
@@ -457,22 +470,75 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  /** Map the selected preset into the canonical `SizingPolicy`. Reference parity
-   * resolves to `SetHoldings(1.0)` once PR3 lights it up; Custom expands to the
-   * kind dropdown in PR4. For PR1, only Safe canary actually emits a runnable
-   * policy — the others are visually disabled in the template.
-   */
+  /** PR4 reviewer fix — strict integer regex so values like "1.9" or "25abc"
+   * (which `Number.parseInt` happily truncates to 1 or 25) are rejected at
+   * the form boundary, not silently truncated into a live order. */
+  private static readonly FIXED_SHARES_INTEGER_RE = /^[1-9]\d*$/;
+  /** PR4 reviewer fix — strict positive-decimal regex for FixedNotional. The
+   * value travels to Python as a decimal string (no float on the wire), so we
+   * only need to enforce a positive decimal shape here. */
+  private static readonly FIXED_NOTIONAL_DECIMAL_RE = /^(?:\d+\.\d+|\d+\.?|\.\d+)$/;
+
+  /** Validate the Custom preset's raw value against its kind. Returns a
+   * user-facing error string when invalid (rendered via `blockedReason` so the
+   * deploy button disables); returns `null` when the value is acceptable.
+   * Centralizing this here means `submit()` never throws mid-flight after
+   * setting `busy=true` (the PR4 reviewer's wedged-state concern). */
+  readonly customSizingError = computed<string | null>(() => {
+    if (this.sizingPreset() !== 'custom') return null;
+    const raw = this.customValue().trim();
+    if (raw === '') return 'Custom sizing value is required.';
+    if (this.customKind() === 'FixedShares') {
+      if (!BrokerDeployFormComponent.FIXED_SHARES_INTEGER_RE.test(raw)) {
+        return `FixedShares value must be a whole number ≥ 1 (no decimals, letters, or signs). Got "${raw}".`;
+      }
+      const n = Number.parseInt(raw, 10);
+      if (n < 1) return `FixedShares value must be ≥ 1. Got "${raw}".`;
+      return null;
+    }
+    // FixedNotional
+    if (!BrokerDeployFormComponent.FIXED_NOTIONAL_DECIMAL_RE.test(raw)) {
+      return `FixedNotional value must be a positive number. Got "${raw}".`;
+    }
+    const n = Number.parseFloat(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      return `FixedNotional value must be a positive number. Got "${raw}".`;
+    }
+    return null;
+  });
+
+  /** Map the selected preset into the canonical `SizingPolicy`. Custom inputs
+   * are validated upstream by `customSizingError`, which gates `canSubmit` —
+   * so this method only runs when validation already passed and never
+   * throws. */
   private resolveSizingPolicy(): SizingPolicy {
     const preset = this.sizingPreset();
     if (preset === 'reference_parity') {
       return REFERENCE_PARITY_POLICY;
     }
     if (preset === 'custom') {
-      // Placeholder: PR4 wires the custom expansion with the actual operator
-      // input. Until then, Custom is disabled in the template; this branch is
-      // unreachable from the UI.
-      return { kind: 'FixedShares', value: 1 };
+      const raw = this.customValue().trim();
+      if (this.customKind() === 'FixedShares') {
+        return { kind: 'FixedShares', value: Number.parseInt(raw, 10) };
+      }
+      return { kind: 'FixedNotional', value: raw };
     }
     return { kind: 'FixedShares', value: 1 };
+  }
+
+  setCustomKind(e: Event): void {
+    if (!(e.target instanceof HTMLSelectElement)) return;
+    const v = e.target.value;
+    if (v === 'FixedShares' || v === 'FixedNotional') {
+      this.customKind.set(v);
+      // Re-default the value to a sane shape for the kind (1 share / 100 dollars).
+      this.customValue.set(v === 'FixedShares' ? '1' : '100');
+    }
+  }
+
+  setCustomValue(e: Event): void {
+    if (e.target instanceof HTMLInputElement) {
+      this.customValue.set(e.target.value);
+    }
   }
 }
