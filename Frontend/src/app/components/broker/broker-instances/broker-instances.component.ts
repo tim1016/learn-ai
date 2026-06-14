@@ -71,11 +71,12 @@ interface ChecklistRow {
   fix: string;
 }
 
-/** What the per-gate "Fix this" button does. `reconcile` fires the safe RECONCILE
- * command; `set-intent` scrolls to Bot Behavior; `view-log` opens the run-log
- * modal to inspect a halt; `reveal` just expands the written guidance when no
- * one-click remedy exists. */
-type GateActionKind = 'reconcile' | 'set-intent' | 'view-log' | 'reveal';
+/** What the per-gate "Fix this" button does. `set-intent` scrolls to Bot
+ * Behavior so the operator can pick PAUSE/RESUME/STOP; `view-log` opens the
+ * run-log modal to inspect a halt; `reveal` just expands the written guidance
+ * when no one-click remedy exists (the only mode for ``latest_reconcile``
+ * after Phase 4 — runtime reconcile is not wired). */
+type GateActionKind = 'set-intent' | 'view-log' | 'reveal';
 
 interface GateAction {
   kind: GateActionKind;
@@ -130,8 +131,13 @@ const INTENT_CHOICES: readonly IntentChoice[] = [
   { action: 'stop', icon: 'pi pi-stop', label: 'Stop', description: 'Bot will not start at all' },
 ];
 
+// VCR-0002 / Phase 4 — the runtime ``RECONCILE`` affordance is removed
+// because ADR 0008's durable-submit / cold-start reconciler is not yet
+// wired into production order flow. The verb stays as a backend-compat
+// surface (``backend-instances`` / CLI / panic paths) but the cockpit
+// no longer renders a button that promises a runtime refresh; Phase 5B
+// will promote this to a real "reconcile on next restart" affordance.
 const ADVANCED_ACTIONS: readonly AdvancedAction[] = [
-  { verb: 'RECONCILE', label: 'Re-sync account balance with broker', description: 'Safe: refreshes what the bot believes your broker account contains.', tone: 'safe' },
   { verb: 'FLATTEN', label: 'Close all open positions immediately', description: 'Warning: sends a command to flatten positions for this running bot.', tone: 'danger' },
   { verb: 'MARK_POISONED', label: 'Flag this instance as unsafe and halt all trading', description: 'Warning: marks this instance unsafe until an operator investigates.', tone: 'danger' },
 ];
@@ -155,7 +161,10 @@ const GATE_LABELS: Record<string, { label: string; meaning: string; fix: string 
   latest_reconcile: {
     label: 'Account Reconciled',
     meaning: 'The bot confirmed your account balances match expectations.',
-    fix: 'Run Re-sync account balance with broker.',
+    // VCR-0002 / Phase 4 — until ADR 0008 is fully wired, runtime reconcile
+    // is a no-op. The honest fix is restart + manual broker verification;
+    // the cockpit no longer offers a button that pretends otherwise.
+    fix: 'Runtime reconcile is not wired yet. Restart the bot and verify the broker positions match the cockpit before resuming.',
   },
   orders_cap: {
     label: 'Daily Trade Limit Available',
@@ -726,24 +735,20 @@ export class BrokerInstancesComponent {
   }
 
   /** What "Fix this" does for a given gate. Resolved against live status because
-   * the right remedy depends on whether the bot is running (reconcile routes to
-   * a live binding) and whether a run log exists to inspect. */
+   * the right remedy depends on whether the bot is running and whether a run
+   * log exists to inspect. */
   fixAction(row: ChecklistRow, s: LiveInstanceStatus): GateAction {
     switch (row.key) {
       case 'latest_reconcile':
-        // RECONCILE is a command on the live binding — it can't run against a
-        // stopped bot, so fall back to revealing the start-first guidance.
-        if (!s.live_binding) {
-          return {
-            kind: 'reveal',
-            label: 'How to fix',
-            hint: 'Start the bot first — re-sync runs against the live session.',
-          };
-        }
+        // VCR-0002 / Phase 4 — runtime RECONCILE is not wired. The honest
+        // affordance is to reveal the manual-restart guidance; the previous
+        // "Re-sync now" button dispatched a backend no-op that pretended to
+        // refresh state. Phase 5B promotes this to a real "reconcile on next
+        // restart" affordance.
         return {
-          kind: 'reconcile',
-          label: this.busyFixKey() === row.key ? 'Re-syncing…' : 'Re-sync now',
-          disabled: this.busyFixKey() !== null,
+          kind: 'reveal',
+          label: 'How to fix',
+          hint: 'Runtime reconcile is not wired yet. Stop the bot, verify the broker positions match the cockpit, then restart.',
         };
       case 'desired_state':
         return { kind: 'set-intent', label: 'Set bot intent' };
@@ -763,9 +768,6 @@ export class BrokerInstancesComponent {
   runFix(row: ChecklistRow, s: LiveInstanceStatus): void {
     const action = this.fixAction(row, s);
     switch (action.kind) {
-      case 'reconcile':
-        void this.runReconcileFix();
-        return;
       case 'set-intent':
         this.scrollToBehavior();
         return;
@@ -778,29 +780,6 @@ export class BrokerInstancesComponent {
       case 'reveal':
         this.toggleGuidance(row.key);
         return;
-    }
-  }
-
-  /** One-click remedy for the Account-Reconciled gate: issue RECONCILE to the
-   * bound run and report the outcome inline on the checklist (not in the
-   * Advanced card, where the operator who clicked "Re-sync now" wouldn't see it). */
-  private async runReconcileFix(): Promise<void> {
-    const id = this.selectedInstanceId();
-    if (id === null) return;
-    this.busyFixKey.set('latest_reconcile');
-    this.fixError.set(null);
-    this.fixNotice.set(null);
-    try {
-      await this.svc.issueInstanceCommand(id, { verb: 'RECONCILE' });
-      if (this.selectedInstanceId() === id) {
-        this.fixNotice.set('Re-sync requested — the bot refreshes account balances on its next loop.');
-        this.commands.reload();
-        this.status.reload();
-      }
-    } catch (err) {
-      if (this.selectedInstanceId() === id) this.fixError.set(toOperationError('reconcile', err));
-    } finally {
-      this.busyFixKey.set(null);
     }
   }
 

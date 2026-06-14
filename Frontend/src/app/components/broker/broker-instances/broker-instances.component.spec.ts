@@ -691,7 +691,11 @@ describe('BrokerInstancesComponent', () => {
     return buttons.find((b) => b.textContent?.includes(text)) as HTMLElement | undefined;
   }
 
-  it('issues RECONCILE and confirms inline when "Re-sync now" is clicked on the reconcile gate', async () => {
+  // VCR-0002 / VCR-0008 / Phase 4 — runtime RECONCILE is not wired. The
+  // cockpit no longer renders a "Re-sync now" button on the reconcile gate;
+  // the only affordance is "How to fix" which reveals the manual-restart
+  // guidance.
+  it('reveals manual-restart guidance for the reconcile gate (does not dispatch RECONCILE)', async () => {
     const { fixture, component, svc } = setup();
     svc.getInstanceStatus.mockResolvedValue(reconcileGateStatus());
     await flush();
@@ -702,21 +706,19 @@ describe('BrokerInstancesComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    const btn = findFixButton(fixture, 'Re-sync now');
+    expect(findFixButton(fixture, 'Re-sync now')).toBeUndefined();
+    const btn = findFixButton(fixture, 'How to fix');
     expect(btn).toBeTruthy();
     btn?.click();
-    await flush();
     fixture.detectChanges();
 
-    expect(svc.issueInstanceCommand).toHaveBeenCalledWith('spy_ema_paper', { verb: 'RECONCILE' });
-    expect(fixture.nativeElement.textContent).toContain('Re-sync requested');
+    expect(svc.issueInstanceCommand).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).toContain('Runtime reconcile is not wired');
   });
 
-  it('does not issue RECONCILE for the reconcile gate when the bot is not live — it reveals start-first guidance', async () => {
+  it('renders the ADR 0008 not-wired banner whenever a live binding exists', async () => {
     const { fixture, component, svc } = setup();
-    svc.getInstanceStatus.mockResolvedValue(
-      reconcileGateStatus({ process: { state: 'idle' }, live_binding: null }),
-    );
+    svc.getInstanceStatus.mockResolvedValue(reconcileGateStatus());
     await flush();
     fixture.detectChanges();
 
@@ -725,13 +727,28 @@ describe('BrokerInstancesComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    const btn = findFixButton(fixture, 'How to fix');
-    expect(btn).toBeTruthy();
-    btn?.click();
+    const banner = fixture.nativeElement.querySelector('[data-testid="adr-0008-not-wired-banner"]');
+    expect(banner).toBeTruthy();
+    expect(banner?.textContent).toContain('Runtime reconcile is not wired yet');
+  });
+
+  it('does not offer RECONCILE in the Advanced Actions list', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(reconcileGateStatus());
+    await flush();
     fixture.detectChanges();
 
-    expect(svc.issueInstanceCommand).not.toHaveBeenCalled();
-    expect(fixture.nativeElement.textContent).toContain('Start the bot first');
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const advancedButtons = Array.from(
+      fixture.nativeElement.querySelectorAll('.advanced-actions button'),
+    ) as HTMLElement[];
+    const labels = advancedButtons.map((b) => b.textContent ?? '');
+    expect(labels.some((l) => l.includes('Re-sync'))).toBe(false);
+    expect(labels.some((l) => l.includes('Close all open positions'))).toBe(true);
   });
 
   it('opens the run-log modal from the persistent toolbar and renders log lines', async () => {
