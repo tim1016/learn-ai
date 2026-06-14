@@ -1748,6 +1748,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     start.add_argument(
+        "--sibling-all-in-symbols",
+        default=None,
+        help=(
+            "Comma-separated symbols where sibling managed instances on this account "
+            "currently hold SetHoldings(1.0) (injected by the host daemon). The "
+            "ADR 0009 § 9 / Decision 13 coexistence guard refuses to start a "
+            "SetHoldings(1.0) run on any symbol in this set; FixedShares / "
+            "FixedNotional starts are never blocked."
+        ),
+    )
+    start.add_argument(
         "--artifacts-root",
         type=Path,
         default=Path("PythonDataService/artifacts"),

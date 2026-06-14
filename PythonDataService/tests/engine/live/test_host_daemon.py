@@ -853,6 +853,117 @@ async def test_qc_audit_copies_excludes_untracked_files(
     assert "references/qc-shadow/UncommittedAlgorithm.py" not in entries  # untracked
 
 
+def test_build_start_command_passes_sibling_all_in_symbols(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """ADR 0009 PR5 reviewer fix — the host-runner start command now carries
+    --sibling-all-in-symbols so cmd_start's coexistence guard can detect a
+    sibling SetHoldings(1.0) instance even before the broker observes its
+    exposure."""
+    from app.schemas.live_runs import HostRunnerStartRequest
+
+    manager, run_dir = daemon_context
+    request = HostRunnerStartRequest(
+        readonly=True,
+        hydrate_policy="optional",
+        strategy="spy_ema_crossover",
+        max_orders_per_day=3,
+        ibkr_host="127.0.0.1",
+    )
+    command = manager._build_start_command(
+        run_dir,
+        request,
+        managed_symbols={"AAPL"},
+        sibling_all_in_symbols={"SPY"},
+    )
+    assert "--sibling-all-in-symbols" in command
+    idx = command.index("--sibling-all-in-symbols")
+    assert command[idx + 1] == "SPY"
+    # The unrelated managed-symbols arg still rides through too.
+    assert "--managed-symbols" in command
+
+
+def test_build_start_command_omits_sibling_all_in_when_empty(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    from app.schemas.live_runs import HostRunnerStartRequest
+
+    manager, run_dir = daemon_context
+    request = HostRunnerStartRequest(strategy="spy_ema_crossover")
+    command = manager._build_start_command(
+        run_dir,
+        request,
+        managed_symbols=set(),
+        sibling_all_in_symbols=set(),
+    )
+    assert "--sibling-all-in-symbols" not in command
+
+
+def test_sibling_all_in_symbols_detects_set_holdings_full(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sibling whose ledger pins SetHoldings(1.0) contributes its symbol;
+    a sibling with FixedShares contributes nothing.
+    """
+    from app.engine.live.host_daemon import ManagedProcess
+
+    manager, _ = daemon_context
+
+    # Bypass the real Pydantic spec loader: the test only exercises the
+    # sizing-shape filter; symbol resolution is a separate concern verified
+    # elsewhere.
+    monkeypatch.setattr(
+        manager,
+        "_resolve_symbol",
+        lambda run_dir: json.loads((run_dir / "run_ledger.json").read_text())
+        .get("live_config", {})
+        .get("symbol"),
+    )
+
+    def _write_sibling(key: str, sizing: dict | None, symbol: str) -> ManagedProcess:
+        run_id = "sib-" + key + "a" * (60 - len(key))
+        rdir = manager.live_runs_root / run_id
+        rdir.mkdir(parents=True)
+        ledger = {
+            "schema_version": "1.3",
+            "run_id": run_id,
+            "code_sha": "abc",
+            "strategy_spec_path": "PythonDataService/spec.json",
+            "strategy_spec_sha256": "x" * 64,
+            "qc_audit_copy_path": "references/qc-shadow/X.py",
+            "qc_audit_copy_sha256": "y" * 64,
+            "qc_cloud_backtest_id": "bt-1",
+            "account_id": "DU111",
+            "start_date_ms": 0,
+            "live_config": {"symbol": symbol, **({"sizing": sizing} if sizing else {})},
+            "created_at_ms": 0,
+        }
+        (rdir / "run_ledger.json").write_text(json.dumps(ledger), encoding="utf-8")
+        log_path = rdir / "host_daemon.log"
+        managed = ManagedProcess(
+            strategy_instance_id=key,
+            run_id=run_id,
+            run_dir=rdir,
+            process=FakeProcess(),
+            command=[],
+            started_at_ms=0,
+            log_path=log_path,
+            log_handle=log_path.open("a", encoding="utf-8"),
+        )
+        manager._managed[key] = managed
+        return managed
+
+    _write_sibling("sib_full", {"kind": "SetHoldings", "fraction": "1.0"}, "SPY")
+    _write_sibling("sib_canary", {"kind": "FixedShares", "value": 1}, "QQQ")
+    _write_sibling("sib_legacy", None, "TSLA")
+
+    # `_sibling_all_in_symbols(key)` excludes the key from its own scan; pass a
+    # synthetic excluded key so all three siblings are surveyed.
+    all_in = manager._sibling_all_in_symbols("self")
+    assert all_in == {"SPY"}
+
+
 async def test_qc_audit_copies_empty_when_dir_absent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "PythonDataService").mkdir(parents=True)
