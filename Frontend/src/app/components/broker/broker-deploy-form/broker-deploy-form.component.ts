@@ -335,6 +335,11 @@ export class BrokerDeployFormComponent {
       return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
     }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
+    // button disables BEFORE submit() runs; throwing inside submit() would
+    // leave busy=true and the form wedged.
+    const customError = this.customSizingError();
+    if (customError !== null) return customError;
     return null;
   });
 
@@ -465,11 +470,47 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  /** Map the selected preset into the canonical `SizingPolicy`. Reference
-   * parity routes through `SetHoldings(1.0)` (gated server-side). Custom
-   * resolves the operator's kind + value, validating that the value parses
-   * as a positive number for FixedShares (integer ≥ 1) and as a positive
-   * decimal string for FixedNotional. */
+  /** PR4 reviewer fix — strict integer regex so values like "1.9" or "25abc"
+   * (which `Number.parseInt` happily truncates to 1 or 25) are rejected at
+   * the form boundary, not silently truncated into a live order. */
+  private static readonly FIXED_SHARES_INTEGER_RE = /^[1-9]\d*$/;
+  /** PR4 reviewer fix — strict positive-decimal regex for FixedNotional. The
+   * value travels to Python as a decimal string (no float on the wire), so we
+   * only need to enforce a positive decimal shape here. */
+  private static readonly FIXED_NOTIONAL_DECIMAL_RE = /^(?:\d+\.\d+|\d+\.?|\.\d+)$/;
+
+  /** Validate the Custom preset's raw value against its kind. Returns a
+   * user-facing error string when invalid (rendered via `blockedReason` so the
+   * deploy button disables); returns `null` when the value is acceptable.
+   * Centralizing this here means `submit()` never throws mid-flight after
+   * setting `busy=true` (the PR4 reviewer's wedged-state concern). */
+  readonly customSizingError = computed<string | null>(() => {
+    if (this.sizingPreset() !== 'custom') return null;
+    const raw = this.customValue().trim();
+    if (raw === '') return 'Custom sizing value is required.';
+    if (this.customKind() === 'FixedShares') {
+      if (!BrokerDeployFormComponent.FIXED_SHARES_INTEGER_RE.test(raw)) {
+        return `FixedShares value must be a whole number ≥ 1 (no decimals, letters, or signs). Got "${raw}".`;
+      }
+      const n = Number.parseInt(raw, 10);
+      if (n < 1) return `FixedShares value must be ≥ 1. Got "${raw}".`;
+      return null;
+    }
+    // FixedNotional
+    if (!BrokerDeployFormComponent.FIXED_NOTIONAL_DECIMAL_RE.test(raw)) {
+      return `FixedNotional value must be a positive number. Got "${raw}".`;
+    }
+    const n = Number.parseFloat(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      return `FixedNotional value must be a positive number. Got "${raw}".`;
+    }
+    return null;
+  });
+
+  /** Map the selected preset into the canonical `SizingPolicy`. Custom inputs
+   * are validated upstream by `customSizingError`, which gates `canSubmit` —
+   * so this method only runs when validation already passed and never
+   * throws. */
   private resolveSizingPolicy(): SizingPolicy {
     const preset = this.sizingPreset();
     if (preset === 'reference_parity') {
@@ -478,18 +519,7 @@ export class BrokerDeployFormComponent {
     if (preset === 'custom') {
       const raw = this.customValue().trim();
       if (this.customKind() === 'FixedShares') {
-        const n = Number.parseInt(raw, 10);
-        if (!Number.isFinite(n) || n < 1) {
-          throw new Error(`FixedShares value must be an integer ≥ 1, got "${raw}"`);
-        }
-        return { kind: 'FixedShares', value: n };
-      }
-      // FixedNotional ships the decimal as a string verbatim — Python's
-      // Pydantic discriminated union rejects raw floats. We only sanity-check
-      // here that the value parses as a positive number.
-      const n = Number.parseFloat(raw);
-      if (!Number.isFinite(n) || n <= 0) {
-        throw new Error(`FixedNotional value must be a positive number, got ${raw}`);
+        return { kind: 'FixedShares', value: Number.parseInt(raw, 10) };
       }
       return { kind: 'FixedNotional', value: raw };
     }
