@@ -348,6 +348,12 @@ class LiveEngine:
         # invokes ``_flatten`` without terminating the process. The flag is
         # cleared after the flatten lands so a subsequent enqueue rearms it.
         self._flatten_now_requested = False
+        # VCR-0018-F / Phase 6C — engine-level force-flat enforcement.
+        # Mirrors the local ``last_force_flat_date == minute_bar.time.date()``
+        # check, surfaced as instance state so ``_submit_pending_with_meta``
+        # can drop strategy-emitted orders at the engine boundary instead
+        # of relying on the strategy to remember to suppress.
+        self._force_flat_active = False
         # Decision-row provenance.
         self._run_id = run_id
         self._strategy_key = strategy_key
@@ -594,6 +600,11 @@ class LiveEngine:
                 if current_session_date is None or bar_date != current_session_date:
                     orders_submitted_today = 0
                     current_session_date = bar_date
+                    # VCR-0018-F / Phase 6C — clear the engine-level
+                    # force-flat flag on session-date boundary so a new
+                    # session can trade normally until the next force-flat
+                    # barrier fires.
+                    self._force_flat_active = False
                 await self._process_replay_broker_bar(minute_bar)
                 for event in self._drain_replay_order_events():
                     portfolio.record_broker_fill(event)
@@ -686,6 +697,12 @@ class LiveEngine:
                             )
                         ctx.log(f"[FORCE-FLAT] {minute_bar.time}: submitted {liquidations} liquidation order(s)")
                     strategy.on_force_flat()
+                    # VCR-0018-F / Phase 6C — engine-level enforcement.
+                    # Once force-flat fires this session, any further order
+                    # the strategy emits is dropped at the engine boundary.
+                    # The flag mirrors ``last_force_flat_date`` so the
+                    # session-date boundary reset clears it.
+                    self._force_flat_active = True
                     last_force_flat_date = minute_bar.time.date()
                     # NEW: indicator-state checkpoint at force-flat.
                     ctx.maybe_write_indicator_state(
@@ -1130,6 +1147,26 @@ class LiveEngine:
         """
         pending_snapshot = list(portfolio.pending_orders)
         if self._readonly:
+            portfolio.pending_orders.clear()
+            return []
+        # VCR-0018-F / Phase 6C — engine-level force-flat enforcement.
+        # ``self._force_flat_active`` is set when the force-flat barrier
+        # fires for this session date; until the next session, any order
+        # the strategy emits is dropped at the engine boundary with a
+        # structured log event. A strategy that "forgets" to suppress
+        # cannot get an order through; the per-strategy suppression code
+        # remains as defense-in-depth.
+        if self._force_flat_active and pending_snapshot:
+            for order in pending_snapshot:
+                logger.warning(
+                    "[FORCE_FLAT_DROP] strategy=%s symbol=%s qty=%s tag=%s — order "
+                    "dropped at engine boundary because force-flat is active for "
+                    "this session",
+                    self._strategy_key,
+                    order.symbol,
+                    order.quantity,
+                    order.tag,
+                )
             portfolio.pending_orders.clear()
             return []
         acks = await portfolio.submit_pending_orders()
