@@ -297,10 +297,27 @@ class HostRunnerStopRequest(BaseModel):
 
 
 class HostRunnerActionResponse(BaseModel):
-    """Response for daemon start/stop actions."""
+    """Response for daemon start/stop actions.
+
+    VCR-0018-B / Phase 6B — ``accepted`` historically conflated
+    "signal accepted by the OS" with "process actually exited". The Stop
+    path now distinguishes the two so the cockpit can render them as
+    separate stages:
+
+    - ``command_id`` is a stable per-stop identifier returned immediately
+      on signal acceptance.
+    - ``stop_outcome`` is the deferred outcome carried in the same
+      response. Values: ``"signal_accepted"``, ``"exited"``,
+      ``"still_running_after_2s"``. None for non-stop actions.
+    - ``exit_reason`` carries the run's documented exit reason when the
+      process actually exits.
+    """
 
     accepted: bool
     process: HostRunnerProcessStatus
+    command_id: str | None = None
+    stop_outcome: str | None = None
+    exit_reason: str | None = None
 
 
 class HostRunnerDeployRequest(BaseModel):
