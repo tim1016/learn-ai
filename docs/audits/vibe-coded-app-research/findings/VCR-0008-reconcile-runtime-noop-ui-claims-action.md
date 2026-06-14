@@ -1,15 +1,45 @@
 ---
 id: VCR-0008
 severity: P1
-status: open
+status: remediated
 area: ui-runtime-claims
 canonical_file: PythonDataService/app/engine/live/live_engine.py:1086
 reference: docs/architecture/adrs/0005-engine-authored-readiness-two-altitude-broker-ownership.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#496 — Phase 4 — Remove runtime RECONCILE affordance + ADR 0008 banner"
 lens: halt-pause-stop-flatten-poison
 dedupe_with_F: none
 confidence: high
+---
+
+## Remediation (#496 / Phase 4)
+
+Closed by issue #496. The cockpit no longer renders the "Re-sync now"
+button or routes the per-gate "Fix this" affordance through ``RECONCILE``;
+the runtime verb on ``command_channel`` is kept as a backend-compat
+surface but its dispatcher returns the structured no-op the PRD
+specifies:
+
+```json
+{"result": "accepted_noop",
+ "reason": "runtime_reconcile_not_wired",
+ "manual_action": "restart_required_no_broker_refresh_occurred"}
+```
+
+The ``latest_reconcile`` gate's "Fix this" now reveals manual-restart
+guidance instead of dispatching. Active runs render a banner above the
+dashboard repeating the same wording so an operator who does not click
+"Fix this" still sees the contract:
+
+> Runtime reconcile is not wired yet. After a crash / restart or any
+> suspected broker drift, stop the bot, verify the broker positions
+> match the cockpit, and only then restart.
+
+Phase 5B will promote this to a real durable "Schedule reconcile on
+next restart" affordance once ``ColdStartReconciler.verify()`` is
+wired into ``cmd_start``.
+
 ---
 
 ## What
