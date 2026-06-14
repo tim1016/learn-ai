@@ -23,6 +23,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.safety_verdict import BrokerSafetyVerdict
+
 OptionRight = Literal["C", "P"]
 
 
@@ -606,6 +608,11 @@ class IbkrConnectionHealth(BaseModel):
     The router never raises on disconnect; it returns this with
     ``connected=False`` so the UI can render the disconnected state and
     surface a reconnect button.
+
+    Phase 7A / VCR-0010 / ADR 0011 — ``safety_verdict`` is the structured
+    paper-mode safety verdict the cockpit hero binds to. Derivation is
+    fail-closed: the hero never claims ``paper-only`` unless every gate
+    positively confirms it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -621,6 +628,7 @@ class IbkrConnectionHealth(BaseModel):
     is_paper: bool | None = None
     server_version: int | None = None
     fetched_at_ms: int
+    safety_verdict: BrokerSafetyVerdict | None = None
 
 
 __all__ = [
