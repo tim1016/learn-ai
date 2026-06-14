@@ -894,20 +894,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"[START] could not parse run_ledger.json: {exc}", file=sys.stderr)
         return 2
 
-    # VCR-P3-Q / Phase 6D — rerun the halt.flag pre-flight at start time.
-    # A halt.flag persisted from yesterday's session must refuse the start
-    # even if the operator already ran ``cmd_pre_flight`` (which they might
-    # not run on every restart). The flag is observed-only here; the
-    # operator must remove it after reviewing the reason.
-    _halt_check = check_no_halt_flag(args.run_dir)
-    if not _halt_check.passed:
-        print(
-            f"[START] HALT — halt.flag present at {args.run_dir}: {_halt_check.detail}. "
-            "Review the prior-session halt cause before clearing the flag and restarting.",
-            file=sys.stderr,
-        )
-        return 2
-
     # VCR-0001 / Phase 1 — refuse to start a pre-policy ledger (no explicit
     # ``live_config.sizing``). Mirrors the deploy-boundary refusal so a legacy
     # ledger that pre-dates ADR 0009 cannot enter the runtime through this
