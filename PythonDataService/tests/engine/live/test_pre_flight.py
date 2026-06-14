@@ -620,3 +620,39 @@ def test_all_in_coexistence_fails_when_broker_unreachable() -> None:
     )
     assert not result.passed
     assert result.data["reason"] == "broker_unreachable"
+
+
+# ─────────────── Phase 1 / VCR-0001 — sizing policy present ──────────
+
+
+def test_sizing_policy_present_passes_for_safe_canary() -> None:
+    """The Safe canary (``FixedShares(1)``) — the deploy-form default — is the
+    canonical pass case for the new pre-flight check."""
+    from app.engine.live.pre_flight import check_sizing_policy_present
+
+    result = check_sizing_policy_present(
+        {"sizing": {"kind": "FixedShares", "value": 1}}
+    )
+    assert result.passed
+    assert result.name == "sizing_policy_present"
+
+
+def test_sizing_policy_present_fails_for_legacy_ledger() -> None:
+    """A pre-policy ledger (no ``sizing`` key) fails the gate — the runner must
+    refuse to start, and the operator's next step is to redeploy with an explicit
+    policy."""
+    from app.engine.live.pre_flight import check_sizing_policy_present
+
+    result = check_sizing_policy_present({})
+    assert not result.passed
+    assert "redeploy" in result.detail.lower()
+
+
+def test_sizing_policy_present_fails_when_sibling_keys_only() -> None:
+    """``live_config`` carrying siblings without ``sizing`` is the same legacy
+    case — fail closed."""
+    from app.engine.live.pre_flight import check_sizing_policy_present
+
+    result = check_sizing_policy_present({"symbol": "SPY"})
+    assert not result.passed
+    assert "redeploy" in result.detail.lower()

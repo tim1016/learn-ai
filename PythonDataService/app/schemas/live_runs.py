@@ -332,27 +332,43 @@ class HostRunnerDeployRequest(BaseModel):
     @field_validator("live_config", mode="after")
     @classmethod
     def _validate_sizing(cls, value: dict) -> dict:
-        """ADR 0009 — validate ``live_config.sizing`` at the deploy boundary.
+        """ADR 0009 / VCR-0001 — enforce an explicit sizing policy at the
+        deploy boundary.
 
-        ``HostRunnerDeployRequest.live_config`` is intentionally an open dict
-        (the schema doesn't lock every key); but the ``sizing`` sub-field, if
-        present, must round-trip through the ``SizingPolicy`` discriminated
-        union. Catching a malformed policy at the API boundary keeps a bad
-        canonical form from being hashed into ``run_id`` and persisted.
+        Phase 1 closes the back door that let an empty ``live_config`` fall
+        through to legacy ``SimpleFloorSizing`` (the ``set_holdings(SPY, 1.0)``
+        → all-in path). New deploys must carry ``live_config.sizing`` and may
+        only use the keys ``_live_config_from_ledger`` knows how to round-trip
+        — anything else would be hashed into ``run_id`` and then refused at
+        start, leaving an unstartable ledger on disk.
+
+        Three gates:
+
+        1. ``sizing`` is required. Empty / missing rejects.
+        2. Unknown sibling keys reject (mirrors the ledger reader's allow-list).
+        3. ``sizing`` round-trips through the ``SizingPolicy`` discriminated
+           union and is re-serialized via ``policy_to_ledger_dict`` so the hash
+           stays stable regardless of how the operator stringified ``Decimal``.
         """
         if not isinstance(value, dict):
-            return value
-        sizing = value.get("sizing")
-        if sizing is None:
             return value
         from app.engine.execution.order_sizer import (
             parse_sizing_policy,
             policy_to_ledger_dict,
         )
+        from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS
 
+        unknown = set(value.keys()) - LIVE_CONFIG_LEDGER_KEYS
+        if unknown:
+            raise ValueError(f"unknown live_config keys: {sorted(unknown)}")
+        sizing = value.get("sizing")
+        if sizing is None:
+            raise ValueError(
+                "live_config.sizing is required — Phase 1 / ADR 0009 closes the "
+                "empty-live_config back door (VCR-0001). Submit an explicit "
+                "policy (Safe canary: {'sizing': {'kind': 'FixedShares', 'value': 1}})."
+            )
         policy = parse_sizing_policy(sizing)
-        # Re-serialize via the policy's canonical form so the hash stays stable
-        # regardless of how the operator stringified ``Decimal`` on the wire.
         value["sizing"] = policy_to_ledger_dict(policy)
         return value
 

@@ -61,7 +61,9 @@ from app.engine.live.deploy import (
     DirtyTreeError,
     GitUnavailableError,
     RunAlreadyExistsError,
+    SizingPolicyMissingError,
     SpecOrAuditMissingError,
+    UnknownLiveConfigKeyError,
     deploy_run,
 )
 from app.engine.live.pre_flight import (
@@ -139,6 +141,12 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
         return 1
     except SpecOrAuditMissingError as exc:
         print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
+        return 2
+    except SizingPolicyMissingError as exc:
+        print(f"[INIT-LEDGER] {exc}", file=sys.stderr)
+        return 2
+    except UnknownLiveConfigKeyError as exc:
+        print(f"[INIT-LEDGER] {exc}", file=sys.stderr)
         return 2
     except DeployIOError as exc:
         print(f"[INIT-LEDGER] filesystem error: {exc}", file=sys.stderr)
@@ -865,6 +873,25 @@ def cmd_start(args: argparse.Namespace) -> int:
         ledger = read_ledger(ledger_path)
     except (OSError, ValueError) as exc:
         print(f"[START] could not parse run_ledger.json: {exc}", file=sys.stderr)
+        return 2
+
+    # VCR-0001 / Phase 1 — refuse to start a pre-policy ledger (no explicit
+    # ``live_config.sizing``). Mirrors the deploy-boundary refusal so a legacy
+    # ledger that pre-dates ADR 0009 cannot enter the runtime through this
+    # path. There is no ``--allow-pre-policy-sizing`` override: ``live_config``
+    # is hashed into ``run_id``, so a start-time effective-sizing change would
+    # make the identity fingerprint dishonest. The read-only cockpit / Sizing-
+    # card path still loads legacy ledgers via ``_live_config_from_ledger``.
+    ledger_live_config = ledger.live_config if isinstance(ledger.live_config, dict) else {}
+    if ledger_live_config.get("sizing") is None:
+        print(
+            "[START] HALT — live_config.sizing is missing from the ledger "
+            "(pre-policy / VCR-0001). Phase 1 / ADR 0009 requires every new "
+            "run to carry an explicit sizing policy. Redeploy with an "
+            "explicit policy (Safe canary: "
+            "{'sizing': {'kind': 'FixedShares', 'value': 1}}).",
+            file=sys.stderr,
+        )
         return 2
 
     # Foot-gun guard (#416): the algorithm is imported purely from --strategy,

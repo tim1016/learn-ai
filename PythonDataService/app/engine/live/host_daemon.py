@@ -40,7 +40,9 @@ from app.engine.live.deploy import (
     GitUnavailableError,
     InvalidInstanceIdError,
     RunAlreadyExistsError,
+    SizingPolicyMissingError,
     SpecOrAuditMissingError,
+    UnknownLiveConfigKeyError,
     deploy_run,
     git_head_sha,
 )
@@ -453,6 +455,14 @@ class RunnerProcessManager:
         except ExplicitSurfaceSizingMismatchError as exc:
             raise HostRunnerError(
                 status.HTTP_400_BAD_REQUEST, f"Invalid sizing policy: {exc}"
+            ) from exc
+        except SizingPolicyMissingError as exc:
+            raise HostRunnerError(
+                status.HTTP_400_BAD_REQUEST, f"Sizing policy required: {exc}"
+            ) from exc
+        except UnknownLiveConfigKeyError as exc:
+            raise HostRunnerError(
+                status.HTTP_400_BAD_REQUEST, f"Unknown live_config key: {exc}"
             ) from exc
         except SpecOrAuditMissingError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc

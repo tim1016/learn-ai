@@ -303,7 +303,7 @@ def test_init_ledger_succeeds_in_clean_tree(repo_with_inputs: tuple[Path, Path, 
             "--start-date-ms",
             "1700000000000",
             "--live-config-json",
-            '{"symbol": "SPY"}',
+            '{"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}}',
             "--run-root",
             str(tmp_path / "live_runs"),
         ]
@@ -315,7 +315,10 @@ def test_init_ledger_succeeds_in_clean_tree(repo_with_inputs: tuple[Path, Path, 
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["account_id"] == "DU111"
-    assert ledger["live_config"] == {"symbol": "SPY"}
+    assert ledger["live_config"] == {
+        "symbol": "SPY",
+        "sizing": {"kind": "FixedShares", "value": 1},
+    }
     assert ledger["run_id"] == runs[0].name
 
 
@@ -371,6 +374,8 @@ def test_init_ledger_writes_strategy_instance_id(
             "spy-ema-paper-1",
             "--start-date-ms",
             "1700000000000",
+            "--live-config-json",
+            '{"sizing": {"kind": "FixedShares", "value": 1}}',
             "--run-root",
             str(tmp_path / "live_runs"),
         ]
@@ -413,6 +418,8 @@ def test_init_ledger_writes_strategy_key(
             "spy_ema_crossover",
             "--start-date-ms",
             "1700000000000",
+            "--live-config-json",
+            '{"sizing": {"kind": "FixedShares", "value": 1}}',
             "--run-root",
             str(tmp_path / "live_runs"),
         ]
@@ -485,6 +492,8 @@ def test_init_ledger_refuses_existing_run_dir_without_force(
         "DU111",
         "--start-date-ms",
         "1700000000000",
+        "--live-config-json",
+        '{"sizing": {"kind": "FixedShares", "value": 1}}',
         "--run-root",
         str(tmp_path / "live_runs"),
     ]
@@ -772,7 +781,7 @@ def _write_ledger_with_strategy_key(tmp_path: Path, strategy_key: str) -> Path:
         qc_cloud_backtest_id="bt-test-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
         strategy_key=strategy_key,
     )
     run_dir = tmp_path / ledger.run_id
@@ -1006,7 +1015,7 @@ def test_hydration_failure_exits_code_4(tmp_path: Path) -> None:
         account_id="DU123",
         # A past date so NYSE calendar can find a prior session.
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -1067,7 +1076,7 @@ def test_stateless_strategy_starts_under_require_without_seed_day(tmp_path: Path
         qc_cloud_backtest_id="bt-stateless-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -1176,7 +1185,7 @@ def test_deployment_validation_completes_clean_session_offline(tmp_path: Path) -
         qc_cloud_backtest_id="bt-clean-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -1246,7 +1255,7 @@ def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> N
         qc_cloud_backtest_id="bt-connect-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -1307,7 +1316,7 @@ def test_fetch_positions_failure_writes_terminal_status_and_exits_3(tmp_path: Pa
         qc_cloud_backtest_id="bt-fetchfail-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -1368,7 +1377,7 @@ def test_unexpected_position_halt_writes_terminal_status_and_exits_1(tmp_path: P
         qc_cloud_backtest_id="bt-foreign-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)
@@ -1552,7 +1561,7 @@ def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: py
                 "qc_cloud_backtest_id": "bt",
                 "account_id": "DU111",
                 "start_date_ms": 1700000000000,
-                "live_config": {},
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
                 "created_at_ms": 1700000000000,
             }
         ),
@@ -1589,3 +1598,182 @@ def test_make_ibkr_client_pins_spec_client_id() -> None:
     # Omitted (None) ⇒ fall back to the env/default clientId, not 11.
     fallback = _make_ibkr_client(None)
     assert fallback.settings.client_id != 11
+
+
+# ─────────────── Phase 1 / VCR-0001 — cmd_start refusal ──────────────
+
+
+def test_start_refuses_legacy_ledger_without_sizing(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """VCR-0001 / Phase 1 — a pre-policy ledger (no ``live_config.sizing``) is
+    read-only. ``cmd_start`` must refuse to bring it up; the operator's next
+    step is to redeploy with an explicit policy. There is no override flag —
+    ``live_config`` is hashed into ``run_id``, so a start-time effective-sizing
+    change would make the identity fingerprint dishonest."""
+    import json as _json
+
+    (tmp_path / "run_ledger.json").write_text(
+        _json.dumps(
+            {
+                "schema_version": "1.0",
+                "run_id": "legacy",
+                "code_sha": "abc",
+                "strategy_spec_path": "/x",
+                "strategy_spec_sha256": "y",
+                "qc_audit_copy_path": "/x",
+                "qc_audit_copy_sha256": "z",
+                "qc_cloud_backtest_id": "bt",
+                "account_id": "DU111",
+                "start_date_ms": 1700000000000,
+                "live_config": {},
+                "created_at_ms": 1700000000000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = main(
+        [
+            "start",
+            "--run-dir",
+            str(tmp_path),
+            "--strategy",
+            "spy_ema_crossover",
+            "--readonly",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "live_config.sizing is missing" in err
+    assert "redeploy" in err.lower()
+
+
+def test_start_refuses_ledger_with_sibling_keys_but_no_sizing(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A pre-policy ledger that carries siblings (e.g. ``symbol``) but no
+    ``sizing`` is the same legacy case — refuse to start."""
+    import json as _json
+
+    (tmp_path / "run_ledger.json").write_text(
+        _json.dumps(
+            {
+                "schema_version": "1.0",
+                "run_id": "legacy-sibling",
+                "code_sha": "abc",
+                "strategy_spec_path": "/x",
+                "strategy_spec_sha256": "y",
+                "qc_audit_copy_path": "/x",
+                "qc_audit_copy_sha256": "z",
+                "qc_cloud_backtest_id": "bt",
+                "account_id": "DU111",
+                "start_date_ms": 1700000000000,
+                "live_config": {"symbol": "SPY"},
+                "created_at_ms": 1700000000000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = main(
+        [
+            "start",
+            "--run-dir",
+            str(tmp_path),
+            "--strategy",
+            "spy_ema_crossover",
+            "--readonly",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "live_config.sizing is missing" in err
+
+
+def test_live_config_from_ledger_legacy_path_still_loads_for_inspection() -> None:
+    """The read-only cockpit / Sizing-card path keeps loading legacy ledgers via
+    ``_live_config_from_ledger`` so the operator can inspect them. ``cmd_start``
+    is the runtime gate; the parser stays permissive."""
+    from app.engine.execution.order_sizer import FixedShares
+    from app.engine.live.run import _live_config_from_ledger
+
+    legacy = _live_config_from_ledger({})
+    assert legacy.sizing is None
+
+    explicit = _live_config_from_ledger({"sizing": {"kind": "FixedShares", "value": 1}})
+    assert isinstance(explicit.sizing, FixedShares)
+
+
+@requires_git
+def test_init_ledger_refuses_default_empty_live_config(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """VCR-0001 / Phase 1 — running ``init-ledger`` without
+    ``--live-config-json`` defaults to an empty dict, which is the legacy
+    back door. The CLI must refuse with exit 2 and a sizing-policy-missing
+    message so an automation that pre-dates ADR 0009 stops failing closed
+    rather than silently writing a pre-policy ledger."""
+    repo, spec, qc = repo_with_inputs
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--run-root",
+            str(tmp_path / "live_runs"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "live_config.sizing is required" in err
+    # No ledger should have been written.
+    assert not (tmp_path / "live_runs").exists() or not list((tmp_path / "live_runs").iterdir())
+
+
+@requires_git
+def test_init_ledger_refuses_unknown_live_config_sibling(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """VCR-0001 / Phase 1 — unknown sibling keys are refused at the CLI seam
+    too, mirroring the schema validator. A stale CLI / typo never produces an
+    unstartable ledger on disk."""
+    repo, spec, qc = repo_with_inputs
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--live-config-json",
+            '{"future_field": 1, "sizing": {"kind": "FixedShares", "value": 1}}',
+            "--run-root",
+            str(tmp_path / "live_runs"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "unknown live_config keys" in err

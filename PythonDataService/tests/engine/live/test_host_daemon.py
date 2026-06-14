@@ -710,7 +710,10 @@ def _deploy_body(**overrides: Any) -> dict[str, Any]:
         "account_id": "DU111",
         "start_date_ms": 1700000000000,
         "strategy_instance_id": "spy-ema-paper-1",
-        "live_config": {"symbol": "SPY"},
+        "live_config": {
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+        },
     }
     body.update(overrides)
     return body

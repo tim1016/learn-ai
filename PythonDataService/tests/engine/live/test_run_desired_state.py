@@ -222,7 +222,7 @@ def _build_started_ledger(tmp_path: Path, *, strategy_instance_id: str = ""):
         qc_cloud_backtest_id="bt-desired-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
         strategy_instance_id=strategy_instance_id,
     )
     run_dir = tmp_path / "run"

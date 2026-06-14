@@ -43,10 +43,58 @@ def test_set_holdings_fraction_canonicalized_to_decimal_string() -> None:
     assert req.live_config == {"sizing": {"kind": "SetHoldings", "fraction": "1.0"}}
 
 
-def test_absent_sizing_is_passthrough() -> None:
-    """live_config without a sizing key is unmodified — legacy/unknown."""
-    req = HostRunnerDeployRequest(**_base_kwargs(live_config={"symbol": "SPY"}))
-    assert req.live_config == {"symbol": "SPY"}
+def test_empty_live_config_rejected() -> None:
+    """VCR-0001 / Phase 1 — an empty ``live_config`` would fall through to
+    legacy ``SimpleFloorSizing`` (the all-in path that bought $250k of SPY).
+    The deploy boundary must refuse it so no new run lands on the legacy
+    code path. Sizing-policy-missing is named explicitly in the error."""
+    with pytest.raises(ValidationError, match=r"live_config\.sizing is required"):
+        HostRunnerDeployRequest(**_base_kwargs(live_config={}))
+
+
+def test_live_config_without_sizing_key_rejected() -> None:
+    """VCR-0001 / Phase 1 — any ``live_config`` that omits ``sizing`` lands on
+    the same legacy path as the empty case. Reject it at the schema layer,
+    not after the ledger is written."""
+    with pytest.raises(ValidationError, match=r"live_config\.sizing is required"):
+        HostRunnerDeployRequest(**_base_kwargs(live_config={"symbol": "SPY"}))
+
+
+def test_unknown_sibling_key_rejected_at_schema_boundary() -> None:
+    """VCR-0001 / Phase 1 — unknown ``live_config`` sibling keys must be
+    rejected at the schema layer (mirroring ``_live_config_from_ledger``),
+    not after ledger creation. Otherwise a stale CLI / typo writes a ledger
+    whose ``run_id`` is hashed from a field the runtime will refuse to
+    interpret."""
+    with pytest.raises(ValidationError, match=r"unknown live_config keys"):
+        HostRunnerDeployRequest(
+            **_base_kwargs(
+                live_config={
+                    "future_field": 1,
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                }
+            )
+        )
+
+
+def test_live_config_with_only_known_siblings_accepted() -> None:
+    """The fields ``_live_config_from_ledger`` already round-trips (``symbol``,
+    ``force_flat_at``, ``consolidator_period_min``, ``max_submit_latency_ms``)
+    are legal siblings of ``sizing`` and must continue to round-trip cleanly."""
+    req = HostRunnerDeployRequest(
+        **_base_kwargs(
+            live_config={
+                "symbol": "QQQ",
+                "consolidator_period_min": 30,
+                "sizing": {"kind": "FixedShares", "value": 1},
+            }
+        )
+    )
+    assert req.live_config == {
+        "symbol": "QQQ",
+        "consolidator_period_min": 30,
+        "sizing": {"kind": "FixedShares", "value": 1},
+    }
 
 
 def test_malformed_sizing_kind_rejected() -> None:
