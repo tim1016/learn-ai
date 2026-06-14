@@ -13,7 +13,6 @@ are trusted, so per-session is sufficient and less noisy.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -73,8 +72,10 @@ def write_session_metadata(run_dir: Path, metadata: SessionMetadata) -> Path:
         os.replace(tmp, path)
     except Exception:
         # Best-effort cleanup of the tempfile if rename failed
-        with contextlib.suppress(OSError):
+        try:
             os.unlink(tmp)
+        except OSError:
+            pass
         raise
     return path
 
