@@ -21,7 +21,9 @@ from app.engine.live.deploy import (
     ExplicitSurfaceSizingMismatchError,
     InvalidInstanceIdError,
     RunAlreadyExistsError,
+    SizingPolicyMissingError,
     SpecOrAuditMissingError,
+    UnknownLiveConfigKeyError,
     deploy_run,
 )
 
@@ -72,7 +74,11 @@ def _params(repo: Path, spec: Path, qc: Path, run_root: Path, **overrides: objec
         "account_id": "DU111",
         "start_date_ms": 1700000000000,
         "run_root": run_root,
-        "live_config": {"symbol": "SPY"},
+        # Phase 1 / ADR 0009: every new deploy carries an explicit sizing policy.
+        # The Safe canary (FixedShares(1)) is the deploy-form default; tests
+        # that override ``live_config`` must still carry a ``sizing`` key or be
+        # asserting the new rejection path.
+        "live_config": {"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}},
     }
     base.update(overrides)
     return DeployParams(**base)  # type: ignore[arg-type]
@@ -92,7 +98,10 @@ def test_deploy_run_creates_ledger(
     ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["run_id"] == result.run_id
     assert ledger["account_id"] == "DU111"
-    assert ledger["live_config"] == {"symbol": "SPY"}
+    assert ledger["live_config"] == {
+        "symbol": "SPY",
+        "sizing": {"kind": "FixedShares", "value": 1},
+    }
 
 
 @requires_git
@@ -321,3 +330,86 @@ def test_deploy_run_allows_policy_sizing_for_policy_surface_strategy(
     result = deploy_run(params)
     assert result.created is True
 
+
+
+# ────────────────── Phase 1 / VCR-0001 — sizing required at deploy ───
+
+
+@requires_git
+def test_deploy_run_rejects_empty_live_config(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """VCR-0001 / Phase 1 — ``deploy_run`` (CLI seam) refuses an empty
+    ``live_config``. Mirrors the schema-layer 400 the API path returns; the
+    CLI ``init-ledger`` path goes straight to ``deploy_run`` and cannot bypass
+    the gate."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(SizingPolicyMissingError, match=r"live_config\.sizing is required"):
+        deploy_run(_params(repo, spec, qc, run_root, live_config={}))
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_rejects_live_config_without_sizing(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """VCR-0001 / Phase 1 — ``live_config`` carrying siblings (e.g. ``symbol``)
+    but no ``sizing`` would also fall through to legacy ``SimpleFloorSizing``.
+    Reject at the deploy seam before any ledger is written."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(SizingPolicyMissingError, match=r"live_config\.sizing is required"):
+        deploy_run(_params(repo, spec, qc, run_root, live_config={"symbol": "SPY"}))
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_rejects_unknown_live_config_sibling_key(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """VCR-0001 / Phase 1 — unknown siblings of ``sizing`` are refused at the
+    deploy seam (not after the ledger is written), so a stale CLI / typo never
+    produces an unstartable ledger."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(UnknownLiveConfigKeyError, match=r"unknown live_config keys"):
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                live_config={
+                    "future_field": 1,
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                },
+            )
+        )
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_canonicalizes_sizing_dict(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """VCR-0001 / Phase 1 — the CLI seam canonicalizes ``sizing`` so an
+    operator who writes ``"fraction": "1.0"`` and one who writes ``"fraction":
+    "1.00"`` produce the same hashed ``run_id``. Mirrors the schema validator."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    result = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            run_root,
+            live_config={"sizing": {"kind": "SetHoldings", "fraction": "1.0"}},
+        )
+    )
+    ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["live_config"]["sizing"] == {"kind": "SetHoldings", "fraction": "1.0"}

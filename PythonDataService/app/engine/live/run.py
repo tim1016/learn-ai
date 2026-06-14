@@ -61,7 +61,9 @@ from app.engine.live.deploy import (
     DirtyTreeError,
     GitUnavailableError,
     RunAlreadyExistsError,
+    SizingPolicyMissingError,
     SpecOrAuditMissingError,
+    UnknownLiveConfigKeyError,
     deploy_run,
 )
 from app.engine.live.pre_flight import (
@@ -140,6 +142,12 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
     except SpecOrAuditMissingError as exc:
         print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
         return 2
+    except SizingPolicyMissingError as exc:
+        print(f"[INIT-LEDGER] {exc}", file=sys.stderr)
+        return 2
+    except UnknownLiveConfigKeyError as exc:
+        print(f"[INIT-LEDGER] {exc}", file=sys.stderr)
+        return 2
     except DeployIOError as exc:
         print(f"[INIT-LEDGER] filesystem error: {exc}", file=sys.stderr)
         return 1
@@ -190,6 +198,24 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
     checks.append(check_clean_tree(scope_paths, repo_root=repo_root))
     checks.append(check_run_state_intact(args.run_dir))
     checks.append(check_no_halt_flag(args.run_dir))
+    # VCR-0001 / Phase 1 — surface the sizing-policy-present gate in the
+    # manual pre-flight subcommand too. Reads the ledger directly (if
+    # present) so the CLI shows the same verdict ``cmd_start`` will give
+    # before the operator runs it. A run dir without a ledger is treated
+    # as a legacy/pre-policy ledger and fails the gate (the operator must
+    # redeploy with an explicit policy).
+    _ledger_live_config: dict = {}
+    _pre_ledger_path = args.run_dir / "run_ledger.json"
+    if _pre_ledger_path.is_file():
+        try:
+            _ledger_live_config = json.loads(
+                _pre_ledger_path.read_text(encoding="utf-8")
+            ).get("live_config") or {}
+        except (OSError, json.JSONDecodeError):
+            _ledger_live_config = {}
+    from app.engine.live.pre_flight import check_sizing_policy_present
+
+    checks.append(check_sizing_policy_present(_ledger_live_config))
 
     if args.skip_ntp:
         print("[PRE-FLIGHT] skipping NTP check (--skip-ntp)")
@@ -560,20 +586,15 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     """
     from datetime import time
 
-    from app.engine.live.config import LiveConfig
+    from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS, LiveConfig
 
     if not payload:
         return LiveConfig()
 
-    known_fields = {
-        "symbol",
-        "force_flat_at",
-        "consolidator_period_min",
-        "run_dir",
-        "max_submit_latency_ms",
-        "sizing",
-    }
-    unknown = set(payload.keys()) - known_fields
+    # VCR-0001 / Phase 1 — share the allow-list with the deploy-boundary
+    # schema validator so any future sibling key is added in exactly one
+    # place. CodeRabbit P2 review comment on PR #519.
+    unknown = set(payload.keys()) - LIVE_CONFIG_LEDGER_KEYS
     if unknown:
         raise ValueError(f"unknown live_config keys: {sorted(unknown)}")
 
@@ -865,6 +886,25 @@ def cmd_start(args: argparse.Namespace) -> int:
         ledger = read_ledger(ledger_path)
     except (OSError, ValueError) as exc:
         print(f"[START] could not parse run_ledger.json: {exc}", file=sys.stderr)
+        return 2
+
+    # VCR-0001 / Phase 1 — refuse to start a pre-policy ledger (no explicit
+    # ``live_config.sizing``). Mirrors the deploy-boundary refusal so a legacy
+    # ledger that pre-dates ADR 0009 cannot enter the runtime through this
+    # path. There is no ``--allow-pre-policy-sizing`` override: ``live_config``
+    # is hashed into ``run_id``, so a start-time effective-sizing change would
+    # make the identity fingerprint dishonest. The read-only cockpit / Sizing-
+    # card path still loads legacy ledgers via ``_live_config_from_ledger``.
+    ledger_live_config = ledger.live_config if isinstance(ledger.live_config, dict) else {}
+    if ledger_live_config.get("sizing") is None:
+        print(
+            "[START] HALT — live_config.sizing is missing from the ledger "
+            "(pre-policy / VCR-0001). Phase 1 / ADR 0009 requires every new "
+            "run to carry an explicit sizing policy. Redeploy with an "
+            "explicit policy (Safe canary: "
+            "{'sizing': {'kind': 'FixedShares', 'value': 1}}).",
+            file=sys.stderr,
+        )
         return 2
 
     # Foot-gun guard (#416): the algorithm is imported purely from --strategy,

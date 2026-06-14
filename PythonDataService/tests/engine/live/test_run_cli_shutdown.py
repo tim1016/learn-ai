@@ -76,7 +76,7 @@ def _build_run_dir(tmp_path: Path) -> Path:
         qc_cloud_backtest_id="bt-test-1",
         account_id="DU123",
         start_date_ms=1714838400000,
-        live_config={},
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
     )
     run_dir = tmp_path / ledger.run_id
     write_ledger(run_dir / "run_ledger.json", ledger)

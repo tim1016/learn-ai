@@ -77,6 +77,25 @@ class ExplicitSurfaceSizingMismatchError(DeployError):
     ``StrategyExplicit`` for explicit-surface strategies."""
 
 
+class SizingPolicyMissingError(DeployError):
+    """VCR-0001 / Phase 1 — ``live_config`` is empty or has no ``sizing`` key.
+
+    Closes the back door where a missing policy fell through to legacy
+    ``SimpleFloorSizing`` (the ``set_holdings(SPY, 1.0)`` all-in path). Maps to
+    HTTP 400: the operator must submit an explicit policy. The Safe canary
+    (``{"kind": "FixedShares", "value": 1}``) is the recommended starting
+    point."""
+
+
+class UnknownLiveConfigKeyError(DeployError):
+    """VCR-0001 / Phase 1 — ``live_config`` carries a sibling key that
+    ``_live_config_from_ledger`` does not know how to round-trip.
+
+    Reject at the deploy boundary so the bad key is never hashed into
+    ``run_id``. Otherwise the ledger persists with a field the runtime will
+    refuse to interpret, leaving an unstartable run on disk."""
+
+
 class RunAlreadyExistsError(DeployError):
     """The content-addressed run directory already exists.
 
@@ -121,6 +140,62 @@ class DeployResult:
     run_dir: Path
     created: bool
     ledger: LiveRunLedger
+
+
+def _enforce_sizing_policy_present(live_config: dict) -> dict:
+    """VCR-0001 / Phase 1 — refuse a new deploy whose ``live_config`` does not
+    name an explicit sizing policy or whose siblings the ledger reader cannot
+    round-trip.
+
+    Returns the ``live_config`` with ``sizing`` re-serialized through the
+    discriminated union's canonical form (mirrors the schema validator); the
+    canonical form keeps ``run_id`` stable regardless of how the operator
+    stringified ``Decimal`` on the wire.
+
+    Three gates:
+
+    1. Empty / missing ``sizing`` → :class:`SizingPolicyMissingError`. This is
+       the actual hole VCR-0001 documented: an empty payload fell through to
+       legacy ``SimpleFloorSizing``.
+    2. Unknown siblings → :class:`UnknownLiveConfigKeyError`. Mirrors
+       ``_live_config_from_ledger``'s allow-list so a stale CLI / typo never
+       writes a ledger the runtime cannot read.
+    3. Malformed ``sizing`` → :class:`SizingPolicyMissingError` wrapping the
+       parser's ``ValueError`` (same error surface — the operator's next step
+       is to fix the policy either way).
+    """
+    if not isinstance(live_config, dict) or not live_config:
+        raise SizingPolicyMissingError(
+            "live_config.sizing is required — Phase 1 / ADR 0009 closes the "
+            "empty-live_config back door (VCR-0001). Submit an explicit "
+            "policy (Safe canary: {'sizing': {'kind': 'FixedShares', 'value': 1}})."
+        )
+    from app.engine.execution.order_sizer import (
+        parse_sizing_policy,
+        policy_to_ledger_dict,
+    )
+    from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS
+
+    unknown = set(live_config.keys()) - LIVE_CONFIG_LEDGER_KEYS
+    if unknown:
+        raise UnknownLiveConfigKeyError(
+            f"unknown live_config keys: {sorted(unknown)}. Allowed keys: "
+            f"{sorted(LIVE_CONFIG_LEDGER_KEYS)}."
+        )
+    sizing = live_config.get("sizing")
+    if sizing is None:
+        raise SizingPolicyMissingError(
+            "live_config.sizing is required — Phase 1 / ADR 0009 closes the "
+            "empty-live_config back door (VCR-0001). Submit an explicit "
+            "policy (Safe canary: {'sizing': {'kind': 'FixedShares', 'value': 1}})."
+        )
+    try:
+        policy = parse_sizing_policy(sizing)
+    except ValueError as exc:
+        raise SizingPolicyMissingError(str(exc)) from exc
+    canonical = dict(live_config)
+    canonical["sizing"] = policy_to_ledger_dict(policy)
+    return canonical
 
 
 def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> None:
@@ -208,6 +283,12 @@ def deploy_run(params: DeployParams) -> DeployResult:
 
     code_sha = git_head_sha(repo_root)
 
+    # VCR-0001 / Phase 1 — every new deploy must carry an explicit sizing
+    # policy. The schema validator already rejects the API path; this is the
+    # CLI / direct-call seam's enforcement. Canonicalize the ``sizing`` dict
+    # so the CLI path produces the same hashed ``run_id`` the API path would.
+    canonical_live_config = _enforce_sizing_policy_present(params.live_config)
+
     # ADR 0009 § 6 / PR7 reviewer fix — explicit-surface strategies size
     # themselves via internal accounting; the deploy boundary must refuse a
     # policy-style ``live_config.sizing`` for them so the ledger never
@@ -216,7 +297,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
     # daemon caller could submit ``FixedShares(1)`` for ``ema_crossover_options``
     # and we'd hash a misleading run_id before the engine refuses on the
     # first set_holdings call.)
-    _enforce_explicit_surface_policy(params.strategy_key, params.live_config)
+    _enforce_explicit_surface_policy(params.strategy_key, canonical_live_config)
 
     # ADR 0009 — record the audit copy path relative to the repo so a
     # later read (the start gate, the cockpit) can re-verify against the
@@ -231,7 +312,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
             qc_cloud_backtest_id=params.qc_cloud_backtest_id,
             account_id=params.account_id,
             start_date_ms=params.start_date_ms,
-            live_config=params.live_config,
+            live_config=canonical_live_config,
             strategy_instance_id=params.strategy_instance_id,
             strategy_key=params.strategy_key,
             audit_copy_allow_list_root=repo_root,

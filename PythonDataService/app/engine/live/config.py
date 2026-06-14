@@ -13,6 +13,21 @@ from pathlib import Path
 from app.engine.execution.order_sizer import SizingPolicy
 from app.engine.live.order_identity import DEFAULT_ORDER_REF_MAX_LENGTH
 
+# Single source of truth for the operator-supplied ``live_config`` dict keys.
+# The deploy boundary (``HostRunnerDeployRequest._validate_sizing``) rejects
+# unknown siblings; ``_live_config_from_ledger`` rejects them when reading a
+# legacy ledger. Adding a field here is a deliberate two-sided change.
+LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
+    {
+        "symbol",
+        "force_flat_at",
+        "consolidator_period_min",
+        "run_dir",
+        "max_submit_latency_ms",
+        "sizing",
+    }
+)
+
 
 @dataclass(frozen=True)
 class LiveConfig:

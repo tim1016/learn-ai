@@ -454,6 +454,41 @@ def check_no_halt_flag(run_dir: Path) -> CheckResult:
     )
 
 
+# ─────────────── Sizing-policy-present gate (Phase 1 / VCR-0001) ─────
+
+
+def check_sizing_policy_present(live_config: dict) -> CheckResult:
+    """Refuse to start a run whose ledger has no explicit ``sizing`` policy.
+
+    VCR-0001 / Phase 1 — closes the back door where a pre-policy ledger
+    (legacy ``live_config={}`` or one carrying siblings without ``sizing``)
+    would start under the legacy ``SimpleFloorSizing`` all-in path. Mirrors
+    the deploy-boundary refusal so the operator's next step is to redeploy
+    with an explicit policy. There is no override flag: ``live_config`` is
+    hashed into ``run_id``, so a start-time effective-sizing change would
+    make the identity fingerprint dishonest.
+
+    The pre-flight surface returns the failure as a structured ``CheckResult``
+    so the operator-facing pre-flight subcommand renders the same message;
+    the runtime gate in ``cmd_start`` raises the refusal directly.
+    """
+    if isinstance(live_config, dict) and live_config.get("sizing") is not None:
+        return CheckResult(
+            name="sizing_policy_present",
+            passed=True,
+            detail="live_config.sizing present",
+        )
+    return CheckResult(
+        name="sizing_policy_present",
+        passed=False,
+        detail=(
+            "live_config.sizing missing — Phase 1 / ADR 0009 requires every new "
+            "run to carry an explicit sizing policy. Redeploy with an explicit "
+            "policy (Safe canary: {'sizing': {'kind': 'FixedShares', 'value': 1}})."
+        ),
+    )
+
+
 # ──────────────────────────── Yesterday-artifacts gate ───────────────
 
 

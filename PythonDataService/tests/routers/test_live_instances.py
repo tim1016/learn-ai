@@ -1167,7 +1167,12 @@ def _deploy_body() -> dict:
         "account_id": "DU111",
         "start_date_ms": 1700000000000,
         "strategy_instance_id": "spy_ema_paper",
-        "live_config": {"symbol": "SPY"},
+        # VCR-0001 / Phase 1 — explicit sizing is required at the deploy
+        # boundary. Safe canary is the deploy-form default.
+        "live_config": {
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+        },
     }
 
 
