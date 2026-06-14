@@ -566,9 +566,9 @@ def _lookup_sizing_surface(strategy_key: str) -> str | None:
         from app.routers.engine import _STRATEGY_REGISTRY  # local import: lazy
     except Exception:
         return None
+    # VCR-0004 / Phase 2 — the registry is keyed by module name now, so the
+    # legacy ``removeprefix("spy_")`` workaround is gone.
     reg = _STRATEGY_REGISTRY.get(strategy_key)
-    if reg is None and strategy_key.startswith("spy_"):
-        reg = _STRATEGY_REGISTRY.get(strategy_key.removeprefix("spy_"))
     return getattr(reg, "sizing_surface", None) if reg is not None else None
 
 
@@ -934,19 +934,35 @@ def cmd_start(args: argparse.Namespace) -> int:
         extra={"step": "0"},
     )
 
+    # VCR-0004 / Phase 2 — the registry is the single source of truth for
+    # both the module (the registry key) and the class
+    # (``registration.class_name``). An unregistered ``--strategy`` cannot
+    # launch: the registry is also the dropdown's contract, so any
+    # importable-but-unregistered module (``buy_and_hold``,
+    # ``spy_vwap_reversion``) is intentionally non-deployable.
+    try:
+        from app.routers.engine import _STRATEGY_REGISTRY
+    except Exception as exc:  # pragma: no cover - registry import crash is a deploy bug
+        print(f"[START] could not load strategy registry: {exc}", file=sys.stderr)
+        return 2
+    registration = _STRATEGY_REGISTRY.get(args.strategy)
+    if registration is None:
+        print(
+            f"[START] strategy {args.strategy!r} is not registered. Registered "
+            f"strategies: {sorted(_STRATEGY_REGISTRY)}.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         module = import_module(f"app.engine.strategy.algorithms.{args.strategy}")
     except ImportError as exc:
         print(f"[START] could not import strategy module {args.strategy!r}: {exc}", file=sys.stderr)
         return 2
-    # Convention: snake_case module name → PascalCase class with
-    # "Algorithm" suffix. e.g. spy_ema_crossover → SpyEmaCrossoverAlgorithm.
-    class_name = "".join(part.capitalize() for part in args.strategy.split("_")) + "Algorithm"
-    strategy_cls = getattr(module, class_name, None)
+    strategy_cls = getattr(module, registration.class_name, None)
     if strategy_cls is None:
         print(
-            f"[START] strategy module {args.strategy!r} has no class {class_name!r} "
-            f"(naming convention: snake_case module → PascalCase + 'Algorithm')",
+            f"[START] strategy module {args.strategy!r} has no class "
+            f"{registration.class_name!r} (registered in StrategyRegistration.class_name).",
             file=sys.stderr,
         )
         return 2

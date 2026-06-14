@@ -281,7 +281,7 @@ def test_deploy_run_rejects_policy_sizing_for_explicit_surface_strategy(
         spec,
         qc,
         run_root,
-        strategy_key="ema_crossover_options",
+        strategy_key="spy_ema_crossover_options",
         live_config={"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}},
     )
     with pytest.raises(ExplicitSurfaceSizingMismatchError, match=r"sizing_surface=.explicit"):
@@ -303,7 +303,7 @@ def test_deploy_run_accepts_strategy_explicit_for_explicit_surface_strategy(
         spec,
         qc,
         run_root,
-        strategy_key="ema_crossover_options",
+        strategy_key="spy_ema_crossover_options",
         live_config={"symbol": "SPY", "sizing": {"kind": "StrategyExplicit"}},
     )
     result = deploy_run(params)
@@ -324,7 +324,7 @@ def test_deploy_run_allows_policy_sizing_for_policy_surface_strategy(
         spec,
         qc,
         run_root,
-        strategy_key="ema_crossover",
+        strategy_key="spy_ema_crossover",
         live_config={"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}},
     )
     result = deploy_run(params)

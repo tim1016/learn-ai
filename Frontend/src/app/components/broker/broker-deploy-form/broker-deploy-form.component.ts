@@ -154,7 +154,7 @@ export class BrokerDeployFormComponent {
   );
 
   /** ADR 0009 § 6 — the strategy's sizing surface. `"explicit"` (e.g.
-   * `ema_crossover_options`) means the algorithm sizes itself via internal
+   * `spy_ema_crossover_options`) means the algorithm sizes itself via internal
    * accounting (contracts_per_trade / market_order) and the live policy must
    * be `StrategyExplicit`; the sizing controls are disabled + labelled. */
   readonly selectedSizingSurface = computed<'policy' | 'explicit' | null>(() => {

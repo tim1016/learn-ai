@@ -51,7 +51,7 @@ function setup(
           sizing_surface: 'policy',
         },
         {
-          name: 'ema_crossover_options',
+          name: 'spy_ema_crossover_options',
           display_name: 'EMA Crossover Options',
           description: '',
           sizing_surface: 'explicit',
@@ -226,7 +226,7 @@ describe('BrokerDeployFormComponent', () => {
   it('submits StrategyExplicit and disables the sizing selector for an explicit-surface strategy', async () => {
     const { svc, component, fixture } = setup();
     await flush();
-    component.strategyKey.set('ema_crossover_options');
+    component.strategyKey.set('spy_ema_crossover_options');
     component.specPath.set('PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json');
     component.accountId.set('DU123');
     component.qcBacktestId.set('bt-1');

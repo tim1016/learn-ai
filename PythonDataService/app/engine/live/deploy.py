@@ -217,9 +217,9 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
         from app.routers.engine import _STRATEGY_REGISTRY
     except Exception:
         return
+    # VCR-0004 / Phase 2 — the registry is keyed by module name now, so the
+    # legacy ``removeprefix("spy_")`` workaround is gone.
     reg = _STRATEGY_REGISTRY.get(strategy_key)
-    if reg is None and strategy_key.startswith("spy_"):
-        reg = _STRATEGY_REGISTRY.get(strategy_key.removeprefix("spy_"))
     surface = getattr(reg, "sizing_surface", None) if reg is not None else None
     if surface != "explicit":
         return
