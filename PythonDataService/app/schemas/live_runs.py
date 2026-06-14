@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RunState(StrEnum):
@@ -328,6 +328,33 @@ class HostRunnerDeployRequest(BaseModel):
     # When true, chain a host-runner start after a successful create.
     start: bool = False
     start_options: HostRunnerStartRequest = Field(default_factory=HostRunnerStartRequest)
+
+    @field_validator("live_config", mode="after")
+    @classmethod
+    def _validate_sizing(cls, value: dict) -> dict:
+        """ADR 0009 — validate ``live_config.sizing`` at the deploy boundary.
+
+        ``HostRunnerDeployRequest.live_config`` is intentionally an open dict
+        (the schema doesn't lock every key); but the ``sizing`` sub-field, if
+        present, must round-trip through the ``SizingPolicy`` discriminated
+        union. Catching a malformed policy at the API boundary keeps a bad
+        canonical form from being hashed into ``run_id`` and persisted.
+        """
+        if not isinstance(value, dict):
+            return value
+        sizing = value.get("sizing")
+        if sizing is None:
+            return value
+        from app.engine.execution.order_sizer import (
+            parse_sizing_policy,
+            policy_to_ledger_dict,
+        )
+
+        policy = parse_sizing_policy(sizing)
+        # Re-serialize via the policy's canonical form so the hash stays stable
+        # regardless of how the operator stringified ``Decimal`` on the wire.
+        value["sizing"] = policy_to_ledger_dict(policy)
+        return value
 
 
 class HostRunnerDeployResponse(BaseModel):
@@ -658,6 +685,31 @@ class InstanceLastExit(BaseModel):
     halt_detail: dict | None = None
 
 
+class InstanceSizing(BaseModel):
+    """ADR 0009 — sizing surface for the instance console's Sizing card.
+
+    Surfaces the resolved policy from the bound (or latest evidence) run's
+    ``live_config.sizing`` plus the two engine-derived ledger stamps. ``policy``
+    is ``None`` for a **legacy/pre-policy run** (the ledger has no ``sizing``
+    key); the Sizing card renders the degraded "Pre-policy run" badge variant
+    in that case (ADR 0009 § 14).
+
+    PR1 surfaces static facts only. PR4 adds the *live derivation* (resolved
+    shares at the latest price); PR6 adds the *per-trade audit list*.
+    """
+
+    # Canonical policy form (the same shape the operator submitted, after
+    # Pydantic round-trips it through the discriminated union). ``None`` means
+    # legacy/pre-policy — the UI shows the honest "pre-policy" badge.
+    policy: dict | None = None
+    # Operator-facing preset label inferred from the policy shape. Carried
+    # explicitly so the UI doesn't re-derive it client-side. ``None`` for
+    # pre-policy runs.
+    preset: Literal["safe_canary", "reference_parity", "custom", "explicit"] | None = None
+    governed_by: Literal["live_config", "strategy_explicit"]
+    sizing_provenance: Literal["reference_native", "live_override", "spec_default"]
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -681,6 +733,10 @@ class LiveInstanceStatus(BaseModel):
     # audit copy+SHA, backtest id, account). None when nothing is deployed. Lets
     # the console explain the hashes ("what this proves") instead of dumping them.
     provenance: InstanceProvenance | None = None
+    # ADR 0009 — sizing surface for the Sizing card. ``None`` when nothing is
+    # deployed; pre-policy runs surface with ``policy=None`` (the UI shows the
+    # honest pre-policy badge).
+    sizing: InstanceSizing | None = None
     # Why the most recent run ended, when it has terminated. None while a run is
     # live or when nothing was ever deployed. Lets the console explain a STOPPED
     # instance instead of leaving the operator to read run_status.json by hand.

@@ -138,7 +138,27 @@ algorithm that emits orders directly.
 
 ---
 
-## 3. Resolved plan (2026-06-08)
+## 3. Resolved plan (2026-06-08, re-thought 2026-06-13)
+
+> **Updated 2026-06-13.** A second `grill-with-docs` session re-opened ADR 0009
+> for a **UI re-think** after the broker control panel grew (provenance card,
+> instance console, paper-run, candlestick + trades, run-log "Fix this"). The
+> ADR's **substance — engine, allow-list mechanism, provenance stamps, presets,
+> `FixedShares(1)` default — is unchanged.** The deltas are: a **dedicated Sizing
+> card** on the instance console (in addition to the deploy form selector); a
+> **per-trade audit list** backed by a new `SIZING_RESOLVED` WAL event; the
+> allow-list pinned to **`docs/references/audit-copy-sizing-allow-list.json`**
+> (single indexed file, sha-verified at load); the coexistence guard **narrowed
+> to symbol-scope** (cross-symbol all-in is permitted-but-unsafe pending the
+> capital sleeve); the implementation order **flipped to tracer-first** (Safe
+> canary end-to-end first, then layer Reference parity → Custom → guard → audit
+> → registry); and **honest "pre-policy run" badges** for legacy
+> empty-`live_config` runs (no ledger backfill, no synthetic kind). See
+> **ADR 0009 § "Updated 2026-06-13 — UI re-think"** for the full deltas.
+> Load-bearing code claims (no `live_config.sizing` field today, allow-list at
+> `run.py:540` still rejects unknown keys, `LivePortfolio.sizing_model` still
+> never overridden, broker cockpit doesn't touch sizing) were re-verified
+> against the current code before this update.
 
 > This section was rewritten after a `grill-with-docs` session walked the full
 > decision tree. The architecture is recorded in **ADR 0009 —

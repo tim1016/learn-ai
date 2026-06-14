@@ -68,6 +68,7 @@ from app.schemas.live_runs import (
     InstanceLastExit,
     InstanceProcessView,
     InstanceProvenance,
+    InstanceSizing,
     InstanceStartDefaults,
     IntentActuation,
     LiveBinding,
@@ -429,6 +430,55 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
             translated = container_root + path[idx + len(marker) :]
             candidates.append(Path(translated))
     return [c for c in candidates if c.is_file()] or candidates
+
+
+def _sizing(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> InstanceSizing | None:
+    """ADR 0009 — surface the bound (or latest evidence) run's sizing surface
+    to the instance console's Sizing card.
+
+    A run with no ``live_config.sizing`` key (legacy/pre-policy) returns an
+    ``InstanceSizing`` with ``policy=None`` and ``preset=None`` — the UI shows
+    the honest "Pre-policy run" degraded variant (Decision 14). A ledger that
+    predates the ``governed_by`` / ``sizing_provenance`` fields uses the same
+    ``live_config`` / ``live_override`` defaults the engine derives.
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+
+    live_config = ledger.get("live_config") or {}
+    sizing_payload = live_config.get("sizing") if isinstance(live_config, dict) else None
+    governed_by = ledger.get("governed_by", "live_config")
+    sizing_provenance = ledger.get("sizing_provenance", "live_override")
+
+    preset: str | None
+    if sizing_payload is None:
+        preset = None
+    else:
+        kind = sizing_payload.get("kind") if isinstance(sizing_payload, dict) else None
+        if kind == "FixedShares" and sizing_payload.get("value") == 1:
+            preset = "safe_canary"
+        elif kind == "SetHoldings" and sizing_payload.get("fraction") == "1.0":
+            preset = "reference_parity"
+        elif kind == "StrategyExplicit":
+            preset = "explicit"
+        else:
+            preset = "custom"
+
+    return InstanceSizing(
+        policy=sizing_payload if isinstance(sizing_payload, dict) else None,
+        preset=preset,
+        governed_by=governed_by if governed_by in ("live_config", "strategy_explicit") else "live_config",
+        sizing_provenance=sizing_provenance
+        if sizing_provenance in ("reference_native", "live_override", "spec_default")
+        else "live_override",
+    )
 
 
 def _provenance(
@@ -806,6 +856,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             root, live_binding, runs, readonly_default=_resolve_readonly_default(settings)
         ),
         provenance=_provenance(root, live_binding, runs),
+        sizing=_sizing(root, live_binding, runs),
         last_exit=_instance_last_exit(runs),
         symbol=_resolve_symbol(root, live_binding, runs),
         fetched_at_ms=_now_ms(),

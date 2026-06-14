@@ -1,0 +1,32 @@
+<section class="sizing-card" aria-labelledby="sizing-card-title">
+  <header>
+    <h2 id="sizing-card-title">Position sizing</h2>
+    @if (isLegacy()) {
+      <span class="badge pre-policy" title="This run was created before live_config.sizing shipped.">Pre-policy run</span>
+    }
+  </header>
+
+  @if (isLegacy()) {
+    <p class="pre-policy-note">
+      Sized by the historical <code>SimpleFloorSizing</code> model. Provenance, audit-copy verdict, and per-trade
+      audit are unavailable for pre-policy runs. Re-deploy from this instance to switch to Safe canary.
+    </p>
+  } @else {
+    <dl class="facts">
+      @for (fact of facts(); track fact.label) {
+        <div class="fact">
+          <dt>{{ fact.label }}</dt>
+          <dd>
+            <span class="value">{{ fact.value }}</span>
+            @if (fact.pill) {
+              <span class="pill" [class]="'pill-' + fact.pill">{{ fact.value }}</span>
+            }
+          </dd>
+        </div>
+      }
+    </dl>
+    <p class="future-note">
+      Live derivation (resolved share count at the latest price) and the per-trade audit list land in PR4 / PR6.
+    </p>
+  }
+</section>

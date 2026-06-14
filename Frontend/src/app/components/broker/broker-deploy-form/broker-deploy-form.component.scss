@@ -358,6 +358,50 @@ small code {
   }
 }
 
+.sizing-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.sizing-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+
+  &.selected {
+    border-color: #7dd3fc;
+    background: rgba(125, 211, 252, 0.08);
+  }
+
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  input[type='radio'] {
+    margin-top: 0.2rem;
+  }
+
+  .sizing-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+
+    strong {
+      font-size: 0.95rem;
+    }
+  }
+}
+
 @media (max-width: 860px) {
   .workspace {
     grid-template-columns: 1fr;

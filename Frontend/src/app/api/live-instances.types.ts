@@ -1,6 +1,12 @@
 // Instance-addressed operator console types (ADR 0004).
 // The console's subject is the strategy instance; the current run is evidence.
-import type { HydratePolicy } from './live-runs.types';
+import type {
+  GovernedBy,
+  HydratePolicy,
+  SizingPolicy,
+  SizingPreset,
+  SizingProvenance,
+} from './live-runs.types';
 import type { DesiredStateView } from './live-runs-controls.types';
 
 export type InstanceProcessState =
@@ -116,6 +122,10 @@ export interface LiveInstanceStatus {
   /** What the run's content-addressed identity attests to (the hashed deploy
    * inputs); null when nothing is deployed. Drives the "what this proves" card. */
   provenance: InstanceProvenance | null;
+  /** ADR 0009 — sizing surface for the Sizing card. Null when nothing is
+   * deployed; a legacy/pre-policy run surfaces with `policy = null` (the UI
+   * shows the honest "Pre-policy run" degraded badge). */
+  sizing: InstanceSizing | null;
   /** Why the most recent run ended; null while a run is live or nothing was
    * ever deployed. Drives the console's "why it stopped" surface. */
   last_exit: InstanceLastExit | null;
@@ -125,6 +135,24 @@ export interface LiveInstanceStatus {
    * default (the prior 'SPY' default was the bug Slice 2 closes). */
   symbol: string | null;
   fetched_at_ms: number;
+}
+
+/** ADR 0009 — the bound (or evidence) run's sizing surface for the Sizing card.
+ * `policy` is null for a legacy/pre-policy run (ledger has no `sizing` key); the
+ * UI renders the honest "Pre-policy run" degraded badge in that case. */
+export interface InstanceSizing {
+  /** Resolved policy from `live_config.sizing` — the same shape submitted at
+   * deploy. Null = legacy/pre-policy run; never substitute a default. */
+  policy: SizingPolicy | null;
+  /** Operator-facing preset inferred from the policy shape; null for a
+   * pre-policy run. `explicit` corresponds to a `StrategyExplicit` policy. */
+  preset: SizingPreset | 'explicit' | null;
+  /** Engine-derived stamp: who set the quantity (deploy-page policy vs the
+   * strategy's own `market_order` / `contracts_per_trade`). */
+  governed_by: GovernedBy;
+  /** Engine-derived stamp: does the resolved sizing match the bound QC audit
+   * copy? `live_override` = fail-closed default until PR3 wires the allow-list. */
+  sizing_provenance: SizingProvenance;
 }
 
 /** What a run's content-addressed identity (`run_id`) fingerprints — so the UI

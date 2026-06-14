@@ -543,6 +543,7 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
         "consolidator_period_min",
         "run_dir",
         "max_submit_latency_ms",
+        "sizing",
     }
     unknown = set(payload.keys()) - known_fields
     if unknown:
@@ -573,6 +574,14 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
         kwargs["run_dir"] = Path(str(payload["run_dir"]))
     if "max_submit_latency_ms" in payload:
         kwargs["max_submit_latency_ms"] = int(payload["max_submit_latency_ms"])
+    if "sizing" in payload:
+        from app.engine.execution.order_sizer import parse_sizing_policy
+
+        raw = payload["sizing"]
+        if raw is None:
+            kwargs["sizing"] = None
+        else:
+            kwargs["sizing"] = parse_sizing_policy(raw)
 
     return LiveConfig(**kwargs)
 

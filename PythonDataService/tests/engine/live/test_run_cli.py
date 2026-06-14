@@ -261,7 +261,7 @@ def test_init_ledger_writes_strategy_instance_id(
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "spy-ema-paper-1"
-    assert ledger["schema_version"] == "1.2"
+    assert ledger["schema_version"] == "1.3"
     assert ledger["run_id"] == runs[0].name
 
 
@@ -303,7 +303,7 @@ def test_init_ledger_writes_strategy_key(
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_key"] == "spy_ema_crossover"
-    assert ledger["schema_version"] == "1.2"
+    assert ledger["schema_version"] == "1.3"
 
 
 @requires_git
@@ -741,6 +741,39 @@ def test_live_config_from_ledger_rejects_unknown_keys() -> None:
 
     with pytest.raises(ValueError, match="unknown live_config keys"):
         _live_config_from_ledger({"future_field": 1})
+
+
+def test_live_config_from_ledger_accepts_safe_canary_sizing() -> None:
+    """ADR 0009 PR1 — the ``sizing`` key validates through the discriminated
+    union and surfaces as a typed ``SizingPolicy`` on the ``LiveConfig``."""
+    from app.engine.execution.order_sizer import FixedShares
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger(
+        {"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}}
+    )
+    assert isinstance(cfg.sizing, FixedShares)
+    assert cfg.sizing.value == 1
+
+
+def test_live_config_from_ledger_rejects_malformed_sizing() -> None:
+    """A malformed ``sizing`` payload surfaces as the same ``ValueError`` the
+    start gate already catches — never a silent fall-through."""
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(ValueError, match=r"invalid live_config\.sizing"):
+        _live_config_from_ledger({"sizing": {"kind": "FixedShares", "value": 0}})
+
+
+def test_live_config_from_ledger_absence_of_sizing_is_none() -> None:
+    """ADR 0009 — absence of ``sizing`` is legacy/unknown; the engine reads it
+    as ``None`` and the portfolio falls back to the legacy SimpleFloor path."""
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger({"symbol": "SPY"})
+    assert cfg.sizing is None
 
 
 def test_start_refuses_when_poisoned_flag_present(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:

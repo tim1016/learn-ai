@@ -436,12 +436,16 @@ different homes.
   retires the handoff doc's assumption that a sizing change needs a fresh QC
   parity anchor — that was an artifact of sizing being fused into the algorithm.)
 - **audit-copy sizing allow-list** — the **receipt** that backs a `reference_native`
-  claim: a narrow map `qc_audit_copy_sha256 → known sizing rule` (e.g.
-  `SetHoldings(1.0)`), **not** AST-parsing of arbitrary LEAN code. The proof has
-  three outcomes — *proven match* / *proven mismatch* / *cannot prove (sha absent)*
-  — and the **Reference parity** preset proceeds **only on proven match**; both
-  other outcomes block. An audit copy absent from the allow-list makes Reference
-  parity unavailable until its sha + rule are registered.
+  claim: a single indexed JSON file
+  (`docs/references/audit-copy-sizing-allow-list.json`) of
+  `{audit_copy_sha256, audit_copy_path, rule, registered_at_ms, registered_by}`
+  entries, **not** AST-parsing of arbitrary LEAN code. The entry's `sha256` is
+  re-verified against the on-disk audit copy at load — a mismatch is *cannot prove*,
+  not a silent override. The proof has three outcomes — *proven match* / *proven
+  mismatch* / *cannot prove (sha absent or sha-mismatch)* — and the **Reference
+  parity** preset proceeds **only on proven match**; both other outcomes block. An
+  audit copy absent from the index makes Reference parity unavailable until its sha
+  + rule are registered.
 - **`sizing_surface`** — a declarative `StrategyRegistration` attribute
   (`"policy" | "explicit"`) naming *which boundary sizes the strategy* (named for
   the boundary, not a bare `self_sized` bool — leaves room for a future `mixed` /
@@ -464,6 +468,31 @@ different homes.
   order is a registration bug → **fail-fast on the first mismatched entry order**,
   never continue with a misleading ledger. `liquidate()` is a **flatten command,
   not a sizing surface** — never a violation in either mode.
+- **Sizing card** — the dedicated instance-console card that displays the live
+  bot's sizing decision and its consequences. Three sections: (1) **static facts**
+  — the resolved `live_config.sizing.{kind, value}`, the preset that produced it
+  (Safe canary / Reference parity / Custom), `governed_by`, `sizing_provenance`,
+  and the audit-copy verdict (*proven match* / *proven mismatch* / *cannot prove*)
+  with the diff spelled out; (2) **live derivation** — the share count this policy
+  would resolve to at the latest price (for `SetHoldings` / `FixedNotional`),
+  and the **sizing-skip** counter for the session; (3) **per-trade audit list**.
+  The provenance card stays unchanged (run-identity fingerprints only); the Sizing
+  card is the sizing-specific surface. For `legacy/pre-policy runs`, the card
+  degrades to a "Pre-policy run" badge and hides the live and per-trade sections.
+- **per-trade audit list** — the bottom section of the Sizing card: one row per
+  broker fill in the current session, joining each fill to the policy that sized
+  the order (`policy_kind` → `intended_qty` → `actual_filled` at fill price). Lets
+  the operator sanity-check that the policy's outputs match the fills (partial-
+  fill drift, broker-side qty caps, etc.). Drives one new engine artifact named in
+  ADR 0009.
+- **legacy/pre-policy run** — a live run created before `live_config.sizing`
+  shipped (`live_config` lacks a `sizing` key). The provenance and Sizing cards
+  render this as an **honest "pre-policy" badge**, never a synthetic kind: the
+  ledger is **not backfilled** (that would mutate `run_id` hashes), `governed_by`
+  / `sizing_provenance` / audit-copy verdict / per-trade audit are all suppressed.
+  Re-deploying from a legacy run defaults the deploy form to **Safe canary**, not
+  to "whatever the legacy run effectively did" — the safe default applies on the
+  first sizing-aware deploy.
 - **capital sleeve** *(future — not v1)* — a Python **live buying-power budget**
   that scopes the portfolio value a single strategy's percent sizing may target.
   It will sit at the **portfolio-value provider** feeding `order_sizer`'s
@@ -474,10 +503,16 @@ different homes.
   reporting record; `capital sleeve` is a live pre-trade sizing input. The two
   words must stay distinct across stacks.
 - **all-in coexistence guard** — the interim v1 stand-in for the capital-sleeve
-  layer: a start / pre-flight **refusal**. If resolved sizing is `SetHoldings(1.0)`
-  (Reference parity) **and** the account is non-flat or another managed all-in bot
-  is active → **block start** ("all-in coexistence requires the capital-sleeve
+  layer: a start / pre-flight **refusal**, scoped to the **trade symbol** (not the
+  whole account). If resolved sizing is `SetHoldings(1.0)` (Reference parity) **and**
+  *either* (a) the bound trade symbol has non-zero exposure in the broker account,
+  *or* (b) another managed live binding on this account holds `SetHoldings(1.0)` on
+  the same symbol → **block start** ("all-in coexistence requires the capital-sleeve
   layer, not built yet"); the deploy page surfaces the same state best-effort.
   `FixedShares` / `FixedNotional` are **never** blocked — an oversized custom
   notional fails loudly through broker / reconciliation, never via silent
   budget-clamping.
+  **Permitted-but-unsafe**: two all-in bots on *different* symbols (e.g. SPY all-in
+  + AAPL all-in) deploy successfully on the same cash account and *will* fight for
+  shared buying power. This is an accepted v1 trade-off, not an oversight; the
+  capital-sleeve layer closes it.

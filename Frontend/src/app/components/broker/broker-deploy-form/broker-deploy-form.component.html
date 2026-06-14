@@ -97,6 +97,55 @@
         </label>
       </section>
 
+      <section class="group" aria-labelledby="sizing-section">
+        <h2 id="sizing-section">Position sizing</h2>
+        <p class="plain-help">
+          How big should each entry be? Safe canary is the default — every signal trades one share, so a misconfigured
+          bot can't surprise your account. Reference parity and Custom land in upcoming PRs.
+        </p>
+        <fieldset class="sizing-presets" role="radiogroup" aria-labelledby="sizing-section">
+          <label class="sizing-option" [class.selected]="sizingPreset() === 'safe_canary'">
+            <input
+              type="radio"
+              name="sizing-preset"
+              value="safe_canary"
+              [checked]="sizingPreset() === 'safe_canary'"
+              (change)="setSizingPreset($event)"
+            />
+            <span class="sizing-label">
+              <strong>Safe canary</strong>
+              <small>1 share per signal — proves the wiring without risking capital.</small>
+            </span>
+          </label>
+          <label class="sizing-option disabled" [class.selected]="sizingPreset() === 'reference_parity'">
+            <input
+              type="radio"
+              name="sizing-preset"
+              value="reference_parity"
+              disabled
+              [checked]="sizingPreset() === 'reference_parity'"
+            />
+            <span class="sizing-label">
+              <strong>Reference parity</strong>
+              <small>Matches the QC audit copy's <code>SetHoldings(1.0)</code> all-in target. Ships in PR3.</small>
+            </span>
+          </label>
+          <label class="sizing-option disabled" [class.selected]="sizingPreset() === 'custom'">
+            <input
+              type="radio"
+              name="sizing-preset"
+              value="custom"
+              disabled
+              [checked]="sizingPreset() === 'custom'"
+            />
+            <span class="sizing-label">
+              <strong>Custom</strong>
+              <small>Fixed shares (n &gt; 1) or fixed notional. Ships in PR4.</small>
+            </span>
+          </label>
+        </fieldset>
+      </section>
+
       <section class="group" aria-labelledby="launch-section">
         <div class="group-head">
           <h2 id="launch-section">Launch options</h2>

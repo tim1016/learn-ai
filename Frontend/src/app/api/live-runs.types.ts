@@ -234,6 +234,56 @@ export interface HostRunnerActionResponse {
   process: HostRunnerProcessStatus;
 }
 
+// ─────────────────────────── ADR 0009 sizing policy ───────────────────────────
+//
+// `live_config.sizing` is the operator-selected policy that governs `set_holdings`
+// at the engine boundary. The discriminated union mirrors Python's
+// `app.engine.execution.order_sizer.SizingPolicy` 1:1.
+//
+// PR1 ships only `FixedShares` at runtime; the other kinds validate but are
+// disabled in the deploy form UI:
+//   * `SetHoldings` (Reference parity)  — wired in PR3
+//   * `FixedNotional` (Custom: notional) — wired in PR4
+//   * `StrategyExplicit`                 — surfaced in PR7
+
+export type SizingKind = 'FixedShares' | 'SetHoldings' | 'FixedNotional' | 'StrategyExplicit';
+
+export interface SizingFixedShares {
+  kind: 'FixedShares';
+  value: number;
+}
+
+export interface SizingSetHoldings {
+  kind: 'SetHoldings';
+  /** Decimal string on the wire (never a float) — preserves run_id hash stability. */
+  fraction: string;
+}
+
+export interface SizingFixedNotional {
+  kind: 'FixedNotional';
+  /** Decimal string on the wire (never a float) — preserves run_id hash stability. */
+  value: string;
+}
+
+export interface SizingStrategyExplicit {
+  kind: 'StrategyExplicit';
+}
+
+export type SizingPolicy =
+  | SizingFixedShares
+  | SizingSetHoldings
+  | SizingFixedNotional
+  | SizingStrategyExplicit;
+
+/** Deploy-form preset (ADR 0009 § 7). Each maps to one or two `SizingPolicy`
+ * shapes. Reference parity is gated by the audit-copy allow-list (PR3). */
+export type SizingPreset = 'safe_canary' | 'reference_parity' | 'custom';
+
+/** Engine-derived sizing stamps on the run ledger (ADR 0009 § 3). Never operator
+ * input; the engine derives both at deploy/start. */
+export type GovernedBy = 'live_config' | 'strategy_explicit';
+export type SizingProvenance = 'reference_native' | 'live_override' | 'spec_default';
+
 /** Deploy (create-a-run) request — forwarded by the data plane to the daemon
  * (ADR 0006). The QC anchor (`qc_cloud_backtest_id` + `qc_audit_copy_path`) is
  * mandatory by design. `start: true` chains a launch using `start_options`. */

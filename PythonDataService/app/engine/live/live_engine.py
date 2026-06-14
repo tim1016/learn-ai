@@ -30,6 +30,7 @@ from app.broker.ibkr.models import IbkrMinuteBar, IbkrOrderEvent
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
+from app.engine.execution.order_sizer import OrderSizer
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
@@ -395,7 +396,16 @@ class LiveEngine:
             raise ValueError("supply at most one of bars or ibkr_bars")
 
         self._validate_paper_client()
-        portfolio = LivePortfolio(self._broker)
+        # ADR 0009 — when the resolved live_config carries a sizing policy,
+        # construct the policy-application adapter and attach it to the
+        # portfolio. ``set_holdings`` then routes through the adapter; legacy
+        # callers (no policy in live_config) keep the prior SimpleFloorSizing
+        # path. PR1 wires FixedShares only; the percent and notional paths land
+        # in later PRs.
+        order_sizer: OrderSizer | None = None
+        if self._config.sizing is not None:
+            order_sizer = OrderSizer(self._config.sizing)
+        portfolio = LivePortfolio(self._broker, order_sizer=order_sizer)
         await portfolio.refresh_from_broker()
         initial_cash = portfolio.cash
         ctx = LiveContext(
