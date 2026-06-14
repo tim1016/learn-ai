@@ -72,6 +72,29 @@ _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 
 
+def _exit_reason_from_code(returncode: int | None) -> str:
+    """VCR-0018-B / Phase 6B — best-effort exit-reason classifier.
+
+    Maps the runtime's documented exit codes (``cmd_start``) to operator-
+    facing strings so the cockpit can render "process gone" with a
+    readable cause. Unknown codes fall through to a generic
+    ``"exited(<rc>)"`` so the operator still sees the raw return code.
+    """
+    if returncode is None:
+        return "alive"
+    if returncode == 0:
+        return "normal"
+    if returncode == 1:
+        return "fatal_halt"
+    if returncode == 2:
+        return "operator_refusal"
+    if returncode == 3:
+        return "exception"
+    if returncode == 4:
+        return "hydration_failure"
+    return f"exited({returncode})"
+
+
 class HostRunnerError(RuntimeError):
     """Error that should be translated into a daemon HTTP response."""
 
@@ -590,14 +613,35 @@ class RunnerProcessManager:
         return resolved
 
     def stop(self, run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
-        """Signal the host runner for ``run_id`` to stop."""
+        """Signal the host runner for ``run_id`` to stop.
+
+        VCR-0018-B / Phase 6B — distinguishes "signal accepted" from
+        "process exited" in the response. ``command_id`` is the stable
+        per-stop identifier; ``stop_outcome`` is one of
+        ``"signal_accepted"`` (process is alive but won't be after the
+        runtime drains), ``"exited"`` (poll returned non-None), or
+        ``"still_running_after_2s"`` (process did not exit within
+        ``_STOP_WAIT_SECONDS``). The cockpit/CLI renders both stages so
+        the operator can tell "signal sent" from "process gone".
+        """
+        import uuid as _uuid
+
+        command_id = f"stop-{_uuid.uuid4().hex[:12]}"
         current = self._by_run_id(run_id)
         if current is None:
             raise HostRunnerError(
                 status.HTTP_404_NOT_FOUND, f"No host runner process is being tracked for {run_id}."
             )
         if current.process.poll() is not None:
-            return HostRunnerActionResponse(accepted=False, process=self.process_status(run_id))
+            # Already-exited race: report it as ``exited`` with the runner's
+            # actual exit code so the cockpit doesn't render a phantom stop.
+            return HostRunnerActionResponse(
+                accepted=False,
+                process=self.process_status(run_id),
+                command_id=command_id,
+                stop_outcome="exited",
+                exit_reason=_exit_reason_from_code(current.process.returncode),
+            )
 
         current.stopping = True
         if current.process.poll() is None:
@@ -606,10 +650,20 @@ class RunnerProcessManager:
             except OSError:
                 self._refresh(current)
                 if current.process.poll() is not None:
-                    return HostRunnerActionResponse(accepted=False, process=self.process_status(run_id))
+                    return HostRunnerActionResponse(
+                        accepted=False,
+                        process=self.process_status(run_id),
+                        command_id=command_id,
+                        stop_outcome="exited",
+                        exit_reason=_exit_reason_from_code(current.process.returncode),
+                    )
                 raise
+        stop_outcome = "still_running_after_2s"
+        exit_reason: str | None = None
         try:
             current.process.wait(timeout=_STOP_WAIT_SECONDS)
+            stop_outcome = "exited"
+            exit_reason = _exit_reason_from_code(current.process.returncode)
         except subprocess.TimeoutExpired:
             if request.force:
                 if current.process.poll() is None:
@@ -620,10 +674,23 @@ class RunnerProcessManager:
                         if current.process.poll() is None:
                             raise
                 current.process.wait(timeout=_STOP_WAIT_SECONDS)
+                stop_outcome = "exited"
+                exit_reason = _exit_reason_from_code(current.process.returncode)
 
         self._refresh(current)
-        logger.info("Stop requested for host live runner %s", run_id)
-        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
+        logger.info(
+            "Stop requested for host live runner %s: outcome=%s exit_reason=%s",
+            run_id,
+            stop_outcome,
+            exit_reason,
+        )
+        return HostRunnerActionResponse(
+            accepted=True,
+            process=self.process_status(run_id),
+            command_id=command_id,
+            stop_outcome=stop_outcome,
+            exit_reason=exit_reason,
+        )
 
     def _build_start_command(
         self,
