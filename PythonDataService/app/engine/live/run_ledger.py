@@ -164,6 +164,7 @@ def build_ledger(
     live_config: dict,
     strategy_instance_id: str = "",
     strategy_key: str = "",
+    audit_copy_allow_list_root: Path | None = None,
 ) -> LiveRunLedger:
     """Build a ``LiveRunLedger`` from on-disk inputs and resolved config.
 
@@ -199,17 +200,23 @@ def build_ledger(
     # carries the conservative defaults on the ledger model (governed_by =
     # live_config since the legacy ``SimpleFloorSizing`` was de facto the
     # ``set_holdings`` path; sizing_provenance = live_override since there is
-    # no proof path until PR3).
+    # no proof path for it).
+    #
+    # PR3 wires ``reference_native`` via the audit-copy allow-list: when the
+    # resolved policy is rule-equivalent to the audit copy's registered rule
+    # AND the audit copy's sha re-verifies, the stamp goes to
+    # ``reference_native``. Every other outcome (mismatch, sha drift, file
+    # missing, allow-list missing) falls to the fail-closed ``live_override``.
+    from app.engine.execution.audit_copy_allow_list import lookup as _audit_copy_lookup
     from app.engine.execution.order_sizer import (
-        default_sizing_provenance,
         governed_by,
         parse_sizing_policy,
     )
 
-    # Validate ``sizing`` by **key presence**, not truthiness. A falsy payload
-    # (``{}`` / ``None`` / ``""``) past the API boundary is a deploy bug —
-    # writing it would persist an unstartable ledger because the start gate
-    # parses on key presence and would reject it. Hand it to
+    # Validate ``sizing`` by **key presence**, not truthiness (PR1 reviewer
+    # fix). A falsy payload (``{}`` / ``None`` / ``""``) past the API boundary
+    # is a deploy bug — writing it would persist an unstartable ledger because
+    # the start gate parses on key presence and would reject it. Hand it to
     # ``parse_sizing_policy`` so the deploy fails fast with the same error
     # surface the start gate uses. Genuine absence (no key at all) keeps
     # legacy/unknown semantics on the ledger stamps.
@@ -218,6 +225,34 @@ def build_ledger(
         resolved_policy = parse_sizing_policy(live_config["sizing"])
     else:
         resolved_policy = None
+
+    sizing_provenance: Literal["reference_native", "live_override", "spec_default"] = (
+        "live_override"
+    )
+    if resolved_policy is not None:
+        # The allow-list stores repo-relative POSIX paths (the canonical form
+        # ADR 0006 uses everywhere); compute that form from the absolute path
+        # the daemon resolved before handing off here.
+        lookup_path = str(qc_audit_copy_path)
+        if audit_copy_allow_list_root is not None:
+            try:
+                lookup_path = (
+                    Path(qc_audit_copy_path)
+                    .resolve()
+                    .relative_to(Path(audit_copy_allow_list_root).resolve())
+                    .as_posix()
+                )
+            except ValueError:
+                # The audit copy is outside the repo root — the lookup will
+                # legitimately surface as cannot_prove.
+                lookup_path = str(qc_audit_copy_path)
+        verdict = _audit_copy_lookup(
+            audit_copy_path=lookup_path,
+            proposed_policy=resolved_policy,
+            repo_root=audit_copy_allow_list_root,
+        )
+        if verdict.verdict == "proven_match":
+            sizing_provenance = "reference_native"
     return LiveRunLedger(
         run_id=run_id,
         code_sha=code_sha,
@@ -232,7 +267,7 @@ def build_ledger(
         strategy_instance_id=strategy_instance_id,
         strategy_key=strategy_key,
         governed_by=governed_by(resolved_policy),
-        sizing_provenance=default_sizing_provenance(resolved_policy),
+        sizing_provenance=sizing_provenance,
     )
 
 

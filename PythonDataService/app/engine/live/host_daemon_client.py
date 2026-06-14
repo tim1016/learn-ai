@@ -160,6 +160,24 @@ async def fetch_qc_audit_copies(base_url: str) -> dict | None:
     return await _get_json(f"{base_url.rstrip('/')}/qc-audit-copies")
 
 
+async def fetch_audit_copy_sizing_lookup(
+    base_url: str,
+    audit_copy_path: str,
+    proposed_sizing: dict | None = None,
+) -> dict | None:
+    """GET /audit-copy-sizing-lookup. Returns body or None on daemon failure.
+
+    ``proposed_sizing`` is JSON-encoded into the query string.
+    """
+    import json as _json
+    from urllib.parse import quote
+
+    params = f"audit_copy_path={quote(audit_copy_path, safe='/')}"
+    if proposed_sizing is not None:
+        params += f"&proposed_sizing={quote(_json.dumps(proposed_sizing, sort_keys=True))}"
+    return await _get_json(f"{base_url.rstrip('/')}/audit-copy-sizing-lookup?{params}")
+
+
 async def _get_json(url: str) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

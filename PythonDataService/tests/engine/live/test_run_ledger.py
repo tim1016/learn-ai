@@ -388,7 +388,9 @@ def test_build_ledger_derives_governed_by_from_sizing_kind(tmp_path: Path) -> No
     legacy = build_ledger(live_config={}, **common)
 
     assert canary.governed_by == "live_config"
-    assert canary.sizing_provenance == "live_override"  # fail-closed default until PR3
+    # No allow-list at this tmp_path, so the lookup yields cannot_prove and
+    # the fail-closed default `live_override` lands on the ledger.
+    assert canary.sizing_provenance == "live_override"
     assert explicit.governed_by == "strategy_explicit"
     assert legacy.governed_by == "live_config"
     assert legacy.sizing_provenance == "live_override"
@@ -411,6 +413,67 @@ def test_build_ledger_rejects_empty_sizing_payload(tmp_path: Path) -> None:
             start_date_ms=1_700_000_000_000,
             live_config={"sizing": {}},
         )
+
+
+def test_build_ledger_derives_reference_native_on_allow_list_match(tmp_path: Path) -> None:
+    """ADR 0009 § 3 — when ``live_config.sizing`` matches the registered rule
+    AND the audit copy's sha re-verifies, the engine stamps ``reference_native``.
+    Every other outcome falls to the fail-closed ``live_override``.
+    """
+    import hashlib
+    import json as _json
+
+    # Build a repo layout the lookup can resolve.
+    repo_root = tmp_path / "repo"
+    spec = repo_root / "spec.json"
+    qc_rel = "references/qc-shadow/Foo.py"
+    qc_copy = repo_root / qc_rel
+    qc_copy.parent.mkdir(parents=True, exist_ok=True)
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text('{"strategy": "x"}', encoding="utf-8")
+    content = "# canonical"
+    qc_copy.write_text(content, encoding="utf-8")
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    allow_list = repo_root / "docs/references/audit-copy-sizing-allow-list.json"
+    allow_list.parent.mkdir(parents=True, exist_ok=True)
+    allow_list.write_text(
+        _json.dumps(
+            [
+                {
+                    "audit_copy_path": qc_rel,
+                    "audit_copy_sha256": sha,
+                    "rule": {"kind": "SetHoldings", "fraction": "1.0"},
+                    "registered_at_ms": 0,
+                    "registered_by": "x",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    matched = build_ledger(
+        code_sha="abc",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=0,
+        live_config={"sizing": {"kind": "SetHoldings", "fraction": "1.0"}},
+        audit_copy_allow_list_root=repo_root,
+    )
+    assert matched.sizing_provenance == "reference_native"
+
+    mismatched = build_ledger(
+        code_sha="abc",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=0,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+        audit_copy_allow_list_root=repo_root,
+    )
+    assert mismatched.sizing_provenance == "live_override"
 
 
 def test_sizing_changes_run_id_via_live_config_hash(tmp_path: Path) -> None:

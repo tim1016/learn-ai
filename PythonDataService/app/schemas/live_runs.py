@@ -380,6 +380,30 @@ class QcAuditCopyListing(BaseModel):
     entries: list[str] = Field(default_factory=list)
 
 
+class AuditCopySizingLookup(BaseModel):
+    """ADR 0009 § 3 — deploy-form gate status for the Reference parity preset.
+
+    Returned by the daemon's audit-copy-sizing lookup endpoint and surfaced to
+    the deploy form's inline gate banner. Three verdicts:
+
+    * ``proven_match`` — registered + sha re-verifies + proposed policy
+      matches the registered rule (or no proposed policy was supplied, which
+      is the deploy-form's pre-select case).
+    * ``proven_mismatch`` — registered + sha re-verifies, but the proposed
+      policy differs from the registered rule.
+    * ``cannot_prove`` — entry absent, file missing, sha drift, or allow-list
+      unavailable.
+    """
+
+    verdict: Literal["proven_match", "proven_mismatch", "cannot_prove"]
+    # Operator-facing one-line summary; safe to render verbatim.
+    detail: str
+    # The registered rule (when known) and the proposed live rule (when sent),
+    # both rendered as dicts via the same shape ``live_config.sizing`` uses.
+    expected_rule: dict | None = None
+    actual_rule: dict | None = None
+
+
 # --- PRD-A UI-1/UI-3/UI-4 contract additions ---
 
 

@@ -316,6 +316,19 @@ export interface QcAuditCopyListing {
   entries: string[];
 }
 
+/** ADR 0009 § 3 — Reference parity gate verdict for the deploy form. */
+export type AuditCopySizingVerdict = 'proven_match' | 'proven_mismatch' | 'cannot_prove';
+
+export interface AuditCopySizingLookup {
+  verdict: AuditCopySizingVerdict;
+  /** Operator-facing one-liner; safe to render verbatim. */
+  detail: string;
+  /** The registered rule from the allow-list (when known), as a `SizingPolicy` dict. */
+  expected_rule: SizingPolicy | null;
+  /** The proposed live rule (when the form sent one), as a `SizingPolicy` dict. */
+  actual_rule: SizingPolicy | null;
+}
+
 /** Minimal strategy descriptor from `GET /api/engine/strategies`. `name` is the
  * algorithm module (the `strategy_key`); the full payload also carries a params
  * schema the deploy form does not need. */

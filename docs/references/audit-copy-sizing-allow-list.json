@@ -1,0 +1,18 @@
+[
+  {
+    "audit_copy_path": "references/qc-shadow/DeploymentValidationAlgorithm.py",
+    "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
+    "rule": { "kind": "SetHoldings", "fraction": "1.0" },
+    "registered_at_ms": 1718268000000,
+    "registered_by": "inkant",
+    "note": "Deployment-validation canary — all-in SetHoldings(SPY, 1.0)."
+  },
+  {
+    "audit_copy_path": "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+    "audit_copy_sha256": "cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078",
+    "rule": { "kind": "SetHoldings", "fraction": "1.0" },
+    "registered_at_ms": 1718268000000,
+    "registered_by": "inkant",
+    "note": "SPY EMA crossover audit copy — all-in SetHoldings(SPY, 1.0)."
+  }
+]

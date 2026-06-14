@@ -399,6 +399,14 @@ small code {
     strong {
       font-size: 0.95rem;
     }
+
+    .gate {
+      color: #fbbf24;
+
+      &.gate-pass {
+        color: #4ade80;
+      }
+    }
   }
 }
 
