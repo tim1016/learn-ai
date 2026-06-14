@@ -1,15 +1,66 @@
 ---
 id: VCR-0004
 severity: P1
-status: open
+status: remediated
 area: strategy-keys
 canonical_file: PythonDataService/app/engine/live/run.py:897
 reference: PRD §12.1
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#494 — Phase 2 — Module-name strategy keys + explicit class_name"
 lens: strategy-registry-key-mapping
 dedupe_with_F: none
 confidence: high
+---
+
+## Remediation (#494 / Phase 2)
+
+Closed by issue #494. Registry keys, deploy values, ledger ``strategy_key``,
+runner ``--strategy``, and the Python module path now use a single string —
+the module name. ``StrategyRegistration.class_name`` names the algorithm
+class explicitly so a future class rename cannot silently break the
+runner's class lookup.
+
+Key changes:
+
+- ``app/routers/engine.py`` — ``StrategyRegistration`` gains required
+  ``class_name: str``; six keys renamed to module-name form:
+  ``ema_crossover``→``spy_ema_crossover``, ``orb``→``spy_orb``,
+  ``ema_crossover_options``→``spy_ema_crossover_options``,
+  ``rsi_range_a/b/c``→``spy_strategy_a/b/c``. Three keys keep their
+  module-aligned names (``sma_crossover``, ``rsi_mean_reversion``,
+  ``deployment_validation``). ``daily_sma_crossover`` gets a thin shim
+  module (re-exports ``SmaCrossoverAlgorithm``) so the registry/module
+  invariant holds for every entry.
+- ``app/engine/live/run.py`` — the runner consults
+  ``_STRATEGY_REGISTRY`` first (unregistered ``--strategy`` is refused);
+  the class lookup is now ``getattr(module, registration.class_name)``
+  instead of the ``<PascalKey>Algorithm`` convention. Both the
+  ``_lookup_sizing_surface`` and ``deploy.py`` paths drop their
+  ``removeprefix("spy_")`` workaround.
+- ``app/engine/strategy/algorithms/deployment_validation.py`` — the
+  alias ``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
+  is deleted. The registry names the real class.
+
+Regression tests:
+
+- ``tests/test_engine_strategies_endpoint.py`` —
+  ``test_every_registered_strategy_can_be_imported_by_key``,
+  ``test_every_registered_strategy_has_explicit_class_name``,
+  ``test_every_registered_class_name_resolves_against_its_module``,
+  ``test_deployment_validation_class_name_is_consecutive_green``,
+  ``test_deployment_validation_alias_no_longer_exists``.
+- ``tests/engine/test_deployment_validation_strategy.py`` —
+  ``test_live_start_registry_class_name_resolves_strategy_class``
+  replaces the old alias-checks test.
+- ``tests/engine/live/test_run_cli.py::test_start_returns_2_when_strategy_module_unknown``
+  asserts the new ``is not registered`` exit path (unregistered
+  ``--strategy`` is the gate, not module-level ``import_module``).
+
+Frontend mock (`broker-deploy-form.component.spec.ts`) updated so the
+deploy form test data mirrors what production now emits
+(``spy_ema_crossover_options`` instead of ``ema_crossover_options``).
+
 ---
 
 ## What

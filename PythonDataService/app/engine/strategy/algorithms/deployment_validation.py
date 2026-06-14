@@ -222,6 +222,3 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._entry_pending = False
 
 
-# Live runtime dynamic import convention:
-# ``deployment_validation`` -> ``DeploymentValidationAlgorithm``.
-DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen

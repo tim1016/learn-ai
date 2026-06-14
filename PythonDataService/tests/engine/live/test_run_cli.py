@@ -869,15 +869,16 @@ def test_start_guard_noops_when_ledger_strategy_key_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     """A legacy ledger (empty ``strategy_key``) is unguarded — any ``--strategy``
-    passes the guard and advances to the algorithm import. Using a non-existent
-    module, the run fails at *import* (exit 2, "could not import"), not at the
-    guard — proving the guard let it through without executing the engine.
-    """
+    passes the foot-gun guard and advances to the next gate. Phase 2 / VCR-0004
+    moved the gate from a bare ``import_module`` to the strategy registry, so
+    an unregistered name now fails at ``[START] strategy '<name>' is not
+    registered``. We assert that — and that it is NOT the foot-gun guard —
+    proving the guard let it through."""
     run_dir = _write_ledger_with_strategy_key(tmp_path, "")
     rc = main(["start", "--run-dir", str(run_dir), "--strategy", "no_such_algo_xyz", "--readonly"])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "could not import strategy module" in err
+    assert "is not registered" in err
     assert "does not match the ledger's strategy_key" not in err
 
 
@@ -1639,7 +1640,10 @@ def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: py
     )
     assert rc == 2
     err = capsys.readouterr().err
-    assert "could not import strategy" in err
+    # VCR-0004 / Phase 2 — unregistered strategies are refused at the registry
+    # gate (not at ``import_module``) so the dropdown contract is enforced
+    # even if a module file happens to exist on disk.
+    assert "is not registered" in err
 
 
 def test_make_ibkr_client_pins_spec_client_id() -> None:

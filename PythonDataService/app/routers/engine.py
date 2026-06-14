@@ -343,6 +343,13 @@ class StrategyRegistration:
     description: str
     param_schema: type[StrategyParamsBase]
     build: Callable[[StrategyParamsBase], Strategy]
+    # VCR-0004 / Phase 2 — the algorithm class the runner constructs. The
+    # registry key is the module name (``app.engine.strategy.algorithms.{key}``);
+    # ``class_name`` names the class inside that module. Together they retire
+    # the ``<PascalKey>Algorithm`` convention so a future class rename
+    # (``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
+    # was the smoking gun) cannot silently break the runner's class lookup.
+    class_name: str = ""
     # Which data resolutions the strategy can run against. Defaults to
     # minute-only because every currently-ported strategy consolidates
     # minute bars via a ``TradeBarConsolidator``. Daily-native strategies
@@ -374,8 +381,9 @@ class StrategyRegistration:
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "ema_crossover": StrategyRegistration(
+    "spy_ema_crossover": StrategyRegistration(
         display_name="EMA Crossover",
+        class_name="SpyEmaCrossoverAlgorithm",
         description=(
             "Long-only intraday trend strategy. Bit-exact against the LEAN "
             "C# reference when run with the default SPY symbol; any ticker "
@@ -474,6 +482,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
+        class_name="SmaCrossoverAlgorithm",
         description=(
             "Classic golden-cross / death-cross. Enters long when the short "
             "SMA crosses above the long SMA, exits on the opposite cross. "
@@ -543,6 +552,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "daily_sma_crossover": StrategyRegistration(
         display_name="Daily SMA Crossover",
+        class_name="SmaCrossoverAlgorithm",
         description=(
             "Long-term golden-cross / death-cross run against LEAN daily "
             "bars (one zip per symbol under equity/usa/daily/). Defaults "
@@ -615,6 +625,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
+        class_name="RsiMeanReversionAlgorithm",
         description=(
             "Long-only RSI threshold strategy. Buys oversold (RSI < oversold), "
             "sells overbought (RSI > overbought). Configurable symbol, window, "
@@ -678,8 +689,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
     ),
-    "orb": StrategyRegistration(
+    "spy_orb": StrategyRegistration(
         display_name="Opening Range Breakout",
+        class_name="SpyOpeningRangeBreakout",
         description=(
             "Pure price-action Opening Range Breakout — zero indicator "
             "warmup. The opening range (default: first 3 fifteen-minute "
@@ -776,6 +788,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     ),
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
+        class_name="DeploymentValidationConsecutiveGreen",
         description=(
             "Minute-bar lifecycle validation strategy. Starting with the "
             "09:45 ET minute close, it watches for two consecutive green "
@@ -834,8 +847,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             symbol=p.symbol,  # type: ignore[attr-defined]
         ),
     ),
-    "ema_crossover_options": StrategyRegistration(
+    "spy_ema_crossover_options": StrategyRegistration(
         display_name="EMA Crossover Options",
+        class_name="SpyEmaCrossoverOptionsAlgorithm",
         description=(
             "This strategy uses the exact same EMA crossover signal as the equity version "
             "— same entry times, same exit times, same 5-bar hold — but instead of buying "
@@ -979,8 +993,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         # form disables the sizing control + labels it "self-sized".
         sizing_surface="explicit",
     ),
-    "rsi_range_a": StrategyRegistration(
+    "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
+        class_name="SpyStrategyAAlgorithm",
         description=(
             "Long-only 15-minute trend-follower. On each bar while flat, enters "
             "long if RSI is inside the [rsi_low_gate, rsi_high_gate] range AND "
@@ -1055,8 +1070,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
     ),
-    "rsi_range_b": StrategyRegistration(
+    "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
+        class_name="SpyStrategyBAlgorithm",
         description=(
             "Long-only 15-minute momentum strategy. Same RSI-range filter as "
             "Strategy A. On each bar while flat, enters long if RSI is in "
@@ -1134,8 +1150,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
     ),
-    "rsi_range_c": StrategyRegistration(
+    "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
+        class_name="SpyStrategyCAlgorithm",
         description=(
             "Long-only 15-minute strategy with the simplest gate: on each "
             "bar while flat, enter long if RSI is in range, ADX > 20 AND "

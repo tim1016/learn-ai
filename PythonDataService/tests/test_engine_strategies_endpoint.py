@@ -25,13 +25,18 @@ from __future__ import annotations
 import json
 
 EXPECTED_STRATEGY_KEYS = {
-    "ema_crossover",
+    # VCR-0004 / Phase 2 — registry keys are now module names so the runner
+    # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
+    "spy_ema_crossover",
     "sma_crossover",
     "daily_sma_crossover",
     "rsi_mean_reversion",
-    "orb",
+    "spy_orb",
     "deployment_validation",
-    "ema_crossover_options",
+    "spy_ema_crossover_options",
+    "spy_strategy_a",
+    "spy_strategy_b",
+    "spy_strategy_c",
 }
 
 
@@ -46,12 +51,15 @@ def _list_strategies():
 
 
 def test_orb_is_registered_with_correct_metadata():
-    """The orb strategy is present and carries the expected metadata."""
+    """The orb strategy is present and carries the expected metadata.
+
+    VCR-0004 / Phase 2: the registry key is now the module name (``spy_orb``)
+    so the runner imports the same file the dropdown advertises."""
     strategies = _list_strategies()
     names = {s["name"] for s in strategies}
-    assert "orb" in names, f"orb strategy missing from registry; saw: {sorted(names)}"
+    assert "spy_orb" in names, f"spy_orb strategy missing from registry; saw: {sorted(names)}"
 
-    orb = next(s for s in strategies if s["name"] == "orb")
+    orb = next(s for s in strategies if s["name"] == "spy_orb")
     assert orb["display_name"] == "Opening Range Breakout"
     assert "minute" in orb["supported_resolutions"]
 
@@ -116,7 +124,7 @@ def test_orb_gotchas_include_traded_today_guard():
     permanently in the UI gotcha list is how we prevent the next
     porter from overlooking it.
     """
-    orb = next(s for s in _list_strategies() if s["name"] == "orb")
+    orb = next(s for s in _list_strategies() if s["name"] == "spy_orb")
     combined = " ".join(orb["gotchas"]).lower()
     assert "traded_today" in combined or "one trade per day" in combined, (
         "ORB gotcha list should document the one-trade-per-day guard — the QQQ validation study's primary finding."
@@ -139,7 +147,7 @@ def test_build_callable_constructs_orb_with_default_params():
     """
     from app.routers.engine import _STRATEGY_REGISTRY
 
-    reg = _STRATEGY_REGISTRY["orb"]
+    reg = _STRATEGY_REGISTRY["spy_orb"]
     default_params = reg.param_schema()
     instance = reg.build(default_params)
     assert instance.__class__.__name__ == "SpyOpeningRangeBreakout"
@@ -147,6 +155,88 @@ def test_build_callable_constructs_orb_with_default_params():
     qqq_params = reg.param_schema(symbol="QQQ")
     qqq_instance = reg.build(qqq_params)
     assert qqq_instance._symbol_name == "QQQ"
+
+
+# ────────────────── VCR-0004 / Phase 2 — module-name contract ─────────
+
+
+def test_every_registered_strategy_can_be_imported_by_key():
+    """The registry key IS the module name — the runner imports by it. If a
+    registered key cannot be imported, the dropdown advertises a strategy that
+    cannot start. This was the smoking gun for VCR-0004 (7 of 10 dropdown items
+    broken)."""
+    from importlib import import_module
+
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    failures = []
+    for key in _STRATEGY_REGISTRY:
+        try:
+            import_module(f"app.engine.strategy.algorithms.{key}")
+        except ImportError as exc:
+            failures.append(f"{key}: {exc}")
+    assert not failures, (
+        "Registry keys must match algorithm module names so the runner can "
+        "import them. Failing keys: " + "; ".join(failures)
+    )
+
+
+def test_every_registered_strategy_has_explicit_class_name():
+    """``StrategyRegistration.class_name`` retires the ``<PascalKey>Algorithm``
+    convention. Every entry names its class explicitly so a future class rename
+    does not silently break the runner's class lookup."""
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    missing = [key for key, reg in _STRATEGY_REGISTRY.items() if not getattr(reg, "class_name", "")]
+    assert not missing, (
+        f"Strategies missing class_name: {missing}. Phase 2 / VCR-0004 — "
+        f"populate StrategyRegistration.class_name for every entry."
+    )
+
+
+def test_every_registered_class_name_resolves_against_its_module():
+    """The runner does ``getattr(module, registration.class_name)``. Every
+    registered ``class_name`` must resolve to a class in its module."""
+    from importlib import import_module
+
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    failures = []
+    for key, reg in _STRATEGY_REGISTRY.items():
+        try:
+            module = import_module(f"app.engine.strategy.algorithms.{key}")
+        except ImportError as exc:
+            failures.append(f"{key} module import: {exc}")
+            continue
+        cls = getattr(module, reg.class_name, None)
+        if cls is None:
+            failures.append(f"{key}: module has no class {reg.class_name!r}")
+    assert not failures, (
+        "Registered class_name must resolve in its module. Failing entries: "
+        + "; ".join(failures)
+    )
+
+
+def test_deployment_validation_class_name_is_consecutive_green():
+    """The ``DeploymentValidationAlgorithm`` alias is retired. The registry
+    names the real class (``DeploymentValidationConsecutiveGreen``)."""
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    reg = _STRATEGY_REGISTRY["deployment_validation"]
+    assert reg.class_name == "DeploymentValidationConsecutiveGreen"
+
+
+def test_deployment_validation_alias_no_longer_exists():
+    """``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
+    in ``deployment_validation.py`` was the convention paper-over. Delete it
+    along with the convention itself; the registry's ``class_name`` is the
+    sole source of truth."""
+    from app.engine.strategy.algorithms import deployment_validation
+
+    assert not hasattr(deployment_validation, "DeploymentValidationAlgorithm"), (
+        "DeploymentValidationAlgorithm alias must be removed — the registry's "
+        "class_name names DeploymentValidationConsecutiveGreen directly."
+    )
 
 
 if __name__ == "__main__":

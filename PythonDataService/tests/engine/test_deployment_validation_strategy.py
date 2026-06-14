@@ -10,7 +10,6 @@ from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode
 from app.engine.strategy.algorithms.deployment_validation import (
-    DeploymentValidationAlgorithm,
     DeploymentValidationConsecutiveGreen,
 )
 
@@ -130,8 +129,19 @@ def test_stops_detecting_and_flattens_at_1545() -> None:
     assert events == []
 
 
-def test_live_start_convention_alias_resolves_strategy_class() -> None:
-    assert DeploymentValidationAlgorithm is DeploymentValidationConsecutiveGreen
+def test_live_start_registry_class_name_resolves_strategy_class() -> None:
+    """VCR-0004 / Phase 2 — the runner reads ``StrategyRegistration.class_name``
+    instead of inferring a ``<PascalKey>Algorithm`` convention. The retired
+    alias ``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
+    is gone; the registry now names the real class directly."""
+    from importlib import import_module
+
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    reg = _STRATEGY_REGISTRY["deployment_validation"]
+    assert reg.class_name == "DeploymentValidationConsecutiveGreen"
+    module = import_module("app.engine.strategy.algorithms.deployment_validation")
+    assert getattr(module, reg.class_name) is DeploymentValidationConsecutiveGreen
 
 
 def test_exposes_consolidator_period_for_indicator_hydration() -> None:
