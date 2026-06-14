@@ -343,6 +343,11 @@ class LiveEngine:
         # ``start_paused`` seeds this from durable desired-state so a
         # bot that was PAUSED before a crash resumes paused.
         self._paused = start_paused
+        # VCR-0007 / Phase 6A — FLATTEN_NOW is a pure one-shot. The command
+        # dispatcher sets this flag; the bar loop polls it between bars and
+        # invokes ``_flatten`` without terminating the process. The flag is
+        # cleared after the flatten lands so a subsequent enqueue rearms it.
+        self._flatten_now_requested = False
         # Decision-row provenance.
         self._run_id = run_id
         self._strategy_key = strategy_key
@@ -440,7 +445,7 @@ class LiveEngine:
 
         ``shutdown_event`` is the graceful-shutdown hook for SIGINT /
         SIGTERM (wired in ``run.py`` cmd_start). When set, the bar
-        loop runs ``_shutdown_flatten`` (cancel open broker orders +
+        loop runs ``_flatten`` (cancel open broker orders +
         liquidate positions + submit the liquidations) and exits
         cleanly through the existing finally block (artifact writers
         close, event stream stops). Responsiveness: the event is
@@ -553,7 +558,7 @@ class LiveEngine:
                 if minute_bar is None:
                     if shutdown_won:
                         # Graceful shutdown via SIGINT/SIGTERM. cancel_open_orders +
-                        # liquidate + submit happen via _shutdown_flatten; the
+                        # liquidate + submit happen via _flatten; the
                         # existing finally block (post-break) flushes writers and
                         # stops the broker event stream. ``last_bar.end_time``
                         # gives the historical "use the last bar's time" behavior
@@ -562,13 +567,28 @@ class LiveEngine:
                         # where no bar ever arrived.
                         fallback_time = last_bar.end_time if last_bar is not None else datetime.now(_ENGINE_TZ)
                         ctx.log(f"[SHUTDOWN] {fallback_time}: shutdown_event set; flattening and exiting")
-                        flat_acks = await self._shutdown_flatten(portfolio, ctx, bar_time=fallback_time)
+                        flat_acks = await self._flatten(portfolio, ctx, bar_time=fallback_time)
                         submitted_order_ids.extend(ack.order_id for ack in flat_acks)
                     # source exhausted (shutdown_won=False) OR shutdown finished —
                     # either way the bar loop is done.
                     break
                 last_bar = minute_bar
                 self._raise_if_event_stream_failed()
+                # VCR-0007 / Phase 6A — service the FLATTEN_NOW one-shot
+                # between bars BEFORE per-bar consolidation/strategy work.
+                # The flatten cancels owned opens + liquidates positions
+                # but does NOT terminate the engine; the bar loop keeps
+                # running. The "Flatten and pause" UI endpoint writes
+                # ``desired_state = PAUSED`` BEFORE enqueueing FLATTEN_NOW,
+                # so the resume of the loop refuses new entries until
+                # the operator explicitly resumes.
+                if self._flatten_now_requested:
+                    self._flatten_now_requested = False
+                    ctx.log(
+                        f"[FLATTEN_NOW] {minute_bar.time}: cancelling owned opens + liquidating"
+                    )
+                    flat_acks = await self._flatten(portfolio, ctx, bar_time=minute_bar.time)
+                    submitted_order_ids.extend(ack.order_id for ack in flat_acks)
                 # Reset per-day order counter on session-date boundary.
                 bar_date = minute_bar.time.date()
                 if current_session_date is None or bar_date != current_session_date:
@@ -1195,14 +1215,17 @@ class LiveEngine:
                 shutdown_event.set()
                 return {"status": "success", "effect": "shutdown_signalled"}
             if cmd.verb is CommandVerb.FLATTEN:
-                # Graceful shutdown path already calls _shutdown_flatten
-                # which liquidates open positions. Aliasing FLATTEN to
-                # STOP for now; refinement is a follow-up that exposes
-                # a flatten-without-stop primitive. FLATTEN persists
-                # STOPPED too so the bot doesn't auto-restart after it.
-                self._persist_desired_state(DesiredState.STOPPED, "command_channel:FLATTEN")
-                shutdown_event.set()
-                return {"status": "success", "effect": "shutdown_signalled_with_flatten"}
+                # VCR-0007 / Phase 6A / ADR 0010 — FLATTEN_NOW is now PURE.
+                # It cancels owned opens + liquidates positions but does NOT
+                # mutate ``desired_state`` and does NOT terminate the
+                # process. The "Flatten and pause" UI endpoint composes
+                # ``desired_state = PAUSED`` BEFORE enqueueing this verb so
+                # the bar loop refuses new entries after the flatten lands.
+                # The actual flatten happens in the async bar loop (a flag
+                # the loop polls between bars); the ack here is "accepted",
+                # not "completed".
+                self._flatten_now_requested = True
+                return {"status": "accepted", "effect": "flatten_now_queued"}
             if cmd.verb is CommandVerb.MARK_POISONED:
                 effect = "poisoned_flag_written"
                 if self._output_dir is not None:
@@ -1284,7 +1307,7 @@ class LiveEngine:
 
     # ──────────────────── Graceful shutdown helper ───────────────────
 
-    async def _shutdown_flatten(
+    async def _flatten(
         self,
         portfolio: LivePortfolio,
         ctx: LiveContext,
