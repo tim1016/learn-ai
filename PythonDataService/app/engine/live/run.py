@@ -800,12 +800,18 @@ def cmd_start(args: argparse.Namespace) -> int:
     import os as _os
     from importlib import import_module
 
+    from app.engine.live.account_identity import (
+        AccountIdentityMismatchError,
+        InvalidAccountIdError,
+    )
     from app.engine.live.artifacts import DECISION_COLUMNS, resolve_decision_columns
     from app.engine.live.halt import FatalHaltError, read_poisoned_flag
     from app.engine.live.live_engine import (
         LiveEngine,
         MaxOrdersPerDayExceeded,
     )
+
+    _AccountIdentityError = (AccountIdentityMismatchError, InvalidAccountIdError)
     from app.engine.live.run_logging import configure_run_logging
     from app.engine.live.run_status import now_ms, write_run_status
     from app.engine.strategy.spec import load_spec_from_path
@@ -1425,6 +1431,24 @@ def cmd_start(args: argparse.Namespace) -> int:
                             "last_update_ms": now_ms(),
                             "exit_code": 1,
                             "exit_reason": ExitReason.max_orders_exceeded,
+                        }
+                    ),
+                )
+                return 1
+            except _AccountIdentityError as exc:
+                # VCR-0006 / Phase 3 — account identity refusal at the start
+                # gate. NO recovery flatten — touching orders on the wrong
+                # account is exactly what the gate is preventing. Exit 1 with
+                # both raw values surfaced for the cockpit failure list.
+                print(f"[START] HALT — broker account identity refusal: {exc}", file=sys.stderr)
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.fatal_halt,
                         }
                     ),
                 )
