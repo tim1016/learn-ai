@@ -38,13 +38,29 @@ describe('BrokerProvenanceCardComponent', () => {
     expect(text).toContain('Identity & Provenance');
     expect(text).toContain('abcdef012345'); // short run_id
     expect(text).toContain('Ran this committed code');
-    expect(text).toContain('Byte-identical to backtest');
-    expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
+    // VCR-0014 / Phase 7D — the QC provenance row is split into two
+    // honest proofs. The audit copy is a verifiable SHA; the QC Cloud
+    // backtest id is operator-recorded.
+    expect(text).toContain('Audit copy');
     expect(text).toContain('SpyEmaCrossoverAlgorithm.py'); // audit-copy filename
+    expect(text).toContain('QC Cloud backtest');
+    expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
+    expect(text).toContain('Operator-recorded, not auto-verified');
     expect(text).toContain('DU1234567');
     // live_config is part of the identity hash — surface it as a proof row.
     expect(text).toContain('Runtime config');
     expect(text).toContain('symbol=SPY');
+  });
+
+  it('never renders the forbidden VCR-0014 strings', () => {
+    const text = render(makeProv()).textContent ?? '';
+
+    // PRD §7D forbids these labels until a real QC Cloud API verification
+    // path exists. The card was the original source of "QC-approved" /
+    // "Byte-identical to backtest" — Phase 7D removes both.
+    expect(text).not.toContain('QC-approved');
+    expect(text).not.toContain('Byte-identical to backtest');
+    expect(text).not.toContain('verified backtest');
   });
 
   it('keeps the full fingerprints behind a disclosure', () => {
@@ -67,7 +83,8 @@ describe('BrokerProvenanceCardComponent', () => {
       ).textContent ?? '';
 
     expect(text).not.toContain('Ran this committed code');
-    expect(text).not.toContain('Byte-identical to backtest');
+    expect(text).not.toContain('Audit copy');
+    expect(text).not.toContain('QC Cloud backtest');
     expect(text).toContain('DU1234567'); // account proof still present
   });
 });

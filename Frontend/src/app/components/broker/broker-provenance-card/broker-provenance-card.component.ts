@@ -12,9 +12,15 @@ interface ProofRow {
 /**
  * "What this proves" — turns a run's content-addressed identity (run_id + the
  * hashed deploy inputs) into plain-language proof statements, with the full
- * fingerprints behind a disclosure. The operator learns what the hashes attest
- * to (committed code, QC-approved algorithm, account) instead of eyeballing
- * 40-char strings.
+ * fingerprints behind a disclosure.
+ *
+ * VCR-0014 / Phase 7D — the QC provenance row is split into two distinct
+ * proofs. The audit copy is verifiable (SHA against the on-disk file +
+ * ADR 0009 allow-list verdict). The QC Cloud backtest id is operator-
+ * recorded — there is no automated verification path against QC Cloud yet,
+ * so the row labels itself "Operator-recorded, not auto-verified" rather
+ * than the forbidden "QC-approved" / "verified backtest" /
+ * "Byte-identical to backtest" copy that VCR-0014 documented.
  */
 @Component({
   selector: 'app-broker-provenance-card',
@@ -45,11 +51,21 @@ export class BrokerProvenanceCardComponent {
         mono: shortSha(p.strategy_spec_sha256) || null,
       });
     }
-    if (p.qc_cloud_backtest_id || p.qc_audit_copy_sha256) {
+    // VCR-0014 / Phase 7D — split the old "QC-approved /
+    // Byte-identical to backtest" row (which conflated a verifiable SHA
+    // claim with an operator-recorded id) into two honest proofs.
+    if (p.qc_audit_copy_sha256 || p.qc_audit_copy_path) {
       rows.push({
-        label: 'QC-approved',
-        statement: `Byte-identical to backtest ${p.qc_cloud_backtest_id || '(recorded)'} — audit copy ${filename(p.qc_audit_copy_path) || '(recorded)'}`,
+        label: 'Audit copy',
+        statement: `SHA recorded for ${filename(p.qc_audit_copy_path) || '(recorded)'}`,
         mono: shortSha(p.qc_audit_copy_sha256) || null,
+      });
+    }
+    if (p.qc_cloud_backtest_id) {
+      rows.push({
+        label: 'QC Cloud backtest',
+        statement: `${p.qc_cloud_backtest_id} — Operator-recorded, not auto-verified.`,
+        mono: null,
       });
     }
     if (p.account_id) {

@@ -541,8 +541,14 @@ describe('BrokerInstancesComponent', () => {
 
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Identity & Provenance');
-    expect(text).toContain('Byte-identical to backtest');
+    // VCR-0014 / Phase 7D — the QC backtest id is rendered with the
+    // honest "operator-recorded" label, not the forbidden "QC-approved" /
+    // "Byte-identical to backtest" copy.
+    expect(text).toContain('QC Cloud backtest');
     expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
+    expect(text).toContain('Operator-recorded, not auto-verified');
+    expect(text).not.toContain('Byte-identical to backtest');
+    expect(text).not.toContain('QC-approved');
   });
 
   it('runs an account-wide emergency flatten after confirm + account echo', async () => {
