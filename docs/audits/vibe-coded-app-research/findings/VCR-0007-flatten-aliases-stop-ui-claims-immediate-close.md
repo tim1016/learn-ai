@@ -1,63 +1,15 @@
 ---
 id: VCR-0007
 severity: P1
-status: remediated
+status: open
 area: halt-state-machine
 canonical_file: PythonDataService/app/engine/live/live_engine.py
 reference: docs/architecture/adrs/0004-instance-addressed-operator-control-plane.md
-remediated_in: "#498 — Phase 6A — Flatten-and-pause composition (FLATTEN_NOW stays pure)"
 first_seen: 2026-06-14
 last_seen: 2026-06-14
 lens: halt-pause-stop-flatten-poison
 dedupe_with_F: none
-confidence: high
----
-
-## Remediation (#498 / Phase 6A)
-
-Closed by issue #498 per ADR 0010's resolved operator-action contract.
-
-Engine side:
-
-- ``CommandVerb.FLATTEN`` no longer aliases STOP. The dispatcher sets a
-  ``_flatten_now_requested`` flag and returns ``{"status": "accepted",
-  "effect": "flatten_now_queued"}``. The bar loop services the flag
-  between bars by calling ``_flatten`` (renamed from
-  ``_shutdown_flatten`` — single primitive used by both the graceful-
-  shutdown and one-shot paths). The process keeps running; no
-  ``desired_state`` mutation.
-
-Endpoint side:
-
-- New ``POST /api/live-instances/{strategy_instance_id}/flatten-and-pause``
-  composes the two primitives:
-  1. ``DesiredStateRepo.set(DesiredState.PAUSED, ...)`` — durable
-     intent FIRST. If this fails, the endpoint aborts with HTTP 503
-     and the one-shot is NOT sent.
-  2. ``CommandChannel.write_from_operator(CommandVerb.FLATTEN)`` on
-     the bound run. If the queue write fails, PAUSE is already
-     persisted so the bar loop refuses new entries — the operator
-     can retry the flatten manually.
-- Response uses the same ``SetInstanceDesiredStateResponse`` shape as
-  the existing desired-state endpoint so the cockpit reuses its
-  renderer.
-
-Regression tests in ``tests/engine/live/test_flatten_and_pause.py``:
-
-- ``test_flatten_does_not_mutate_desired_state`` — the engine's
-  desired-state writer receives zero writes when FLATTEN is dispatched.
-- ``test_flatten_does_not_terminate_the_process`` — the bar loop runs
-  past the FLATTEN command; the ack outcome reads ``accepted`` /
-  ``flatten_now_queued``.
-- ``test_flatten_ack_remains_accepted_not_shutdown`` — the outcome
-  payload no longer says ``shutdown_signalled_with_flatten``.
-
-Cockpit-side relabel ("Close all open positions immediately" → "Flatten
-and pause") plus dispatch through the new endpoint is the natural
-follow-up; the backend contract is in place for that change. The
-``RECONCILE`` cleanup landed in #496 already removed the unrelated
-sibling promise.
-
+confidence: medium
 ---
 
 ## What
