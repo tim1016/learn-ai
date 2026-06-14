@@ -36,6 +36,7 @@ from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
     DirtyTreeError,
+    ExplicitSurfaceSizingMismatchError,
     GitUnavailableError,
     InvalidInstanceIdError,
     RunAlreadyExistsError,
@@ -448,6 +449,10 @@ class RunnerProcessManager:
         except InvalidInstanceIdError as exc:
             raise HostRunnerError(
                 status.HTTP_400_BAD_REQUEST, f"Invalid deployment name: {exc}"
+            ) from exc
+        except ExplicitSurfaceSizingMismatchError as exc:
+            raise HostRunnerError(
+                status.HTTP_400_BAD_REQUEST, f"Invalid sizing policy: {exc}"
             ) from exc
         except SpecOrAuditMissingError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc

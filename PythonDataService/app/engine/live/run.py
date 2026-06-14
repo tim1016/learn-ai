@@ -522,6 +522,17 @@ async def _recovery_flatten(
 def _lookup_sizing_surface(strategy_key: str) -> str | None:
     """Resolve the strategy's registered ``sizing_surface`` (ADR 0009 § 6).
 
+    ``cmd_start``'s ``--strategy`` arg is the algorithm **module** name
+    (``import_module(f"app.engine.strategy.algorithms.{strategy}")``), but
+    the registry is keyed by the operator-visible **registration name**
+    (e.g. module ``spy_ema_crossover_options`` is registered as
+    ``ema_crossover_options``). So we try the exact module name first and a
+    ``spy_``-prefix-stripped form second — that covers every existing
+    divergence today. A future module that breaks this rule will surface
+    here as a ``None`` lookup; the fail-fast quietly disables for that
+    strategy (same behaviour as legacy/test runs) until the lookup is
+    extended.
+
     Tolerates an unregistered ``strategy_key`` (returns ``None`` so the
     fail-fast in LivePortfolio doesn't fire on legacy/test runs).
     """
@@ -530,6 +541,8 @@ def _lookup_sizing_surface(strategy_key: str) -> str | None:
     except Exception:
         return None
     reg = _STRATEGY_REGISTRY.get(strategy_key)
+    if reg is None and strategy_key.startswith("spy_"):
+        reg = _STRATEGY_REGISTRY.get(strategy_key.removeprefix("spy_"))
     return getattr(reg, "sizing_surface", None) if reg is not None else None
 
 

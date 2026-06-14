@@ -245,6 +245,25 @@ def test_live_state_writer_does_not_lose_audit_rows_when_write_fails(tmp_path: P
     assert portfolio.sizing_resolutions == [{"symbol": "SPY", "policy_kind": "X"}]
 
 
+def test_lookup_sizing_surface_resolves_module_name_to_registry_key() -> None:
+    """ADR 0009 PR7 reviewer fix — cmd_start passes ``args.strategy`` (the
+    algorithm module name) to ``_lookup_sizing_surface``. For strategies
+    whose module names carry the ``spy_`` prefix, the registry is keyed
+    without it (e.g. module ``spy_ema_crossover_options`` registers as
+    ``ema_crossover_options``). The lookup must resolve both shapes so
+    the order-surface fail-fast actually fires on CLI starts.
+    """
+    from app.engine.live.run import _lookup_sizing_surface
+
+    # Module name with the ``spy_`` prefix resolves to the registry's
+    # ``ema_crossover_options`` entry, which is explicit.
+    assert _lookup_sizing_surface("spy_ema_crossover_options") == "explicit"
+    # Direct registry key still works for strategies whose module + key match.
+    assert _lookup_sizing_surface("deployment_validation") == "policy"
+    # Unregistered names safely return None (legacy / test runs).
+    assert _lookup_sizing_surface("totally_unknown_strategy") is None
+
+
 def test_read_owned_perm_ids_hydrates_from_live_state_sidecar(tmp_path: Path) -> None:
     path = tmp_path / "live_state.json"
     LiveStateSidecarRepo(path).write(

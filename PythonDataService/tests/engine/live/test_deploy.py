@@ -18,6 +18,7 @@ from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
     DirtyTreeError,
+    ExplicitSurfaceSizingMismatchError,
     InvalidInstanceIdError,
     RunAlreadyExistsError,
     SpecOrAuditMissingError,
@@ -250,3 +251,73 @@ def test_deploy_run_force_overwrites(
 
     assert again.created is True
     assert again.run_id == first.run_id
+
+
+# ────────────────── ADR 0009 § 6 / PR7 reviewer fix ──────────────────
+
+
+@requires_git
+def test_deploy_run_rejects_policy_sizing_for_explicit_surface_strategy(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """A stale frontend or direct daemon caller submitting `FixedShares(1)`
+    for `ema_crossover_options` (registered as `sizing_surface="explicit"`)
+    is refused at the deploy boundary, so the misleading run_id is never
+    hashed."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    params = _params(
+        repo,
+        spec,
+        qc,
+        run_root,
+        strategy_key="ema_crossover_options",
+        live_config={"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}},
+    )
+    with pytest.raises(ExplicitSurfaceSizingMismatchError, match=r"sizing_surface=.explicit"):
+        deploy_run(params)
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_accepts_strategy_explicit_for_explicit_surface_strategy(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """The honest `{kind: StrategyExplicit}` value the deploy form submits
+    for explicit-surface strategies must be accepted."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    params = _params(
+        repo,
+        spec,
+        qc,
+        run_root,
+        strategy_key="ema_crossover_options",
+        live_config={"symbol": "SPY", "sizing": {"kind": "StrategyExplicit"}},
+    )
+    result = deploy_run(params)
+    assert result.created is True
+
+
+@requires_git
+def test_deploy_run_allows_policy_sizing_for_policy_surface_strategy(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    """Policy-surface strategies (the default) keep accepting any
+    SizingPolicy — the explicit-surface gate is opt-in by registration."""
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    params = _params(
+        repo,
+        spec,
+        qc,
+        run_root,
+        strategy_key="ema_crossover",
+        live_config={"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}},
+    )
+    result = deploy_run(params)
+    assert result.created is True
+
