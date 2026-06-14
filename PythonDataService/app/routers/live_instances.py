@@ -26,7 +26,7 @@ from pydantic import ValidationError
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
-from app.engine.live.desired_state import DesiredStateRepo
+from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
@@ -1306,6 +1306,117 @@ async def set_instance_desired_state(
                 run_id=live_binding.run_id,
                 command_seq=command.seq,
                 detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
+            )
+
+    return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
+
+
+@router.post(
+    "/{strategy_instance_id}/flatten-and-pause",
+    response_model=SetInstanceDesiredStateResponse,
+)
+async def flatten_and_pause_instance(
+    strategy_instance_id: str,
+    body: SetDesiredStateRequest | None = None,
+) -> SetInstanceDesiredStateResponse:
+    """VCR-0007 / Phase 6A / ADR 0010 — composed panic-button endpoint.
+
+    The cockpit's "Flatten and pause" affordance is the only path that
+    composes durable PAUSE with a one-shot FLATTEN_NOW; the underlying
+    primitives (``set_instance_desired_state`` and ``write_from_operator``)
+    stay pure. Order is strictly:
+
+    1. Write ``desired_state = PAUSED`` to the durable sidecar. If this
+       fails, abort BEFORE enqueueing the one-shot — leaving a live FLATTEN
+       behind an unpersisted PAUSE would re-open the bug VCR-0007 named.
+    2. If a live binding exists, enqueue ``FLATTEN_NOW`` on the bound run.
+       The bar loop honours ``desired_state = PAUSED`` and refuses new
+       entries even if the one-shot fails to enqueue.
+
+    The endpoint returns the structured response shape the existing
+    desired-state endpoint uses so the cockpit can reuse its renderer.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    artifacts_root = _desired_state_root(root)
+    try:
+        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
+        ) from exc
+
+    payload = body or SetDesiredStateRequest(
+        action=DesiredStateAction.pause,
+        reason="flatten-and-pause",
+        updated_by="operator",
+    )
+    repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
+    try:
+        record = repo.set(
+            DesiredState.PAUSED,
+            updated_by=payload.updated_by,
+            reason=payload.reason or "flatten-and-pause",
+            now_ms=_now_ms(),
+        )
+    except OSError as exc:
+        # Step 1 failed — refuse the composition. The one-shot is NOT sent
+        # because a flatten without a persisted PAUSE would still let the
+        # next bar re-enter, re-opening VCR-0007.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"flatten_and_pause aborted before FLATTEN_NOW: durable PAUSE write failed: {exc}",
+        ) from exc
+
+    durable = DesiredStateRecordResponse(
+        state=record.desired_state.value,
+        updated_at_ms=record.updated_at_ms,
+        updated_by=record.updated_by,
+        reason=record.reason,
+        version=record.version,
+    )
+
+    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+    if live_binding is None or live_run_dir is None:
+        detail = (
+            "PAUSE persisted; no live binding so FLATTEN_NOW was not enqueued"
+            if live_binding is None
+            else (
+                f"PAUSE persisted; bound run {live_binding.run_id} is not visible locally, "
+                "FLATTEN_NOW not enqueued"
+            )
+        )
+        actuation = IntentActuation(actuated=False, detail=detail)
+    else:
+        try:
+            command = CommandChannel(live_run_dir / "commands").write_from_operator(
+                CommandVerb.FLATTEN
+            )
+        except Exception as exc:
+            # PAUSE is already persisted — surface the failure honestly.
+            # The durable PAUSE keeps the bar loop from re-entering even
+            # though the flatten one-shot did not enqueue.
+            actuation = IntentActuation(
+                actuated=False,
+                run_id=live_binding.run_id,
+                detail=(
+                    "PAUSE persisted but FLATTEN_NOW failed to enqueue — retry the "
+                    f"flatten one-shot manually: {exc}"
+                ),
+            )
+        else:
+            actuation = IntentActuation(
+                actuated=True,
+                run_id=live_binding.run_id,
+                command_seq=command.seq,
+                detail=(
+                    f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; "
+                    "awaiting flatten ack"
+                ),
             )
 
     return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
