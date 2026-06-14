@@ -118,6 +118,14 @@ def test_order_sizer_returns_zero_when_fraction_zero() -> None:
     assert sizer.resolve_set_holdings_quantity(target_fraction=Decimal("0")) == 0
 
 
+def test_order_sizer_rejects_negative_fraction_for_fixed_shares() -> None:
+    """Long-only in v1 — a negative fraction is short intent that FixedShares
+    would otherwise silently invert to a positive target. Fail fast."""
+    sizer = OrderSizer(FixedShares(value=7))
+    with pytest.raises(ValueError, match="long-only"):
+        sizer.resolve_set_holdings_quantity(target_fraction=Decimal("-0.5"))
+
+
 @pytest.mark.parametrize(
     ("policy", "lands_in"),
     [

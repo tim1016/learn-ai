@@ -252,6 +252,15 @@ class OrderSizer:
         """
         policy = self._policy
         if isinstance(policy, FixedShares):
+            if target_fraction < Decimal(0):
+                # Long-only in v1 — a negative fraction is a short intent that
+                # FixedShares would otherwise silently invert to a positive
+                # target quantity. Fail fast so a misconfigured strategy never
+                # opens a short position.
+                raise ValueError(
+                    "FixedShares is long-only in v1; target_fraction must be >= 0, "
+                    f"got {target_fraction}"
+                )
             if target_fraction == Decimal(0):
                 return 0
             return int(policy.value)

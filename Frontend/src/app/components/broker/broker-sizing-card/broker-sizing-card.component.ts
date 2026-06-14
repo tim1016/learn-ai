@@ -4,8 +4,16 @@ import type { InstanceSizing } from '../../../api/live-instances.types';
 interface SizingFact {
   label: string;
   value: string;
-  /** Pill class for terse stamp values (governed_by, sizing_provenance). */
-  pill?: 'live-config' | 'strategy-explicit' | 'live-override' | 'reference-native' | null;
+  /** Pill class for terse stamp values (governed_by, sizing_provenance).
+   * Null means render the plain text value without a coloured pill — used for
+   * `spec_default` (reserved, unstyled until we decide its colour). */
+  pill?:
+    | 'live-config'
+    | 'strategy-explicit'
+    | 'live-override'
+    | 'reference-native'
+    | 'spec-default'
+    | null;
 }
 
 /**
@@ -81,7 +89,12 @@ export class BrokerSizingCardComponent {
             : s.sizing_provenance === 'spec_default'
               ? 'Spec default'
               : 'Live override',
-        pill: s.sizing_provenance === 'reference_native' ? 'reference-native' : 'live-override',
+        pill:
+          s.sizing_provenance === 'reference_native'
+            ? 'reference-native'
+            : s.sizing_provenance === 'spec_default'
+              ? 'spec-default'
+              : 'live-override',
       },
     ];
     return rows;

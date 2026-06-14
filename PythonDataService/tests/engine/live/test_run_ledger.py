@@ -394,6 +394,25 @@ def test_build_ledger_derives_governed_by_from_sizing_kind(tmp_path: Path) -> No
     assert legacy.sizing_provenance == "live_override"
 
 
+def test_build_ledger_rejects_empty_sizing_payload(tmp_path: Path) -> None:
+    """A deploy with ``live_config = {"sizing": {}}`` would otherwise persist a
+    ledger that fails to start (``_live_config_from_ledger`` parses on key
+    presence). Fail fast at build time so the deploy boundary surfaces the
+    same error rather than producing an unstartable run.
+    """
+    spec, qc_copy = _make_inputs(tmp_path)
+    with pytest.raises(ValueError, match=r"invalid live_config\.sizing"):
+        build_ledger(
+            code_sha="abc123",
+            strategy_spec_path=spec,
+            qc_audit_copy_path=qc_copy,
+            qc_cloud_backtest_id="bt-1",
+            account_id="DU111",
+            start_date_ms=1_700_000_000_000,
+            live_config={"sizing": {}},
+        )
+
+
 def test_sizing_changes_run_id_via_live_config_hash(tmp_path: Path) -> None:
     """ADR 0009 — live_config.sizing is hashed into run_id through live_config,
     so two deploys differing only in sizing kind mint different run_ids."""

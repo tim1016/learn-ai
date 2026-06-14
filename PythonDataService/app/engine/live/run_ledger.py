@@ -206,8 +206,18 @@ def build_ledger(
         parse_sizing_policy,
     )
 
-    sizing_payload = live_config.get("sizing") if isinstance(live_config, dict) else None
-    resolved_policy = parse_sizing_policy(sizing_payload) if sizing_payload else None
+    # Validate ``sizing`` by **key presence**, not truthiness. A falsy payload
+    # (``{}`` / ``None`` / ``""``) past the API boundary is a deploy bug —
+    # writing it would persist an unstartable ledger because the start gate
+    # parses on key presence and would reject it. Hand it to
+    # ``parse_sizing_policy`` so the deploy fails fast with the same error
+    # surface the start gate uses. Genuine absence (no key at all) keeps
+    # legacy/unknown semantics on the ledger stamps.
+    sizing_present = isinstance(live_config, dict) and "sizing" in live_config
+    if sizing_present:
+        resolved_policy = parse_sizing_policy(live_config["sizing"])
+    else:
+        resolved_policy = None
     return LiveRunLedger(
         run_id=run_id,
         code_sha=code_sha,
