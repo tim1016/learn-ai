@@ -70,6 +70,13 @@ class DeployIOError(DeployError):
     directory). Maps to infra-failure status rather than a 500 traceback."""
 
 
+class ExplicitSurfaceSizingMismatchError(DeployError):
+    """ADR 0009 § 6 — the strategy is registered with ``sizing_surface="explicit"``
+    but the operator (or a stale client) submitted a policy-style sizing
+    (e.g. ``FixedShares``). Maps to HTTP 400 — the operator must submit
+    ``StrategyExplicit`` for explicit-surface strategies."""
+
+
 class RunAlreadyExistsError(DeployError):
     """The content-addressed run directory already exists.
 
@@ -114,6 +121,40 @@ class DeployResult:
     run_dir: Path
     created: bool
     ledger: LiveRunLedger
+
+
+def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> None:
+    """ADR 0009 § 6 — refuse a policy-style ``live_config.sizing`` for a
+    strategy registered with ``sizing_surface="explicit"``.
+
+    Looks up the strategy in ``_STRATEGY_REGISTRY`` (re-using the same module-
+    name → registry-key fallback as ``_lookup_sizing_surface`` in ``run.py``).
+    A strategy that is unregistered, registered as ``policy``, or registered
+    without a ``sizing_surface`` attribute is silently allowed — the runtime
+    fail-fast remains the backstop for those cases.
+    """
+    if not isinstance(live_config, dict):
+        return
+    sizing = live_config.get("sizing")
+    if not isinstance(sizing, dict):
+        return
+    try:
+        from app.routers.engine import _STRATEGY_REGISTRY
+    except Exception:
+        return
+    reg = _STRATEGY_REGISTRY.get(strategy_key)
+    if reg is None and strategy_key.startswith("spy_"):
+        reg = _STRATEGY_REGISTRY.get(strategy_key.removeprefix("spy_"))
+    surface = getattr(reg, "sizing_surface", None) if reg is not None else None
+    if surface != "explicit":
+        return
+    if sizing.get("kind") != "StrategyExplicit":
+        raise ExplicitSurfaceSizingMismatchError(
+            f"strategy {strategy_key!r} is registered with sizing_surface='explicit' — "
+            f"live_config.sizing must be {{'kind': 'StrategyExplicit'}}, got "
+            f"{sizing.get('kind')!r}. The strategy sizes itself via internal accounting; "
+            "the deploy-page policy cannot meaningfully reinterpret its quantity."
+        )
 
 
 def git_head_sha(repo_root: Path) -> str:
@@ -166,6 +207,16 @@ def deploy_run(params: DeployParams) -> DeployResult:
         raise DirtyTreeError(clean.detail)
 
     code_sha = git_head_sha(repo_root)
+
+    # ADR 0009 § 6 / PR7 reviewer fix — explicit-surface strategies size
+    # themselves via internal accounting; the deploy boundary must refuse a
+    # policy-style ``live_config.sizing`` for them so the ledger never
+    # carries a misleading "live_config-governed" stamp that the runtime
+    # fail-fast also catches. (Without this, a stale frontend or direct
+    # daemon caller could submit ``FixedShares(1)`` for ``ema_crossover_options``
+    # and we'd hash a misleading run_id before the engine refuses on the
+    # first set_holdings call.)
+    _enforce_explicit_surface_policy(params.strategy_key, params.live_config)
 
     # ADR 0009 — record the audit copy path relative to the repo so a
     # later read (the start gate, the cockpit) can re-verify against the

@@ -102,6 +102,22 @@ def test_set_holdings_with_fixed_shares_policy_zero_fraction_is_flat() -> None:
     assert order is None
 
 
+def test_set_holdings_fails_fast_on_explicit_surface_mismatch() -> None:
+    """ADR 0009 § 6 — a strategy registered as ``explicit`` invoking
+    ``set_holdings`` is a registration bug; the engine halts on the first
+    entry so the ledger never carries the misleading "policy_set_holdings"
+    sizing record."""
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+
+    portfolio = LivePortfolio(FakeBroker(), order_sizer=OrderSizer(FixedShares(value=1)))
+    portfolio.registered_sizing_surface = "explicit"
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+
+    with pytest.raises(RuntimeError, match="Order-surface mismatch"):
+        portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+
 def test_set_holdings_captures_audit_row_for_each_resolution() -> None:
     """ADR 0009 § 11 — every set_holdings via the policy adapter records a
     row on portfolio.sizing_resolutions, capturing the kind/value/intended_qty/

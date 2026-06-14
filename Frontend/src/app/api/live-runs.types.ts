@@ -331,11 +331,16 @@ export interface AuditCopySizingLookup {
 
 /** Minimal strategy descriptor from `GET /api/engine/strategies`. `name` is the
  * algorithm module (the `strategy_key`); the full payload also carries a params
- * schema the deploy form does not need. */
+ * schema the deploy form does not need.
+ *
+ * `sizing_surface` (ADR 0009 § 6) drives whether the deploy form's sizing
+ * selector is enabled (`"policy"`) or disabled + labelled "self-sized"
+ * (`"explicit"`). */
 export interface EngineStrategyInfo {
   name: string;
   display_name: string;
   description: string;
+  sizing_surface: 'policy' | 'explicit';
 }
 
 /** Canonical strategy-spec fixture from `GET /api/spec-strategy/fixtures`.
