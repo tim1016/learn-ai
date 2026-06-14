@@ -34,6 +34,11 @@ const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidat
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 
+// ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
+// so the gate lookup and the submit path use the *same* shape; a future change
+// to the preset's all-in fraction needs to land in exactly one place.
+const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '1.0' };
+
 /**
  * Deploy form for a live strategy instance. The UI uses plain operator words,
  * while the request still maps exactly to ADR 0006: create the run on the host,
@@ -89,12 +94,20 @@ export class BrokerDeployFormComponent {
   // ADR 0009 § 3 — Reference parity gate. Refetched whenever the chosen audit
   // copy changes; surfaces the verdict (`proven_match` / `proven_mismatch` /
   // `cannot_prove`) inline so the operator sees *why* Reference parity is
-  // available or not before clicking.
+  // available or not before clicking. **Crucially**, the lookup passes the
+  // actual Reference parity policy (`SetHoldings(1.0)`) so the backend
+  // compares the registered rule against the preset the operator would
+  // submit; an audit copy registered as `SetHoldings(0.5)` would otherwise
+  // pass the bare informational lookup and silently enable a Reference
+  // parity click that submits `SetHoldings(1.0)`.
   readonly referenceParityGate = resource({
     params: () => ({ auditCopyPath: this.qcAuditCopyPath().trim() }),
     loader: async ({ params }) => {
       if (!params.auditCopyPath) return null;
-      return this.svc.getAuditCopySizingLookup(params.auditCopyPath);
+      return this.svc.getAuditCopySizingLookup(
+        params.auditCopyPath,
+        REFERENCE_PARITY_POLICY,
+      );
     },
     defaultValue: null,
   });
@@ -452,10 +465,7 @@ export class BrokerDeployFormComponent {
   private resolveSizingPolicy(): SizingPolicy {
     const preset = this.sizingPreset();
     if (preset === 'reference_parity') {
-      // Reference parity preset = SetHoldings(1.0). Disabled in PR1's template,
-      // but the resolver is included so a future PR enabling the radio doesn't
-      // also have to change submission code.
-      return { kind: 'SetHoldings', fraction: '1.0' };
+      return REFERENCE_PARITY_POLICY;
     }
     if (preset === 'custom') {
       // Placeholder: PR4 wires the custom expansion with the actual operator
