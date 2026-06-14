@@ -62,7 +62,6 @@ def test_engine_drops_strategy_orders_when_force_flat_active(tmp_path: Path, cap
     flat barrier is exercised in ``test_engine_clears_force_flat_on_session_date_boundary``
     via the actual integration path)."""
     import logging
-
     from app.engine.live.live_portfolio import LivePortfolio
 
     caplog.set_level(logging.WARNING, logger="app.engine.live.live_engine")
