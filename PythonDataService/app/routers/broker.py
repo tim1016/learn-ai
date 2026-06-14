@@ -115,6 +115,8 @@ _ibkr_client_factory: type[IbkrClient] = IbkrClient
 @router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
+    from app.broker.safety_verdict import derive_broker_safety_verdict
+
     if _is_broker_disabled():
         from datetime import UTC, datetime
 
@@ -133,6 +135,12 @@ async def broker_health() -> IbkrConnectionHealth:
             is_paper=None,
             server_version=None,
             fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+            safety_verdict=derive_broker_safety_verdict(
+                configured_mode=s.mode,
+                readonly_flag=None,
+                port=s.port,
+                connected_account=None,
+            ),
         )
     try:
         client = get_client()
@@ -152,8 +160,26 @@ async def broker_health() -> IbkrConnectionHealth:
             is_paper=None,
             server_version=None,
             fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+            safety_verdict=derive_broker_safety_verdict(
+                configured_mode=s.mode,
+                readonly_flag=None,
+                port=s.port,
+                connected_account=None,
+            ),
         )
-    return client.health()
+    health = client.health()
+    # Re-derive on every call so the verdict reflects the latest
+    # connection state. ADR 0011 §3 — no connect-time cache.
+    return health.model_copy(
+        update={
+            "safety_verdict": derive_broker_safety_verdict(
+                configured_mode=health.mode,
+                readonly_flag=None,
+                port=health.port,
+                connected_account=health.account_id,
+            ),
+        }
+    )
 
 
 # ── /diagnose ──────────────────────────────────────────────────────────
