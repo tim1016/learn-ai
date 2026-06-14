@@ -270,7 +270,7 @@ class LivePortfolio:
     # Legacy / replay callers leave these unset and keep their pre-Phase-5A
     # behaviour. Phase 5D wires the full submit-retry state machine; Phase 8
     # promotes the in-memory ``sizing_resolutions`` list to a WAL fold.
-    intent_wal: IntentWal | None = None
+    intent_wal: "IntentWal | None" = None
     bot_order_namespace: str = ""
     # Internal: ``order_id → intent_id`` so the submit step can recover the
     # identity minted in ``set_holdings`` without changing the ``Order``
