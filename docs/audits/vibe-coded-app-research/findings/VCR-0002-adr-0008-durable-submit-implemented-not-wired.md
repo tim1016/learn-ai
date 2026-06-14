@@ -1,15 +1,63 @@
 ---
 id: VCR-0002
 severity: P0
-status: open
+status: phase_5a_foundation_landed
 area: broker-ownership
 canonical_file: PythonDataService/app/engine/live/live_engine.py:1086
 reference: docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediation_progress:
+  - "#497 — Phase 5A — Intent identity foundation (intent_id, order_ref, PENDING_INTENT / SUBMITTED / ACK_FAILED_UNCERTAIN WAL)"
+  - "#496 — Phase 4 — Operator-trust mitigation (UI banner + RECONCILE accepted_noop)"
+follow_up_required:
+  - "Phase 5B — ColdStartReconciler.verify() at cmd_start"
+  - "Phase 5C — Ownership query wiring + cancel-then-liquidate ordering"
+  - "Phase 5D — Submit retry state machine + SUBMIT_UNCERTAIN_HALT"
+  - "Phase 5E — Fill conversion uses ownership classifier"
 lens: broker-order-ownership-reconcile
 dedupe_with_F: none
 confidence: high
+---
+
+## Phase 5A progress (#497) — intent identity foundation
+
+Wired the ``intent_id ↔ order_ref ↔ attempted broker order`` invariant:
+
+- ``LivePortfolio`` accepts optional ``intent_wal`` + ``bot_order_namespace``.
+  ``set_holdings`` mints an ``intent_id`` **only after** sizing resolves to
+  ``delta != 0`` (a skip never reserves an identity).
+- ``submit_pending_orders`` builds ``order_ref = build_order_ref(namespace,
+  intent_id)``, stamps it on ``IbkrOrderSpec.order_ref`` (new field), and
+  fsyncs ``PENDING_INTENT`` BEFORE ``broker.place_order`` is called.
+- On success: ``SUBMITTED`` is appended with ``order_id`` and ``perm_id`` (if
+  the ack carries one). On exception: ``ACK_FAILED_UNCERTAIN`` with error
+  context (no silent swallow — the submit is genuinely uncertain and the
+  WAL preserves that).
+- ``app/broker/ibkr/orders.py::_build_order`` stamps the spec's
+  ``order_ref`` onto ``ib_async.order.orderRef`` so the IBKR Gateway
+  echoes it on every order callback. The runtime can now join fills /
+  cancels by the deterministic token across restarts.
+- Existing in-memory ``sizing_resolutions`` list is unchanged so the
+  Sizing card keeps rendering during the transition (PRD §5A); Phase 8
+  swaps the list for a WAL fold over ``SIZING_RESOLVED`` / ``SIZING_SKIP``.
+
+The full closure of VCR-0002 needs Phases 5B–5E (cold-start reconciler,
+ownership classifier, submit-retry state machine) plus Phase 8 (sizing
+WAL fold). Phase 5A is the load-bearing identity layer those phases
+build on.
+
+Regression tests in ``tests/engine/live/test_intent_identity_wiring.py``:
+
+- ``test_ibkr_order_spec_accepts_order_ref``
+- ``test_set_holdings_with_zero_delta_does_not_mint_intent_id``
+- ``test_set_holdings_with_non_zero_delta_mints_intent_id``
+- ``test_submit_pending_orders_stamps_order_ref_on_spec``
+- ``test_submit_pending_orders_writes_pending_intent_before_submit``
+- ``test_submit_pending_orders_writes_submitted_after_success``
+- ``test_submit_pending_orders_writes_ack_failed_uncertain_on_exception``
+- ``test_legacy_portfolio_without_wal_keeps_working``
+
 ---
 
 ## What

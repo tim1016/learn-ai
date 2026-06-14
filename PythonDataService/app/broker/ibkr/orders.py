@@ -219,6 +219,12 @@ def _build_order(spec: IbkrOrderSpec):
         )
 
     order.tif = spec.time_in_force
+    # ADR 0008 / Phase 5A — stamp the deterministic order_ref so the IBKR
+    # Gateway echoes it back on every order callback. The runtime joins
+    # fills / cancels / cold-start reconciliation by this token; missing
+    # it would lose ownership across a restart.
+    if spec.order_ref is not None:
+        order.orderRef = spec.order_ref
     return order
 
 
