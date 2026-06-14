@@ -72,9 +72,9 @@ def test_cmd_start_refuses_when_halt_flag_present(tmp_path, capsys) -> None:
     """VCR-P3-Q / Phase 6D — ``cmd_start`` re-runs ``check_no_halt_flag``
     at start time. A halt.flag from yesterday refuses today's start even if
     the operator skipped ``cmd_pre_flight``."""
-    import json as _json
-
     from app.engine.live.run import main
+
+    import json as _json
 
     # Build a minimal valid ledger + a halt.flag.
     (tmp_path / "run_ledger.json").write_text(
