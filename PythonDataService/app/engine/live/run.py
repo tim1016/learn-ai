@@ -198,6 +198,24 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
     checks.append(check_clean_tree(scope_paths, repo_root=repo_root))
     checks.append(check_run_state_intact(args.run_dir))
     checks.append(check_no_halt_flag(args.run_dir))
+    # VCR-0001 / Phase 1 — surface the sizing-policy-present gate in the
+    # manual pre-flight subcommand too. Reads the ledger directly (if
+    # present) so the CLI shows the same verdict ``cmd_start`` will give
+    # before the operator runs it. A run dir without a ledger is treated
+    # as a legacy/pre-policy ledger and fails the gate (the operator must
+    # redeploy with an explicit policy).
+    _ledger_live_config: dict = {}
+    _pre_ledger_path = args.run_dir / "run_ledger.json"
+    if _pre_ledger_path.is_file():
+        try:
+            _ledger_live_config = json.loads(
+                _pre_ledger_path.read_text(encoding="utf-8")
+            ).get("live_config") or {}
+        except (OSError, json.JSONDecodeError):
+            _ledger_live_config = {}
+    from app.engine.live.pre_flight import check_sizing_policy_present
+
+    checks.append(check_sizing_policy_present(_ledger_live_config))
 
     if args.skip_ntp:
         print("[PRE-FLIGHT] skipping NTP check (--skip-ntp)")
@@ -568,20 +586,15 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     """
     from datetime import time
 
-    from app.engine.live.config import LiveConfig
+    from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS, LiveConfig
 
     if not payload:
         return LiveConfig()
 
-    known_fields = {
-        "symbol",
-        "force_flat_at",
-        "consolidator_period_min",
-        "run_dir",
-        "max_submit_latency_ms",
-        "sizing",
-    }
-    unknown = set(payload.keys()) - known_fields
+    # VCR-0001 / Phase 1 — share the allow-list with the deploy-boundary
+    # schema validator so any future sibling key is added in exactly one
+    # place. CodeRabbit P2 review comment on PR #519.
+    unknown = set(payload.keys()) - LIVE_CONFIG_LEDGER_KEYS
     if unknown:
         raise ValueError(f"unknown live_config keys: {sorted(unknown)}")
 

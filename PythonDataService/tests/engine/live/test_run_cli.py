@@ -506,7 +506,17 @@ def test_pre_flight_passes_when_no_flags_set(repo_with_inputs: tuple[Path, Path,
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "x",
+                # VCR-0001 / Phase 1 — pre-flight asserts sizing-policy
+                # present alongside the existing gates.
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     rc = main(
         [
@@ -532,7 +542,17 @@ def test_pre_flight_halts_when_dirty_tree(
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "x",
+                # VCR-0001 / Phase 1 — pre-flight asserts sizing-policy
+                # present alongside the existing gates.
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     rc = main(
         [
@@ -557,7 +577,17 @@ def test_pre_flight_halts_when_halt_flag_present(repo_with_inputs: tuple[Path, P
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "x",
+                # VCR-0001 / Phase 1 — pre-flight asserts sizing-policy
+                # present alongside the existing gates.
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
     (run_dir / "halt.flag").write_text(json.dumps({"day_n": 3, "reasons": ["x"]}), encoding="utf-8")
 
     rc = main(
@@ -583,7 +613,17 @@ def test_pre_flight_halts_when_positions_json_has_foreign_symbol(
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "x",
+                # VCR-0001 / Phase 1 — pre-flight asserts sizing-policy
+                # present alongside the existing gates.
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     positions_json = tmp_path / "positions.json"
     positions_json.write_text(json.dumps({"positions": [{"symbol": "QQQ", "quantity": 100}]}), encoding="utf-8")
@@ -614,7 +654,17 @@ def test_pre_flight_passes_when_positions_json_matches_expected(
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "x",
+                # VCR-0001 / Phase 1 — pre-flight asserts sizing-policy
+                # present alongside the existing gates.
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     positions_json = tmp_path / "positions.json"
     positions_json.write_text(json.dumps({"positions": [{"symbol": "SPY", "quantity": 200}]}), encoding="utf-8")
@@ -644,7 +694,17 @@ def test_pre_flight_skips_position_check_when_no_positions_json(
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "x",
+                # VCR-0001 / Phase 1 — pre-flight asserts sizing-policy
+                # present alongside the existing gates.
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     rc = main(
         [
