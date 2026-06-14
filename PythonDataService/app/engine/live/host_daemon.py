@@ -134,6 +134,16 @@ class RunnerProcessManager:
         self.repo_root = repo_root.resolve()
         self.live_runs_root = live_runs_root.resolve()
         self._managed: dict[str, ManagedProcess] = {}
+        # VCR-P3-P / Phase 6D — per-instance start locks. Each key holds an
+        # ``rlock`` so the (check_existing, spawn, register) sequence in
+        # ``start`` runs serialised for one instance while different instances
+        # remain free to start concurrently. Without this lock, two requests
+        # both observe an absent ``_managed[key]`` and spawn duplicate
+        # processes that race on the same run dir.
+        import threading as _threading
+
+        self._start_lock_per_instance: dict[str, _threading.RLock] = {}
+        self._start_lock_table_lock = _threading.Lock()
         # The git SHA of the code THIS process is running, captured ONCE at
         # launch. The daemon does not reload on `git pull`, so the running code
         # is frozen at startup even as the working tree advances — comparing this
@@ -297,6 +307,19 @@ class RunnerProcessManager:
                 return managed
         return None
 
+    def _instance_start_lock(self, key: str):
+        """VCR-P3-P / Phase 6D — return the RLock for ``key``, creating one
+        lazily under a table-level guard so two concurrent first-time starts
+        for the same instance share the same lock."""
+        with self._start_lock_table_lock:
+            lock = self._start_lock_per_instance.get(key)
+            if lock is None:
+                import threading as _threading
+
+                lock = _threading.RLock()
+                self._start_lock_per_instance[key] = lock
+            return lock
+
     def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         """Start ``app.engine.live.run start`` for an existing run directory.
 
@@ -304,59 +327,65 @@ class RunnerProcessManager:
         ledger; falls back to ``run_id`` for legacy runs). A second start for
         the *same* instance while it is running is rejected; different
         instances coexist as separate processes.
+
+        VCR-P3-P / Phase 6D — the entire ``(check_existing, spawn, register)``
+        sequence runs under a per-instance lock. Without it, two requests
+        could both observe an absent ``_managed[key]`` and spawn duplicate
+        processes that race on the same run dir.
         """
         run_dir = self._validate_run_dir(run_id)
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
 
-        existing = self._managed.get(key)
-        if existing is not None:
-            self._refresh(existing)
-            if existing.process.poll() is None:
-                raise HostRunnerError(
-                    status.HTTP_409_CONFLICT,
-                    f"Host runner already active for {existing.run_id} (instance {key!r}). "
-                    "Stop it before starting another run for this instance.",
-                )
+        with self._instance_start_lock(key):
+            existing = self._managed.get(key)
+            if existing is not None:
+                self._refresh(existing)
+                if existing.process.poll() is None:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        f"Host runner already active for {existing.run_id} (instance {key!r}). "
+                        "Stop it before starting another run for this instance.",
+                    )
 
-        command = self._build_start_command(
-            run_dir,
-            request,
-            self._sibling_symbols(key),
-            self._sibling_all_in_symbols(key),
-        )
-        env = self._build_child_env(request)
-        log_path = run_dir / "host_daemon.log"
-        log_handle = log_path.open("a", encoding="utf-8")
-
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(self.repo_root),
-                env=env,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                creationflags=_creation_flags(),
-                start_new_session=(os.name != "nt"),
+            command = self._build_start_command(
+                run_dir,
+                request,
+                self._sibling_symbols(key),
+                self._sibling_all_in_symbols(key),
             )
-        except OSError as exc:
-            log_handle.close()
-            raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}") from exc
+            env = self._build_child_env(request)
+            log_path = run_dir / "host_daemon.log"
+            log_handle = log_path.open("a", encoding="utf-8")
 
-        self._managed[key] = ManagedProcess(
-            strategy_instance_id=sid,
-            run_id=run_id,
-            run_dir=run_dir,
-            process=process,
-            command=command,
-            started_at_ms=_now_ms(),
-            log_path=log_path,
-            log_handle=log_handle,
-        )
-        logger.info(
-            "Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid
-        )
-        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(self.repo_root),
+                    env=env,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    creationflags=_creation_flags(),
+                    start_new_session=(os.name != "nt"),
+                )
+            except OSError as exc:
+                log_handle.close()
+                raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}") from exc
+
+            self._managed[key] = ManagedProcess(
+                strategy_instance_id=sid,
+                run_id=run_id,
+                run_dir=run_dir,
+                process=process,
+                command=command,
+                started_at_ms=_now_ms(),
+                log_path=log_path,
+                log_handle=log_handle,
+            )
+            logger.info(
+                "Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid
+            )
+            return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
     def emergency_flatten(self, run_id: str, account: str) -> HostRunnerActionResponse:
         """Account-wide emergency flatten via the existing one-shot CLI (§ 7.2 #6).
