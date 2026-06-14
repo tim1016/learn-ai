@@ -396,6 +396,24 @@ class IbkrOrderSpec(BaseModel):
         max_length=64,
     )
 
+    # ADR 0008 / Phase 5A — deterministic ``{namespace}:{intent_id}`` token
+    # the broker echoes back on every order callback. Lets the WAL and the
+    # IBKR audit be joined unambiguously even after a restart. ``None`` for
+    # legacy callers (replay / explicit-surface tests) so the surface stays
+    # backwards-compatible while the production submit path is rewired.
+    order_ref: str | None = Field(
+        default=None,
+        description=(
+            "ADR 0008 / Phase 5A. Deterministic ``{bot_order_namespace}:"
+            "{intent_id}`` stamped on every managed broker order. The IBKR "
+            "Gateway echoes it back on order callbacks; the runtime joins "
+            "fills / cancels by it. ``None`` only on legacy / pre-Phase-5A "
+            "callers; future durable-submit activation refuses requests "
+            "without it."
+        ),
+        max_length=120,
+    )
+
 
 OrderEventType = Literal["status", "fill", "cancel", "error"]
 

@@ -15,7 +15,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from app.engine.live.intent_wal import IntentWal
 
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import IbkrClient
@@ -37,6 +40,16 @@ from app.engine.execution.order_sizer import (
 )
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+
+
+def _try_int(value: object) -> int | None:
+    """Convert a possibly-stringly-typed broker id to ``int``; ``None`` if absent."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _describe_policy_value(policy: object) -> str:
@@ -248,6 +261,22 @@ class LivePortfolio:
     # a fail-fast registration bug — the order will fire with a misleading
     # ledger otherwise.
     registered_sizing_surface: str | None = None
+    # ADR 0008 / Phase 5A — intent identity foundation. When ``intent_wal``
+    # and ``bot_order_namespace`` are both set, ``set_holdings`` mints an
+    # ``intent_id`` (only when ``delta != 0``; a skip never mints), the
+    # submit path stamps ``order_ref = {namespace}:{intent_id}`` on the
+    # ``IbkrOrderSpec``, and ``PENDING_INTENT`` / ``SUBMITTED`` /
+    # ``ACK_FAILED_UNCERTAIN`` are appended around ``broker.place_order``.
+    # Legacy / replay callers leave these unset and keep their pre-Phase-5A
+    # behaviour. Phase 5D wires the full submit-retry state machine; Phase 8
+    # promotes the in-memory ``sizing_resolutions`` list to a WAL fold.
+    intent_wal: "IntentWal | None" = None
+    bot_order_namespace: str = ""
+    # Internal: ``order_id → intent_id`` so the submit step can recover the
+    # identity minted in ``set_holdings`` without changing the ``Order``
+    # value type (existing tests construct ``Order`` directly).
+    _intent_by_order_id: dict[int, str] = field(default_factory=dict)
+    _last_minted_intent_id: str | None = None
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -374,8 +403,20 @@ class LivePortfolio:
             )
         delta = target_quantity - current_pos.quantity
         if delta == 0:
+            # PRD §5A — a skip is not an intent. ``intent_id`` is minted
+            # only AFTER this check, so a no-op never reserves an identity.
             return None
-        return self.submit_market_order(sym, delta, time, tag=tag or "SetHoldings")
+        order = self.submit_market_order(sym, delta, time, tag=tag or "SetHoldings")
+        # Phase 5A — mint the intent_id only when the WAL surface is wired
+        # (production path). Replay / legacy tests run without the WAL and
+        # keep the prior behaviour: no minting, no WAL writes.
+        if self.intent_wal is not None and self.bot_order_namespace:
+            from app.engine.live.order_identity import mint_intent_id
+
+            intent_id = mint_intent_id()
+            self._intent_by_order_id[order.order_id] = intent_id
+            self._last_minted_intent_id = intent_id
+        return order
 
     def liquidate(self, symbol: str, time: datetime) -> Order | None:
         pos = self.get_position(symbol)
@@ -408,9 +449,25 @@ class LivePortfolio:
         self.total_fees += event.fee
 
     async def submit_pending_orders(self) -> list[IbkrOrderAck]:
-        """Submit all locally queued orders through the paper-order boundary."""
+        """Submit all locally queued orders through the paper-order boundary.
+
+        Phase 5A wires the intent-identity WAL around each submit: append
+        ``PENDING_INTENT`` BEFORE ``broker.place_order`` (fsynced), append
+        ``SUBMITTED`` after success with ``perm_id`` and ``broker_order_id``,
+        append ``ACK_FAILED_UNCERTAIN`` on broker exception (the only honest
+        event when the submit may or may not have landed). The WAL surface
+        is opt-in via ``intent_wal`` + ``bot_order_namespace`` so legacy
+        replay / explicit-surface tests keep their pre-Phase-5A behaviour.
+        """
+        from app.engine.live.intent_events import IntentEventType
+        from app.engine.live.order_identity import build_order_ref
+
         acks: list[IbkrOrderAck] = []
         for order in self.drain_pending():
+            intent_id = self._intent_by_order_id.pop(order.order_id, None)
+            order_ref: str | None = None
+            if self.intent_wal is not None and intent_id is not None:
+                order_ref = build_order_ref(self.bot_order_namespace, intent_id)
             spec = IbkrOrderSpec(
                 symbol=order.symbol,
                 sec_type="STK",
@@ -420,6 +477,53 @@ class LivePortfolio:
                 time_in_force="DAY",
                 confirm_paper=True,
                 client_order_id=f"live-{order.order_id}",
+                order_ref=order_ref,
             )
-            acks.append(await self.broker.place_order(spec))
+            if self.intent_wal is not None and intent_id is not None and order_ref is not None:
+                self.intent_wal.append(
+                    event_type=IntentEventType.PENDING_INTENT,
+                    intent_id=intent_id,
+                    bot_order_namespace=self.bot_order_namespace,
+                    order_ref=order_ref,
+                    order_spec=spec.model_dump(),
+                )
+            try:
+                ack = await self.broker.place_order(spec)
+            except Exception as exc:
+                if self.intent_wal is not None and intent_id is not None and order_ref is not None:
+                    self.intent_wal.append(
+                        event_type=IntentEventType.ACK_FAILED_UNCERTAIN,
+                        intent_id=intent_id,
+                        bot_order_namespace=self.bot_order_namespace,
+                        order_ref=order_ref,
+                        reason=f"broker.place_order raised: {type(exc).__name__}: {exc}",
+                    )
+                raise
+            acks.append(ack)
+            if self.intent_wal is not None and intent_id is not None and order_ref is not None:
+                self.intent_wal.append(
+                    event_type=IntentEventType.SUBMITTED,
+                    intent_id=intent_id,
+                    bot_order_namespace=self.bot_order_namespace,
+                    order_ref=order_ref,
+                    order_id=_try_int(getattr(ack, "order_id", None)),
+                    perm_id=_try_int(getattr(ack, "perm_id", None)),
+                )
         return acks
+
+    def last_minted_intent_id(self) -> str | None:
+        """The most recent ``intent_id`` minted on a ``set_holdings`` submit.
+
+        Surfaces the identity foundation for tests; production callers join
+        through the WAL (``intent_events.jsonl``) instead.
+        """
+        return self._last_minted_intent_id
+
+    def intent_id_for_order(self, order_id: int) -> str | None:
+        """The ``intent_id`` reserved for the given pending order, if any.
+
+        Returns the value while the order is still pending; once
+        ``submit_pending_orders`` runs, the mapping is consumed and only
+        the WAL retains the join.
+        """
+        return self._intent_by_order_id.get(order_id)
