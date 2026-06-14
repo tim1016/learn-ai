@@ -182,6 +182,19 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.referenceParityAvailable()).toBe(true);
   });
 
+  it('queries the parity gate with the Reference-parity policy so the registered rule is compared against the preset', async () => {
+    const { component, svc } = setup();
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(svc.getAuditCopySizingLookup).toHaveBeenCalledWith(
+      'references/qc-shadow/A.py',
+      { kind: 'SetHoldings', fraction: '1.0' },
+    );
+  });
+
   it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {
     const { component } = setup({
       parityGate: {
