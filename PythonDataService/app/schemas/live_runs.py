@@ -380,6 +380,30 @@ class QcAuditCopyListing(BaseModel):
     entries: list[str] = Field(default_factory=list)
 
 
+class AuditCopySizingLookup(BaseModel):
+    """ADR 0009 § 3 — deploy-form gate status for the Reference parity preset.
+
+    Returned by the daemon's audit-copy-sizing lookup endpoint and surfaced to
+    the deploy form's inline gate banner. Three verdicts:
+
+    * ``proven_match`` — registered + sha re-verifies + proposed policy
+      matches the registered rule (or no proposed policy was supplied, which
+      is the deploy-form's pre-select case).
+    * ``proven_mismatch`` — registered + sha re-verifies, but the proposed
+      policy differs from the registered rule.
+    * ``cannot_prove`` — entry absent, file missing, sha drift, or allow-list
+      unavailable.
+    """
+
+    verdict: Literal["proven_match", "proven_mismatch", "cannot_prove"]
+    # Operator-facing one-line summary; safe to render verbatim.
+    detail: str
+    # The registered rule (when known) and the proposed live rule (when sent),
+    # both rendered as dicts via the same shape ``live_config.sizing`` uses.
+    expected_rule: dict | None = None
+    actual_rule: dict | None = None
+
+
 # --- PRD-A UI-1/UI-3/UI-4 contract additions ---
 
 
@@ -685,6 +709,18 @@ class InstanceLastExit(BaseModel):
     halt_detail: dict | None = None
 
 
+class SizingAuditRow(BaseModel):
+    """ADR 0009 § 11 — one row of the per-trade audit list."""
+
+    ts_ms: int
+    symbol: str
+    policy_kind: str
+    policy_value: str
+    intended_qty: int
+    reference_price: str
+    sized_via: str
+
+
 class InstanceSizing(BaseModel):
     """ADR 0009 — sizing surface for the instance console's Sizing card.
 
@@ -693,9 +729,6 @@ class InstanceSizing(BaseModel):
     is ``None`` for a **legacy/pre-policy run** (the ledger has no ``sizing``
     key); the Sizing card renders the degraded "Pre-policy run" badge variant
     in that case (ADR 0009 § 14).
-
-    PR1 surfaces static facts only. PR4 adds the *live derivation* (resolved
-    shares at the latest price); PR6 adds the *per-trade audit list*.
     """
 
     # Canonical policy form (the same shape the operator submitted, after
@@ -708,6 +741,9 @@ class InstanceSizing(BaseModel):
     preset: Literal["safe_canary", "reference_parity", "custom", "explicit"] | None = None
     governed_by: Literal["live_config", "strategy_explicit"]
     sizing_provenance: Literal["reference_native", "live_override", "spec_default"]
+    # ADR 0009 § 11 — per-trade audit rows, newest first (capped server-side
+    # at 50 rows). Empty for runs that predate the audit log.
+    per_trade_audit: list[SizingAuditRow] = Field(default_factory=list)
 
 
 class LiveInstanceStatus(BaseModel):

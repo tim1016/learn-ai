@@ -144,6 +144,107 @@ def test_live_state_writer_preserves_order_trail(tmp_path: Path) -> None:
     assert loaded.known_exec_ids == ["exec-1"]
 
 
+def test_live_state_writer_discards_audit_rows_from_prior_run_id(tmp_path: Path) -> None:
+    """ADR 0009 PR6 reviewer fix — the live-state sidecar is keyed by the
+    strategy_instance_id, not the run_id. When a re-deploy mints a new run_id
+    for the same instance, prior audit rows must be dropped so the cockpit
+    doesn't show stale rows under the new policy."""
+
+    class _Client:
+        settings = type("_Settings", (), {"client_id": 42})()
+
+    artifacts_root = tmp_path / "artifacts"
+    path = artifacts_root / "live_state" / "spy_ema_crossover" / "live_state.json"
+    repo = LiveStateSidecarRepo(path)
+    repo.write(
+        LiveStateEnvelope(
+            strategy_instance_id="spy_ema_crossover",
+            run_id="run-old",
+            bot_order_namespace="learn-ai/spy_ema_crossover/v1",
+            ib_client_id=42,
+            sizing_resolutions=[{"symbol": "SPY", "policy_kind": "SetHoldings"}],
+            last_processed_bar_ms=1_780_000_000_000,
+            last_artifact_flush_ms=1_780_000_000_500,
+        )
+    )
+
+    writer = _build_live_state_writer(
+        strategy_instance_id="spy_ema_crossover",
+        run_id="run-new",  # different from "run-old" persisted above
+        client=_Client(),
+        artifacts_root=artifacts_root,
+    )
+    portfolio = type("_Portfolio", (), {"positions": {}, "sizing_resolutions": []})()
+    writer(portfolio, 1_780_000_060_000)
+
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.run_id == "run-new"
+    assert loaded.sizing_resolutions == [], (
+        "audit rows from run-old must not leak into run-new's sidecar"
+    )
+
+
+def test_live_state_writer_does_not_lose_audit_rows_when_write_fails(tmp_path: Path) -> None:
+    """ADR 0009 PR6 reviewer fix — if repo.write raises, the portfolio's
+    in-memory buffer keeps the unwritten rows so the next bar's flush
+    retries them. The previous code cleared the buffer pre-write and lost
+    rows on any transient sidecar I/O failure.
+    """
+    import pytest as _pytest
+
+    class _Client:
+        settings = type("_Settings", (), {"client_id": 42})()
+
+    class _FailingRepo:
+        path = tmp_path / "nope.json"
+
+        def read(self):
+            return None
+
+        def write(self, envelope):  # emulates a sidecar I/O failure
+            del envelope
+            raise OSError("simulated disk full")
+
+    monkey_patch = LiveStateSidecarRepo
+    artifacts_root = tmp_path / "artifacts"
+    # Build the writer with a real client so it returns a callable; then swap
+    # the repo it captured for the failing one. The writer closes over the
+    # local `repo` variable in run.py, so we monkey-patch the LiveStateSidecarRepo
+    # class temporarily.
+    original_init = monkey_patch.__init__
+
+    def _swap_init(self, path):
+        original_init(self, path)
+        # Override the methods on the instance with the failing repo's behaviour.
+        self.read = _FailingRepo().read
+        self.write = _FailingRepo().write
+
+    monkey_patch.__init__ = _swap_init
+    try:
+        writer = _build_live_state_writer(
+            strategy_instance_id="spy_ema_crossover",
+            run_id="run-fixture",
+            client=_Client(),
+            artifacts_root=artifacts_root,
+        )
+    finally:
+        monkey_patch.__init__ = original_init
+
+    portfolio = type(
+        "_Portfolio",
+        (),
+        {"positions": {}, "sizing_resolutions": [{"symbol": "SPY", "policy_kind": "X"}]},
+    )()
+
+    with _pytest.raises(OSError):
+        writer(portfolio, 1_780_000_060_000)
+
+    # The audit row was NOT drained because the write failed; the next flush
+    # will retry it.
+    assert portfolio.sizing_resolutions == [{"symbol": "SPY", "policy_kind": "X"}]
+
+
 def test_read_owned_perm_ids_hydrates_from_live_state_sidecar(tmp_path: Path) -> None:
     path = tmp_path / "live_state.json"
     LiveStateSidecarRepo(path).write(

@@ -20,6 +20,13 @@ function setup(
     fleetBlocks?: boolean;
     qcEntries?: string[];
     instances?: { strategy_instance_id: string; process_state: string }[];
+    parityGate?: {
+      verdict: 'proven_match' | 'proven_mismatch' | 'cannot_prove';
+      detail: string;
+      expected_rule: unknown;
+      actual_rule: unknown;
+    };
+    positions?: { symbol: string; quantity: number }[];
   } = {},
 ) {
   const svc = {
@@ -55,8 +62,21 @@ function setup(
     deployInstance: vi
       .fn()
       .mockResolvedValue({ run_id: 'run-new', run_dir: '/runs/run-new', created: true, start: null }),
+    getAuditCopySizingLookup: vi.fn().mockResolvedValue(
+      opts.parityGate ?? {
+        verdict: 'cannot_prove',
+        detail: 'allow-list unavailable in tests',
+        expected_rule: null,
+        actual_rule: null,
+      },
+    ),
   };
-  const broker = { account: vi.fn().mockResolvedValue({ account_id: 'DU123' }) };
+  const broker = {
+    account: vi.fn().mockResolvedValue({ account_id: 'DU123' }),
+    positions: vi
+      .fn()
+      .mockResolvedValue({ positions: opts.positions ?? [] }),
+  };
   const connectivity = {
     links: () => [],
     blockers: () => [],
@@ -138,6 +158,147 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.start_options).toBeUndefined();
     expect(fixture.nativeElement.textContent).toContain('Deployment created');
     expect(fixture.nativeElement.textContent).toContain('run-new');
+  });
+
+  it('defaults the sizing preset to Safe canary and submits FixedShares(1)', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedShares', value: 1 } });
+    expect(component.sizingPreset()).toBe('safe_canary');
+  });
+
+  it('enables Reference parity only when the gate returns proven_match', async () => {
+    const { component } = setup({
+      parityGate: {
+        verdict: 'proven_match',
+        detail: 'audit copy proves SetHoldings(1.0) — Reference parity available',
+        expected_rule: { kind: 'SetHoldings', fraction: '1.0' },
+        actual_rule: null,
+      },
+    });
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(component.referenceParityAvailable()).toBe(true);
+  });
+
+  it('queries the parity gate with the Reference-parity policy so the registered rule is compared against the preset', async () => {
+    const { component, svc } = setup();
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(svc.getAuditCopySizingLookup).toHaveBeenCalledWith(
+      'references/qc-shadow/A.py',
+      { kind: 'SetHoldings', fraction: '1.0' },
+    );
+  });
+
+  it('emits a Custom FixedShares policy from the kind/value inputs', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedShares');
+    component.customValue.set('25');
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedShares', value: 25 } });
+  });
+
+  it('emits a Custom FixedNotional policy with the value as a decimal string', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedNotional');
+    component.customValue.set('1500.50');
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config).toEqual({ sizing: { kind: 'FixedNotional', value: '1500.50' } });
+  });
+
+  it('rejects Custom FixedShares values that parseInt would silently truncate', async () => {
+    const { component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedShares');
+
+    for (const bad of ['1.9', '25abc', '-3', '0', ' 5 5', '']) {
+      component.customValue.set(bad);
+      expect(component.blockedReason()).not.toBeNull();
+      expect(component.canSubmit()).toBe(false);
+    }
+    component.customValue.set('25');
+    expect(component.customSizingError()).toBeNull();
+  });
+
+  it('keeps the submit path safe when Custom sizing is invalid (no busy wedge)', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedNotional');
+    component.customValue.set('not-a-number');
+
+    // submit() short-circuits via canSubmit(); it never throws or sets busy.
+    await component.submit();
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+    expect(component.busy()).toBe(false);
+  });
+
+  it('blocks Reference parity when the strategy symbol already has exposure', async () => {
+    const { fixture, component } = setup({
+      parityGate: {
+        verdict: 'proven_match',
+        detail: 'audit copy proves SetHoldings(1.0)',
+        expected_rule: { kind: 'SetHoldings', fraction: '1.0' },
+        actual_rule: null,
+      },
+      positions: [{ symbol: 'SPY', quantity: 37 }],
+    });
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    fillRequired(component);
+    await flush();
+    await flush();
+    await flush();
+    component.sizingPreset.set('reference_parity');
+    fixture.detectChanges();
+
+    expect(component.blockedReason()).toMatch(/already holds 37/);
+  });
+
+  it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {
+    const { component } = setup({
+      parityGate: {
+        verdict: 'cannot_prove',
+        detail: 'audit copy is not registered in the allow-list',
+        expected_rule: null,
+        actual_rule: null,
+      },
+    });
+    await flush();
+    component.qcAuditCopyPath.set('references/qc-shadow/Unregistered.py');
+    await flush();
+
+    // Simulate a stray check on the disabled radio.
+    const evt = { target: { value: 'reference_parity' } } as unknown as Event;
+    Object.setPrototypeOf(evt.target as object, HTMLInputElement.prototype);
+    component.setSizingPreset(evt);
+
+    expect(component.sizingPreset()).toBe('safe_canary');
   });
 
   it('attaches start_options only when "Start now" is checked', async () => {

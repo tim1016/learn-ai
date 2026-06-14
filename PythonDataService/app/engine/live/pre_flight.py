@@ -207,6 +207,133 @@ class _PositionsLike(Protocol):
     def positions(self) -> list: ...  # pragma: no cover
 
 
+def check_all_in_coexistence(
+    *,
+    proposed_symbol: str,
+    proposed_sizing: object,
+    broker_positions: _PositionsLike | None,
+    sibling_all_in_symbols: set[str] | None = None,
+) -> CheckResult:
+    """ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence guard.
+
+    The interim stand-in for the capital-sleeve layer (which is deferred).
+    Refuses to start a new run when **resolved sizing is ``SetHoldings(1.0)``**
+    *and* either:
+
+    1. The bound trade symbol has non-zero exposure in the broker account
+       (any source — managed or not). An existing all-in position would
+       silently absorb a second all-in target.
+    2. Another managed live binding on this account holds ``SetHoldings(1.0)``
+       on the **same symbol** (passed via ``sibling_all_in_symbols``).
+
+    ``FixedShares`` / ``FixedNotional`` are **never** blocked — those policies
+    don't fight for the whole portfolio. Cross-symbol all-in concurrency
+    (SPY all-in + AAPL all-in on the same cash account) is **permitted-but-unsafe**
+    in v1; the capital-sleeve layer (Decision 9) is what eventually closes
+    it. We do not block cross-symbol because account-wide blocking would
+    refuse a clean SPY canary deploy onto an account that holds an
+    unrelated manual position.
+
+    ``proposed_sizing`` is taken as ``object`` to keep the signature usable
+    from both the typed runtime path (a ``SizingPolicy`` instance) and the
+    deploy-form gate (a raw dict). The function isinstance-checks and dict-
+    sniffs to decide whether the policy is the gating ``SetHoldings(1.0)``.
+
+    When ``broker_positions`` is ``None`` the broker probe is unavailable;
+    the check returns ``passed=False`` with a "broker unreachable" detail so
+    the operator sees the failure mode rather than a silent pass that could
+    deploy onto a non-flat account.
+    """
+    from decimal import Decimal as _Decimal
+
+    # Sniff the policy. Anything other than SetHoldings(1.0) is unconditionally OK.
+    is_all_in = _is_set_holdings_full(proposed_sizing)
+    if not is_all_in:
+        return CheckResult(
+            name="all_in_coexistence",
+            passed=True,
+            detail="not all-in; coexistence guard does not apply",
+        )
+
+    expected = proposed_symbol.upper()
+    sibling = {s.upper() for s in sibling_all_in_symbols} if sibling_all_in_symbols else set()
+    if expected in sibling:
+        return CheckResult(
+            name="all_in_coexistence",
+            passed=False,
+            detail=(
+                f"another managed live binding on this account already holds "
+                f"SetHoldings(1.0) on {expected}; the capital-sleeve layer is the "
+                "fix and is not yet built"
+            ),
+            data={"reason": "sibling_all_in", "symbol": expected},
+        )
+
+    if broker_positions is None:
+        return CheckResult(
+            name="all_in_coexistence",
+            passed=False,
+            detail=(
+                "broker positions unreachable; cannot prove the trade symbol is flat "
+                "before launching an all-in run"
+            ),
+            data={"reason": "broker_unreachable", "symbol": expected},
+        )
+
+    for pos in broker_positions.positions:
+        symbol = str(pos.symbol).upper()
+        if symbol != expected:
+            continue
+        try:
+            qty = _Decimal(str(pos.quantity))
+        except (ValueError, TypeError):
+            continue
+        if qty != 0:
+            return CheckResult(
+                name="all_in_coexistence",
+                passed=False,
+                detail=(
+                    f"existing exposure on {expected} ({qty}) would silently absorb "
+                    "an all-in target; flatten or wait before launching"
+                ),
+                data={
+                    "reason": "symbol_exposure_present",
+                    "symbol": expected,
+                    "quantity": str(qty),
+                },
+            )
+
+    return CheckResult(
+        name="all_in_coexistence",
+        passed=True,
+        detail=f"all-in on {expected} cleared (symbol is flat and no sibling holds it)",
+    )
+
+
+def _is_set_holdings_full(policy: object) -> bool:
+    """True iff ``policy`` is the gating ``SetHoldings(1.0)`` shape.
+
+    Accepts both the typed ``SizingPolicy`` form and a raw dict (the
+    deploy-form gate calls with the operator's submitted payload before it
+    has been parsed by the discriminated union).
+    """
+    from decimal import Decimal as _Decimal
+
+    from app.engine.execution.order_sizer import SetHoldings
+
+    if isinstance(policy, SetHoldings):
+        return policy.fraction == _Decimal("1.0")
+    if isinstance(policy, dict):
+        if policy.get("kind") != "SetHoldings":
+            return False
+        fraction = policy.get("fraction")
+        try:
+            return _Decimal(str(fraction)) == _Decimal("1.0")
+        except (ValueError, TypeError):
+            return False
+    return False
+
+
 def check_unexpected_position(
     snapshot: _PositionsLike,
     *,

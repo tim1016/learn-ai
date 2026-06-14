@@ -34,6 +34,11 @@ const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidat
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 
+// ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
+// so the gate lookup and the submit path use the *same* shape; a future change
+// to the preset's all-in fraction needs to land in exactly one place.
+const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '1.0' };
+
 /**
  * Deploy form for a live strategy instance. The UI uses plain operator words,
  * while the request still maps exactly to ADR 0006: create the run on the host,
@@ -61,6 +66,11 @@ export class BrokerDeployFormComponent {
   // Best-effort: the account prefill is convenience only — broker may be down,
   // in which case the operator types the account id manually.
   readonly account = resource({ loader: () => this.broker.account() });
+  // ADR 0009 § 9 — broker positions for the symbol-scoped all-in coexistence
+  // guard (Decision 13). Loaded once on form open; the guard only consults it
+  // when Reference parity is selected, so a broker outage doesn't block other
+  // presets.
+  readonly positions = resource({ loader: () => this.broker.positions() });
 
   // Form fields.
   readonly strategyKey = signal<string>('');
@@ -82,8 +92,49 @@ export class BrokerDeployFormComponent {
   readonly startNow = signal<boolean>(false);
   // ADR 0009 § 7 — position-sizing preset. Defaults to Safe canary
   // (FixedShares(1)); the $250k surprise from the first deployment-validation
-  // run is opt-in from PR1 forward. Reference parity + Custom ship in PR3/PR4.
+  // run is opt-in. Reference parity is gated by the audit-copy allow-list
+  // (ADR § 3); Custom ships in PR4.
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
+
+  // ADR 0009 § 3 — Reference parity gate. Refetched whenever the chosen audit
+  // copy changes; surfaces the verdict (`proven_match` / `proven_mismatch` /
+  // `cannot_prove`) inline so the operator sees *why* Reference parity is
+  // available or not before clicking. **Crucially**, the lookup passes the
+  // actual Reference parity policy (`SetHoldings(1.0)`) so the backend
+  // compares the registered rule against the preset the operator would
+  // submit; an audit copy registered as `SetHoldings(0.5)` would otherwise
+  // pass the bare informational lookup and silently enable a Reference
+  // parity click that submits `SetHoldings(1.0)`.
+  readonly referenceParityGate = resource({
+    params: () => ({ auditCopyPath: this.qcAuditCopyPath().trim() }),
+    loader: async ({ params }) => {
+      if (!params.auditCopyPath) return null;
+      return this.svc.getAuditCopySizingLookup(
+        params.auditCopyPath,
+        REFERENCE_PARITY_POLICY,
+      );
+    },
+    defaultValue: null,
+  });
+
+  readonly referenceParityAvailable = computed<boolean>(() => {
+    const gate = this.referenceParityGate.value();
+    return gate?.verdict === 'proven_match';
+  });
+
+  readonly referenceParityBanner = computed<string>(() => {
+    const gate = this.referenceParityGate.value();
+    if (!gate) return 'Pick an audit copy to check Reference parity availability.';
+    return gate.detail;
+  });
+
+  // PR4 — Custom expansion. The operator picks a kind (FixedShares or
+  // FixedNotional) and a value. The kind dropdown is the canonical name; the
+  // value field accepts plain numbers (FixedShares) or decimal-string-friendly
+  // numbers (FixedNotional). Decimal-on-the-wire is enforced at submit time so
+  // the operator never sees a float at the API boundary.
+  readonly customKind = signal<'FixedShares' | 'FixedNotional'>('FixedShares');
+  readonly customValue = signal<string>('1');
   readonly showLiveConfirm = signal<boolean>(false);
   private readonly liveConfirmed = signal<boolean>(false);
   private readonly autoSelectedDeploymentValidationAuditCopy = signal<boolean>(false);
@@ -238,6 +289,16 @@ export class BrokerDeployFormComponent {
       const nextPath = match?.path ?? fallback;
       if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
     });
+    // Reference parity must not silently downgrade — if the audit-copy choice
+    // changes such that the gate is no longer proven_match, reset the preset to
+    // Safe canary so the operator re-confirms the choice (ADR 0009 § 3 "the
+    // preset's name is a promise, breaking it silently is bad audit UX").
+    effect(() => {
+      if (this.sizingPreset() === 'reference_parity' && !this.referenceParityAvailable()) {
+        this.sizingPreset.set('safe_canary');
+      }
+    });
+
     effect(() => {
       if (this.strategyKey() === 'deployment_validation') {
         if (this.qcAuditCopyPath().trim() === '') {
@@ -266,12 +327,37 @@ export class BrokerDeployFormComponent {
       this.instanceId().trim() !== '',
   );
 
+  /** ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence guard
+   * surfaced client-side from the broker positions snapshot. Refuses
+   * Reference parity (the only all-in preset) when the strategy's symbol
+   * carries any exposure on the connected broker account. Cross-symbol
+   * all-in concurrency is permitted-but-unsafe (the capital-sleeve layer
+   * closes it later), so this guard intentionally only blocks the trade
+   * symbol's own exposure.
+   */
+  readonly allInCoexistenceBlock = computed<string | null>(() => {
+    if (this.sizingPreset() !== 'reference_parity') return null;
+    const symbol = this.selectedFixture()?.symbols?.[0]?.toUpperCase();
+    if (!symbol) return null;
+    const snap = this.positions.value();
+    if (!snap) return null;
+    const own = snap.positions.find((p) => p.symbol.toUpperCase() === symbol);
+    if (!own || Number(own.quantity) === 0) return null;
+    return (
+      `Reference parity blocked: ${symbol} already holds ${own.quantity} share(s) on this account. ` +
+      'Flatten the position, or pick Safe canary / Custom — the capital-sleeve layer that would let ' +
+      'two all-in bots coexist on one symbol is not built yet.'
+    );
+  });
+
   /** Why Deploy can't be submitted, sourced from the connectivity strip + form.
    * Null = ready. */
   readonly blockedReason = computed<string | null>(() => {
     if (this.connectivity.daemonDown()) {
       return 'Live engine unavailable. Start it on this machine, then recheck.';
     }
+    const coexistence = this.allInCoexistenceBlock();
+    if (coexistence !== null) return coexistence;
     if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
       return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
     }
@@ -279,6 +365,11 @@ export class BrokerDeployFormComponent {
       return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
     }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
+    // button disables BEFORE submit() runs; throwing inside submit() would
+    // leave busy=true and the form wedged.
+    const customError = this.customSizingError();
+    if (customError !== null) return customError;
     return null;
   });
 
@@ -395,36 +486,89 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  /** ADR 0009 PR1 — preset selector. Reference parity ships in PR3 (gated by
-   * the audit-copy allow-list); Custom in PR4. The radio binds onlyOnSafeCanary
-   * so a stray click can't quietly switch to a disabled option. */
+  /** ADR 0009 — preset selector. Reference parity is gated by the audit-copy
+   * allow-list (PR3); Custom ships in PR4. The radio rejects a stray switch to
+   * a disabled option and refuses Reference parity when the gate isn't open. */
   setSizingPreset(e: Event): void {
     if (!(e.target instanceof HTMLInputElement)) return;
     const next = e.target.value;
+    if (next === 'reference_parity' && !this.referenceParityAvailable()) {
+      return;
+    }
     if (next === 'safe_canary' || next === 'reference_parity' || next === 'custom') {
       this.sizingPreset.set(next);
     }
   }
 
-  /** Map the selected preset into the canonical `SizingPolicy`. Reference parity
-   * resolves to `SetHoldings(1.0)` once PR3 lights it up; Custom expands to the
-   * kind dropdown in PR4. For PR1, only Safe canary actually emits a runnable
-   * policy — the others are visually disabled in the template.
-   */
+  /** PR4 reviewer fix — strict integer regex so values like "1.9" or "25abc"
+   * (which `Number.parseInt` happily truncates to 1 or 25) are rejected at
+   * the form boundary, not silently truncated into a live order. */
+  private static readonly FIXED_SHARES_INTEGER_RE = /^[1-9]\d*$/;
+  /** PR4 reviewer fix — strict positive-decimal regex for FixedNotional. The
+   * value travels to Python as a decimal string (no float on the wire), so we
+   * only need to enforce a positive decimal shape here. */
+  private static readonly FIXED_NOTIONAL_DECIMAL_RE = /^(?:\d+\.\d+|\d+\.?|\.\d+)$/;
+
+  /** Validate the Custom preset's raw value against its kind. Returns a
+   * user-facing error string when invalid (rendered via `blockedReason` so the
+   * deploy button disables); returns `null` when the value is acceptable.
+   * Centralizing this here means `submit()` never throws mid-flight after
+   * setting `busy=true` (the PR4 reviewer's wedged-state concern). */
+  readonly customSizingError = computed<string | null>(() => {
+    if (this.sizingPreset() !== 'custom') return null;
+    const raw = this.customValue().trim();
+    if (raw === '') return 'Custom sizing value is required.';
+    if (this.customKind() === 'FixedShares') {
+      if (!BrokerDeployFormComponent.FIXED_SHARES_INTEGER_RE.test(raw)) {
+        return `FixedShares value must be a whole number ≥ 1 (no decimals, letters, or signs). Got "${raw}".`;
+      }
+      const n = Number.parseInt(raw, 10);
+      if (n < 1) return `FixedShares value must be ≥ 1. Got "${raw}".`;
+      return null;
+    }
+    // FixedNotional
+    if (!BrokerDeployFormComponent.FIXED_NOTIONAL_DECIMAL_RE.test(raw)) {
+      return `FixedNotional value must be a positive number. Got "${raw}".`;
+    }
+    const n = Number.parseFloat(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      return `FixedNotional value must be a positive number. Got "${raw}".`;
+    }
+    return null;
+  });
+
+  /** Map the selected preset into the canonical `SizingPolicy`. Custom inputs
+   * are validated upstream by `customSizingError`, which gates `canSubmit` —
+   * so this method only runs when validation already passed and never
+   * throws. */
   private resolveSizingPolicy(): SizingPolicy {
     const preset = this.sizingPreset();
     if (preset === 'reference_parity') {
-      // Reference parity preset = SetHoldings(1.0). Disabled in PR1's template,
-      // but the resolver is included so a future PR enabling the radio doesn't
-      // also have to change submission code.
-      return { kind: 'SetHoldings', fraction: '1.0' };
+      return REFERENCE_PARITY_POLICY;
     }
     if (preset === 'custom') {
-      // Placeholder: PR4 wires the custom expansion with the actual operator
-      // input. Until then, Custom is disabled in the template; this branch is
-      // unreachable from the UI.
-      return { kind: 'FixedShares', value: 1 };
+      const raw = this.customValue().trim();
+      if (this.customKind() === 'FixedShares') {
+        return { kind: 'FixedShares', value: Number.parseInt(raw, 10) };
+      }
+      return { kind: 'FixedNotional', value: raw };
     }
     return { kind: 'FixedShares', value: 1 };
+  }
+
+  setCustomKind(e: Event): void {
+    if (!(e.target instanceof HTMLSelectElement)) return;
+    const v = e.target.value;
+    if (v === 'FixedShares' || v === 'FixedNotional') {
+      this.customKind.set(v);
+      // Re-default the value to a sane shape for the kind (1 share / 100 dollars).
+      this.customValue.set(v === 'FixedShares' ? '1' : '100');
+    }
+  }
+
+  setCustomValue(e: Event): void {
+    if (e.target instanceof HTMLInputElement) {
+      this.customValue.set(e.target.value);
+    }
   }
 }

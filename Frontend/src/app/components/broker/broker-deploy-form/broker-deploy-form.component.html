@@ -117,33 +117,65 @@
               <small>1 share per signal — proves the wiring without risking capital.</small>
             </span>
           </label>
-          <label class="sizing-option disabled" [class.selected]="sizingPreset() === 'reference_parity'">
+          <label
+            class="sizing-option"
+            [class.disabled]="!referenceParityAvailable()"
+            [class.selected]="sizingPreset() === 'reference_parity'"
+          >
             <input
               type="radio"
               name="sizing-preset"
               value="reference_parity"
-              disabled
+              [disabled]="!referenceParityAvailable()"
               [checked]="sizingPreset() === 'reference_parity'"
+              (change)="setSizingPreset($event)"
             />
             <span class="sizing-label">
               <strong>Reference parity</strong>
-              <small>Matches the QC audit copy's <code>SetHoldings(1.0)</code> all-in target. Ships in PR3.</small>
+              <small>Matches the QC audit copy's all-in target. Routes through LEAN's buffered sizing.</small>
+              <small class="gate" [class.gate-pass]="referenceParityAvailable()">{{ referenceParityBanner() }}</small>
             </span>
           </label>
-          <label class="sizing-option disabled" [class.selected]="sizingPreset() === 'custom'">
+          <label class="sizing-option" [class.selected]="sizingPreset() === 'custom'">
             <input
               type="radio"
               name="sizing-preset"
               value="custom"
-              disabled
               [checked]="sizingPreset() === 'custom'"
+              (change)="setSizingPreset($event)"
             />
             <span class="sizing-label">
               <strong>Custom</strong>
-              <small>Fixed shares (n &gt; 1) or fixed notional. Ships in PR4.</small>
+              <small>Fixed shares (n &gt; 1) or fixed notional. No reference promise.</small>
             </span>
           </label>
         </fieldset>
+
+        @if (sizingPreset() === 'custom') {
+          <div class="custom-expansion">
+            <label class="field inline">
+              <span>Kind</span>
+              <select [value]="customKind()" (change)="setCustomKind($event)">
+                <option value="FixedShares">Fixed shares</option>
+                <option value="FixedNotional">Fixed notional ($)</option>
+              </select>
+            </label>
+            <label class="field inline">
+              <span>{{ customKind() === 'FixedShares' ? 'Shares per signal' : 'Dollars per signal' }}</span>
+              <input
+                type="text"
+                inputmode="decimal"
+                [value]="customValue()"
+                (input)="setCustomValue($event)"
+                [placeholder]="customKind() === 'FixedShares' ? '1' : '100.00'"
+              />
+            </label>
+            <small class="custom-help">
+              FixedNotional floors <code>value / latest price</code> to a whole share. Values that round to
+              zero shares are logged as a sizing skip and never submit a zero order.
+            </small>
+          </div>
+        }
       </section>
 
       <section class="group" aria-labelledby="launch-section">

@@ -1,8 +1,9 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import type {
+  AuditCopySizingLookup,
   CommandsSummary,
   CommandWriteRequest,
   CommandWriteResponse,
@@ -19,6 +20,7 @@ import type {
   LiveRunSummary,
   LogLine,
   QcAuditCopyListing,
+  SizingPolicy,
   SpecStrategyFixture,
 } from '../api/live-runs.types';
 import type {
@@ -207,6 +209,25 @@ export class LiveRunsService {
   getQcAuditCopies(): Promise<QcAuditCopyListing> {
     return firstValueFrom(
       this.http.get<QcAuditCopyListing>(`${this.instancesBase}/qc-audit-copies`),
+    );
+  }
+
+  /** ADR 0009 § 3 — Reference parity gate verdict for an audit copy. The
+   * optional `proposedSizing` lets the deploy form check a specific policy;
+   * omit it on initial render to learn the registered rule. */
+  getAuditCopySizingLookup(
+    auditCopyPath: string,
+    proposedSizing?: SizingPolicy,
+  ): Promise<AuditCopySizingLookup> {
+    let params = new HttpParams().set('audit_copy_path', auditCopyPath);
+    if (proposedSizing) {
+      params = params.set('proposed_sizing', JSON.stringify(proposedSizing));
+    }
+    return firstValueFrom(
+      this.http.get<AuditCopySizingLookup>(
+        `${this.instancesBase}/audit-copy-sizing-lookup`,
+        { params },
+      ),
     );
   }
 

@@ -45,6 +45,7 @@ from app.engine.live.deploy import (
 )
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
+    AuditCopySizingLookup,
     EmergencyFlattenRequest,
     HostRunnerActionResponse,
     HostRunnerDeployRequest,
@@ -292,7 +293,12 @@ class RunnerProcessManager:
                     "Stop it before starting another run for this instance.",
                 )
 
-        command = self._build_start_command(run_dir, request, self._sibling_symbols(key))
+        command = self._build_start_command(
+            run_dir,
+            request,
+            self._sibling_symbols(key),
+            self._sibling_all_in_symbols(key),
+        )
         env = self._build_child_env(request)
         log_path = run_dir / "host_daemon.log"
         log_handle = log_path.open("a", encoding="utf-8")
@@ -489,6 +495,41 @@ class RunnerProcessManager:
             raise RuntimeError(f"git ls-files failed: rc={proc.returncode} stderr={proc.stderr!r}")
         return [p for p in proc.stdout.split("\0") if p]
 
+    def lookup_audit_copy_sizing(
+        self, audit_copy_path: str, proposed_sizing: dict | None
+    ) -> dict:
+        """ADR 0009 § 3 — Reference parity gate status for the deploy form.
+
+        Resolves the operator's audit-copy choice against
+        ``docs/references/audit-copy-sizing-allow-list.json``, re-verifying the
+        file's sha. ``proposed_sizing`` is the canonical ``live_config.sizing``
+        dict; pass ``None`` to query the registered rule without proposing one
+        (the deploy form's initial render uses this to populate the gate
+        banner).
+        """
+        from app.engine.execution.audit_copy_allow_list import lookup as _lookup
+        from app.engine.execution.order_sizer import (
+            parse_sizing_policy,
+            policy_to_ledger_dict,
+        )
+
+        proposed_policy = parse_sizing_policy(proposed_sizing) if proposed_sizing else None
+        verdict = _lookup(
+            audit_copy_path=audit_copy_path,
+            proposed_policy=proposed_policy,
+            repo_root=self.repo_root,
+        )
+        return {
+            "verdict": verdict.verdict,
+            "detail": verdict.detail,
+            "expected_rule": policy_to_ledger_dict(verdict.expected_rule)
+            if verdict.expected_rule is not None
+            else None,
+            "actual_rule": policy_to_ledger_dict(verdict.actual_rule)
+            if verdict.actual_rule is not None
+            else None,
+        }
+
     def list_qc_audit_copies(self) -> QcAuditCopyListing:
         """List committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
 
@@ -570,7 +611,11 @@ class RunnerProcessManager:
         return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
     def _build_start_command(
-        self, run_dir: Path, request: HostRunnerStartRequest, managed_symbols: set[str]
+        self,
+        run_dir: Path,
+        request: HostRunnerStartRequest,
+        managed_symbols: set[str],
+        sibling_all_in_symbols: set[str],
     ) -> list[str]:
         command = [
             sys.executable,
@@ -593,6 +638,14 @@ class RunnerProcessManager:
             # the unexpected-position gate excludes them rather than flagging a
             # sibling as foreign contamination (ADR 0005, completes #395).
             command += ["--managed-symbols", ",".join(sorted(managed_symbols))]
+        if sibling_all_in_symbols:
+            # ADR 0009 § 9 / Decision 13 — symbols where a sibling managed
+            # instance currently runs SetHoldings(1.0). The coexistence guard
+            # refuses to start a SetHoldings(1.0) run on any of these.
+            command += [
+                "--sibling-all-in-symbols",
+                ",".join(sorted(sibling_all_in_symbols)),
+            ]
         return command
 
     def _resolve_symbol(self, run_dir: Path) -> str | None:
@@ -619,6 +672,48 @@ class RunnerProcessManager:
                 if symbol:
                     symbols.add(symbol)
         return symbols
+
+    def _sibling_all_in_symbols(self, exclude_key: str) -> set[str]:
+        """ADR 0009 § 9 / Decision 13 — symbols where a sibling running
+        managed instance currently holds ``SetHoldings(1.0)``.
+
+        The coexistence guard refuses to start a new ``SetHoldings(1.0)``
+        run on any of these symbols. Reads each sibling's ledger
+        ``live_config.sizing`` field; a malformed or absent sizing block
+        is treated as "not all-in" (no contribution to the set).
+        """
+        from app.engine.live.pre_flight import _is_set_holdings_full
+
+        symbols: set[str] = set()
+        for key, managed in self._managed.items():
+            if key == exclude_key:
+                continue
+            self._refresh(managed)
+            if managed.process.poll() is None and _is_set_holdings_full(
+                self._read_sibling_sizing(managed.run_dir)
+            ):
+                symbol = self._resolve_symbol(managed.run_dir)
+                if symbol:
+                    symbols.add(symbol)
+        return symbols
+
+    @staticmethod
+    def _read_sibling_sizing(run_dir: Path) -> dict | None:
+        """Read a sibling run's ``live_config.sizing`` from its ledger.
+
+        Returns ``None`` when the ledger / live_config / sizing field is
+        absent or unreadable — siblings that predate the sizing policy
+        never trigger the all-in coexistence guard.
+        """
+        try:
+            data = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        live_config = data.get("live_config")
+        if not isinstance(live_config, dict):
+            return None
+        sizing = live_config.get("sizing")
+        return sizing if isinstance(sizing, dict) else None
 
     def _build_child_env(self, request: HostRunnerStartRequest) -> dict[str, str]:
         env = os.environ.copy()
@@ -731,6 +826,42 @@ def create_app(
     @app.get("/qc-audit-copies", response_model=QcAuditCopyListing, dependencies=auth)
     async def qc_audit_copies() -> QcAuditCopyListing:
         return process_manager.list_qc_audit_copies()
+
+    @app.get(
+        "/audit-copy-sizing-lookup",
+        response_model=AuditCopySizingLookup,
+        dependencies=auth,
+    )
+    async def audit_copy_sizing_lookup(
+        audit_copy_path: str,
+        proposed_sizing: str | None = None,
+    ) -> AuditCopySizingLookup:
+        """ADR 0009 § 3 — Reference parity gate status for the deploy form.
+
+        ``proposed_sizing`` is a URL-encoded JSON object (the same dict the
+        deploy submits as ``live_config.sizing``). Pass nothing for an
+        informational lookup of the registered rule.
+        """
+        import json as _json
+
+        sizing: dict | None = None
+        if proposed_sizing:
+            try:
+                parsed = _json.loads(proposed_sizing)
+            except _json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail=f"proposed_sizing must be JSON: {exc}",
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail="proposed_sizing must be a JSON object",
+                )
+            sizing = parsed
+        return AuditCopySizingLookup.model_validate(
+            process_manager.lookup_audit_copy_sizing(audit_copy_path, sizing)
+        )
 
     @app.post("/deploy", response_model=HostRunnerDeployResponse, dependencies=auth)
     async def deploy(request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:

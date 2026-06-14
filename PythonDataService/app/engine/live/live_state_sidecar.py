@@ -70,6 +70,16 @@ class LiveStateEnvelope(BaseModel):
     # Defaults to 0 so envelopes written before this field read back cleanly.
     last_intent_wal_seq: int = Field(default=0, ge=0)
 
+    # ADR 0009 § 11 — the per-trade sizing audit log. Bounded ring buffer
+    # (capped server-side; the engine trims to the most recent N entries
+    # before each write) so a long-running bot doesn't grow the sidecar
+    # unbounded. Each row carries the policy that produced the order,
+    # the intended quantity, the reference price (decimal string), the
+    # sizing_provenance at resolve time, and the order surface
+    # (``policy_set_holdings`` / ``strategy_explicit_market_order`` etc).
+    # Empty for runs created before this field shipped.
+    sizing_resolutions: list[dict[str, Any]] = Field(default_factory=list)
+
     poisoned_reason: str | None = None
 
 

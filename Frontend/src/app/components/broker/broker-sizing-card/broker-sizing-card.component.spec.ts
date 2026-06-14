@@ -20,6 +20,7 @@ describe('BrokerSizingCardComponent', () => {
         preset: 'safe_canary',
         governed_by: 'live_config',
         sizing_provenance: 'live_override',
+        per_trade_audit: [],
       }).textContent ?? '';
 
     expect(text).toContain('Position sizing');
@@ -29,12 +30,39 @@ describe('BrokerSizingCardComponent', () => {
     expect(text).toContain('Live override');
   });
 
+  it('renders the per-trade audit list when rows are present', () => {
+    const text =
+      render({
+        policy: { kind: 'FixedShares', value: 1 },
+        preset: 'safe_canary',
+        governed_by: 'live_config',
+        sizing_provenance: 'live_override',
+        per_trade_audit: [
+          {
+            ts_ms: 1700000000000,
+            symbol: 'SPY',
+            policy_kind: 'FixedShares',
+            policy_value: '1',
+            intended_qty: 1,
+            reference_price: '500.25',
+            sized_via: 'policy_set_holdings',
+          },
+        ],
+      }).textContent ?? '';
+
+    expect(text).toContain('Per-trade audit');
+    expect(text).toContain('SPY');
+    expect(text).toContain('FixedShares(1)');
+    expect(text).toContain('500.25');
+  });
+
   it('renders the honest "Pre-policy run" badge when the policy is absent', () => {
     const html = render({
       policy: null,
       preset: null,
       governed_by: 'live_config',
       sizing_provenance: 'live_override',
+      per_trade_audit: [],
     });
 
     expect(html.textContent).toContain('Pre-policy run');
@@ -49,6 +77,7 @@ describe('BrokerSizingCardComponent', () => {
         preset: 'explicit',
         governed_by: 'strategy_explicit',
         sizing_provenance: 'live_override',
+        per_trade_audit: [],
       }).textContent ?? '';
 
     expect(text).toContain('Self-sized (strategy explicit)');
@@ -63,6 +92,7 @@ describe('BrokerSizingCardComponent', () => {
         preset: 'reference_parity',
         governed_by: 'live_config',
         sizing_provenance: 'reference_native',
+        per_trade_audit: [],
       }).textContent ?? '';
 
     expect(text).toContain('Reference parity');

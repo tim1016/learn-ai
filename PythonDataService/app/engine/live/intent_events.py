@@ -23,7 +23,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class IntentEventType(StrEnum):
-    """The submit-lifecycle states (ADR-0008 §3)."""
+    """The submit-lifecycle states (ADR-0008 §3).
+
+    ``SIZING_RESOLVED`` (ADR 0009 § 11) is an **audit-trail** event, not a
+    submit-lifecycle transition: it captures the sizing decision the engine
+    made for a given intent before the broker call. It is appended **before**
+    ``SUBMITTED`` / ``ACK_FAILED_UNCERTAIN`` and is **never** considered an
+    unresolved submit state — the fold treats it as informational.
+    """
 
     PENDING_INTENT = "PENDING_INTENT"
     SUBMITTED = "SUBMITTED"
@@ -32,6 +39,11 @@ class IntentEventType(StrEnum):
     INTENT_NOT_ACCEPTED = "INTENT_NOT_ACCEPTED"
     SUBMIT_UNCERTAIN_HALTED = "SUBMIT_UNCERTAIN_HALTED"
     ADOPTED_BROKER_ORDER = "ADOPTED_BROKER_ORDER"
+    # ADR 0009 § 11 — audit-only sizing decision record. Joins each broker
+    # fill back to the live_config.sizing rule that produced its order, so
+    # the Sizing card's per-trade audit list can render the rule, intended
+    # qty, reference price, and sizing_provenance at resolve time.
+    SIZING_RESOLVED = "SIZING_RESOLVED"
 
 
 class IntentKind(StrEnum):
@@ -71,6 +83,19 @@ class IntentEvent(BaseModel):
     # Intended order details, carried on PENDING_INTENT so a provably-absent
     # retry can re-place the SAME intent. Opaque to the pure modules.
     order_spec: dict[str, Any] | None = None
+
+    # ADR 0009 § 11 — sizing-decision payload, populated ONLY on
+    # ``SIZING_RESOLVED`` events. All five fields are optional on the type
+    # so other event types parse cleanly with extra="forbid". The fold
+    # surfaces them as ``submitted_orders[intent_id].sizing_resolution``.
+    # ``reference_price`` is stored as a decimal string (never a float —
+    # wire/storage rule for money values).
+    policy_kind: str | None = None
+    policy_value: str | None = None
+    intended_qty: int | None = None
+    reference_price: str | None = None
+    sizing_provenance_at_resolve_time: str | None = None
+    sized_via: str | None = None
 
     # Human-facing provenance. NEVER the fold cursor (use seq). Bounded to
     # int64 ms UTC: it is serialized into the WAL, so it must honor the repo's

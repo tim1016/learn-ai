@@ -152,3 +152,77 @@ def test_projection_from_envelope_round_trips() -> None:
     assert order.status is IntentEventType.SUBMITTED
     assert order.perm_id == 900
     assert order.exec_ids == ("e1",)
+
+
+def test_sizing_resolved_decorates_submitted_order_view_without_changing_status() -> None:
+    """ADR 0009 § 11 — a SIZING_RESOLVED event attaches the resolution to the
+    intent's view but does NOT change its submit-lifecycle status. The
+    fold treats it as audit-only.
+    """
+    from app.engine.live.intent_events import IntentEvent
+    from app.engine.live.intent_ledger import LedgerProjection, fold
+
+    order_ref = build_order_ref(NS, IID)
+    submitted = IntentEvent(
+        seq=1,
+        event_type=IntentEventType.SUBMITTED,
+        intent_id=IID,
+        bot_order_namespace=NS,
+        order_ref=order_ref,
+        order_id=11,
+        perm_id=900,
+    )
+    sizing = IntentEvent(
+        seq=2,
+        event_type=IntentEventType.SIZING_RESOLVED,
+        intent_id=IID,
+        bot_order_namespace=NS,
+        order_ref=order_ref,
+        policy_kind="FixedShares",
+        policy_value="1",
+        intended_qty=1,
+        reference_price="500",
+        sizing_provenance_at_resolve_time="live_override",
+        sized_via="policy_set_holdings",
+    )
+    view = fold(LedgerProjection(), [submitted, sizing])
+    order = view.submitted_orders[IID]
+    # Status is preserved; SIZING_RESOLVED never advances the lifecycle.
+    assert order.status is IntentEventType.SUBMITTED
+    assert order.sizing_resolution is not None
+    assert order.sizing_resolution.intended_qty == 1
+    assert order.sizing_resolution.sized_via == "policy_set_holdings"
+
+
+def test_sizing_resolved_before_submitted_synthesizes_pending_view() -> None:
+    """Edge case: SIZING_RESOLVED appears before PENDING_INTENT in the WAL.
+    The fold synthesizes a pending view carrying the resolution; the
+    follow-up SUBMITTED then overwrites status while preserving sizing."""
+    from app.engine.live.intent_events import IntentEvent
+    from app.engine.live.intent_ledger import LedgerProjection, fold
+
+    order_ref = build_order_ref(NS, IID)
+    sizing = IntentEvent(
+        seq=1,
+        event_type=IntentEventType.SIZING_RESOLVED,
+        intent_id=IID,
+        bot_order_namespace=NS,
+        order_ref=order_ref,
+        policy_kind="FixedShares",
+        policy_value="2",
+        intended_qty=2,
+        reference_price="500",
+    )
+    submitted = IntentEvent(
+        seq=2,
+        event_type=IntentEventType.SUBMITTED,
+        intent_id=IID,
+        bot_order_namespace=NS,
+        order_ref=order_ref,
+        order_id=11,
+    )
+    view = fold(LedgerProjection(), [sizing, submitted])
+    order = view.submitted_orders[IID]
+    assert order.status is IntentEventType.SUBMITTED
+    assert order.sizing_resolution is not None
+    assert order.sizing_resolution.intended_qty == 2

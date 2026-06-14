@@ -11,7 +11,7 @@ applying each exactly once.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -33,6 +33,23 @@ _UNRESOLVED_STATUSES = frozenset(
 
 
 @dataclass(frozen=True)
+class SizingResolution:
+    """ADR 0009 § 11 — sizing decision frozen into the WAL for the per-trade
+    audit list. Captured at order-construction time (not at fill, not at
+    session boundary); the cockpit joins it back to fills on ``intent_id``.
+    ``reference_price`` is stored as a decimal string (money never floats).
+    """
+
+    policy_kind: str
+    policy_value: str
+    intended_qty: int
+    reference_price: str
+    sizing_provenance_at_resolve_time: str
+    sized_via: str
+    ts_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class SubmittedOrderView:
     """One intent's folded state, keyed by ``intent_id`` in the ledger."""
 
@@ -44,6 +61,7 @@ class SubmittedOrderView:
     order_id: int | None = None
     perm_id: int | None = None
     exec_ids: tuple[str, ...] = ()
+    sizing_resolution: SizingResolution | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +104,45 @@ def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> Led
         exec_ids = existing.exec_ids if existing else ()
         if event.exec_id is not None and event.exec_id not in exec_ids:
             exec_ids = (*exec_ids, event.exec_id)
+
+        # ADR 0009 § 11 — SIZING_RESOLVED is an audit-only event that decorates
+        # the projection without changing the submit lifecycle status. We
+        # capture the sizing resolution on the view but keep the prior status
+        # (so a sole SIZING_RESOLVED event doesn't masquerade as "submitted").
+        if event.event_type is IntentEventType.SIZING_RESOLVED:
+            if event.policy_kind is None or event.intended_qty is None:
+                # Malformed audit event — skip without breaking the fold.
+                last_seq = event.seq
+                continue
+            sizing_resolution = SizingResolution(
+                policy_kind=event.policy_kind,
+                policy_value=event.policy_value or "",
+                intended_qty=event.intended_qty,
+                reference_price=event.reference_price or "",
+                sizing_provenance_at_resolve_time=event.sizing_provenance_at_resolve_time
+                or "live_override",
+                sized_via=event.sized_via or "policy_set_holdings",
+                ts_ms=event.ts_ms,
+            )
+            if existing is not None:
+                orders[event.intent_id] = replace(
+                    existing, sizing_resolution=sizing_resolution
+                )
+            else:
+                # Edge case: SIZING_RESOLVED before PENDING_INTENT (e.g. test
+                # fixture). Synthesize a sentinel view; the real
+                # PENDING_INTENT/SUBMITTED follow-up will overwrite status.
+                orders[event.intent_id] = SubmittedOrderView(
+                    intent_id=event.intent_id,
+                    bot_order_namespace=event.bot_order_namespace,
+                    order_ref=event.order_ref,
+                    status=IntentEventType.PENDING_INTENT,
+                    intent_kind=event.intent_kind,
+                    sizing_resolution=sizing_resolution,
+                )
+            last_seq = event.seq
+            continue
+
         orders[event.intent_id] = SubmittedOrderView(
             intent_id=event.intent_id,
             bot_order_namespace=event.bot_order_namespace,
@@ -99,6 +156,7 @@ def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> Led
             if event.perm_id is not None
             else (existing.perm_id if existing else None),
             exec_ids=exec_ids,
+            sizing_resolution=existing.sizing_resolution if existing else None,
         )
         if event.perm_id is not None:
             known_perm_ids.add(event.perm_id)
