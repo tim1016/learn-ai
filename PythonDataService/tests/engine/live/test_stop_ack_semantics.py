@@ -45,9 +45,10 @@ def test_stop_outcome_still_running_after_timeout() -> None:
     ``still_running_after_2s`` outcome instead of silently claiming
     ``accepted`` without telling the operator the process is still
     alive."""
-    from app.engine.live.host_daemon import RunnerProcessManager, _STOP_WAIT_SECONDS
-    from app.schemas.live_runs import HostRunnerStopRequest
     from pathlib import Path
+
+    from app.engine.live.host_daemon import _STOP_WAIT_SECONDS, RunnerProcessManager
+    from app.schemas.live_runs import HostRunnerStopRequest
 
     # The constant must be the documented 2 seconds per PRD / ADR 0010.
     assert _STOP_WAIT_SECONDS == 2.0
