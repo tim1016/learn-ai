@@ -233,7 +233,7 @@ def test_real_broker_portfolio_without_intent_wal_raises() -> None:
     """ADR 0008 / Phase 5B — a real-broker LivePortfolio cannot be constructed
     without an IntentWal. Closes the bypass path VCR-0002 names: even after
     every wiring PR ships, ``intent_wal is None`` was the residual escape."""
-    with pytest.raises(ValueError, match="ADR 0008.*IntentWal"):
+    with pytest.raises(ValueError, match=r"ADR 0008.*IntentWal"):
         LivePortfolio(
             _RealBrokerFake(),
             bot_order_namespace="learn-ai/test-instance/v1",
@@ -245,7 +245,7 @@ def test_real_broker_portfolio_without_namespace_raises(tmp_path: Path) -> None:
     with an empty ``bot_order_namespace``: ownership identity is undefined
     without a namespace."""
     wal = IntentWal(tmp_path / "intent_events.jsonl")
-    with pytest.raises(ValueError, match="ADR 0008.*bot_order_namespace"):
+    with pytest.raises(ValueError, match=r"ADR 0008.*bot_order_namespace"):
         LivePortfolio(_RealBrokerFake(), intent_wal=wal)
 
 
