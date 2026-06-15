@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
 
 from app.engine.live.cold_start_reconciler import (
     ColdStartReconciler,
@@ -44,15 +43,7 @@ class FakeBroker:
     Only exposes the verbs the reconciler is permitted to call. The
     absence of a reqAllOpenOrders method is part of the contract:
     Resolution 2 forbids that call entirely.
-
-    Declares ``_shadow_safe = True`` so the VCR-P3-G shadow-broker
-    assertion in ``ColdStartReconciler._assert_shadow_broker`` accepts
-    this fake. The fake does not submit orders to any real broker —
-    it's an in-memory implementation, structurally equivalent to
-    ``NoSubmitBrokerAdapter`` for the reconciler's contract.
     """
-
-    _shadow_safe: ClassVar[bool] = True
 
     open_orders_by_namespace_result: list[dict[str, object]] = field(default_factory=list)
     executions_for_namespace_result: list[dict[str, object]] = field(default_factory=list)
@@ -447,94 +438,3 @@ def test_poisoned_flag_is_shared_json_format(tmp_path: Path) -> None:
     payload = json.loads((run_dir / "poisoned.flag").read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     assert payload["trigger"] == "cold_start_divergence"
-
-
-# ─────────────────────── VCR-P3-G shadow assertion ──────────────────────
-
-
-def test_shadow_mode_with_non_shadow_safe_broker_raises_p3_g(tmp_path: Path) -> None:
-    """VCR-P3-G — ``shadow_mode=True`` with a broker that is neither
-    ``NoSubmitBrokerAdapter`` nor ``_shadow_safe=True`` fails fast at
-    the reconciler boundary. The shadow contract is structural; a
-    runtime flag is not sufficient defense."""
-    import pytest
-
-    from app.engine.live.cold_start_reconciler import ShadowBrokerMismatchError
-
-    class _ImitationBroker:
-        """A broker that lacks both the NoSubmitBrokerAdapter pedigree
-        AND the _shadow_safe marker. Models a real IbkrBrokerAdapter
-        being misconfigured with shadow_mode=True."""
-
-        def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]:
-            return []
-
-        def executions_for_namespace(
-            self, namespace: str, since_ms: int
-        ) -> list[dict[str, object]]:
-            return []
-
-    repo = _seed_sidecar(tmp_path / "live_state.json")
-    reconciler = ColdStartReconciler()
-
-    with pytest.raises(ShadowBrokerMismatchError, match="shadow_mode=True"):
-        reconciler.verify(
-            broker=_ImitationBroker(), sidecar=repo, shadow_mode=True
-        )
-
-
-def test_shadow_mode_with_no_submit_broker_adapter_proceeds_p3_g(
-    tmp_path: Path,
-) -> None:
-    """VCR-P3-G — sanity: the production ``NoSubmitBrokerAdapter`` is
-    accepted by the assertion. We can't construct one fully here (it
-    requires an IB client), so we use ``isinstance(... NoSubmitBrokerAdapter)``
-    by constructing a subclass that satisfies the type check without
-    the heavy init."""
-    from app.engine.live.no_submit_broker_adapter import NoSubmitBrokerAdapter
-
-    class _BareNoSubmitBroker(NoSubmitBrokerAdapter):
-        def __init__(self) -> None:  # bypass NoSubmitBrokerAdapter's heavy init
-            pass
-
-        def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]:
-            return []
-
-        def executions_for_namespace(
-            self, namespace: str, since_ms: int
-        ) -> list[dict[str, object]]:
-            return []
-
-    repo = _seed_sidecar(tmp_path / "live_state.json")
-    reconciler = ColdStartReconciler()
-
-    # Should NOT raise — isinstance(NoSubmitBrokerAdapter) check passes.
-    result = reconciler.verify(
-        broker=_BareNoSubmitBroker(), sidecar=repo, shadow_mode=True
-    )
-    assert isinstance(result, SafeToResume)
-
-
-def test_shadow_mode_with_shadow_safe_marker_proceeds_p3_g(tmp_path: Path) -> None:
-    """VCR-P3-G — the ``_shadow_safe=True`` opt-in marker is the
-    escape hatch for in-memory test fakes. FakeBroker uses this in the
-    existing shadow-mode tests; this test exercises the marker path
-    directly with an unrelated class."""
-    repo = _seed_sidecar(tmp_path / "live_state.json")
-
-    class _MarkedShadowBroker:
-        _shadow_safe: ClassVar[bool] = True
-
-        def open_orders_by_namespace(self, namespace: str) -> list[dict[str, object]]:
-            return []
-
-        def executions_for_namespace(
-            self, namespace: str, since_ms: int
-        ) -> list[dict[str, object]]:
-            return []
-
-    reconciler = ColdStartReconciler()
-    result = reconciler.verify(
-        broker=_MarkedShadowBroker(), sidecar=repo, shadow_mode=True
-    )
-    assert isinstance(result, SafeToResume)

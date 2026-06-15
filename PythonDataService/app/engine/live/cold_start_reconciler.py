@@ -49,20 +49,6 @@ class Poisoned:
 ReconciliationResult = SafeToResume | Poisoned
 
 
-class ShadowBrokerMismatchError(RuntimeError):
-    """VCR-P3-G — raised when ``shadow_mode=True`` is requested but the
-    broker argument is not ``NoSubmitBrokerAdapter``.
-
-    The shadow contract (ADR 0002) is that a shadow strategy never
-    reaches ``ib.placeOrder``. ``NoSubmitBrokerAdapter`` enforces that
-    structurally (no code path submits). Passing a real broker (e.g.
-    ``IbkrBrokerAdapter``) with ``shadow_mode=True`` would silently
-    relax the structural invariant to a runtime flag — the kind of
-    drift that the next refactor turns into a real-money order. Fail
-    fast at the reconciler boundary instead.
-    """
-
-
 class ColdStartReconciler:
     def verify(
         self,
@@ -72,49 +58,10 @@ class ColdStartReconciler:
         shadow_mode: bool = False,
         run_dir: Path | None = None,
     ) -> ReconciliationResult:
-        if shadow_mode:
-            self._assert_shadow_broker(broker)
         result = self._verify_inner(broker=broker, sidecar=sidecar, shadow_mode=shadow_mode)
         if isinstance(result, Poisoned) and run_dir is not None:
             _write_poisoned_flag(run_dir, result.reason, sidecar=sidecar)
         return result
-
-    @staticmethod
-    def _assert_shadow_broker(broker: object) -> None:
-        """VCR-P3-G — structural invariant: ``shadow_mode=True`` requires
-        a broker that structurally cannot submit.
-
-        Accepted brokers:
-          * ``NoSubmitBrokerAdapter`` — the production shadow adapter
-            (ADR 0002, ``no_submit_broker_adapter.py``).
-          * Any object whose class declares ``_shadow_safe = True`` —
-            the opt-in escape hatch for in-memory test fakes that need
-            to exercise shadow-mode branches without pulling in the
-            full NoSubmit adapter.
-
-        Refused: anything else, especially ``IbkrBrokerAdapter`` — the
-        whole point of P3-G is that a real broker wired with
-        ``shadow_mode=True`` is the kind of drift that the next
-        refactor turns into a real-money order.
-
-        The shadow adapter is imported locally so the reconciler
-        module stays decoupled from the shadow adapter at the top
-        level (the shadow adapter pulls in market-data deps the
-        reconciler does not need).
-        """
-        from app.engine.live.no_submit_broker_adapter import NoSubmitBrokerAdapter
-
-        if isinstance(broker, NoSubmitBrokerAdapter):
-            return
-        if getattr(broker, "_shadow_safe", False) is True:
-            return
-        raise ShadowBrokerMismatchError(
-            "shadow_mode=True requires NoSubmitBrokerAdapter (or a class "
-            f"declaring _shadow_safe=True); got {type(broker).__name__}. "
-            "The shadow contract is structural (ADR 0002): only a no-submit "
-            "broker guarantees that no code path reaches ib.placeOrder. "
-            "Refusing to proceed."
-        )
 
     def _verify_inner(
         self,
