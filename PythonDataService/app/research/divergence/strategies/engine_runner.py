@@ -56,7 +56,7 @@ def _load_lean_day(zip_path: Path, trading_date: date) -> pd.DataFrame:
         parts = line.split(",")
         if len(parts) != 6:
             continue
-        ms, o, h, l, c, v = parts  # noqa: E741 — `l` is canonical OHLCV "low"
+        ms, o, h, l, c, v = parts
         rows.append((int(ms), int(o), int(h), int(l), int(c), int(v)))
     if not rows:
         return pd.DataFrame()

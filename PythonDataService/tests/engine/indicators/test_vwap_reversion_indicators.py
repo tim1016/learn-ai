@@ -29,11 +29,11 @@ def test_session_anchored_vwap_matches_numpy_cumulative() -> None:
     ]
     vwap = SessionAnchoredVwap()
     got = []
-    for i, (h, l, c, v) in enumerate(bars):  # noqa: E741 — `l` is canonical OHLCV "low"
+    for i, (h, l, c, v) in enumerate(bars):
         vwap.update(_t(i), high=h, low=l, close=c, volume=v)
         got.append(vwap.current_value)
 
-    typ = np.array([(h + l + c) / 3 for h, l, c, _ in bars])  # noqa: E741 — `l` is canonical OHLCV "low"
+    typ = np.array([(h + l + c) / 3 for h, l, c, _ in bars])
     vol = np.array([v for *_, v in bars])
     expected = np.cumsum(typ * vol) / np.cumsum(vol)
     assert np.allclose(got, expected, atol=1e-9, rtol=0)

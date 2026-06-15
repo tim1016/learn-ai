@@ -107,7 +107,7 @@ def _parse_csv_bytes(
         parts = line.split(",")
         if len(parts) != 6:
             continue
-        ms, o, h, l, c, v = parts  # noqa: E741 — `l` is canonical OHLCV "low"
+        ms, o, h, l, c, v = parts
         # Bar start time: midnight + ms
         start = midnight + timedelta(milliseconds=int(ms))
         # LEAN minute bars have a 1-minute period.
@@ -286,7 +286,7 @@ def _parse_daily_csv_bytes(
         parts = line.split(",")
         if len(parts) != 6:
             continue
-        ts, o, h, l, c, v = parts  # noqa: E741 — `l` is canonical OHLCV "low"
+        ts, o, h, l, c, v = parts
         # ts is "YYYYMMDD HH:MM"; splitting on space gives date | time.
         date_str, _, _time_str = ts.partition(" ")
         if len(date_str) != 8:
