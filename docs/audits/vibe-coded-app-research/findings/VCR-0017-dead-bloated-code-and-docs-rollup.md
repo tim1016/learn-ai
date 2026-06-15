@@ -1,12 +1,15 @@
 ---
 id: VCR-0017
 severity: P2
-status: open
+status: remediated
 area: dead-code
 canonical_file: multiple
 reference: PRD §8.6
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "Phase 11 — hard-deleted authors/books/run-comparison/polygon.service + validation_study.py + trade_comparison.py + root scratch files (.docx/.xlsx/.sql/.md)"
+follow_up_required:
+  - "docs/broker-user-manual.html and .pdf — gated on Phase 12 canonical manual shipping first (PRD §11 manual-migration PR)"
 lens: dead-bloated-code-docs
 dedupe_with_F: none
 confidence: high
