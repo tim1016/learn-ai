@@ -99,10 +99,18 @@ export class BrokerStatusComponent {
     return h !== null && h.connected;
   });
 
-  /** Truthy iff the post-connect sentinel agrees with mode. */
+  /** VCR-0018-A — Truthy iff the structured 4-layer broker safety verdict
+   * (Phase 7A) agrees that this run is paper-only. Falls back to the
+   * legacy 2-layer ``mode + is_paper`` check when the server hasn't yet
+   * shipped the ``safety_verdict`` block (older endpoint, or a pre-Phase-7A
+   * broker.py running in some legacy env). ``null`` while disconnected
+   * or pre-first-response so the pill renders the loading state. */
   readonly sentinelOk = computed(() => {
     const h = this.health();
     if (h === null || !h.connected || h.account_id == null) return null;
+    if (h.safety_verdict != null) {
+      return h.safety_verdict.final_verdict === 'paper-only';
+    }
     return h.mode === 'paper' ? h.is_paper === true : h.is_paper === false;
   });
 
