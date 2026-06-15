@@ -474,9 +474,34 @@ class LivePortfolio:
         self._next_order_id += 1
         return self._next_order_id
 
-    def submit_market_order(self, symbol: str, quantity: int, time: datetime, tag: str = "") -> Order:
+    def submit_market_order(
+        self,
+        symbol: str,
+        quantity: int,
+        time: datetime,
+        tag: str = "",
+        *,
+        explicit_call: bool = False,
+    ) -> Order:
         if quantity == 0:
             raise ValueError("cannot submit a zero-quantity market order")
+        # ADR 0009 § 6 / VCR-P3-F — order-surface reverse fail-fast. A
+        # strategy registered as ``policy`` invoking ``market_order``
+        # (the explicit surface) is the mirror of the forward case
+        # caught in ``set_holdings``. ``explicit_call=True`` flags the
+        # invocation as originating from ``ctx.market_order`` /
+        # ``strategy.market_order`` (the public explicit surfaces);
+        # ``set_holdings``, ``liquidate``, and engine-internal flatten
+        # paths continue to call without the flag so they remain
+        # unaffected.
+        if explicit_call and self.registered_sizing_surface == "policy":
+            raise RuntimeError(
+                f"Order-surface mismatch (ADR 0009 § 6 / VCR-P3-F): strategy "
+                f"registered with sizing_surface='policy' invoked market_order "
+                f"on {symbol.upper()}. Re-register as sizing_surface='explicit' "
+                "or change the strategy to use set_holdings; halting before "
+                "the misleading entry."
+            )
         order = Order(
             order_id=self._next_id(),
             symbol=symbol.upper(),

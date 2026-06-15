@@ -180,9 +180,20 @@ class StrategyContext:
         For strategies that size by a fixed share count rather than a
         portfolio fraction (e.g. the VWAP-reversion port, which mirrors a
         fixed-quantity reference). Delegates to the portfolio's
-        ``submit_market_order``."""
+        ``submit_market_order``.
+
+        Passes ``explicit_call=True`` so the portfolio's order-surface
+        guard can refuse a policy-registered strategy that reaches the
+        explicit surface (ADR 0009 § 6 reverse direction / VCR-P3-F).
+        """
         assert self.current_time is not None
-        self.portfolio.submit_market_order(symbol.upper(), quantity, self.current_time, tag)
+        self.portfolio.submit_market_order(
+            symbol.upper(),
+            quantity,
+            self.current_time,
+            tag,
+            explicit_call=True,
+        )
 
     def emit_insight(self, insight: Insight) -> None:
         """Register a structured prediction.

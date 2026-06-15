@@ -85,10 +85,21 @@ class LiveContext:
         self.portfolio.liquidate(symbol.upper(), self.current_time)
 
     def market_order(self, symbol: str, quantity: int, tag: str = "") -> None:
-        """Submit a fixed-quantity market order (signed: + buy, − sell)."""
+        """Submit a fixed-quantity market order (signed: + buy, − sell).
+
+        Passes ``explicit_call=True`` so the portfolio's order-surface
+        guard can refuse a policy-registered strategy that reaches the
+        explicit surface (ADR 0009 § 6 reverse direction / VCR-P3-F).
+        """
         if self.current_time is None:
             raise RuntimeError("market_order requires a current live bar time")
-        self.portfolio.submit_market_order(symbol.upper(), quantity, self.current_time, tag)
+        self.portfolio.submit_market_order(
+            symbol.upper(),
+            quantity,
+            self.current_time,
+            tag,
+            explicit_call=True,
+        )
 
     def emit_insight(self, insight: Insight) -> None:
         if self.current_time is not None:

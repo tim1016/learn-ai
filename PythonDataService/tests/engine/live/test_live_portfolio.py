@@ -118,6 +118,95 @@ def test_set_holdings_fails_fast_on_explicit_surface_mismatch() -> None:
         portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
 
 
+def test_market_order_fails_fast_on_policy_surface_mismatch_vcr_p3_f() -> None:
+    """ADR 0009 § 6 reverse / VCR-P3-F — a strategy registered as
+    ``policy`` invoking ``market_order`` (the explicit surface) is the
+    mirror of the forward case. ``submit_market_order(explicit_call=True)``
+    must refuse on a policy-registered portfolio.
+
+    Internal callers (``set_holdings``, ``liquidate``, engine-internal
+    flatten paths) do NOT pass ``explicit_call=True`` and so remain
+    unaffected — covered by the no-flag test below."""
+    portfolio = LivePortfolio(FakeBroker())
+    portfolio.registered_sizing_surface = "policy"
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+
+    with pytest.raises(RuntimeError, match="Order-surface mismatch.*VCR-P3-F"):
+        portfolio.submit_market_order(
+            "SPY",
+            100,
+            datetime(2026, 5, 4, 14, 45, tzinfo=UTC),
+            explicit_call=True,
+        )
+
+
+def test_market_order_internal_callers_unaffected_by_p3_f_guard() -> None:
+    """The reverse guard fires only when ``explicit_call=True``. The
+    internal callers (``set_holdings`` and the engine flatten paths)
+    invoke ``submit_market_order`` without the flag and must keep
+    working on a policy-registered portfolio."""
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+
+    portfolio = LivePortfolio(FakeBroker(), order_sizer=OrderSizer(FixedShares(value=2)))
+    portfolio.registered_sizing_surface = "policy"
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+
+    # set_holdings is the policy surface; calling it on policy-registered
+    # is the CORRECT case and must succeed even with the new guard.
+    order = portfolio.set_holdings(
+        "SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC)
+    )
+    assert order is not None
+    assert order.quantity == 2  # FixedShares(2)
+
+    # A direct internal submit_market_order without explicit_call=True
+    # (e.g. engine recovery_flatten constructs an Order directly) must
+    # also keep working.
+    order2 = portfolio.submit_market_order(
+        "SPY", -1, datetime(2026, 5, 4, 14, 46, tzinfo=UTC)
+    )
+    assert order2.quantity == -1
+
+
+def test_market_order_explicit_call_on_explicit_surface_proceeds_p3_f() -> None:
+    """Sanity inverse: a strategy CORRECTLY registered as ``explicit``
+    calling ``market_order`` must succeed — the guard fires only on the
+    mismatch direction."""
+    portfolio = LivePortfolio(FakeBroker())
+    portfolio.registered_sizing_surface = "explicit"
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+
+    order = portfolio.submit_market_order(
+        "SPY",
+        100,
+        datetime(2026, 5, 4, 14, 45, tzinfo=UTC),
+        explicit_call=True,
+    )
+    assert order.quantity == 100
+
+
+def test_market_order_unregistered_surface_proceeds_p3_f() -> None:
+    """Backward-compat: a portfolio whose ``registered_sizing_surface`` is
+    ``None`` (legacy callers / tests) must let ``market_order`` through
+    regardless of ``explicit_call`` — the guard requires an explicit
+    ``policy`` registration to fire."""
+    portfolio = LivePortfolio(FakeBroker())
+    # registered_sizing_surface stays None — default.
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+
+    order = portfolio.submit_market_order(
+        "SPY",
+        100,
+        datetime(2026, 5, 4, 14, 45, tzinfo=UTC),
+        explicit_call=True,
+    )
+    assert order.quantity == 100
+
+
 def test_set_holdings_captures_audit_row_for_each_resolution() -> None:
     """ADR 0009 § 11 — every set_holdings via the policy adapter records a
     row on portfolio.sizing_resolutions, capturing the kind/value/intended_qty/
