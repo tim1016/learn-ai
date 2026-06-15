@@ -85,17 +85,21 @@ class IntentEvent(BaseModel):
     order_spec: dict[str, Any] | None = None
 
     # ADR 0009 § 11 — sizing-decision payload, populated ONLY on
-    # ``SIZING_RESOLVED`` events. All five fields are optional on the type
-    # so other event types parse cleanly with extra="forbid". The fold
+    # ``SIZING_RESOLVED`` events. All fields are optional on the type so
+    # other event types parse cleanly with extra="forbid". The fold
     # surfaces them as ``submitted_orders[intent_id].sizing_resolution``.
     # ``reference_price`` is stored as a decimal string (never a float —
     # wire/storage rule for money values).
+    # ``symbol`` (VCR-0003 PR A) is carried so the Sizing card's per-trade
+    # audit fold can survive a restart with the symbol column populated; old
+    # WAL events without it fold to ``symbol=""``.
     policy_kind: str | None = None
     policy_value: str | None = None
     intended_qty: int | None = None
     reference_price: str | None = None
     sizing_provenance_at_resolve_time: str | None = None
     sized_via: str | None = None
+    symbol: str | None = None
 
     # Human-facing provenance. NEVER the fold cursor (use seq). Bounded to
     # int64 ms UTC: it is serialized into the WAL, so it must honor the repo's

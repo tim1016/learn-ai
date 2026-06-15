@@ -656,6 +656,7 @@ class LivePortfolio:
                     reference_price=str(price),
                     sizing_provenance_at_resolve_time=default_sizing_provenance(policy),
                     sized_via="policy_set_holdings",
+                    symbol=sym,
                     ts_ms=int(time.timestamp() * 1000),
                 )
         return order

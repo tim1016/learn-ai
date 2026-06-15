@@ -76,6 +76,7 @@ class IntentWal:
         reference_price: str | None = None,
         sizing_provenance_at_resolve_time: str | None = None,
         sized_via: str | None = None,
+        symbol: str | None = None,
     ) -> IntentEvent:
         """Append one event with the next per-run ``seq`` and **fsync before
         returning**. The caller may call ``placeOrder`` only after this returns.
@@ -100,6 +101,7 @@ class IntentWal:
             reference_price=reference_price,
             sizing_provenance_at_resolve_time=sizing_provenance_at_resolve_time,
             sized_via=sized_via,
+            symbol=symbol,
         )
         self._path.parent.mkdir(parents=True, exist_ok=True)
         line = event.model_dump_json() + "\n"
