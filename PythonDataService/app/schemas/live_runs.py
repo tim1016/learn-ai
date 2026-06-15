@@ -743,7 +743,23 @@ class InstanceLastExit(BaseModel):
 
 
 class SizingAuditRow(BaseModel):
-    """ADR 0009 § 11 — one row of the per-trade audit list."""
+    """ADR 0009 § 11 — one row of the per-trade audit list.
+
+    ``sizing_provenance_at_resolve_time`` (VCR-0003 last-mile): the
+    provenance stamp the engine mints at policy-resolution time per
+    ADR 0009 § 11 — one of ``{reference_native, live_override,
+    spec_default}``. Surfaced through the WAL fold so the per-trade
+    audit can attribute each fill to the policy that produced it.
+    ``None`` for legacy rows (SIZING_RESOLVED events authored before
+    the field landed) and for skip rows (sizing_skip.jsonl predates
+    this column; future revision may add it). Frontend renders an
+    "unknown" badge when ``None``.
+
+    ``skipped`` / ``skip_reason`` (Phase 8 / VCR-0003): present on
+    rows folded from ``sizing_skip.jsonl``; absent for WAL rows.
+    The Sizing card branch on ``skipped`` to render the "skipped"
+    variant.
+    """
 
     ts_ms: int
     symbol: str
@@ -752,6 +768,9 @@ class SizingAuditRow(BaseModel):
     intended_qty: int
     reference_price: str
     sized_via: str
+    sizing_provenance_at_resolve_time: str | None = None
+    skipped: bool | None = None
+    skip_reason: str | None = None
 
 
 class InstanceSizing(BaseModel):

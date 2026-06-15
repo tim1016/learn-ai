@@ -527,6 +527,18 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
                     "intended_qty": int(event.intended_qty or 0),
                     "reference_price": event.reference_price or "",
                     "sized_via": event.sized_via or "policy_set_holdings",
+                    # VCR-0003 last-mile — surface the provenance stamp the
+                    # engine mints at resolve time so the per-trade audit
+                    # can attribute each fill to the policy that produced
+                    # it ({reference_native, live_override, spec_default}).
+                    # SIZING_RESOLVED events authored before this field
+                    # was minted (or skip rows that never carry it) render
+                    # as ``None`` — preserved as ``None`` rather than
+                    # coerced to a sentinel string so the frontend can
+                    # render the "unknown" badge variant.
+                    "sizing_provenance_at_resolve_time": (
+                        event.sizing_provenance_at_resolve_time or None
+                    ),
                 }
             )
 
@@ -562,6 +574,17 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
                     "sized_via": "policy_set_holdings_skip",
                     "skipped": True,
                     "skip_reason": payload.get("reason", ""),
+                    # VCR-0003 last-mile — sizing skip rows don't currently
+                    # capture provenance (the IntentEvent invariant carve-out
+                    # for skips lives in sizing_skip.jsonl, which has its
+                    # own minimal schema). Surface ``None`` rather than
+                    # omitting the key so the frontend renders the
+                    # "unknown" badge variant uniformly across WAL and
+                    # skip rows. If a future sizing_skip.jsonl revision
+                    # adds the field, pass it through here.
+                    "sizing_provenance_at_resolve_time": payload.get(
+                        "sizing_provenance_at_resolve_time"
+                    ),
                 }
             except (TypeError, ValueError):
                 # ``int(<list>)`` raises TypeError; ``int("not-a-number")``
