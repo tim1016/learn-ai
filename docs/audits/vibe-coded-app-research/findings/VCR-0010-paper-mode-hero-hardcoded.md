@@ -9,11 +9,12 @@ first_seen: 2026-06-14
 last_seen: 2026-06-14
 remediation_progress:
   - "#502 — Phase 7A — Broker safety verdict on /broker/health (verdict surfaced; rendering wired)"
-  - "PR feat/phase-7b-verdict-enforcement — Phase 7B order-block: LivePortfolio.submit_pending_orders refuses to submit when verdict_provider returns anything other than 'paper-only' or None; raises BrokerSafetyVerdictBlockError before any broker.place_order call"
+  - "#528 — Phase 7A — Broker safety verdict card on cockpit hero"
+  - "#538 — Phase 7B order-block: LivePortfolio.submit_pending_orders refuses to submit when verdict_provider returns anything other than 'paper-only' or None; raises BrokerSafetyVerdictBlockError before any broker.place_order call"
+  - "#541 — Phase 7B mid-session transition observer — bar-loop poll of verdict_provider that emits BROKER_SAFETY_VERDICT_TRANSITION_HALT + halt.flag on transition out of paper-only"
 regrounded_to: high
 follow_up_required:
-  - "Phase 7B mid-session transition observer — bar-loop poll of verdict_provider that emits BROKER_SAFETY_VERDICT_TRANSITION_HALT + halt.flag on transition out of paper-only (deferred; engine-side observer)"
-  - "Phase 7B Resume guard #1 — cmd_resume consults a persisted verdict snapshot (composes with PR #535's WAL guard)"
+  - "Phase 7B Resume guard #1 — cmd_resume consults a persisted verdict snapshot (composes with PR #535's WAL guard); currently noted as TODO at run.py:1865-1868 with the engine-side bar loop (#541) as the secondary line of defense. The carve-out is genuine: cmd_resume can today be invoked while the verdict is unknown/unsafe, and only the engine bar-loop observer would catch and halt; a startup-time guard would make the trip-wire one cycle faster."
 lens: ui-vs-runtime-claims
 dedupe_with_F: none
 confidence: high
