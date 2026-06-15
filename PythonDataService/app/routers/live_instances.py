@@ -29,6 +29,8 @@ from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.halt import read_poisoned_flag
+from app.engine.live.intent_events import IntentEventType
+from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
@@ -453,6 +455,79 @@ def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
         return []
     rows = list(envelope.sizing_resolutions or [])
     rows.reverse()  # newest first for the UI
+    return rows[:50]
+
+
+def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
+    """VCR-0003 PR A — fold the durable Sizing-card audit from a run's WAL
+    and skip log into the merged per-trade row shape the in-memory sidecar
+    already surfaces.
+
+    Reads SIZING_RESOLVED events from ``<run_dir>/intent_events.jsonl`` and
+    SIZING_SKIP rows from ``<run_dir>/sizing_skip.jsonl``. The two sources
+    are **disjoint** by construction (Phase 8 / ADR 0009 § 11): a skip
+    never mints an intent_id and so never writes SIZING_RESOLVED; a
+    non-skip always mints and writes SIZING_RESOLVED but never appends to
+    the skip log. Returns the most recent 50 rows newest-first, sorted by
+    ``ts_ms``.
+
+    Fail-open: a missing file is empty, a corrupt file degrades to "no
+    rows from that source". The Sizing card is a UI surface — it should
+    render the surviving evidence rather than block on partial corruption.
+    PR B will wire this as the primary source for ``_sizing_audit_rows``,
+    with the sidecar projection as the legacy-run fallback.
+    """
+    rows: list[dict] = []
+
+    wal_path = run_dir / "intent_events.jsonl"
+    if wal_path.is_file():
+        try:
+            events = IntentWal(wal_path).read_tail()
+        except (IntentWalCorruptError, OSError):
+            events = []
+        for event in events:
+            if event.event_type is not IntentEventType.SIZING_RESOLVED:
+                continue
+            rows.append(
+                {
+                    "ts_ms": event.ts_ms or 0,
+                    "symbol": event.symbol or "",
+                    "policy_kind": event.policy_kind or "",
+                    "policy_value": event.policy_value or "",
+                    "intended_qty": int(event.intended_qty or 0),
+                    "reference_price": event.reference_price or "",
+                    "sized_via": event.sized_via or "policy_set_holdings",
+                }
+            )
+
+    skip_path = run_dir / "sizing_skip.jsonl"
+    if skip_path.is_file():
+        try:
+            for line in skip_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                payload = json.loads(stripped)
+                rows.append(
+                    {
+                        "ts_ms": int(payload.get("ts_ms_utc") or 0),
+                        "symbol": payload.get("symbol", ""),
+                        "policy_kind": payload.get("policy_kind", ""),
+                        "policy_value": payload.get("policy_value", ""),
+                        "intended_qty": int(payload.get("target_qty") or 0),
+                        "reference_price": payload.get("reference_price", ""),
+                        "sized_via": "policy_set_holdings_skip",
+                        "skipped": True,
+                        "skip_reason": payload.get("reason", ""),
+                    }
+                )
+        except (OSError, ValueError):
+            # Fail-open: a torn or unparseable skip-log line drops the
+            # whole skip source for this fold; the WAL rows above still
+            # render. The card degrades, it does not break.
+            pass
+
+    rows.sort(key=lambda r: r["ts_ms"], reverse=True)
     return rows[:50]
 
 
