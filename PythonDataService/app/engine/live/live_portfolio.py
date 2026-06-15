@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -75,6 +76,21 @@ class LiveBrokerEventStreamError(RuntimeError):
     would silently desync the portfolio from broker reality. The engine
     surfaces this as a failed run rather than a degraded one.
     """
+
+
+def _append_sizing_skip_line(path: Path, payload: dict) -> None:
+    """Best-effort append to the SIZING_SKIP audit log. A write failure
+    is logged but does not break the bar handler — the in-memory
+    ``sizing_resolutions`` list is the loss-tolerant secondary surface."""
+    import json as _json
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(payload) + "\n")
+            fh.flush()
+    except OSError:
+        logger.exception("sizing_skip.jsonl append failed; in-memory audit preserved")
 
 
 class BrokerSafetyVerdictBlockError(RuntimeError):
@@ -370,6 +386,19 @@ class LivePortfolio:
     # ``paper-only`` or ``None``. ``None`` keeps the prior pre-Phase-7B
     # behavior (no verdict enforcement) for replay / shadow / legacy paths.
     verdict_provider: object = None  # Callable[[], str | None] | None
+    # Phase 8 / VCR-0003 — SIZING_SKIP audit log path. When set, every
+    # set_holdings call that resolves to ``delta == 0`` (target == current
+    # → no order to submit) appends a JSON line to this file capturing
+    # the full skip context (symbol, policy_kind, policy_value,
+    # target_qty, current_qty, reference_price, reason, ts_ms_utc). The
+    # PRD §8 contract: skips do NOT mint an intent_id and so don't fit
+    # the IntentEvent invariant (order_ref == namespace:intent_id). A
+    # separate JSONL keeps the durable audit honest without forcing a
+    # data-model relaxation that ripples through the fold and the
+    # ColdStartReconciler. ``None`` keeps the prior pre-Phase-8-skip
+    # behavior — the in-memory ``sizing_resolutions`` list is the only
+    # surface a Sizing card can read.
+    sizing_skip_log_path: Path | None = None
     # Internal: ``order_id → intent_id`` so the submit step can recover the
     # identity minted in ``set_holdings`` without changing the ``Order``
     # value type (existing tests construct ``Order`` directly).
@@ -533,6 +562,33 @@ class LivePortfolio:
         if delta == 0:
             # PRD §5A — a skip is not an intent. ``intent_id`` is minted
             # only AFTER this check, so a no-op never reserves an identity.
+            # Phase 8 / VCR-0003 — durable SIZING_SKIP audit. The skip
+            # joins the in-memory ``sizing_resolutions`` list (which the
+            # Sizing card already reads). When ``sizing_skip_log_path``
+            # is set, also append a JSON line so the audit survives a
+            # restart even though the skip never minted an intent_id.
+            self._append_sizing_skip(
+                ts_ms=int(time.timestamp() * 1000),
+                symbol=sym,
+                policy_kind=(
+                    self.order_sizer.policy.kind
+                    if self.order_sizer is not None
+                    else "sizing_model"
+                ),
+                policy_value=(
+                    _describe_policy_value(self.order_sizer.policy)
+                    if self.order_sizer is not None
+                    else ""
+                ),
+                target_qty=int(target_quantity),
+                current_qty=int(current_pos.quantity),
+                reference_price=str(price),
+                reason=(
+                    "target_equals_current"
+                    if target_quantity == current_pos.quantity != 0
+                    else "zero_shares_while_flat"
+                ),
+            )
             return None
         order = self.submit_market_order(sym, delta, time, tag=tag or "SetHoldings")
         # Phase 5A — mint the intent_id only when the WAL surface is wired
@@ -875,6 +931,63 @@ class LivePortfolio:
                     reason=halt_reason,
                 )
         return acks
+
+    def _append_sizing_skip(
+        self,
+        *,
+        ts_ms: int,
+        symbol: str,
+        policy_kind: str,
+        policy_value: str,
+        target_qty: int,
+        current_qty: int,
+        reference_price: str,
+        reason: str,
+    ) -> None:
+        """Phase 8 / VCR-0003 — durable SIZING_SKIP audit entry.
+
+        Per PRD §8: a skip carries no ``intent_id`` (it's not an intent).
+        Annotates the most recent ``sizing_resolutions`` row (which the
+        order_sizer branch already appended pre-delta) with the skip
+        marker, then — when ``sizing_skip_log_path`` is set — fsyncs a
+        JSON line to the durable log.
+        """
+        if self.sizing_resolutions:
+            self.sizing_resolutions[-1]["skipped"] = True
+            self.sizing_resolutions[-1]["skip_reason"] = reason
+        else:
+            # Non-policy path (legacy sizing_model) hasn't appended a row;
+            # synthesize one so the in-memory list stays the single source
+            # of truth for the Sizing card UI.
+            self.sizing_resolutions.append(
+                {
+                    "ts_ms": ts_ms,
+                    "symbol": symbol,
+                    "policy_kind": policy_kind,
+                    "policy_value": policy_value,
+                    "intended_qty": target_qty,
+                    "reference_price": reference_price,
+                    "sized_via": "sizing_model",
+                    "skipped": True,
+                    "skip_reason": reason,
+                }
+            )
+        if self.sizing_skip_log_path is None:
+            return
+        _append_sizing_skip_line(
+            self.sizing_skip_log_path,
+            {
+                "event_type": "SIZING_SKIP",
+                "ts_ms_utc": ts_ms,
+                "symbol": symbol,
+                "policy_kind": policy_kind,
+                "policy_value": policy_value,
+                "target_qty": target_qty,
+                "current_qty": current_qty,
+                "reference_price": reference_price,
+                "reason": reason,
+            },
+        )
 
     def last_minted_intent_id(self) -> str | None:
         """The most recent ``intent_id`` minted on a ``set_holdings`` submit.
