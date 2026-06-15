@@ -468,16 +468,25 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
     are **disjoint** by construction (Phase 8 / ADR 0009 § 11): a skip
     never mints an intent_id and so never writes SIZING_RESOLVED; a
     non-skip always mints and writes SIZING_RESOLVED but never appends to
-    the skip log. Returns the most recent 50 rows newest-first, sorted by
-    ``ts_ms``.
+    the skip log. Returns the most recent 50 rows newest-first.
 
-    Fail-open: a missing file is empty, a corrupt file degrades to "no
-    rows from that source". The Sizing card is a UI surface — it should
-    render the surviving evidence rather than block on partial corruption.
-    PR B will wire this as the primary source for ``_sizing_audit_rows``,
-    with the sidecar projection as the legacy-run fallback.
+    Within the WAL slice, the authoritative chronology is ``seq`` (monotone
+    by spec — ADR-0008 §3/§5), NOT ``ts_ms``: wall-clock can collide or
+    step-back around fsync. ``read_tail()`` returns events in seq order, so
+    the last 50 by iteration order are the last 50 by seq. The WAL
+    contribution is capped by seq BEFORE the cross-source ts_ms sort so
+    wall-clock reorder cannot silently drop the seq-most-recent
+    SIZING_RESOLVED below the 50-row cap.
+
+    Fail-open: a missing file is empty; a corrupt file degrades to "no
+    rows from that source" for unrecoverable IO failures, and per-line for
+    malformed JSONL. The Sizing card is a UI surface — it should render
+    the surviving evidence rather than block on partial corruption. PR B
+    will wire this as the primary source for ``_sizing_audit_rows``, with
+    the sidecar projection as the legacy-run fallback.
     """
-    rows: list[dict] = []
+    wal_rows: list[dict] = []
+    skip_rows: list[dict] = []
 
     wal_path = run_dir / "intent_events.jsonl"
     if wal_path.is_file():
@@ -486,9 +495,13 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
         except (IntentWalCorruptError, OSError):
             events = []
         for event in events:
-            if event.event_type is not IntentEventType.SIZING_RESOLVED:
+            # Use ``!=`` rather than ``is not``: a future ConfigDict tweak
+            # (e.g. ``use_enum_values=True``) would make event_type a raw
+            # ``str`` and ``is`` comparison would silently always be True,
+            # dropping every SIZING_RESOLVED row.
+            if event.event_type != IntentEventType.SIZING_RESOLVED:
                 continue
-            rows.append(
+            wal_rows.append(
                 {
                     "ts_ms": event.ts_ms or 0,
                     "symbol": event.symbol or "",
@@ -503,32 +516,52 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
     skip_path = run_dir / "sizing_skip.jsonl"
     if skip_path.is_file():
         try:
-            for line in skip_path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if not stripped:
-                    continue
+            text = skip_path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
                 payload = json.loads(stripped)
-                rows.append(
-                    {
-                        "ts_ms": int(payload.get("ts_ms_utc") or 0),
-                        "symbol": payload.get("symbol", ""),
-                        "policy_kind": payload.get("policy_kind", ""),
-                        "policy_value": payload.get("policy_value", ""),
-                        "intended_qty": int(payload.get("target_qty") or 0),
-                        "reference_price": payload.get("reference_price", ""),
-                        "sized_via": "policy_set_holdings_skip",
-                        "skipped": True,
-                        "skip_reason": payload.get("reason", ""),
-                    }
-                )
-        except (OSError, ValueError):
-            # Fail-open: a torn or unparseable skip-log line drops the
-            # whole skip source for this fold; the WAL rows above still
-            # render. The card degrades, it does not break.
-            pass
+            except ValueError:
+                # Per-line fail-open: a single corrupt line drops only
+                # itself, not the trailing prefix of valid lines.
+                continue
+            if not isinstance(payload, dict):
+                # A syntactically-valid non-dict JSON value (``null``,
+                # ``42``, ``[]``, ``"foo"``) would crash ``.get(...)`` with
+                # AttributeError — guard it explicitly.
+                continue
+            try:
+                row = {
+                    "ts_ms": int(payload.get("ts_ms_utc") or 0),
+                    "symbol": payload.get("symbol", ""),
+                    "policy_kind": payload.get("policy_kind", ""),
+                    "policy_value": payload.get("policy_value", ""),
+                    "intended_qty": int(payload.get("target_qty") or 0),
+                    "reference_price": payload.get("reference_price", ""),
+                    "sized_via": "policy_set_holdings_skip",
+                    "skipped": True,
+                    "skip_reason": payload.get("reason", ""),
+                }
+            except (TypeError, ValueError):
+                # ``int(<list>)`` raises TypeError; ``int("not-a-number")``
+                # raises ValueError. Either is per-line fail-open.
+                continue
+            skip_rows.append(row)
 
-    rows.sort(key=lambda r: r["ts_ms"], reverse=True)
-    return rows[:50]
+    # ADR-0008 — cap the WAL contribution by seq order (iteration order
+    # from read_tail is monotone-by-spec) BEFORE the cross-source ts_ms
+    # sort. Skip rows have no seq; cap them by ts_ms.
+    wal_rows = wal_rows[-50:]
+    skip_rows.sort(key=lambda r: r["ts_ms"], reverse=True)
+    skip_rows = skip_rows[:50]
+
+    merged = wal_rows + skip_rows
+    merged.sort(key=lambda r: r["ts_ms"], reverse=True)
+    return merged[:50]
 
 
 def _sizing(
