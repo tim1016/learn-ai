@@ -1649,3 +1649,33 @@ async def test_start_defaults_fail_closed_when_mode_missing(
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["readonly"] is True
+
+
+# ─────────────────────── VCR-P3-I — NY-tz trading day ───────────────────
+
+
+def test_today_ny_uses_america_new_york_not_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """VCR-P3-I — ``_today_ny()`` returns the trading-day date in
+    ``America/New_York``, NOT the UTC calendar date. At the UTC
+    boundary (~00:00 UTC = ~19:00 ET winter / ~20:00 ET summer) these
+    two dates differ, and the chart-snapshot ``today`` reference must
+    follow the trading day, not the UTC day."""
+    from datetime import UTC, date, datetime
+
+    fixed_utc_instant = datetime(2026, 3, 6, 2, 30, tzinfo=UTC)
+    # 2026-03-06 02:30 UTC == 2026-03-05 21:30 America/New_York (EST).
+    # Trading day is 2026-03-05; UTC calendar says 2026-03-06.
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            if tz is None:
+                return fixed_utc_instant.replace(tzinfo=None)
+            return fixed_utc_instant.astimezone(tz)
+
+    monkeypatch.setattr(live_instances, "datetime", _FixedDatetime)
+    assert live_instances._today_ny() == date(2026, 3, 5)
+    # Sanity: the NY-tz "today" is NOT the same as the UTC "today" at
+    # this instant — otherwise the test isn't actually exercising the
+    # bug it covers.
+    assert live_instances._today_ny() != fixed_utc_instant.date()
