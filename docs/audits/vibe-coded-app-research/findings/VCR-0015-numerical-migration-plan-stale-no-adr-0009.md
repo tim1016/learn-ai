@@ -1,12 +1,13 @@
 ---
 id: VCR-0015
 severity: P2
-status: open
+status: remediated
 area: documentation
 canonical_file: docs/architecture/numerical-authority-migration-plan.md
 reference: docs/architecture/adrs/0009-live-sizing-authority-and-provenance.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "Phase 10 — added Phase 5 (ADR 0009 live-sizing) status header, body section, and sequencing-table row; flagged Phase 2.3 as PortfolioRiskService-only and PortfolioValuationService cleanup as VCR-0005 / Phase 9"
 lens: architectural-drift-registries
 dedupe_with_F: ["F-0018 — extends; F-0018 was scoped to PortfolioRiskService migration drift"]
 confidence: high

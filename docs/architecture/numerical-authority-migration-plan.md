@@ -1,6 +1,6 @@
 # Numerical authority migration plan
 
-**Status:** Active — Phase 0/1/2 shipped; Phase 3 and Phase 4 reformulated (see § Status as of 2026-04-27)
+**Status:** Active — Phase 0/1/2 shipped; Phase 3 and Phase 4 reformulated (see § Status as of 2026-04-27); Phase 5 live-sizing authority (ADR 0009) shipped 2026-06-13 (see § Phase 5 below). PortfolioValuationService entry-Greek cleanup tracked separately as VCR-0005 / remediation Phase 9.
 **Owner:** Inkant (single-developer migration)
 **Started:** 2026-04-26
 **Target window:** 2-3 weeks of focused work
@@ -21,7 +21,9 @@
 
 Both callers produce exploratory feedback, not numbers users compare against another number; the canonical authorities `bs_greeks.py` + `quantlib_pricer.py` remain the only math authorities (parity-pinned to `atol=1e-10`).
 
-**Phase 2.3 shipped (2026-04-27).** `ComputeDollarDeltaAsync` + `ComputePortfolioVegaAsync` in `PortfolioRiskService.cs` switched from stored `EntryDelta`/`EntryVega` to `IPolygonService.PortfolioLiveGreeksAsync` (commit `334d419`). Stocks short-circuit to delta=1 without hitting Python. `ComputePortfolioVegaAsync`'s GraphQL resolver doesn't take prices, so the method fetches underlying spots itself via `FetchStockSnapshotsAsync` (one batched call). Test rewrites at `Backend.Tests/Unit/Services/PortfolioRiskServiceTests.cs` mock the live-Greeks calls; the math under test is unchanged (same DollarDelta = 328,250 and totalVega = 150) but the source shifts from stored to recomputed. 7/7 tests pass.
+**Phase 2.3 shipped (2026-04-27).** `ComputeDollarDeltaAsync` + `ComputePortfolioVegaAsync` in **`PortfolioRiskService.cs`** switched from stored `EntryDelta`/`EntryVega` to `IPolygonService.PortfolioLiveGreeksAsync` (commit `334d419`). Stocks short-circuit to delta=1 without hitting Python. `ComputePortfolioVegaAsync`'s GraphQL resolver doesn't take prices, so the method fetches underlying spots itself via `FetchStockSnapshotsAsync` (one batched call). Test rewrites at `Backend.Tests/Unit/Services/PortfolioRiskServiceTests.cs` mock the live-Greeks calls; the math under test is unchanged (same DollarDelta = 328,250 and totalVega = 150) but the source shifts from stored to recomputed. 7/7 tests pass. **Note (added 2026-06-14):** Phase 2.3 covered `PortfolioRiskService` only; `PortfolioValuationService` still aggregates stale entry Greeks into `NetDelta/NetGamma/NetTheta/NetVega` (VCR-0005), scheduled for hard-delete in remediation Phase 9.
+
+**Phase 5 shipped (2026-06-13).** Live-sizing authority (ADR 0009). The canonical live sizing authority is now `live_config.sizing` (a Pydantic discriminated union: `SetHoldings | FixedShares | FixedNotional | StrategyExplicit`), resolved in `app/engine/execution/order_sizer.py` (thin policy adapter). The percent path (`SetHoldings`) delegates to the existing `LeanSetHoldingsSizing` quantity-math authority (buffered, fee-aware LEAN-faithful share counts). This retired `SimpleFloorSizing` from the live path with a pinned regression test documenting the intentional share-count shift. Subsequent VCR remediation Phase 1 (#494) made `live_config.sizing` mandatory at the deploy boundary, closing the empty-`live_config` bypass that re-introduced `SimpleFloorSizing`. See `docs/architecture/adrs/0009-live-sizing-authority-and-provenance.md` for the full 7-PR sequence (Safe canary / LEAN cutover / Reference parity / Custom / coexistence guard / per-trade audit / explicit-surface disable).
 
 **Phase 3 deferred — structural blocker.** Phase 3 as originally written assumed `runBacktest` becomes a passthrough to `/api/engine/backtest`. Investigation on 2026-04-27 found:
 1. Python's newer engine (`app/engine/strategy/algorithms/`) ports only 2 of the 4 strategies the .NET path runs (sma_crossover, rsi_mean_reversion). `RunMomentumRsiStochastic` and `RunRsiReversal` exist only in .NET and in the older `app/services/strategies/` (function-based, pandas-ta) registry — the older registry is not exposed via `/api/engine/backtest`.
@@ -268,8 +270,9 @@ After all phases:
 |---|---|---|---|
 | 1 (days 1-2) | Phase 0 — governance | Inkant | **shipped 2026-04-26** (`e52e7c3`) |
 | 1 (days 3-7) | Phase 1 — options math cutover | Inkant | **shipped** — 1.1/1.2 (`451394d`), 1.3 (header `legacy-ok` for pricing-lab + strategy-builder, see § Status as of 2026-04-27), 1.4 (`451394d` + fix `69d2bfe`) |
-| 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | **shipped** — 2.1/2.2 (`d9738a5`), 2.3 (`334d419` switches `ComputeDollarDelta` + `ComputePortfolioVega` to live Greeks via `PortfolioLiveGreeksAsync`) |
+| 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | **shipped** — 2.1/2.2 (`d9738a5`), 2.3 (`334d419` **PortfolioRiskService only**; PortfolioValuationService entry-Greek cleanup tracked as VCR-0005 / remediation Phase 9) |
 | 3 (days 1-3) | Phase 3 — retire BacktestService math | Inkant | **deferred** — blocked on lean-engine reaching feature parity with Strategy Lab. Phase 3.0 deprecation comment shipped (`d3c3c18`). See § Status as of 2026-04-27. |
 | 3 (days 4-5) | Phase 4 — `rule_based_backtest.py` adapter | Inkant | **deferred** — original "thin adapter" plan doesn't fit the actual code shape; needs reformulation. See § Status as of 2026-04-27. |
+| (separate stream) | Phase 5 — live-sizing authority (ADR 0009) | Inkant | **shipped 2026-06-13** — 7 sub-PRs Safe canary / LEAN cutover / Reference parity / Custom / coexistence guard / per-trade audit / explicit-surface disable; see § Phase 5 above |
 
 Phase 4 can move earlier and run in parallel with Phase 1 or 2 if convenient — it has no dependencies after Phase 0.

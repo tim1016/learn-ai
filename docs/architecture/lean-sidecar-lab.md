@@ -1,7 +1,7 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 5b — reconciliation-grade template + Phase 5a self-reconciler shipped; Phase 1c sandbox + Phase 4a-e UI complete
-**Last reviewed:** 2026-05-17
+**Status:** Phase 5g.3 shipped (2026-06-13) — launcher + cross_runner + cross_reconciler + determinism gate + UI run-history + form rehydration + lean_error_categories + custom-algorithm textarea; reconciliation-grade template + self-reconciler + Phase 1c sandbox + Phase 4a-e UI complete. Current per-phase progress in `docs/architecture/phases/phase-5a.md` through `phase-5g.md`.
+**Last reviewed:** 2026-06-14
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
 This document is the authority for the **LEAN Lab** feature — a UI surface in learn-ai where the user pastes or edits a real `QCAlgorithm` and runs it through an isolated official LEAN runner sidecar. It exists because the alternative ("just shell out to LEAN from FastAPI") quietly violates several invariants this repo depends on.

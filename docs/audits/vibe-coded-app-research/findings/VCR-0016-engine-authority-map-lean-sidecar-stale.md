@@ -1,12 +1,13 @@
 ---
 id: VCR-0016
 severity: P2
-status: open
+status: remediated
 area: documentation
 canonical_file: docs/architecture/engine-authority-map.md:19
 reference: docs/architecture/lean-sidecar-lab.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "Phase 10 — engine-authority-map.md row 19 updated to 'shipped through Phase 5g.3 (2026-06-13)'; lean-sidecar-lab.md status header refreshed to Phase 5g.3"
 lens: architectural-drift-registries
 dedupe_with_F: none
 confidence: high
