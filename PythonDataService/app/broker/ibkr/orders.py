@@ -238,9 +238,10 @@ async def place_paper_order(
 
     Steps:
     1. Run all four safety layers; refuse on any failure.
-    2. Build and qualify the contract (so we get a ``conId``).
-    3. Build the order. Submit via ``IB.placeOrder``.
-    4. Return ``IbkrOrderAck`` with the broker-assigned ``orderId``.
+    2. Enforce ADR 0008 / Phase 5B durable-submit precondition (``order_ref``).
+    3. Build and qualify the contract (so we get a ``conId``).
+    4. Build the order. Submit via ``IB.placeOrder``.
+    5. Return ``IbkrOrderAck`` with the broker-assigned ``orderId``.
 
     Status updates after this point arrive via Phase 3b's order event
     stream — this function doesn't wait for fills.
@@ -258,6 +259,23 @@ async def place_paper_order(
     """
     client.require_connected()
     account_id = _enforce_paper_safety(client, spec)
+
+    # ADR 0008 / Phase 5B / VCR-0002 — every real-broker submit must carry
+    # a deterministic ``order_ref`` so the WAL and IBKR audit can be joined
+    # unambiguously even across a restart. Callers building the spec inside
+    # the engine (``LivePortfolio.submit_pending_orders``) guarantee this;
+    # callers outside the engine (the ``/api/broker/orders`` POST endpoint,
+    # bespoke scripts) must stamp one themselves via ``order_identity.
+    # build_order_ref``. Refusing here closes the structural hole VCR-0002
+    # names: a real broker submit cannot bypass ADR 0008 by going around
+    # ``LivePortfolio``.
+    if spec.order_ref is None:
+        raise OrderRefusedError(
+            "ADR 0008: place_paper_order requires spec.order_ref. Build a "
+            "deterministic {bot_order_namespace}:{intent_id} token via "
+            "app.engine.live.order_identity.build_order_ref and stamp it on "
+            "the IbkrOrderSpec before calling this function."
+        )
 
     # Without an idempotency key each call is independent — place directly.
     if spec.client_order_id is None:

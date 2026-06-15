@@ -16,6 +16,8 @@ from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
 
 def _spec(**overrides) -> IbkrOrderSpec:
+    # ADR 0008 / Phase 5B — ``place_paper_order`` refuses a spec without
+    # ``order_ref``; the default test spec carries a syntactically valid token.
     base = {
         "symbol": "SPY",
         "sec_type": "STK",
@@ -24,6 +26,7 @@ def _spec(**overrides) -> IbkrOrderSpec:
         "order_type": "MKT",
         "time_in_force": "DAY",
         "confirm_paper": True,
+        "order_ref": "learn-ai/test-instance/v1:AAAAAAAAAAAAAAAAAAAAAA",
     }
     base.update(overrides)
     return IbkrOrderSpec(**base)

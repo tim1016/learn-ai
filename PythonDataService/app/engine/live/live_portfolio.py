@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.engine.live.intent_wal import IntentWal
@@ -82,7 +82,21 @@ class BrokerAdapter(Protocol):
     """Async broker surface LivePortfolio + LiveEngine consume — the typed
     ``IBrokerAdapter`` contract of ADR 0002. Both the executing
     ``IbkrBrokerAdapter`` and the shadow ``NoSubmitBrokerAdapter`` implement
-    it, so the engine depends on the protocol, never a concrete adapter."""
+    it, so the engine depends on the protocol, never a concrete adapter.
+
+    ADR 0008 / Phase 5B — concrete implementations declare a class variable
+    ``requires_durable_submit: ClassVar[bool]``. ``True`` means ``place_order``
+    reaches a real broker; ``LivePortfolio`` refuses construction without an
+    ``IntentWal`` + ``bot_order_namespace``. ``False`` is shadow / fake / replay.
+    The invariant is read at runtime via ``getattr(broker,
+    'requires_durable_submit', False)`` — a missing marker defaults to ``False``
+    (safe: skips the WAL enforcement). The marker is intentionally NOT a
+    Protocol member, because ``@runtime_checkable`` Protocols verify data
+    attributes by name on Python 3.12+, and declaring it here would force
+    every fake/test broker (which uses ``isinstance(broker, ReplayBrokerAdapter)``
+    and friends elsewhere in the engine) to declare it too. A new real-broker
+    adapter MUST set this to ``True`` explicitly or it silently bypasses ADR 0008.
+    """
 
     async def fetch_account_summary(self): ...
 
@@ -112,6 +126,11 @@ class IbkrBrokerAdapter(BrokerAdapter):
     alone, even if it shares the connected client. Buffers IBKR order
     events so the live engine can drain real fills per bar.
     """
+
+    # ADR 0008 / Phase 5B — this adapter calls ``IB.placeOrder`` for real,
+    # so any ``LivePortfolio`` constructed around it MUST carry an IntentWal
+    # and a non-empty bot_order_namespace. Enforced in ``LivePortfolio.__post_init__``.
+    requires_durable_submit: ClassVar[bool] = True
 
     def __init__(self, client: IbkrClient) -> None:
         self._client = client
@@ -277,6 +296,36 @@ class LivePortfolio:
     # value type (existing tests construct ``Order`` directly).
     _intent_by_order_id: dict[int, str] = field(default_factory=dict)
     _last_minted_intent_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """ADR 0008 / Phase 5B — enforce the durable-submit invariant.
+
+        A ``LivePortfolio`` whose broker adapter declares
+        ``requires_durable_submit = True`` cannot be constructed without an
+        ``IntentWal`` and a non-empty ``bot_order_namespace``. This closes the
+        "implemented but never wired" hole VCR-0002 names: the protocol exists,
+        the engine cannot bypass it.
+
+        Shadow / fake adapters (``requires_durable_submit = False`` or unset)
+        retain the pre-Phase-5B opt-in behaviour for backwards compatibility
+        with the replay/test fixtures.
+        """
+        if not getattr(self.broker, "requires_durable_submit", False):
+            return
+        if self.intent_wal is None:
+            raise ValueError(
+                "ADR 0008 / Phase 5B: LivePortfolio with a real-broker adapter "
+                f"({type(self.broker).__name__}) cannot be constructed without "
+                "an IntentWal. Pass intent_wal=IntentWal(<run_dir>/intent_events.jsonl). "
+                "Shadow runs (NoSubmitBrokerAdapter) may omit it."
+            )
+        if not self.bot_order_namespace:
+            raise ValueError(
+                "ADR 0008 / Phase 5B: LivePortfolio with a real-broker adapter "
+                f"({type(self.broker).__name__}) cannot be constructed without "
+                "a non-empty bot_order_namespace. Pass "
+                "bot_order_namespace=build_bot_order_namespace(strategy_instance_id)."
+            )
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -451,23 +500,52 @@ class LivePortfolio:
     async def submit_pending_orders(self) -> list[IbkrOrderAck]:
         """Submit all locally queued orders through the paper-order boundary.
 
-        Phase 5A wires the intent-identity WAL around each submit: append
-        ``PENDING_INTENT`` BEFORE ``broker.place_order`` (fsynced), append
-        ``SUBMITTED`` after success with ``perm_id`` and ``broker_order_id``,
-        append ``ACK_FAILED_UNCERTAIN`` on broker exception (the only honest
-        event when the submit may or may not have landed). The WAL surface
-        is opt-in via ``intent_wal`` + ``bot_order_namespace`` so legacy
-        replay / explicit-surface tests keep their pre-Phase-5A behaviour.
+        Phase 5B (ADR 0008 / VCR-0002) — on a *real-broker* adapter (one whose
+        ``requires_durable_submit`` is ``True``), the WAL writes and the
+        deterministic ``order_ref`` stamp are MANDATORY:
+
+        * ``__post_init__`` has already guaranteed ``intent_wal`` and
+          ``bot_order_namespace`` are set; no nullable guards needed here.
+        * An order arriving without a minted ``intent_id`` is minted at this
+          boundary so every broker order has an identity (covers strategies
+          that called ``market_order`` / ``liquidate`` directly rather than
+          ``set_holdings``). A future PR may tighten this to fail-fast.
+        * A namespace-match assertion runs immediately before
+          ``broker.place_order`` — belt-and-suspenders against stale
+          ``order_ref``s from adoption / replay / future tooling.
+        * The WAL surface is unconditional: ``PENDING_INTENT`` is fsynced
+          BEFORE ``broker.place_order``, ``SUBMITTED`` after a clean ack,
+          ``ACK_FAILED_UNCERTAIN`` if the call raises (the only honest event
+          when a placement may or may not have landed).
+
+        Shadow / no-submit adapters (``requires_durable_submit`` False or
+        unset) retain the pre-Phase-5B opt-in behaviour: WAL writes happen
+        iff an ``intent_wal`` was passed and an ``intent_id`` was minted
+        upstream. Replay / explicit-surface tests are unaffected.
         """
         from app.engine.live.intent_events import IntentEventType
-        from app.engine.live.order_identity import build_order_ref
+        from app.engine.live.order_identity import build_order_ref, mint_intent_id
+
+        requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
 
         acks: list[IbkrOrderAck] = []
         for order in self.drain_pending():
             intent_id = self._intent_by_order_id.pop(order.order_id, None)
             order_ref: str | None = None
-            if self.intent_wal is not None and intent_id is not None:
+
+            if requires_durable:
+                # __post_init__ guarantees intent_wal + namespace. Mint a
+                # fallback intent_id for orders that bypassed set_holdings
+                # (market_order / liquidate / engine-internal flatten paths)
+                # so every real-broker order carries an identity.
+                if intent_id is None:
+                    intent_id = mint_intent_id()
+                    self._last_minted_intent_id = intent_id
                 order_ref = build_order_ref(self.bot_order_namespace, intent_id)
+            elif self.intent_wal is not None and intent_id is not None:
+                # Shadow / fake path opting into the WAL voluntarily.
+                order_ref = build_order_ref(self.bot_order_namespace, intent_id)
+
             spec = IbkrOrderSpec(
                 symbol=order.symbol,
                 sec_type="STK",
@@ -479,7 +557,31 @@ class LivePortfolio:
                 client_order_id=f"live-{order.order_id}",
                 order_ref=order_ref,
             )
-            if self.intent_wal is not None and intent_id is not None and order_ref is not None:
+
+            if requires_durable:
+                # Defense in depth — run BEFORE the WAL write so a malformed
+                # spec never reaches durable storage. An ``order_ref`` that
+                # doesn't match this instance's ``bot_order_namespace`` would
+                # mis-attribute a real broker placement; catches stale tokens
+                # leaking from adoption / replay / future tooling before they
+                # reach IBKR (or the WAL). The boundary delimiter is ``:``
+                # (the canonical separator); ``startswith`` here is safe
+                # because the namespace is followed by exactly ``:`` (not the
+                # broker-sourced side that CONTEXT.md flags).
+                assert spec.order_ref is not None  # narrow for type-checker
+                expected_prefix = self.bot_order_namespace + ":"
+                assert spec.order_ref.startswith(expected_prefix), (
+                    f"ADR 0008 namespace mismatch: spec.order_ref="
+                    f"{spec.order_ref!r} does not start with {expected_prefix!r}"
+                )
+
+            wal_active = (
+                self.intent_wal is not None
+                and intent_id is not None
+                and order_ref is not None
+            )
+            if wal_active:
+                assert self.intent_wal is not None  # narrow for type-checker
                 self.intent_wal.append(
                     event_type=IntentEventType.PENDING_INTENT,
                     intent_id=intent_id,
@@ -487,10 +589,12 @@ class LivePortfolio:
                     order_ref=order_ref,
                     order_spec=spec.model_dump(),
                 )
+
             try:
                 ack = await self.broker.place_order(spec)
             except Exception as exc:
-                if self.intent_wal is not None and intent_id is not None and order_ref is not None:
+                if wal_active:
+                    assert self.intent_wal is not None  # narrow for type-checker
                     self.intent_wal.append(
                         event_type=IntentEventType.ACK_FAILED_UNCERTAIN,
                         intent_id=intent_id,
@@ -500,7 +604,8 @@ class LivePortfolio:
                     )
                 raise
             acks.append(ack)
-            if self.intent_wal is not None and intent_id is not None and order_ref is not None:
+            if wal_active:
+                assert self.intent_wal is not None  # narrow for type-checker
                 self.intent_wal.append(
                     event_type=IntentEventType.SUBMITTED,
                     intent_id=intent_id,

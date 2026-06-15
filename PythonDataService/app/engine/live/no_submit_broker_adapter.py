@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import ClassVar, Literal
 
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.data.trade_bar import TradeBar
@@ -72,6 +72,11 @@ def _to_canonical(bar: TradeBar) -> CanonicalBar:
 
 class NoSubmitBrokerAdapter:
     """Market-data-only adapter; synthesises shadow_sim fills, never submits."""
+
+    # ADR 0008 / Phase 5B — shadow adapter never reaches ``ib.placeOrder``, so
+    # the durable-submit invariant does not apply. ``LivePortfolio`` may be
+    # constructed without an IntentWal when this adapter is the broker.
+    requires_durable_submit: ClassVar[bool] = False
 
     def __init__(
         self,

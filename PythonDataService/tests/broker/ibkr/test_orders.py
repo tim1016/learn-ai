@@ -28,6 +28,9 @@ from app.broker.ibkr.orders import (
 
 
 def _spec(**overrides) -> IbkrOrderSpec:
+    # ADR 0008 / Phase 5B — ``place_paper_order`` refuses a spec without
+    # ``order_ref``, so the default test spec carries a syntactically valid
+    # token. Tests that exercise the precondition itself pass ``order_ref=None``.
     base = {
         "symbol": "SPY",
         "sec_type": "STK",
@@ -41,6 +44,7 @@ def _spec(**overrides) -> IbkrOrderSpec:
         "right": None,
         "multiplier": 100,
         "confirm_paper": True,
+        "order_ref": "learn-ai/test-instance/v1:AAAAAAAAAAAAAAAAAAAAAA",
     }
     base.update(overrides)
     return IbkrOrderSpec(**base)
@@ -164,6 +168,19 @@ async def test_place_paper_order_lmt_requires_limit_price() -> None:
     # provided), so the OrderRefusedError fires from _build_order.
     with pytest.raises(OrderRefusedError, match="LMT order requires limit_price"):
         await place_paper_order(client, bad)
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_refuses_missing_order_ref() -> None:
+    """ADR 0008 / Phase 5B / VCR-0002 — a real-broker placement cannot bypass
+    durable-submit identity by omitting ``order_ref``. ``place_paper_order``
+    refuses before any IBKR call so the protocol exists structurally, not as
+    a soft convention."""
+    client = _client()
+    bad = _spec(order_ref=None)
+    with pytest.raises(OrderRefusedError, match="ADR 0008"):
+        await place_paper_order(client, bad)
+    client.ib.placeOrder.assert_not_called()
 
 
 # ── safety layers route into place_paper_order ────────────────────────

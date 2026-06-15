@@ -204,3 +204,137 @@ def test_legacy_portfolio_without_wal_keeps_working(tmp_path: Path) -> None:
     assert portfolio.last_minted_intent_id() is None
     asyncio.run(portfolio.submit_pending_orders())  # No WAL file expected
     assert not (tmp_path / "intent_events.jsonl").exists()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Phase 5B / VCR-0002 — durable-submit invariant tests.
+#
+# The Phase 5A surface above was opt-in via ``intent_wal is not None``. Phase 5B
+# closes the structural hole: a broker adapter whose ``requires_durable_submit``
+# marker is ``True`` CANNOT be wrapped in a ``LivePortfolio`` without an
+# ``IntentWal`` + ``bot_order_namespace``. The WAL writes on the real-broker path
+# are unconditional and the namespace match is asserted before placement.
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _RealBrokerFake(FakeBroker):
+    """FakeBroker subclass that declares itself a real-broker adapter for the
+    invariant tests. Used wherever a test needs to exercise the Phase 5B
+    code path without spinning up an actual IbkrBrokerAdapter."""
+
+    requires_durable_submit = True
+
+
+def test_real_broker_portfolio_without_intent_wal_raises() -> None:
+    """ADR 0008 / Phase 5B — a real-broker LivePortfolio cannot be constructed
+    without an IntentWal. Closes the bypass path VCR-0002 names: even after
+    every wiring PR ships, ``intent_wal is None`` was the residual escape."""
+    with pytest.raises(ValueError, match="ADR 0008.*IntentWal"):
+        LivePortfolio(
+            _RealBrokerFake(),
+            bot_order_namespace="learn-ai/test-instance/v1",
+        )
+
+
+def test_real_broker_portfolio_without_namespace_raises(tmp_path: Path) -> None:
+    """ADR 0008 / Phase 5B — a real-broker LivePortfolio cannot be constructed
+    with an empty ``bot_order_namespace``: ownership identity is undefined
+    without a namespace."""
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    with pytest.raises(ValueError, match="ADR 0008.*bot_order_namespace"):
+        LivePortfolio(_RealBrokerFake(), intent_wal=wal)
+
+
+def test_real_broker_portfolio_with_intent_wal_constructs(tmp_path: Path) -> None:
+    """Happy path — the marker triggers the invariant, the invariant is
+    satisfied, construction proceeds."""
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        _RealBrokerFake(),
+        intent_wal=wal,
+        bot_order_namespace="learn-ai/test-instance/v1",
+    )
+    assert portfolio.intent_wal is wal
+    assert portfolio.bot_order_namespace == "learn-ai/test-instance/v1"
+
+
+def test_shadow_portfolio_still_works_without_intent_wal() -> None:
+    """Shadow / fake adapters (no ``requires_durable_submit`` marker, or marker
+    set to ``False``) retain the pre-Phase-5B opt-in behaviour: ``LivePortfolio``
+    can be constructed without an IntentWal so existing replay / unit-test
+    fixtures keep their shape."""
+    portfolio = LivePortfolio(FakeBroker())  # FakeBroker has no marker → defaults to False
+    assert portfolio.intent_wal is None
+    assert portfolio.bot_order_namespace == ""
+
+
+def test_real_broker_submit_writes_pending_intent_unconditionally(tmp_path: Path) -> None:
+    """ADR 0008 / Phase 5B — on the real-broker code path, the WAL writes are
+    unconditional. An order that did NOT go through ``set_holdings`` (e.g. a
+    direct ``submit_market_order`` from a strategy or engine flatten path)
+    still gets a minted intent_id, a stamped order_ref, and a fsynced
+    PENDING_INTENT BEFORE ``broker.place_order`` is awaited."""
+    import asyncio
+
+    wal_path = tmp_path / "intent_events.jsonl"
+    wal = IntentWal(wal_path)
+    portfolio = LivePortfolio(
+        _RealBrokerFake(),
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("test-instance"),
+    )
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    # Direct submit_market_order — bypasses set_holdings, so no intent_id was
+    # minted upstream. The Phase 5B fallback mints one at submit time.
+    portfolio.submit_market_order("SPY", 1, _bar_time(), tag="ManualEntry")
+
+    asyncio.run(portfolio.submit_pending_orders())
+
+    raw = wal_path.read_text(encoding="utf-8").splitlines()
+    assert raw, "WAL must contain at least one event"
+    # First event is PENDING_INTENT, second is SUBMITTED — same intent_id.
+    import json
+
+    events = [json.loads(line) for line in raw if line.strip()]
+    assert [e["event_type"] for e in events] == [
+        IntentEventType.PENDING_INTENT.value,
+        IntentEventType.SUBMITTED.value,
+    ]
+    assert events[0]["intent_id"] == events[1]["intent_id"]
+    assert events[0]["order_ref"].startswith(build_bot_order_namespace("test-instance") + ":")
+    # The broker saw a non-empty order_ref on its spec.
+    assert portfolio.broker.orders[0].order_ref is not None
+    assert portfolio.broker.orders[0].order_ref == events[0]["order_ref"]
+
+
+def test_real_broker_namespace_mismatch_assertion_fires(tmp_path: Path, monkeypatch) -> None:
+    """ADR 0008 / Phase 5B — defense-in-depth. If a future bug supplied an
+    ``order_ref`` that does not match this instance's ``bot_order_namespace``
+    (e.g. stale value from cold-start adoption or a cross-instance leak),
+    ``submit_pending_orders`` refuses before ``broker.place_order`` is
+    awaited."""
+    import asyncio
+
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        _RealBrokerFake(),
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("test-instance"),
+    )
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.submit_market_order("SPY", 1, _bar_time())
+
+    # Force build_order_ref (called inside submit_pending_orders) to return a
+    # token whose namespace does NOT match the portfolio's bot_order_namespace.
+    # The defense-in-depth assertion must fire before the broker is hit.
+    def _wrong_namespace(_ns: str, intent_id: str) -> str:
+        return f"learn-ai/SOMEONE-ELSE/v1:{intent_id}"
+
+    monkeypatch.setattr(
+        "app.engine.live.order_identity.build_order_ref", _wrong_namespace
+    )
+
+    with pytest.raises(AssertionError, match="ADR 0008 namespace mismatch"):
+        asyncio.run(portfolio.submit_pending_orders())
+    # And the broker must never have been invoked.
+    assert portfolio.broker.orders == []
