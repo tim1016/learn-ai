@@ -11,8 +11,7 @@ remediation_progress:
   - "#530 — Phase 8 — SIZING_RESOLVED emitted right after intent_id mint in LivePortfolio.set_holdings (before PENDING_INTENT)"
   - "PR feat/phase-8-sizing-skip — Phase 8 SIZING_SKIP durable audit log: separate sizing_skip.jsonl file alongside intent_events.jsonl. PRD §8 schema (no intent_id; carries target/current qty + reason). The IntentEvent invariant (order_ref==namespace:intent_id) is preserved — skips truly are not intents and live in their own log per the autonomous architectural decision; the in-memory sizing_resolutions list still annotates the skip row with a 'skipped' marker so the Sizing card stays consistent."
 follow_up_required:
-  - "Sizing card data-source cutover from in-memory sizing_resolutions list to a fold of SIZING_RESOLVED (intent_wal) + SIZING_SKIP (sizing_skip.jsonl) (PRD §8 step 6); deferred"
-  - "ADR 0009 § 6 reverse order-surface validation: policy-registered strategy invoking market_order should fail fast (VCR-P3-F)"
+  - "Sizing card data-source cutover from in-memory sizing_resolutions list to a fold of SIZING_RESOLVED (intent_wal) + SIZING_SKIP (sizing_skip.jsonl) (PRD §8 step 6); deferred — frontend cutover blocks on UI testing, and the current sidecar projection is sufficient as a fast-path cache. The backend half (a fold helper reading both files) can land independently once the frontend cutover scope is sized."
 lens: live-sizing-adr-0009
 dedupe_with_F: none
 confidence: high
