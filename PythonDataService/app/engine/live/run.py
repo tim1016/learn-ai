@@ -1620,6 +1620,28 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
             if snapshot.account_id.upper() != args.account.upper():
                 _log(f"REFUSED: connected account {snapshot.account_id} != --account {args.account}; no orders placed.")
                 return 2
+            # VCR-0009 — cancel owned open orders BEFORE liquidating. The
+            # sibling paths (``_recovery_flatten`` and
+            # ``LiveEngine._flatten``) already do this; ``cmd_emergency_flatten``
+            # was the asymmetric outlier and could race an open SELL limit
+            # against the emergency SELL market, double-selling on a panic.
+            # ``cancel_open_orders`` is namespace-scoped: it only touches the
+            # runner's own orders, never an unrelated open order on the
+            # same paper account. Full Phase 5C ownership-query gating
+            # (OWNERSHIP_QUERY_UNAVAILABLE_HALT, cancel-confirm timeout
+            # with EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS carve-out)
+            # is the deferred follow-up; this fix closes the immediate
+            # cancel-first asymmetry called out in VCR-0009.
+            try:
+                cancelled = await broker.cancel_open_orders()
+                _log(f"cancelled_open_orders: count={len(cancelled)} ids={cancelled}")
+            except Exception as exc:
+                # Operator-confirmed force-flatten proceeds even if the cancel
+                # call fails — leaving open broker positions during a panic
+                # is worse than acting without cancel-confirmation. Logged
+                # loudly so the run record shows the unconfirmed cancel.
+                _log(f"WARNING: cancel_open_orders failed ({type(exc).__name__}: {exc}); proceeding with liquidation anyway (force-flatten).")
+
             liquidated = 0
             for pos in snapshot.positions:
                 qty_signed = float(pos.quantity)
