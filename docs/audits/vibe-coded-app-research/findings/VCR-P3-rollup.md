@@ -13,12 +13,17 @@ remediation_progress:
   - "#494 — Phase 2 — P3-C spec-fixture auto-fill follows module-name keys"
   - "#501 — Phase 6D — P3-P/Q per-instance start lock + halt.flag pre-flight rerun"
   - "P3-E — Phase 8 SIZING_SKIP audit log shipped via #544 (sizing_skip.jsonl; symbol/policy/target/current/reason captured)"
-  - "P3-F — Order-surface reverse fail-fast: LivePortfolio.submit_market_order accepts explicit_call=True from ctx.market_order / strategy.market_order; raises Order-surface mismatch when registered_sizing_surface == 'policy'. The forward case (explicit + set_holdings) was already in place at live_portfolio.py:524-530."
+  - "P3-F — Order-surface reverse fail-fast (#549): LivePortfolio.submit_market_order accepts explicit_call=True from ctx.market_order / strategy.market_order; raises Order-surface mismatch when registered_sizing_surface == 'policy'."
+  - "P3-D — ADR 0009 References line numbers re-anchored: pointers updated to current master code locations; semantics unchanged."
+  - "P3-G — Shadow invariant runtime assertion: ColdStartReconciler refuses shadow_mode=True with a non-NoSubmitBrokerAdapter / non-_shadow_safe broker. Defense-in-depth against the next refactor accidentally wiring a real broker into the shadow path."
+  - "P3-I — Chart-snapshot trading-day boundary uses America/New_York: _today_utc() replaced with _today_ny(); UTC boundary no longer misclassifies ET-session bars."
+  - "P3-J — Sizing card timestamp formatting already correct (broker-sizing-card.component.html:45 uses 'America/New_York')."
+  - "P3-M — HostRunnerDeployRequest live_config allow-list already enforced (_validate_sizing applies LIVE_CONFIG_LEDGER_KEYS symmetry)."
+  - "P3-N — Stub component tracker links added: volatility-stub and strategy-finder-stub now link to GitHub issues."
 follow_up_required:
-  - "P3-D ADR 0009 References line numbers — re-anchor on next ADR 0009 touch (doc-only drift; semantics preserved)"
-  - "P3-J/K/L/N timestamp rigor + QC card tail — Phase 7 follow-ups, not gating safety"
-  - "P3-M sizing policy presence in cmd_start — covered by Phase 1 + Phase 6D start-gate"
-  - "P3-O/N dead-code rollup — Phase 11 / rolled into VCR-0017"
+  - "P3-K — FailureRecord/FailureRow ts_ms rename — wire-shape change; needs frontend + backend coordinated PR with UI eyeball (deferred to morning HITL)"
+  - "P3-L — ExecutionRow exec_time_ms — parquet schema migration; needs backward-compat decision for old runs (deferred to morning HITL)"
+  - "P3-H — _order_belongs_to_account multi-client check — blocked on ib_async client_id availability verification (deferred to morning HITL)"
 lens: multiple
 dedupe_with_F: none
 confidence: mixed

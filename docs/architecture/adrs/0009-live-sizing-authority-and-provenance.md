@@ -122,17 +122,21 @@ This is only true **after** this ADR is implemented. Today, with no `live_config
 
 ## References
 
-- `PythonDataService/app/engine/live/run_ledger.py:124-133` — `compute_run_id` (the 7 hashed fields; `live_config` independent of the QC-anchor fields).
-- `PythonDataService/app/engine/live/run.py:540-549` — `_live_config_from_ledger` allow-list that `raise`s on unknown keys (the load-bearing gate); `:854-861` start-failure path.
-- `PythonDataService/app/engine/live/config.py:16-47` — `LiveConfig` dataclass (no `sizing` field today).
-- `PythonDataService/app/engine/live/live_engine.py:398` — `LivePortfolio(self._broker)` (no sizing injection); `:240-284` — `LiveEngine.__init__` has no `sizing_model` param.
-- `PythonDataService/app/engine/live/live_portfolio.py:211` — `sizing_model: SizingModel = field(default_factory=SimpleFloorSizing)`; `:268-291` — `set_holdings` → `target_quantity` → delta market order.
-- `PythonDataService/app/engine/execution/sizing.py:46-61` — `SizingModel` protocol; `:88-137` — `LeanSetHoldingsSizing` (the quantity-math authority the resolver delegates to).
-- `PythonDataService/app/engine/execution/order_sizer.py` — **new**, the live policy-application adapter.
-- `PythonDataService/app/engine/strategy/spec/schema.py:290-302` — existing `SizeRule` (`SetHoldings | FixedContracts`), spec-level, backtest-only.
-- `PythonDataService/app/engine/strategy/algorithms/deployment_validation.py:157` — `set_holdings(symbol, Decimal(1))` (fraction 1.0); `spy_vwap_reversion.py:117` — `market_order(symbol, 100)` (explicit surface).
-- `PythonDataService/app/routers/engine.py:340-363` — `StrategyRegistration` (gains `sizing_surface`); `:1583,1617-1627` — `StrategyInfo` construction (one line surfaces it).
-- `Frontend/src/app/api/live-runs.types.ts:272` / `Frontend/src/app/services/live-runs.service.ts:214` — trimmed `EngineStrategyInfo` the deploy form reads (must be widened for `sizing_surface`).
+Line numbers re-anchored 2026-06-15 (VCR-P3-D) to current master. Semantics unchanged
+since the original ADR draft; subsequent PRs grew the modules. Re-anchor on next ADR
+touch if these drift again.
+
+- `PythonDataService/app/engine/live/run_ledger.py:128` — `compute_run_id` (the 7 hashed fields; `live_config` independent of the QC-anchor fields).
+- `PythonDataService/app/engine/live/run.py:593` — `_live_config_from_ledger` allow-list that `raise`s on unknown keys (the load-bearing gate); `:887-945` `[START] HALT` paths (run-poisoned / halt.flag / pre-policy sizing).
+- `PythonDataService/app/engine/live/config.py:16-29` — `LIVE_CONFIG_LEDGER_KEYS` allow-list; `:33-70` — `LiveConfig` dataclass (now carries the `sizing` field per Decision 4).
+- `PythonDataService/app/engine/live/live_engine.py:629` — `LivePortfolio(self._broker)` (sizing injected via `LiveConfig.sizing` per Phase 1); `:333-336` — `class LiveEngine` / `__init__`.
+- `PythonDataService/app/engine/live/live_portfolio.py:349` — `sizing_model: SizingModel = field(default_factory=SimpleFloorSizing)` (legacy default; Phase 1 overrides via `OrderSizer`); `:517` — `set_holdings` → policy resolution → delta market order.
+- `PythonDataService/app/engine/execution/sizing.py:47` — `SizingModel` protocol; `:89` — `LeanSetHoldingsSizing` (the quantity-math authority the resolver delegates to).
+- `PythonDataService/app/engine/execution/order_sizer.py` — the live policy-application adapter (shipped Phase 1).
+- `PythonDataService/app/engine/strategy/spec/schema.py:290` — `SetHoldings`; `:296` — `FixedContracts` (the spec-level `SizeRule`, backtest-only).
+- `PythonDataService/app/engine/strategy/algorithms/deployment_validation.py:157` — `set_holdings(symbol, Decimal(1))` (fraction 1.0); `spy_vwap_reversion.py:117` — `market_order(symbol, QUANTITY)` (explicit surface).
+- `PythonDataService/app/routers/engine.py:341` — `class StrategyRegistration` (carries `sizing_surface`); `:1615` — `class StrategyInfo` (surfaces it to the frontend).
+- `Frontend/src/app/api/live-runs.types.ts:339` (`EngineStrategyInfo` interface) / `Frontend/src/app/services/live-runs.service.ts:235` (`getEngineStrategies()`) — the deploy form reads this shape.
 - `CONTEXT.md` § "Sizing authority" — the operator vocabulary this ADR implements.
 - `docs/position-sizing-research-handoff.md` — research briefs A–E; § 3 superseded by Decision 8.
 
