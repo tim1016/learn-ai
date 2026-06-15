@@ -612,6 +612,29 @@ async def test_protected_route_accepts_correct_token(
     assert response.status_code == 200
 
 
+async def test_protected_route_rejects_prefix_of_token_vcr_0011(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    # VCR-0011: token compare must be constant-time (hmac.compare_digest).
+    # A token that is a strict prefix of the real one must still be rejected
+    # with no length-dependent fast path. Asserts the equality semantics the
+    # constant-time compare preserves; timing-stability assertions are out
+    # of scope for unit tests.
+    manager, _ = daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+    prefix = _TEST_TOKEN[: max(1, len(_TEST_TOKEN) // 2)]
+    assert prefix != _TEST_TOKEN
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={TOKEN_HEADER: prefix},
+    ) as client:
+        response = await client.get("/instances")
+
+    assert response.status_code == 401
+
+
 async def test_health_is_open_without_token(
     daemon_context: tuple[RunnerProcessManager, Path],
 ) -> None:

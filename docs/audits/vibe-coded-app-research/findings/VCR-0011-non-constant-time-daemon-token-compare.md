@@ -1,7 +1,7 @@
 ---
 id: VCR-0011
 severity: P1
-status: regrounded_open
+status: remediated
 area: untraced-bugs
 canonical_file: PythonDataService/app/engine/live/host_daemon.py:905
 reference: docs/architecture/adrs/0007-host-daemon-shared-secret-auth.md
@@ -10,7 +10,7 @@ last_seen: 2026-06-14
 regrounded_on: 2026-06-14
 regrounded_to: high
 phase_0_verdict: confirmed_valid
-remediation_target: "Phase 7C — hmac.compare_digest in _verify_token"
+remediated_in: "Phase 7C — hmac.compare_digest in _verify_token + VCR-0011 prefix-rejection regression test"
 lens: live-deploy-flow
 dedupe_with_F: none
 confidence: high

@@ -13,6 +13,7 @@ owns subprocess lifecycle.
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 import logging
@@ -902,7 +903,11 @@ def create_app(
     async def _verify_token(
         supplied: str | None = Header(default=None, alias=TOKEN_HEADER),
     ) -> None:
-        if supplied != token:
+        # Constant-time compare: response latency must not depend on which
+        # byte of the token is wrong. See VCR-0011 / ADR 0007.
+        if not hmac.compare_digest(
+            (supplied or "").encode("utf-8"), token.encode("utf-8")
+        ):
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
                 detail=f"missing or wrong {TOKEN_HEADER}",
