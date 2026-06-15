@@ -106,7 +106,7 @@ def test_activation_raises_when_subclass_construction_fails(tmp_path) -> None:
         def __init__(self, client) -> None:  # mirror the constructor signature
             self._client = client
 
-        def open_orders_by_namespace(self, namespace):  # noqa: D401
+        def open_orders_by_namespace(self, namespace):
             return []
 
         def executions_for_namespace(self, namespace, since_ms):
