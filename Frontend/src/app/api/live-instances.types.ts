@@ -147,6 +147,21 @@ export interface SizingAuditRow {
   intended_qty: number;
   reference_price: string;
   sized_via: string;
+  /** VCR-0003 last-mile — provenance stamp the engine mints at
+   * policy-resolution time. One of {reference_native, live_override,
+   * spec_default}. null for legacy SIZING_RESOLVED rows authored
+   * before the field landed and for sizing-skip rows (their JSONL
+   * predates this column). When null, the Sizing card may render an
+   * "unknown" badge variant. */
+  sizing_provenance_at_resolve_time?: string | null;
+  /** Phase 8 / VCR-0003 — present (true) on rows folded from
+   * sizing_skip.jsonl; absent / undefined on rows from
+   * intent_events.jsonl SIZING_RESOLVED. */
+  skipped?: boolean | null;
+  /** Phase 8 / VCR-0003 — the operator-visible reason the policy
+   * skipped (e.g. "target_equals_current", "zero_shares_while_flat").
+   * Only meaningful when `skipped === true`. */
+  skip_reason?: string | null;
 }
 
 /** ADR 0009 — the bound (or evidence) run's sizing surface for the Sizing card.

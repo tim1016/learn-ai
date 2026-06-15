@@ -109,6 +109,9 @@ def test_fold_only_sizing_resolved_in_wal(tmp_path: Path) -> None:
     assert row["sized_via"] == "policy_set_holdings"
     assert row["ts_ms"] == 1_780_000_000_000
     assert row.get("skipped", False) is False
+    # VCR-0003 last-mile — the engine-minted provenance stamp is now
+    # surfaced through the fold to the Sizing card's per-trade audit.
+    assert row["sizing_provenance_at_resolve_time"] == "live_override"
 
 
 def test_fold_only_sizing_skip_log(tmp_path: Path) -> None:
@@ -130,6 +133,11 @@ def test_fold_only_sizing_skip_log(tmp_path: Path) -> None:
     # path tags as ``policy_set_holdings`` (the sizer wrote the prior row
     # with that tag); we mirror that for fold consistency.
     assert row["sized_via"] == "policy_set_holdings_skip"
+    # VCR-0003 last-mile — sizing_skip.jsonl predates this field, so
+    # skip rows surface ``None``. The frontend renders an "unknown"
+    # badge for these rows. A future skip-log schema revision can
+    # populate the field; until then it's None.
+    assert row["sizing_provenance_at_resolve_time"] is None
 
 
 def test_fold_merges_both_newest_first(tmp_path: Path) -> None:
