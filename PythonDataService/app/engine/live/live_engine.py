@@ -173,6 +173,34 @@ class MaxOrdersPerDayExceeded(RuntimeError):
     """
 
 
+class BrokerSafetyVerdictTransitionHaltError(RuntimeError):
+    """Phase 7B / VCR-0010 — broker safety verdict left ``paper-only``.
+
+    Raised by ``LiveEngine._check_verdict_transition_halt`` at the top of
+    each bar iteration when the injected ``verdict_provider`` returns a
+    verdict other than ``paper-only``. PRD §7B "Mid-session transition":
+    the run halts BEFORE any submission, ``halt.flag`` is written to the
+    output dir, and pending orders are cleared from the portfolio. The
+    operator must reconcile the verdict (e.g. confirm the right port,
+    re-enable readonly) and then resume — Phase 5D Resume guard #3
+    (PR #535) already refuses ``cmd_resume`` when the WAL carries an
+    orphaned uncertain ack.
+
+    The matching durable ``BROKER_SAFETY_VERDICT_TRANSITION_HALT`` WAL
+    event is gated on the broker-lifecycle WAL-location decision and is
+    omitted here; ``halt.flag`` plus the exception carry the same
+    forensic payload for the failure list / runbook.
+    """
+
+    def __init__(self, *, verdict: str) -> None:
+        super().__init__(
+            f"BrokerSafetyVerdictTransitionHaltError(verdict={verdict!r}): "
+            "mid-session transition out of paper-only — run halted before "
+            "next submit per PRD §7B"
+        )
+        self.verdict = verdict
+
+
 @dataclass(frozen=True)
 class _OrderMeta:
     """Per-order context the engine needs to convert IBKR fills.
@@ -293,6 +321,16 @@ class LiveEngine:
         # the broker still echoes the prior session's ``perm_id`` on fills.
         # ``None`` keeps the prior pre-Phase-5E behavior (warn + drop).
         intent_wal_path: Path | None = None,
+        # Phase 7B / VCR-0010 — mid-session broker safety verdict observer.
+        # Called at the top of every bar iteration (BEFORE pending submits).
+        # When the provider returns a non-``paper-only`` and non-``None``
+        # verdict — i.e. a positive ``unsafe`` / ``unknown`` signal — the
+        # bar loop writes ``halt.flag`` to ``output_dir`` and raises
+        # ``BrokerSafetyVerdictTransitionHaltError`` so the run halts
+        # before any submission, matching the PRD §7B "Mid-session
+        # transition" contract. ``None`` (the default) keeps the
+        # pre-Phase-7B behavior (no observer).
+        verdict_provider: object = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -373,6 +411,8 @@ class LiveEngine:
         # Phase 5E / VCR-0012 — fold path for the cross-restart fill classifier
         # (see ``_resolve_meta_via_intent_wal``).
         self._intent_wal_path = intent_wal_path
+        # Phase 7B / VCR-0010 — broker safety verdict observer.
+        self._verdict_provider = verdict_provider
         self._sizing_surface = sizing_surface
         # The strategy-specific decision columns = resolved minus the core.
         self._strategy_decision_columns = tuple(
@@ -774,6 +814,15 @@ class LiveEngine:
                         portfolio=portfolio,
                         writers=writers,
                     )
+
+                # Phase 7B / VCR-0010 — mid-session broker safety verdict
+                # gate (PRD §7B "Mid-session transition"). Called BEFORE
+                # the PAUSE drop and BEFORE submission so a verdict that
+                # transitions out of paper-only halts the run proactively
+                # (rather than catching the next submit's exception). The
+                # halt.flag write + raise mirrors PRD §5D's SUBMIT_UNCERTAIN
+                # halt semantics.
+                self._check_verdict_transition_halt(portfolio)
 
                 # PAUSE drops new orders this bar before submit. The
                 # strategy still consumes the bar (indicators advance),
@@ -1598,6 +1647,37 @@ class LiveEngine:
             if engine_event is not None:
                 out.append(engine_event)
         return out
+
+    def _check_verdict_transition_halt(self, portfolio: LivePortfolio) -> None:
+        """Phase 7B / VCR-0010 — broker safety verdict observer.
+
+        Consult ``self._verdict_provider`` (if set). On a non-paper-only,
+        non-None verdict, clear pending orders, write ``halt.flag``, and
+        raise ``BrokerSafetyVerdictTransitionHaltError`` so the bar loop
+        exits before any new submission. PRD §7B's "Mid-session transition"
+        contract: ``halt.flag`` + durable PAUSED + WAL event. The WAL
+        event is gated on the broker-lifecycle WAL-location decision and
+        is omitted here; ``halt.flag`` + the exception carry the same
+        forensic payload via the failure list / cmd_resume guard #1 path.
+        """
+        if self._verdict_provider is None:
+            return
+        verdict_value = self._verdict_provider()  # type: ignore[operator]
+        if verdict_value is None or verdict_value == "paper-only":
+            return
+        portfolio.pending_orders.clear()
+        if self._output_dir is not None:
+            try:
+                self._output_dir.mkdir(parents=True, exist_ok=True)
+                (self._output_dir / "halt.flag").write_text(
+                    f"BROKER_SAFETY_VERDICT_TRANSITION_HALT verdict={verdict_value}\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                logger.exception(
+                    "halt.flag write failed for verdict transition halt"
+                )
+        raise BrokerSafetyVerdictTransitionHaltError(verdict=str(verdict_value))
 
     def _resolve_meta_via_intent_wal(
         self, fill: IbkrOrderEvent
