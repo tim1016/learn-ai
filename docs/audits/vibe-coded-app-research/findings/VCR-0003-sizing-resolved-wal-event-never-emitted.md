@@ -7,10 +7,11 @@ canonical_file: PythonDataService/app/engine/live/intent_events.py:46
 reference: docs/architecture/adrs/0009-live-sizing-authority-and-provenance.md (§ 11)
 first_seen: 2026-06-14
 last_seen: 2026-06-14
-remediated_in: "Phase 8 — SIZING_RESOLVED emitted right after intent_id mint in LivePortfolio.set_holdings (before PENDING_INTENT). Full payload (policy_kind/value, intended_qty, reference_price, sizing_provenance_at_resolve_time, sized_via) populated from order_sizer + reference_price"
+remediation_progress:
+  - "#530 — Phase 8 — SIZING_RESOLVED emitted right after intent_id mint in LivePortfolio.set_holdings (before PENDING_INTENT)"
+  - "PR feat/phase-8-sizing-skip — Phase 8 SIZING_SKIP durable audit log: separate sizing_skip.jsonl file alongside intent_events.jsonl. PRD §8 schema (no intent_id; carries target/current qty + reason). The IntentEvent invariant (order_ref==namespace:intent_id) is preserved — skips truly are not intents and live in their own log per the autonomous architectural decision; the in-memory sizing_resolutions list still annotates the skip row with a 'skipped' marker so the Sizing card stays consistent."
 follow_up_required:
-  - "SIZING_SKIP (no intent_id) — requires data-model relaxation (IntentEvent.intent_id min_length=1 + order_ref invariant) that ripples through ColdStartReconciler and the fold; deferred"
-  - "Sizing card data-source cutover from in-memory sizing_resolutions list to a WAL fold of SIZING_RESOLVED events (PRD §8 step 6); deferred"
+  - "Sizing card data-source cutover from in-memory sizing_resolutions list to a fold of SIZING_RESOLVED (intent_wal) + SIZING_SKIP (sizing_skip.jsonl) (PRD §8 step 6); deferred"
   - "ADR 0009 § 6 reverse order-surface validation: policy-registered strategy invoking market_order should fail fast (VCR-P3-F)"
 lens: live-sizing-adr-0009
 dedupe_with_F: none
