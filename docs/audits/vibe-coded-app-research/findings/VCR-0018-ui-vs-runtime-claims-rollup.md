@@ -92,3 +92,20 @@ Each item has its own resolution above. Two cross-cutting fixes:
 ## Provenance of the finding
 
 Lens: `ui-vs-runtime-claims` + `halt-pause-stop-flatten-poison` (workflow `wf_def78013-ce4`). Surfaced in lens summaries; specific component/line ranges not re-verified by the main loop for each item. Confidence `medium` per-item pending re-grounding before remediation.
+
+## Phase 0 re-grounding (2026-06-14) — A/C/D/E and tail items
+
+Sub-items B/F/G were closed by Phase 6 PRs (#499, #500, #501). The remaining sub-items were re-grounded against current HEAD:
+
+| Sub-item | Verdict | Current file:line | Minimal fix / Phase target |
+|---|---|---|---|
+| **A** Sentinel pill mode-blind | Partially valid — pill still binds to DU prefix; not yet wired to Phase 7A verdict | `Frontend/src/app/components/broker/broker-status/broker-status.component.ts:102-107` | Bind `sentinelOk` computed to `SafetyVerdict.final_verdict === "paper-only"` exposed by `/api/broker/health` Phase 7A payload. **Phase 7B** mechanical follow-up. |
+| **C** Readiness gate label gap | Confirmed — server emits 7 gates (`desired_state, broker_connection, poison_sentinel, session_window, orders_cap, submission_mode, data_provenance`), frontend `GATE_LABELS` covers 4 | server: `PythonDataService/app/engine/live/readiness.py:80-107`; frontend: `Frontend/src/app/components/broker/broker-instances/broker-instances.component.ts:145-174` | Expand `GATE_LABELS` to cover all 7; add TS lint failing when a new gate enum lands without a label. **Phase 7 mechanical**. |
+| **D** Deploy form mode dialog wording | Partially valid — dialog already gates on `startNow() && !readonlyFlag()` but wording ambiguous | `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.html:280-291` | Reword dialog body to "This account is live mode — real orders will be placed." conditional on actual `mode === "live"` selection. **Phase 7 mechanical**. |
+| **E** "Historical Data Loading" label | Confirmed — label conflates indicator hydration with bar backfill | `Frontend/src/app/components/broker/broker-start-stop-card/broker-start-stop-card.component.html:35-42` | Rename to "Indicator state hydration" + update select option copy from "load history" to "restore prior session state". **Phase 7 mechanical**. |
+| **J** Sizing card timestamps not NY-formatted | Confirmed | `Frontend/src/app/components/broker/broker-sizing-card/broker-sizing-card.component.html:45` | Use `fmtTimestampNy(row.ts_ms)` from `format.ts:96` instead of `\| date: 'short'`. **Phase 7 mechanical**. |
+| **K** Failure timestamps render `raw_ts` not `ts_ms` | Confirmed | `Frontend/src/app/components/broker/broker-instances/bot-failures-table/bot-failures-table.component.html:37` | Render `ts_ms \| date` or `fmtTimestampNy(ts_ms)`; per `.claude/rules/numerical-rigor.md` prefer canonical `int64 ms UTC` conversion. **Phase 7 mechanical**. |
+| **L** broker `exec_time_ms` + local `received_at_ms` persistence | Not enumerated in finding body; informational only — verify against `ExecutionRow` schema at `Frontend/src/app/components/broker/.../bot-trade-chart-card.types.ts:52`. **Verify-and-skip if both already persist.** |
+| **N** No enumerated sub-item | Not present in finding body. No action. |
+
+Sub-items J and K are doc-level "timestamp rigor" items also tracked under VCR-P3-J/K. Sub-items C/D/E are pure UI label fixes safe to ship as a single Frontend PR after re-grounding.

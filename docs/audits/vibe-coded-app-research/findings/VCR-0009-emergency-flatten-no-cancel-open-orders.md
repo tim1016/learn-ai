@@ -1,16 +1,36 @@
 ---
 id: VCR-0009
 severity: P1
-status: open
+status: regrounded_open
 area: halt-state-machine
 canonical_file: PythonDataService/app/engine/live/run.py::cmd_emergency_flatten
 reference: PRD §12.8
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+regrounded_on: 2026-06-14
+regrounded_to: high
+phase_0_verdict: confirmed_valid
+remediation_target: "Phase 5C (ownership-query gates) + cmd_emergency_flatten cancel-first fix"
 lens: halt-pause-stop-flatten-poison
 dedupe_with_F: none
-confidence: medium
+confidence: high
 ---
+
+## Phase 0 re-grounding (2026-06-14)
+
+**Verdict:** CONFIRMED VALID. The claim survives direct evidence at current HEAD.
+
+**Evidence:**
+
+- `cmd_emergency_flatten` at `PythonDataService/app/engine/live/run.py:1547-1663` (inner `_flatten()` at 1609-1649): the path is `broker.fetch_positions()` (line 1619) → liquidation loop → `broker.place_order(spec)` (line 1645). **No `cancel_open_orders` call** appears before the liquidation orders fire.
+- Sibling paths *do* cancel-first: `_recovery_flatten` at `run.py:413-507` calls `cancelled = await broker.cancel_open_orders()` at line 469 before the liquidation loop at line 484. `live_engine.py::_flatten` at lines 1347-1387 calls the same at line 1369. The asymmetry called out in the original finding holds.
+- The companion `_convert_ibkr_fill` gap at `live_engine.py:1591-1639` (drops fills with unknown `order_id`) is the same issue tracked separately as VCR-0012.
+- Phase 6A (#498 / commit 24bb655d) shipped flatten-and-pause but did **not** touch `cmd_emergency_flatten`'s cancel sequencing.
+
+**Outstanding work for this finding:**
+
+1. `cmd_emergency_flatten` needs `cancel_open_orders` before the liquidation loop, per the Phase 5C contract ("Cancel-then-liquidate ordering" — PRD §5C step 4). The emergency-flatten carve-out (`force=True`) per Phase 5C may proceed past cancel-confirm timeout with audit event `EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS`, but it must still **attempt** the cancel.
+2. Cross-restart fill ownership (`_convert_ibkr_fill` perm_id fallback) is Phase 5E.
 
 ## What
 

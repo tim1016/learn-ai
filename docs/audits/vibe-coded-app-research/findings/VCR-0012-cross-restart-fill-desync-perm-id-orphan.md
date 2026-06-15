@@ -1,16 +1,41 @@
 ---
 id: VCR-0012
 severity: P1
-status: open
+status: regrounded_open
 area: broker-ownership
 canonical_file: PythonDataService/app/engine/live/live_engine.py::_convert_ibkr_fill
 reference: docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+regrounded_on: 2026-06-14
+regrounded_to: high
+phase_0_verdict: confirmed_valid
+remediation_target: "Phase 5E — fill ownership classifier wired into _convert_ibkr_fill"
 lens: broker-order-ownership-reconcile
 dedupe_with_F: none
-confidence: medium
+confidence: high
 ---
+
+## Phase 0 re-grounding (2026-06-14)
+
+**Verdict:** CONFIRMED VALID. Survives Phase 5A; Phase 5A built the durable WAL but the converter doesn't read it.
+
+**Evidence at current HEAD:**
+
+- `_convert_ibkr_fill` at `live_engine.py:1591-1608` is gated **exclusively** on `self._order_meta.get(int(fill.order_id))`. If `meta is None`, the fill is logged-and-dropped (lines 1602-1608). No perm_id fallback.
+- `reconciliation_classifier.classify` at `reconciliation_classifier.py:125-232` implements the correct precedence (perm_id → exec_id → exact-namespace order_ref match). **Zero call sites** in the production fill path.
+- `parse_order_ref` / `build_order_ref` at `order_identity.py:129-141` exist and are used at submit time (Phase 5A stamping) but not consulted at fill conversion time.
+- Phase 5A stamps `intent_id`/`order_ref` on outbound `IbkrOrderSpec` at `live_portfolio.py:544, 558, 571-574` and writes SUBMITTED WAL with `perm_id` (`intent_events.py:80`). Durable artifacts exist. The converter just never folds them back.
+
+**Current behavior on cross-restart fill:**
+
+- Restart loses `_order_meta` (in-memory only).
+- An IBKR fill carrying a `perm_id` that was SUBMITTED by a prior session arrives with `order_id` unknown to the fresh `_order_meta`.
+- Line 1605-1608 drops the fill → engine portfolio never records it → broker position diverges from engine forever.
+
+**Phase 5E plug-in point:**
+
+Replace lines 1602-1608 with a fallback to `classify_ownership(order_ref, perm_id, exec_id, allowed_namespaces, known_intent_ids, known_perm_ids, known_exec_ids)` driven by the intent WAL view. When ownership ≠ NONE, reconstruct `meta` from the WAL's SUBMITTED event (or `IntentEvent.order_spec`) instead of dropping. Detailed example pseudo-code in `docs/audits/vibe-coded-app-remediation-prd.md` §5E.
 
 ## What
 

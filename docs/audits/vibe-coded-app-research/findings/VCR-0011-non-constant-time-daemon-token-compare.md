@@ -1,16 +1,43 @@
 ---
 id: VCR-0011
 severity: P1
-status: open
+status: regrounded_open
 area: untraced-bugs
-canonical_file: PythonDataService/app/engine/live/daemon_auth.py
+canonical_file: PythonDataService/app/engine/live/host_daemon.py:905
 reference: docs/architecture/adrs/0007-host-daemon-shared-secret-auth.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+regrounded_on: 2026-06-14
+regrounded_to: high
+phase_0_verdict: confirmed_valid
+remediation_target: "Phase 7C — hmac.compare_digest in _verify_token"
 lens: live-deploy-flow
 dedupe_with_F: none
-confidence: medium
+confidence: high
 ---
+
+## Phase 0 re-grounding (2026-06-14)
+
+**Verdict:** CONFIRMED VALID. Single site, 2-line mechanical fix.
+
+**Evidence:**
+
+- `_verify_token` lives at `PythonDataService/app/engine/live/host_daemon.py:902-909` (not `daemon_auth.py` as the original finding's `canonical_file` field assumed — corrected here).
+- Line 905: `if supplied != token:` — plain string inequality. Vulnerable to timing-side-channel attack.
+- Module does not import `hmac`. No constant-time compare anywhere in the daemon auth path.
+- `_verify_token` gates every actuation route (`auth = [Depends(_verify_token)]` at line 911) — deploy, start, stop, emergency-flatten, instances, audit-copy-sizing. `/health` is the only unauthed route.
+
+**Minimal fix:**
+
+```python
+import hmac
+
+def _verify_token(...):
+    if not hmac.compare_digest((supplied or "").encode("utf-8"), token.encode("utf-8")):
+        raise HTTPException(...)
+```
+
+**Test:** smoke test that the comparison still succeeds/fails on equal/unequal tokens; timing-stability assertions optional.
 
 ## What
 
