@@ -1,3 +1,4 @@
+import { DatePipe } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
@@ -17,6 +18,7 @@ const POLL_INTERVAL_MS = 5_000;
 @Component({
   selector: 'app-bot-failures-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [DatePipe],
   templateUrl: './bot-failures-table.component.html',
   styleUrl: './bot-failures-table.component.scss',
 })
