@@ -430,3 +430,208 @@ def test_pause_subcommand_parses() -> None:
     assert args.command == "pause"
     assert args.strategy_instance_id == "x"
     assert args.updated_by == "operator"
+
+
+# ──────────────────── Phase 5D Resume WAL guard (VCR-0002) ────────────
+
+
+def _seed_run_with_wal(
+    artifacts_root: Path,
+    *,
+    sid: str,
+    run_id: str,
+    wal_events: list[dict],
+) -> Path:
+    """Lay down a minimal ``live_runs/<run_id>/`` containing a ``run_ledger.json``
+    naming ``sid`` and an ``intent_events.jsonl`` of the given events."""
+    import json as _json
+
+    run_dir = artifacts_root / "live_runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run_ledger.json").write_text(
+        _json.dumps({"strategy_instance_id": sid, "run_id": run_id}),
+        encoding="utf-8",
+    )
+    wal_path = run_dir / "intent_events.jsonl"
+    if wal_events:
+        wal_path.write_text(
+            "\n".join(_json.dumps(e) for e in wal_events) + "\n",
+            encoding="utf-8",
+        )
+    return run_dir
+
+
+def _build_intent_event(
+    *,
+    seq: int,
+    event_type: str,
+    intent_id: str,
+    namespace: str = "learn-ai/test-instance/v1",
+) -> dict:
+    """Synthesize a single WAL line matching the IntentEvent invariant
+    ``order_ref == namespace:intent_id``."""
+    return {
+        "seq": seq,
+        "event_type": event_type,
+        "intent_id": intent_id,
+        "bot_order_namespace": namespace,
+        "order_ref": f"{namespace}:{intent_id}",
+        "intent_kind": "STRATEGY",
+    }
+
+
+def test_resume_refused_on_unresolved_ack_failed_uncertain_vcr_0002(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Phase 5D Resume guard #3 — Resume refuses when the WAL carries an
+    ACK_FAILED_UNCERTAIN with no matching SUBMITTED, SUBMITTED_RECOVERED,
+    INTENT_NOT_ACCEPTED, or SUBMIT_UNCERTAIN_HALTED downstream."""
+    sid = "spy_ema_crossover"
+    _seed_run_with_wal(
+        tmp_path,
+        sid=sid,
+        run_id="r1",
+        wal_events=[
+            _build_intent_event(seq=1, event_type="PENDING_INTENT", intent_id="aaaaa"),
+            _build_intent_event(seq=2, event_type="ACK_FAILED_UNCERTAIN", intent_id="aaaaa"),
+        ],
+    )
+
+    rc = main(
+        [
+            "resume",
+            "--strategy-instance-id",
+            sid,
+            "--artifacts-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "REFUSED" in err
+    assert "aaaaa" in err
+    # The durable desired-state file MUST NOT have been written.
+    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, sid))
+    assert repo.read() is None
+
+
+def test_resume_allowed_when_uncertain_is_resolved(tmp_path: Path) -> None:
+    """A WAL with ACK_FAILED_UNCERTAIN followed by SUBMITTED_RECOVERED is
+    resolved per PRD §5D Resume guard #3 — Resume proceeds."""
+    sid = "spy_ema_crossover"
+    _seed_run_with_wal(
+        tmp_path,
+        sid=sid,
+        run_id="r1",
+        wal_events=[
+            _build_intent_event(seq=1, event_type="PENDING_INTENT", intent_id="bbbbb"),
+            _build_intent_event(seq=2, event_type="ACK_FAILED_UNCERTAIN", intent_id="bbbbb"),
+            _build_intent_event(seq=3, event_type="SUBMITTED_RECOVERED", intent_id="bbbbb"),
+        ],
+    )
+
+    rc = main(
+        [
+            "resume",
+            "--strategy-instance-id",
+            sid,
+            "--artifacts-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert rc == 0
+    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, sid))
+    rec = repo.read()
+    assert rec is not None
+    assert rec.desired_state is DesiredState.RUNNING
+
+
+def test_resume_force_overrides_guard(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The operator passes --force after manual reconciliation; Resume
+    proceeds even with an unresolved uncertain in the WAL."""
+    sid = "spy_ema_crossover"
+    _seed_run_with_wal(
+        tmp_path,
+        sid=sid,
+        run_id="r1",
+        wal_events=[
+            _build_intent_event(seq=1, event_type="PENDING_INTENT", intent_id="ccccc"),
+            _build_intent_event(seq=2, event_type="ACK_FAILED_UNCERTAIN", intent_id="ccccc"),
+        ],
+    )
+
+    rc = main(
+        [
+            "resume",
+            "--strategy-instance-id",
+            sid,
+            "--artifacts-root",
+            str(tmp_path),
+            "--force",
+            "--reason",
+            "manual reconcile via TWS",
+        ]
+    )
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "REFUSED" not in err
+    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, sid))
+    rec = repo.read()
+    assert rec is not None
+    assert rec.desired_state is DesiredState.RUNNING
+    assert rec.reason == "manual reconcile via TWS"
+
+
+def test_resume_proceeds_when_no_live_runs_dir_yet(tmp_path: Path) -> None:
+    """Backward-compat: a fresh instance with no live_runs/ dir at all
+    must still Resume cleanly — there's no WAL to scan."""
+    sid = "spy_ema_crossover"
+
+    rc = main(
+        [
+            "resume",
+            "--strategy-instance-id",
+            sid,
+            "--artifacts-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert rc == 0
+    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, sid))
+    rec = repo.read()
+    assert rec is not None
+    assert rec.desired_state is DesiredState.RUNNING
+
+
+def test_resume_refused_on_corrupt_wal(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A corrupt WAL must NOT silently allow Resume — surface it as a
+    refusal so the operator inspects before resuming."""
+    sid = "spy_ema_crossover"
+    run_dir = _seed_run_with_wal(tmp_path, sid=sid, run_id="r1", wal_events=[])
+    (run_dir / "intent_events.jsonl").write_text(
+        '{"seq": 1, "event_type": "PENDING_INTENT", "intent_id"\n',
+        encoding="utf-8",
+    )
+
+    rc = main(
+        [
+            "resume",
+            "--strategy-instance-id",
+            sid,
+            "--artifacts-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "REFUSED" in err
+    assert "wal-corrupt" in err

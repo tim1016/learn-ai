@@ -1722,8 +1722,125 @@ def cmd_pause(args: argparse.Namespace) -> int:
     return _cmd_set_desired_state(args, DesiredState.PAUSED)
 
 
+def _latest_run_dir_for_instance(
+    artifacts_root: Path, strategy_instance_id: str
+) -> Path | None:
+    """Find the most recent ``live_runs/<run_id>/`` whose ``run_ledger.json``
+    names this instance. Returns ``None`` if no run dir is found.
+
+    Used by Phase 5D's Resume WAL guard: the operator types ``run.py resume
+    --strategy-instance-id <sid>``; we need the WAL of that instance's
+    latest run to scan for unresolved uncertain intents. We sort by ledger
+    mtime so the most-recent (or in-flight) run wins. A start-time race
+    where ``run_ledger.json`` is written by ``init-ledger`` slightly later
+    than a pre-existing prior run is acceptable: resume itself is durable
+    and idempotent, and the scan is conservative (an unresolved uncertain
+    in any of the candidate dirs would be a stronger signal anyway —
+    Phase 5D-Follow-up may broaden this to "all runs for this sid").
+    """
+    import json as _json
+
+    live_runs = artifacts_root / "live_runs"
+    if not live_runs.exists():
+        return None
+    candidates: list[tuple[float, Path]] = []
+    for run_dir in live_runs.iterdir():
+        if not run_dir.is_dir():
+            continue
+        ledger_path = run_dir / "run_ledger.json"
+        if not ledger_path.exists():
+            continue
+        try:
+            ledger = _json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, _json.JSONDecodeError):
+            continue
+        if ledger.get("strategy_instance_id") != strategy_instance_id:
+            continue
+        try:
+            mtime = ledger_path.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((mtime, run_dir))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
+def _scan_wal_for_unresolved_uncertains(wal_path: Path) -> list[str]:
+    """Phase 5D Resume guard (PRD §5D Resume contract, guard #3): return
+    the list of ``intent_id``s whose ``ACK_FAILED_UNCERTAIN`` event has no
+    matching resolution event downstream in the same WAL.
+
+    A resolution is any of: ``SUBMITTED_RECOVERED`` (probe PRESENT),
+    ``INTENT_NOT_ACCEPTED`` (probe PROVABLY_ABSENT — retry), ``SUBMITTED``
+    (the retry succeeded), or ``SUBMIT_UNCERTAIN_HALTED`` (the state machine
+    halted on the uncertain — an explicit resolution, not silent drop).
+
+    An empty list means Resume is safe per this guard. A non-empty list
+    means the WAL carries an orphaned uncertain ack and the operator must
+    reconcile broker state manually before Resume.
+    """
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
+
+    if not wal_path.exists():
+        return []
+    try:
+        events = IntentWal(wal_path).read_tail()
+    except IntentWalCorruptError:
+        # A corrupt WAL must NOT silently allow Resume — surface it as
+        # "every intent_id with an uncertain is unresolved" so the caller
+        # refuses Resume and the operator inspects the WAL.
+        return ["<wal-corrupt-cannot-scan>"]
+    pending_uncertain: set[str] = set()
+    resolution_types = {
+        IntentEventType.SUBMITTED.value,
+        IntentEventType.SUBMITTED_RECOVERED.value,
+        IntentEventType.INTENT_NOT_ACCEPTED.value,
+        IntentEventType.SUBMIT_UNCERTAIN_HALTED.value,
+    }
+    for event in events:
+        et = event.event_type.value
+        if et == IntentEventType.ACK_FAILED_UNCERTAIN.value:
+            pending_uncertain.add(event.intent_id)
+        elif et in resolution_types:
+            pending_uncertain.discard(event.intent_id)
+    return sorted(pending_uncertain)
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
+    """Set durable ``desired_state=RUNNING`` after the Phase 5D Resume
+    guard passes.
+
+    Guard #3 (WAL guard, this PR): refuse Resume when the latest run's
+    ``intent_events.jsonl`` carries one or more ``ACK_FAILED_UNCERTAIN``
+    events without a downstream resolution. The operator passes
+    ``--force`` to override after manual reconciliation.
+
+    Guards #1 (broker safety verdict == paper-only) and #2 (cold-start
+    reconciler last verdict == clean) require artifacts written by Phase
+    7B / Phase 5B respectively; they are TODO at this surface but the
+    engine-side bar loop is the secondary line of defense for both.
+    """
     from app.engine.live.desired_state import DesiredState
+
+    run_dir = _latest_run_dir_for_instance(args.artifacts_root, args.strategy_instance_id)
+    if run_dir is not None:
+        unresolved = _scan_wal_for_unresolved_uncertains(run_dir / "intent_events.jsonl")
+        if unresolved and not getattr(args, "force", False):
+            preview = ", ".join(unresolved[:5])
+            if len(unresolved) > 5:
+                preview += f", and {len(unresolved) - 5} more"
+            print(
+                f"[RESUME] REFUSED: {len(unresolved)} unresolved ACK_FAILED_UNCERTAIN "
+                f"in {run_dir / 'intent_events.jsonl'} (intent_id: {preview}). "
+                "Per PRD §5D Resume guard #3, the broker may have state the engine "
+                "cannot reconstruct. Manually reconcile then pass --force to "
+                "override.",
+                file=sys.stderr,
+            )
+            return 2
 
     return _cmd_set_desired_state(args, DesiredState.RUNNING)
 
@@ -1993,6 +2110,20 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser.add_argument(
             "--updated-by", default="operator", help="Identity recorded in the file."
         )
+        if verb == "resume":
+            # Phase 5D Resume guard (PRD §5D) override. Without this flag,
+            # cmd_resume refuses to set RUNNING when the latest run's WAL
+            # carries an unresolved ACK_FAILED_UNCERTAIN — the operator
+            # must manually reconcile broker state first.
+            verb_parser.add_argument(
+                "--force",
+                action="store_true",
+                help=(
+                    "Override the Phase 5D WAL guard. Use only after manually "
+                    "reconciling broker state. The override is recorded in "
+                    "desired_state.json via --reason / --updated-by."
+                ),
+            )
         verb_parser.set_defaults(func=handler)
 
     return parser
