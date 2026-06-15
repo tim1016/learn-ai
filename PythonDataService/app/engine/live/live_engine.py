@@ -173,6 +173,39 @@ class MaxOrdersPerDayExceeded(RuntimeError):
     """
 
 
+class ReconnectAccountMismatchHaltError(RuntimeError):
+    """Phase 3 reconnect re-validation / VCR-0006.
+
+    Raised when an IBKR reconnect lands on a different account from the
+    ledger's ``account_id``. PRD §3 "Re-check on every reconnect": the
+    engine writes ``halt.flag`` before raising; the bar loop exits, no
+    new orders submit. Distinct from
+    ``BrokerSafetyVerdictTransitionHaltError`` per the PRD's "Distinct
+    event class" note — account-identity drift is a different failure
+    mode from safety-verdict degradation, and the cockpit failure list
+    surfaces them separately.
+    """
+
+    def __init__(
+        self,
+        *,
+        ledger_account_id: str,
+        connected_account: str,
+        connection_epoch: int,
+    ) -> None:
+        super().__init__(
+            f"ReconnectAccountMismatchHaltError("
+            f"ledger_account_id={ledger_account_id!r} "
+            f"connected_account={connected_account!r} "
+            f"connection_epoch={connection_epoch}): "
+            "broker reconnected to a different account from the run ledger — "
+            "PRD §3 reconnect re-validation halt"
+        )
+        self.ledger_account_id = ledger_account_id
+        self.connected_account = connected_account
+        self.connection_epoch = connection_epoch
+
+
 class BrokerSafetyVerdictTransitionHaltError(RuntimeError):
     """Phase 7B / VCR-0010 — broker safety verdict left ``paper-only``.
 
@@ -413,6 +446,11 @@ class LiveEngine:
         self._intent_wal_path = intent_wal_path
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
+        # Phase 3 / VCR-0006 — reconnect re-validation. Each bar iteration
+        # snapshots IbkrClient.connectivity_lost_count; on increment + restored
+        # connection the engine re-runs account_identity.verify_account_match.
+        self._last_connectivity_lost_count: int = 0
+        self._connection_epoch: int = 0
         self._sizing_surface = sizing_surface
         # The strategy-specific decision columns = resolved minus the core.
         self._strategy_decision_columns = tuple(
@@ -815,6 +853,11 @@ class LiveEngine:
                         writers=writers,
                     )
 
+                # Phase 3 / VCR-0006 — reconnect re-validation runs BEFORE
+                # the verdict observer so an account-mismatch halt surfaces
+                # ahead of a safety-verdict halt (PRD §3 "Distinct event
+                # class" note).
+                self._check_reconnect_revalidation(portfolio)
                 # Phase 7B / VCR-0010 — mid-session broker safety verdict
                 # gate (PRD §7B "Mid-session transition"). Called BEFORE
                 # the PAUSE drop and BEFORE submission so a verdict that
@@ -1647,6 +1690,73 @@ class LiveEngine:
             if engine_event is not None:
                 out.append(engine_event)
         return out
+
+    def _check_reconnect_revalidation(self, portfolio: LivePortfolio) -> None:
+        """Phase 3 reconnect re-validation / VCR-0006.
+
+        Detects a broker reconnect by comparing the client's
+        ``connectivity_lost_count`` to the per-engine snapshot. When the
+        count has advanced AND ``connection_lost is False`` (i.e. the
+        session is restored), re-runs the start-time account identity
+        check against the now-restored ``connected_account``. On
+        mismatch: clears pending orders, writes ``halt.flag``, raises
+        ``ReconnectAccountMismatchHaltError``. On match: bumps the
+        per-engine ``connection_epoch`` so a failure list can
+        distinguish reconnects.
+        """
+        client = self._client
+        if client is None or not self._account_id:
+            return
+        current_count = getattr(client, "connectivity_lost_count", 0)
+        if current_count <= self._last_connectivity_lost_count:
+            return
+        # A loss happened. Only re-validate once the connection is back
+        # (``connection_lost is False``); otherwise wait for the next bar.
+        if getattr(client, "connection_lost", True):
+            return
+        # Reconnect observed. Snapshot the count + bump the epoch first so
+        # repeated bar iterations don't re-validate the same restore.
+        self._last_connectivity_lost_count = current_count
+        self._connection_epoch += 1
+        connected_account = getattr(client, "connected_account", None)
+        from app.engine.live.account_identity import (
+            AccountIdentityMismatchError,
+            verify_account_match,
+        )
+
+        try:
+            verify_account_match(
+                ledger_account_id=self._account_id,
+                connected_account=connected_account or "",
+            )
+        except AccountIdentityMismatchError:
+            portfolio.pending_orders.clear()
+            if self._output_dir is not None:
+                try:
+                    self._output_dir.mkdir(parents=True, exist_ok=True)
+                    (self._output_dir / "halt.flag").write_text(
+                        f"RECONNECT_ACCOUNT_MISMATCH_HALT "
+                        f"ledger_account_id={self._account_id} "
+                        f"connected_account={connected_account} "
+                        f"connection_epoch={self._connection_epoch}\n",
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    logger.exception(
+                        "halt.flag write failed for reconnect-mismatch halt"
+                    )
+            raise ReconnectAccountMismatchHaltError(
+                ledger_account_id=self._account_id,
+                connected_account=connected_account or "",
+                connection_epoch=self._connection_epoch,
+            ) from None
+        logger.info(
+            "Broker reconnect re-validated identity match at epoch=%d "
+            "(ledger=%s, connected=%s)",
+            self._connection_epoch,
+            self._account_id,
+            connected_account,
+        )
 
     def _check_verdict_transition_halt(self, portfolio: LivePortfolio) -> None:
         """Phase 7B / VCR-0010 — broker safety verdict observer.
