@@ -7,10 +7,13 @@ canonical_file: Frontend/src/app/components/broker/broker-instances/**
 reference: PRD §12.10, broker-user-manual.html §4
 first_seen: 2026-06-14
 last_seen: 2026-06-14
-remediated_in: "#502 — Phase 7A — Broker safety verdict on /broker/health (verdict surfaced; rendering wired)"
+remediation_progress:
+  - "#502 — Phase 7A — Broker safety verdict on /broker/health (verdict surfaced; rendering wired)"
+  - "PR feat/phase-7b-verdict-enforcement — Phase 7B order-block: LivePortfolio.submit_pending_orders refuses to submit when verdict_provider returns anything other than 'paper-only' or None; raises BrokerSafetyVerdictBlockError before any broker.place_order call"
 regrounded_to: high
 follow_up_required:
-  - "Phase 7B — verdict order-blocking + mid-session transition halt + Resume guard"
+  - "Phase 7B mid-session transition observer — bar-loop poll of verdict_provider that emits BROKER_SAFETY_VERDICT_TRANSITION_HALT + halt.flag on transition out of paper-only (deferred; engine-side observer)"
+  - "Phase 7B Resume guard #1 — cmd_resume consults a persisted verdict snapshot (composes with PR #535's WAL guard)"
 lens: ui-vs-runtime-claims
 dedupe_with_F: none
 confidence: high
