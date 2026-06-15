@@ -42,7 +42,7 @@
           <tbody>
             @for (row of audit; track row.ts_ms + ':' + row.symbol) {
               <tr>
-                <td>{{ row.ts_ms | date: 'short' }}</td>
+                <td>{{ row.ts_ms | date: 'short' : 'America/New_York' }}</td>
                 <td>{{ row.symbol }}</td>
                 <td>{{ row.policy_kind }}({{ row.policy_value }})</td>
                 <td>{{ row.intended_qty }}</td>

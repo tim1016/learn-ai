@@ -11,12 +11,9 @@ remediation_progress:
   - "#499 — Phase 6B — VCR-0018-B Stop ack semantics (signal-accepted vs process-exited)"
   - "#500 — Phase 6C — VCR-0018-F Engine-level force-flat enforcement"
   - "#501 — Phase 6D — VCR-0018-G Per-instance start lock + halt.flag pre-flight rerun"
+  - "PR feat/vcr-0018-frontend-tail — VCR-0018-C/D/E/J/K Frontend mechanical fixes (readiness-gate labels, deploy-form dialog wording, indicator-hydration relabel, sizing-card NY formatter, failures-table ts_ms over raw_ts)"
 follow_up_required:
-  - "VCR-0018-A — Sentinel pill label bound to structured 4-layer verdict (Phase 7B)"
-  - "VCR-0018-C — ReadinessGate label coverage gap (Phase 7 mechanical)"
-  - "VCR-0018-D — Deploy form 'Live mode' dialog wording (Phase 7B)"
-  - "VCR-0018-E — sub-item to verify against current code"
-  - "VCR-0018-J/K/L/N — timestamp rigor + QC card tail (Phase 7 mechanical)"
+  - "VCR-0018-A — Sentinel pill label bound to structured 4-layer verdict (Phase 7B — depends on broker-status component reading SafetyVerdict struct end-to-end)"
 lens: ui-vs-runtime-claims
 dedupe_with_F: none
 confidence: medium

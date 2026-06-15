@@ -32,12 +32,12 @@
     </label>
 
     <label class="field">
-      <span>Historical Data Loading</span>
-      <small>How much history the bot loads before it starts.</small>
+      <span>Indicator state hydration</span>
+      <small>Replays prior session bars so indicators (EMA, RSI, etc.) warm up before the bot starts emitting signals. This is distinct from backtest bar loading; the runner replays the local session window only.</small>
       <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)" [disabled]="isLive()">
-        <option value="require">Always load history before starting (recommended)</option>
-        <option value="optional">Try to load history, start anyway if unavailable</option>
-        <option value="disabled">Skip history loading (advanced)</option>
+        <option value="require">Always restore prior session state (recommended)</option>
+        <option value="optional">Try to restore prior session state, start anyway if unavailable</option>
+        <option value="disabled">Skip hydration (advanced)</option>
       </select>
     </label>
 

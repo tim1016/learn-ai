@@ -171,6 +171,29 @@ const GATE_LABELS: Record<string, { label: string; meaning: string; fix: string 
     meaning: 'The bot has not used every trade allowed by today\'s safety cap.',
     fix: 'Wait for the next session or raise the safety cap before starting.',
   },
+  // VCR-0018-C — server emits these four readiness gates but the frontend
+  // was rendering raw enum tokens for them; adding operator-facing copy so
+  // the cockpit no longer surfaces developer strings.
+  broker_connection: {
+    label: 'Broker Connection Live',
+    meaning: 'The runner can reach IBKR Gateway / TWS on the configured port.',
+    fix: 'Confirm Gateway is running on the paper port (default 7497) and the credentials match.',
+  },
+  session_window: {
+    label: 'Inside Trading Session',
+    meaning: 'The current wall-clock time is inside the strategy\'s configured session window (typically 09:30-16:00 ET).',
+    fix: 'Wait for the session to open, or adjust the configured window if the strategy supports it.',
+  },
+  submission_mode: {
+    label: 'Submission Mode Ready',
+    meaning: 'The runner can submit orders (paper-only) — no halt.flag, no durable PAUSE, no readonly override.',
+    fix: 'Resolve any active halt or pause before resuming.',
+  },
+  data_provenance: {
+    label: 'Bar Source Trusted',
+    meaning: 'The bar feed matches the source recorded at deploy time; no silent feed swap.',
+    fix: 'Redeploy from the canonical source if the provenance drifted.',
+  },
 };
 
 function titleizeKey(key: string): string {
