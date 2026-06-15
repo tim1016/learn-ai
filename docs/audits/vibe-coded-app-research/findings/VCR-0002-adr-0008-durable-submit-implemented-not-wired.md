@@ -1,7 +1,7 @@
 ---
 id: VCR-0002
 severity: P0
-status: phase_5b_coldstart_gated
+status: phase_5c_structural_complete_operator_gated
 area: broker-ownership
 canonical_file: PythonDataService/app/engine/live/live_engine.py:1086
 reference: docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md
@@ -14,11 +14,13 @@ remediation_progress:
   - "#533 — Phase 5D — submit_state_machine wired into submit_pending_orders (RETRY_CAP=1, NOT_PROVABLE→HALT, SUBMIT_UNCERTAIN_HALTED WAL event, SubmitUncertainHaltError)"
   - "#535 — Phase 5D Resume WAL guard — cmd_resume refuses on unresolved ACK_FAILED_UNCERTAIN with --force override"
   - "#536 — Phase 5E — _convert_ibkr_fill cross-restart classifier via folded intent WAL keyed by perm_id"
-  - "PR feat/phase-5c-ownership-query — Phase 5C — IbkrBrokerOwnershipQuery(VerifiedBrokerOwnershipQuery) subclass implementing namespace-scoped open_orders + executions queries against ib_async caches; passes require_durable_submit_activation structural gate"
+  - "#539 — Phase 5C — IbkrBrokerOwnershipQuery(VerifiedBrokerOwnershipQuery) subclass implementing namespace-scoped open_orders + executions queries against ib_async caches; passes require_durable_submit_activation structural gate"
+  - "#543 — Phase 5C — LiveConfig.durable_submit_enabled activation flag wired into LiveEngine.__init__; default False keeps backward compatibility"
+  - "#545 — Phase 5C — LiveEngine._flatten cancel-confirm timeout (CANCEL_CONFIRM_TIMEOUT_S=5.0); on timeout writes halt.flag + raises CancelConfirmTimeoutHaltError, refuses liquidation"
+  - "#546 — Phase 5C — _recovery_flatten (managed: halt on timeout) + cmd_emergency_flatten (force: log EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS audit row and proceed); all three flatten paths now cancel-confirm-protected"
 follow_up_required:
-  - "Phase 5C cancel-then-liquidate refactor — _flatten / _recovery_flatten / cmd_emergency_flatten to consult the ownership query, await per-order cancel confirms, then liquidate (PRD §5C step 4-5)"
-  - "Phase 5C halt events — OWNERSHIP_QUERY_UNAVAILABLE_HALT / CANCEL_CONFIRM_TIMEOUT_HALT / EMERGENCY_FLATTEN_WITHOUT_OWNERSHIP_PROOF (gated on broker-lifecycle WAL location decision; see VCR-0006 follow-up)"
-  - "Phase 5C activation flip — operator enables require_durable_submit_activation(enabled=True, ownership_query=IbkrBrokerOwnershipQuery(client), verified_order_ref_cap=VERIFIED_ORDER_REF_CAP) after the deployment_validation paper deploy proves IBKR returns prior-run orders/executions carrying orderRef across reconnect (Acceptance Gate #2 behavioral receipt)"
+  - "Phase 5C activation flip — operator enables require_durable_submit_activation(enabled=True, ownership_query=IbkrBrokerOwnershipQuery(client), verified_order_ref_cap=VERIFIED_ORDER_REF_CAP) after the deployment_validation paper deploy proves IBKR returns prior-run orders/executions carrying orderRef across reconnect (Acceptance Gate #2 behavioral receipt). This is the operator-controlled flip; the structural prerequisites are now all in place."
+  - "OWNERSHIP_QUERY_UNAVAILABLE_HALT — emitted via halt.flag mechanism when activation is on and the ownership query subclass cannot return for a managed flatten path (deferred until operator flips activation, since the halt taxonomy doesn't fire without the gated query active)"
 lens: broker-order-ownership-reconcile
 dedupe_with_F: none
 confidence: high

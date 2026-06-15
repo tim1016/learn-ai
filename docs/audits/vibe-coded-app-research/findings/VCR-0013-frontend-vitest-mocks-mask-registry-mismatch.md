@@ -1,12 +1,16 @@
 ---
 id: VCR-0013
 severity: P2
-status: open
+status: remediated
 area: strategy-keys
 canonical_file: Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.spec.ts
 reference: PRD §12.2
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediation_progress:
+  - "Co-resolves with VCR-0004: production endpoint and Vitest mocks both standardize on the module-name registry keys (e.g. `spy_ema_crossover`), so the test-suite mock shape now matches the real `GET /api/engine/strategies` response."
+  - "Backend contract is enforced by `PythonDataService/tests/test_engine_strategies_endpoint.py::test_every_registered_strategy_can_be_imported_by_key` and `test_every_registered_class_name_resolves_against_its_module` — every registry key is import-tested against `app.engine.strategy.algorithms.{key}`."
+  - "`broker-start-stop-card.component.ts:18-21` keeps `FALLBACK_STRATEGY = 'spy_ema_crossover'` with the legacy-ledger justification comment (the only case the fallback fires is a ledger predating the strategy_key field)."
 lens: strategy-registry-key-mapping
 dedupe_with_F: none
 confidence: high
