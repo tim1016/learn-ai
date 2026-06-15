@@ -1,12 +1,13 @@
 ---
 id: VCR-0005
 severity: P1
-status: open
+status: remediated
 area: architectural-drift
 canonical_file: Backend/Services/Implementation/PortfolioValuationService.cs:111
 reference: docs/architecture/numerical-authority-migration-plan.md § Phase 2.2/2.3
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "Phase 9 — hard-deleted EntryDelta/EntryGamma/EntryTheta/EntryVega summation in PortfolioValuationService; removed NetDelta/NetGamma/NetTheta/NetVega from PortfolioValuation DTO, PortfolioSnapshot entity, EF model, and Frontend types; added DropPortfolioSnapshotGreekColumns EF migration"
 lens: architectural-drift-registries
 dedupe_with_F: ["F-0018 — extends; F-0018 was closed by editing only documentation, the underlying code remains"]
 confidence: high

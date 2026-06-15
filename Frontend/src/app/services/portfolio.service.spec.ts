@@ -374,7 +374,6 @@ describe('PortfolioService', () => {
       const mockValuation = {
         cash: 90000, marketValue: 15000, equity: 105000,
         unrealizedPnL: 500, realizedPnL: 200,
-        netDelta: 100, netGamma: 0.5, netTheta: -10, netVega: 25,
         positions: [{ symbol: 'AAPL', currentPrice: 155, quantity: 100, multiplier: 1, marketValue: 15500, unrealizedPnL: 500, costBasis: 15000 }],
       };
 

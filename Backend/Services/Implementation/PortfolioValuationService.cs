@@ -62,7 +62,6 @@ public class PortfolioValuationService : IPortfolioValuationService
         decimal totalMarketValue = 0;
         decimal totalUnrealizedPnL = 0;
         decimal totalRealizedPnL = 0;
-        decimal? netDelta = null, netGamma = null, netTheta = null, netVega = null;
 
         foreach (var position in positions)
         {
@@ -96,24 +95,6 @@ public class PortfolioValuationService : IPortfolioValuationService
             totalMarketValue += marketValue;
             totalUnrealizedPnL += unrealizedPnL;
             totalRealizedPnL += position.RealizedPnL;
-
-            // Aggregate Greeks from option legs if available
-            if (position.AssetType == AssetType.Option)
-            {
-                var legs = _context.OptionLegs
-                    .Where(l => l.Trade.AccountId == account.Id
-                                && l.OptionContractId == position.OptionContractId)
-                    .OrderByDescending(l => l.Trade.ExecutionTimestamp)
-                    .FirstOrDefault();
-
-                if (legs != null)
-                {
-                    netDelta = (netDelta ?? 0) + (legs.EntryDelta ?? 0) * position.NetQuantity * multiplier;
-                    netGamma = (netGamma ?? 0) + (legs.EntryGamma ?? 0) * position.NetQuantity * multiplier;
-                    netTheta = (netTheta ?? 0) + (legs.EntryTheta ?? 0) * position.NetQuantity * multiplier;
-                    netVega = (netVega ?? 0) + (legs.EntryVega ?? 0) * position.NetQuantity * multiplier;
-                }
-            }
         }
 
         return new PortfolioValuation
@@ -123,10 +104,6 @@ public class PortfolioValuationService : IPortfolioValuationService
             Equity = account.Cash + totalMarketValue,
             UnrealizedPnL = totalUnrealizedPnL,
             RealizedPnL = totalRealizedPnL,
-            NetDelta = netDelta,
-            NetGamma = netGamma,
-            NetTheta = netTheta,
-            NetVega = netVega,
             Positions = positionValuations,
         };
     }

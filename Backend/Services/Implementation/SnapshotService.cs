@@ -167,10 +167,6 @@ public class SnapshotService : ISnapshotService
             MarginUsed = 0,
             UnrealizedPnL = valuation.UnrealizedPnL,
             RealizedPnL = valuation.RealizedPnL,
-            NetDelta = valuation.NetDelta,
-            NetGamma = valuation.NetGamma,
-            NetTheta = valuation.NetTheta,
-            NetVega = valuation.NetVega,
         };
 
         _context.PortfolioSnapshots.Add(snapshot);

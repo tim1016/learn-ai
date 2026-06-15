@@ -74,10 +74,6 @@ export interface PortfolioValuation {
   equity: number;
   unrealizedPnL: number;
   realizedPnL: number;
-  netDelta: number;
-  netGamma: number;
-  netTheta: number;
-  netVega: number;
   positions: PositionValuation[];
 }
 
@@ -92,10 +88,6 @@ export interface PortfolioSnapshot {
   marketValue: number;
   unrealizedPnL: number;
   realizedPnL: number;
-  netDelta: number;
-  netGamma: number;
-  netTheta: number;
-  netVega: number;
 }
 
 export interface DrawdownPoint {

@@ -106,7 +106,6 @@ export class PortfolioService {
       query GetValuation($accountId: UUID!) {
         getPortfolioValuation(accountId: $accountId) {
           cash marketValue equity unrealizedPnL realizedPnL
-          netDelta netGamma netTheta netVega
           positions { symbol currentPrice quantity multiplier marketValue unrealizedPnL costBasis }
         }
       }

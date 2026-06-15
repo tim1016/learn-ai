@@ -420,10 +420,6 @@ public class AppDbContext : DbContext
             entity.Property(s => s.MarginUsed).HasPrecision(18, 8);
             entity.Property(s => s.UnrealizedPnL).HasPrecision(18, 8);
             entity.Property(s => s.RealizedPnL).HasPrecision(18, 8);
-            entity.Property(s => s.NetDelta).HasPrecision(18, 8);
-            entity.Property(s => s.NetGamma).HasPrecision(18, 8);
-            entity.Property(s => s.NetTheta).HasPrecision(18, 8);
-            entity.Property(s => s.NetVega).HasPrecision(18, 8);
             entity.HasOne(s => s.Account)
                   .WithMany()
                   .HasForeignKey(s => s.AccountId)

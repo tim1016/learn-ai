@@ -50,10 +50,6 @@ public class SnapshotServiceTests
                 Equity = 100_000m,
                 UnrealizedPnL = 5_000m,
                 RealizedPnL = 2_000m,
-                NetDelta = 150m,
-                NetGamma = 5m,
-                NetTheta = -25m,
-                NetVega = 100m,
             });
 
         var snapshot = await service.TakeSnapshotAsync(account.Id);
@@ -65,12 +61,7 @@ public class SnapshotServiceTests
         Assert.Equal(100_000m, snapshot.Equity);
         Assert.Equal(5_000m, snapshot.UnrealizedPnL);
         Assert.Equal(2_000m, snapshot.RealizedPnL);
-        Assert.Equal(150m, snapshot.NetDelta);
-        Assert.Equal(5m, snapshot.NetGamma);
-        Assert.Equal(-25m, snapshot.NetTheta);
-        Assert.Equal(100m, snapshot.NetVega);
 
-        // Verify persisted to DB
         var saved = context.PortfolioSnapshots.FirstOrDefault(s => s.Id == snapshot.Id);
         Assert.NotNull(saved);
     }
