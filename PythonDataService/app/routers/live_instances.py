@@ -16,9 +16,9 @@ import json
 import logging
 import re
 from datetime import UTC, date, datetime, timedelta
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, Response, status
