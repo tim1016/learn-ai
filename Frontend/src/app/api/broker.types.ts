@@ -4175,6 +4175,36 @@ export interface components {
             reason?: string | null;
             /** Fetched At Ms */
             fetched_at_ms: number;
+            /**
+             * Safety Verdict
+             * @description Phase 7A / VCR-0010 / ADR 0011 — structured 4-layer
+             *     broker safety verdict the Frontend renders directly. The
+             *     hero and sentinel pill bind to ``final_verdict``; per-gate
+             *     fields are surfaced as expandable detail.
+             */
+            safety_verdict?: components["schemas"]["BrokerSafetyVerdict"] | null;
+        };
+        /**
+         * BrokerSafetyVerdict
+         * @description ADR 0011 §1 — broker safety verdict shape published
+         *     on the broker-status payload. The Frontend MUST NOT derive
+         *     ``final_verdict`` from raw gate fields.
+         */
+        BrokerSafetyVerdict: {
+            /** Configured Mode */
+            configured_mode: "paper" | "live" | "unknown";
+            /** Readonly Flag */
+            readonly_flag: boolean | null;
+            /** Port Class */
+            port_class: "paper_port" | "live_port" | "unknown";
+            /** Connected Account Prefix */
+            connected_account_prefix: "DU" | "non_DU" | null;
+            /** Final Verdict */
+            final_verdict: "paper-only" | "unsafe" | "unknown";
+            /** Failing Gates */
+            failing_gates: string[];
+            /** Unknown Gates */
+            unknown_gates: string[];
         };
         /**
          * IbkrOpenOrder
