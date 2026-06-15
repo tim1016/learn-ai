@@ -1,9 +1,11 @@
 # VCR Remediation + Deployment-Validation Deploy — Handoff (2026-06-15)
 
-**Status as of:** 2026-06-15 07:51 ET
-**Master HEAD:** `e9469910` (Phase 12 manual merged)
-**Open PRs in flight:** #533 (Phase 5D submit retry policy) — CodeRabbit + Python Lint green, other checks finishing
-**Recently merged:** #530 Phase 8 + Phase 3 verdict, #531 Phase 12 manual, #532 VCR-0009 emergency-flatten cancel-first
+**Status as of:** 2026-06-15 ~10:55 ET (updated after #545/#546)
+**Master HEAD (post-#546):** `2ce8904f` (Phase 5C cancel-confirm timeout in LiveEngine._flatten + recovery_flatten + cmd_emergency_flatten landed)
+**Open PRs in flight:** #547 (chore: VCR-0002/0013 status sync) — doc-only
+**Recently merged in this session:** #530 Phase 8 SIZING_SKIP, #531 Phase 12 manual, #532 VCR-0009 emergency-flatten cancel-first, #533 Phase 5D state machine, #534 Phase 5D resume guard #3, #535 Phase 5E fill classifier, #536 Phase 5E cross-restart classifier, #537 Phase 7C constant-time daemon token, #538 Phase 7B order-block, #539 Phase 5C ownership query subclass, #541 Phase 7B mid-session verdict observer, #542 Phase 3 reconnect re-validation, #543 Phase 5C activation flag, #544 Phase 8 SIZING_SKIP audit log, #545 Phase 5C cancel-confirm in LiveEngine._flatten, #546 Phase 5C cancel-confirm in recovery_flatten + cmd_emergency_flatten
+
+**VCR status snapshot:** 15 of 19 remediated, 3 partially_remediated (VCR-0003 sizing card cutover deferred, VCR-0010 Resume guard #1 TODO, VCR-P3 routine cleanup), 1 operator-gated (VCR-0002 — `durable_submit_enabled` flag flip awaits behavioral receipt from the deployment_validation paper deploy).
 
 ---
 
@@ -20,19 +22,23 @@ The rest of this doc is the handoff for that.
 
 ## 2. Which commit hash to deploy from
 
-You have two clean, green-on-CI candidates depending on how conservative you want to be:
+You have three clean, green-on-CI candidates depending on how conservative you want to be. All keep `durable_submit_enabled=False` by default — the activation flag flip is a separate operator decision per VCR-0002 follow-up, NOT a side effect of deploying these hashes.
 
 | Hash | Description | Includes |
 |------|-------------|----------|
-| `e9469910` (current master) | Phase 12 manual merged on top of Phase 8 / 9 / 10 / 11. The current canonical state. **CI green.** | Phases 1-12 except Phase 5C/5D/5E/7B; the durable submit code path is still single-shot. |
+| `2ce8904f` (current master, **recommended**) | Phase 5C cancel-confirm structurally complete across all three flatten paths; verdict observer (#541) + activation flag (#543) + emergency cancel-confirm (#546). **CI green.** | Phases 1-12 + Phase 5C structural + Phase 7B verdict observer. Durable submit OFF by default. |
+| `e9469910` | Phase 12 manual merged on top of Phase 8 / 9 / 10 / 11. Pre-Phase-5C / Pre-5D / Pre-7B observer. **CI green.** | Phases 1-12 except 5C/5D/5E/7B observer; durable submit code path is still single-shot. |
 | `a5994e95` (Phase 7D merge) | Pre-Phase-8 — the state before the new SIZING_RESOLVED WAL emit landed. **CI green.** | Phases 1-7D only. No SIZING_RESOLVED emit, no entry-Greek delete, no Phase 12 manual, no Phase 10 doc updates. |
 
-**Recommendation: deploy from `e9469910`.** It's the most-recent green master, includes the safety closure of VCR-0001 / VCR-0004 / VCR-0006 (start-time) / VCR-0008 / VCR-0014 / Phase 6 operator-action contract / Phase 7A broker-safety verdict / Phase 7C constant-time daemon token / VCR-0011, and explicitly does NOT include the Phase 5D state-machine wiring that's still in PR #533 awaiting review.
+**Recommendation: deploy from `2ce8904f` (current master).** The Phase 5C structural work doesn't activate by default — `LiveConfig.durable_submit_enabled` defaults to False so behavior is identical to e9469910's single-shot path. Deploying current master gives you the option to flip the flag later without re-deploying, plus you get the Phase 7B mid-session verdict observer (one extra safety layer at zero cost).
 
-If `a5994e95` feels safer (less code change since the deploy you last validated), it's a fine fallback — but you lose Phase 8's audit-trail SIZING_RESOLVED emit and Phase 9's portfolio-Greek cleanup. No safety regression, just less visibility.
+If `e9469910` feels safer (the prior "deploy from here" recommendation), it's a fine fallback — you lose only the verdict observer and the cancel-confirm timeout protection (the latter only matters if the broker session loses its cancel-confirm callback, which is a corner case).
 
 ```bash
-# To deploy from e9469910:
+# To deploy from current master 2ce8904f:
+git checkout 2ce8904f -- .
+
+# Or from e9469910:
 git checkout e9469910 -- .
 
 # Or from a5994e95:
