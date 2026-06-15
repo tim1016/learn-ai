@@ -77,6 +77,34 @@ class LiveBrokerEventStreamError(RuntimeError):
     """
 
 
+class BrokerSafetyVerdictBlockError(RuntimeError):
+    """Phase 7B / VCR-0010 — broker safety verdict is not ``paper-only``.
+
+    Raised by ``submit_pending_orders`` BEFORE any broker call when the
+    injected ``verdict_provider`` returns a verdict other than
+    ``paper-only`` (i.e. ``unsafe`` or ``unknown``). Per PRD §7B the
+    engine refuses to submit orders while the verdict is unsafe and
+    refuses to start while the verdict is unknown outside the named
+    diagnostic path. Mid-session transitions from ``paper-only`` to a
+    non-``paper-only`` verdict trigger this exception on the next pending
+    submit; the engine catches and writes ``halt.flag`` + durable
+    ``desired_state=PAUSED`` per the PRD's "Mid-session transition"
+    contract (event ``BROKER_SAFETY_VERDICT_TRANSITION_HALT``).
+
+    ``verdict`` is the literal ``final_verdict`` value the provider
+    returned (``unsafe``, ``unknown``, etc.); ``detail`` carries any
+    additional context the provider chose to surface.
+    """
+
+    def __init__(self, *, verdict: str, detail: str | None = None) -> None:
+        suffix = f": {detail}" if detail else ""
+        super().__init__(
+            f"BrokerSafetyVerdictBlockError(verdict={verdict!r}){suffix}"
+        )
+        self.verdict = verdict
+        self.detail = detail
+
+
 class SubmitUncertainHaltError(RuntimeError):
     """Phase 5D / VCR-0002 — submit state machine reached HALT.
 
@@ -333,6 +361,15 @@ class LivePortfolio:
     # promotes the in-memory ``sizing_resolutions`` list to a WAL fold.
     intent_wal: IntentWal | None = None
     bot_order_namespace: str = ""
+    # Phase 7B / VCR-0010 — broker safety verdict provider. Callable returning
+    # the current verdict's ``final_verdict`` value (``paper-only``,
+    # ``unsafe``, ``unknown``) or ``None`` when no verdict is available yet
+    # (e.g. broker disconnected, probe in progress). ``submit_pending_orders``
+    # consults this BEFORE each broker call and raises
+    # ``BrokerSafetyVerdictBlockError`` if the verdict is anything other than
+    # ``paper-only`` or ``None``. ``None`` keeps the prior pre-Phase-7B
+    # behavior (no verdict enforcement) for replay / shadow / legacy paths.
+    verdict_provider: object = None  # Callable[[], str | None] | None
     # Internal: ``order_id → intent_id`` so the submit step can recover the
     # identity minted in ``set_holdings`` without changing the ``Order``
     # value type (existing tests construct ``Order`` directly).
@@ -609,6 +646,24 @@ class LivePortfolio:
         )
 
         requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
+
+        # Phase 7B / VCR-0010 — broker safety verdict gate. Consulted once at
+        # the start of the submit pass (the verdict can't flip mid-call) so
+        # the cost is a single getter call per bar, not per order. When the
+        # verdict is set and != ``paper-only`` (and not ``None``), refuse the
+        # entire pending batch and raise — the engine catches this and writes
+        # halt.flag + durable PAUSED + ``BROKER_SAFETY_VERDICT_TRANSITION_HALT``
+        # to the WAL.
+        if self.verdict_provider is not None:
+            verdict_value = self.verdict_provider()  # type: ignore[operator]
+            if verdict_value is not None and verdict_value != "paper-only":
+                raise BrokerSafetyVerdictBlockError(
+                    verdict=str(verdict_value),
+                    detail=(
+                        "engine refuses to submit while broker safety verdict "
+                        "is not paper-only (PRD §7B order-block)"
+                    ),
+                )
 
         acks: list[IbkrOrderAck] = []
         for order in self.drain_pending():

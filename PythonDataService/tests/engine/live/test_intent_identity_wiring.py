@@ -559,3 +559,94 @@ def test_submit_adopts_on_present_probe_vcr_0002(tmp_path: Path) -> None:
     # Only ONE place call: the broker already has it, no re-place.
     assert sum(1 for t in timeline if t.startswith("place:")) == 1
     assert sum(1 for t in timeline if t.startswith("probe:")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 7B (VCR-0010) — broker safety verdict order-block
+# ---------------------------------------------------------------------------
+
+
+def test_submit_refused_when_verdict_is_unsafe_vcr_0010(tmp_path: Path) -> None:
+    """Phase 7B — engine refuses to submit when verdict is ``unsafe``.
+    No broker.place_order call happens; no WAL entries written for the
+    blocked batch (the order goes back into pending? actually the batch
+    raised before drain — test verifies no place call)."""
+    import asyncio
+
+    from app.engine.live.live_portfolio import BrokerSafetyVerdictBlockError
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    portfolio.verdict_provider = lambda: "unsafe"
+
+    with pytest.raises(BrokerSafetyVerdictBlockError) as exc:
+        asyncio.run(portfolio.submit_pending_orders())
+
+    assert exc.value.verdict == "unsafe"
+    # No place call happened — broker stays untouched.
+    assert portfolio.broker.orders == []
+
+
+def test_submit_refused_when_verdict_is_unknown_vcr_0010(tmp_path: Path) -> None:
+    """Phase 7B — fail-closed: ``unknown`` is start-blocking AND
+    submit-blocking outside the named diagnostic path."""
+    import asyncio
+
+    from app.engine.live.live_portfolio import BrokerSafetyVerdictBlockError
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    portfolio.verdict_provider = lambda: "unknown"
+
+    with pytest.raises(BrokerSafetyVerdictBlockError) as exc:
+        asyncio.run(portfolio.submit_pending_orders())
+
+    assert exc.value.verdict == "unknown"
+    assert portfolio.broker.orders == []
+
+
+def test_submit_proceeds_when_verdict_is_paper_only_vcr_0010(
+    tmp_path: Path,
+) -> None:
+    """Phase 7B — verdict gate is permissive on ``paper-only``."""
+    import asyncio
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    portfolio.verdict_provider = lambda: "paper-only"
+
+    acks = asyncio.run(portfolio.submit_pending_orders())
+
+    assert len(acks) == 1
+    assert len(portfolio.broker.orders) == 1
+
+
+def test_submit_proceeds_when_verdict_provider_returns_none_vcr_0010(
+    tmp_path: Path,
+) -> None:
+    """A provider that returns ``None`` (broker not yet probed, snapshot
+    not ready) does NOT block. Phase 7B's gate engages only when a
+    non-paper-only signal is positively observed."""
+    import asyncio
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    portfolio.verdict_provider = lambda: None
+
+    acks = asyncio.run(portfolio.submit_pending_orders())
+
+    assert len(acks) == 1
+
+
+def test_submit_proceeds_when_no_verdict_provider_set(tmp_path: Path) -> None:
+    """Backward-compat: a portfolio constructed without a verdict provider
+    behaves exactly as it did before Phase 7B — no gate, no overhead."""
+    import asyncio
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    assert portfolio.verdict_provider is None
+
+    acks = asyncio.run(portfolio.submit_pending_orders())
+
+    assert len(acks) == 1
