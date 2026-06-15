@@ -161,6 +161,13 @@ async def _next_bar_or_shutdown(
 # never gets written. (CodeRabbit P1 from #194.)
 FATAL_HALT_CANCEL_TIMEOUT_S = 5.0
 
+# Phase 5C / VCR-0002 — managed cancel/flatten paths await per-order cancel
+# confirms with this timeout. On timeout the engine writes ``halt.flag``,
+# sets durable ``desired_state = PAUSED``, and refuses to liquidate (PRD §5C).
+# The emergency-flatten force path may proceed past the timeout but emits
+# an ``EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS`` audit row.
+CANCEL_CONFIRM_TIMEOUT_S = 5.0
+
 
 class MaxOrdersPerDayExceeded(RuntimeError):
     """Raised when the per-day order cap (§ 9) is exceeded mid-session.
@@ -171,6 +178,32 @@ class MaxOrdersPerDayExceeded(RuntimeError):
     retry + 1 force-flat). Crossing the cap halts the run; resuming
     requires investigation and a new ``run_id``.
     """
+
+
+class CancelConfirmTimeoutHaltError(RuntimeError):
+    """Phase 5C / VCR-0002 — managed cancel-then-liquidate path stalled.
+
+    Raised by ``LiveEngine._flatten`` when ``broker.cancel_open_orders``
+    does not return within ``cancel_confirm_timeout_s``. PRD §5C
+    "Cancel-confirm timeout": the engine writes ``halt.flag`` carrying
+    ``CANCEL_CONFIRM_TIMEOUT_HALT`` + durable PAUSED and REFUSES to
+    liquidate — submitting market liquidations against a broker we
+    can't confirm cancel state with would race the just-issued cancels.
+
+    The emergency-flatten force path may proceed past this timeout
+    (operator-confirmed last-resort behavior); it emits the distinct
+    ``EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS`` audit row instead of
+    raising.
+    """
+
+    def __init__(self, *, timeout_s: float) -> None:
+        super().__init__(
+            f"CancelConfirmTimeoutHaltError(timeout_s={timeout_s}): "
+            "broker.cancel_open_orders did not return within the cancel-"
+            "confirm window; refused to liquidate to avoid racing "
+            "just-issued cancels (PRD §5C)"
+        )
+        self.timeout_s = timeout_s
 
 
 class ReconnectAccountMismatchHaltError(RuntimeError):
@@ -364,6 +397,10 @@ class LiveEngine:
         # transition" contract. ``None`` (the default) keeps the
         # pre-Phase-7B behavior (no observer).
         verdict_provider: object = None,
+        # Phase 5C / VCR-0002 — managed cancel/flatten paths await per-order
+        # cancel confirms with this timeout. Tests pass a short value
+        # (e.g. 0.05s) to exercise the timeout path without waiting 5s.
+        cancel_confirm_timeout_s: float = CANCEL_CONFIRM_TIMEOUT_S,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -446,6 +483,8 @@ class LiveEngine:
         self._intent_wal_path = intent_wal_path
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
+        # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
+        self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
         # Phase 3 / VCR-0006 — reconnect re-validation. Each bar iteration
         # snapshots IbkrClient.connectivity_lost_count; on increment + restored
         # connection the engine re-runs account_identity.verify_account_match.
@@ -1493,11 +1532,40 @@ class LiveEngine:
         record their IDs in ``submitted_order_ids``.
         """
         portfolio.pending_orders.clear()
+        # Phase 5C / VCR-0002 — managed cancel-confirm timeout. PRD §5C step
+        # 4-5: every managed cancel/flatten path follows cancel → wait for
+        # confirms → fetch positions → liquidate. A hung broker that can't
+        # confirm cancels must NOT proceed to liquidation; the engine
+        # writes halt.flag (CANCEL_CONFIRM_TIMEOUT_HALT) and raises so the
+        # operator can reconcile. The emergency-flatten force path has its
+        # own audit-event carve-out at the CLI layer.
         try:
-            cancelled = await self._broker.cancel_open_orders()
+            cancelled = await asyncio.wait_for(
+                self._broker.cancel_open_orders(),
+                timeout=self._cancel_confirm_timeout_s,
+            )
+        except TimeoutError as exc:
+            if self._output_dir is not None:
+                try:
+                    self._output_dir.mkdir(parents=True, exist_ok=True)
+                    (self._output_dir / "halt.flag").write_text(
+                        f"CANCEL_CONFIRM_TIMEOUT_HALT "
+                        f"timeout_s={self._cancel_confirm_timeout_s} "
+                        f"path=_flatten bar_time={bar_time}\n",
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    logger.exception(
+                        "halt.flag write failed for cancel-confirm timeout"
+                    )
+            raise CancelConfirmTimeoutHaltError(
+                timeout_s=self._cancel_confirm_timeout_s
+            ) from exc
         except Exception:
-            # Mirror _fatal_halt's tolerance: best-effort cancel, log
-            # and continue so the flatten still runs.
+            # Other broker exceptions (network blip, transient) — preserve
+            # the prior tolerant behavior so the operator-issued flatten
+            # still acts. PRD §5C is silent on this branch; the timeout
+            # path is the load-bearing safety.
             logger.exception("broker.cancel_open_orders failed during shutdown_flatten")
             cancelled = []
         if cancelled:
