@@ -63,7 +63,7 @@ def _read_raw_rows(symbol: str) -> list[tuple[date, int, int, int, int, int]]:
             parts = line.split(",")
             if len(parts) != 6:
                 continue
-            ts, o, h, l, c, v = parts
+            ts, o, h, l, c, v = parts  # noqa: E741 — `l` is canonical OHLCV "low"
             date_str = ts.split(" ", 1)[0]
             d = date(int(date_str[0:4]), int(date_str[4:6]), int(date_str[6:8]))
             rows.append((d, int(o), int(h), int(l), int(c), int(v)))

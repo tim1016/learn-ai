@@ -142,7 +142,7 @@ def interpolate_iv_at_price(legs: list[StrategyLeg], price: float) -> float:
     """
     valid = sorted(
         [leg for leg in legs if leg.iv > 0],
-        key=lambda l: l.strike,
+        key=lambda leg: leg.strike,
     )
     if not valid:
         return weighted_iv(legs)
