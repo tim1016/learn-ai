@@ -285,6 +285,14 @@ class LiveEngine:
         # ADR 0009 § 6 — propagated registered sizing surface. ``None`` ⇒
         # legacy / unregistered (no fail-fast applies).
         sizing_surface: str | None = None,
+        # Phase 5E / VCR-0012 — when set, ``_convert_ibkr_fill`` falls back
+        # to a fold of this WAL to reconstruct a fill's ``_OrderMeta`` when
+        # the in-memory dict has no entry for the fill's ``order_id``. The
+        # cross-restart case: prior session minted the intent + landed the
+        # broker order; this session boots into a fresh ``_order_meta`` but
+        # the broker still echoes the prior session's ``perm_id`` on fills.
+        # ``None`` keeps the prior pre-Phase-5E behavior (warn + drop).
+        intent_wal_path: Path | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -362,6 +370,9 @@ class LiveEngine:
         self._bar_source = bar_source
         self._decision_columns = decision_columns
         self._owned_perm_ids = owned_perm_ids or set()
+        # Phase 5E / VCR-0012 — fold path for the cross-restart fill classifier
+        # (see ``_resolve_meta_via_intent_wal``).
+        self._intent_wal_path = intent_wal_path
         self._sizing_surface = sizing_surface
         # The strategy-specific decision columns = resolved minus the core.
         self._strategy_decision_columns = tuple(
@@ -1588,6 +1599,75 @@ class LiveEngine:
                 out.append(engine_event)
         return out
 
+    def _resolve_meta_via_intent_wal(
+        self, fill: IbkrOrderEvent
+    ) -> _OrderMeta | None:
+        """Phase 5E / VCR-0012 — cross-restart fill classifier.
+
+        Folds the intent WAL once per orphan fill and looks up a
+        ``SubmittedOrderView`` whose ``perm_id`` matches the fill's
+        ``perm_id``. If found AND the view's ``bot_order_namespace``
+        matches the namespace this engine owns AND the view's ``order_spec``
+        carries symbol+action+quantity, reconstructs an ``_OrderMeta`` and
+        returns it. Otherwise returns ``None`` and the fill remains dropped.
+
+        Performance: O(N) per orphan fill where N = WAL line count. The
+        WAL is small (typically <10k lines per session) and orphans are
+        rare (only crosses-restart cases), so the cost is bounded. If
+        orphan rates grow, the LedgerView can be cached on the engine and
+        updated incrementally — kept simple here.
+        """
+        if self._intent_wal_path is None or fill.perm_id is None:
+            return None
+        from app.engine.live.intent_ledger import LedgerProjection, fold
+        from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
+
+        try:
+            events = IntentWal(self._intent_wal_path).read_tail()
+        except IntentWalCorruptError:
+            # A corrupt WAL must NOT silently mask the drop — surface as
+            # "no meta resolved" and let the caller's warning log carry
+            # the orphan signal upstream.
+            return None
+        view = fold(LedgerProjection(), events)
+        # Reverse lookup: find the SubmittedOrderView whose perm_id matches.
+        # Build only what we need rather than precomputing a Mapping.
+        target = next(
+            (
+                v
+                for v in view.submitted_orders.values()
+                if v.perm_id is not None and int(v.perm_id) == int(fill.perm_id)
+            ),
+            None,
+        )
+        if target is None:
+            return None
+        spec = target.order_spec
+        if not isinstance(spec, dict):
+            return None
+        symbol_obj = spec.get("symbol")
+        action_obj = spec.get("action")
+        quantity_obj = spec.get("quantity")
+        if (
+            not isinstance(symbol_obj, str)
+            or not isinstance(action_obj, str)
+            or quantity_obj is None
+        ):
+            return None
+        try:
+            magnitude = abs(int(float(quantity_obj)))
+        except (TypeError, ValueError):
+            return None
+        if magnitude == 0:
+            return None
+        signed_qty = magnitude if action_obj.upper() == "BUY" else -magnitude
+        return _OrderMeta(
+            symbol=symbol_obj,
+            tag="Phase5E:cross-restart",
+            signed_qty=signed_qty,
+            submitted_at_ms=0,
+        )
+
     def _convert_ibkr_fill(self, fill: IbkrOrderEvent) -> OrderEvent | None:
         """Translate one ``IbkrOrderEvent`` to an engine ``OrderEvent``.
 
@@ -1601,11 +1681,26 @@ class LiveEngine:
             return None
         meta = self._order_meta.get(int(fill.order_id))
         if meta is None:
-            logger.warning(
-                "Dropping IBKR fill for unknown order_id=%s (not placed by this runner)",
-                fill.order_id,
-            )
-            return None
+            # Phase 5E / VCR-0012 — before treating this as foreign, try
+            # the cross-restart classifier. The fill's order_id wasn't
+            # placed in THIS process, but the fill's perm_id may be from a
+            # prior session of THIS runner that landed the order pre-crash.
+            recovered = self._resolve_meta_via_intent_wal(fill)
+            if recovered is not None:
+                logger.info(
+                    "Cross-restart fill classified bot-owned by perm_id=%s "
+                    "(order_id=%s, symbol=%s)",
+                    fill.perm_id,
+                    fill.order_id,
+                    recovered.symbol,
+                )
+                meta = recovered
+            else:
+                logger.warning(
+                    "Dropping IBKR fill for unknown order_id=%s (not placed by this runner)",
+                    fill.order_id,
+                )
+                return None
         magnitude = int(fill.fill_quantity or 0)
         if magnitude == 0:
             return None
