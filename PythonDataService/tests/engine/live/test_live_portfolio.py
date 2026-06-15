@@ -132,7 +132,7 @@ def test_market_order_fails_fast_on_policy_surface_mismatch_vcr_p3_f() -> None:
     portfolio.net_liquidation = Decimal("100000")
     portfolio.update_reference_price("SPY", Decimal("500"))
 
-    with pytest.raises(RuntimeError, match="Order-surface mismatch.*VCR-P3-F"):
+    with pytest.raises(RuntimeError, match=r"Order-surface mismatch.*VCR-P3-F"):
         portfolio.submit_market_order(
             "SPY",
             100,
