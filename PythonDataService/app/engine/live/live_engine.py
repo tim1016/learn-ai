@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
@@ -1854,18 +1855,27 @@ class LiveEngine:
     def _check_verdict_transition_halt(self, portfolio: LivePortfolio) -> None:
         """Phase 7B / VCR-0010 — broker safety verdict observer.
 
-        Consult ``self._verdict_provider`` (if set). On a non-paper-only,
-        non-None verdict, clear pending orders, write ``halt.flag``, and
-        raise ``BrokerSafetyVerdictTransitionHaltError`` so the bar loop
-        exits before any new submission. PRD §7B's "Mid-session transition"
-        contract: ``halt.flag`` + durable PAUSED + WAL event. The WAL
-        event is gated on the broker-lifecycle WAL-location decision and
-        is omitted here; ``halt.flag`` + the exception carry the same
-        forensic payload via the failure list / cmd_resume guard #1 path.
+        Consult ``self._verdict_provider`` (if set). On every check (NOT
+        only on transition) write ``verdict_snapshot.json`` to
+        ``self._output_dir`` so that ``cmd_resume`` (Guard #1) can
+        consult the engine's last reading even after the engine exits.
+        The snapshot carries ``{verdict, observed_at_ms_utc}`` and is
+        overwritten atomically per check.
+
+        On a non-paper-only, non-None verdict, clear pending orders,
+        write ``halt.flag``, and raise
+        ``BrokerSafetyVerdictTransitionHaltError`` so the bar loop
+        exits before any new submission. PRD §7B's "Mid-session
+        transition" contract: ``halt.flag`` + durable PAUSED + WAL
+        event. The WAL event is gated on the broker-lifecycle
+        WAL-location decision and is omitted here; ``halt.flag`` +
+        the exception carry the same forensic payload.
         """
         if self._verdict_provider is None:
             return
         verdict_value = self._verdict_provider()  # type: ignore[operator]
+        if self._output_dir is not None:
+            self._write_verdict_snapshot(verdict_value)
         if verdict_value is None or verdict_value == "paper-only":
             return
         portfolio.pending_orders.clear()
@@ -1881,6 +1891,41 @@ class LiveEngine:
                     "halt.flag write failed for verdict transition halt"
                 )
         raise BrokerSafetyVerdictTransitionHaltError(verdict=str(verdict_value))
+
+    def _write_verdict_snapshot(self, verdict_value: object) -> None:
+        """Phase 7B Guard #1 — persist the latest verdict reading so
+        ``cmd_resume`` can consult it before flipping desired_state to
+        RUNNING. Atomic write via ``.tmp`` + rename so a partial read
+        in another process can never observe a torn file.
+
+        Snapshot shape (small + flat for cheap reads on the CLI surface):
+
+            {"verdict": "paper-only", "observed_at_ms_utc": 1718553600123}
+
+        ``verdict`` is the raw provider output (str, None, or any other
+        truthy value coerced via ``str``). The CLI guard treats anything
+        other than the literal "paper-only" as non-passing.
+        """
+        from datetime import UTC, datetime
+
+        if self._output_dir is None:
+            return
+        try:
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            snapshot = {
+                "verdict": verdict_value if isinstance(verdict_value, str) else (
+                    None if verdict_value is None else str(verdict_value)
+                ),
+                "observed_at_ms_utc": int(datetime.now(UTC).timestamp() * 1000),
+            }
+            tmp_path = self._output_dir / "verdict_snapshot.json.tmp"
+            tmp_path.write_text(
+                json.dumps(snapshot, separators=(",", ":"), sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            tmp_path.replace(self._output_dir / "verdict_snapshot.json")
+        except OSError:
+            logger.exception("verdict_snapshot.json write failed")
 
     def _resolve_meta_via_intent_wal(
         self, fill: IbkrOrderEvent

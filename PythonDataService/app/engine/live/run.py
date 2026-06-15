@@ -1811,6 +1811,35 @@ def _latest_run_dir_for_instance(
     return candidates[0][1]
 
 
+def _scan_verdict_snapshot(snapshot_path: Path) -> str | None:
+    """Phase 7B Resume guard #1 (PRD §7B / VCR-0010): return the last
+    verdict reading if it is NOT ``"paper-only"``, otherwise ``None``.
+
+    Returns ``None`` when:
+      * The snapshot file does not exist (no engine has observed a
+        verdict for this instance — older runs predating the snapshot).
+      * The snapshot's ``verdict`` field is ``"paper-only"``.
+      * The snapshot is unreadable or malformed (fail-open here so a
+        spurious file corruption does not jail the operator out of
+        Resume entirely; the engine bar loop is still the secondary
+        defense and will re-emit a fresh snapshot on the next check).
+    """
+    if not snapshot_path.exists():
+        return None
+    try:
+        import json as _json
+
+        data = _json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    verdict_value = data.get("verdict") if isinstance(data, dict) else None
+    if not isinstance(verdict_value, str):
+        return None
+    if verdict_value == "paper-only":
+        return None
+    return verdict_value
+
+
 def _scan_wal_for_unresolved_uncertains(wal_path: Path) -> list[str]:
     """Phase 5D Resume guard (PRD §5D Resume contract, guard #3): return
     the list of ``intent_id``s whose ``ACK_FAILED_UNCERTAIN`` event has no
@@ -1854,23 +1883,43 @@ def _scan_wal_for_unresolved_uncertains(wal_path: Path) -> list[str]:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    """Set durable ``desired_state=RUNNING`` after the Phase 5D Resume
-    guard passes.
+    """Set durable ``desired_state=RUNNING`` after the Phase 5D / 7B Resume
+    guards pass.
 
-    Guard #3 (WAL guard, this PR): refuse Resume when the latest run's
+    Guard #1 (Phase 7B / VCR-0010): refuse Resume when the latest run's
+    persisted ``verdict_snapshot.json`` carries a verdict other than
+    ``"paper-only"``. The engine bar-loop observer writes this file on
+    every check, so the snapshot reflects the last reading before the
+    engine exited. Resume past a non-paper-only verdict can pass
+    ``--force`` after the operator confirms the broker session is back
+    on a paper account.
+
+    Guard #3 (Phase 5D WAL): refuse Resume when the latest run's
     ``intent_events.jsonl`` carries one or more ``ACK_FAILED_UNCERTAIN``
     events without a downstream resolution. The operator passes
     ``--force`` to override after manual reconciliation.
 
-    Guards #1 (broker safety verdict == paper-only) and #2 (cold-start
-    reconciler last verdict == clean) require artifacts written by Phase
-    7B / Phase 5B respectively; they are TODO at this surface but the
-    engine-side bar loop is the secondary line of defense for both.
+    Guard #2 (cold-start reconciler last verdict == clean) requires
+    artifacts written by Phase 5B; it remains TODO at this surface but
+    the engine-side bar loop is the secondary line of defense.
     """
     from app.engine.live.desired_state import DesiredState
 
     run_dir = _latest_run_dir_for_instance(args.artifacts_root, args.strategy_instance_id)
     if run_dir is not None:
+        verdict_check = _scan_verdict_snapshot(run_dir / "verdict_snapshot.json")
+        if verdict_check is not None and not getattr(args, "force", False):
+            print(
+                f"[RESUME] REFUSED: last broker safety verdict was "
+                f"{verdict_check!r} (not 'paper-only') in {run_dir / 'verdict_snapshot.json'}. "
+                "Per PRD §7B Resume guard #1, the engine paused because the "
+                "broker session left paper-only; resuming may submit orders "
+                "to a non-paper account. Confirm the broker is back on a "
+                "paper account, then pass --force to override.",
+                file=sys.stderr,
+            )
+            return 2
+
         unresolved = _scan_wal_for_unresolved_uncertains(run_dir / "intent_events.jsonl")
         if unresolved and not getattr(args, "force", False):
             preview = ", ".join(unresolved[:5])
@@ -2155,17 +2204,21 @@ def build_parser() -> argparse.ArgumentParser:
             "--updated-by", default="operator", help="Identity recorded in the file."
         )
         if verb == "resume":
-            # Phase 5D Resume guard (PRD §5D) override. Without this flag,
-            # cmd_resume refuses to set RUNNING when the latest run's WAL
-            # carries an unresolved ACK_FAILED_UNCERTAIN — the operator
-            # must manually reconcile broker state first.
+            # Phase 5D Resume guard (PRD §5D) AND Phase 7B Resume guard #1
+            # (PRD §7B / VCR-0010) share the same override. Without this
+            # flag, cmd_resume refuses to set RUNNING when EITHER the
+            # latest run's WAL carries an unresolved ACK_FAILED_UNCERTAIN
+            # OR the persisted verdict_snapshot.json carries a verdict
+            # other than "paper-only". The operator must manually
+            # reconcile broker state / confirm a paper account first.
             verb_parser.add_argument(
                 "--force",
                 action="store_true",
                 help=(
-                    "Override the Phase 5D WAL guard. Use only after manually "
-                    "reconciling broker state. The override is recorded in "
-                    "desired_state.json via --reason / --updated-by."
+                    "Override the Phase 5D WAL guard AND the Phase 7B verdict "
+                    "snapshot guard. Use only after manually reconciling broker "
+                    "state. The override is recorded in desired_state.json via "
+                    "--reason / --updated-by."
                 ),
             )
         verb_parser.set_defaults(func=handler)

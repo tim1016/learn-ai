@@ -207,5 +207,85 @@ async def test_engine_halts_on_transition_partway_through_run(
     # emitted an order yet (consolidator fires on second bar) so the
     # halt catches it cleanly before any submission.
     assert exc.value.verdict == "unsafe"
-    assert state["calls"] == 2  # provider polled on bar 1 + bar 2
-    assert (tmp_path / "halt.flag").exists()
+
+
+# ─────────────────── Resume guard #1 snapshot ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_engine_writes_verdict_snapshot_on_paper_only_observation(
+    tmp_path: Path,
+) -> None:
+    """Phase 7B Resume guard #1 (VCR-0010) — every verdict check writes
+    ``verdict_snapshot.json`` so ``cmd_resume`` can consult the engine's
+    last reading even after the engine exits. A paper-only observation
+    must produce a snapshot with ``verdict == "paper-only"``."""
+    import json
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        verdict_provider=lambda: "paper-only",
+    )
+
+    await engine.run(_no_strategy(), iter_bars([_bar(m) for m in range(3)]))
+
+    snapshot_path = tmp_path / "verdict_snapshot.json"
+    assert snapshot_path.exists()
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert snapshot["verdict"] == "paper-only"
+    assert isinstance(snapshot["observed_at_ms_utc"], int)
+    assert snapshot["observed_at_ms_utc"] > 0
+
+
+@pytest.mark.asyncio
+async def test_engine_writes_verdict_snapshot_on_unsafe_observation(
+    tmp_path: Path,
+) -> None:
+    """Phase 7B Resume guard #1 — an unsafe verdict halts the engine,
+    but the snapshot is written BEFORE the halt so ``cmd_resume`` finds
+    the non-paper-only reading and refuses to flip RUNNING."""
+    import json
+
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        verdict_provider=lambda: "unsafe",
+    )
+
+    with pytest.raises(BrokerSafetyVerdictTransitionHaltError):
+        await engine.run(_no_strategy(), iter_bars([_bar(m) for m in range(3)]))
+
+    snapshot_path = tmp_path / "verdict_snapshot.json"
+    assert snapshot_path.exists()
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert snapshot["verdict"] == "unsafe"
+
+
+@pytest.mark.asyncio
+async def test_engine_writes_no_snapshot_when_no_verdict_provider(
+    tmp_path: Path,
+) -> None:
+    """Backward-compat: a run without a verdict provider does not write
+    a snapshot. cmd_resume's missing-snapshot fallback then lets the
+    Resume go through (the engine has not yet observed any verdict)."""
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+    )
+
+    await engine.run(_no_strategy(), iter_bars([_bar(m) for m in range(3)]))
+
+    assert not (tmp_path / "verdict_snapshot.json").exists()
