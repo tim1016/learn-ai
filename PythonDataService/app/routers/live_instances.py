@@ -437,13 +437,30 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
 
 
 def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
-    """Read the per-trade sizing audit log from the instance's live-state sidecar.
+    """Read the per-trade sizing audit log for the instance's Sizing card.
 
-    Returns the most recent 50 rows (newest first). Empty when the sidecar
-    is absent or the field predates the audit log. Never raises.
+    VCR-0003 PR B — prefer the durable WAL+skip-log fold from the latest
+    run dir (the source of truth that survives a restart). Fall back to
+    the in-memory ``sizing_resolutions`` sidecar projection only when the
+    fold is empty — preserves backward-compat for runs that predate
+    Phase 8 (no WAL evidence on disk).
+
+    Returns the most recent 50 rows (newest first). Empty when neither
+    source has evidence. Never raises.
     """
     settings = get_settings()
     artifacts_root = Path(settings.live_runs_root).parent
+
+    # Local import — keeps the routers package free of a top-level dep
+    # on the CLI entrypoint module, which has a much larger import graph.
+    from app.engine.live.run import _latest_run_dir_for_instance
+
+    run_dir = _latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
+    if run_dir is not None:
+        wal_rows = _fold_wal_sizing_audit(run_dir)
+        if wal_rows:
+            return wal_rows
+
     sidecar_path = artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
     if not sidecar_path.is_file():
         return []
