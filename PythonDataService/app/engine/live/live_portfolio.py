@@ -77,6 +77,38 @@ class LiveBrokerEventStreamError(RuntimeError):
     """
 
 
+class SubmitUncertainHaltError(RuntimeError):
+    """Phase 5D / VCR-0002 — submit state machine reached HALT.
+
+    Raised by ``submit_pending_orders`` after appending
+    ``SUBMIT_UNCERTAIN_HALTED`` to the WAL. The engine catches this and
+    writes ``halt.flag`` + durable ``desired_state=PAUSED`` per PRD §5D
+    HALT semantics. The bar loop must exit; no new orders may submit
+    on this run until operator reconciliation clears the three Resume
+    guards (broker safety verdict, cold-start reconciler verdict,
+    no unresolved uncertain intent in WAL).
+    """
+
+    def __init__(
+        self,
+        *,
+        intent_id: str,
+        order_ref: str,
+        probe_result: str,
+        retry_count: int,
+        reason: str,
+    ) -> None:
+        super().__init__(
+            f"SubmitUncertainHaltError(intent_id={intent_id!r} order_ref={order_ref!r} "
+            f"probe={probe_result} retry_count={retry_count} reason={reason!r})"
+        )
+        self.intent_id = intent_id
+        self.order_ref = order_ref
+        self.probe_result = probe_result
+        self.retry_count = retry_count
+        self.reason = reason
+
+
 @runtime_checkable
 class BrokerAdapter(Protocol):
     """Async broker surface LivePortfolio + LiveEngine consume — the typed
@@ -115,6 +147,16 @@ class BrokerAdapter(Protocol):
         values.
         """
         ...
+
+    # Phase 5D / VCR-0002 — ``probe_intent_status`` is NOT declared on the
+    # Protocol so that the runtime ``isinstance(broker, BrokerAdapter)``
+    # check still succeeds for legacy / replay / no-submit adapters that
+    # never need a probe. The submit loop in ``submit_pending_orders``
+    # duck-types it via ``getattr(broker, "probe_intent_status", None)``
+    # and falls back to ``BrokerProbe.NOT_PROVABLE`` when the method is
+    # absent — the safe halt-default. A real-broker adapter MUST add the
+    # method to enable RETRY_ONCE / RECOVER_ADOPT (Phase 5C ownership
+    # query subclass).
 
 
 class IbkrBrokerAdapter(BrokerAdapter):
@@ -558,6 +600,13 @@ class LivePortfolio:
         """
         from app.engine.live.intent_events import IntentEventType
         from app.engine.live.order_identity import build_order_ref, mint_intent_id
+        from app.engine.live.submit_state_machine import (
+            RETRY_CAP,
+            AckOutcome,
+            BrokerProbe,
+            SubmitVerdict,
+            next_action,
+        )
 
         requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
 
@@ -613,39 +662,162 @@ class LivePortfolio:
                 and intent_id is not None
                 and order_ref is not None
             )
-            if wal_active:
-                assert self.intent_wal is not None  # narrow for type-checker
-                self.intent_wal.append(
-                    event_type=IntentEventType.PENDING_INTENT,
-                    intent_id=intent_id,
-                    bot_order_namespace=self.bot_order_namespace,
-                    order_ref=order_ref,
-                    order_spec=spec.model_dump(),
-                )
 
-            try:
-                ack = await self.broker.place_order(spec)
-            except Exception as exc:
+            # Phase 5D / VCR-0002 — submit retry policy driven by
+            # ``submit_state_machine.next_action``. Each attempt fsync's a
+            # fresh ``PENDING_INTENT`` so a crash-during-retry still leaves
+            # the same recoverable WAL fingerprint as a crash-during-first.
+            # ``retry_count`` runs 0..RETRY_CAP; PROVABLY_ABSENT escalates
+            # the count, NOT_PROVABLE halts immediately, PRESENT adopts.
+            retry_count = 0
+            ack: IbkrOrderAck | None = None
+            while True:
                 if wal_active:
                     assert self.intent_wal is not None  # narrow for type-checker
+                    self.intent_wal.append(
+                        event_type=IntentEventType.PENDING_INTENT,
+                        intent_id=intent_id,
+                        bot_order_namespace=self.bot_order_namespace,
+                        order_ref=order_ref,
+                        order_spec=spec.model_dump(),
+                    )
+
+                try:
+                    ack = await self.broker.place_order(spec)
+                    ack_outcome = AckOutcome.CLEAN_ACK
+                    ack_reason: str | None = None
+                except Exception as exc:
+                    ack_outcome = AckOutcome.RAISED_OR_TIMEOUT
+                    ack_reason = f"broker.place_order raised: {type(exc).__name__}: {exc}"
+
+                # State machine: ack phase.
+                ack_verdict = next_action(
+                    current_status=IntentEventType.PENDING_INTENT,
+                    ack_outcome=ack_outcome,
+                )
+                if ack_verdict is SubmitVerdict.RECORD_SUBMITTED:
+                    assert ack is not None  # narrow
+                    if wal_active:
+                        assert self.intent_wal is not None
+                        self.intent_wal.append(
+                            event_type=IntentEventType.SUBMITTED,
+                            intent_id=intent_id,
+                            bot_order_namespace=self.bot_order_namespace,
+                            order_ref=order_ref,
+                            order_id=_try_int(getattr(ack, "order_id", None)),
+                            perm_id=_try_int(getattr(ack, "perm_id", None)),
+                        )
+                    acks.append(ack)
+                    break  # next order
+
+                # ack_verdict == RECORD_ACK_FAILED_UNCERTAIN.
+                if wal_active:
+                    assert self.intent_wal is not None
                     self.intent_wal.append(
                         event_type=IntentEventType.ACK_FAILED_UNCERTAIN,
                         intent_id=intent_id,
                         bot_order_namespace=self.bot_order_namespace,
                         order_ref=order_ref,
-                        reason=f"broker.place_order raised: {type(exc).__name__}: {exc}",
+                        reason=ack_reason,
                     )
-                raise
-            acks.append(ack)
-            if wal_active:
-                assert self.intent_wal is not None  # narrow for type-checker
-                self.intent_wal.append(
-                    event_type=IntentEventType.SUBMITTED,
+
+                # Non-WAL (replay / shadow) paths preserve prior raise-on-fail
+                # behaviour: there is no durable identity to retry against, so
+                # the state machine has nothing to gate. The raised exception
+                # propagates to the bar loop the same way it did before
+                # Phase 5D.
+                if not wal_active:
+                    raise RuntimeError(ack_reason or "broker.place_order raised")
+
+                # Probe phase. ``probe_intent_status`` is the I/O boundary
+                # for "is the order present at the broker." The default
+                # implementation returns NOT_PROVABLE so the state machine
+                # halts on the first uncertain ack — a real-broker adapter
+                # MUST override this to enable the RETRY_ONCE / RECOVER_ADOPT
+                # paths (Phase 5C ownership-query subclass).
+                # ``hasattr`` guard keeps legacy / replay fakes that pre-date
+                # Phase 5D working without forcing every test broker to declare
+                # the method; absence resolves to NOT_PROVABLE, which is the
+                # safe halt-default.
+                assert intent_id is not None and order_ref is not None
+                probe_fn = getattr(self.broker, "probe_intent_status", None)
+                if probe_fn is None:
+                    probe_value = BrokerProbe.NOT_PROVABLE.value
+                else:
+                    probe_value = await probe_fn(intent_id, order_ref)
+                try:
+                    probe = BrokerProbe(probe_value)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"broker.probe_intent_status returned an invalid value "
+                        f"{probe_value!r}; expected one of {list(BrokerProbe)}"
+                    ) from exc
+
+                probe_verdict = next_action(
+                    current_status=IntentEventType.ACK_FAILED_UNCERTAIN,
+                    probe=probe,
+                    retry_count=retry_count,
+                )
+
+                if probe_verdict is SubmitVerdict.RECOVER_ADOPT:
+                    if wal_active:
+                        assert self.intent_wal is not None
+                        self.intent_wal.append(
+                            event_type=IntentEventType.SUBMITTED_RECOVERED,
+                            intent_id=intent_id,
+                            bot_order_namespace=self.bot_order_namespace,
+                            order_ref=order_ref,
+                            reason=f"probe=PRESENT (retry_count={retry_count})",
+                        )
+                    # Adopted order: the broker has it; we have no synthesized
+                    # ack to return because the original raise lost the ack.
+                    # Downstream fill processing keys on order_ref/perm_id so
+                    # the absence of an ack object is fine.
+                    break
+
+                if probe_verdict is SubmitVerdict.RETRY_ONCE:
+                    if wal_active:
+                        assert self.intent_wal is not None
+                        self.intent_wal.append(
+                            event_type=IntentEventType.INTENT_NOT_ACCEPTED,
+                            intent_id=intent_id,
+                            bot_order_namespace=self.bot_order_namespace,
+                            order_ref=order_ref,
+                            reason=f"probe=PROVABLY_ABSENT (retry_count={retry_count}); retrying with same intent_id",
+                        )
+                    retry_count += 1
+                    if retry_count > RETRY_CAP:
+                        # Belt-and-suspenders: next_action already enforces the
+                        # cap, but a defensive check here removes any window
+                        # where a loop bug could double-submit.
+                        raise RuntimeError(
+                            "submit retry exceeded RETRY_CAP — state-machine invariant violated"
+                        )
+                    continue  # next attempt: fresh PENDING_INTENT, same order_ref
+
+                # probe_verdict is HALT. The WAL records the halt-class event
+                # BEFORE the exception propagates so a crash between WAL and
+                # engine cleanup still leaves the recovery-readable receipt.
+                assert probe_verdict is SubmitVerdict.HALT
+                halt_reason = (
+                    f"submit state not provable after retry_count={retry_count} "
+                    f"(probe={probe.value}); {ack_reason}"
+                )
+                if wal_active:
+                    assert self.intent_wal is not None
+                    self.intent_wal.append(
+                        event_type=IntentEventType.SUBMIT_UNCERTAIN_HALTED,
+                        intent_id=intent_id,
+                        bot_order_namespace=self.bot_order_namespace,
+                        order_ref=order_ref,
+                        reason=halt_reason,
+                    )
+                raise SubmitUncertainHaltError(
                     intent_id=intent_id,
-                    bot_order_namespace=self.bot_order_namespace,
                     order_ref=order_ref,
-                    order_id=_try_int(getattr(ack, "order_id", None)),
-                    perm_id=_try_int(getattr(ack, "perm_id", None)),
+                    probe_result=probe.value,
+                    retry_count=retry_count,
+                    reason=halt_reason,
                 )
         return acks
 

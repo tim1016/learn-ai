@@ -412,3 +412,150 @@ def test_set_holdings_sizing_resolved_precedes_pending_intent(tmp_path: Path) ->
     sizing_idx = types.index(IntentEventType.SIZING_RESOLVED.value)
     pending_idx = types.index(IntentEventType.PENDING_INTENT.value)
     assert sizing_idx < pending_idx
+
+
+# ---------------------------------------------------------------------------
+# Phase 5D (VCR-0002) — submit retry policy via submit_state_machine
+# ---------------------------------------------------------------------------
+
+
+def _make_probing_broker(
+    portfolio: LivePortfolio,
+    *,
+    boom_count: int,
+    probe_returns: str,
+) -> list[str]:
+    """Wire ``portfolio.broker`` so that the first ``boom_count`` place_order
+    calls raise, then succeed. The broker's probe_intent_status always
+    returns ``probe_returns``. Returns a list that records each broker call
+    in order so tests can assert the state-machine path taken."""
+    timeline: list[str] = []
+    remaining_booms = boom_count
+    original_place = portfolio.broker.place_order
+
+    async def _capture_place(spec: IbkrOrderSpec, **kwargs: object) -> IbkrOrderAck:
+        nonlocal remaining_booms
+        timeline.append(f"place:{spec.order_ref}")
+        if remaining_booms > 0:
+            remaining_booms -= 1
+            raise RuntimeError("synthetic broker outage")
+        return await original_place(spec, **kwargs)
+
+    async def _probe(intent_id: str, order_ref: str) -> str:
+        timeline.append(f"probe:{order_ref}")
+        return probe_returns
+
+    portfolio.broker.place_order = _capture_place  # type: ignore[assignment]
+    portfolio.broker.probe_intent_status = _probe  # type: ignore[assignment]
+    return timeline
+
+
+def test_submit_halts_on_not_provable_probe_vcr_0002(tmp_path: Path) -> None:
+    """Phase 5D — NOT_PROVABLE is the default. The state machine HALTs on
+    the first uncertain ack rather than guess; the WAL records
+    SUBMIT_UNCERTAIN_HALTED and the runner raises SubmitUncertainHaltError."""
+    import asyncio
+
+    from app.engine.live.live_portfolio import SubmitUncertainHaltError
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    timeline = _make_probing_broker(portfolio, boom_count=1, probe_returns="NOT_PROVABLE")
+
+    with pytest.raises(SubmitUncertainHaltError) as exc:
+        asyncio.run(portfolio.submit_pending_orders())
+
+    assert exc.value.probe_result == "NOT_PROVABLE"
+    assert exc.value.retry_count == 0
+    types = [e["event_type"] for e in _read_wal_events(tmp_path)]
+    assert IntentEventType.SUBMIT_UNCERTAIN_HALTED.value in types
+    # No retry attempted: only one place call, one probe.
+    assert sum(1 for t in timeline if t.startswith("place:")) == 1
+    assert sum(1 for t in timeline if t.startswith("probe:")) == 1
+
+
+def test_submit_retries_once_then_succeeds_on_provably_absent_vcr_0002(
+    tmp_path: Path,
+) -> None:
+    """Phase 5D — PROVABLY_ABSENT with retry_count < RETRY_CAP retries
+    with the SAME intent_id/order_ref. The replaced order succeeds and the
+    WAL carries [PENDING_INTENT, ACK_FAILED_UNCERTAIN, INTENT_NOT_ACCEPTED,
+    PENDING_INTENT, SUBMITTED] all sharing the same intent_id."""
+    import asyncio
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    intent_id = portfolio.last_minted_intent_id()
+    assert intent_id is not None
+    timeline = _make_probing_broker(
+        portfolio, boom_count=1, probe_returns="PROVABLY_ABSENT"
+    )
+
+    asyncio.run(portfolio.submit_pending_orders())
+
+    events = _read_wal_events(tmp_path)
+    types = [e["event_type"] for e in events]
+    # SIZING_RESOLVED is Phase 8's prelude; assert the Phase 5D lifecycle.
+    assert types[-5:] == [
+        IntentEventType.PENDING_INTENT.value,
+        IntentEventType.ACK_FAILED_UNCERTAIN.value,
+        IntentEventType.INTENT_NOT_ACCEPTED.value,
+        IntentEventType.PENDING_INTENT.value,
+        IntentEventType.SUBMITTED.value,
+    ]
+    # Every event carries the SAME intent_id (no fresh mint on retry).
+    submit_events = [e for e in events if e["event_type"] != IntentEventType.SIZING_RESOLVED.value or e["intent_id"] == intent_id]
+    assert all(e["intent_id"] == intent_id for e in submit_events)
+    # Two place calls (initial + retry) and one probe.
+    assert sum(1 for t in timeline if t.startswith("place:")) == 2
+    assert sum(1 for t in timeline if t.startswith("probe:")) == 1
+
+
+def test_submit_halts_after_retry_cap_on_provably_absent_vcr_0002(
+    tmp_path: Path,
+) -> None:
+    """Phase 5D — RETRY_CAP = 1. A second PROVABLY_ABSENT halts; the WAL
+    records [..., INTENT_NOT_ACCEPTED, PENDING_INTENT, ACK_FAILED_UNCERTAIN,
+    SUBMIT_UNCERTAIN_HALTED] and SubmitUncertainHaltError carries
+    retry_count >= 1."""
+    import asyncio
+
+    from app.engine.live.live_portfolio import SubmitUncertainHaltError
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    timeline = _make_probing_broker(
+        portfolio, boom_count=2, probe_returns="PROVABLY_ABSENT"
+    )
+
+    with pytest.raises(SubmitUncertainHaltError) as exc:
+        asyncio.run(portfolio.submit_pending_orders())
+
+    assert exc.value.retry_count == 1  # crossed the cap on second attempt
+    types = [e["event_type"] for e in _read_wal_events(tmp_path)]
+    assert types.count(IntentEventType.PENDING_INTENT.value) == 2
+    assert types.count(IntentEventType.ACK_FAILED_UNCERTAIN.value) == 2
+    assert types[-1] == IntentEventType.SUBMIT_UNCERTAIN_HALTED.value
+    assert sum(1 for t in timeline if t.startswith("place:")) == 2
+    assert sum(1 for t in timeline if t.startswith("probe:")) == 2
+
+
+def test_submit_adopts_on_present_probe_vcr_0002(tmp_path: Path) -> None:
+    """Phase 5D — PRESENT means the broker has the order. Record
+    SUBMITTED_RECOVERED and stop; no second place_order call."""
+    import asyncio
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    timeline = _make_probing_broker(portfolio, boom_count=1, probe_returns="PRESENT")
+
+    acks = asyncio.run(portfolio.submit_pending_orders())
+
+    # No ack synthesized for adopted orders — broker fills will reconcile
+    # against the WAL.
+    assert acks == []
+    types = [e["event_type"] for e in _read_wal_events(tmp_path)]
+    assert types[-1] == IntentEventType.SUBMITTED_RECOVERED.value
+    # Only ONE place call: the broker already has it, no re-place.
+    assert sum(1 for t in timeline if t.startswith("place:")) == 1
+    assert sum(1 for t in timeline if t.startswith("probe:")) == 1
