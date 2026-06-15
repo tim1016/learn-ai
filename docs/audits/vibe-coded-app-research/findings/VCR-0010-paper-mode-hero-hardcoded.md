@@ -1,7 +1,7 @@
 ---
 id: VCR-0010
 severity: P1
-status: partially_remediated
+status: remediated
 area: ui-runtime-claims
 canonical_file: Frontend/src/app/components/broker/broker-instances/**
 reference: PRD §12.10, broker-user-manual.html §4
@@ -12,9 +12,9 @@ remediation_progress:
   - "#528 — Phase 7A — Broker safety verdict card on cockpit hero"
   - "#538 — Phase 7B order-block: LivePortfolio.submit_pending_orders refuses to submit when verdict_provider returns anything other than 'paper-only' or None; raises BrokerSafetyVerdictBlockError before any broker.place_order call"
   - "#541 — Phase 7B mid-session transition observer — bar-loop poll of verdict_provider that emits BROKER_SAFETY_VERDICT_TRANSITION_HALT + halt.flag on transition out of paper-only"
+  - "#548 — Phase 7B Resume guard #1 — cmd_resume consults verdict_snapshot.json written by the engine's bar-loop observer; refuses on non-paper-only without --force"
 regrounded_to: high
-follow_up_required:
-  - "Phase 7B Resume guard #1 — cmd_resume consults a persisted verdict snapshot (composes with PR #535's WAL guard); currently noted as TODO at run.py:1865-1868 with the engine-side bar loop (#541) as the secondary line of defense. The carve-out is genuine: cmd_resume can today be invoked while the verdict is unknown/unsafe, and only the engine bar-loop observer would catch and halt; a startup-time guard would make the trip-wire one cycle faster."
+follow_up_required: []
 lens: ui-vs-runtime-claims
 dedupe_with_F: none
 confidence: high

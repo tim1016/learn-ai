@@ -12,12 +12,13 @@ remediation_progress:
   - "#494 — Phase 2 — P3-B unregistered modules gated by registry-based runner check"
   - "#494 — Phase 2 — P3-C spec-fixture auto-fill follows module-name keys"
   - "#501 — Phase 6D — P3-P/Q per-instance start lock + halt.flag pre-flight rerun"
+  - "P3-E — Phase 8 SIZING_SKIP audit log shipped via #544 (sizing_skip.jsonl; symbol/policy/target/current/reason captured)"
+  - "P3-F — Order-surface reverse fail-fast: LivePortfolio.submit_market_order accepts explicit_call=True from ctx.market_order / strategy.market_order; raises Order-surface mismatch when registered_sizing_surface == 'policy'. The forward case (explicit + set_holdings) was already in place at live_portfolio.py:524-530."
 follow_up_required:
-  - "P3-D ADR 0009 References line numbers — Phase 10 governance docs"
-  - "P3-E/F sizing surface validation — Phase 8 sizing WAL events"
-  - "P3-J/K/L/N timestamp rigor + QC card tail — Phase 7"
+  - "P3-D ADR 0009 References line numbers — re-anchor on next ADR 0009 touch (doc-only drift; semantics preserved)"
+  - "P3-J/K/L/N timestamp rigor + QC card tail — Phase 7 follow-ups, not gating safety"
   - "P3-M sizing policy presence in cmd_start — covered by Phase 1 + Phase 6D start-gate"
-  - "P3-O/N dead-code rollup — Phase 11"
+  - "P3-O/N dead-code rollup — Phase 11 / rolled into VCR-0017"
 lens: multiple
 dedupe_with_F: none
 confidence: mixed
