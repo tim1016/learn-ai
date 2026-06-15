@@ -1,7 +1,7 @@
 ---
 id: VCR-0009
 severity: P1
-status: regrounded_open
+status: remediated
 area: halt-state-machine
 canonical_file: PythonDataService/app/engine/live/run.py::cmd_emergency_flatten
 reference: PRD §12.8
@@ -10,7 +10,10 @@ last_seen: 2026-06-14
 regrounded_on: 2026-06-14
 regrounded_to: high
 phase_0_verdict: confirmed_valid
-remediation_target: "Phase 5C (ownership-query gates) + cmd_emergency_flatten cancel-first fix"
+remediated_in: "fix(vcr-0009) — cmd_emergency_flatten now calls broker.cancel_open_orders before the liquidation loop, matching the sibling _recovery_flatten / LiveEngine._flatten pattern. Force-flatten carve-out: cancel failure is logged loudly but liquidation proceeds (leaving open positions during a panic is worse than acting without cancel confirmation)."
+follow_up_required:
+  - "Full Phase 5C ownership-query gating (OWNERSHIP_QUERY_UNAVAILABLE_HALT + cancel-confirm timeout + EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS carve-out) — separate remediation"
+  - "Cross-restart fill-conversion classifier (VCR-0012) — Phase 5E"
 lens: halt-pause-stop-flatten-poison
 dedupe_with_F: none
 confidence: high

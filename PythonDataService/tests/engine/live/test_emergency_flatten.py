@@ -25,18 +25,27 @@ from app.engine.live.run import cmd_emergency_flatten
 
 
 class _FakeFlattenBroker:
-    """Just enough surface for cmd_emergency_flatten — fetch_positions
-    + place_order. No event stream, no portfolio refresh."""
+    """Just enough surface for cmd_emergency_flatten — fetch_positions,
+    cancel_open_orders, place_order. No event stream, no portfolio refresh.
+
+    ``timeline`` records every method call so cancel-before-liquidate
+    ordering can be asserted directly (VCR-0009 regression)."""
 
     def __init__(
         self,
         *,
         account_id: str = "DU123",
         positions: list[IbkrPosition] | None = None,
+        owned_open_order_ids: list[int] | None = None,
+        cancel_raises: BaseException | None = None,
     ) -> None:
         self._account_id = account_id
         self._positions = positions or []
+        self._owned_open_order_ids = list(owned_open_order_ids or [])
+        self._cancel_raises = cancel_raises
         self.placed: list[IbkrOrderSpec] = []
+        self.cancel_calls = 0
+        self.timeline: list[str] = []
         self._next_order_id = 500
 
     async def fetch_account_summary(self) -> IbkrAccountSummary:
@@ -56,8 +65,16 @@ class _FakeFlattenBroker:
             fetched_at_ms=1,
         )
 
+    async def cancel_open_orders(self) -> list[int]:
+        self.cancel_calls += 1
+        self.timeline.append("cancel_open_orders")
+        if self._cancel_raises is not None:
+            raise self._cancel_raises
+        return list(self._owned_open_order_ids)
+
     async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
         self.placed.append(spec)
+        self.timeline.append(f"place_order:{spec.symbol}")
         order_id = self._next_order_id
         self._next_order_id += 1
         return IbkrOrderAck(
@@ -206,6 +223,56 @@ def test_emergency_flatten_does_nothing_on_empty_account(tmp_path: Path) -> None
     assert broker.placed == []
     log = (tmp_path / "emergency_flatten.log").read_text()
     assert "complete: liquidated=0" in log
+
+
+# ──────────────────────────── VCR-0009 ───────────────────────────────
+
+
+def test_emergency_flatten_cancels_open_orders_before_liquidating_vcr_0009(
+    tmp_path: Path,
+) -> None:
+    """VCR-0009 — cmd_emergency_flatten MUST cancel owned open orders BEFORE
+    any liquidation order is submitted. Without this, an open bot SELL limit
+    can race the emergency SELL market and double-sell the position."""
+    broker = _FakeFlattenBroker(
+        positions=[_pos("SPY", 200), _pos("QQQ", -50)],
+        owned_open_order_ids=[111, 222],
+    )
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
+
+    assert rc == 0
+    assert broker.cancel_calls == 1
+    # The critical ordering invariant: cancel comes first; every place_order
+    # comes after.
+    assert broker.timeline[0] == "cancel_open_orders"
+    assert all(step.startswith("place_order:") for step in broker.timeline[1:])
+    log = (tmp_path / "emergency_flatten.log").read_text()
+    assert "cancelled_open_orders: count=2" in log
+
+
+def test_emergency_flatten_proceeds_when_cancel_raises_vcr_0009(
+    tmp_path: Path,
+) -> None:
+    """VCR-0009 — emergency-flatten is an operator-confirmed force-flatten
+    path. If cancel_open_orders raises (broker glitch, partial outage), the
+    runner logs the failure loudly and proceeds with liquidation anyway —
+    leaving open positions during a panic is worse than acting without
+    cancel confirmation. The audit log carries both events."""
+    broker = _FakeFlattenBroker(
+        positions=[_pos("SPY", 200)],
+        cancel_raises=RuntimeError("broker timeout"),
+    )
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
+
+    assert rc == 0
+    assert broker.cancel_calls == 1
+    assert len(broker.placed) == 1  # liquidation still happened
+    log = (tmp_path / "emergency_flatten.log").read_text()
+    assert "cancel_open_orders failed" in log
+    assert "RuntimeError" in log
+    assert "broker timeout" in log
 
 
 # ──────────────────────────── Audit log ──────────────────────────────
