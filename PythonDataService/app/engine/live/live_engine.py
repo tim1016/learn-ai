@@ -1544,7 +1544,7 @@ class LiveEngine:
                 self._broker.cancel_open_orders(),
                 timeout=self._cancel_confirm_timeout_s,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             if self._output_dir is not None:
                 try:
                     self._output_dir.mkdir(parents=True, exist_ok=True)
