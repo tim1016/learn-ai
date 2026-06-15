@@ -105,13 +105,79 @@ jobs:
         working-directory: PythonDataService
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: PythonDataService/requirements*.txt
       - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
-      - run: python -m pytest tests/ -v -k "not slow" --tb=short
+
+      # Curated fast baseline + diff-driven extras.
+      # Baseline dirs always run; everything else only runs when the diff touches it
+      # (either a tests/** file directly, or an app/**/<name>.py with a matching
+      # tests/**/test_<name>.py). See discussion in PR introducing this step.
+      - name: Compute change-driven extra test paths
+        id: changed
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_ref="${{ github.base_ref }}"
+            git fetch --no-tags --depth=200 origin "$base_ref" || git fetch --no-tags origin "$base_ref"
+            base="origin/${base_ref}"
+            range="${base}...HEAD"
+          else
+            # push to master: diff just the pushed commits
+            range="${{ github.event.before }}...${{ github.sha }}"
+            if ! git rev-parse --verify "${{ github.event.before }}" >/dev/null 2>&1; then
+              range="HEAD~1...HEAD"
+            fi
+          fi
+          changed=$(git diff --name-only "$range" || true)
+          # Baseline dirs are always run; skip them here to avoid duplicate paths.
+          baseline_pattern='^PythonDataService/tests/(unit|indicators|edge|utils|engine|routers|schemas)/'
+          extra=""
+          # (1) Directly-changed test files outside the baseline dirs.
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            case "$p" in
+              PythonDataService/tests/*test_*.py)
+                if [[ ! "$p" =~ $baseline_pattern ]]; then
+                  rel="${p#PythonDataService/}"
+                  [ -f "PythonDataService/$rel" ] && extra="$extra $rel"
+                fi
+                ;;
+            esac
+          done <<< "$changed"
+          # (2) tests/**/test_<name>.py and test_<name>_*.py for each changed app/**/<name>.py.
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            case "$p" in
+              PythonDataService/app/*.py)
+                stem=$(basename "$p" .py)
+                [ "$stem" = "__init__" ] && continue
+                while IFS= read -r t; do
+                  if [[ ! "PythonDataService/$t" =~ $baseline_pattern ]]; then
+                    extra="$extra $t"
+                  fi
+                done < <(cd PythonDataService && find tests -type f \( -name "test_${stem}.py" -o -name "test_${stem}_*.py" \) 2>/dev/null || true)
+                ;;
+            esac
+          done <<< "$changed"
+          extra=$(echo "$extra" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
+          echo "extra=${extra}" >> "$GITHUB_OUTPUT"
+          echo "Extra change-driven test paths: ${extra:-<none>}"
+
+      - name: Run fast baseline + change-driven tests
+        run: |
+          python -m pytest \
+            tests/unit tests/indicators tests/edge tests/utils \
+            tests/engine tests/routers tests/schemas \
+            ${{ steps.changed.outputs.extra }} \
+            -v -k "not slow" --tb=short
 
   validate-golden-manifest:
     name: Validate Golden Manifest
