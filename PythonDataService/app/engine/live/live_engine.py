@@ -414,6 +414,31 @@ class LiveEngine:
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
         self._sizing_surface = sizing_surface
+
+        # Phase 5C / VCR-0002 — durable submit activation. When the operator
+        # has flipped ``LiveConfig.durable_submit_enabled = True`` AND a
+        # real IBKR client is wired, instantiate the verified
+        # ``IbkrBrokerOwnershipQuery`` subclass and run the activation
+        # contract (Gate #1 verified order_ref cap + Gate #2
+        # subclass-allowlist). The contract raises
+        # ``DurableSubmitNotActivatable`` on failure, which propagates out
+        # of construction so the runner refuses to start. Default is
+        # ``False`` so this is purely additive — the operator opts in
+        # after the paper-side validation receipt lands.
+        if self._config.durable_submit_enabled and self._client is not None:
+            from app.engine.live.broker_ownership_query import (
+                require_durable_submit_activation,
+            )
+            from app.engine.live.ibkr_broker_ownership_query import (
+                VERIFIED_ORDER_REF_CAP,
+                IbkrBrokerOwnershipQuery,
+            )
+
+            require_durable_submit_activation(
+                enabled=True,
+                verified_order_ref_cap=VERIFIED_ORDER_REF_CAP,
+                ownership_query=IbkrBrokerOwnershipQuery(self._client),
+            )
         # The strategy-specific decision columns = resolved minus the core.
         self._strategy_decision_columns = tuple(
             c for c in decision_columns if c not in CORE_DECISION_COLUMNS
