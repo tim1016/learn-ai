@@ -1,15 +1,17 @@
 ---
 id: VCR-0007
 severity: P1
-status: open
+status: remediated
 area: halt-state-machine
 canonical_file: PythonDataService/app/engine/live/live_engine.py
 reference: docs/architecture/adrs/0004-instance-addressed-operator-control-plane.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#498 — Phase 6A — Flatten-and-pause composition (ADR 0010 v1 contract)"
+regrounded_to: high
 lens: halt-pause-stop-flatten-poison
 dedupe_with_F: none
-confidence: medium
+confidence: high
 ---
 
 ## What

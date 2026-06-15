@@ -1,12 +1,13 @@
 ---
 id: VCR-0004
 severity: P1
-status: open
+status: remediated
 area: strategy-keys
 canonical_file: PythonDataService/app/engine/live/run.py:897
 reference: PRD §12.1
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#494 — Phase 2 — Module-name keys + explicit class_name"
 lens: strategy-registry-key-mapping
 dedupe_with_F: none
 confidence: high

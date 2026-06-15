@@ -1,15 +1,19 @@
 ---
 id: VCR-0010
 severity: P1
-status: open
+status: partially_remediated
 area: ui-runtime-claims
 canonical_file: Frontend/src/app/components/broker/broker-instances/**
 reference: PRD §12.10, broker-user-manual.html §4
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#502 — Phase 7A — Broker safety verdict on /broker/health (verdict surfaced; rendering wired)"
+regrounded_to: high
+follow_up_required:
+  - "Phase 7B — verdict order-blocking + mid-session transition halt + Resume guard"
 lens: ui-vs-runtime-claims
 dedupe_with_F: none
-confidence: medium
+confidence: high
 ---
 
 ## What

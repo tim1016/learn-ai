@@ -1,12 +1,13 @@
 ---
 id: VCR-0014
 severity: P2
-status: open
+status: remediated
 area: ui-runtime-claims
 canonical_file: Frontend/src/app/components/broker/broker-provenance-card/broker-provenance-card.component.ts:48
 reference: docs/architecture/adrs/0006-deploy-control-plane-host-daemon-init-ledger.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediated_in: "#503 — Phase 7D — Split QC provenance card (ADR 0011 §9 contract: operator-recorded, not auto-verified)"
 lens: run-ledger-identity-provenance
 dedupe_with_F: none
 confidence: high

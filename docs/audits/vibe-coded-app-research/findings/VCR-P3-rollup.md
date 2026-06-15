@@ -1,12 +1,23 @@
 ---
 id: VCR-P3-rollup
 severity: P3
-status: open
+status: partially_remediated
 area: cleanup
 canonical_file: multiple
 reference: PRD §7
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediation_progress:
+  - "#494 — Phase 2 — P3-A DeploymentValidationAlgorithm alias retired via explicit class_name"
+  - "#494 — Phase 2 — P3-B unregistered modules gated by registry-based runner check"
+  - "#494 — Phase 2 — P3-C spec-fixture auto-fill follows module-name keys"
+  - "#501 — Phase 6D — P3-P/Q per-instance start lock + halt.flag pre-flight rerun"
+follow_up_required:
+  - "P3-D ADR 0009 References line numbers — Phase 10 governance docs"
+  - "P3-E/F sizing surface validation — Phase 8 sizing WAL events"
+  - "P3-J/K/L/N timestamp rigor + QC card tail — Phase 7"
+  - "P3-M sizing policy presence in cmd_start — covered by Phase 1 + Phase 6D start-gate"
+  - "P3-O/N dead-code rollup — Phase 11"
 lens: multiple
 dedupe_with_F: none
 confidence: mixed

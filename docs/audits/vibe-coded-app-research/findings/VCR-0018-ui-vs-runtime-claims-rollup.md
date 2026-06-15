@@ -1,12 +1,22 @@
 ---
 id: VCR-0018
 severity: P2
-status: open
+status: partially_remediated
 area: ui-runtime-claims
 canonical_file: multiple Frontend broker components
 reference: PRD §7
 first_seen: 2026-06-14
 last_seen: 2026-06-14
+remediation_progress:
+  - "#499 — Phase 6B — VCR-0018-B Stop ack semantics (signal-accepted vs process-exited)"
+  - "#500 — Phase 6C — VCR-0018-F Engine-level force-flat enforcement"
+  - "#501 — Phase 6D — VCR-0018-G Per-instance start lock + halt.flag pre-flight rerun"
+follow_up_required:
+  - "VCR-0018-A — Sentinel pill label bound to structured 4-layer verdict (Phase 7B)"
+  - "VCR-0018-C — ReadinessGate label coverage gap (Phase 7 mechanical)"
+  - "VCR-0018-D — Deploy form 'Live mode' dialog wording (Phase 7B)"
+  - "VCR-0018-E — sub-item to verify against current code"
+  - "VCR-0018-J/K/L/N — timestamp rigor + QC card tail (Phase 7 mechanical)"
 lens: ui-vs-runtime-claims
 dedupe_with_F: none
 confidence: medium

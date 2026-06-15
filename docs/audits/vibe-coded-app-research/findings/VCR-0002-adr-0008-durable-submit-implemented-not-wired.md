@@ -1,17 +1,17 @@
 ---
 id: VCR-0002
 severity: P0
-status: phase_5a_foundation_landed
+status: phase_5b_coldstart_gated
 area: broker-ownership
 canonical_file: PythonDataService/app/engine/live/live_engine.py:1086
 reference: docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md
 first_seen: 2026-06-14
 last_seen: 2026-06-14
 remediation_progress:
-  - "#497 — Phase 5A — Intent identity foundation (intent_id, order_ref, PENDING_INTENT / SUBMITTED / ACK_FAILED_UNCERTAIN WAL)"
   - "#496 — Phase 4 — Operator-trust mitigation (UI banner + RECONCILE accepted_noop)"
+  - "#497 — Phase 5A — Intent identity foundation (intent_id, order_ref, PENDING_INTENT / SUBMITTED / ACK_FAILED_UNCERTAIN WAL)"
+  - "aae1cf2c — Phase 5B — Require IntentWal + order_ref for real IBKR submits (ColdStartReconciler gate)"
 follow_up_required:
-  - "Phase 5B — ColdStartReconciler.verify() at cmd_start"
   - "Phase 5C — Ownership query wiring + cancel-then-liquidate ordering"
   - "Phase 5D — Submit retry state machine + SUBMIT_UNCERTAIN_HALT"
   - "Phase 5E — Fill conversion uses ownership classifier"
