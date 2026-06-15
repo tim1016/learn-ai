@@ -34,7 +34,7 @@
             [attr.aria-expanded]="r.traceback ? open : null"
           >
             <span class="level" [class.crit]="r.level === 'CRITICAL'">{{ r.level }}</span>
-            <span class="ts mono">{{ r.raw_ts }}</span>
+            <span class="ts mono">{{ r.ts_ms | date: 'short' : 'America/New_York' }}</span>
             <span class="logger mono">{{ r.logger }}</span>
             <span class="msg">{{ r.message }}</span>
             @if (r.traceback) {
