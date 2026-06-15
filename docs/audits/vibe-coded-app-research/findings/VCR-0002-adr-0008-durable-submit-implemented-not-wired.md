@@ -11,10 +11,14 @@ remediation_progress:
   - "#496 — Phase 4 — Operator-trust mitigation (UI banner + RECONCILE accepted_noop)"
   - "#497 — Phase 5A — Intent identity foundation (intent_id, order_ref, PENDING_INTENT / SUBMITTED / ACK_FAILED_UNCERTAIN WAL)"
   - "aae1cf2c — Phase 5B — Require IntentWal + order_ref for real IBKR submits (ColdStartReconciler gate)"
+  - "#533 — Phase 5D — submit_state_machine wired into submit_pending_orders (RETRY_CAP=1, NOT_PROVABLE→HALT, SUBMIT_UNCERTAIN_HALTED WAL event, SubmitUncertainHaltError)"
+  - "#535 — Phase 5D Resume WAL guard — cmd_resume refuses on unresolved ACK_FAILED_UNCERTAIN with --force override"
+  - "#536 — Phase 5E — _convert_ibkr_fill cross-restart classifier via folded intent WAL keyed by perm_id"
+  - "PR feat/phase-5c-ownership-query — Phase 5C — IbkrBrokerOwnershipQuery(VerifiedBrokerOwnershipQuery) subclass implementing namespace-scoped open_orders + executions queries against ib_async caches; passes require_durable_submit_activation structural gate"
 follow_up_required:
-  - "Phase 5C — Ownership query wiring + cancel-then-liquidate ordering"
-  - "Phase 5D — Submit retry state machine + SUBMIT_UNCERTAIN_HALT"
-  - "Phase 5E — Fill conversion uses ownership classifier"
+  - "Phase 5C cancel-then-liquidate refactor — _flatten / _recovery_flatten / cmd_emergency_flatten to consult the ownership query, await per-order cancel confirms, then liquidate (PRD §5C step 4-5)"
+  - "Phase 5C halt events — OWNERSHIP_QUERY_UNAVAILABLE_HALT / CANCEL_CONFIRM_TIMEOUT_HALT / EMERGENCY_FLATTEN_WITHOUT_OWNERSHIP_PROOF (gated on broker-lifecycle WAL location decision; see VCR-0006 follow-up)"
+  - "Phase 5C activation flip — operator enables require_durable_submit_activation(enabled=True, ownership_query=IbkrBrokerOwnershipQuery(client), verified_order_ref_cap=VERIFIED_ORDER_REF_CAP) after the deployment_validation paper deploy proves IBKR returns prior-run orders/executions carrying orderRef across reconnect (Acceptance Gate #2 behavioral receipt)"
 lens: broker-order-ownership-reconcile
 dedupe_with_F: none
 confidence: high
