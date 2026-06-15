@@ -273,6 +273,49 @@ def test_emergency_flatten_proceeds_when_cancel_raises_vcr_0009(
     assert "cancel_open_orders failed" in log
     assert "RuntimeError" in log
     assert "broker timeout" in log
+    assert "EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS" in log
+
+
+def test_emergency_flatten_proceeds_on_cancel_confirm_timeout_vcr_0002(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 5C / VCR-0002 — emergency-flatten force carve-out.
+
+    The managed paths (LiveEngine._flatten, _recovery_flatten) refuse to
+    liquidate on cancel-confirm timeout. emergency-flatten is the operator-
+    confirmed panic surface and is allowed to proceed past timeout — but
+    the unconfirmed-cancel decision is recorded as an audit event so a
+    post-mortem can identify runs that liquidated against possibly-still-
+    open orders.
+
+    Models the broker session whose cancel-confirm path has gone silent
+    (gateway dropped the callback, or the cancel acknowledgement never
+    arrives). The operator already typed ``--confirm`` and named the
+    account; the panic semantics commit to flattening.
+    """
+    import asyncio
+
+    class _HangingCancelBroker(_FakeFlattenBroker):
+        async def cancel_open_orders(self) -> list[int]:
+            self.cancel_calls += 1
+            self.timeline.append("cancel_open_orders")
+            await asyncio.sleep(10)
+            return []
+
+    monkeypatch.setattr(
+        "app.engine.live.live_engine.CANCEL_CONFIRM_TIMEOUT_S", 0.05
+    )
+    broker = _HangingCancelBroker(positions=[_pos("SPY", 200)])
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
+
+    assert rc == 0
+    assert broker.cancel_calls == 1
+    assert len(broker.placed) == 1, "force-flatten must liquidate past timeout"
+    log = (tmp_path / "emergency_flatten.log").read_text()
+    assert "timed out" in log
+    assert "EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS" in log
+    assert "cancel_confirm_timeout_s=0.05" in log
 
 
 # ──────────────────────────── Audit log ──────────────────────────────

@@ -465,8 +465,26 @@ async def _recovery_flatten(
             detected += 1
         return detected
 
+    # Phase 5C / VCR-0002 — managed cancel-confirm timeout in the
+    # recovery-flatten path. PRD §5C: do NOT liquidate when the cancel
+    # confirms can't return within the window; surface as a fatal halt
+    # so the operator inspects rather than racing cancels against the
+    # immediately-following market liquidations.
+    from app.engine.live.live_engine import (
+        CANCEL_CONFIRM_TIMEOUT_S,
+        CancelConfirmTimeoutHaltError,
+    )
+
     try:
-        cancelled = await broker.cancel_open_orders()
+        cancelled = await asyncio.wait_for(
+            broker.cancel_open_orders(), timeout=CANCEL_CONFIRM_TIMEOUT_S
+        )
+    except TimeoutError as exc:
+        logger.error(
+            "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
+            extra={"step": "8", "timeout_s": CANCEL_CONFIRM_TIMEOUT_S},
+        )
+        raise CancelConfirmTimeoutHaltError(timeout_s=CANCEL_CONFIRM_TIMEOUT_S) from exc
     except Exception:
         logger.exception(
             "cancel_open_orders failed during recovery flatten",
@@ -1632,15 +1650,41 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
             # with EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS carve-out)
             # is the deferred follow-up; this fix closes the immediate
             # cancel-first asymmetry called out in VCR-0009.
+            # Phase 5C / VCR-0002 — emergency-flatten force carve-out.
+            # The managed paths (LiveEngine._flatten, _recovery_flatten)
+            # refuse to liquidate on cancel-confirm timeout. Emergency
+            # flatten is the operator-confirmed "panic" surface and DOES
+            # proceed past timeout — but the unconfirmed-cancel decision
+            # is recorded as an audit event so post-mortems can identify
+            # runs that liquidated against possibly-still-open orders.
+            from app.engine.live.live_engine import CANCEL_CONFIRM_TIMEOUT_S
+
+            unconfirmed_cancels_reason: str | None = None
             try:
-                cancelled = await broker.cancel_open_orders()
+                cancelled = await _asyncio.wait_for(
+                    broker.cancel_open_orders(),
+                    timeout=CANCEL_CONFIRM_TIMEOUT_S,
+                )
                 _log(f"cancelled_open_orders: count={len(cancelled)} ids={cancelled}")
+            except TimeoutError:
+                unconfirmed_cancels_reason = f"cancel_confirm_timeout_s={CANCEL_CONFIRM_TIMEOUT_S}"
+                _log(
+                    f"WARNING: cancel_open_orders timed out after {CANCEL_CONFIRM_TIMEOUT_S}s; "
+                    "proceeding with liquidation anyway (force-flatten)."
+                )
             except Exception as exc:
+                unconfirmed_cancels_reason = f"{type(exc).__name__}: {exc}"
                 # Operator-confirmed force-flatten proceeds even if the cancel
                 # call fails — leaving open broker positions during a panic
                 # is worse than acting without cancel-confirmation. Logged
                 # loudly so the run record shows the unconfirmed cancel.
                 _log(f"WARNING: cancel_open_orders failed ({type(exc).__name__}: {exc}); proceeding with liquidation anyway (force-flatten).")
+
+            if unconfirmed_cancels_reason is not None:
+                _log(
+                    "EMERGENCY_FLATTEN_WITH_UNCONFIRMED_CANCELS reason="
+                    f"{unconfirmed_cancels_reason} account={args.account}"
+                )
 
             liquidated = 0
             for pos in snapshot.positions:
