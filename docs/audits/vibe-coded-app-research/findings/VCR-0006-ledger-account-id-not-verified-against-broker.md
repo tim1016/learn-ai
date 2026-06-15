@@ -8,7 +8,8 @@ reference: docs/architecture/adrs/0006-deploy-control-plane-host-daemon-init-led
 first_seen: 2026-06-14
 last_seen: 2026-06-14
 remediated_in: "#495 — Phase 3 — strict ledger↔broker account identity (start-time)"
-follow_up_required: "reconnect re-validation (PRD §11 C) deferred — requires IbkrClient reconnect-lifecycle changes"
+follow_up_required:
+  - "Reconnect re-validation (PRD §11 C) — scope verdict (Phase 3 reconnect explore, 2026-06-14): tractable but substantial; 4-6 focused PRs covering (1) IbkrClient reconnect hook / event API; (2) BROKER_RECONNECTED + RECONNECT_ACCOUNT_MISMATCH_HALT WAL event types; (3) reuse halt.flag + desired_state=PAUSED plumbing; (4) connection_epoch increment; (5) tests; (6) cockpit failure-list rendering. Gating decisions required from user before opening PR1: (a) intent_wal vs new broker_wal for broker-lifecycle events; (b) whether halt.flag schema needs a new PoisonedHaltTrigger variant; (c) reconnect-observer API design (callback subscription vs bar-loop polling)."
 lens: run-ledger-identity-provenance
 dedupe_with_F: none
 confidence: high
