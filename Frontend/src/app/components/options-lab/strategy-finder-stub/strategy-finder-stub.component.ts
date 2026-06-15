@@ -41,6 +41,15 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
       font-size: 13px;
       line-height: 1.6;
     }
+    .tracker {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #6b7077;
+    }
+    .tracker a {
+      color: #6b7077;
+      text-decoration: underline;
+    }
   `],
   template: `
     <div class="panel">
@@ -50,6 +59,15 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
         A scanner that ranks pre-built strategies (spreads, condors, butterflies)
         by reward/risk, breakeven distance, and expected payoff across a price
         range. Design and ranking criteria still TBD.
+      </p>
+      <p class="tracker">
+        Tracked in
+        <a
+          href="https://github.com/tim1016/learn-ai/issues?q=is%3Aissue+strategy-finder-stub"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub issues (label: strategy-finder-stub)</a
+        >. VCR-P3-N.
       </p>
     </div>
   `,

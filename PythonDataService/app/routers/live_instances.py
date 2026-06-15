@@ -18,6 +18,7 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, Response, status
@@ -1123,14 +1124,30 @@ def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | 
         effective_end = ended if ended is not None else day_end_ms
         if started < day_end_ms and effective_end >= day_start_ms:
             out.append({**run, "started_at_ms": started, "ended_at_ms": ended, "sidecar_started": sidecar is not None})
-        elif live_binding is not None and run.get("run_id") == live_binding.run_id and day == _today_utc():
+        elif live_binding is not None and run.get("run_id") == live_binding.run_id and day == _today_ny():
             out.append({**run, "started_at_ms": started, "ended_at_ms": None, "sidecar_started": False})
     return out
 
 
-def _today_utc() -> date:
-    """Today as UTC date — the partition key for live bars."""
-    return datetime.now(UTC).date()
+# VCR-P3-I — Trading-day boundaries are America/New_York, not UTC. At
+# the UTC boundary (00:00 UTC = 19:00 ET in winter / 20:00 ET in summer)
+# bars from the ET trading session could fall on the wrong UTC date,
+# making the chart-snapshot "today" view miss bars or show yesterday's
+# bars under today's banner. The chart-snapshot is the only consumer in
+# this module; everything else operates on bar-time milliseconds where
+# the timezone is already explicit.
+_NY_TZ = ZoneInfo("America/New_York")
+
+
+def _today_ny() -> date:
+    """Today as America/New_York date — the trading-day partition key.
+
+    VCR-P3-I: at the UTC boundary, bars from the ET trading session
+    can fall on the wrong UTC date. The chart-snapshot endpoint reads
+    by trading day, so the "today" reference must be the NY trading
+    date, not the UTC calendar date.
+    """
+    return datetime.now(_NY_TZ).date()
 
 
 def _bar_to_dict(bar) -> dict:
@@ -1207,7 +1224,7 @@ async def get_chart_snapshot(
     root = Path(settings.live_runs_root)
 
     try:
-        day = date.fromisoformat(date_str) if date_str else _today_utc()
+        day = date.fromisoformat(date_str) if date_str else _today_ny()
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid date") from None
 
@@ -1216,7 +1233,7 @@ async def get_chart_snapshot(
     runs = _scan_runs_by_instance(root).get(sid, [])
 
     symbol = _resolve_symbol(root, live_binding, runs)
-    is_today = day == _today_utc()
+    is_today = day == _today_ny()
 
     # Today's path: nudge the live aggregator so a fresh operator session
     # after a deploy/restart starts the IBKR stream — the chart card no

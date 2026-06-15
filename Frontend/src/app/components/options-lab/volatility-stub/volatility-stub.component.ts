@@ -41,6 +41,15 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
       font-size: 13px;
       line-height: 1.6;
     }
+    .tracker {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #6b7077;
+    }
+    .tracker a {
+      color: #6b7077;
+      text-decoration: underline;
+    }
   `],
   template: `
     <div class="panel">
@@ -49,6 +58,15 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
       <p>
         Implied-volatility surface and term-structure visualizations across
         strikes and expirations. View shape and exact metrics still TBD.
+      </p>
+      <p class="tracker">
+        Tracked in
+        <a
+          href="https://github.com/tim1016/learn-ai/issues?q=is%3Aissue+volatility-stub"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub issues (label: volatility-stub)</a
+        >. VCR-P3-N.
       </p>
     </div>
   `,
