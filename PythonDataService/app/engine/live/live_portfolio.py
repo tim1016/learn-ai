@@ -460,11 +460,44 @@ class LivePortfolio:
         # (production path). Replay / legacy tests run without the WAL and
         # keep the prior behaviour: no minting, no WAL writes.
         if self.intent_wal is not None and self.bot_order_namespace:
-            from app.engine.live.order_identity import mint_intent_id
+            from app.engine.live.intent_events import IntentEventType, IntentKind
+            from app.engine.live.order_identity import build_order_ref, mint_intent_id
 
             intent_id = mint_intent_id()
             self._intent_by_order_id[order.order_id] = intent_id
             self._last_minted_intent_id = intent_id
+
+            # Phase 8 (ADR 0009 § 11) — append SIZING_RESOLVED to the WAL
+            # immediately after the intent_id is minted and BEFORE the
+            # PENDING_INTENT / SUBMITTED record that follows in the submit
+            # path. Reuses the same intent_id so the per-trade Sizing card
+            # can join SIZING_RESOLVED → submit → fill on intent_id alone.
+            # SIZING_SKIP (no intent_id) is deferred — the IntentEvent model
+            # currently requires non-empty intent_id + order_ref; emitting
+            # the skip side would need a data-model relaxation that ripples
+            # through ColdStartReconciler and the fold, scope-creep for the
+            # WAL-emit half. Tracked as VCR-0003 follow-up.
+            if self.order_sizer is not None:
+                from app.engine.execution.order_sizer import (
+                    default_sizing_provenance,
+                )
+
+                policy = self.order_sizer.policy
+                self.intent_wal.append(
+                    event_type=IntentEventType.SIZING_RESOLVED,
+                    intent_id=intent_id,
+                    bot_order_namespace=self.bot_order_namespace,
+                    order_ref=build_order_ref(self.bot_order_namespace, intent_id),
+                    intent_kind=IntentKind.STRATEGY,
+                    order_id=order.order_id,
+                    policy_kind=policy.kind,
+                    policy_value=_describe_policy_value(policy),
+                    intended_qty=int(target_quantity),
+                    reference_price=str(price),
+                    sizing_provenance_at_resolve_time=default_sizing_provenance(policy),
+                    sized_via="policy_set_holdings",
+                    ts_ms=int(time.timestamp() * 1000),
+                )
         return order
 
     def liquidate(self, symbol: str, time: datetime) -> Order | None:

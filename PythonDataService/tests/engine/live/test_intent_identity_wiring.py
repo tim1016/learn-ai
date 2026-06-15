@@ -156,12 +156,16 @@ def test_submit_pending_orders_writes_submitted_after_success(tmp_path: Path) ->
 
     wal_text = (tmp_path / "intent_events.jsonl").read_text(encoding="utf-8")
     events = [_json.loads(line) for line in wal_text.splitlines() if line.strip()]
+    # Phase 8 inserts SIZING_RESOLVED ahead of PENDING_INTENT; the lifecycle
+    # pair PENDING_INTENT → SUBMITTED still applies on the same intent_id.
     assert [e["event_type"] for e in events] == [
+        IntentEventType.SIZING_RESOLVED.value,
         IntentEventType.PENDING_INTENT.value,
         IntentEventType.SUBMITTED.value,
     ]
-    assert events[0]["intent_id"] == events[1]["intent_id"]
-    assert events[1]["order_id"] is not None
+    intent_id = events[0]["intent_id"]
+    assert all(e["intent_id"] == intent_id for e in events)
+    assert events[-1]["order_id"] is not None
 
 
 def test_submit_pending_orders_writes_ack_failed_uncertain_on_exception(tmp_path: Path) -> None:
@@ -338,3 +342,73 @@ def test_real_broker_namespace_mismatch_assertion_fires(tmp_path: Path, monkeypa
         asyncio.run(portfolio.submit_pending_orders())
     # And the broker must never have been invoked.
     assert portfolio.broker.orders == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 (VCR-0003) — SIZING_RESOLVED WAL emission
+# ---------------------------------------------------------------------------
+
+
+def _read_wal_events(tmp_path: Path) -> list[dict]:
+    import json
+
+    path = tmp_path / "intent_events.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def test_set_holdings_appends_sizing_resolved_with_minted_intent_id(tmp_path: Path) -> None:
+    """Phase 8 — after a non-skip ``set_holdings`` the WAL holds a single
+    SIZING_RESOLVED event keyed to the freshly-minted intent_id."""
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    intent_id = portfolio.last_minted_intent_id()
+    assert intent_id is not None
+
+    events = _read_wal_events(tmp_path)
+    sizing = [e for e in events if e["event_type"] == IntentEventType.SIZING_RESOLVED.value]
+    assert len(sizing) == 1
+    row = sizing[0]
+    assert row["intent_id"] == intent_id
+    assert row["order_ref"] == f"learn-ai/test-instance/v1:{intent_id}"
+    assert row["policy_kind"] == "FixedShares"
+    assert row["policy_value"] == "10"
+    assert row["intended_qty"] == 10
+    assert row["reference_price"] == "500"
+    assert row["sizing_provenance_at_resolve_time"] == "live_override"
+    assert row["sized_via"] == "policy_set_holdings"
+
+
+def test_set_holdings_skip_writes_no_sizing_resolved(tmp_path: Path) -> None:
+    """Phase 8 — a skip (delta == 0) must NOT mint an intent_id and therefore
+    must NOT append SIZING_RESOLVED. SIZING_SKIP (which carries no intent_id)
+    is the deferred half tracked as VCR-0003 follow-up."""
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.get_position("SPY").quantity = 10  # already at FixedShares(10)
+
+    order = portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+
+    assert order is None
+    events = _read_wal_events(tmp_path)
+    assert all(e["event_type"] != IntentEventType.SIZING_RESOLVED.value for e in events)
+
+
+def test_set_holdings_sizing_resolved_precedes_pending_intent(tmp_path: Path) -> None:
+    """Phase 8 / PRD §8 — SIZING_RESOLVED must be appended BEFORE the
+    PENDING_INTENT that follows in the submit path. The fold relies on this
+    ordering when joining the Sizing card to the trade record."""
+    import asyncio
+
+    portfolio = _portfolio_with_intent_wal(tmp_path)
+    portfolio.set_holdings("SPY", Decimal("1.0"), _bar_time())
+    asyncio.run(portfolio.submit_pending_orders())
+
+    events = _read_wal_events(tmp_path)
+    types = [e["event_type"] for e in events]
+    assert IntentEventType.SIZING_RESOLVED.value in types
+    assert IntentEventType.PENDING_INTENT.value in types
+    sizing_idx = types.index(IntentEventType.SIZING_RESOLVED.value)
+    pending_idx = types.index(IntentEventType.PENDING_INTENT.value)
+    assert sizing_idx < pending_idx
