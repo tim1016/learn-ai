@@ -1,7 +1,7 @@
 ---
 id: VCR-0012
 severity: P1
-status: regrounded_open
+status: remediated
 area: broker-ownership
 canonical_file: PythonDataService/app/engine/live/live_engine.py::_convert_ibkr_fill
 reference: docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md
@@ -10,7 +10,7 @@ last_seen: 2026-06-14
 regrounded_on: 2026-06-14
 regrounded_to: high
 phase_0_verdict: confirmed_valid
-remediation_target: "Phase 5E — fill ownership classifier wired into _convert_ibkr_fill"
+remediated_in: "Phase 5E — _convert_ibkr_fill consults the durable intent WAL when in-memory _order_meta misses, reconstructs _OrderMeta from the SubmittedOrderView's order_spec (symbol/action/quantity) keyed by perm_id. Cross-restart bot-owned fills now record into portfolio."
 lens: broker-order-ownership-reconcile
 dedupe_with_F: none
 confidence: high

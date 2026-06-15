@@ -51,7 +51,16 @@ class SizingResolution:
 
 @dataclass(frozen=True)
 class SubmittedOrderView:
-    """One intent's folded state, keyed by ``intent_id`` in the ledger."""
+    """One intent's folded state, keyed by ``intent_id`` in the ledger.
+
+    ``order_spec`` is the order's IbkrOrderSpec.model_dump() captured at
+    PENDING_INTENT emit time (Phase 5A). Phase 5E reads ``order_spec["symbol"]``
+    and ``order_spec["action"]`` / ``order_spec["quantity"]`` to reconstruct
+    a fill's ``_OrderMeta`` when only the broker's ``perm_id`` survives a
+    restart (the in-memory ``LiveEngine._order_meta`` is empty on cold
+    start). ``None`` for events that pre-date Phase 5A or that fold
+    SIZING_RESOLVED before the PENDING_INTENT lands.
+    """
 
     intent_id: str
     bot_order_namespace: str
@@ -62,6 +71,7 @@ class SubmittedOrderView:
     perm_id: int | None = None
     exec_ids: tuple[str, ...] = ()
     sizing_resolution: SizingResolution | None = None
+    order_spec: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +153,16 @@ def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> Led
             last_seq = event.seq
             continue
 
+        # Phase 5E — preserve the first non-None ``order_spec`` we see on
+        # the lifecycle (PENDING_INTENT carries it). Later events overwrite
+        # status / order_id / perm_id but keep the original spec so a
+        # cross-restart fill classifier can recover symbol / quantity even
+        # when the in-memory ``_order_meta`` is empty.
+        order_spec = (
+            event.order_spec
+            if event.order_spec is not None
+            else (existing.order_spec if existing else None)
+        )
         orders[event.intent_id] = SubmittedOrderView(
             intent_id=event.intent_id,
             bot_order_namespace=event.bot_order_namespace,
@@ -157,6 +177,7 @@ def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> Led
             else (existing.perm_id if existing else None),
             exec_ids=exec_ids,
             sizing_resolution=existing.sizing_resolution if existing else None,
+            order_spec=order_spec,
         )
         if event.perm_id is not None:
             known_perm_ids.add(event.perm_id)
