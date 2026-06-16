@@ -23,6 +23,7 @@ hardening plan.
 from __future__ import annotations
 
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -51,7 +52,19 @@ def _format_step(record: logging.LogRecord) -> str:
 
 
 class _StepFormatter(logging.Formatter):
-    """Formatter that inlines a ``[STEP X]`` prefix when present."""
+    """Formatter that inlines a ``[STEP X]`` prefix when present.
+
+    VCR-P3-K fix: emit ``%(asctime)s`` in UTC instead of host-local
+    time. The ``live.log`` parser (``app.services.live_log_failures``)
+    consumes these as if UTC; without this override, the engine writes
+    host-local strings, the parser stamps them with ``tzinfo=UTC``, and
+    the cockpit's DatePipe converts the resulting (wrong) UTC ms to
+    America/New_York — net effect: the Failures panel displays each
+    event offset by the host's UTC offset. Writing UTC at the source
+    closes the loop without changing the parser or the DatePipe call.
+    """
+
+    converter = time.gmtime
 
     def format(self, record: logging.LogRecord) -> str:
         record.step_prefix = _format_step(record)

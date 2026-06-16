@@ -88,3 +88,56 @@ def test_configure_run_logging_creates_run_dir_if_missing(tmp_path: Path) -> Non
     log_path = configure_run_logging(run_dir)
     assert run_dir.is_dir()
     assert log_path == run_dir / "live.log"
+
+
+def test_configure_run_logging_writes_utc_timestamps_vcr_p3_k(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """VCR-P3-K — ``%(asctime)s`` must be UTC, not host-local. The
+    failures-table consumer (``live_log_failures.parse_failures``)
+    interprets the parsed naive string as UTC; emitting host-local
+    here produces the cockpit display drift the finding documents.
+
+    Pin TZ to ``America/Chicago`` (UTC-5 in CST / UTC-6 in CDT) so the
+    test fails clearly on any host that's not on UTC and a future
+    regression that re-emits host-local timestamps lights up as ~5-6
+    hours of offset rather than equality at a coincidental TZ.
+    """
+    import os
+    import re
+    import time as _time
+
+    monkeypatch.setenv("TZ", "America/Chicago")
+    _time.tzset()
+
+    try:
+        log_path = configure_run_logging(tmp_path / "run-utc")
+        before_utc = _time.gmtime()
+        logger = logging.getLogger("test.tz")
+        logger.info("utc-tz-check")
+        after_utc = _time.gmtime()
+
+        line = next(
+            ln for ln in log_path.read_text(encoding="utf-8").splitlines()
+            if "utc-tz-check" in ln
+        )
+        m = re.match(
+            r"^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),\d{3}\s",
+            line,
+        )
+        assert m is not None, line
+        year, month, day, hour, minute, second = (int(x) for x in m.groups())
+        logged_struct = _time.struct_time(
+            (year, month, day, hour, minute, second, 0, 0, 0)
+        )
+        # Equality on hour-and-coarser: a host-local emit on Chicago
+        # time would differ by at least 5 hours from gmtime.
+        assert (year, month, day, hour) == before_utc[:4] or (
+            year, month, day, hour
+        ) == after_utc[:4], (
+            f"asctime did not match UTC bounds; got {logged_struct}, "
+            f"expected near {before_utc} / {after_utc}"
+        )
+    finally:
+        os.environ.pop("TZ", None)
+        _time.tzset()
