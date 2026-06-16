@@ -4192,7 +4192,7 @@ export interface components {
              *     synthetic-health factory in ``app.broker.ibkr.health``
              *     stamps it on every wire payload.
              */
-            connection_state: "connected" | "soft_lost" | "reconnecting" | "disconnected" | "disabled";
+            connection_state: "connected" | "soft_lost" | "subscriptions_stale" | "degraded_data_farm" | "reconnecting" | "recovering" | "disconnected" | "disabled";
             /** Last Transition Ms */
             last_transition_ms: number;
             /** Connection Lost */
@@ -4203,6 +4203,22 @@ export interface components {
             reconnect_attempt?: number | null;
             /** Successful Reconnect Count */
             successful_reconnect_count?: number;
+            /** Last Ibkr Code */
+            last_ibkr_code?: number | null;
+            /** Last Ibkr Message */
+            last_ibkr_message?: string | null;
+            /** Subscriptions Stale */
+            subscriptions_stale?: boolean;
+            /** Data Farm Degraded */
+            data_farm_degraded?: boolean;
+            /** Last Probe Ms */
+            last_probe_ms?: number | null;
+            /** Last Probe Error */
+            last_probe_error?: string | null;
+            /** Last Recovery Ms */
+            last_recovery_ms?: number | null;
+            /** Recovery Error */
+            recovery_error?: string | null;
         };
         /**
          * BrokerSafetyVerdict

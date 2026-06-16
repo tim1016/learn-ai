@@ -58,9 +58,12 @@ def build_broker_health(
     if monitor is None:
         return base.model_copy(update={"safety_verdict": safety_verdict})
 
-    state: BrokerConnectionState = (
-        "reconnecting" if monitor.is_attempting else base.connection_state
-    )
+    if monitor.is_attempting:
+        state: BrokerConnectionState = "reconnecting"
+    elif getattr(monitor, "is_recovering", False) is True:
+        state = "recovering"
+    else:
+        state = base.connection_state
     return base.model_copy(
         update={
             "connection_state": state,

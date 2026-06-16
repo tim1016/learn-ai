@@ -51,12 +51,14 @@ def _fake_monitor(
     current_attempt: int = 0,
     successful_reconnect_count: int = 0,
     last_transition_ms: int = 0,
+    is_recovering: bool = False,
 ) -> MagicMock:
     monitor = MagicMock()
     monitor.is_attempting = is_attempting
     monitor.current_attempt = current_attempt
     monitor.successful_reconnect_count = successful_reconnect_count
     monitor.last_transition_ms = last_transition_ms
+    monitor.is_recovering = is_recovering
     return monitor
 
 
@@ -106,6 +108,15 @@ def test_build_broker_health_preserves_client_state_when_monitor_idle() -> None:
     # want to know how flaky the bridge has been even when it's currently
     # not mid-attempt.
     assert out.successful_reconnect_count == 4
+
+
+def test_build_broker_health_overlays_recovering_after_reconnect() -> None:
+    client = _fake_client(_fake_client_health(connection_state="connected"))
+    monitor = _fake_monitor(is_attempting=False, is_recovering=True)
+
+    out = build_broker_health(client, monitor)
+
+    assert out.connection_state == "recovering"
 
 
 def test_build_broker_health_last_transition_is_max_of_both_sides() -> None:

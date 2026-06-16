@@ -37,6 +37,8 @@ class _FakeClient:
         connection_lost: bool = False,
         connect_outcomes: list[bool | Exception] | None = None,
         desired_connected: bool = True,
+        probe_outcomes: list[bool | Exception] | None = None,
+        subscriptions_stale: bool = False,
     ) -> None:
         self._is_connected = is_connected
         self._connection_lost = connection_lost
@@ -46,10 +48,15 @@ class _FakeClient:
         self._connect_outcomes = list(connect_outcomes or [])
         self.connect_calls = 0
         self.disconnect_calls = 0
+        self.probe_calls = 0
+        self._probe_outcomes = list(probe_outcomes or [])
         # Operator-intended state. True is the common case for monitor
         # tests (we're testing recovery); set False to exercise the
         # short-circuit on intentional disconnects.
         self._desired_connected = desired_connected
+        self._subscriptions_stale = subscriptions_stale
+        self.recovery_succeeded_calls = 0
+        self.recovery_failed_calls = 0
 
     def is_connected(self) -> bool:
         return self._is_connected
@@ -62,8 +69,19 @@ class _FakeClient:
     def desired_connected(self) -> bool:
         return self._desired_connected
 
+    @property
+    def subscriptions_stale(self) -> bool:
+        return self._subscriptions_stale
+
     def set_desired_connected(self, value: bool) -> None:
         self._desired_connected = value
+
+    def mark_recovery_succeeded(self) -> None:
+        self.recovery_succeeded_calls += 1
+        self._subscriptions_stale = False
+
+    def mark_recovery_failed(self, exc: Exception) -> None:
+        self.recovery_failed_calls += 1
 
     async def connect(self):
         self.connect_calls += 1
@@ -79,6 +97,12 @@ class _FakeClient:
     async def disconnect(self):
         self.disconnect_calls += 1
         self._is_connected = False
+
+    async def probe(self, *, timeout_s: float = 4.0) -> None:
+        self.probe_calls += 1
+        outcome = self._probe_outcomes.pop(0) if self._probe_outcomes else True
+        if isinstance(outcome, Exception):
+            raise outcome
 
 
 # ──────────────────────────── lifecycle ──────────────────────────────
@@ -111,6 +135,76 @@ async def test_monitor_skips_reconnect_when_client_is_connected_and_healthy() ->
     assert client.connect_calls == 0
     assert monitor.is_attempting is False
     assert monitor.current_attempt == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_forces_reconnect_when_app_probe_fails() -> None:
+    client = _FakeClient(
+        is_connected=True,
+        connection_lost=False,
+        probe_outcomes=[TimeoutError("probe timed out")],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.01,
+        initial_backoff_s=0.01,
+        probe_interval_s=0.0,
+        probe_timeout_s=0.01,
+    )
+    monitor.start()
+    for _ in range(50):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.probe_calls >= 1
+    assert client.disconnect_calls >= 1
+    assert client.connect_calls >= 1
+
+
+# ─────────────────────── stale subscriptions ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_monitor_runs_recovery_callbacks_when_subscriptions_stale() -> None:
+    """Codex P1 — IBKR code 1101 leaves the socket alive but invalidates
+    market-data subscriptions. The reconnect loop never fires (because
+    ``is_connected and not connection_lost``), so without an explicit
+    stale-subscription path ``resubscribe_all`` would never run and charts
+    would freeze. The monitor must run the recovery callbacks and clear
+    the stale flag without a full reconnect."""
+    client = _FakeClient(
+        is_connected=True,
+        connection_lost=False,
+        subscriptions_stale=True,
+    )
+    callback_calls = 0
+
+    async def fake_resubscribe() -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.01,
+        initial_backoff_s=0.01,
+        subscription_recovery_interval_s=0.0,
+        recovery_callbacks=[fake_resubscribe],
+    )
+    monitor.start()
+    for _ in range(50):
+        if callback_calls >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert callback_calls >= 1
+    assert client.recovery_succeeded_calls >= 1
+    assert client.subscriptions_stale is False
+    # No reconnect cycle — the socket was healthy, only subscriptions were lost.
+    assert client.connect_calls == 0
+    assert client.disconnect_calls == 0
 
 
 # ──────────────────────────── soft loss ──────────────────────────────

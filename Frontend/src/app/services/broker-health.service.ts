@@ -41,11 +41,14 @@ export class BrokerHealthService {
    * means we have not yet received a first response from the service
    * (loading / unknown — render no banner).
    */
-  readonly bannerState = computed<'paper' | 'live' | 'disconnected' | 'disabled-host-runner-active' | null>(() => {
+  readonly bannerState = computed<
+    'paper' | 'live' | 'degraded' | 'disconnected' | 'disabled-host-runner-active' | null
+  >(() => {
     const h = this.health();
     if (h === null) return null;
     if (h.disabled === true) return 'disabled-host-runner-active';
     if (!h.connected) return 'disconnected';
+    if (h.connection_state !== 'connected') return 'degraded';
     return h.is_paper ? 'paper' : 'live';
   });
 

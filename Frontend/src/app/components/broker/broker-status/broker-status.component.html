@@ -183,12 +183,53 @@
 
         <dt>Status</dt>
         <dd>
-          @if (h.connected) {
+          @if (h.connection_state === 'connected') {
             <span class="status-pill ok">Connected</span>
+          } @else if (h.connected) {
+            <span class="status-pill status-warn">{{ h.connection_state }}</span>
           } @else {
             <span class="status-pill bad">Disconnected</span>
           }
         </dd>
+
+        <dt>Broker state</dt>
+        <dd class="mono">{{ h.connection_state }}</dd>
+
+        <dt>Last IBKR code</dt>
+        <dd class="mono">{{ h.last_ibkr_code ?? '—' }}</dd>
+
+        <dt>IBKR message</dt>
+        <dd>{{ h.last_ibkr_message ?? '—' }}</dd>
+
+        <dt>Subscriptions</dt>
+        <dd>
+          @if (h.subscriptions_stale) {
+            <span class="status-pill status-warn">Stale</span>
+          } @else {
+            <span class="status-pill ok">Current</span>
+          }
+        </dd>
+
+        <dt>Data farm</dt>
+        <dd>
+          @if (h.data_farm_degraded) {
+            <span class="status-pill status-warn">Degraded</span>
+          } @else {
+            <span class="status-pill ok">OK</span>
+          }
+        </dd>
+
+        <dt>Last probe</dt>
+        <dd class="mono">{{ fmtAge(h.last_probe_ms) }}</dd>
+
+        <dt>Probe error</dt>
+        <dd>{{ h.last_probe_error ?? '—' }}</dd>
+
+        <dt>Last recovery</dt>
+        <dd class="mono">{{ fmtAge(h.last_recovery_ms) }}</dd>
+
+        <dt>Recovery error</dt>
+        <dd>{{ h.recovery_error ?? '—' }}</dd>
 
         <dt>Sentinel</dt>
         @let ok = sentinelOk();

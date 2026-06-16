@@ -10,7 +10,10 @@ export type LinkState = 'ok' | 'down' | 'warn' | 'unknown';
 export type BrokerConnectionState =
   | 'connected'
   | 'soft_lost'
+  | 'subscriptions_stale'
+  | 'degraded_data_farm'
   | 'reconnecting'
+  | 'recovering'
   | 'disconnected'
   | 'disabled';
 
@@ -83,7 +86,10 @@ export class BrokerConnectivityService {
   > = {
     connected: { link: 'ok', baseDetail: 'Connected' },
     reconnecting: { link: 'warn', baseDetail: 'Reconnecting' },
+    recovering: { link: 'warn', baseDetail: 'Recovering streams' },
     soft_lost: { link: 'warn', baseDetail: 'Connection degraded — feed lost, recovering' },
+    subscriptions_stale: { link: 'warn', baseDetail: 'Subscriptions stale — resubscribe required' },
+    degraded_data_farm: { link: 'warn', baseDetail: 'IBKR data farm degraded' },
     disabled: { link: 'unknown', baseDetail: 'Disabled' },
     disconnected: { link: 'down', baseDetail: 'Disconnected' },
   };
@@ -105,6 +111,15 @@ export class BrokerConnectivityService {
     const h = this.brokerHealth.health();
     if (state === 'reconnecting' && h?.reconnect_attempt) {
       return `Reconnecting (attempt ${h.reconnect_attempt})`;
+    }
+    if (state === 'recovering') {
+      return h?.recovery_error ? `Recovery failed: ${h.recovery_error}` : baseDetail;
+    }
+    if (state === 'subscriptions_stale' && h?.last_ibkr_code) {
+      return `${baseDetail} (${h.last_ibkr_code})`;
+    }
+    if (state === 'degraded_data_farm' && h?.last_ibkr_code) {
+      return `${baseDetail} (${h.last_ibkr_code})`;
     }
     if (state === 'disabled' && h?.reason) {
       return h.reason;
@@ -183,8 +198,14 @@ export class BrokerConnectivityService {
       out.push('Broker disconnected — connect IBKR to act on a live run.');
     } else if (bs === 'reconnecting') {
       out.push('Broker reconnecting — order entry paused until the link is restored.');
+    } else if (bs === 'recovering') {
+      out.push('Broker recovering streams — order entry paused until subscriptions and probes pass.');
     } else if (bs === 'soft_lost') {
       out.push('Broker feed lost — auto-recovery in progress. Hold off on order entry.');
+    } else if (bs === 'subscriptions_stale') {
+      out.push('Broker subscriptions are stale after reconnect — resubscribe streams before order entry.');
+    } else if (bs === 'degraded_data_farm') {
+      out.push('IBKR data farm is degraded — market data may be stale or incomplete.');
     }
     if (this.fleetState() === 'warn') {
       out.push('Fleet policy is blocking new starts (account contaminated).');

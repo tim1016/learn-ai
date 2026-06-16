@@ -119,6 +119,15 @@ export class BrokerStatusComponent {
   readonly fmtInteger = fmtInteger;
   readonly fmtDateNy = fmtDateNy;
 
+  readonly fmtAge = (ms: number | null | undefined): string => {
+    if (ms == null) return '—';
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+    if (ageSeconds < 60) return `${ageSeconds}s ago`;
+    const ageMinutes = Math.floor(ageSeconds / 60);
+    if (ageMinutes < 60) return `${ageMinutes}m ago`;
+    return `${Math.floor(ageMinutes / 60)}h ago`;
+  };
+
   constructor() {
     void this.refresh();
   }

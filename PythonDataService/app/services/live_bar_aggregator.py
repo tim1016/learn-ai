@@ -67,7 +67,9 @@ _EXPECTED_WINDOW_MS_1M = 60_000
 _EXPECTED_WINDOW_MS_5S = 5_000
 
 
-SubscriptionStatus = Literal["idle", "subscribing", "streaming", "errored"]
+SubscriptionStatus = Literal[
+    "idle", "subscribing", "streaming", "errored", "resubscribing"
+]
 
 
 @dataclass
@@ -224,6 +226,50 @@ class LiveBarAggregator:
                 await t
             except (asyncio.CancelledError, Exception) as exc:
                 logger.debug("Aggregator task ended on shutdown: %s", exc)
+
+    async def resubscribe_all(self) -> None:
+        """Recreate every active live-bar subscription after broker recovery.
+
+        IBKR code 1101 means market-data subscriptions were lost. The broker
+        monitor calls this after reconnect so already-open chart/watch streams
+        don't stay stuck until a user happens to poll the exact endpoint that
+        lazily restarts them.
+        """
+        async with self._lock:
+            restart_1m = list(self._states.items())
+            restart_5s = list(self._states_5s.items())
+            tasks: list[asyncio.Task] = []
+            for _, state in (*restart_1m, *restart_5s):
+                if state.task is not None and not state.task.done():
+                    state.task.cancel()
+                    tasks.append(state.task)
+                state.status = "resubscribing"
+                state.last_error = None
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception) as exc:
+                logger.debug("Aggregator task ended during resubscribe: %s", exc)
+        async with self._lock:
+            for symbol, state in restart_1m:
+                state.task = asyncio.create_task(
+                    self._run_stream(symbol, state),
+                    name=f"live-bar-stream:{symbol}",
+                )
+            for symbol, state in restart_5s:
+                state.task = asyncio.create_task(
+                    self._run_stream_5s(symbol, state),
+                    name=f"live-bar-stream-5s:{symbol}",
+                )
+        if restart_1m or restart_5s:
+            logger.info(
+                "Resubscribed live bar streams after broker recovery",
+                extra={
+                    "action": "live_bar_resubscribe_all",
+                    "one_minute_count": len(restart_1m),
+                    "five_second_count": len(restart_5s),
+                },
+            )
 
     def _seed_from_persistence(
         self, state: _SymbolState, symbol: str, resolution: str

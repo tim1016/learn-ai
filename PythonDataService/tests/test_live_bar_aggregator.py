@@ -236,6 +236,45 @@ async def test_5s_and_1m_buffers_are_independent(
     await fresh_aggregator.shutdown()
 
 
+async def test_resubscribe_all_restarts_existing_streams(
+    fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    starts: list[str] = []
+
+    async def fake_1m(_c, symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
+        starts.append(f"1m:{symbol}")
+        yield _bar(symbol, 1_000_000 + len(starts), 100.0)
+        await asyncio.sleep(3600)
+
+    async def fake_5s(_c, symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
+        starts.append(f"5s:{symbol}")
+        yield _bar(symbol, 2_000_000 + len(starts), 100.0)
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(agg_mod, "stream_minute_bars", fake_1m)
+    monkeypatch.setattr(agg_mod, "stream_raw_5s_bars", fake_5s)
+
+    await fresh_aggregator.ensure_subscribed("SPY")
+    await fresh_aggregator.ensure_subscribed_5s("QQQ")
+    for _ in range(20):
+        if len(starts) == 2:
+            break
+        await asyncio.sleep(0.01)
+
+    await fresh_aggregator.resubscribe_all()
+    for _ in range(20):
+        if len(starts) == 4:
+            break
+        await asyncio.sleep(0.01)
+
+    assert starts.count("1m:SPY") == 2
+    assert starts.count("5s:QQQ") == 2
+    assert fresh_aggregator.status("SPY")[0] == "streaming"
+    assert fresh_aggregator.status_5s("QQQ")[0] == "streaming"
+
+    await fresh_aggregator.shutdown()
+
+
 async def test_pump_persists_each_emitted_bar(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

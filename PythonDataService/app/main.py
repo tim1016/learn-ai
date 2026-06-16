@@ -132,7 +132,12 @@ async def lifespan(app: FastAPI):
             )
         # The monitor is started even when initial connect failed — it will
         # observe the disconnected state and retry per the backoff policy.
-        monitor = AutoReconnectMonitor(ibkr_client)
+        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+        monitor = AutoReconnectMonitor(
+            ibkr_client,
+            recovery_callbacks=[LIVE_BAR_AGGREGATOR.resubscribe_all],
+        )
         monitor.start()
         set_monitor(monitor)
     else:

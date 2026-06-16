@@ -125,6 +125,8 @@
     color: var(--text-primary);
     font-size: 0.9rem;
     text-align: right;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 }
 

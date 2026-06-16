@@ -20,6 +20,7 @@ touches it directly.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,8 +42,11 @@ def _now_ms() -> int:
 # TWS may still report ``isConnected() == True``. 1101 = connectivity restored
 # (data maintained); 1102 = connectivity restored (data lost). See
 # https://interactivebrokers.github.io/tws-api/message_codes.html.
-_CONNECTIVITY_LOST_CODES = frozenset({1100, 504})
+_CONNECTIVITY_LOST_CODES = frozenset({1100, 1300, 2110, 504})
 _CONNECTIVITY_RESTORED_CODES = frozenset({1101, 1102})
+_SUBSCRIPTIONS_STALE_CODES = frozenset({1101})
+_DATA_FARM_DEGRADED_CODES = frozenset({2103, 2105})
+_DATA_FARM_OK_CODES = frozenset({2104, 2106})
 
 
 # Sentinel value for ``IBKR_HOST`` that triggers host auto-resolution.
@@ -243,6 +247,14 @@ class IbkrClient:
         # by diagnostics) per numerical-rigor's "surfaced, never silenced".
         self._connection_lost: bool = False
         self._connectivity_lost_count: int = 0
+        self._subscriptions_stale: bool = False
+        self._data_farm_degraded: bool = False
+        self._last_ibkr_code: int | None = None
+        self._last_ibkr_message: str | None = None
+        self._last_probe_ms: int | None = None
+        self._last_probe_error: str | None = None
+        self._last_recovery_ms: int | None = None
+        self._recovery_error: str | None = None
         # Wall-clock when the client's own observable connection state last
         # changed — set by ``connect`` / ``disconnect`` / 1100 / 1101.
         # ``health()`` returns this verbatim; the cockpit overlay composer
@@ -258,6 +270,34 @@ class IbkrClient:
         self._desired_connected: bool = False
         self._ib.errorEvent += self._on_ib_error
 
+    def _record_broker_event(self, event_type: str, **fields: object) -> None:
+        """Append a broker lifecycle event to the diagnostics JSONL log."""
+        path = (
+            Path(self._settings.live_runs_root)
+            / "_broker"
+            / "connection_events.jsonl"
+        )
+        payload = {
+            "event_type": event_type,
+            "ts_ms_utc": _now_ms(),
+            "mode": self._settings.mode,
+            "host": self._settings.host,
+            "port": self._settings.port,
+            "client_id": self._settings.client_id,
+            "connected_account": self._connected_account,
+            **fields,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, sort_keys=True) + "\n")
+        except OSError as exc:
+            logger.warning(
+                "Could not append IBKR broker event log: %s",
+                exc,
+                extra={"action": "broker_event_log_write_failed"},
+            )
+
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
         """ib_async errorEvent handler.
 
@@ -265,14 +305,60 @@ class IbkrClient:
 
         * ``326`` — clientId already in use (captured for ``connect()``'s
           fast-fail).
-        * ``1100`` / ``504`` — connectivity to TWS/IB lost. Mark the
+        * ``1100`` / ``1300`` / ``2110`` / ``504`` — connectivity to TWS/IB lost. Mark the
           connection degraded so streaming loops surface a fatal error rather
           than hanging on a feed that has gone dark. ``isConnected()`` can
           still report True here because the API socket stays open.
         * ``1101`` / ``1102`` — connectivity restored. Clear the flag.
+          ``1101`` additionally means market-data subscriptions were lost and
+          must be recreated.
+        * ``2103`` / ``2105`` and ``2104`` / ``2106`` — market/historical
+          data-farm degraded/restored signals. These do not necessarily mean
+          account/order connectivity is gone, so they publish a degraded state
+          instead of forcing a disconnect.
         """
+        if errorCode in (
+            _CONNECTIVITY_LOST_CODES
+            | _CONNECTIVITY_RESTORED_CODES
+            | _DATA_FARM_DEGRADED_CODES
+            | _DATA_FARM_OK_CODES
+        ):
+            self._last_ibkr_code = errorCode
+            self._last_ibkr_message = errorString
+            self._record_broker_event(
+                "IBKR_CODE",
+                ibkr_code=errorCode,
+                message=errorString,
+                connection_state=self.connection_state,
+            )
         if errorCode == 326:
             self._client_id_in_use_seen = True
+            return
+        if errorCode in _DATA_FARM_DEGRADED_CODES:
+            if not self._data_farm_degraded:
+                self._last_event_ms = _now_ms()
+            self._data_farm_degraded = True
+            logger.warning(
+                "IBKR data farm degraded",
+                extra={
+                    "error_code": errorCode,
+                    "error": errorString,
+                    "action": "data_farm_degraded",
+                },
+            )
+            return
+        if errorCode in _DATA_FARM_OK_CODES:
+            if self._data_farm_degraded:
+                self._last_event_ms = _now_ms()
+            self._data_farm_degraded = False
+            logger.info(
+                "IBKR data farm restored",
+                extra={
+                    "error_code": errorCode,
+                    "error": errorString,
+                    "action": "data_farm_restored",
+                },
+            )
             return
         if errorCode in _CONNECTIVITY_LOST_CODES:
             was_lost = self._connection_lost
@@ -296,6 +382,8 @@ class IbkrClient:
                 # Transition (soft_lost → healthy) — same rationale as above.
                 self._last_event_ms = _now_ms()
             self._connection_lost = False
+            if errorCode in _SUBSCRIPTIONS_STALE_CODES:
+                self._subscriptions_stale = True
             logger.info(
                 "IBKR connectivity restored",
                 extra={
@@ -403,6 +491,9 @@ class IbkrClient:
             )
 
         self._connected_account = account_id
+        self.mark_recovery_succeeded()
+        self._subscriptions_stale = False
+        self._data_farm_degraded = False
         # State transition (anything → connected) — stamp at the mutation
         # site so ``health()`` stays a pure read.
         self._last_event_ms = _now_ms()
@@ -425,6 +516,43 @@ class IbkrClient:
         self._connected_account = None
         if was_connected:
             self._last_event_ms = _now_ms()
+
+    async def probe(self, *, timeout_s: float = 4.0) -> None:
+        """Bounded app-level liveness probe.
+
+        TCP keep-alive catches dead sockets eventually; this verifies that
+        TWS/Gateway is still processing API requests. ``reqCurrentTimeAsync``
+        is preferred because it is cheap and does not consume market-data
+        lines. If the ib_async surface changes, the exception is intentionally
+        surfaced to the monitor, which will force a reconnect.
+        """
+        self.require_live()
+        try:
+            await asyncio.wait_for(self._ib.reqCurrentTimeAsync(), timeout=timeout_s)
+        except Exception as exc:
+            self._last_probe_error = f"{type(exc).__name__}: {exc}"
+            self._record_broker_event(
+                "BROKER_PROBE_FAILED", probe_error=self._last_probe_error
+            )
+            raise
+        self._last_probe_ms = _now_ms()
+        self._last_probe_error = None
+        self._record_broker_event("BROKER_PROBE_OK", probe_ts_ms=self._last_probe_ms)
+
+    def mark_recovery_succeeded(self) -> None:
+        self._subscriptions_stale = False
+        self._last_recovery_ms = _now_ms()
+        self._recovery_error = None
+        self._record_broker_event(
+            "BROKER_RECOVERY_OK", recovery_ts_ms=self._last_recovery_ms
+        )
+
+    def mark_recovery_failed(self, exc: Exception) -> None:
+        self._recovery_error = f"{type(exc).__name__}: {exc}"
+        self._last_event_ms = _now_ms()
+        self._record_broker_event(
+            "BROKER_RECOVERY_FAILED", recovery_error=self._recovery_error
+        )
 
     # ── accessors ───────────────────────────────────────────────────────
 
@@ -461,6 +589,10 @@ class IbkrClient:
     def connectivity_lost_count(self) -> int:
         """Observable count of connectivity-lost events seen this process."""
         return self._connectivity_lost_count
+
+    @property
+    def subscriptions_stale(self) -> bool:
+        return self._subscriptions_stale
 
     def require_connected(self) -> None:
         if not self.is_connected():
@@ -512,6 +644,14 @@ class IbkrClient:
             connection_state=self.connection_state,
             connection_lost=self._connection_lost,
             connectivity_lost_count=self._connectivity_lost_count,
+            last_ibkr_code=self._last_ibkr_code,
+            last_ibkr_message=self._last_ibkr_message,
+            subscriptions_stale=self._subscriptions_stale,
+            data_farm_degraded=self._data_farm_degraded,
+            last_probe_ms=self._last_probe_ms,
+            last_probe_error=self._last_probe_error,
+            last_recovery_ms=self._last_recovery_ms,
+            recovery_error=self._recovery_error,
             last_transition_ms=self._last_event_ms,
         )
 
@@ -524,6 +664,10 @@ class IbkrClient:
             return "disconnected"
         if self._connection_lost:
             return "soft_lost"
+        if self._subscriptions_stale:
+            return "subscriptions_stale"
+        if self._data_farm_degraded:
+            return "degraded_data_farm"
         return "connected"
 
     @property

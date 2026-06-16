@@ -9,7 +9,7 @@
   padding: 0.4rem 0.9rem;
   font-size: 0.85rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 
   &.is-paper {
@@ -20,6 +20,11 @@
   &.is-live {
     background: var(--live-banner-bg, #fee2e2);
     color: var(--live-banner-fg, #7f1d1d);
+  }
+
+  &.is-degraded {
+    background: var(--warn-banner-bg, #fef9c3);
+    color: var(--warn-banner-fg, #713f12);
   }
 
   &.is-disconnected {
