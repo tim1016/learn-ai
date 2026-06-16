@@ -22,6 +22,7 @@ import { BrokerHealthService } from '../services/broker-health.service';
         class="broker-banner"
         [class.is-paper]="state.kind === 'paper'"
         [class.is-live]="state.kind === 'live'"
+        [class.is-degraded]="state.kind === 'degraded'"
         [class.is-disconnected]="state.kind === 'disconnected'"
         [class.is-disabled]="state.kind === 'disabled'"
         role="status"
@@ -51,6 +52,17 @@ import { BrokerHealthService } from '../services/broker-health.service';
             {{ action === 'disconnect' ? 'Disconnecting…' : 'Disconnect' }}
           </button>
         }
+        @if (state.kind === 'degraded') {
+          <button
+            type="button"
+            class="broker-banner-cta"
+            (click)="reconnect()"
+            [disabled]="action !== null"
+            aria-label="Reconnect to IB Gateway"
+          >
+            {{ action === 'reconnect' ? 'Reconnecting…' : 'Reconnect' }}
+          </button>
+        }
       </div>
     }
   `,
@@ -65,6 +77,10 @@ export class BrokerBannerComponent {
 
   disconnect(): Promise<void> {
     return this.healthService.disconnect();
+  }
+
+  reconnect(): Promise<void> {
+    return this.healthService.reconnect();
   }
 
   readonly banner = computed(() => {
@@ -95,6 +111,15 @@ export class BrokerBannerComponent {
         aria: 'Connected to IBKR LIVE account — real money at risk',
       };
     }
+    if (state === 'degraded') {
+      const label = this.degradedLabel(h?.connection_state);
+      return {
+        kind: 'degraded' as const,
+        icon: '!',
+        text: `IBKR DEGRADED — ${label}`,
+        aria: `IBKR broker degraded: ${label}`,
+      };
+    }
     return {
       kind: 'disconnected' as const,
       icon: '⛔',
@@ -102,4 +127,21 @@ export class BrokerBannerComponent {
       aria: 'IBKR broker is disconnected',
     };
   });
+
+  private degradedLabel(state: string | undefined): string {
+    switch (state) {
+      case 'soft_lost':
+        return 'feed lost, auto-recovery in progress';
+      case 'reconnecting':
+        return 'reconnecting';
+      case 'recovering':
+        return 'recovering subscriptions';
+      case 'subscriptions_stale':
+        return 'subscriptions stale';
+      case 'degraded_data_farm':
+        return 'data farm degraded';
+      default:
+        return 'not ready for orders';
+    }
+  }
 }

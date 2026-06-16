@@ -74,6 +74,18 @@ describe('BrokerHealthService — bannerState', () => {
     svc.health.set(makeHealth({ connected: true, is_paper: false }));
     expect(svc.bannerState()).toBe('live');
   });
+
+  it('returns degraded when the socket is connected but broker state is not ready', () => {
+    const { svc } = setup();
+    svc.health.set(
+      makeHealth({
+        connected: true,
+        is_paper: true,
+        connection_state: 'subscriptions_stale',
+      }),
+    );
+    expect(svc.bannerState()).toBe('degraded');
+  });
 });
 
 describe('BrokerHealthService — isPaperConnected', () => {

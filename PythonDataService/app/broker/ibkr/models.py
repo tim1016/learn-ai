@@ -324,7 +324,7 @@ class IbkrBarsSnapshot(BaseModel):
     """
 
     symbol: str
-    status: Literal["idle", "subscribing", "streaming", "errored"]
+    status: Literal["idle", "subscribing", "streaming", "errored", "resubscribing"]
     last_error: str | None = None
     last_bar_ms: int | None = None
     bars: list[IbkrMinuteBar] = Field(default_factory=list)
@@ -602,14 +602,27 @@ DiagnosticReport = Annotated[
 ]
 
 
-ClientConnectionState = Literal["connected", "soft_lost", "disconnected"]
+ClientConnectionState = Literal[
+    "connected",
+    "soft_lost",
+    "subscriptions_stale",
+    "degraded_data_farm",
+    "disconnected",
+]
 """Subset of states an ``IbkrClient`` can observe for itself. The monitor's
 ``reconnecting`` overlay and the env-driven ``disabled`` state are layered on
 by ``build_broker_health``."""
 
 
 BrokerConnectionState = Literal[
-    "connected", "soft_lost", "reconnecting", "disconnected", "disabled"
+    "connected",
+    "soft_lost",
+    "subscriptions_stale",
+    "degraded_data_farm",
+    "reconnecting",
+    "recovering",
+    "disconnected",
+    "disabled",
 ]
 """Wire-level state surfaced to the cockpit. Strict superset of
 ``ClientConnectionState`` with the monitor and env-driven values."""
@@ -670,6 +683,28 @@ class IbkrConnectionHealth(BaseModel):
     """Cumulative observable count of monitor-driven recoveries this process —
     surfaces in the broker diagnostics for an operator who wants to know
     "how flaky has the bridge been"."""
+    last_ibkr_code: int | None = None
+    """Most recent IBKR/TWS connectivity or data-farm code observed by the
+    client. Used by the UI to distinguish a daily reset from a stale
+    subscription or data-farm degradation."""
+    last_ibkr_message: str | None = None
+    """Message paired with ``last_ibkr_code``."""
+    subscriptions_stale: bool = False
+    """True after IBKR code 1101 ("data lost") until recovery callbacks have
+    resubscribed active streams."""
+    data_farm_degraded: bool = False
+    """True while market-data or historical-data farm connectivity is
+    degraded (e.g. 2103 / 2105 without its matching OK code yet)."""
+    last_probe_ms: int | None = None
+    """Wall-clock timestamp of the most recent successful app-level broker
+    probe."""
+    last_probe_error: str | None = None
+    """Most recent watchdog probe failure, cleared on probe success."""
+    last_recovery_ms: int | None = None
+    """Wall-clock timestamp when post-reconnect recovery last completed."""
+    recovery_error: str | None = None
+    """Most recent post-reconnect recovery failure, cleared on recovery
+    success."""
 
 
 __all__ = [

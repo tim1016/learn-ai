@@ -37,6 +37,7 @@ class _FakeClient:
         connection_lost: bool = False,
         connect_outcomes: list[bool | Exception] | None = None,
         desired_connected: bool = True,
+        probe_outcomes: list[bool | Exception] | None = None,
     ) -> None:
         self._is_connected = is_connected
         self._connection_lost = connection_lost
@@ -46,6 +47,8 @@ class _FakeClient:
         self._connect_outcomes = list(connect_outcomes or [])
         self.connect_calls = 0
         self.disconnect_calls = 0
+        self.probe_calls = 0
+        self._probe_outcomes = list(probe_outcomes or [])
         # Operator-intended state. True is the common case for monitor
         # tests (we're testing recovery); set False to exercise the
         # short-circuit on intentional disconnects.
@@ -80,6 +83,12 @@ class _FakeClient:
         self.disconnect_calls += 1
         self._is_connected = False
 
+    async def probe(self, *, timeout_s: float = 4.0) -> None:
+        self.probe_calls += 1
+        outcome = self._probe_outcomes.pop(0) if self._probe_outcomes else True
+        if isinstance(outcome, Exception):
+            raise outcome
+
 
 # ──────────────────────────── lifecycle ──────────────────────────────
 
@@ -111,6 +120,32 @@ async def test_monitor_skips_reconnect_when_client_is_connected_and_healthy() ->
     assert client.connect_calls == 0
     assert monitor.is_attempting is False
     assert monitor.current_attempt == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_forces_reconnect_when_app_probe_fails() -> None:
+    client = _FakeClient(
+        is_connected=True,
+        connection_lost=False,
+        probe_outcomes=[TimeoutError("probe timed out")],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.01,
+        initial_backoff_s=0.01,
+        probe_interval_s=0.0,
+        probe_timeout_s=0.01,
+    )
+    monitor.start()
+    for _ in range(50):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.probe_calls >= 1
+    assert client.disconnect_calls >= 1
+    assert client.connect_calls >= 1
 
 
 # ──────────────────────────── soft loss ──────────────────────────────

@@ -63,6 +63,41 @@ def test_paper_account_sentinel_predicate() -> None:
     assert not _is_paper_account("F1234567")
 
 
+def test_error_1101_marks_subscriptions_stale(settings_paper: IbkrSettings) -> None:
+    _fake_ib, fake_class = _patched_ib_class()
+
+    with patch("ib_async.IB", fake_class):
+        client = IbkrClient(settings_paper)
+
+    client._on_ib_error(0, 1100, "lost", None)
+    assert client.connection_state == "soft_lost"
+
+    client._on_ib_error(0, 1101, "restored data lost", None)
+
+    assert client.connection_lost is False
+    assert client.subscriptions_stale is True
+    assert client.connection_state == "subscriptions_stale"
+    assert client.health().last_ibkr_code == 1101
+    assert client.health().subscriptions_stale is True
+
+
+def test_data_farm_codes_mark_degraded_until_ok(settings_paper: IbkrSettings) -> None:
+    _fake_ib, fake_class = _patched_ib_class()
+
+    with patch("ib_async.IB", fake_class):
+        client = IbkrClient(settings_paper)
+
+    client._on_ib_error(0, 2103, "market data farm disconnected", None)
+
+    assert client.connection_state == "degraded_data_farm"
+    assert client.health().data_farm_degraded is True
+
+    client._on_ib_error(0, 2104, "market data farm ok", None)
+
+    assert client.connection_state == "connected"
+    assert client.health().data_farm_degraded is False
+
+
 # ── host auto-detection (default-gateway parsing) ───────────────────────
 
 

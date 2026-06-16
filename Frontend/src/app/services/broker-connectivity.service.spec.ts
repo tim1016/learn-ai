@@ -161,6 +161,40 @@ describe('BrokerConnectivityService broker state (auto-reconnect)', () => {
     expect(brokerLink(service)?.detail).toContain('feed lost');
   });
 
+  it('renders RECOVERING while post-reconnect recovery callbacks are running', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: {
+        connected: true,
+        connection_state: 'recovering',
+      },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('warn');
+    expect(service.brokerConnectionState()).toBe('recovering');
+    expect(brokerLink(service)?.detail).toContain('Recovering streams');
+    expect(service.blockers()).toContain(
+      'Broker recovering streams — order entry paused until subscriptions and probes pass.',
+    );
+  });
+
+  it('renders SUBSCRIPTIONS_STALE with the IBKR code when data was lost', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: {
+        connected: true,
+        connection_state: 'subscriptions_stale',
+        last_ibkr_code: 1101,
+      },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('warn');
+    expect(service.brokerConnectionState()).toBe('subscriptions_stale');
+    expect(brokerLink(service)?.detail).toBe('Subscriptions stale — resubscribe required (1101)');
+  });
+
   it('renders DISCONNECTED (down) when the socket is hard-closed', async () => {
     const service = setup({
       instances: [],

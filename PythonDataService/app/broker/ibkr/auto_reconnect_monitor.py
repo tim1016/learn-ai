@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -88,11 +89,17 @@ class AutoReconnectMonitor:
         poll_interval_s: float | None = None,
         initial_backoff_s: float | None = None,
         max_backoff_s: float | None = None,
+        probe_interval_s: float = 30.0,
+        probe_timeout_s: float = 4.0,
+        recovery_callbacks: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> None:
         self._client = client
         self._poll_interval_s = poll_interval_s or self.POLL_INTERVAL_S
         self._initial_backoff_s = initial_backoff_s or self.INITIAL_BACKOFF_S
         self._max_backoff_s = max_backoff_s or self.MAX_BACKOFF_S
+        self._probe_interval_s = probe_interval_s
+        self._probe_timeout_s = probe_timeout_s
+        self._recovery_callbacks = list(recovery_callbacks or [])
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         # Monitor-owned state surfaced to the cockpit via build_broker_health.
@@ -100,6 +107,8 @@ class AutoReconnectMonitor:
         self._current_attempt: int = 0
         self._successful_reconnect_count: int = 0
         self._last_transition_ms: int = _now_ms()
+        self._is_recovering: bool = False
+        self._last_probe_due_ms: int = _now_ms()
 
     @property
     def is_running(self) -> bool:
@@ -120,6 +129,10 @@ class AutoReconnectMonitor:
     @property
     def last_transition_ms(self) -> int:
         return self._last_transition_ms
+
+    @property
+    def is_recovering(self) -> bool:
+        return self._is_recovering
 
     def start(self) -> None:
         """Spawn the monitor task. No-op if already running."""
@@ -207,8 +220,34 @@ class AutoReconnectMonitor:
         if not self._client.desired_connected:
             return
         if self._client.is_connected() and not self._client.connection_lost:
+            if await self._probe_if_due():
+                return
             return
         await self._attempt_reconnect_loop()
+
+    async def _probe_if_due(self) -> bool:
+        """Run a bounded app-level probe on healthy-looking sockets.
+
+        Returns True when the probe failed and a reconnect loop was entered.
+        """
+        now_ms = _now_ms()
+        if now_ms - self._last_probe_due_ms < int(self._probe_interval_s * 1000):
+            return False
+        self._last_probe_due_ms = now_ms
+        probe = getattr(self._client, "probe", None)
+        if probe is None:
+            return False
+        try:
+            await probe(timeout_s=self._probe_timeout_s)
+        except Exception:
+            logger.warning(
+                "IBKR app-level probe failed; forcing reconnect",
+                exc_info=True,
+                extra={"action": "auto_reconnect_probe_fail"},
+            )
+            await self._attempt_reconnect_loop()
+            return True
+        return False
 
     async def _attempt_reconnect_loop(self) -> None:
         """Retry ``client.connect()`` with exponential backoff until it
@@ -276,6 +315,8 @@ class AutoReconnectMonitor:
                 extra={"action": "auto_reconnect_fail", "attempt": attempt},
             )
             return False
+        if not await self._run_recovery_callbacks():
+            return False
         self._end_attempt(success=True)
         logger.info(
             "Auto-reconnect attempt %d succeeded",
@@ -288,6 +329,30 @@ class AutoReconnectMonitor:
         )
         return True
 
+    async def _run_recovery_callbacks(self) -> bool:
+        """Run post-connect recovery before the monitor reports healthy."""
+        self._begin_recovery()
+        try:
+            for callback in self._recovery_callbacks:
+                await callback()
+        except Exception as exc:
+            self._end_recovery(success=False)
+            mark_failed = getattr(self._client, "mark_recovery_failed", None)
+            if mark_failed is not None:
+                mark_failed(exc)
+            logger.warning(
+                "IBKR post-reconnect recovery failed: %s",
+                exc,
+                exc_info=True,
+                extra={"action": "auto_reconnect_recovery_fail"},
+            )
+            return False
+        mark_succeeded = getattr(self._client, "mark_recovery_succeeded", None)
+        if mark_succeeded is not None:
+            mark_succeeded()
+        self._end_recovery(success=True)
+        return True
+
     def _begin_attempt(self, attempt: int) -> None:
         self._is_attempting = True
         self._current_attempt = attempt
@@ -298,6 +363,17 @@ class AutoReconnectMonitor:
         if success:
             self._current_attempt = 0
             self._successful_reconnect_count += 1
+        self._last_transition_ms = _now_ms()
+
+    def _begin_recovery(self) -> None:
+        self._is_attempting = False
+        self._is_recovering = True
+        self._last_transition_ms = _now_ms()
+
+    def _end_recovery(self, *, success: bool) -> None:
+        self._is_recovering = False
+        if success:
+            self._current_attempt = 0
         self._last_transition_ms = _now_ms()
 
 
