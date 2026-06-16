@@ -253,8 +253,54 @@ export class BrokerInstancesComponent {
 
   readonly busyAction = signal<DesiredStateAction | null>(null);
   readonly lastActuation = signal<IntentActuation | null>(null);
+  // VCR-0021 — wall-clock when ``lastActuation`` was set, so an optimistic
+  // "queued ... awaiting ack" banner can be aged out if no matching ack ever
+  // arrives. The engine consumes the command and exits before writing its
+  // ack file on a clean shutdown, so the polled commands list goes empty
+  // and the banner would otherwise linger until a hard page refresh.
+  private readonly actuatedAtMs = signal<number | null>(null);
+  /** ms an optimistic actuation banner survives without an ack before we
+   * assume implicit-on-shutdown / lost. Most acks land in 1-2 polls of
+   * 1000ms; 15s is well past the normal window. */
+  private readonly ACTUATION_BANNER_STALE_MS = 15_000;
   readonly busyVerb = signal<CommandVerb | null>(null);
   readonly busyEmergencyFlatten = signal<boolean>(false);
+
+  /**
+   * VCR-0021 — the actuation surfaced in the Bot Behavior banner.
+   *
+   * Returns the optimistic ``lastActuation`` while it's still "in flight".
+   * Clears to ``null`` when:
+   *   1. the polled commands list contains an entry with the matching
+   *      ``command_seq`` whose status is ``acknowledged`` or ``failed``
+   *      (explicit ack — the engine wrote the ack file before exit), OR
+   *   2. no entry with that seq is present AND the banner has aged past
+   *      ``ACTUATION_BANNER_STALE_MS`` (implicit ack on engine shutdown,
+   *      or a genuinely lost command — both demand the banner clear).
+   *
+   * Re-evaluates on every commands-resource poll tick, so an aged banner
+   * disappears at the next interval rather than waiting for the operator
+   * to hard-refresh.
+   */
+  readonly effectiveActuation = computed<IntentActuation | null>(() => {
+    const act = this.lastActuation();
+    if (act === null) return null;
+    // ``actuated=false`` is a steady-state explanation ("takes effect on
+    // next start"), not an in-flight optimistic banner — preserve it.
+    if (!act.actuated || act.command_seq == null) return act;
+
+    const entries = this.commandEntries();
+    const match = entries.find((e) => e.seq === act.command_seq);
+    if (match !== undefined) {
+      if (match.status === 'acknowledged' || match.status === 'failed') return null;
+      return act;
+    }
+    const setAt = this.actuatedAtMs();
+    if (setAt !== null && Date.now() - setAt > this.ACTUATION_BANNER_STALE_MS) {
+      return null;
+    }
+    return act;
+  });
 
   // Structured inline errors (handoff: inline-only surfacing, never a toast).
   readonly intentError = signal<OperationError | null>(null);
@@ -279,6 +325,7 @@ export class BrokerInstancesComponent {
   select(instanceId: string): void {
     this.selectedInstanceId.set(instanceId);
     this.lastActuation.set(null);
+    this.actuatedAtMs.set(null);
     this.intentError.set(null);
     this.commandError.set(null);
     this.runLog.set(null);
@@ -301,6 +348,7 @@ export class BrokerInstancesComponent {
       const result = await this.svc.setInstanceDesiredState(id, { action });
       if (this.selectedInstanceId() === id) {
         this.lastActuation.set(result.actuation);
+        this.actuatedAtMs.set(Date.now());
         this.status.reload();
       }
     } catch (err) {

@@ -356,6 +356,111 @@ def test_resolve_recovery_broker_returns_none_when_client_disconnected() -> None
     assert _resolve_recovery_broker(FakeBroker(), _DisconnectedClient()) is None
 
 
+# ──────────────────────────── VCR-0019 ───────────────────────────────
+
+
+class _StaleThenFreshBroker(FakeBroker):
+    """Models the VCR-0019 race: the engine's prior strategy SELL filled at
+    the broker between the first ``fetch_positions`` call and the post-cancel
+    refresh. The initial snapshot says ``qty=1`` (stale); every subsequent
+    refresh says ``qty=0`` (fresh / fill propagated). If recovery_flatten
+    iterates the stale snapshot without refreshing, it submits a duplicate
+    SELL and the paper account goes net-short."""
+
+    def __init__(self, *, symbol: str, stale_qty: float) -> None:
+        super().__init__()
+        self._symbol = symbol
+        self._stale_qty = stale_qty
+        self._fetches = 0
+
+    async def fetch_positions(self) -> IbkrPositionsSnapshot:
+        self._fetches += 1
+        qty = self._stale_qty if self._fetches == 1 else 0.0
+        return IbkrPositionsSnapshot(
+            account_id="DU123",
+            is_paper=True,
+            positions=[
+                IbkrPosition(
+                    account_id="DU123",
+                    con_id=1,
+                    symbol=self._symbol,
+                    sec_type="STK",
+                    quantity=qty,
+                    avg_cost=500.0,
+                    fetched_at_ms=1,
+                ),
+            ],
+            fetched_at_ms=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_does_not_duplicate_sell_when_broker_fill_propagates_post_snapshot_vcr_0019() -> None:
+    """VCR-0019 — the recovery path must NOT submit a duplicate SELL when
+    the strategy's prior exit fill landed at the broker between the initial
+    ``fetch_positions`` call and the moment we'd otherwise place a
+    liquidation order.
+
+    Receipt: 2026-06-16 HITL run, intent_events.jsonl seq 24-27 — the engine
+    saw ``position=1`` in its initial snapshot, cancelled open orders, then
+    submitted a SECOND SELL that took the account net-short. Manual cleanup
+    via /api/broker/orders was required (and emergency-flatten was also
+    broken — see VCR-0020).
+    """
+    broker = _StaleThenFreshBroker(symbol="SPY", stale_qty=1.0)
+
+    liquidated = await _recovery_flatten(broker)
+
+    assert liquidated == 0, "no orders may be submitted when the broker reports flat"
+    assert broker.orders == [], "duplicate SELL would short the account"
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_stamps_order_ref_when_namespace_provided_vcr_0020() -> None:
+    """VCR-0020 — recovery_flatten must stamp a deterministic ``order_ref``
+    on each spec so a ``requires_durable_submit=True`` broker (real IBKR
+    adapter) accepts the submission. The spec's ``order_ref`` must parse
+    as ``{namespace}:{intent_id}`` with the engine's namespace prefix."""
+    broker = FakeBroker()
+    _seed_position(broker, "SPY", 100.0)
+
+    liquidated = await _recovery_flatten(
+        broker, bot_order_namespace="learn-ai/spy_ema_paper/v1"
+    )
+
+    assert liquidated == 1
+    [spec] = broker.orders
+    assert spec.order_ref is not None
+    assert spec.order_ref.startswith("learn-ai/spy_ema_paper/v1:")
+    # Final-colon split → 22-char base64url intent_id suffix.
+    _ns, _, intent = spec.order_ref.rpartition(":")
+    assert len(intent) == 22
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_sources_namespace_from_live_state_seed() -> None:
+    """When no explicit ``bot_order_namespace`` is passed, the seed envelope
+    is consulted. cmd_start passes the explicit param today, but the seed
+    is the fall-back path for older callers and post-flush envelopes."""
+    sidecar_seed = LiveStateEnvelope(
+        strategy_instance_id="seed_sid",
+        run_id="run-seed",
+        bot_order_namespace="learn-ai/seed_sid/v1",
+        ib_client_id=7,
+        last_processed_bar_ms=1,
+        last_artifact_flush_ms=2,
+    )
+    broker = FakeBroker()
+    _seed_position(broker, "QQQ", 50.0)
+
+    liquidated = await _recovery_flatten(broker, live_state_seed=sidecar_seed)
+
+    assert liquidated == 1
+    [spec] = broker.orders
+    assert spec.order_ref is not None
+    assert spec.order_ref.startswith("learn-ai/seed_sid/v1:")
+
+
 def test_resolve_recovery_broker_returns_engine_broker_to_preserve_owned_order_ids() -> None:
     """Recovery flatten must use the SAME broker instance the engine ran with.
 

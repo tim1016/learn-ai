@@ -277,7 +277,7 @@
               </button>
             }
           </div>
-          @let act = lastActuation();
+          @let act = effectiveActuation();
           @if (act) {
             <p class="actuation" [class.live]="act.actuated">{{ act.detail }}</p>
           }

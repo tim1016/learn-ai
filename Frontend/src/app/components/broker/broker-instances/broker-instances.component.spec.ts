@@ -239,6 +239,104 @@ describe('BrokerInstancesComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('PAUSE queued on run-live');
   });
 
+  it('clears a stale optimistic actuation banner when the matching command is acknowledged (VCR-0021)', async () => {
+    const { fixture, component, svc } = setup();
+    // Set up an actuation with command_seq=42, and arrange the commands
+    // poll to return the matching acknowledged entry.
+    svc.setInstanceDesiredState.mockResolvedValue({
+      durable: { state: 'STOPPED', updated_at_ms: 1, updated_by: 'operator', reason: null, version: 2 },
+      actuation: {
+        actuated: true,
+        run_id: 'run-live',
+        command_seq: 42,
+        detail: 'STOP queued on run-live; awaiting ack',
+      },
+    });
+    svc.getInstanceCommands.mockResolvedValue({
+      entries: [
+        {
+          seq: 42,
+          verb: 'STOP',
+          status: 'acknowledged',
+          reason: null,
+          issued_by: 'operator',
+          queued_at_ms: 1,
+          acked_at_ms: 2,
+          outcome: 'ok',
+          outcome_detail: null,
+        },
+      ],
+      poll_interval_ms: 1000,
+    });
+
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    await component.setIntent('stop');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    // The matching ack already landed in the polled list → banner cleared.
+    expect(fixture.nativeElement.textContent).not.toContain('STOP queued on run-live; awaiting ack');
+  });
+
+  it('clears an aged optimistic actuation banner when the engine acked-on-shutdown and the commands list is empty (VCR-0021)', async () => {
+    const { fixture, component, svc } = setup();
+    // Engine consumes STOP via the command channel and exits cleanly before
+    // writing the ack file, so the commands list goes empty. The banner
+    // must age out rather than linger until the operator hard-refreshes.
+    svc.setInstanceDesiredState.mockResolvedValue({
+      durable: { state: 'STOPPED', updated_at_ms: 1, updated_by: 'operator', reason: null, version: 2 },
+      actuation: {
+        actuated: true,
+        run_id: 'run-live',
+        command_seq: 99,
+        detail: 'STOP queued on run-live; awaiting ack',
+      },
+    });
+    // Fresh empty array per call so each reload produces a distinct
+    // resource value, forcing the downstream ``effectiveActuation``
+    // computed to re-evaluate against the current wall-clock.
+    svc.getInstanceCommands.mockImplementation(() =>
+      Promise.resolve({ entries: [], poll_interval_ms: 1000 }),
+    );
+
+    await flush();
+    fixture.detectChanges();
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    // Freeze Date.now() so we can advance it past the stale threshold.
+    const baseNow = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(baseNow);
+
+    await component.setIntent('stop');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    // Before the threshold: banner still showing.
+    expect(fixture.nativeElement.textContent).toContain('STOP queued on run-live; awaiting ack');
+
+    // Advance wall-clock past the 15s stale threshold, force a re-poll so
+    // ``effectiveActuation`` re-evaluates against the (still empty) list.
+    nowSpy.mockReturnValue(baseNow + 16_000);
+    component.commands.reload();
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).not.toContain('STOP queued on run-live; awaiting ack');
+    nowSpy.mockRestore();
+  });
+
   it('renders the command timeline and issues one-shot commands', async () => {
     const { fixture, component, svc } = setup();
     await flush();

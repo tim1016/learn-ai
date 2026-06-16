@@ -350,6 +350,60 @@ def test_emergency_flatten_appends_to_existing_log(tmp_path: Path) -> None:
     assert "complete: liquidated=1" in log, "must append new run"
 
 
+# ──────────────────────────── VCR-0020 ───────────────────────────────
+
+
+class _DurableSubmitRequiringBroker(_FakeFlattenBroker):
+    """Fake that enforces the Phase 5A real-broker invariant: every spec
+    handed to ``place_order`` must carry an ``order_ref``. Mirrors
+    ``place_paper_order``'s OrderRefusedError so we exercise the actual
+    contract that ``cmd_emergency_flatten`` was failing in production."""
+
+    requires_durable_submit = True
+
+    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
+        if spec.order_ref is None:
+            raise AssertionError(
+                "ADR 0008: place_paper_order requires spec.order_ref "
+                "(VCR-0020 — emergency-flatten must stamp order_ref)"
+            )
+        return await super().place_order(spec)
+
+
+def test_emergency_flatten_stamps_order_ref_on_each_spec_vcr_0020(tmp_path: Path) -> None:
+    """VCR-0020 — every liquidation spec must carry a deterministic
+    ``order_ref`` so a real-broker adapter accepts it. Without this fix the
+    documented panic CLI exits 3 with OrderRefusedError on the first
+    placement and the operator's only escape hatch fails.
+
+    Receipt: 2026-06-16 HITL run — operator invoked emergency-flatten to
+    clean up VCR-0019's stray short and got
+    ``OrderRefusedError: ADR 0008: place_paper_order requires spec.order_ref``
+    on every liquidation attempt. Cleanup fell back to hand-crafted
+    /api/broker/orders calls.
+    """
+    broker = _DurableSubmitRequiringBroker(
+        positions=[_pos("SPY", 200), _pos("QQQ", -50)]
+    )
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
+
+    assert rc == 0, "all placements must succeed with a stamped order_ref"
+    assert len(broker.placed) == 2
+    for spec in broker.placed:
+        assert spec.order_ref is not None
+        # Synthetic namespace ``learn-ai/eflat-{account}/v1``: same
+        # ``{namespace}:{intent_id}`` shape as engine-issued orders, with a
+        # short ``eflat-`` prefix to keep within the 60-char order_ref cap.
+        assert spec.order_ref.startswith("learn-ai/eflat-DU123/v1:")
+        _ns, _, intent = spec.order_ref.rpartition(":")
+        assert len(intent) == 22  # 22-char base64url intent_id
+
+    # Each liquidation must get a UNIQUE intent_id (no replay-by-mistake).
+    intents = {spec.order_ref.rpartition(":")[2] for spec in broker.placed}
+    assert len(intents) == len(broker.placed)
+
+
 # ──────────────────────────── Failure path ───────────────────────────
 
 
