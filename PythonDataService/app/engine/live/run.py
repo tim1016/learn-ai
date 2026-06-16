@@ -1214,6 +1214,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         decision_columns=decision_columns,
         owned_perm_ids=owned_perm_ids,
         sizing_surface=_lookup_sizing_surface(args.strategy),
+        # Phase 5A wiring (VCR-0002 hot-fix) — give the engine the path
+        # to the run's intent_events.jsonl so it can construct an
+        # IntentWal on LivePortfolio. Required since Phase 5B (ADR 0008)
+        # fail-fasts when a real-broker portfolio has no IntentWal.
+        intent_wal_path=args.run_dir / "intent_events.jsonl",
     )
 
     _entry_sidecar = RunStatusSidecar(

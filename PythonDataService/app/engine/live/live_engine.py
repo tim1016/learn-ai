@@ -626,7 +626,26 @@ class LiveEngine:
         # path. PR2 wires the SetHoldings percent path through
         # LeanSetHoldingsSizing via a callable portfolio-value provider —
         # the seam where the future capital-sleeve layer will drop in.
-        portfolio = LivePortfolio(self._broker)
+        # Phase 5A wiring (VCR-0002) — when a real broker requires
+        # durable submit (IbkrBrokerAdapter), pass the run's IntentWal
+        # and bot_order_namespace so set_holdings mints intent_id and
+        # submit_pending_orders stamps order_ref on each broker call.
+        # Without this, LivePortfolio.__post_init__ fail-fasts because
+        # Phase 5B (ADR 0008) requires the intent-identity foundation.
+        intent_wal_for_portfolio = None
+        bot_order_namespace_for_portfolio = ""
+        if self._intent_wal_path is not None and self._strategy_instance_id:
+            from app.engine.live.intent_wal import IntentWal as _IntentWal
+
+            intent_wal_for_portfolio = _IntentWal(self._intent_wal_path)
+            bot_order_namespace_for_portfolio = (
+                f"learn-ai/{self._strategy_instance_id}/v1"
+            )
+        portfolio = LivePortfolio(
+            self._broker,
+            intent_wal=intent_wal_for_portfolio,
+            bot_order_namespace=bot_order_namespace_for_portfolio,
+        )
         if self._config.sizing is not None:
             portfolio.order_sizer = OrderSizer(
                 self._config.sizing,
