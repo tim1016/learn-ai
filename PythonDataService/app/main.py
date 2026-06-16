@@ -101,6 +101,13 @@ async def lifespan(app: FastAPI):
         # auto-connect leaves _client=None and the only fix is restarting
         # the container.
         set_client(ibkr_client)
+        # The operator-intended state is set BEFORE the connect attempt so
+        # the monitor (started further down) knows whether to retry on
+        # initial-connect failure: when ``connect_on_startup`` is True the
+        # operator wants a live link and a soft-fail should auto-retry;
+        # when False the operator wants the client idle until they click
+        # Connect — the monitor must NOT auto-connect against that intent.
+        ibkr_client.set_desired_connected(ibkr_settings.connect_on_startup)
         if ibkr_settings.connect_on_startup:
             try:
                 await ibkr_client.connect()

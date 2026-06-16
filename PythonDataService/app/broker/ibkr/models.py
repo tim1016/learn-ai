@@ -673,6 +673,8 @@ class IbkrConnectionHealth(BaseModel):
 
 
 __all__ = [
+    "BrokerConnectionState",
+    "ClientConnectionState",
     "DiagnosticCheck",
     "DiagnosticReport",
     "DiagnosticReportActive",

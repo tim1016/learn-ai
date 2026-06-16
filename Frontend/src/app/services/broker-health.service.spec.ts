@@ -84,13 +84,15 @@ describe('BrokerHealthService — isPaperConnected', () => {
 
   it('returns false when disabled', () => {
     const { svc } = setup();
-    svc.health.set(makeHealth({ disabled: true, connected: false }));
+    svc.health.set(
+      makeHealth({ disabled: true, connected: false, connection_state: 'disabled' }),
+    );
     expect(svc.isPaperConnected()).toBe(false);
   });
 
   it('returns false when disconnected', () => {
     const { svc } = setup();
-    svc.health.set(makeHealth({ connected: false }));
+    svc.health.set(makeHealth({ connected: false, connection_state: 'disconnected' }));
     expect(svc.isPaperConnected()).toBe(false);
   });
 
@@ -104,6 +106,33 @@ describe('BrokerHealthService — isPaperConnected', () => {
     const { svc } = setup();
     svc.health.set(makeHealth({ connected: true, is_paper: true }));
     expect(svc.isPaperConnected()).toBe(true);
+  });
+
+  it('returns false on soft connectivity loss even though connected=true (VCR-broker-stability)', () => {
+    // Codex P1 regression — during a TWS 1100 soft loss the socket is
+    // still open but the data feed is dead. The order-submission gate
+    // must consult the structured connection_state, NOT the boolean.
+    const { svc } = setup();
+    svc.health.set(
+      makeHealth({
+        connected: true,
+        is_paper: true,
+        connection_state: 'soft_lost',
+      }),
+    );
+    expect(svc.isPaperConnected()).toBe(false);
+  });
+
+  it('returns false during a monitor-driven reconnect attempt', () => {
+    const { svc } = setup();
+    svc.health.set(
+      makeHealth({
+        connected: false,
+        is_paper: true,
+        connection_state: 'reconnecting',
+      }),
+    );
+    expect(svc.isPaperConnected()).toBe(false);
   });
 });
 

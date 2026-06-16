@@ -53,10 +53,15 @@ export class BrokerHealthService {
    * Defense-in-depth gate for any UI that places orders. Mirrors the
    * server-side third paper safety layer (DU account-id sentinel) so
    * the form stays locked until both sides agree.
+   *
+   * Reads ``connection_state`` rather than the legacy ``connected``
+   * boolean: during a TWS 1100 soft loss the socket is still up
+   * (``connected=true``) but the feed is dead — order submission
+   * would silently land on nothing. Codex P1 on PR #563.
    */
   readonly isPaperConnected = computed<boolean>(() => {
     const h = this.health();
-    return h !== null && h.connected === true && h.is_paper === true;
+    return h !== null && h.connection_state === 'connected' && h.is_paper === true;
   });
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;

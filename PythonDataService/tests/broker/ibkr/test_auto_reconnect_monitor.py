@@ -36,6 +36,7 @@ class _FakeClient:
         is_connected: bool = True,
         connection_lost: bool = False,
         connect_outcomes: list[bool | Exception] | None = None,
+        desired_connected: bool = True,
     ) -> None:
         self._is_connected = is_connected
         self._connection_lost = connection_lost
@@ -45,6 +46,10 @@ class _FakeClient:
         self._connect_outcomes = list(connect_outcomes or [])
         self.connect_calls = 0
         self.disconnect_calls = 0
+        # Operator-intended state. True is the common case for monitor
+        # tests (we're testing recovery); set False to exercise the
+        # short-circuit on intentional disconnects.
+        self._desired_connected = desired_connected
 
     def is_connected(self) -> bool:
         return self._is_connected
@@ -52,6 +57,13 @@ class _FakeClient:
     @property
     def connection_lost(self) -> bool:
         return self._connection_lost
+
+    @property
+    def desired_connected(self) -> bool:
+        return self._desired_connected
+
+    def set_desired_connected(self, value: bool) -> None:
+        self._desired_connected = value
 
     async def connect(self):
         self.connect_calls += 1
@@ -196,6 +208,7 @@ async def test_monitor_serialises_reconnect_via_shared_lifecycle_lock() -> None:
     in flight), the monitor's tick must wait — never call ``connect()``
     concurrently on the same IB instance."""
     client = _FakeClient(is_connected=False)
+    client.set_desired_connected(True)
     monitor = AutoReconnectMonitor(
         client,
         poll_interval_s=0.01,
@@ -228,6 +241,7 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     waiting on the lock, the monitor's re-check inside the lock must
     short-circuit — it must NOT issue a duplicate connect attempt."""
     client = _FakeClient(is_connected=False)
+    client.set_desired_connected(True)
     monitor = AutoReconnectMonitor(
         client,
         poll_interval_s=0.01,
@@ -235,12 +249,16 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     )
     lock = get_client_lifecycle_lock()
     await lock.acquire()
-    monitor.start()
-    await asyncio.sleep(0.05)  # let monitor reach the lock acquire and wait
-    # Simulate the operator's reconnect having succeeded.
-    client._is_connected = True
-    client._connection_lost = False
-    lock.release()
+    try:
+        monitor.start()
+        await asyncio.sleep(0.05)  # let monitor reach the lock acquire and wait
+        # Simulate the operator's reconnect having succeeded.
+        client._is_connected = True
+        client._connection_lost = False
+    finally:
+        # Release the process-wide lifecycle lock no matter what — leaking
+        # it would poison subsequent tests in the suite.
+        lock.release()
 
     # Give the monitor time to acquire the lock, re-check, and exit.
     await asyncio.sleep(0.05)
@@ -251,6 +269,59 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     # not monitor-driven.)
     assert client.connect_calls == 0
     assert monitor.successful_reconnect_count == 0
+
+
+# ──────────────────────────── intentional disconnect ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_monitor_does_not_reconnect_when_operator_disconnected() -> None:
+    """Codex P1 regression — when the operator hits ``POST /disconnect``
+    (or ``IBKR_CONNECT_ON_STARTUP=false`` leaves the client idle), the
+    monitor must NOT auto-reconnect. ``desired_connected=False`` is the
+    operator's stated intent and the monitor honours it."""
+    client = _FakeClient(
+        is_connected=False, connection_lost=False, desired_connected=False
+    )
+    monitor = AutoReconnectMonitor(
+        client, poll_interval_s=0.01, initial_backoff_s=0.01
+    )
+    monitor.start()
+    # Let multiple ticks fire — none should result in a connect attempt.
+    await asyncio.sleep(0.05)
+    await monitor.stop()
+
+    assert client.connect_calls == 0
+    assert client.disconnect_calls == 0
+    assert monitor.is_attempting is False
+    assert monitor.successful_reconnect_count == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_resumes_when_operator_clicks_connect_after_idle() -> None:
+    """The dual of the above — when the operator flips desired back to
+    True (clicks /connect from the cockpit), the monitor's next tick
+    starts recovering normally."""
+    client = _FakeClient(
+        is_connected=False, connection_lost=False, desired_connected=False
+    )
+    monitor = AutoReconnectMonitor(
+        client, poll_interval_s=0.01, initial_backoff_s=0.01
+    )
+    monitor.start()
+    await asyncio.sleep(0.05)
+    assert client.connect_calls == 0  # idle while operator hasn't asked
+
+    # Operator clicks /connect — monitor takes over from the next tick.
+    client.set_desired_connected(True)
+    for _ in range(50):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.connect_calls >= 1
+    assert monitor.successful_reconnect_count == 1
 
 
 # ──────────────────────────── monitor-owned state ─────────────────────

@@ -204,6 +204,9 @@ async def connect_endpoint() -> IbkrConnectionHealth:
     _raise_if_disabled()
     async with _lifecycle_lock:
         client = _get_or_create_client()
+        # Operator clicked Connect — mark intent so the monitor knows it
+        # SHOULD auto-recover from any future drop.
+        client.set_desired_connected(True)
         if client.is_connected():
             return client.health()
         return await _connect_and_install(client)
@@ -222,6 +225,10 @@ async def disconnect_endpoint() -> IbkrConnectionHealth:
             client = get_client()
         except NotConnectedError:
             return synthetic_disconnected_health()
+        # Operator clicked Disconnect — clear intent so the monitor stops
+        # auto-reconnecting against the operator's stated wish (the previous
+        # design ignored this and re-connected on the next tick).
+        client.set_desired_connected(False)
         await _disconnect_with_error_mapping(client)
         return client.health()
 
@@ -236,6 +243,7 @@ async def reconnect_endpoint() -> IbkrConnectionHealth:
     _raise_if_disabled()
     async with _lifecycle_lock:
         client = _get_or_create_client()
+        client.set_desired_connected(True)
         if client.is_connected():
             await _disconnect_with_error_mapping(client)
         return await _connect_and_install(client)

@@ -250,6 +250,12 @@ class IbkrClient:
         # timestamp so the wire-level ``last_transition_ms`` is the most
         # recent of either side.
         self._last_event_ms: int = _now_ms()
+        # Operator-intended connection state. The AutoReconnectMonitor only
+        # acts on observed drops when this is True; ``POST /disconnect`` sets
+        # it False so the operator's "off" sticks, and a startup with
+        # ``IBKR_CONNECT_ON_STARTUP=false`` leaves it False until the
+        # operator clicks Connect. Codex P1 fix on PR #563.
+        self._desired_connected: bool = False
         self._ib.errorEvent += self._on_ib_error
 
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
@@ -527,6 +533,21 @@ class IbkrClient:
         ``build_broker_health`` so the wire-level ``last_transition_ms``
         can be the max of this and the monitor's own transition stamp."""
         return self._last_event_ms
+
+    @property
+    def desired_connected(self) -> bool:
+        """Whether the operator (or startup contract) wants a live
+        connection. The AutoReconnectMonitor short-circuits its tick when
+        this is False, so a manual ``/disconnect`` makes the operator's
+        "off" sticky."""
+        return self._desired_connected
+
+    def set_desired_connected(self, value: bool) -> None:
+        """Set by the FastAPI lifespan (based on ``IBKR_CONNECT_ON_STARTUP``)
+        and by the ``/connect`` / ``/disconnect`` / ``/reconnect`` router
+        endpoints. NOT touched by the monitor — the monitor reads it as
+        precondition, never writes it."""
+        self._desired_connected = value
 
 
 # ── module-level singleton ──────────────────────────────────────────────

@@ -199,8 +199,13 @@ class AutoReconnectMonitor:
                 )
 
     async def _tick(self) -> None:
-        """One observation cycle. If the client looks healthy, return.
-        Otherwise enter the reconnect attempt loop."""
+        """One observation cycle. Returns without acting in three cases:
+        the operator does not want a live connection
+        (``desired_connected=False``); the client looks healthy
+        (``is_connected and not connection_lost``); otherwise enter the
+        reconnect attempt loop."""
+        if not self._client.desired_connected:
+            return
         if self._client.is_connected() and not self._client.connection_lost:
             return
         await self._attempt_reconnect_loop()
@@ -216,8 +221,13 @@ class AutoReconnectMonitor:
             attempt += 1
             async with get_client_lifecycle_lock():
                 # Re-check once the lock is held — an operator's manual
-                # reconnect may have restored the connection between the
-                # tick observation and this acquisition.
+                # /connect, /disconnect, or /reconnect may have changed
+                # the intent or the observable state between the tick and
+                # this acquisition. ``desired_connected`` flipping False
+                # means the operator clicked Disconnect; we exit cleanly
+                # without one more attempt.
+                if not self._client.desired_connected:
+                    return
                 if (
                     self._client.is_connected()
                     and not self._client.connection_lost
