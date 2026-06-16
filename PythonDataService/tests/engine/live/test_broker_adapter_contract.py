@@ -20,6 +20,7 @@ def _ibkr_adapter() -> IbkrBrokerAdapter:
         connected_account="DU1",
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
     return IbkrBrokerAdapter(client)
 
