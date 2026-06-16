@@ -146,3 +146,61 @@ Until that work is done, the live trading surface should be banner-gated to "ADR
 ## Provenance of the finding
 
 Lens: `broker-order-ownership-reconcile` (workflow `wf_def78013-ce4`). Lens summary identified the gap; main-loop verified by direct read of `live_engine.py:1086` (the verbatim "runtime no-op" comment) plus grep against `live_engine.py`/`run.py`/`broker/ibkr/orders.py` confirming no import or invocation of the ADR 0008 module set.
+
+## Acceptance Gate #2 — behavioral receipt (captured 2026-06-16)
+
+Captured during a live HITL paper-broker run against IBKR (account `DUM284968`, paper port 4002) from master `d4b1953a` + a not-yet-committed in-place patch (see "Production-wiring gap" below). Receipt path: deploy → first SUBMITTED → engine stop → engine restart → cold-start reconciler queries IBKR via the namespaced `executions_for_namespace` and matches the prior session's `orderRef` tokens byte-identical.
+
+### What was observed
+
+```
+BUY  1 SPY @ 753.35   permId=567189495   orderId=22
+  orderRef = learn-ai/dep_val_smoke_002/v1:78F5yVtDSaiz8AQBjO0SzQ
+
+SELL 1 SPY @ 753.76   permId=567189496   orderId=24
+  orderRef = learn-ai/dep_val_smoke_002/v1:vRNr9yzMQkece9Zaf-Lkrg
+```
+
+Both fills carried the constructed `order_ref` token. IBKR returned them on `execDetails` callbacks immediately after the new (post-restart) engine connected, before any new bars were processed. The orderRef was preserved byte-identical across the engine restart.
+
+### What this proves
+
+1. IBKR preserves `Order.orderRef` through `place_order → ack → fill → executions` for paper STK / MKT orders. The `orderRef` we stamped via `_build_order` (the `ib_async.MarketOrder(orderRef=...)` constructor) survived the full lifecycle.
+2. IBKR returns `orderRef` on the `execDetails` callback consumed by the new engine's cold-start reconciler — `ib_async.IB.fills()[…].execution.orderRef` carries the same token across session restart.
+3. `Order.permId` materialised on both executions (`567189495` BUY, `567189496` SELL) — the durable IBKR fingerprint that survives reconnects and is the join key for the Phase 5E cross-restart classifier (#536).
+4. Namespace + intent_id schema (`learn-ai/<strategy_instance_id>/v1:<22-char base64 intent_id>`) round-trips cleanly. Total length: **50 characters**.
+
+### Verified orderRef cap
+
+The observed orderRef length was **50 characters**. Recommended cap for activation: **`durable_submit_verified_order_ref_cap=60`** (gives 10-character headroom for namespace schema or intent_id encoding evolution before the cap needs re-validation).
+
+### Production-wiring gap (must ship before activation flip)
+
+This receipt was captured with an **in-place patch** on the host venv's `app/engine/live/{live_engine.py, run.py}` that wires the IntentWal into LivePortfolio at engine construction time. The patch is required because Phase 5B (`aae1cf2c`) added a fail-fast `LivePortfolio.__post_init__` check (real broker + no IntentWal → `ValueError`), but the production `run.cmd_start → LiveEngine` path was never updated to thread `intent_wal_path` through to `LivePortfolio(intent_wal=..., bot_order_namespace=...)`.
+
+**Patch summary (NOT YET COMMITTED — must land as a PR before the activation flip):**
+- `live_engine.py:629` — `LivePortfolio(self._broker)` → `LivePortfolio(self._broker, intent_wal=IntentWal(self._intent_wal_path), bot_order_namespace=f"learn-ai/{self._strategy_instance_id}/v1")` when `intent_wal_path` is set.
+- `run.py:1192-1217` — `LiveEngine(...)` constructor call gains `intent_wal_path=args.run_dir / "intent_events.jsonl"`.
+
+Without this patch, the production cmd_start path crashes on construction with `ValueError: ADR 0008 / Phase 5B: LivePortfolio with a real-broker adapter (IbkrBrokerAdapter) cannot be constructed without an IntentWal`. The patch closes that gap; activation flip requires this patch to be in master.
+
+### Operational notes observed during capture
+
+- **IBKR Gateway disconnect frequency.** During the ~60-minute capture window the IBKR session dropped twice (`Error 1100: Connectivity between IBKR and Trader Workstation has been lost`) at roughly 20-25 minute intervals. The `IBKRBarStreamError` is raised fatally at the bar-stream source and is not intercepted by Phase 3 reconnect re-validation (#542). Daemon restarted the engine each time. Worth investigating Gateway settings (`Auto restart`, idle timeout) before flipping `durable_submit_enabled=true`, since the cascade is more sensitive to mid-position restarts.
+- **VCR-P3-K timestamp drift.** The cockpit Failures panel displayed event timestamps offset by 5 hours (CDT host time parsed as UTC, then re-converted to CDT for display). Cosmetic only; the engine's `live.log` timestamps were correct. Tracked separately as VCR-P3-K.
+- **No `halt.flag` written**, no `poisoned.flag` written, no `ACK_FAILED_UNCERTAIN` events — the durable submit cascade behaved exactly as ADR 0008 specifies on the happy path.
+
+### Sidecar projection
+
+`live_state.json` at `artifacts/live_state/dep_val_smoke_002/live_state.json` after the run shows the two `submitted_orders` keyed by `client_order_id` (`live-1`, `live-2`) with `perm_id` populated, `known_perm_ids = [567189495, 567189496]`, position flat. This is the sidecar shape the next session's ColdStartReconciler reads — and on the actual restart it correctly matched all of these against IBKR's response.
+
+### Status flip readiness
+
+With this receipt:
+
+- ✅ Acceptance Gate #1 (structural): require_durable_submit_activation passes with IbkrBrokerOwnershipQuery (#539, #543).
+- ✅ Acceptance Gate #2 (behavioral): IBKR echoed orderRef on `execDetails` across engine restart (this section).
+- ❌ Production-wiring patch (above): must land in master as a separate PR before the activation flip is safe.
+- ❌ Gateway stability (above): two disconnects in 60 minutes is abnormal; investigate before flipping to avoid mid-position activation hangs.
+
+Once those two are resolved, the operator can ship a deploy with `live_config = {"durable_submit_enabled": true, "durable_submit_verified_order_ref_cap": 60, "sizing": {...}}` and the full Phase 5C cascade activates.
