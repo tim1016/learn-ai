@@ -91,6 +91,7 @@ class AutoReconnectMonitor:
         max_backoff_s: float | None = None,
         probe_interval_s: float = 30.0,
         probe_timeout_s: float = 4.0,
+        subscription_recovery_interval_s: float = 10.0,
         recovery_callbacks: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> None:
         self._client = client
@@ -99,6 +100,7 @@ class AutoReconnectMonitor:
         self._max_backoff_s = max_backoff_s or self.MAX_BACKOFF_S
         self._probe_interval_s = probe_interval_s
         self._probe_timeout_s = probe_timeout_s
+        self._subscription_recovery_interval_s = subscription_recovery_interval_s
         self._recovery_callbacks = list(recovery_callbacks or [])
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -109,6 +111,10 @@ class AutoReconnectMonitor:
         self._last_transition_ms: int = _now_ms()
         self._is_recovering: bool = False
         self._last_probe_due_ms: int = _now_ms()
+        # Tracks last in-process subscription-recovery attempt so a repeatedly
+        # failing resubscribe doesn't spam every poll cycle. ``0`` lets the
+        # first stale observation fire immediately on detection.
+        self._last_subscription_recovery_ms: int = 0
 
     @property
     def is_running(self) -> bool:
@@ -212,18 +218,55 @@ class AutoReconnectMonitor:
                 )
 
     async def _tick(self) -> None:
-        """One observation cycle. Returns without acting in three cases:
-        the operator does not want a live connection
-        (``desired_connected=False``); the client looks healthy
-        (``is_connected and not connection_lost``); otherwise enter the
-        reconnect attempt loop."""
+        """One observation cycle. Returns without acting when the operator
+        does not want a live connection (``desired_connected=False``).
+        Otherwise, on an apparently-healthy client (``is_connected and not
+        connection_lost``) it first recovers stale subscriptions if the
+        client surfaced IBKR code 1101 (socket alive, subscriptions gone),
+        then runs an app-level probe at the configured cadence. On any
+        observed drop, enters the reconnect attempt loop."""
         if not self._client.desired_connected:
             return
         if self._client.is_connected() and not self._client.connection_lost:
+            if await self._recover_subscriptions_if_stale():
+                return
             if await self._probe_if_due():
                 return
             return
         await self._attempt_reconnect_loop()
+
+    async def _recover_subscriptions_if_stale(self) -> bool:
+        """Run recovery callbacks when the client reports stale subscriptions.
+
+        After IBKR code 1101 (``connectivity restored, data lost``) the
+        socket stays open and ``is_connected()`` returns True, but active
+        market-data subscriptions are gone. The reconnect loop never fires
+        in that state, so charts would freeze until manual intervention
+        unless ``resubscribe_all`` (registered via ``recovery_callbacks``)
+        runs here.
+
+        Returns True iff an attempt was made this tick.
+        """
+        if not getattr(self._client, "subscriptions_stale", False):
+            return False
+        now_ms = _now_ms()
+        interval_ms = int(self._subscription_recovery_interval_s * 1000)
+        if now_ms - self._last_subscription_recovery_ms < interval_ms:
+            return False
+        self._last_subscription_recovery_ms = now_ms
+
+        from app.broker.ibkr.client import get_client_lifecycle_lock
+
+        async with get_client_lifecycle_lock():
+            # Re-check inside the lock — an operator's manual /reconnect
+            # may have run while we were waiting on the lock, clearing
+            # ``subscriptions_stale`` as part of its successful connect.
+            if not getattr(self._client, "subscriptions_stale", False):
+                return False
+            if not self._client.is_connected() or self._client.connection_lost:
+                return False
+            await self._run_recovery_callbacks()
+        return True
 
     async def _probe_if_due(self) -> bool:
         """Run a bounded app-level probe on healthy-looking sockets.
