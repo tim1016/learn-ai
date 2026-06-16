@@ -124,8 +124,8 @@ _ibkr_client_factory: type[IbkrClient] = IbkrClient
 @router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
-    from app.broker.safety_verdict import derive_broker_safety_verdict
     from app.broker.ibkr.config import get_settings
+    from app.broker.safety_verdict import derive_broker_safety_verdict
 
     s = get_settings()
     # Safety verdict is re-derived on every call so it reflects the latest
