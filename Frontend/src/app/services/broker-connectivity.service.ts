@@ -4,6 +4,16 @@ import { LiveRunsService } from './live-runs.service';
 
 export type LinkState = 'ok' | 'down' | 'warn' | 'unknown';
 
+/** Structured broker connection state from the backend (auto-reconnect
+ * hardening). The strip and per-control disable-with-reason both derive
+ * their LinkState from this. */
+export type BrokerConnectionState =
+  | 'connected'
+  | 'soft_lost'
+  | 'reconnecting'
+  | 'disconnected'
+  | 'disabled';
+
 export interface ConnectivityLink {
   key: 'daemon' | 'broker' | 'fleet';
   label: string;
@@ -53,10 +63,67 @@ export class BrokerConnectivityService {
     return this.daemon.value()?.ok ? 'ok' : 'down';
   });
 
-  readonly brokerState = computed<LinkState>(() => {
+  /** The structured connection state from the backend. ``null`` while the
+   * first health probe is in flight. Falls back to deriving from the
+   * legacy ``connected`` boolean when an older backend hasn't published
+   * the new field — that keeps the cockpit working during a partial
+   * rollout (backend ahead of frontend or vice versa). */
+  readonly brokerConnectionState = computed<BrokerConnectionState | null>(() => {
     const h = this.brokerHealth.health();
-    if (h === null) return 'unknown';
-    return h.connected ? 'ok' : 'down';
+    if (h === null) return null;
+    if (h.disabled === true) return 'disabled';
+    if (h.connection_state !== undefined && h.connection_state !== null) {
+      return h.connection_state;
+    }
+    return h.connected ? 'connected' : 'disconnected';
+  });
+
+  /** Strip-facing state. ``reconnecting`` and ``soft_lost`` map to ``warn``
+   * so the dot turns amber rather than red — the cockpit knows the
+   * monitor is on it. ``disconnected`` is red; ``disabled`` reads as
+   * grey (``unknown``) because it's an intentional configuration, not
+   * a failure. */
+  readonly brokerState = computed<LinkState>(() => {
+    const state = this.brokerConnectionState();
+    if (state === null) return 'unknown';
+    switch (state) {
+      case 'connected':
+        return 'ok';
+      case 'reconnecting':
+      case 'soft_lost':
+        return 'warn';
+      case 'disabled':
+        return 'unknown';
+      case 'disconnected':
+      default:
+        return 'down';
+    }
+  });
+
+  /** Operator-facing detail string for the broker link. ``Reconnecting``
+   * surfaces the attempt counter when the backend publishes it so the
+   * operator sees progress rather than silence. */
+  readonly brokerDetail = computed<string>(() => {
+    const state = this.brokerConnectionState();
+    if (state === null) return 'Checking…';
+    const h = this.brokerHealth.health();
+    switch (state) {
+      case 'connected':
+        return 'Connected';
+      case 'reconnecting': {
+        const attempt = h?.reconnect_attempt;
+        return attempt !== null && attempt !== undefined && attempt > 0
+          ? `Reconnecting (attempt ${attempt})`
+          : 'Reconnecting';
+      }
+      case 'soft_lost':
+        return 'Connection degraded — feed lost, recovering';
+      case 'disabled':
+        return h?.reason ?? 'Disabled';
+      case 'disconnected':
+      default:
+        return 'Disconnected';
+    }
   });
 
   /** Whether the connected session is the paper account. Paper-only UI
@@ -99,12 +166,7 @@ export class BrokerConnectivityService {
       key: 'broker',
       label: 'Broker',
       state: this.brokerState(),
-      detail:
-        this.brokerState() === 'ok'
-          ? 'Connected'
-          : this.brokerState() === 'unknown'
-            ? 'Checking…'
-            : 'Disconnected',
+      detail: this.brokerDetail(),
     },
     {
       key: 'fleet',
@@ -130,8 +192,13 @@ export class BrokerConnectivityService {
     if (this.daemonState() === 'down') {
       out.push('Live engine unavailable — start it on this machine, then recheck.');
     }
-    if (this.brokerState() === 'down') {
+    const bs = this.brokerConnectionState();
+    if (bs === 'disconnected') {
       out.push('Broker disconnected — connect IBKR to act on a live run.');
+    } else if (bs === 'reconnecting') {
+      out.push('Broker reconnecting — order entry paused until the link is restored.');
+    } else if (bs === 'soft_lost') {
+      out.push('Broker feed lost — auto-recovery in progress. Hold off on order entry.');
     }
     if (this.fleetState() === 'warn') {
       out.push('Fleet policy is blocking new starts (account contaminated).');

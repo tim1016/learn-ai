@@ -442,3 +442,108 @@ async def test_disconnect_calls_sync_ib_disconnect_when_connected(
 
     fake_ib.disconnect.assert_called_once()
     assert client.connected_account is None
+
+
+# ── connection-state machine (broker-stability hardening) ──────────────
+
+
+def test_connection_state_reports_connected_on_happy_path(
+    settings_paper: IbkrSettings,
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True
+
+    assert client.connection_state == "connected"
+
+
+def test_connection_state_reports_soft_lost_on_1100(settings_paper: IbkrSettings) -> None:
+    """A 1100 error keeps the socket open but the feed dead — the cockpit
+    must see ``soft_lost``, not ``connected``."""
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True
+    client._on_ib_error(-1, 1100, "lost", None)
+
+    assert client.connection_state == "soft_lost"
+
+
+def test_connection_state_reports_disconnected_when_socket_closed(
+    settings_paper: IbkrSettings,
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = False
+
+    assert client.connection_state == "disconnected"
+
+
+def test_connection_state_reports_reconnecting_during_monitor_attempt(
+    settings_paper: IbkrSettings,
+) -> None:
+    """While the AutoReconnectMonitor is mid-attempt, the cockpit must see
+    ``reconnecting`` — even if the underlying socket flickers up and down
+    between retries — so it can render "Reconnecting (attempt 3)" rather
+    than the misleading ``disconnected`` / ``connected`` it would
+    otherwise oscillate between."""
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = False
+    client._mark_reconnect_started(3)
+
+    assert client.connection_state == "reconnecting"
+    assert client.reconnect_attempt == 3
+
+
+def test_health_publishes_connection_state_machine_fields(
+    settings_paper: IbkrSettings,
+) -> None:
+    """``health()`` exposes the state-machine fields the cockpit binds to:
+    ``connection_state``, ``connection_lost``, ``connectivity_lost_count``,
+    ``reconnect_attempt``, ``successful_reconnect_count``,
+    ``last_transition_ms``."""
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True
+    client._on_ib_error(-1, 1100, "lost", None)
+    client._mark_reconnect_started(2)
+
+    h = client.health()
+
+    assert h.connection_state == "reconnecting"
+    assert h.connection_lost is True
+    assert h.connectivity_lost_count == 1
+    assert h.reconnect_attempt == 2
+    assert h.successful_reconnect_count == 0
+    assert h.last_transition_ms is not None and h.last_transition_ms > 0
+
+
+def test_mark_reconnect_resolved_success_increments_recovery_count_and_clears_attempt(
+    settings_paper: IbkrSettings,
+) -> None:
+    """A successful monitor-driven recovery bumps
+    ``successful_reconnect_count`` and clears ``reconnect_attempt`` so the
+    cockpit drops the "Reconnecting" banner and the diagnostics surface
+    how flaky the bridge has been."""
+    client = _client_with_fake_ib(settings_paper)
+    client._mark_reconnect_started(1)
+    assert client.reconnect_attempt == 1
+
+    client._mark_reconnect_resolved(success=True)
+
+    assert client.reconnect_attempt == 0
+    assert client.successful_reconnect_count == 1
+    assert client.connection_state in {"connected", "disconnected", "soft_lost"}
+
+
+def test_mark_reconnect_resolved_failure_leaves_attempt_set_for_observer_continuity(
+    settings_paper: IbkrSettings,
+) -> None:
+    """A failed attempt clears the in-flight ``_reconnecting`` flag so the
+    next backoff window doesn't keep showing "Reconnecting" — but the
+    attempt counter survives so the next attempt's number monotonically
+    increases ("attempt 4" follows "attempt 3 failed")."""
+    client = _client_with_fake_ib(settings_paper)
+    client._mark_reconnect_started(3)
+    client._mark_reconnect_resolved(success=False)
+
+    assert client._reconnect_attempt == 3
+    assert client.successful_reconnect_count == 0
+    # While resolved, _reconnecting clears, so connection_state falls back
+    # to the underlying socket state.
+    assert client.connection_state in {"connected", "disconnected", "soft_lost"}

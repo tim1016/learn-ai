@@ -45,6 +45,7 @@ from app.broker.ibkr.client import (
     IbkrClientIdInUseError,
     NotConnectedError,
     get_client,
+    get_client_lifecycle_lock,
     set_client,
 )
 from app.broker.ibkr.diagnostics import run_diagnostics
@@ -99,9 +100,12 @@ logger = logging.getLogger(__name__)
 # a fresh timestamp that shifts on every poll.
 _BROKER_DISABLED_SINCE_MS: int = int(time.time() * 1000)
 
-# Serialises POST /connect | /disconnect | /reconnect so two concurrent
-# operator clicks do not race ``IbkrClient.connect`` against itself.
-_lifecycle_lock = asyncio.Lock()
+# Serialises POST /connect | /disconnect | /reconnect against two concurrent
+# operator clicks AND against the AutoReconnectMonitor's reconnect attempts.
+# The lock lives in ``app.broker.ibkr.client`` so both this router and the
+# monitor share the same object — without that, a monitor tick could race an
+# operator's manual reconnect and double-call ``ib_async.IB.connectAsync``.
+_lifecycle_lock = get_client_lifecycle_lock()
 
 # Factory indirection so tests can monkeypatch the client constructor
 # without having ``ib_async`` installed. Production callers see the real
@@ -141,6 +145,7 @@ async def broker_health() -> IbkrConnectionHealth:
                 port=s.port,
                 connected_account=None,
             ),
+            connection_state="disabled",
         )
     try:
         client = get_client()
@@ -166,6 +171,7 @@ async def broker_health() -> IbkrConnectionHealth:
                 port=s.port,
                 connected_account=None,
             ),
+            connection_state="disconnected",
         )
     health = client.health()
     # Re-derive on every call so the verdict reflects the latest
@@ -327,6 +333,7 @@ def _synthesize_disconnected_health() -> IbkrConnectionHealth:
         is_paper=None,
         server_version=None,
         fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        connection_state="disconnected",
     )
 
 

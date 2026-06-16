@@ -83,6 +83,15 @@ async def lifespan(app: FastAPI):
 
     ibkr_settings = get_ibkr_settings()
     ibkr_client: IbkrClient | None = None
+    # Auto-reconnect monitor (broker-stability hardening). Started after the
+    # initial connect attempt regardless of its outcome — even a startup
+    # failure should auto-retry rather than wait for an operator click.
+    from app.broker.ibkr.auto_reconnect_monitor import (
+        AutoReconnectMonitor,
+        set_monitor,
+    )
+
+    monitor: AutoReconnectMonitor | None = None
 
     if ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
@@ -103,8 +112,10 @@ async def lifespan(app: FastAPI):
             except (BrokerError, OSError) as exc:
                 # Soft fail — Gateway is probably not running locally. Broker
                 # endpoints will return 503 until POST /api/broker/connect.
+                # The auto-reconnect monitor below picks it up on the next tick.
                 logger.warning(
-                    "IBKR client could not connect (%s). Use POST /api/broker/connect or the Status page to retry.",
+                    "IBKR client could not connect (%s). Auto-reconnect monitor will retry; "
+                    "POST /api/broker/connect or the Status page will also drive a manual attempt.",
                     exc,
                 )
         else:
@@ -112,8 +123,14 @@ async def lifespan(app: FastAPI):
                 "IBKR auto-connect disabled (IBKR_CONNECT_ON_STARTUP=false). "
                 "Use POST /api/broker/connect or the Status page to establish the connection."
             )
+        # The monitor is started even when initial connect failed — it will
+        # observe the disconnected state and retry per the backoff policy.
+        monitor = AutoReconnectMonitor(ibkr_client)
+        monitor.start()
+        set_monitor(monitor)
     else:
         set_client(None)
+        set_monitor(None)
         logger.info(
             "IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled. Live-runs router available."
         )
@@ -121,6 +138,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Stop the monitor BEFORE disconnecting so a tick-in-flight doesn't
+        # observe the close and immediately try to reconnect.
+        if monitor is not None:
+            await monitor.stop()
+            set_monitor(None)
         if ibkr_client is not None and ibkr_client.is_connected():
             await ibkr_client.disconnect()
         set_client(None)

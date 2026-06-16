@@ -629,6 +629,38 @@ class IbkrConnectionHealth(BaseModel):
     server_version: int | None = None
     fetched_at_ms: int
     safety_verdict: BrokerSafetyVerdict | None = None
+    # ── Connection-state machine fields (auto-reconnect, VCR-broker-stability) ──
+    # ``connection_state`` is the single field the cockpit binds the link strip
+    # to. ``connected`` stays boolean for back-compat (existing callers); the
+    # finer-grained states discriminate between a hard socket close, a soft
+    # 1100 loss, and an in-flight auto-reconnect. None-default keeps the model
+    # constructible by older code paths (tests, the disabled fallback) without
+    # forcing every constructor site to know about the new field.
+    connection_state: Literal[
+        "connected", "soft_lost", "reconnecting", "disconnected", "disabled"
+    ] | None = None
+    """Cockpit-facing connection state. ``None`` only on payloads minted before
+    the state-machine landed (cached test fixtures); current code always sets
+    it."""
+    connection_lost: bool = False
+    """Whether IBKR Error 1100 / 504 has fired and not yet been restored. The
+    socket may still report ``connected=True`` in this window — the data feed
+    is dead."""
+    connectivity_lost_count: int = 0
+    """Cumulative observable count of connectivity-lost events since the
+    process started."""
+    reconnect_attempt: int | None = None
+    """Current AutoReconnectMonitor attempt number while ``connection_state ==
+    "reconnecting"``, ``None`` otherwise. The cockpit renders it as
+    "Reconnecting (attempt N)" so the operator sees progress, not silence."""
+    successful_reconnect_count: int = 0
+    """Cumulative observable count of monitor-driven recoveries this process
+    — surfaces in the broker diagnostics for an operator who wants to know
+    "how flaky has the bridge been"."""
+    last_transition_ms: int | None = None
+    """Wall-clock when ``connection_state`` last changed (int64 ms UTC). The
+    cockpit derives "Reconnecting since 12s ago" from this without an extra
+    server-side ticker."""
 
 
 __all__ = [
