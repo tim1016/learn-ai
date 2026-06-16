@@ -94,6 +94,13 @@ EXECUTION_COLUMNS = (
     "execution_source",
     "fill_model",
     "source_bar_close_ms",
+    # VCR-P3-L — broker-reported execution time (int64 ms UTC) for live
+    # fills, NULL for shadow / backtest fills. ``ts_ms`` above stays the
+    # engine's wall-clock at receipt for backward compatibility; latency
+    # analysis and reconciliation joins read ``exec_time_ms`` first and
+    # fall back to ``ts_ms`` when NULL (e.g. older parquet files written
+    # before this column existed).
+    "exec_time_ms",
 )
 EXECUTION_SOURCE_VALUES = {"broker_fill", "shadow_sim"}
 TRADE_COLUMNS = (
@@ -262,6 +269,13 @@ class ExecutionRow:
     execution_source: str = "broker_fill"
     fill_model: str = "NEXT_BAR_OPEN"
     source_bar_close_ms: int | None = None
+    # VCR-P3-L — broker-reported execution time. ``ts_ms`` records the
+    # engine's wall-clock at fill receipt; ``exec_time_ms`` records what
+    # IBKR's ``Execution.time`` reported. They differ by network +
+    # event-loop latency; for live latency analysis and post-restart
+    # reconciliation joins the broker time is authoritative. ``None`` on
+    # backtest / shadow fills (no broker).
+    exec_time_ms: int | None = None
 
     def __post_init__(self) -> None:
         if self.execution_source not in EXECUTION_SOURCE_VALUES:
@@ -409,6 +423,9 @@ class ExecutionWriter(_ParquetAppendWriter):
                 "fill_model": str(row.fill_model),
                 "source_bar_close_ms": (
                     None if row.source_bar_close_ms is None else int(row.source_bar_close_ms)
+                ),
+                "exec_time_ms": (
+                    None if row.exec_time_ms is None else int(row.exec_time_ms)
                 ),
             }
         )

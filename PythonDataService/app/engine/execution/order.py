@@ -98,3 +98,11 @@ class OrderEvent:
     # None (real broker fills today), the writer falls back to synthesised ids.
     exec_id: str | None = None
     client_order_id: str | None = None
+    # VCR-P3-L — broker-reported execution time, distinct from ``time``
+    # (which is the engine's wall-clock observation moment for live fills,
+    # or the bar time for shadow / backtest fills). Set only on live broker
+    # fills (sourced from ``IbkrOrderEvent.exec_time_ms``); ``None`` for
+    # backtests and the shadow simulator. Surfaced into ``executions.parquet``
+    # so latency analysis and reconciliation joins have the authoritative
+    # broker time, not the receipt-side wall-clock.
+    exec_time_ms: int | None = None

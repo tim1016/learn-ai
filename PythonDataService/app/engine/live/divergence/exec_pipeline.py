@@ -53,6 +53,10 @@ def _execution_rows(executions: pd.DataFrame) -> list[ExecutionRow]:
     rows: list[ExecutionRow] = []
     for rec in executions.to_dict("records"):
         src_bar = rec.get("source_bar_close_ms")
+        # VCR-P3-L — ``exec_time_ms`` is optional on older parquet files
+        # written before the column existed. Use ``.get`` with a NaN-aware
+        # check so the loader stays back-compatible.
+        exec_time = rec.get("exec_time_ms")
         rows.append(
             ExecutionRow(
                 ts_ms=int(rec["ts_ms"]),
@@ -67,6 +71,7 @@ def _execution_rows(executions: pd.DataFrame) -> list[ExecutionRow]:
                 execution_source=str(rec.get("execution_source", "broker_fill")),
                 fill_model=str(rec.get("fill_model", "NEXT_BAR_OPEN")),
                 source_bar_close_ms=None if src_bar is None or pd.isna(src_bar) else int(src_bar),
+                exec_time_ms=None if exec_time is None or pd.isna(exec_time) else int(exec_time),
             )
         )
     return rows
