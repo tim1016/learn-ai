@@ -9,6 +9,10 @@ interface SetupOpts {
   fleetVerdict?: 'clean' | 'contaminated';
   policyBlocks?: boolean;
   daemonHealth?: Record<string, unknown>;
+  /** Override the broker-health payload the connectivity service reads. The
+   * default is a happy ``connected`` snapshot so unrelated tests don't have
+   * to spell it out. */
+  brokerHealth?: Record<string, unknown>;
 }
 
 function setup(opts: SetupOpts) {
@@ -33,7 +37,14 @@ function setup(opts: SetupOpts) {
     }),
     getInstances: vi.fn().mockResolvedValue(opts.instances),
   };
-  const health = { health: () => ({ connected: true }), refresh: vi.fn() };
+  const defaultBrokerHealth = {
+    connected: true,
+    connection_state: 'connected',
+  };
+  const health = {
+    health: () => opts.brokerHealth ?? defaultBrokerHealth,
+    refresh: vi.fn(),
+  };
   TestBed.configureTestingModule({
     providers: [
       { provide: LiveRunsService, useValue: svc },
@@ -53,6 +64,10 @@ async function flush() {
 
 function fleetLink(service: BrokerConnectivityService) {
   return service.links().find((l) => l.key === 'fleet');
+}
+
+function brokerLink(service: BrokerConnectivityService) {
+  return service.links().find((l) => l.key === 'broker');
 }
 
 afterEach(() => {
@@ -90,6 +105,89 @@ describe('BrokerConnectivityService fleet state', () => {
     expect(service.fleetState()).toBe('warn');
     expect(service.fleetBlocksStarts()).toBe(true);
     expect(fleetLink(service)?.detail).toBe('Contaminated — new starts blocked');
+  });
+});
+
+describe('BrokerConnectivityService broker state (auto-reconnect)', () => {
+  it('renders CONNECTED with a green dot when the backend publishes connection_state=connected', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: { connected: true, connection_state: 'connected' },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('ok');
+    expect(service.brokerConnectionState()).toBe('connected');
+    expect(brokerLink(service)?.detail).toBe('Connected');
+    expect(service.blockers()).not.toContain(
+      expect.stringContaining('Broker reconnecting'),
+    );
+  });
+
+  it('renders RECONNECTING with the attempt counter when the monitor is mid-attempt', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: {
+        connected: false,
+        connection_state: 'reconnecting',
+        reconnect_attempt: 3,
+      },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('warn');
+    expect(service.brokerConnectionState()).toBe('reconnecting');
+    expect(brokerLink(service)?.detail).toBe('Reconnecting (attempt 3)');
+    // The blocker reason is operator-actionable — order entry stays
+    // paused until the link comes back.
+    expect(
+      service.blockers().some((b) => b.startsWith('Broker reconnecting')),
+    ).toBe(true);
+  });
+
+  it('renders SOFT_LOST (warn) when Error 1100 fired but the socket is open', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: {
+        connected: true,
+        connection_state: 'soft_lost',
+        connection_lost: true,
+      },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('warn');
+    expect(service.brokerConnectionState()).toBe('soft_lost');
+    expect(brokerLink(service)?.detail).toContain('feed lost');
+  });
+
+  it('renders DISCONNECTED (down) when the socket is hard-closed', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: { connected: false, connection_state: 'disconnected' },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('down');
+    expect(service.brokerConnectionState()).toBe('disconnected');
+    expect(brokerLink(service)?.detail).toBe('Disconnected');
+  });
+
+  it('renders DISABLED (unknown / grey) using the backend reason when the broker is intentionally off', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: {
+        connected: false,
+        disabled: true,
+        connection_state: 'disabled',
+        reason: 'IBKR_BROKER_ENABLED=false — host runner owns the IBKR session',
+      },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('unknown');
+    expect(service.brokerConnectionState()).toBe('disabled');
+    expect(brokerLink(service)?.detail).toContain('host runner');
   });
 });
 

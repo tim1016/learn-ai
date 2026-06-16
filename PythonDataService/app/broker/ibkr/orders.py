@@ -257,7 +257,12 @@ async def place_paper_order(
     that the next same-account relaunch needs to recognize the replayed
     recovery fill as bot-owned (see ``run._recovery_flatten``).
     """
-    client.require_connected()
+    # Codex P1 on PR #563 — ``require_live`` refuses on TWS 1100 soft loss,
+    # not just on hard close. The cockpit's "Broker reconnecting" banner
+    # was cosmetic without this: ``require_connected`` ignored
+    # ``connection_lost`` so a paper order could land on a dead feed
+    # while the monitor was still trying to reconnect.
+    client.require_live()
     account_id = _enforce_paper_safety(client, spec)
 
     # ADR 0008 / Phase 5B / VCR-0002 — every real-broker submit must carry

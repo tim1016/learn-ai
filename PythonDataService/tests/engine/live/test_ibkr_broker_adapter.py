@@ -81,6 +81,7 @@ def _client(*, owned_open_id: int = 100, foreign_open_id: int = 999):
         connected_account="DU1234567",
         is_connected=lambda: True,
         require_connected=lambda: None,
+        require_live=lambda: None,
     )
     return client, cancel_calls
 

@@ -442,3 +442,79 @@ async def test_disconnect_calls_sync_ib_disconnect_when_connected(
 
     fake_ib.disconnect.assert_called_once()
     assert client.connected_account is None
+
+
+# ── connection-state machine (broker-stability hardening) ──────────────
+
+
+def test_connection_state_reports_connected_on_happy_path(
+    settings_paper: IbkrSettings,
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True
+
+    assert client.connection_state == "connected"
+
+
+def test_connection_state_reports_soft_lost_on_1100(settings_paper: IbkrSettings) -> None:
+    """A 1100 error keeps the socket open but the feed dead — the cockpit
+    must see ``soft_lost``, not ``connected``."""
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True
+    client._on_ib_error(-1, 1100, "lost", None)
+
+    assert client.connection_state == "soft_lost"
+
+
+def test_connection_state_reports_disconnected_when_socket_closed(
+    settings_paper: IbkrSettings,
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = False
+
+    assert client.connection_state == "disconnected"
+
+
+def test_health_publishes_client_observed_fields_only(
+    settings_paper: IbkrSettings,
+) -> None:
+    """``health()`` is a pure read of client-observable state.
+    ``connection_state`` is one of {connected, soft_lost, disconnected};
+    the monitor's "reconnecting" overlay is applied later by
+    ``build_broker_health``."""
+    client = _client_with_fake_ib(settings_paper)
+    client._fake_ib.isConnected.return_value = True
+    client._on_ib_error(-1, 1100, "lost", None)
+
+    h = client.health()
+
+    assert h.connection_state == "soft_lost"
+    assert h.connection_lost is True
+    assert h.connectivity_lost_count == 1
+    # Monitor-owned fields default — composer fills them in.
+    assert h.reconnect_attempt is None
+    assert h.successful_reconnect_count == 0
+    assert h.last_transition_ms > 0
+
+
+def test_on_ib_error_stamps_last_event_ms_at_the_mutation_site(
+    settings_paper: IbkrSettings,
+) -> None:
+    """The transition timestamp is event-stamped, not observed — so a
+    cockpit that polls late still sees the original transition wall-clock.
+    Repeated 1100s do NOT re-stamp the timestamp (already in soft_lost)."""
+    client = _client_with_fake_ib(settings_paper)
+    before = client.last_event_ms
+
+    client._on_ib_error(-1, 1100, "lost", None)
+    after_first = client.last_event_ms
+    assert after_first >= before
+
+    client._on_ib_error(-1, 1100, "lost again", None)
+    after_second = client.last_event_ms
+    # Same state — no transition, no re-stamp.
+    assert after_second == after_first
+
+    client._on_ib_error(-1, 1101, "restored", None)
+    after_restore = client.last_event_ms
+    assert after_restore >= after_first

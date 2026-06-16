@@ -25,9 +25,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
-from app.broker.ibkr.models import IbkrConnectionHealth
+from app.broker.ibkr.keepalive import apply_tcp_keepalive
+from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
 
 logger = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 # TWS/IB connectivity error codes that the ``errorEvent`` handler reacts to.
@@ -238,6 +243,19 @@ class IbkrClient:
         # by diagnostics) per numerical-rigor's "surfaced, never silenced".
         self._connection_lost: bool = False
         self._connectivity_lost_count: int = 0
+        # Wall-clock when the client's own observable connection state last
+        # changed — set by ``connect`` / ``disconnect`` / 1100 / 1101.
+        # ``health()`` returns this verbatim; the cockpit overlay composer
+        # (``build_broker_health``) maxes it against the monitor's transition
+        # timestamp so the wire-level ``last_transition_ms`` is the most
+        # recent of either side.
+        self._last_event_ms: int = _now_ms()
+        # Operator-intended connection state. The AutoReconnectMonitor only
+        # acts on observed drops when this is True; ``POST /disconnect`` sets
+        # it False so the operator's "off" sticks, and a startup with
+        # ``IBKR_CONNECT_ON_STARTUP=false`` leaves it False until the
+        # operator clicks Connect. Codex P1 fix on PR #563.
+        self._desired_connected: bool = False
         self._ib.errorEvent += self._on_ib_error
 
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
@@ -257,8 +275,13 @@ class IbkrClient:
             self._client_id_in_use_seen = True
             return
         if errorCode in _CONNECTIVITY_LOST_CODES:
+            was_lost = self._connection_lost
             self._connection_lost = True
             self._connectivity_lost_count += 1
+            if not was_lost:
+                # State transition (healthy → soft_lost) — stamp at the
+                # mutation site so ``health()`` stays a pure read.
+                self._last_event_ms = _now_ms()
             logger.warning(
                 "IBKR connectivity lost",
                 extra={
@@ -269,6 +292,9 @@ class IbkrClient:
             )
             return
         if errorCode in _CONNECTIVITY_RESTORED_CODES:
+            if self._connection_lost:
+                # Transition (soft_lost → healthy) — same rationale as above.
+                self._last_event_ms = _now_ms()
             self._connection_lost = False
             logger.info(
                 "IBKR connectivity restored",
@@ -313,6 +339,11 @@ class IbkrClient:
                     clientId=s.client_id,
                     readonly=s.readonly,
                 )
+                # Enable TCP keep-alive on the now-open transport so a
+                # silently severed bridge surfaces in ~60s rather than the
+                # OS-default ~2h. Best-effort: the monitor catches what
+                # keep-alive would have accelerated if this fails.
+                apply_tcp_keepalive(self._ib)
                 break
             except Exception as exc:
                 last_error = exc
@@ -372,6 +403,9 @@ class IbkrClient:
             )
 
         self._connected_account = account_id
+        # State transition (anything → connected) — stamp at the mutation
+        # site so ``health()`` stays a pure read.
+        self._last_event_ms = _now_ms()
         logger.info(
             "[STEP 3/3] IBKR connected: account=%s is_paper=%s server_version=%s",
             account_id,
@@ -382,12 +416,15 @@ class IbkrClient:
 
     async def disconnect(self) -> None:
         """Idempotent disconnect."""
-        if self._ib.isConnected():
+        was_connected = self._ib.isConnected()
+        if was_connected:
             # ib_async.IB only exposes a synchronous disconnect(); there is
             # no disconnectAsync. The smoke run on 2026-05-13 surfaced this
             # the first time cmd_start ever called us in production.
             self._ib.disconnect()
         self._connected_account = None
+        if was_connected:
+            self._last_event_ms = _now_ms()
 
     # ── accessors ───────────────────────────────────────────────────────
 
@@ -446,6 +483,15 @@ class IbkrClient:
             )
 
     def health(self) -> IbkrConnectionHealth:
+        """Client-observable snapshot. Pure read — no side effects.
+
+        Returns the wire model with the client's own view stamped in:
+        ``connection_state`` is one of {connected, soft_lost,
+        disconnected}; the monitor's "reconnecting" overlay is applied
+        by ``build_broker_health(client, monitor)`` — the single place
+        that knows both halves of the state machine. Monitor-only fields
+        default (``reconnect_attempt=None``, ``successful_reconnect_count=0``).
+        """
         connected = self.is_connected()
         sv: int | None = None
         if connected and self._ib.client is not None:
@@ -462,8 +508,46 @@ class IbkrClient:
             account_id=self._connected_account,
             is_paper=(_is_paper_account(self._connected_account) if self._connected_account else None),
             server_version=sv,
-            fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+            fetched_at_ms=_now_ms(),
+            connection_state=self.connection_state,
+            connection_lost=self._connection_lost,
+            connectivity_lost_count=self._connectivity_lost_count,
+            last_transition_ms=self._last_event_ms,
         )
+
+    @property
+    def connection_state(self) -> ClientConnectionState:
+        """Cockpit-facing state, *from the client's perspective only*.
+        The monitor's "reconnecting" overlay is applied by
+        ``build_broker_health``, not here."""
+        if not self.is_connected():
+            return "disconnected"
+        if self._connection_lost:
+            return "soft_lost"
+        return "connected"
+
+    @property
+    def last_event_ms(self) -> int:
+        """Wall-clock when the client's observable connection state last
+        flipped (connect / disconnect / 1100 / 1101). Read by
+        ``build_broker_health`` so the wire-level ``last_transition_ms``
+        can be the max of this and the monitor's own transition stamp."""
+        return self._last_event_ms
+
+    @property
+    def desired_connected(self) -> bool:
+        """Whether the operator (or startup contract) wants a live
+        connection. The AutoReconnectMonitor short-circuits its tick when
+        this is False, so a manual ``/disconnect`` makes the operator's
+        "off" sticky."""
+        return self._desired_connected
+
+    def set_desired_connected(self, value: bool) -> None:
+        """Set by the FastAPI lifespan (based on ``IBKR_CONNECT_ON_STARTUP``)
+        and by the ``/connect`` / ``/disconnect`` / ``/reconnect`` router
+        endpoints. NOT touched by the monitor — the monitor reads it as
+        precondition, never writes it."""
+        self._desired_connected = value
 
 
 # ── module-level singleton ──────────────────────────────────────────────
@@ -471,6 +555,15 @@ class IbkrClient:
 # replace via ``set_client`` without going through the lifespan.
 
 _client: IbkrClient | None = None
+
+# Lifecycle lock serialising ``connect`` / ``disconnect`` / ``reconnect`` across
+# every entry point that drives the singleton: the broker router's operator
+# endpoints AND the auto-reconnect monitor. Without a shared lock the monitor's
+# tick can race an operator click and call ``connectAsync`` twice on the same
+# ``ib_async.IB``, corrupting its session bookkeeping. The lock is module-level
+# (not on the instance) so the "create-the-singleton-if-missing" path in the
+# router can still acquire it before a client exists.
+_client_lifecycle_lock = asyncio.Lock()
 
 
 def get_client() -> IbkrClient:
@@ -485,3 +578,8 @@ def set_client(client: IbkrClient | None) -> None:
     """Install the process-wide client. Called from the lifespan event."""
     global _client
     _client = client
+
+
+def get_client_lifecycle_lock() -> asyncio.Lock:
+    """Return the shared connect/disconnect lock the router and monitor share."""
+    return _client_lifecycle_lock

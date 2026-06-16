@@ -32,6 +32,7 @@ from app.main import app
 
 
 def _build_health(*, connected: bool, is_paper: bool | None = True) -> IbkrConnectionHealth:
+    now_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
     return IbkrConnectionHealth(
         mode="paper",
         host="127.0.0.1",
@@ -41,7 +42,9 @@ def _build_health(*, connected: bool, is_paper: bool | None = True) -> IbkrConne
         account_id="DU1234567" if connected else None,
         is_paper=is_paper if connected else None,
         server_version=178 if connected else None,
-        fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        fetched_at_ms=now_ms,
+        connection_state="connected" if connected else "disconnected",
+        last_transition_ms=now_ms,
     )
 
 
@@ -58,6 +61,10 @@ class FakeClient:
         self._connect_raises = connect_raises
         self.connect_calls = 0
         self.disconnect_calls = 0
+        # Mirror ``IbkrClient.desired_connected`` so the router's
+        # set_desired_connected(True/False) calls don't AttributeError.
+        self._desired_connected = False
+        self.set_desired_calls: list[bool] = []
 
     async def connect(self) -> IbkrConnectionHealth:
         self.connect_calls += 1
@@ -72,6 +79,14 @@ class FakeClient:
 
     def is_connected(self) -> bool:
         return self._connected
+
+    @property
+    def desired_connected(self) -> bool:
+        return self._desired_connected
+
+    def set_desired_connected(self, value: bool) -> None:
+        self._desired_connected = value
+        self.set_desired_calls.append(value)
 
     def health(self) -> IbkrConnectionHealth:
         return _build_health(connected=self._connected)
@@ -163,6 +178,7 @@ async def test_connect_when_already_connected_is_idempotent(installed_fake_clien
 async def test_disconnect_when_connected_calls_disconnect(installed_fake_client):
     fake = installed_fake_client
     fake._connected = True
+    fake._desired_connected = True
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/broker/disconnect")
@@ -170,6 +186,23 @@ async def test_disconnect_when_connected_calls_disconnect(installed_fake_client)
     assert response.status_code == 200
     assert response.json()["connected"] is False
     assert fake.disconnect_calls == 1
+    # Codex P1 regression — operator's Disconnect must flip desired
+    # state to False so the AutoReconnectMonitor stops auto-reconnecting.
+    assert fake.desired_connected is False
+    assert False in fake.set_desired_calls
+
+
+async def test_connect_endpoint_sets_desired_connected_true(installed_fake_client):
+    """Dual of the above — operator's Connect re-arms the monitor."""
+    fake = installed_fake_client
+    fake._desired_connected = False
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/broker/connect")
+
+    assert response.status_code == 200
+    assert fake.desired_connected is True
+    assert True in fake.set_desired_calls
 
 
 async def test_disconnect_when_not_connected_is_idempotent(installed_fake_client):

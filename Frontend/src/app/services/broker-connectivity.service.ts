@@ -4,6 +4,16 @@ import { LiveRunsService } from './live-runs.service';
 
 export type LinkState = 'ok' | 'down' | 'warn' | 'unknown';
 
+/** Structured broker connection state from the backend (auto-reconnect
+ * hardening). The strip and per-control disable-with-reason both derive
+ * their LinkState from this. */
+export type BrokerConnectionState =
+  | 'connected'
+  | 'soft_lost'
+  | 'reconnecting'
+  | 'disconnected'
+  | 'disabled';
+
 export interface ConnectivityLink {
   key: 'daemon' | 'broker' | 'fleet';
   label: string;
@@ -53,10 +63,53 @@ export class BrokerConnectivityService {
     return this.daemon.value()?.ok ? 'ok' : 'down';
   });
 
-  readonly brokerState = computed<LinkState>(() => {
+  /** The structured connection state from the backend. ``null`` while the
+   * first health probe is in flight; otherwise the backend's
+   * ``connection_state`` (required field — frontend and backend deploy
+   * together so the partial-rollout fallback would only ever paper over
+   * a misconfigured deploy). */
+  readonly brokerConnectionState = computed<BrokerConnectionState | null>(() => {
     const h = this.brokerHealth.health();
-    if (h === null) return 'unknown';
-    return h.connected ? 'ok' : 'down';
+    if (h === null) return null;
+    return (h.connection_state ?? null) as BrokerConnectionState | null;
+  });
+
+  /** Single source of truth for the link colour and detail string per
+   * connection state. Co-located so the strip can't drift between the
+   * dot's amber and the label's "Reconnecting". */
+  private static readonly STATE_RENDERING: Record<
+    BrokerConnectionState,
+    { link: LinkState; baseDetail: string }
+  > = {
+    connected: { link: 'ok', baseDetail: 'Connected' },
+    reconnecting: { link: 'warn', baseDetail: 'Reconnecting' },
+    soft_lost: { link: 'warn', baseDetail: 'Connection degraded — feed lost, recovering' },
+    disabled: { link: 'unknown', baseDetail: 'Disabled' },
+    disconnected: { link: 'down', baseDetail: 'Disconnected' },
+  };
+
+  readonly brokerState = computed<LinkState>(() => {
+    const state = this.brokerConnectionState();
+    if (state === null) return 'unknown';
+    return BrokerConnectivityService.STATE_RENDERING[state].link;
+  });
+
+  /** Operator-facing detail string for the broker link. ``Reconnecting``
+   * surfaces the attempt counter when the backend publishes it so the
+   * operator sees progress rather than silence; ``disabled`` surfaces
+   * the backend-authored ``reason`` so the operator sees why. */
+  readonly brokerDetail = computed<string>(() => {
+    const state = this.brokerConnectionState();
+    if (state === null) return 'Checking…';
+    const { baseDetail } = BrokerConnectivityService.STATE_RENDERING[state];
+    const h = this.brokerHealth.health();
+    if (state === 'reconnecting' && h?.reconnect_attempt) {
+      return `Reconnecting (attempt ${h.reconnect_attempt})`;
+    }
+    if (state === 'disabled' && h?.reason) {
+      return h.reason;
+    }
+    return baseDetail;
   });
 
   /** Whether the connected session is the paper account. Paper-only UI
@@ -99,12 +152,7 @@ export class BrokerConnectivityService {
       key: 'broker',
       label: 'Broker',
       state: this.brokerState(),
-      detail:
-        this.brokerState() === 'ok'
-          ? 'Connected'
-          : this.brokerState() === 'unknown'
-            ? 'Checking…'
-            : 'Disconnected',
+      detail: this.brokerDetail(),
     },
     {
       key: 'fleet',
@@ -130,8 +178,13 @@ export class BrokerConnectivityService {
     if (this.daemonState() === 'down') {
       out.push('Live engine unavailable — start it on this machine, then recheck.');
     }
-    if (this.brokerState() === 'down') {
+    const bs = this.brokerConnectionState();
+    if (bs === 'disconnected') {
       out.push('Broker disconnected — connect IBKR to act on a live run.');
+    } else if (bs === 'reconnecting') {
+      out.push('Broker reconnecting — order entry paused until the link is restored.');
+    } else if (bs === 'soft_lost') {
+      out.push('Broker feed lost — auto-recovery in progress. Hold off on order entry.');
     }
     if (this.fleetState() === 'warn') {
       out.push('Fleet policy is blocking new starts (account contaminated).');

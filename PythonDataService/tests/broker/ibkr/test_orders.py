@@ -225,6 +225,30 @@ async def test_place_paper_order_refuses_when_confirm_missing() -> None:
     client.ib.placeOrder.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_place_paper_order_refuses_on_soft_connectivity_loss() -> None:
+    """Codex P1 on PR #563 — during a TWS 1100 soft loss the socket is
+    still open (``is_connected()`` returns True) but the data feed is
+    dead. ``require_live`` is the gate that catches this; the old code
+    used ``require_connected`` which ignored the soft-loss flag, so a
+    paper order could land on a dead feed while the monitor was still
+    trying to reconnect."""
+    from app.broker.ibkr.client import NotConnectedError
+
+    client = _client()
+
+    def _refuse() -> None:
+        raise NotConnectedError(
+            "IBKR connectivity lost (TWS error 1100): the API socket is "
+            "open but the data feed is down."
+        )
+
+    client.require_live = _refuse  # type: ignore[assignment]
+    with pytest.raises(NotConnectedError, match="connectivity lost"):
+        await place_paper_order(client, _spec())
+    client.ib.placeOrder.assert_not_called()
+
+
 # ── Phase 3b: idempotency ─────────────────────────────────────────────
 
 
