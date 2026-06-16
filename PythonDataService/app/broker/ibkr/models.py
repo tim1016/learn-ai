@@ -602,6 +602,19 @@ DiagnosticReport = Annotated[
 ]
 
 
+ClientConnectionState = Literal["connected", "soft_lost", "disconnected"]
+"""Subset of states an ``IbkrClient`` can observe for itself. The monitor's
+``reconnecting`` overlay and the env-driven ``disabled`` state are layered on
+by ``build_broker_health``."""
+
+
+BrokerConnectionState = Literal[
+    "connected", "soft_lost", "reconnecting", "disconnected", "disabled"
+]
+"""Wire-level state surfaced to the cockpit. Strict superset of
+``ClientConnectionState`` with the monitor and env-driven values."""
+
+
 class IbkrConnectionHealth(BaseModel):
     """Diagnostic snapshot used by ``GET /api/broker/health``.
 
@@ -630,22 +643,22 @@ class IbkrConnectionHealth(BaseModel):
     fetched_at_ms: int
     safety_verdict: BrokerSafetyVerdict | None = None
     # ── Connection-state machine fields (auto-reconnect, VCR-broker-stability) ──
-    # ``connection_state`` is the single field the cockpit binds the link strip
-    # to. ``connected`` stays boolean for back-compat (existing callers); the
-    # finer-grained states discriminate between a hard socket close, a soft
-    # 1100 loss, and an in-flight auto-reconnect. None-default keeps the model
-    # constructible by older code paths (tests, the disabled fallback) without
-    # forcing every constructor site to know about the new field.
-    connection_state: Literal[
-        "connected", "soft_lost", "reconnecting", "disconnected", "disabled"
-    ] | None = None
-    """Cockpit-facing connection state. ``None`` only on payloads minted before
-    the state-machine landed (cached test fixtures); current code always sets
-    it."""
+    # Required: the cockpit binds the link strip to ``connection_state`` and
+    # ``last_transition_ms`` directly; every constructor in the codebase sets
+    # them, so the typed contract is non-optional. ``connected`` stays bool for
+    # back-compat with downstream code that already keys off it.
+    connection_state: BrokerConnectionState
+    """Cockpit-facing connection state. The single field the link strip binds
+    to; richer than ``connected`` (which is still surfaced for back-compat).
+    Cockpit derives banner colour and detail string from this."""
+    last_transition_ms: int
+    """Wall-clock when ``connection_state`` last changed (int64 ms UTC).
+    Composed by ``build_broker_health`` as the max of the client's own
+    event timestamp and the monitor's last attempt-boundary timestamp."""
     connection_lost: bool = False
-    """Whether IBKR Error 1100 / 504 has fired and not yet been restored. The
-    socket may still report ``connected=True`` in this window — the data feed
-    is dead."""
+    """Whether IBKR Error 1100 / 504 has fired and not yet been restored.
+    The socket may still report ``connected=True`` in this window — the data
+    feed is dead."""
     connectivity_lost_count: int = 0
     """Cumulative observable count of connectivity-lost events since the
     process started."""
@@ -654,13 +667,9 @@ class IbkrConnectionHealth(BaseModel):
     "reconnecting"``, ``None`` otherwise. The cockpit renders it as
     "Reconnecting (attempt N)" so the operator sees progress, not silence."""
     successful_reconnect_count: int = 0
-    """Cumulative observable count of monitor-driven recoveries this process
-    — surfaces in the broker diagnostics for an operator who wants to know
+    """Cumulative observable count of monitor-driven recoveries this process —
+    surfaces in the broker diagnostics for an operator who wants to know
     "how flaky has the bridge been"."""
-    last_transition_ms: int | None = None
-    """Wall-clock when ``connection_state`` last changed (int64 ms UTC). The
-    cockpit derives "Reconnecting since 12s ago" from this without an extra
-    server-side ticker."""
 
 
 __all__ = [

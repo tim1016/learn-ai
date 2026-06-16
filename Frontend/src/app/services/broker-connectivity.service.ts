@@ -64,66 +64,52 @@ export class BrokerConnectivityService {
   });
 
   /** The structured connection state from the backend. ``null`` while the
-   * first health probe is in flight. Falls back to deriving from the
-   * legacy ``connected`` boolean when an older backend hasn't published
-   * the new field — that keeps the cockpit working during a partial
-   * rollout (backend ahead of frontend or vice versa). */
+   * first health probe is in flight; otherwise the backend's
+   * ``connection_state`` (required field — frontend and backend deploy
+   * together so the partial-rollout fallback would only ever paper over
+   * a misconfigured deploy). */
   readonly brokerConnectionState = computed<BrokerConnectionState | null>(() => {
     const h = this.brokerHealth.health();
     if (h === null) return null;
-    if (h.disabled === true) return 'disabled';
-    if (h.connection_state !== undefined && h.connection_state !== null) {
-      return h.connection_state;
-    }
-    return h.connected ? 'connected' : 'disconnected';
+    return (h.connection_state ?? null) as BrokerConnectionState | null;
   });
 
-  /** Strip-facing state. ``reconnecting`` and ``soft_lost`` map to ``warn``
-   * so the dot turns amber rather than red — the cockpit knows the
-   * monitor is on it. ``disconnected`` is red; ``disabled`` reads as
-   * grey (``unknown``) because it's an intentional configuration, not
-   * a failure. */
+  /** Single source of truth for the link colour and detail string per
+   * connection state. Co-located so the strip can't drift between the
+   * dot's amber and the label's "Reconnecting". */
+  private static readonly STATE_RENDERING: Record<
+    BrokerConnectionState,
+    { link: LinkState; baseDetail: string }
+  > = {
+    connected: { link: 'ok', baseDetail: 'Connected' },
+    reconnecting: { link: 'warn', baseDetail: 'Reconnecting' },
+    soft_lost: { link: 'warn', baseDetail: 'Connection degraded — feed lost, recovering' },
+    disabled: { link: 'unknown', baseDetail: 'Disabled' },
+    disconnected: { link: 'down', baseDetail: 'Disconnected' },
+  };
+
   readonly brokerState = computed<LinkState>(() => {
     const state = this.brokerConnectionState();
     if (state === null) return 'unknown';
-    switch (state) {
-      case 'connected':
-        return 'ok';
-      case 'reconnecting':
-      case 'soft_lost':
-        return 'warn';
-      case 'disabled':
-        return 'unknown';
-      case 'disconnected':
-      default:
-        return 'down';
-    }
+    return BrokerConnectivityService.STATE_RENDERING[state].link;
   });
 
   /** Operator-facing detail string for the broker link. ``Reconnecting``
    * surfaces the attempt counter when the backend publishes it so the
-   * operator sees progress rather than silence. */
+   * operator sees progress rather than silence; ``disabled`` surfaces
+   * the backend-authored ``reason`` so the operator sees why. */
   readonly brokerDetail = computed<string>(() => {
     const state = this.brokerConnectionState();
     if (state === null) return 'Checking…';
+    const { baseDetail } = BrokerConnectivityService.STATE_RENDERING[state];
     const h = this.brokerHealth.health();
-    switch (state) {
-      case 'connected':
-        return 'Connected';
-      case 'reconnecting': {
-        const attempt = h?.reconnect_attempt;
-        return attempt !== null && attempt !== undefined && attempt > 0
-          ? `Reconnecting (attempt ${attempt})`
-          : 'Reconnecting';
-      }
-      case 'soft_lost':
-        return 'Connection degraded — feed lost, recovering';
-      case 'disabled':
-        return h?.reason ?? 'Disabled';
-      case 'disconnected':
-      default:
-        return 'Disconnected';
+    if (state === 'reconnecting' && h?.reconnect_attempt) {
+      return `Reconnecting (attempt ${h.reconnect_attempt})`;
     }
+    if (state === 'disabled' && h?.reason) {
+      return h.reason;
+    }
+    return baseDetail;
   });
 
   /** Whether the connected session is the paper account. Paper-only UI

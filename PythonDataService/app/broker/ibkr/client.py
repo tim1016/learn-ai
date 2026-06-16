@@ -21,37 +21,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import socket
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
-from app.broker.ibkr.models import IbkrConnectionHealth
+from app.broker.ibkr.keepalive import apply_tcp_keepalive
+from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
 
 logger = logging.getLogger(__name__)
-
-
-# Structured connection state surfaced to the cockpit. ``connected`` and
-# ``disconnected`` are observable from the socket; ``soft_lost`` means the
-# socket is open but IBKR signalled connectivity loss (Error 1100);
-# ``reconnecting`` is set by the AutoReconnectMonitor while it is mid-
-# attempt; ``disabled`` is the broker-disabled-via-env case.
-ConnectionState = Literal[
-    "connected", "soft_lost", "reconnecting", "disconnected", "disabled"
-]
-
-
-# TCP keep-alive parameters. Worst-case detection of a dead bridge:
-# IDLE + INTVL * CNT ≈ 60s. Tighter than IBKR's own 1100 cadence, so a
-# silently severed bridge surfaces while the operator can still recover
-# the session rather than discovering it hours later when the OS-default
-# (2h) keep-alive finally probes. Linux-only socket options
-# (TCP_KEEPIDLE/INTVL/CNT) are gated on ``hasattr`` so a macOS / BSD
-# build still gets SO_KEEPALIVE without crashing.
-_TCP_KEEPIDLE_S = 30
-_TCP_KEEPINTVL_S = 10
-_TCP_KEEPCNT = 3
 
 
 def _now_ms() -> int:
@@ -266,15 +243,13 @@ class IbkrClient:
         # by diagnostics) per numerical-rigor's "surfaced, never silenced".
         self._connection_lost: bool = False
         self._connectivity_lost_count: int = 0
-        # Auto-reconnect bookkeeping the AutoReconnectMonitor publishes into.
-        # The cockpit reads ``connection_state`` / ``reconnect_attempt`` /
-        # ``last_transition_ms`` to render the live link state without ever
-        # claiming "Connected" while the monitor is mid-attempt.
-        self._reconnecting: bool = False
-        self._reconnect_attempt: int = 0
-        self._successful_reconnect_count: int = 0
-        self._last_transition_ms: int = _now_ms()
-        self._last_connection_state: ConnectionState = "disconnected"
+        # Wall-clock when the client's own observable connection state last
+        # changed — set by ``connect`` / ``disconnect`` / 1100 / 1101.
+        # ``health()`` returns this verbatim; the cockpit overlay composer
+        # (``build_broker_health``) maxes it against the monitor's transition
+        # timestamp so the wire-level ``last_transition_ms`` is the most
+        # recent of either side.
+        self._last_event_ms: int = _now_ms()
         self._ib.errorEvent += self._on_ib_error
 
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
@@ -294,8 +269,13 @@ class IbkrClient:
             self._client_id_in_use_seen = True
             return
         if errorCode in _CONNECTIVITY_LOST_CODES:
+            was_lost = self._connection_lost
             self._connection_lost = True
             self._connectivity_lost_count += 1
+            if not was_lost:
+                # State transition (healthy → soft_lost) — stamp at the
+                # mutation site so ``health()`` stays a pure read.
+                self._last_event_ms = _now_ms()
             logger.warning(
                 "IBKR connectivity lost",
                 extra={
@@ -306,6 +286,9 @@ class IbkrClient:
             )
             return
         if errorCode in _CONNECTIVITY_RESTORED_CODES:
+            if self._connection_lost:
+                # Transition (soft_lost → healthy) — same rationale as above.
+                self._last_event_ms = _now_ms()
             self._connection_lost = False
             logger.info(
                 "IBKR connectivity restored",
@@ -350,11 +333,11 @@ class IbkrClient:
                     clientId=s.client_id,
                     readonly=s.readonly,
                 )
-                # Enable TCP keep-alive immediately so a dead bridge
-                # surfaces in ~60s rather than the OS-default 2h. Failure
-                # to set keep-alive does not abort the connect — the
-                # AutoReconnectMonitor catches missed drops as a fallback.
-                self._apply_tcp_keepalive()
+                # Enable TCP keep-alive on the now-open transport so a
+                # silently severed bridge surfaces in ~60s rather than the
+                # OS-default ~2h. Best-effort: the monitor catches what
+                # keep-alive would have accelerated if this fails.
+                apply_tcp_keepalive(self._ib)
                 break
             except Exception as exc:
                 last_error = exc
@@ -414,6 +397,9 @@ class IbkrClient:
             )
 
         self._connected_account = account_id
+        # State transition (anything → connected) — stamp at the mutation
+        # site so ``health()`` stays a pure read.
+        self._last_event_ms = _now_ms()
         logger.info(
             "[STEP 3/3] IBKR connected: account=%s is_paper=%s server_version=%s",
             account_id,
@@ -424,12 +410,15 @@ class IbkrClient:
 
     async def disconnect(self) -> None:
         """Idempotent disconnect."""
-        if self._ib.isConnected():
+        was_connected = self._ib.isConnected()
+        if was_connected:
             # ib_async.IB only exposes a synchronous disconnect(); there is
             # no disconnectAsync. The smoke run on 2026-05-13 surfaced this
             # the first time cmd_start ever called us in production.
             self._ib.disconnect()
         self._connected_account = None
+        if was_connected:
+            self._last_event_ms = _now_ms()
 
     # ── accessors ───────────────────────────────────────────────────────
 
@@ -488,6 +477,15 @@ class IbkrClient:
             )
 
     def health(self) -> IbkrConnectionHealth:
+        """Client-observable snapshot. Pure read — no side effects.
+
+        Returns the wire model with the client's own view stamped in:
+        ``connection_state`` is one of {connected, soft_lost,
+        disconnected}; the monitor's "reconnecting" overlay is applied
+        by ``build_broker_health(client, monitor)`` — the single place
+        that knows both halves of the state machine. Monitor-only fields
+        default (``reconnect_attempt=None``, ``successful_reconnect_count=0``).
+        """
         connected = self.is_connected()
         sv: int | None = None
         if connected and self._ib.client is not None:
@@ -495,12 +493,6 @@ class IbkrClient:
                 sv = int(self._ib.client.serverVersion())
             except Exception:
                 sv = None
-        state = self.connection_state
-        # Stamp transition timestamps on observed changes so the cockpit
-        # can render "Reconnecting (15s ago)" without an extra signal.
-        if state != self._last_connection_state:
-            self._last_transition_ms = _now_ms()
-            self._last_connection_state = state
         return IbkrConnectionHealth(
             mode=self._settings.mode,
             host=self._settings.host,
@@ -511,24 +503,17 @@ class IbkrClient:
             is_paper=(_is_paper_account(self._connected_account) if self._connected_account else None),
             server_version=sv,
             fetched_at_ms=_now_ms(),
-            connection_state=state,
+            connection_state=self.connection_state,
             connection_lost=self._connection_lost,
             connectivity_lost_count=self._connectivity_lost_count,
-            reconnect_attempt=self._reconnect_attempt if self._reconnecting else None,
-            successful_reconnect_count=self._successful_reconnect_count,
-            last_transition_ms=self._last_transition_ms,
+            last_transition_ms=self._last_event_ms,
         )
 
-    # ── connection-state machine ────────────────────────────────────────
-
     @property
-    def connection_state(self) -> ConnectionState:
-        """Cockpit-facing state. Derivation order matters: ``reconnecting``
-        wins while the monitor is mid-attempt (even if the underlying
-        socket is briefly up between retries), then the socket-closed
-        case, then the soft-loss case, then connected."""
-        if self._reconnecting:
-            return "reconnecting"
+    def connection_state(self) -> ClientConnectionState:
+        """Cockpit-facing state, *from the client's perspective only*.
+        The monitor's "reconnecting" overlay is applied by
+        ``build_broker_health``, not here."""
         if not self.is_connected():
             return "disconnected"
         if self._connection_lost:
@@ -536,109 +521,12 @@ class IbkrClient:
         return "connected"
 
     @property
-    def reconnect_attempt(self) -> int:
-        """Current monitor attempt number; 0 when not reconnecting."""
-        return self._reconnect_attempt if self._reconnecting else 0
-
-    @property
-    def successful_reconnect_count(self) -> int:
-        """Observable count of monitor-driven recoveries this process."""
-        return self._successful_reconnect_count
-
-    def _mark_reconnect_started(self, attempt: int) -> None:
-        """Called by the AutoReconnectMonitor when a fresh attempt begins.
-
-        Bumps ``last_transition_ms`` so the cockpit's "since" age resets
-        per attempt instead of dragging from the original disconnect.
-        """
-        self._reconnecting = True
-        self._reconnect_attempt = attempt
-        self._last_transition_ms = _now_ms()
-
-    def _mark_reconnect_resolved(self, *, success: bool) -> None:
-        """Called by the AutoReconnectMonitor when an attempt finishes.
-
-        Success transitions to ``connected``; failure leaves the
-        underlying ``_connection_lost`` / socket state untouched (the
-        monitor will sleep and retry). In both cases the bookkeeping
-        clears so the next tick's state derivation is clean.
-        """
-        self._reconnecting = False
-        if success:
-            self._reconnect_attempt = 0
-            self._successful_reconnect_count += 1
-        self._last_transition_ms = _now_ms()
-
-    # ── socket-level keep-alive ─────────────────────────────────────────
-
-    def _apply_tcp_keepalive(self) -> None:
-        """Best-effort TCP keep-alive on the ib_async transport socket.
-
-        Defensive: if the socket isn't reachable (older ib_async, a
-        different transport, a test harness) we log and proceed. The
-        AutoReconnectMonitor catches any drops keep-alive would have
-        accelerated, so this stays a hardening tweak, not a correctness
-        requirement. Without this, a silent bridge failure can sit on a
-        stale-but-open socket until OS-default keep-alive (~2h) probes.
-        """
-        try:
-            sock = self._extract_transport_socket()
-        except Exception as exc:
-            logger.warning(
-                "Could not enable TCP keep-alive on IBKR socket: %s",
-                exc,
-                extra={"action": "tcp_keepalive_skip"},
-            )
-            return
-        if sock is None:
-            logger.warning(
-                "IBKR transport socket not accessible; skipping TCP keep-alive",
-                extra={"action": "tcp_keepalive_skip"},
-            )
-            return
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            if hasattr(socket, "TCP_KEEPIDLE"):
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, _TCP_KEEPIDLE_S)
-            if hasattr(socket, "TCP_KEEPINTVL"):
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, _TCP_KEEPINTVL_S)
-            if hasattr(socket, "TCP_KEEPCNT"):
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, _TCP_KEEPCNT)
-        except OSError as exc:
-            logger.warning(
-                "Failed to set TCP keep-alive options on IBKR socket: %s",
-                exc,
-                extra={"action": "tcp_keepalive_skip"},
-            )
-            return
-        logger.info(
-            "TCP keep-alive enabled on IBKR socket (idle=%ds intvl=%ds cnt=%d)",
-            _TCP_KEEPIDLE_S,
-            _TCP_KEEPINTVL_S,
-            _TCP_KEEPCNT,
-            extra={"action": "tcp_keepalive_set"},
-        )
-
-    def _extract_transport_socket(self) -> socket.socket | None:
-        """Reach through ``ib_async.IB`` to its asyncio transport socket.
-
-        ib_async's connection layer evolved across versions; this tries
-        the common attribute paths and returns ``None`` rather than
-        raising if none of them work."""
-        client = self._ib.client
-        if client is None:
-            return None
-        # ib_async ≥ 0.9: client.conn.writer (asyncio.StreamWriter)
-        conn = getattr(client, "conn", None)
-        if conn is not None:
-            writer = getattr(conn, "writer", None) or getattr(conn, "_writer", None)
-            if writer is not None and hasattr(writer, "get_extra_info"):
-                return writer.get_extra_info("socket")
-        # Older / alternate transports: client.socket directly.
-        direct = getattr(client, "socket", None)
-        if isinstance(direct, socket.socket):
-            return direct
-        return None
+    def last_event_ms(self) -> int:
+        """Wall-clock when the client's observable connection state last
+        flipped (connect / disconnect / 1100 / 1101). Read by
+        ``build_broker_health`` so the wire-level ``last_transition_ms``
+        can be the max of this and the monitor's own transition stamp."""
+        return self._last_event_ms
 
 
 # ── module-level singleton ──────────────────────────────────────────────

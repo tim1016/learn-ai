@@ -32,6 +32,7 @@ from app.main import app
 
 
 def _build_health(*, connected: bool, is_paper: bool | None = True) -> IbkrConnectionHealth:
+    now_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
     return IbkrConnectionHealth(
         mode="paper",
         host="127.0.0.1",
@@ -41,7 +42,9 @@ def _build_health(*, connected: bool, is_paper: bool | None = True) -> IbkrConne
         account_id="DU1234567" if connected else None,
         is_paper=is_paper if connected else None,
         server_version=178 if connected else None,
-        fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        fetched_at_ms=now_ms,
+        connection_state="connected" if connected else "disconnected",
+        last_transition_ms=now_ms,
     )
 
 

@@ -38,6 +38,7 @@ from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr import contracts as ibkr_contracts
+from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
@@ -49,6 +50,10 @@ from app.broker.ibkr.client import (
     set_client,
 )
 from app.broker.ibkr.diagnostics import run_diagnostics
+from app.broker.ibkr.health import (
+    build_broker_health,
+    synthetic_disconnected_health,
+)
 from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
     DiagnosticReport,
@@ -120,71 +125,43 @@ _ibkr_client_factory: type[IbkrClient] = IbkrClient
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
     from app.broker.safety_verdict import derive_broker_safety_verdict
+    from app.broker.ibkr.config import get_settings
 
+    s = get_settings()
+    # Safety verdict is re-derived on every call so it reflects the latest
+    # connection state. ADR 0011 §3 — no connect-time cache.
     if _is_broker_disabled():
-        from datetime import UTC, datetime
-
-        from app.broker.ibkr.config import get_settings
-
-        s = get_settings()
-        return IbkrConnectionHealth(
-            mode=s.mode,
-            host=s.host,
-            port=s.port,
-            client_id=s.client_id,
-            connected=False,
+        return synthetic_disconnected_health(
+            state="disabled",
             disabled=True,
             reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
-            account_id=None,
-            is_paper=None,
-            server_version=None,
-            fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
             safety_verdict=derive_broker_safety_verdict(
                 configured_mode=s.mode,
                 readonly_flag=None,
                 port=s.port,
                 connected_account=None,
             ),
-            connection_state="disabled",
         )
     try:
         client = get_client()
     except NotConnectedError:
-        from datetime import UTC, datetime
-
-        from app.broker.ibkr.config import get_settings
-
-        s = get_settings()
-        return IbkrConnectionHealth(
-            mode=s.mode,
-            host=s.host,
-            port=s.port,
-            client_id=s.client_id,
-            connected=False,
-            account_id=None,
-            is_paper=None,
-            server_version=None,
-            fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        return synthetic_disconnected_health(
             safety_verdict=derive_broker_safety_verdict(
                 configured_mode=s.mode,
                 readonly_flag=None,
                 port=s.port,
                 connected_account=None,
             ),
-            connection_state="disconnected",
         )
-    health = client.health()
-    # Re-derive on every call so the verdict reflects the latest
-    # connection state. ADR 0011 §3 — no connect-time cache.
-    return health.model_copy(
-        update={
-            "safety_verdict": derive_broker_safety_verdict(
-                configured_mode=health.mode,
-                readonly_flag=None,
-                port=health.port,
-                connected_account=health.account_id,
-            ),
-        }
+    return build_broker_health(
+        client,
+        get_monitor(),
+        safety_verdict=derive_broker_safety_verdict(
+            configured_mode=client.settings.mode,
+            readonly_flag=None,
+            port=client.settings.port,
+            connected_account=client.connected_account,
+        ),
     )
 
 
@@ -244,7 +221,7 @@ async def disconnect_endpoint() -> IbkrConnectionHealth:
         try:
             client = get_client()
         except NotConnectedError:
-            return _synthesize_disconnected_health()
+            return synthetic_disconnected_health()
         await _disconnect_with_error_mapping(client)
         return client.health()
 
@@ -314,27 +291,6 @@ async def _disconnect_with_error_mapping(client: IbkrClient) -> None:
         return
     except (BrokerError, OSError) as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-
-def _synthesize_disconnected_health() -> IbkrConnectionHealth:
-    """Build a disconnected health snapshot when no client exists."""
-    from datetime import UTC, datetime
-
-    from app.broker.ibkr.config import get_settings
-
-    s = get_settings()
-    return IbkrConnectionHealth(
-        mode=s.mode,
-        host=s.host,
-        port=s.port,
-        client_id=s.client_id,
-        connected=False,
-        account_id=None,
-        is_paper=None,
-        server_version=None,
-        fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
-        connection_state="disconnected",
-    )
 
 
 # ── /account (Phase 2a) ────────────────────────────────────────────────

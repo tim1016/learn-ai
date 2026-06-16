@@ -173,21 +173,6 @@ describe('BrokerConnectivityService broker state (auto-reconnect)', () => {
     expect(brokerLink(service)?.detail).toBe('Disconnected');
   });
 
-  it('falls back to the legacy ``connected`` boolean when the backend has not shipped the new field', async () => {
-    // Partial rollout / cached fixture: connection_state absent, connected is true.
-    // The cockpit must NOT crash or render Checking… forever — it derives the state
-    // from the legacy boolean so it keeps working through a deploy.
-    const service = setup({
-      instances: [],
-      brokerHealth: { connected: true }, // no connection_state field
-    });
-    await flush();
-
-    expect(service.brokerState()).toBe('ok');
-    expect(service.brokerConnectionState()).toBe('connected');
-    expect(brokerLink(service)?.detail).toBe('Connected');
-  });
-
   it('renders DISABLED (unknown / grey) using the backend reason when the broker is intentionally off', async () => {
     const service = setup({
       instances: [],

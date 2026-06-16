@@ -19,6 +19,8 @@ function makeHealth(overrides: Partial<IbkrConnectionHealth> = {}): IbkrConnecti
     is_paper: true,
     server_version: 178,
     fetched_at_ms: 1_700_000_000_000,
+    connection_state: 'connected',
+    last_transition_ms: 1_700_000_000_000,
     ...overrides,
   };
 }

@@ -15,13 +15,13 @@ Both cases used to require an operator click on the cockpit to recover.
 This module replaces that with an asyncio background task that polls
 the client, observes either failure mode, and reconnects with
 exponential backoff. Existing manual reconnect controls keep working —
-the asyncio lock in ``routers.broker`` serialises monitor-driven and
-operator-driven reconnects, so they never race.
+the shared lifecycle lock in ``client.py`` serialises monitor-driven
+and operator-driven reconnects, so they never race.
 
-The monitor's published state (``is_attempting``, ``attempt_number``,
-last transition timestamp) is read by ``IbkrConnectionHealth`` so the
-cockpit can render "Reconnecting (attempt 3)" without losing fidelity
-between polls.
+The monitor owns its own bookkeeping (``is_attempting``,
+``current_attempt``, ``successful_reconnect_count``,
+``last_transition_ms``); ``build_broker_health`` reads it and composes
+the wire-level cockpit payload.
 """
 
 from __future__ import annotations
@@ -50,15 +50,21 @@ class AutoReconnectMonitor:
        previously-stopped monitor cleanly.
     2. The task polls every ``poll_interval_s`` seconds. On observing
        either ``not client.is_connected()`` OR ``client.connection_lost``,
-       it transitions the client to ``reconnecting`` and calls
-       ``client.connect()`` with exponential backoff
+       it enters the attempt loop with exponential backoff
        (``initial_backoff_s`` doubling per failure up to ``max_backoff_s``).
-    3. Each attempt is bracketed by ``client._mark_reconnect_started``
-       and ``client._mark_reconnect_resolved`` so ``health()`` can
-       publish "attempt N in flight" between calls.
-    4. ``stop()`` signals the task to exit at the next tick boundary
+    3. ``stop()`` signals the task to exit at the next tick boundary
        (with a hard cancel as a fallback) so the FastAPI lifespan
        teardown doesn't hang on a long backoff sleep.
+
+    State the monitor owns and publishes to ``build_broker_health``:
+
+    * ``is_attempting`` — True while a reconnect attempt is in flight.
+    * ``current_attempt`` — incrementing attempt number while in flight,
+      0 otherwise.
+    * ``successful_reconnect_count`` — cumulative monitor-driven
+      recoveries this process.
+    * ``last_transition_ms`` — wall-clock when ``is_attempting`` last
+      flipped; the cockpit derives "Reconnecting since 12s ago" from this.
     """
 
     POLL_INTERVAL_S = 3.0
@@ -89,10 +95,31 @@ class AutoReconnectMonitor:
         self._max_backoff_s = max_backoff_s or self.MAX_BACKOFF_S
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
+        # Monitor-owned state surfaced to the cockpit via build_broker_health.
+        self._is_attempting: bool = False
+        self._current_attempt: int = 0
+        self._successful_reconnect_count: int = 0
+        self._last_transition_ms: int = _now_ms()
 
     @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def is_attempting(self) -> bool:
+        return self._is_attempting
+
+    @property
+    def current_attempt(self) -> int:
+        return self._current_attempt if self._is_attempting else 0
+
+    @property
+    def successful_reconnect_count(self) -> int:
+        return self._successful_reconnect_count
+
+    @property
+    def last_transition_ms(self) -> int:
+        return self._last_transition_ms
 
     def start(self) -> None:
         """Spawn the monitor task. No-op if already running."""
@@ -113,7 +140,8 @@ class AutoReconnectMonitor:
     async def stop(self) -> None:
         """Stop the monitor task. Safe to call from the FastAPI lifespan
         teardown; waits up to ~6s for the task to exit cleanly before
-        falling back to a hard cancel."""
+        falling back to a hard cancel. Unhandled task exceptions are
+        logged at error rather than swallowed silently."""
         if self._task is None:
             return
         self._stop_event.set()
@@ -123,10 +151,20 @@ class AutoReconnectMonitor:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
-        except (asyncio.CancelledError, Exception):
+            except Exception:
+                logger.exception(
+                    "Auto-reconnect monitor raised on cancel",
+                    extra={"action": "auto_reconnect_cancel_error"},
+                )
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            logger.exception(
+                "Auto-reconnect monitor raised on stop",
+                extra={"action": "auto_reconnect_stop_error"},
+            )
         finally:
             self._task = None
         logger.info(
@@ -169,24 +207,13 @@ class AutoReconnectMonitor:
 
     async def _attempt_reconnect_loop(self) -> None:
         """Retry ``client.connect()`` with exponential backoff until it
-        succeeds OR the stop event fires.
-
-        Acquires the shared lifecycle lock so a manual operator reconnect
-        in flight is serialised: the monitor waits for the operator's
-        call to finish, observes the post-call state, and either exits
-        (operator succeeded → ``is_connected`` is True) or proceeds with
-        its own attempt (operator failed too).
-
-        The previously-soft socket needs to be torn down before we
-        reconnect — otherwise ``connectAsync`` returns the same dead
-        connection. ``disconnect()`` is idempotent and tolerates a
-        hard-closed socket.
-        """
+        succeeds OR the stop event fires."""
         from app.broker.ibkr.client import get_client_lifecycle_lock
 
         backoff = self._initial_backoff_s
         attempt = 0
         while not self._stop_event.is_set():
+            attempt += 1
             async with get_client_lifecycle_lock():
                 # Re-check once the lock is held — an operator's manual
                 # reconnect may have restored the connection between the
@@ -196,64 +223,85 @@ class AutoReconnectMonitor:
                     and not self._client.connection_lost
                 ):
                     return
-                try:
-                    await self._client.disconnect()
-                except Exception:
-                    logger.exception(
-                        "Pre-reconnect disconnect raised; proceeding to connect",
-                        extra={"action": "auto_reconnect_predisconnect_error"},
-                    )
-                attempt += 1
-                self._client._mark_reconnect_started(attempt)
-                logger.info(
-                    "Auto-reconnect attempt %d starting",
-                    attempt,
-                    extra={"action": "auto_reconnect_attempt", "attempt": attempt},
-                )
-                try:
-                    await self._client.connect()
-                    self._client._mark_reconnect_resolved(success=True)
-                    logger.info(
-                        "Auto-reconnect attempt %d succeeded",
-                        attempt,
-                        extra={
-                            "action": "auto_reconnect_success",
-                            "attempt": attempt,
-                            "recovered_count": self._client.successful_reconnect_count,
-                        },
-                    )
+                if await self._run_one_attempt(attempt):
                     return
-                except Exception as exc:
-                    self._client._mark_reconnect_resolved(success=False)
-                    logger.warning(
-                        "Auto-reconnect attempt %d failed: %s; next try in %.1fs",
-                        attempt,
-                        exc,
-                        backoff,
-                        extra={
-                            "action": "auto_reconnect_fail",
-                            "attempt": attempt,
-                            "next_backoff_s": backoff,
-                        },
-                    )
             # Sleep OUTSIDE the lock so an operator can still reconnect
             # manually during the backoff window without queueing behind
             # the monitor's wait.
-            stopped = await self._wait_or_stop(backoff)
-            if stopped:
+            if await self._wait_or_stop(backoff):
                 return
             backoff = min(backoff * 2.0, self._max_backoff_s)
+
+    async def _run_one_attempt(self, attempt: int) -> bool:
+        """One disconnect-then-connect cycle under the lifecycle lock.
+        Returns True on success, False on failure (logged). Caller
+        controls the retry loop and the backoff sleep.
+
+        The previously-soft socket needs to be torn down before we
+        reconnect — otherwise ``connectAsync`` returns the same dead
+        connection. ``disconnect()`` is idempotent and tolerates a
+        hard-closed socket.
+        """
+        self._begin_attempt(attempt)
+        try:
+            await self._client.disconnect()
+        except Exception:
+            logger.exception(
+                "Pre-reconnect disconnect raised; proceeding to connect",
+                extra={"action": "auto_reconnect_predisconnect_error"},
+            )
+        logger.info(
+            "Auto-reconnect attempt %d starting",
+            attempt,
+            extra={"action": "auto_reconnect_attempt", "attempt": attempt},
+        )
+        try:
+            await self._client.connect()
+        except Exception as exc:
+            self._end_attempt(success=False)
+            logger.warning(
+                "Auto-reconnect attempt %d failed: %s",
+                attempt,
+                exc,
+                extra={"action": "auto_reconnect_fail", "attempt": attempt},
+            )
+            return False
+        self._end_attempt(success=True)
+        logger.info(
+            "Auto-reconnect attempt %d succeeded",
+            attempt,
+            extra={
+                "action": "auto_reconnect_success",
+                "attempt": attempt,
+                "recovered_count": self._successful_reconnect_count,
+            },
+        )
+        return True
+
+    def _begin_attempt(self, attempt: int) -> None:
+        self._is_attempting = True
+        self._current_attempt = attempt
+        self._last_transition_ms = _now_ms()
+
+    def _end_attempt(self, *, success: bool) -> None:
+        self._is_attempting = False
+        if success:
+            self._current_attempt = 0
+            self._successful_reconnect_count += 1
+        self._last_transition_ms = _now_ms()
 
 
 # ── module-level singleton ────────────────────────────────────────────
 # Held alongside the ``IbkrClient`` singleton in the FastAPI lifespan.
+# ``build_broker_health`` consults this when composing the cockpit
+# payload; without it the wire model has no source of "is_attempting".
 
 _monitor: AutoReconnectMonitor | None = None
 
 
 def get_monitor() -> AutoReconnectMonitor | None:
-    """Return the active monitor or ``None`` if the lifespan hasn't
-    installed one (tests, broker-disabled mode)."""
+    """Return the active monitor, or ``None`` when the lifespan has not
+    installed one (broker-disabled mode, ad-hoc tests)."""
     return _monitor
 
 

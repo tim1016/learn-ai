@@ -26,8 +26,9 @@ from app.broker.ibkr.client import get_client_lifecycle_lock
 
 class _FakeClient:
     """Just enough surface for the monitor: ``is_connected``,
-    ``connection_lost``, ``connect()``, ``disconnect()``, plus the
-    private bookkeeping the monitor pokes."""
+    ``connection_lost``, ``connect()``, ``disconnect()``. Notably no
+    monitor-related bookkeeping fields — that state lives entirely on
+    ``AutoReconnectMonitor`` now."""
 
     def __init__(
         self,
@@ -44,17 +45,6 @@ class _FakeClient:
         self._connect_outcomes = list(connect_outcomes or [])
         self.connect_calls = 0
         self.disconnect_calls = 0
-        # Mirror the bookkeeping IbkrClient exposes — monitor pokes these
-        # in real code, tests assert on them here.
-        self.reconnect_attempts_started: list[int] = []
-        self.reconnect_resolutions: list[bool] = []
-        self.successful_reconnect_count = 0
-        self._reconnecting = False
-        self._reconnect_attempt = 0
-
-    @property
-    def is_connected_value(self) -> bool:
-        return self._is_connected
 
     def is_connected(self) -> bool:
         return self._is_connected
@@ -70,7 +60,6 @@ class _FakeClient:
         )
         if isinstance(outcome, Exception):
             raise outcome
-        # Connect success — clear the loss flag and mark connected.
         self._is_connected = True
         self._connection_lost = False
         return None
@@ -78,18 +67,6 @@ class _FakeClient:
     async def disconnect(self):
         self.disconnect_calls += 1
         self._is_connected = False
-
-    def _mark_reconnect_started(self, attempt: int) -> None:
-        self._reconnecting = True
-        self._reconnect_attempt = attempt
-        self.reconnect_attempts_started.append(attempt)
-
-    def _mark_reconnect_resolved(self, *, success: bool) -> None:
-        self._reconnecting = False
-        if success:
-            self._reconnect_attempt = 0
-            self.successful_reconnect_count += 1
-        self.reconnect_resolutions.append(success)
 
 
 # ──────────────────────────── lifecycle ──────────────────────────────
@@ -120,7 +97,8 @@ async def test_monitor_skips_reconnect_when_client_is_connected_and_healthy() ->
     await monitor.stop()
 
     assert client.connect_calls == 0
-    assert client.reconnect_attempts_started == []
+    assert monitor.is_attempting is False
+    assert monitor.current_attempt == 0
 
 
 # ──────────────────────────── soft loss ──────────────────────────────
@@ -141,15 +119,17 @@ async def test_monitor_reconnects_when_connection_lost_flag_set() -> None:
     # Wait for at least one attempt to land. The monitor sleeps poll_interval
     # before the first tick, then runs disconnect+connect.
     for _ in range(50):
-        if client.connect_calls >= 1:
+        if monitor.successful_reconnect_count >= 1:
             break
         await asyncio.sleep(0.01)
     await monitor.stop()
 
     assert client.disconnect_calls >= 1, "must drop the soft socket before reconnecting"
     assert client.connect_calls >= 1
-    assert client.reconnect_resolutions[-1] is True
-    assert client.successful_reconnect_count == 1
+    assert monitor.successful_reconnect_count == 1
+    # Monitor-owned state cleared after a successful recovery.
+    assert monitor.is_attempting is False
+    assert monitor.current_attempt == 0
 
 
 # ──────────────────────────── hard disconnect ────────────────────────
@@ -166,13 +146,13 @@ async def test_monitor_reconnects_when_socket_is_closed() -> None:
     )
     monitor.start()
     for _ in range(50):
-        if client.connect_calls >= 1:
+        if monitor.successful_reconnect_count >= 1:
             break
         await asyncio.sleep(0.01)
     await monitor.stop()
 
     assert client.connect_calls >= 1
-    assert client.successful_reconnect_count == 1
+    assert monitor.successful_reconnect_count == 1
 
 
 # ──────────────────────────── backoff ────────────────────────────────
@@ -180,9 +160,9 @@ async def test_monitor_reconnects_when_socket_is_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_monitor_doubles_backoff_on_repeated_failure() -> None:
-    """First two attempts fail, third succeeds. The monitor's published
-    attempt counter must walk 1 → 2 → 3 and ``connect()`` must be
-    called the same number of times."""
+    """First two attempts fail, third succeeds. ``connect()`` must be
+    called three times; the monitor's ``successful_reconnect_count`` ticks
+    once at the end."""
     boom = OSError("Gateway unreachable")
     client = _FakeClient(
         is_connected=False,
@@ -196,15 +176,15 @@ async def test_monitor_doubles_backoff_on_repeated_failure() -> None:
     )
     monitor.start()
     for _ in range(100):
-        if client.successful_reconnect_count >= 1:
+        if monitor.successful_reconnect_count >= 1:
             break
         await asyncio.sleep(0.01)
     await monitor.stop()
 
     assert client.connect_calls == 3
-    assert client.reconnect_attempts_started == [1, 2, 3]
-    # The last attempt resolved successfully; the prior two failed.
-    assert client.reconnect_resolutions == [False, False, True]
+    assert monitor.successful_reconnect_count == 1
+    assert monitor.is_attempting is False
+    assert monitor.current_attempt == 0
 
 
 # ──────────────────────────── shared lock ────────────────────────────
@@ -267,7 +247,40 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     await monitor.stop()
 
     # No connect call: monitor saw the restored state and exited its attempt
-    # loop. (Successful_reconnect_count stays at 0 because the recovery was
+    # loop. (successful_reconnect_count stays at 0 because the recovery was
     # not monitor-driven.)
     assert client.connect_calls == 0
-    assert client.successful_reconnect_count == 0
+    assert monitor.successful_reconnect_count == 0
+
+
+# ──────────────────────────── monitor-owned state ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_monitor_publishes_attempt_state_to_observers() -> None:
+    """The monitor exposes ``is_attempting`` / ``current_attempt`` /
+    ``last_transition_ms`` so ``build_broker_health`` can compose them
+    into the cockpit payload. Two failed attempts in a row keep
+    ``current_attempt`` ticking up; a successful one clears it."""
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom, True],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+    )
+    initial_transition = monitor.last_transition_ms
+    monitor.start()
+    for _ in range(100):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert monitor.is_attempting is False
+    assert monitor.current_attempt == 0
+    assert monitor.successful_reconnect_count == 1
+    assert monitor.last_transition_ms >= initial_transition

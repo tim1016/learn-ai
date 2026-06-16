@@ -4188,9 +4188,13 @@ export interface components {
              * @description Broker-stability hardening. Cockpit binds the link
              *     strip to this so a soft 1100 loss and a monitor-driven
              *     reconnect attempt no longer render as the misleading
-             *     ``connected=true``.
+             *     ``connected=true``. Required (post-refactor) — the
+             *     synthetic-health factory in ``app.broker.ibkr.health``
+             *     stamps it on every wire payload.
              */
-            connection_state?: "connected" | "soft_lost" | "reconnecting" | "disconnected" | "disabled" | null;
+            connection_state: "connected" | "soft_lost" | "reconnecting" | "disconnected" | "disabled";
+            /** Last Transition Ms */
+            last_transition_ms: number;
             /** Connection Lost */
             connection_lost?: boolean;
             /** Connectivity Lost Count */
@@ -4199,8 +4203,6 @@ export interface components {
             reconnect_attempt?: number | null;
             /** Successful Reconnect Count */
             successful_reconnect_count?: number;
-            /** Last Transition Ms */
-            last_transition_ms?: number | null;
         };
         /**
          * BrokerSafetyVerdict
