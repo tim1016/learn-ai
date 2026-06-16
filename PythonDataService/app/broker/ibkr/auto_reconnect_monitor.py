@@ -245,11 +245,11 @@ class AutoReconnectMonitor:
                 exc_info=True,
                 extra={"action": "auto_reconnect_probe_fail"},
             )
-            await self._attempt_reconnect_loop()
+            await self._attempt_reconnect_loop(force=True)
             return True
         return False
 
-    async def _attempt_reconnect_loop(self) -> None:
+    async def _attempt_reconnect_loop(self, *, force: bool = False) -> None:
         """Retry ``client.connect()`` with exponential backoff until it
         succeeds OR the stop event fires."""
         from app.broker.ibkr.client import get_client_lifecycle_lock
@@ -267,13 +267,13 @@ class AutoReconnectMonitor:
                 # without one more attempt.
                 if not self._client.desired_connected:
                     return
-                if (
-                    self._client.is_connected()
-                    and not self._client.connection_lost
+                if not force and (
+                    self._client.is_connected() and not self._client.connection_lost
                 ):
                     return
                 if await self._run_one_attempt(attempt):
                     return
+                force = False
             # Sleep OUTSIDE the lock so an operator can still reconnect
             # manually during the backoff window without queueing behind
             # the monitor's wait.
