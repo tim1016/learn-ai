@@ -329,6 +329,76 @@ def test_execution_writer_records_shadow_sim(tmp_path: Path) -> None:
     assert int(df.iloc[0]["source_bar_close_ms"]) == 123
 
 
+# ──────────────────────────── VCR-P3-L ────────────────────────────────
+
+
+def test_execution_writer_persists_broker_exec_time_ms_vcr_p3_l(tmp_path: Path) -> None:
+    """VCR-P3-L — a live broker fill stamps both the engine's ``ts_ms``
+    (wall-clock at receipt) and the broker's ``exec_time_ms``. The two can
+    diverge under network / event-loop latency; for latency analysis and
+    post-restart reconciliation joins the broker time is authoritative."""
+    writer = ExecutionWriter(tmp_path / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=1_700_000_005_500,
+            exec_id="x", perm_id=1, client_order_id="live-1",
+            account_id="DU", symbol="SPY", fill_quantity=1, fill_price=1.0, fee=0.0,
+            exec_time_ms=1_700_000_005_120,  # broker time: 380ms earlier
+        )
+    )
+    writer.flush()
+    df = pd.read_parquet(tmp_path / "executions.parquet")
+    assert int(df.iloc[0]["ts_ms"]) == 1_700_000_005_500
+    assert int(df.iloc[0]["exec_time_ms"]) == 1_700_000_005_120
+
+
+def test_execution_writer_shadow_fill_persists_null_exec_time_ms_vcr_p3_l(tmp_path: Path) -> None:
+    """Shadow / backtest fills have no broker, so ``exec_time_ms`` is NULL.
+    The column must still be present on the row (pinned-set invariant);
+    readers see NaN / None and fall back to ``ts_ms``."""
+    writer = ExecutionWriter(tmp_path / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=0, exec_id="s", perm_id=0, client_order_id="shadow-1",
+            account_id="", symbol="SPY", fill_quantity=1, fill_price=1.0, fee=0.0,
+            execution_source="shadow_sim", fill_model="BAR_CLOSE", source_bar_close_ms=123,
+        )
+    )
+    writer.flush()
+    df = pd.read_parquet(tmp_path / "executions.parquet")
+    assert "exec_time_ms" in df.columns
+    assert pd.isna(df.iloc[0]["exec_time_ms"])
+
+
+def test_execution_writer_round_trips_exec_time_ms_through_concat_vcr_p3_l(tmp_path: Path) -> None:
+    """Appending across two flushes (the live runtime's actual append
+    cadence: read existing → concat → rewrite) preserves ``exec_time_ms``
+    on every row, with the second flush's broker time independent of the
+    first row's. Guards the writer's per-flush rewrite path."""
+    path = tmp_path / "executions.parquet"
+    writer = ExecutionWriter(path)
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=1_000, exec_id="a", perm_id=1, client_order_id="live-1",
+            account_id="DU", symbol="SPY", fill_quantity=1, fill_price=1.0, fee=0.0,
+            exec_time_ms=950,
+        )
+    )
+    writer.flush()
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=2_000, exec_id="b", perm_id=2, client_order_id="live-2",
+            account_id="DU", symbol="SPY", fill_quantity=-1, fill_price=1.1, fee=0.0,
+            exec_time_ms=1_870,
+        )
+    )
+    writer.close()
+
+    df = pd.read_parquet(path)
+    assert len(df) == 2
+    assert list(df["exec_time_ms"].astype("int64")) == [950, 1_870]
+
+
 # ──────────────────────────── TradeWriter ────────────────────────────
 
 

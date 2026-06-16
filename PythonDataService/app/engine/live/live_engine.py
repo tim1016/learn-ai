@@ -1198,6 +1198,10 @@ class LiveEngine:
                 execution_source=event.execution_source,
                 fill_model=event.fill_model,
                 source_bar_close_ms=event.source_bar_close_ms,
+                # VCR-P3-L — broker-reported execution time. Distinct from
+                # ``ts_ms`` (engine wall-clock at receipt); reconciliation
+                # joins and latency analysis prefer this when populated.
+                exec_time_ms=event.exec_time_ms,
             )
         )
 
@@ -2078,4 +2082,10 @@ class LiveEngine:
             fee=recorded_fee if recorded_fee is not None else Decimal("0"),
             recorded_fee=recorded_fee,
             tag=meta.tag,
+            # VCR-P3-L — carry the broker-reported execution time through to
+            # the receipt. ``IbkrOrderEvent.exec_time_ms`` is what IBKR's
+            # ``Execution.time`` reported; the engine's ``fill_time`` above
+            # is derived from ``ts_ms`` (wall-clock observation), which can
+            # drift from the broker time under network or event-loop latency.
+            exec_time_ms=fill.exec_time_ms,
         )
