@@ -416,6 +416,7 @@ async def _recovery_flatten(
     readonly: bool = False,
     live_state_path: Path | None = None,
     live_state_seed: LiveStateEnvelope | None = None,
+    bot_order_namespace: str | None = None,
 ) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
 
@@ -441,10 +442,29 @@ async def _recovery_flatten(
     readonly mode — the number of non-zero positions detected.
     Per-position place_order failures are logged but don't abort the
     loop — every remaining position still gets an attempt.
+
+    VCR-0019: positions are re-fetched after ``cancel_open_orders``
+    AND once more per-symbol immediately before each ``place_order``
+    so a strategy fill that landed after the initial enumeration does
+    not drive a duplicate liquidation (the engine's bar loop has
+    stopped; only the broker is authoritative).
+
+    VCR-0020: every spec carries a deterministic ``order_ref`` so a
+    real-broker ``requires_durable_submit=True`` adapter accepts it.
+    ``bot_order_namespace`` is sourced from the explicit parameter
+    first, then from ``live_state_seed.bot_order_namespace``. Callers
+    that supply neither (legacy / fake-broker tests) get unstamped
+    specs — the ``place_paper_order`` invariant only fires for the
+    real-broker path.
     """
     from datetime import UTC, datetime
 
     from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.order_identity import build_order_ref, mint_intent_id
+
+    resolved_namespace = bot_order_namespace
+    if resolved_namespace is None and live_state_seed is not None:
+        resolved_namespace = live_state_seed.bot_order_namespace
 
     snapshot = await broker.fetch_positions()
 
@@ -498,12 +518,42 @@ async def _recovery_flatten(
             extra={"step": "8"},
         )
 
+    # VCR-0019 — re-fetch after cancel_open_orders. The original snapshot was
+    # taken before the cancel; if the engine's last strategy SELL fill landed
+    # at the broker in that window, the stale snapshot would drive a
+    # duplicate liquidation and put the account net-short. The post-cancel
+    # snapshot is authoritative for the liquidation loop.
+    snapshot = await broker.fetch_positions()
+
     liquidated = 0
     for pos in snapshot.positions:
         qty_signed = float(pos.quantity)
         if qty_signed == 0:
             continue
+
+        # VCR-0019 — guard the loop body too. Even after the post-cancel
+        # snapshot above, a fill may land while we iterate. One more refresh
+        # per symbol closes the residual race; on the typical 0-1 position
+        # account this is at most a single extra round-trip.
+        fresh = await broker.fetch_positions()
+        fresh_qty = next(
+            (float(p.quantity) for p in fresh.positions if p.symbol == pos.symbol),
+            0.0,
+        )
+        if fresh_qty == 0:
+            logger.info(
+                "Recovery flatten skipped %s — broker now reports flat (race resolved before submit)",
+                pos.symbol,
+                extra={"step": "8"},
+            )
+            continue
+        qty_signed = fresh_qty
         action = "SELL" if qty_signed > 0 else "BUY"
+        order_ref = (
+            build_order_ref(resolved_namespace, mint_intent_id())
+            if resolved_namespace
+            else None
+        )
         spec = IbkrOrderSpec(
             symbol=pos.symbol,
             sec_type=pos.sec_type,
@@ -513,6 +563,7 @@ async def _recovery_flatten(
             time_in_force="DAY",
             confirm_paper=True,
             client_order_id=f"recovery-flatten-{pos.symbol}-{int(datetime.now(UTC).timestamp() * 1000)}",
+            order_ref=order_ref,
         )
         try:
             # Wait for permId so the durable fingerprint below is recognizable
@@ -1521,6 +1572,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                             readonly=is_readonly,
                             live_state_path=live_state_path,
                             live_state_seed=live_state_seed,
+                            bot_order_namespace=f"learn-ai/{strategy_instance_id}/v1",
                         )
                         if is_readonly:
                             print(
@@ -1595,6 +1647,11 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     from datetime import datetime as _datetime
 
     from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.order_identity import (
+        build_bot_order_namespace,
+        build_order_ref,
+        mint_intent_id,
+    )
 
     if not args.confirm:
         print(
@@ -1603,6 +1660,15 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # VCR-0020 — emergency-flatten runs outside any engine session, so no
+    # ``bot_order_namespace`` exists for it to inherit. Synthesise one from
+    # the account id so every spec carries a deterministic ``order_ref`` and
+    # the Phase 5A ``place_paper_order`` invariant is satisfied. ``eflat-``
+    # short prefix keeps the 60-char ``order_ref`` cap intact even for
+    # 8-char DU* accounts. Using ``build_bot_order_namespace`` keeps the
+    # ``learn-ai/{sid}/v1`` shape downstream parsers expect.
+    emergency_namespace = build_bot_order_namespace(f"eflat-{args.account}")
 
     log_path = args.run_dir / "emergency_flatten.log"
     args.run_dir.mkdir(parents=True, exist_ok=True)
@@ -1703,6 +1769,11 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                 # rejects, leaving the fractional position un-flattened.
                 # (CodeRabbit P2 from #193.)
                 action = "SELL" if qty_signed > 0 else "BUY"
+                # VCR-0020 — mint a fresh intent_id per liquidation, build the
+                # full deterministic ``{namespace}:{intent_id}`` token, stamp on
+                # the spec. Without this, ``place_paper_order`` refuses the
+                # request with OrderRefusedError and the operator's documented
+                # panic surface fails on the very first attempt.
                 spec = IbkrOrderSpec(
                     symbol=pos.symbol,
                     sec_type=pos.sec_type,
@@ -1712,6 +1783,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     time_in_force="DAY",
                     confirm_paper=True,
                     client_order_id=f"emergency-flatten-{pos.symbol}-{int(_datetime.now(UTC).timestamp() * 1000)}",
+                    order_ref=build_order_ref(emergency_namespace, mint_intent_id()),
                 )
                 ack = await broker.place_order(spec)
                 _log(f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} order_id={ack.order_id}")
