@@ -1,0 +1,73 @@
+@let v = verdict();
+@if (v === 'READY') {
+  <aside
+    class="readiness-strip ok"
+    aria-label="Bot readiness"
+    data-testid="readiness-ready-strip"
+  >
+    <i class="pi pi-check-circle" aria-hidden="true"></i>
+    <strong>READY</strong>
+    <span class="dot" aria-hidden="true">·</span>
+    <span>{{ proportionLabel() }}</span>
+  </aside>
+} @else {
+  <section
+    class="card readiness-card"
+    [class.warn]="verdictTone() === 'warn'"
+    [class.bad]="verdictTone() === 'bad'"
+    [class.unknown]="verdictTone() === 'unknown'"
+    aria-labelledby="readiness-heading"
+    data-testid="readiness-card"
+  >
+    <header class="card-header">
+      <div>
+        <h2 id="readiness-heading">Can it trade?</h2>
+        <p>What's holding the bot back from acting on the next signal.</p>
+      </div>
+      <span
+        class="verdict-chip"
+        [class.warn]="verdictTone() === 'warn'"
+        [class.bad]="verdictTone() === 'bad'"
+        [class.unknown]="verdictTone() === 'unknown'"
+        data-testid="readiness-verdict-chip"
+      >
+        {{ v === 'NO_READINESS' ? 'NO READINESS' : v }}
+      </span>
+    </header>
+
+    <p class="proportion" data-testid="readiness-proportion">
+      {{ proportionLabel() }}
+    </p>
+
+    @if (failingGates().length) {
+      <ul class="failing-gates" aria-label="Gates not passing">
+        @for (g of failingGates(); track g.key) {
+          <li
+            class="gate"
+            [class.hard]="g.severity === 'hard'"
+            [class.soft]="g.severity === 'soft'"
+          >
+            <strong>{{ g.label }}</strong>
+            <span
+              class="severity"
+              [class.hard]="g.severity === 'hard'"
+              [class.soft]="g.severity === 'soft'"
+            >
+              {{ g.severity === 'hard' ? 'Blocking' : 'Advisory' }}
+            </span>
+            <p class="detail">{{ g.detail }}</p>
+          </li>
+        }
+      </ul>
+      <p class="affordance-hint">
+        Use the Pre-Trade Checklist below to act on each gate. Detailed
+        affordance-by-gate buttons are tracked as a follow-up.
+      </p>
+    } @else if (v === 'NO_READINESS') {
+      <p class="muted">
+        The engine has not emitted a readiness vector yet — start the bot or
+        wait for its first poll.
+      </p>
+    }
+  </section>
+}

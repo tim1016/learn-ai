@@ -157,6 +157,11 @@
           (viewRunLogRequested)="openRunLog($event)"
         />
 
+        <app-readiness-card
+          [readiness]="s.readiness"
+          [gateLabels]="readinessGateLabels"
+        />
+
         @let r = s.readiness;
         <section class="card checklist-card" aria-labelledby="checklist-heading">
           <header class="card-header">

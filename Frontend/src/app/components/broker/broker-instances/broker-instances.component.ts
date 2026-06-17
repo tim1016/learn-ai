@@ -40,6 +40,7 @@ import { CurrentRiskCardComponent } from './current-risk-card/current-risk-card.
 import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-strip.component';
 import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
 import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
+import { ReadinessCardComponent } from './readiness-card/readiness-card.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -202,6 +203,14 @@ const GATE_LABELS: Record<string, { label: string; meaning: string; fix: string 
   },
 };
 
+// Stable label-only projection of GATE_LABELS for the Readiness card surface.
+// Computed once at module load so [gateLabels] is a stable reference across
+// change-detection passes — otherwise the child input would invalidate every
+// tick under signal-driven CD.
+const READINESS_GATE_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(GATE_LABELS).map(([key, value]) => [key, value.label]),
+);
+
 function titleizeKey(key: string): string {
   return key
     .split('_')
@@ -231,6 +240,7 @@ function titleizeKey(key: string): string {
     LatestSignalStripComponent,
     StrategyRulesCardComponent,
     LastSessionCardComponent,
+    ReadinessCardComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -754,6 +764,13 @@ export class BrokerInstancesComponent {
     if (!e.halt_trigger) return '';
     return HALT_TRIGGER_COPY[e.halt_trigger] ?? `Safety trigger: ${e.halt_trigger}.`;
   }
+
+  /** Label-only projection of `GATE_LABELS` for the Readiness card surface,
+   * which only renders the operator-language gate name (the meaning + fix
+   * still live on the Pre-Trade Checklist below). Reference is stable
+   * across change-detection passes (see READINESS_GATE_LABELS at module
+   * scope). */
+  readonly readinessGateLabels = READINESS_GATE_LABELS;
 
   checklistRows(r: ReadinessVector | null): ChecklistRow[] {
     if (!r) {
