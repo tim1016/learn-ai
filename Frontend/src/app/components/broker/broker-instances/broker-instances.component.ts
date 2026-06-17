@@ -3,12 +3,15 @@ import {
   Component,
   ElementRef,
   computed,
+  effect,
   inject,
   resource,
   signal,
   viewChild,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { map } from 'rxjs/operators';
 import type {
   DecisionColumnDescriptor,
   DesiredStateAction,
@@ -228,19 +231,68 @@ function titleizeKey(key: string): string {
 export class BrokerInstancesComponent {
   private readonly svc = inject(LiveRunsService);
   private readonly connectivity = inject(BrokerConnectivityService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
 
-  readonly selectedInstanceId = signal<string | null>(null);
+  /** The id segment of ``/broker/instances/:id``, or ``null`` on the bare URL.
+   * Used as one input to ``selectedInstanceId``; the resolution falls through
+   * to a default when the id is missing or doesn't match any known instance. */
+  private readonly routeInstanceId = toSignal<string | null>(
+    this.route.paramMap.pipe(map((p) => p.get('id'))),
+    { initialValue: null },
+  );
 
   readonly fleet = resource({
     loader: () => this.svc.getInstances(),
   });
 
+  readonly instances = computed<LiveInstanceSummary[]>(() => this.fleet.value() ?? []);
+
+  /**
+   * The bot the page is currently showing. URL-owned per the PRD:
+   *
+   * 1. If ``/broker/instances/:id`` matches an instance in the loaded fleet,
+   *    that's the selection — reload-stable, deep-linkable, share-able.
+   * 2. Otherwise the page resolves a sensible default from existing
+   *    ``LiveInstanceSummary`` fields:
+   *
+   *    a. first row with ``bound_run_id != null`` (a bot currently bound to a
+   *       live run is the most interesting one to show);
+   *    b. else first row with ``process_state === 'running'`` (booting or
+   *       running but not yet bound);
+   *    c. else the first row in the backend's stable roster order (so a
+   *       cold-start fleet still picks a deterministic default).
+   *
+   *    Ties (multiple bound or multiple running) resolve to the first match
+   *    in roster order — ``Array.find`` preserves stable deploy ordering.
+   *
+   *  An ``effect`` canonicalises the URL: when the path is bare or holds a
+   *  stale / deleted id and the resolver picks something else, the URL is
+   *  rewritten (``replaceUrl: true``) so the bar matches what's on screen.
+   */
+  readonly selectedInstanceId = computed<string | null>(() => {
+    const rows = this.instances();
+    if (rows.length === 0) return null;
+    const routeId = this.routeInstanceId();
+    if (routeId !== null && rows.some((r) => r.strategy_instance_id === routeId)) {
+      return routeId;
+    }
+    const liveBound = rows.find((r) => r.bound_run_id != null);
+    if (liveBound) return liveBound.strategy_instance_id;
+    const running = rows.find((r) => r.process_state === 'running');
+    if (running) return running.strategy_instance_id;
+    return rows[0].strategy_instance_id;
+  });
+
+  /** True iff the tab strip should render — N >= 2 instances. With 0 we show
+   * the empty-state CTA; with 1 we don't waste vertical space on a tab the
+   * trader would never click. */
+  readonly showTabStrip = computed<boolean>(() => this.instances().length >= 2);
+
   readonly status = resource({
     params: () => this.selectedInstanceId() ?? undefined,
     loader: ({ params }) => this.svc.getInstanceStatus(params),
   });
-
-  readonly instances = computed<LiveInstanceSummary[]>(() => this.fleet.value() ?? []);
 
   /** Account-level contamination (ADR 0005, #399). Backend-authored — the one
    * readiness signal no single engine can see. */
@@ -322,8 +374,27 @@ export class BrokerInstancesComponent {
 
   private readonly behaviorCard = viewChild<ElementRef<HTMLElement>>('behaviorCard');
 
-  select(instanceId: string): void {
-    this.selectedInstanceId.set(instanceId);
+  /** Keeps the URL in sync with the resolved selection. Fires whenever the
+   * computed ``selectedInstanceId`` differs from the URL's ``:id`` segment —
+   * the bare URL boot, a deep link to a deleted instance, or a roster row
+   * that disappeared while the page was open. ``replaceUrl: true`` keeps the
+   * browser history clean (no back-button noise from canonicalisation). */
+  private readonly canonicalizeUrlEffect = effect(() => {
+    const resolved = this.selectedInstanceId();
+    const route = this.routeInstanceId();
+    if (resolved === null) return;
+    if (resolved === route) return;
+    void this.router.navigate(['/broker/instances', resolved], { replaceUrl: true });
+  });
+
+  /** Imperative entry point for tab clicks / programmatic selection. The
+   * heavy lifting (resource reloads, per-bot state reset) happens because
+   * ``selectedInstanceId`` recomputes when the URL changes — but transient
+   * UI state we don't want bleeding across bots is wiped synchronously here
+   * so the new bot's surface paints clean even before the route swap
+   * settles. Returns the router navigation promise so tests (and any
+   * future await sites) can sequence on the URL change. */
+  select(instanceId: string): Promise<boolean> {
     this.lastActuation.set(null);
     this.actuatedAtMs.set(null);
     this.intentError.set(null);
@@ -332,6 +403,7 @@ export class BrokerInstancesComponent {
     this.expandedGate.set(null);
     this.fixError.set(null);
     this.fixNotice.set(null);
+    return this.router.navigate(['/broker/instances', instanceId]);
   }
 
   /**

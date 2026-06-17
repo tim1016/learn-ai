@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
+import { BehaviorSubject } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   LiveInstanceStatus,
@@ -153,7 +154,14 @@ function setup(connectivityOverrides: { brokerState?: () => BrokerLinkState } = 
   };
   TestBed.configureTestingModule({
     providers: [
-      provideRouter([]),
+      // PR 3 / #565: ``select(id)`` navigates to ``/broker/instances/:id``,
+      // so we register the route shape the router needs to recognise that
+      // URL in tests. The route does not need to actually load anything —
+      // the test fixture already holds the component.
+      provideRouter([
+        { path: 'broker/instances', children: [] },
+        { path: 'broker/instances/:id', children: [] },
+      ]),
       { provide: LiveRunsService, useValue: svc },
       { provide: BrokerConnectivityService, useValue: connectivity },
     ],
@@ -194,7 +202,9 @@ describe('BrokerInstancesComponent', () => {
 
     expect(svc.getInstanceStatus).toHaveBeenCalledWith('spy_ema_paper');
     expect(fixture.nativeElement.textContent).toContain('RUNNING - NOT READY');
-    expect(fixture.nativeElement.textContent).toContain('Live session run-live');
+    // PR 3 / #565: the binding label moved off the (now removed) roster
+    // button. It still renders inside the run-log target hero strip.
+    expect(fixture.nativeElement.textContent).toContain('live session run-live');
   });
 
   it('labels a stopped instance as last-session evidence with advanced actions disabled', async () => {
@@ -216,7 +226,8 @@ describe('BrokerInstancesComponent', () => {
 
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('STOPPED');
-    expect(text).toContain('Last session run-old');
+    // PR 3 / #565: binding label moved off the roster button.
+    expect(text).toContain('last session run-old');
     expect(text).toContain('These take effect on the next start.');
   });
 
@@ -992,9 +1003,11 @@ describe('BrokerInstancesComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    // Sanity: the fleet roster fixture has spy_ema_paper as RUNNING.
-    const fleetRoster = fixture.nativeElement.querySelector('.fleet');
-    expect(fleetRoster?.textContent).toContain('RUNNING');
+    // Sanity: the tab strip's fixture row for spy_ema_paper shows RUNNING
+    // (sourced from the cached fleet summary). PR 3 / #565 renamed the
+    // roster to a stable-order tab strip.
+    const tabStrip = fixture.nativeElement.querySelector('.tab-strip');
+    expect(tabStrip?.textContent).toContain('RUNNING');
 
     component.select('spy_ema_paper');
     fixture.detectChanges();
@@ -1004,9 +1017,9 @@ describe('BrokerInstancesComponent', () => {
     // After selection, the chip for spy_ema_paper must read STOPPED
     // (matching the just-loaded per-instance status), even though the
     // cached fleet summary still says 'running'.
-    const selectedBtn = fixture.nativeElement.querySelector('.fleet .selected');
-    expect(selectedBtn?.textContent).toContain('STOPPED');
-    expect(selectedBtn?.textContent).not.toContain('RUNNING');
+    const selectedTab = fixture.nativeElement.querySelector('.tab-strip .tab.selected');
+    expect(selectedTab?.textContent).toContain('STOPPED');
+    expect(selectedTab?.textContent).not.toContain('RUNNING');
   });
 
   it('shows the Reset Paper Account button + how-to when the session is on paper', async () => {
@@ -1024,5 +1037,227 @@ describe('BrokerInstancesComponent', () => {
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Reset paper account');
     expect(text).toContain('Paper Trading Account Reset');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 3 / #565 — route-driven selection.
+//
+// The acceptance gate requires coverage for: empty, single, N instances with
+// valid id, missing id (live-bound → running → first-roster fallback), id of
+// a deleted instance (graceful fallback), and multiple-bound tie behavior.
+// ---------------------------------------------------------------------------
+
+const SINGLE_FLEET: LiveInstanceSummary[] = [
+  {
+    strategy_instance_id: 'solo_bot',
+    process_state: 'offline',
+    bound_run_id: null,
+    latest_run_id: null,
+  },
+];
+
+const RUNNING_FALLBACK_FLEET: LiveInstanceSummary[] = [
+  // No row is bound; one row is running. Default resolution should land on
+  // the running row.
+  {
+    strategy_instance_id: 'stopped_a',
+    process_state: 'offline',
+    bound_run_id: null,
+    latest_run_id: 'run-a',
+  },
+  {
+    strategy_instance_id: 'running_b',
+    process_state: 'running',
+    bound_run_id: null,
+    latest_run_id: 'run-b',
+  },
+];
+
+const FIRST_ROSTER_FALLBACK_FLEET: LiveInstanceSummary[] = [
+  // No row is bound and no row is running. Default resolution falls back
+  // to the first row in roster order.
+  {
+    strategy_instance_id: 'first_in_order',
+    process_state: 'offline',
+    bound_run_id: null,
+    latest_run_id: 'run-x',
+  },
+  {
+    strategy_instance_id: 'second_in_order',
+    process_state: 'offline',
+    bound_run_id: null,
+    latest_run_id: 'run-y',
+  },
+];
+
+const MULTIPLE_BOUND_FLEET: LiveInstanceSummary[] = [
+  // Two rows both have a bound_run_id. The first one in roster order should
+  // win — the "stable deploy order" tie-break that protects muscle memory.
+  {
+    strategy_instance_id: 'first_bound',
+    process_state: 'running',
+    bound_run_id: 'run-first',
+    latest_run_id: 'run-first',
+  },
+  {
+    strategy_instance_id: 'second_bound',
+    process_state: 'running',
+    bound_run_id: 'run-second',
+    latest_run_id: 'run-second',
+  },
+];
+
+async function setupAt(routeId: string | null, fleet: LiveInstanceSummary[] = FLEET) {
+  const svc = new FakeLiveRunsService();
+  svc.getInstances.mockResolvedValue(fleet);
+  const connectivity = {
+    links: () => [],
+    blockers: () => [],
+    daemonDown: () => false,
+    fleetBlocksStarts: () => false,
+    brokerState: () => 'ok' as BrokerLinkState,
+    daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
+    isPaper: () => null as boolean | null,
+    reload: () => {},
+  };
+  // ``provideRouter`` injects an ActivatedRoute, but without a router-outlet
+  // in the fixture the route is the empty root — its paramMap never carries
+  // the ``:id`` we navigate to. We stub ActivatedRoute with a paramMap
+  // subject we drive manually, then keep it in sync with the Router's
+  // navigation events so the canonicalisation effect can do its work.
+  const paramMap$ = new BehaviorSubject(convertToParamMap({ id: routeId ?? '' }));
+  const fakeRoute = { paramMap: paramMap$.asObservable() } as Partial<ActivatedRoute>;
+  TestBed.configureTestingModule({
+    providers: [
+      provideRouter([
+        { path: 'broker/instances', children: [] },
+        { path: 'broker/instances/:id', children: [] },
+      ]),
+      { provide: LiveRunsService, useValue: svc },
+      { provide: BrokerConnectivityService, useValue: connectivity },
+      { provide: ActivatedRoute, useValue: fakeRoute },
+    ],
+  });
+  const router = TestBed.inject(Router);
+  // Whenever the component navigates to ``/broker/instances/:id``, mirror
+  // the new id into the fake paramMap so ``selectedInstanceId`` recomputes
+  // exactly as it would when bound to a live ActivatedRoute.
+  router.events.subscribe((e) => {
+    const evtUrl = (e as { url?: string }).url;
+    if (typeof evtUrl !== 'string') return;
+    const match = /\/broker\/instances\/([^/?]+)/.exec(evtUrl);
+    if (match) paramMap$.next(convertToParamMap({ id: match[1] }));
+  });
+  if (routeId !== null) {
+    await router.navigate(['/broker/instances', routeId]);
+  }
+  const fixture = TestBed.createComponent(BrokerInstancesComponent);
+  activeFixture = fixture;
+  fixture.detectChanges();
+  await flush();
+  fixture.detectChanges();
+  return { fixture, svc, component: fixture.componentInstance };
+}
+
+describe('BrokerInstancesComponent — route-driven selection (#565 PR 3)', () => {
+  it('renders an empty-state CTA when the fleet is empty', async () => {
+    const { fixture, component } = await setupAt(null, []);
+
+    expect(component.selectedInstanceId()).toBeNull();
+    expect(component.showTabStrip()).toBe(false);
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('No bots deployed yet');
+    // The tab strip must not render — the trader has no choice to make.
+    expect(fixture.nativeElement.querySelector('.tab-strip')).toBeNull();
+  });
+
+  it('omits the tab strip when a single instance is deployed', async () => {
+    const { fixture, component } = await setupAt(null, SINGLE_FLEET);
+
+    expect(component.selectedInstanceId()).toBe('solo_bot');
+    expect(component.showTabStrip()).toBe(false);
+    expect(fixture.nativeElement.querySelector('.tab-strip')).toBeNull();
+  });
+
+  it('renders the tab strip when N >= 2 and respects the URL :id', async () => {
+    const { fixture, component } = await setupAt('spy_vwap_shadow');
+
+    expect(component.selectedInstanceId()).toBe('spy_vwap_shadow');
+    const strip = fixture.nativeElement.querySelector('.tab-strip') as HTMLElement | null;
+    expect(strip).toBeTruthy();
+    if (strip === null) return;
+    // Tab strip preserves the backend roster order — the same indices as
+    // the LiveInstanceSummary list.
+    const tabs = strip.querySelectorAll('.tab');
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0].textContent).toContain('spy_ema_paper');
+    expect(tabs[1].textContent).toContain('spy_vwap_shadow');
+    // The selected tab is the one named by the URL.
+    expect(strip.querySelector('.tab.selected')?.textContent).toContain('spy_vwap_shadow');
+  });
+
+  it('falls back to the first live-bound instance when the URL has no :id', async () => {
+    const { component } = await setupAt(null);
+
+    // FLEET has spy_ema_paper (bound) and spy_vwap_shadow (offline). The
+    // live-bound row wins.
+    expect(component.selectedInstanceId()).toBe('spy_ema_paper');
+  });
+
+  it('falls back to the first running instance when no row is bound', async () => {
+    const { component } = await setupAt(null, RUNNING_FALLBACK_FLEET);
+
+    expect(component.selectedInstanceId()).toBe('running_b');
+  });
+
+  it('falls back to the first roster row when no row is bound or running', async () => {
+    const { component } = await setupAt(null, FIRST_ROSTER_FALLBACK_FLEET);
+
+    expect(component.selectedInstanceId()).toBe('first_in_order');
+  });
+
+  it('falls back gracefully when the URL :id names a deleted instance', async () => {
+    const { component } = await setupAt('long_gone_bot');
+
+    // 'long_gone_bot' is not in FLEET. Resolver should fall back through
+    // live-bound (spy_ema_paper) instead of returning null or erroring.
+    expect(component.selectedInstanceId()).toBe('spy_ema_paper');
+  });
+
+  it('first-roster-order wins when multiple instances share live-bound state', async () => {
+    const { component } = await setupAt(null, MULTIPLE_BOUND_FLEET);
+
+    // Both first_bound and second_bound have bound_run_id != null. The
+    // first one in roster order is the tie-break (stable deploy order).
+    expect(component.selectedInstanceId()).toBe('first_bound');
+  });
+
+  it('updates the URL when the operator clicks a different tab', async () => {
+    const { fixture, component } = await setupAt('spy_ema_paper');
+    const router = TestBed.inject(Router);
+
+    await component.select('spy_vwap_shadow');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(router.url).toBe('/broker/instances/spy_vwap_shadow');
+    expect(component.selectedInstanceId()).toBe('spy_vwap_shadow');
+  });
+
+  it('canonicalises the URL when a fallback resolves the selection', async () => {
+    const { fixture } = await setupAt(null);
+    const router = TestBed.inject(Router);
+    // The canonicalisation runs through an effect that fires Router.navigate
+    // fire-and-forget. Pump the microtask queue until the next event loop
+    // tick so the navigation can complete before we read router.url.
+    for (let i = 0; i < 5; i++) {
+      await flush();
+      fixture.detectChanges();
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+    }
+
+    expect(router.url).toBe('/broker/instances/spy_ema_paper');
   });
 });

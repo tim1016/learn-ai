@@ -227,6 +227,17 @@ export const routes: Routes = [
       ).then((m) => m.BrokerInstancesComponent),
   },
   {
+    // Deep-linkable per-bot URL (#565 PR 3). The component resolves
+    // ``:id`` against the loaded fleet on every tick; bad / deleted /
+    // missing ids fall back to the same component-resolved default
+    // used when no ``:id`` is supplied.
+    path: "broker/instances/:id",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-instances/broker-instances.component"
+      ).then((m) => m.BrokerInstancesComponent),
+  },
+  {
     // Deploy form — stage 1 of the deploy pipeline (ADR 0006, #417).
     path: "broker/deploy",
     loadComponent: () =>
