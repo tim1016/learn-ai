@@ -620,7 +620,13 @@ describe('BrokerInstancesComponent', () => {
     expect(fixture.nativeElement.textContent).not.toContain('Why It Stopped');
   });
 
-  it('renders the provenance card explaining what the run identity proves', async () => {
+  it('wires the audit-trail accordion onto the page (collapsed, header visible)', async () => {
+    // PR 4 — provenance details now live behind the Audit & Diagnostics
+    // accordion (`app-audit-trail-accordion`). The deep proof content is
+    // covered by audit-trail-accordion.component.spec.ts. Here we only
+    // assert the accordion is mounted into the parent and is collapsed by
+    // default, and that the page does not regress on VCR-0014 forbidden
+    // strings.
     const { fixture, component, svc } = setup();
     svc.getInstanceStatus.mockResolvedValue(
       makeStatus({
@@ -649,13 +655,11 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Identity & Provenance');
-    // VCR-0014 / Phase 7D — the QC backtest id is rendered with the
-    // honest "operator-recorded" label, not the forbidden "QC-approved" /
-    // "Byte-identical to backtest" copy.
-    expect(text).toContain('QC Cloud backtest');
-    expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
-    expect(text).toContain('Operator-recorded, not auto-verified');
+    expect(fixture.nativeElement.querySelector('app-audit-trail-accordion')).toBeTruthy();
+    expect(text).toContain('Audit & Diagnostics');
+    expect(text).not.toContain('Identity & Provenance');
+    // The page must never surface the VCR-0014 forbidden labels — neither
+    // in the parent template nor accidentally leaked from a child render.
     expect(text).not.toContain('Byte-identical to backtest');
     expect(text).not.toContain('QC-approved');
   });
