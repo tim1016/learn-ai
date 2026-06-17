@@ -220,10 +220,17 @@ async def test_chart_snapshot_today_returns_bars_and_runs(
     app, root = app_with_root
 
     # Run with sidecar started_at_ms so it counts as "active today".
-    from datetime import UTC, datetime
+    # VCR-P3-I: ``today`` here must match the endpoint's _today_ny() — the
+    # trading-day date in America/New_York, NOT UTC. Otherwise this test
+    # flakes in the ~5h window every day where the two calendars disagree.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    today = datetime.now(UTC).date()
-    today_start_ms = int(datetime(today.year, today.month, today.day, tzinfo=UTC).timestamp() * 1000)
+    ny_tz = ZoneInfo("America/New_York")
+    today = datetime.now(ny_tz).date()
+    today_start_ms = int(
+        datetime(today.year, today.month, today.day, tzinfo=ny_tz).timestamp() * 1000
+    )
 
     run_dir = root / "run-chart"
     run_dir.mkdir(parents=True)
