@@ -134,6 +134,15 @@
           <app-broker-sizing-card [sizing]="s.sizing" />
         }
 
+        <app-strategy-rules-card
+          [startDefaults]="s.start_defaults"
+          [provenance]="s.provenance"
+          [sizing]="s.sizing"
+          [instanceId]="s.strategy_instance_id"
+          [canRedeploy]="canRedeploy(s)"
+          [redeployQueryParams]="redeployQueryParams(s)"
+        />
+
         <app-current-risk-card
           [broker]="s.broker"
           [readiness]="s.readiness"
