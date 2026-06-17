@@ -851,21 +851,30 @@ async def get_incidents(
         Incidents in source order (oldest first within the returned window).
     """
     root = Path(get_settings().live_runs_root)
+
+    # Inline validation chain so the CodeQL py/path-injection scanner sees the
+    # full sanitizer adjacent to the sink (read_text). _validate_run_id +
+    # _artifact_path already perform this work for the legacy /failures
+    # endpoint, but the scanner doesn't always carry the upstream cleanup
+    # across the helper boundary on newly-added consumer sites — re-state the
+    # safe pattern locally so the dataflow is obviously safe right here.
     try:
-        run_dir = _validate_run_id(run_id, root)
+        safe_run_id = _validate_path_segment(run_id, field="run_id")
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if _RUN_ID_RE.fullmatch(safe_run_id) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+
+    root_resolved = root.resolve()
+    run_dir = (root_resolved / safe_run_id).resolve()
+    if not run_dir.is_relative_to(root_resolved):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Path traversal blocked")
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
-    # Inline _confine on a whitelisted literal so the CodeQL py/path-injection
-    # scanner sees the resolve() + relative_to() sanitizer at the consumer
-    # site. _artifact_path already routes through _confine, but the scanner
-    # doesn't always carry the upstream helper's sanitizer across the call
-    # boundary for newly-added endpoints — same fix shape as PR #478.
-    if "live.log" not in _ARTIFACT_NAMES:
-        raise RuntimeError("live.log missing from artifact whitelist")
-    log_path = _confine(run_dir, "live.log")
+    log_path = (run_dir / "live.log").resolve()
+    if not log_path.is_relative_to(root_resolved):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Path traversal blocked")
     if not log_path.exists():
         return []
 
