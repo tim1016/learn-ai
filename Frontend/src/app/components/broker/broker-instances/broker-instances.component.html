@@ -127,7 +127,7 @@
         </section>
 
         @if (s.provenance) {
-          <app-broker-provenance-card [provenance]="s.provenance" />
+          <app-audit-trail-accordion [provenance]="s.provenance" />
         }
 
         @if (s.sizing) {
@@ -143,6 +143,11 @@
           [redeployQueryParams]="redeployQueryParams(s)"
         />
 
+        <app-current-risk-card
+          [broker]="s.broker"
+          [readiness]="s.readiness"
+          [sizing]="s.sizing"
+        />
 
         @let exit = lastExitNotice(s);
         @if (exit) {
@@ -244,8 +249,15 @@
           [strategyInstanceId]="s.strategy_instance_id"
           [symbol]="s.symbol"
         />
+        <app-latest-signal-strip
+          [decisionColumns]="s.decision_columns"
+          [latestDecision]="s.latest_decision"
+        />
         <app-bot-trades-table [runId]="chartRunId" />
-        <app-bot-failures-table [runId]="chartRunId" />
+        <app-incidents-panel
+          [runId]="chartRunId"
+          (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
+        />
 
         <section #behaviorCard tabindex="-1" class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">
