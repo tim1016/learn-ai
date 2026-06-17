@@ -1,4 +1,12 @@
-.provenance-card {
+.audit-accordion {
+  display: block;
+}
+
+.audit-header-label {
+  font-weight: 600;
+}
+
+.audit-body {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;

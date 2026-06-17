@@ -29,13 +29,19 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { FleetHeaderComponent } from './fleet-header/fleet-header.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
-import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
+import { AuditTrailAccordionComponent } from '../audit-trail-accordion/audit-trail-accordion.component';
 import { BrokerSizingCardComponent } from '../broker-sizing-card/broker-sizing-card.component';
 import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 import { BotTradeChartCardComponent } from './bot-trade-chart-card/bot-trade-chart-card.component';
 import { BotTradesTableComponent } from './bot-trades-table/bot-trades-table.component';
-import { BotFailuresTableComponent } from './bot-failures-table/bot-failures-table.component';
+import { IncidentsPanelComponent } from './incidents-panel/incidents-panel.component';
+import { CurrentRiskCardComponent } from './current-risk-card/current-risk-card.component';
+import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-strip.component';
+import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
+import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
+import { ReadinessCardComponent } from './readiness-card/readiness-card.component';
+import { StickyControlBarComponent } from './sticky-control-bar/sticky-control-bar.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -198,6 +204,14 @@ const GATE_LABELS: Record<string, { label: string; meaning: string; fix: string 
   },
 };
 
+// Stable label-only projection of GATE_LABELS for the Readiness card surface.
+// Computed once at module load so [gateLabels] is a stable reference across
+// change-detection passes — otherwise the child input would invalidate every
+// tick under signal-driven CD.
+const READINESS_GATE_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(GATE_LABELS).map(([key, value]) => [key, value.label]),
+);
+
 function titleizeKey(key: string): string {
   return key
     .split('_')
@@ -217,12 +231,18 @@ function titleizeKey(key: string): string {
     FleetHeaderComponent,
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
-    BrokerProvenanceCardComponent,
+    AuditTrailAccordionComponent,
     BrokerSizingCardComponent,
     BrokerRunLogModalComponent,
     BotTradeChartCardComponent,
     BotTradesTableComponent,
-    BotFailuresTableComponent,
+    IncidentsPanelComponent,
+    CurrentRiskCardComponent,
+    LatestSignalStripComponent,
+    StrategyRulesCardComponent,
+    LastSessionCardComponent,
+    ReadinessCardComponent,
+    StickyControlBarComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -512,6 +532,18 @@ export class BrokerInstancesComponent {
     return this.connectivity.isPaper() === true;
   }
 
+  /** PR12 — scroll the existing Start/Stop card into view when the operator
+   * clicks "Jump to controls" on the sticky bar. The sticky bar does not
+   * own the controls (issue #565 explicitly says safety-critical controls
+   * land LAST so the parent stays the source of truth); the bar just
+   * surfaces the affordance to reach them. */
+  scrollToStartStopCard(): void {
+    const el = document.querySelector('app-broker-start-stop-card');
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
   /** The freshest known process state for a roster row. The fleet roster
    * is a 15-s cached account-level summary — when an instance exits
    * (broker disconnect, halt, manual stop) the summary stays stale until
@@ -746,6 +778,13 @@ export class BrokerInstancesComponent {
     if (!e.halt_trigger) return '';
     return HALT_TRIGGER_COPY[e.halt_trigger] ?? `Safety trigger: ${e.halt_trigger}.`;
   }
+
+  /** Label-only projection of `GATE_LABELS` for the Readiness card surface,
+   * which only renders the operator-language gate name (the meaning + fix
+   * still live on the Pre-Trade Checklist below). Reference is stable
+   * across change-detection passes (see READINESS_GATE_LABELS at module
+   * scope). */
+  readonly readinessGateLabels = READINESS_GATE_LABELS;
 
   checklistRows(r: ReadinessVector | null): ChecklistRow[] {
     if (!r) {

@@ -65,6 +65,12 @@
     @let hero = heroStatus(s);
     @let runLogTarget = logTarget(s);
     <article class="control-panel" aria-label="Instance status">
+      <app-sticky-control-bar
+        [status]="s"
+        [isPaper]="isPaperAccount()"
+        (jumpToControlsRequested)="scrollToStartStopCard()"
+      />
+
       <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
         <div class="hero-copy">
           <p class="mode-line">Paper trading mode - no real money at risk</p>
@@ -127,45 +133,40 @@
         </section>
 
         @if (s.provenance) {
-          <app-broker-provenance-card [provenance]="s.provenance" />
+          <app-audit-trail-accordion [provenance]="s.provenance" />
         }
 
         @if (s.sizing) {
           <app-broker-sizing-card [sizing]="s.sizing" />
         }
 
-        @let exit = lastExitNotice(s);
-        @if (exit) {
-          <section class="card last-exit-card" [class.ok]="exit.tone === 'ok'" [class.warn]="exit.tone === 'warn'" [class.bad]="exit.tone === 'bad'" aria-label="Why the last session stopped">
-            <header class="card-header">
-              <div>
-                <h2>Why It Stopped</h2>
-                <p>What happened to the most recent session.</p>
-              </div>
-            </header>
-            <p class="exit-title"><strong>{{ exit.title }}</strong></p>
-            <p class="plain-text">{{ exit.detail }}</p>
-            <p class="exit-fix">{{ exit.fix }}</p>
-            <div class="exit-actions">
-              @if (canRedeploy(s)) {
-                <a
-                  class="redeploy-link"
-                  routerLink="/broker/deploy"
-                  [queryParams]="redeployQueryParams(s)"
-                >
-                  <i class="pi pi-replay" aria-hidden="true"></i>
-                  <span>Re-deploy (fresh run_id)</span>
-                </a>
-              }
-              @if (runLogTarget) {
-                <button type="button" class="runlog-link" (click)="openRunLog(runLogTarget)">
-                  <i class="pi pi-file" aria-hidden="true"></i>
-                  <span>View run log</span>
-                </button>
-              }
-            </div>
-          </section>
-        }
+        <app-strategy-rules-card
+          [startDefaults]="s.start_defaults"
+          [provenance]="s.provenance"
+          [sizing]="s.sizing"
+          [instanceId]="s.strategy_instance_id"
+          [canRedeploy]="canRedeploy(s)"
+          [redeployQueryParams]="redeployQueryParams(s)"
+        />
+
+        <app-current-risk-card
+          [broker]="s.broker"
+          [readiness]="s.readiness"
+          [sizing]="s.sizing"
+        />
+
+        <app-last-session-card
+          [notice]="lastExitNotice(s)"
+          [canRedeploy]="canRedeploy(s)"
+          [redeployQueryParams]="redeployQueryParams(s)"
+          [runLogTarget]="runLogTarget"
+          (viewRunLogRequested)="openRunLog($event)"
+        />
+
+        <app-readiness-card
+          [readiness]="s.readiness"
+          [gateLabels]="readinessGateLabels"
+        />
 
         @let r = s.readiness;
         <section class="card checklist-card" aria-labelledby="checklist-heading">
@@ -234,8 +235,15 @@
           [strategyInstanceId]="s.strategy_instance_id"
           [symbol]="s.symbol"
         />
+        <app-latest-signal-strip
+          [decisionColumns]="s.decision_columns"
+          [latestDecision]="s.latest_decision"
+        />
         <app-bot-trades-table [runId]="chartRunId" />
-        <app-bot-failures-table [runId]="chartRunId" />
+        <app-incidents-panel
+          [runId]="chartRunId"
+          (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
+        />
 
         <section #behaviorCard tabindex="-1" class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">

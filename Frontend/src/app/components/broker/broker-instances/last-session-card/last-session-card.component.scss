@@ -1,0 +1,69 @@
+.last-session-stub {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: rgba(46, 125, 50, 0.08);
+  border: 1px solid rgba(46, 125, 50, 0.3);
+  color: #1b5e20;
+
+  .pi {
+    font-size: 1rem;
+  }
+}
+
+.last-session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+
+  &.warn {
+    border-left: 4px solid #f57c00;
+  }
+
+  &.bad {
+    border-left: 4px solid #d32f2f;
+  }
+
+  .fix {
+    color: var(--text-secondary, #586573);
+    font-style: italic;
+    margin: 0;
+  }
+
+  .plain-text {
+    margin: 0;
+    color: var(--text-primary, #1f2937);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.25rem;
+  }
+
+  .redeploy-link,
+  .runlog-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--brand-color, #1976d2);
+    border-radius: 4px;
+    text-decoration: none;
+    color: var(--brand-color, #1976d2);
+    font-weight: 600;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+
+    &:hover,
+    &:focus-visible {
+      background: rgba(25, 118, 210, 0.08);
+    }
+  }
+}
