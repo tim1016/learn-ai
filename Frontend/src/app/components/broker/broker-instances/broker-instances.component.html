@@ -22,37 +22,42 @@
     <p>Loading bot instances...</p>
   } @else if (fleet.error()) {
     <p role="alert">Could not load bot instances.</p>
-  } @else {
-    <section class="fleet-card card" aria-labelledby="fleet-heading">
+  } @else if (instances().length === 0) {
+    <section class="fleet-card card empty-fleet" aria-labelledby="fleet-heading">
       <header class="card-header">
         <div>
-          <h2 id="fleet-heading">Choose a Bot</h2>
-          <p>Select the strategy instance you want to control.</p>
+          <h2 id="fleet-heading">No bots deployed yet</h2>
+          <p>Deploy a strategy to start operating from this page.</p>
         </div>
+        <a routerLink="/broker/deploy" class="deploy-link">
+          <i class="pi pi-plus" aria-hidden="true"></i>
+          <span>Deploy a strategy</span>
+        </a>
       </header>
-      <ul class="fleet" aria-label="Strategy instances">
-        @for (inst of instances(); track inst.strategy_instance_id) {
-          <li>
-            <button
-              type="button"
-              [class.selected]="inst.strategy_instance_id === selectedInstanceId()"
-              (click)="select(inst.strategy_instance_id)"
-            >
-              <span class="bot-name" [title]="inst.strategy_instance_id">{{ inst.strategy_instance_id }}</span>
-              @let effState = effectiveProcessState(inst);
-              <span class="state-chip" [class.live]="effState === 'running'">{{ effState === 'running' ? 'RUNNING' : 'STOPPED' }}</span>
-              @if (inst.bound_run_id) {
-                <span class="bound">Live session {{ shortId(inst.bound_run_id) }}</span>
-              } @else if (inst.latest_run_id) {
-                <span class="evidence">Last session {{ shortId(inst.latest_run_id) }}</span>
-              }
-            </button>
-          </li>
-        } @empty {
-          <li class="empty">No strategy instances found.</li>
-        }
-      </ul>
     </section>
+  } @else if (showTabStrip()) {
+    <!--
+      PRD #565 PR 3 — stable-deployment-order tab strip, absent when N <= 1.
+      Roster order is preserved by ``LiveInstanceSummary``'s backend ordering;
+      the tabs mirror it 1:1 so muscle memory survives status changes.
+    -->
+    <nav class="tab-strip" aria-label="Strategy instances" role="tablist">
+      @for (inst of instances(); track inst.strategy_instance_id) {
+        @let isSelected = inst.strategy_instance_id === selectedInstanceId();
+        @let effState = effectiveProcessState(inst);
+        <button
+          type="button"
+          class="tab"
+          role="tab"
+          [class.selected]="isSelected"
+          [attr.aria-selected]="isSelected"
+          (click)="select(inst.strategy_instance_id)"
+        >
+          <span class="bot-name" [title]="inst.strategy_instance_id">{{ inst.strategy_instance_id }}</span>
+          <span class="state-chip" [class.live]="effState === 'running'">{{ effState === 'running' ? 'RUNNING' : 'STOPPED' }}</span>
+        </button>
+      }
+    </nav>
   }
 
   @let s = status.value();

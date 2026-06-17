@@ -185,6 +185,58 @@
   }
 }
 
+.tab-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--bg-elevated);
+      color: var(--text-default);
+    }
+
+    &.selected {
+      background: var(--bg-surface);
+      border-color: var(--border);
+      color: var(--text-default);
+      // Pull the tab down 1px to overlap the strip's bottom border so the
+      // selected tab visually "connects" to the panel below.
+      margin-bottom: -1px;
+      border-bottom: 1px solid var(--bg-surface);
+    }
+
+    .bot-name {
+      max-width: 14rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
+.empty-fleet {
+  .card-header {
+    align-items: center;
+  }
+}
+
 .bot-name {
   min-width: 0;
   overflow: hidden;
