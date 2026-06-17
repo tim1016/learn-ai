@@ -103,7 +103,7 @@ describe('StrategyRulesCardComponent', () => {
     expect(text).toContain('spy_15m_breakout');
     expect(text).toContain('Live submission');
     expect(text).toContain('3 orders / day');
-    expect(text).toContain('Safe Canary');
+    expect(text).toContain('Safe canary');
   });
 
   it('shows the read-only submission label when start_defaults.readonly is true', () => {

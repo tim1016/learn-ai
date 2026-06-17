@@ -125,10 +125,21 @@ function shortSha(sha: string): string {
   return sha ? sha.slice(0, 12) : '';
 }
 
+// Mirrors BrokerSizingCardComponent.presetLabel for the same `sizing.preset` input
+// so the two cards on the same page render identical text for the same datum.
+// Canonical extraction to a shared formatter is deferred to the post-merge
+// cleanup sweep (see docs/audits/2026-06-17-565-thermo-nuclear-review.md).
 function formatPreset(preset: string): string {
-  if (preset === 'explicit') return 'Explicit (strategy-defined)';
-  return preset
-    .split('_')
-    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : w))
-    .join(' ');
+  switch (preset) {
+    case 'safe_canary':
+      return 'Safe canary';
+    case 'reference_parity':
+      return 'Reference parity';
+    case 'custom':
+      return 'Custom';
+    case 'explicit':
+      return 'Self-sized (strategy explicit)';
+    default:
+      return '—';
+  }
 }
