@@ -39,6 +39,7 @@ import { IncidentsPanelComponent } from './incidents-panel/incidents-panel.compo
 import { CurrentRiskCardComponent } from './current-risk-card/current-risk-card.component';
 import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-strip.component';
 import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
+import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -229,6 +230,7 @@ function titleizeKey(key: string): string {
     CurrentRiskCardComponent,
     LatestSignalStripComponent,
     StrategyRulesCardComponent,
+    LastSessionCardComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',

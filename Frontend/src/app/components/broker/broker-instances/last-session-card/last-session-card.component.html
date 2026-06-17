@@ -1,0 +1,53 @@
+@if (notice(); as n) {
+  @if (isClean()) {
+    <aside
+      class="last-session-stub ok"
+      aria-label="Last session status"
+      data-testid="last-session-stub"
+    >
+      <i class="pi pi-check-circle" aria-hidden="true"></i>
+      <span>{{ n.title }}</span>
+    </aside>
+  } @else {
+    <section
+      class="card last-session-card"
+      [class.warn]="n.tone === 'warn'"
+      [class.bad]="n.tone === 'bad'"
+      aria-labelledby="last-session-heading"
+      data-testid="last-session-card"
+    >
+      <header class="card-header">
+        <div>
+          <h2 id="last-session-heading">{{ n.title }}</h2>
+          <p>What happened to the most recent session.</p>
+        </div>
+      </header>
+      <p class="plain-text" data-testid="last-session-detail">{{ n.detail }}</p>
+      <p class="fix" data-testid="last-session-fix">{{ n.fix }}</p>
+      <div class="actions">
+        @if (canRedeploy()) {
+          <a
+            class="redeploy-link"
+            routerLink="/broker/deploy"
+            [queryParams]="redeployQueryParams()"
+            data-testid="redeploy-link"
+          >
+            <i class="pi pi-replay" aria-hidden="true"></i>
+            <span>Re-deploy (fresh run_id)</span>
+          </a>
+        }
+        @if (runLogTarget(); as t) {
+          <button
+            type="button"
+            class="runlog-link"
+            (click)="onViewRunLogClick()"
+            data-testid="view-run-log"
+          >
+            <i class="pi pi-file" aria-hidden="true"></i>
+            <span>View run log</span>
+          </button>
+        }
+      </div>
+    </section>
+  }
+}
