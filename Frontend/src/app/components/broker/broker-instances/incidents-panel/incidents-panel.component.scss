@@ -1,0 +1,133 @@
+.incidents-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.incidents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.incident-row {
+  border: 1px solid var(--surface-border, #2a2a2a);
+  border-radius: 0.4rem;
+  background: var(--surface-100, #1c1c1c);
+  overflow: hidden;
+
+  &.tone-warning {
+    border-left: 4px solid var(--yellow-400, #ffb84d);
+  }
+
+  &.tone-critical {
+    border-left: 4px solid var(--orange-500, #ff7043);
+  }
+
+  &.tone-blocking {
+    border-left: 4px solid var(--red-500, #ef5350);
+  }
+
+  &.tone-unknown {
+    border-left: 4px solid var(--text-muted, #888);
+  }
+}
+
+.incident-head {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.severity-tag {
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-300, #2a2a2a);
+
+  .tone-warning & { color: var(--yellow-400, #ffb84d); }
+  .tone-critical & { color: var(--orange-500, #ff7043); }
+  .tone-blocking & { color: var(--red-500, #ef5350); }
+  .tone-unknown & { color: var(--text-muted, #888); }
+}
+
+.ts {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.incident-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem 0.7rem;
+  border-top: 1px solid var(--surface-border, #2a2a2a);
+}
+
+.message,
+.recommended {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.raw-log-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--surface-border, #2a2a2a);
+  background: var(--surface-200, #242424);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+
+  &:hover { background: var(--surface-300, #2a2a2a); }
+}
+
+.raw-detail summary {
+  cursor: pointer;
+  color: var(--text-muted, #888);
+}
+
+.traceback {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  background: var(--surface-200, #242424);
+  border-radius: 0.3rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-muted, #888);
+  font-size: 0.85rem;
+}

@@ -35,7 +35,7 @@ import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-l
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 import { BotTradeChartCardComponent } from './bot-trade-chart-card/bot-trade-chart-card.component';
 import { BotTradesTableComponent } from './bot-trades-table/bot-trades-table.component';
-import { BotFailuresTableComponent } from './bot-failures-table/bot-failures-table.component';
+import { IncidentsPanelComponent } from './incidents-panel/incidents-panel.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -222,7 +222,7 @@ function titleizeKey(key: string): string {
     BrokerRunLogModalComponent,
     BotTradeChartCardComponent,
     BotTradesTableComponent,
-    BotFailuresTableComponent,
+    IncidentsPanelComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
