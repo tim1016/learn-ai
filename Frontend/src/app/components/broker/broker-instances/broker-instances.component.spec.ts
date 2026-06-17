@@ -482,8 +482,11 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Why It Stopped');
-    expect(text).toContain('seed day');
+    // #565 PR 10 — the operator-priority surface drops the static
+    // "Why It Stopped" header and leads with the dynamic title (the
+    // seed-day notice, in this case), so the question lands as the
+    // headline rather than a generic sub-heading.
+    expect(text).toContain('Needs a seed day');
     expect(text).toContain('Optional');
   });
 
