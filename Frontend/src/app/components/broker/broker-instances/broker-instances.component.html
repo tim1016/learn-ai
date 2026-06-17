@@ -234,6 +234,10 @@
           [strategyInstanceId]="s.strategy_instance_id"
           [symbol]="s.symbol"
         />
+        <app-latest-signal-strip
+          [decisionColumns]="s.decision_columns"
+          [latestDecision]="s.latest_decision"
+        />
         <app-bot-trades-table [runId]="chartRunId" />
         <app-bot-failures-table [runId]="chartRunId" />
 

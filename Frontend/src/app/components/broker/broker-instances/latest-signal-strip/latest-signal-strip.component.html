@@ -1,0 +1,32 @@
+@if (hasContent()) {
+  <aside
+    class="latest-signal-strip"
+    aria-label="Latest engine signal"
+    data-testid="latest-signal-strip"
+  >
+    @if (signal(); as sig) {
+      <span
+        class="signal-pill"
+        [class.ok]="signalTone() === 'ok'"
+        [class.warn]="signalTone() === 'warn'"
+        [class.neutral]="signalTone() === 'neutral'"
+        data-testid="latest-signal-pill"
+      >
+        <span class="signal-label">Signal</span>
+        <strong>{{ sig }}</strong>
+      </span>
+    } @else {
+      <span class="signal-pill neutral" data-testid="latest-signal-pill-empty">
+        <span class="signal-label">Signal</span>
+        <strong>(no decision yet)</strong>
+      </span>
+    }
+
+    @for (cell of cells(); track cell.name) {
+      <span class="cell" [title]="cell.semantic ?? cell.label">
+        <span class="cell-label">{{ cell.label }}</span>
+        <strong>{{ cell.value }}</strong>
+      </span>
+    }
+  </aside>
+}
