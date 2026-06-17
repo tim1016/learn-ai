@@ -41,6 +41,7 @@ import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-
 import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
 import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
 import { ReadinessCardComponent } from './readiness-card/readiness-card.component';
+import { StickyControlBarComponent } from './sticky-control-bar/sticky-control-bar.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -241,6 +242,7 @@ function titleizeKey(key: string): string {
     StrategyRulesCardComponent,
     LastSessionCardComponent,
     ReadinessCardComponent,
+    StickyControlBarComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -528,6 +530,18 @@ export class BrokerInstancesComponent {
    * account, and the warning would be misleading there. */
   isPaperAccount(): boolean {
     return this.connectivity.isPaper() === true;
+  }
+
+  /** PR12 — scroll the existing Start/Stop card into view when the operator
+   * clicks "Jump to controls" on the sticky bar. The sticky bar does not
+   * own the controls (issue #565 explicitly says safety-critical controls
+   * land LAST so the parent stays the source of truth); the bar just
+   * surfaces the affordance to reach them. */
+  scrollToStartStopCard(): void {
+    const el = document.querySelector('app-broker-start-stop-card');
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   }
 
   /** The freshest known process state for a roster row. The fleet roster
