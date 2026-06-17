@@ -858,7 +858,14 @@ async def get_incidents(
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
-    log_path = _artifact_path(run_dir, "live.log")
+    # Inline _confine on a whitelisted literal so the CodeQL py/path-injection
+    # scanner sees the resolve() + relative_to() sanitizer at the consumer
+    # site. _artifact_path already routes through _confine, but the scanner
+    # doesn't always carry the upstream helper's sanitizer across the call
+    # boundary for newly-added endpoints — same fix shape as PR #478.
+    if "live.log" not in _ARTIFACT_NAMES:
+        raise RuntimeError("live.log missing from artifact whitelist")
+    log_path = _confine(run_dir, "live.log")
     if not log_path.exists():
         return []
 
