@@ -51,6 +51,7 @@ from app.schemas.live_runs import (
     ExecutionsSummary,
     FailureRecord,
     FlagsSummary,
+    IncidentRecord,
     LiveRunStatus,
     LiveRunSummary,
     LogLine,
@@ -59,7 +60,7 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     TradesSummary,
 )
-from app.services.live_log_failures import parse_failures
+from app.services.live_log_failures import parse_failures, parse_incidents
 from app.services.live_log_parser import BarEvent, parse_log_tail
 from app.services.live_run_state import infer_state
 
@@ -815,6 +816,59 @@ async def get_failures(
         return []
 
     rows = [FailureRecord.model_validate(r.model_dump()) for r in parse_failures(text)]
+    if since_ms is not None:
+        rows = [r for r in rows if r.ts_ms > since_ms]
+    if len(rows) > limit:
+        rows = rows[-limit:]
+    return rows
+
+
+@router.get("/{run_id}/incidents", response_model=list[IncidentRecord])
+async def get_incidents(
+    run_id: str,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    since_ms: Annotated[int | None, Query(ge=0)] = None,
+) -> list[IncidentRecord]:
+    """Return parsed WARNING / ERROR / CRITICAL records from live.log, each
+    tagged with a backend-classified ``incident_category``.
+
+    Widens the legacy ``/failures`` shape to include WARNING-level events
+    (e.g., ib_async surfaces broker-connectivity loss as a WARNING-level
+    Error 1100, which the operator still needs to see), and attaches a
+    deterministic ``incident_category`` so the frontend's ``INCIDENT_COPY``
+    map renders trader-language copy without re-deriving meaning from raw
+    log text.
+
+    The legacy ``/failures`` endpoint stays online unchanged for any
+    consumer still on the ERROR/CRITICAL-only shape.
+
+    Args:
+        run_id: 64-char hex run identifier.
+        limit: Cap on returned records (newest-first slice when more than limit).
+        since_ms: Optional UTC ms cutoff; only incidents with ts_ms > since_ms.
+
+    Returns:
+        Incidents in source order (oldest first within the returned window).
+    """
+    root = Path(get_settings().live_runs_root)
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
+    if not run_dir.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+
+    log_path = _artifact_path(run_dir, "live.log")
+    if not log_path.exists():
+        return []
+
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("Could not read %s: %s", log_path, exc)
+        return []
+
+    rows = [IncidentRecord.model_validate(r.model_dump()) for r in parse_incidents(text)]
     if since_ms is not None:
         rows = [r for r in rows if r.ts_ms > since_ms]
     if len(rows) > limit:

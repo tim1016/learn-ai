@@ -448,3 +448,98 @@ async def test_log_tail_raw_lines_have_event_type_raw(live_runs_root):
     lines = response.json()
     raw_lines = [ln for ln in lines if ln["event_type"] == "raw"]
     assert len(raw_lines) >= 1
+
+
+# ---------------------------------------------------------------------------
+# GET /api/live-runs/{run_id}/incidents — PR 6 of #565
+# ---------------------------------------------------------------------------
+
+
+async def test_incidents_404_unknown_run(live_runs_root):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-runs/nonexistent-run-id/incidents")
+    assert response.status_code == 404
+
+
+async def test_incidents_empty_when_no_log(live_runs_root):
+    # _make_halted_run writes no live.log; the endpoint must return an
+    # empty list rather than 404 / 500 in this case.
+    run_id = _make_halted_run(live_runs_root)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_incidents_returns_warning_error_critical_with_categories(live_runs_root):
+    # Endpoint widens the legacy /failures shape (ERROR/CRITICAL only) to
+    # include WARNING-level events, and tags each row with the backend-
+    # classified incident_category the frontend's INCIDENT_COPY map keys on.
+    run_id = "run-incidents-" + "k" * 50
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    content = (
+        "2026-06-09 13:47:27,074 INFO __main__ [STEP 0] starting\n"
+        # WARNING-level broker disconnect — only the incidents shape sees it.
+        "2026-06-09 14:12:58,021 WARNING ib_async.wrapper Error 1100, reqId -1: lost\n"
+        # ERROR with no recognised classifier rule → UNKNOWN fallback.
+        "2026-06-09 14:13:00,000 ERROR my.module something unhelpful\n"
+        # CRITICAL engine halt — classifies as ENGINE_FATAL.
+        "2026-06-09 14:13:01,000 CRITICAL __main__ Unhandled exception in engine.run\n"
+        "Traceback (most recent call last):\n"
+        '  File "/app/run.py", line 1, in main\n'
+        "    raise RuntimeError('boom')\n"
+        "RuntimeError: boom\n"
+    )
+    _write_log(run_dir, content)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 3
+
+    # WARNING-level broker disconnect — present only on /incidents, not /failures.
+    assert rows[0]["level"] == "WARNING"
+    assert rows[0]["incident_category"] == "broker_disconnect"
+
+    # Unrecognised message → UNKNOWN fallback (frontend INCIDENT_COPY uses this).
+    assert rows[1]["level"] == "ERROR"
+    assert rows[1]["incident_category"] == "unknown"
+
+    # Engine fatal carries its traceback intact for the raw-log drawer.
+    assert rows[2]["level"] == "CRITICAL"
+    assert rows[2]["incident_category"] == "engine_fatal"
+    assert rows[2]["traceback"] is not None
+    assert "RuntimeError: boom" in rows[2]["traceback"]
+
+
+async def test_incidents_since_ms_cursor_filters_to_newer_rows(live_runs_root):
+    # The since_ms cursor lets the frontend poll incrementally without
+    # re-shipping the full window every tick.
+    run_id = "run-since-" + "m" * 54
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    content = (
+        "2026-06-09 14:12:58,021 WARNING ib_async.wrapper Error 1100: lost\n"
+        "2026-06-09 14:13:00,000 ERROR my.module unrecognised\n"
+    )
+    _write_log(run_dir, content)
+
+    # Cursor matches the first row's ts_ms; only strictly-newer rows return.
+    first_ts = 1781014378021  # 2026-06-09 14:12:58.021 parsed as UTC
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/live-runs/{run_id}/incidents", params={"since_ms": first_ts}
+        )
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["level"] == "ERROR"
