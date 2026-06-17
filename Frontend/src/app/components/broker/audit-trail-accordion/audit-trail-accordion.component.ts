@@ -1,35 +1,44 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionHeader,
+  AccordionPanel,
+} from 'primeng/accordion';
 import type { InstanceProvenance } from '../../../api/live-instances.types';
 
 interface ProofRow {
   label: string;
   statement: string;
-  /** Short fingerprint to show inline, or null when the proof has no hash. */
   mono: string | null;
 }
 
 /**
- * "What this proves" — turns a run's content-addressed identity (run_id + the
- * hashed deploy inputs) into plain-language proof statements, with the full
- * fingerprints behind a disclosure.
+ * Audit & Diagnostics — the page-level provenance accordion. Holds the run's
+ * content-addressed identity (run_id + hashed deploy inputs) as plain-language
+ * proof statements, with the full fingerprints behind a sub-disclosure.
+ *
+ * Per the #565 refactor (PR 4), the previous `broker-provenance-card` is
+ * wrapped in `p-accordion` and collapsed by default so engineering data lives
+ * one click away rather than dominating the trader's default view.
  *
  * VCR-0014 / Phase 7D — the QC provenance row is split into two distinct
  * proofs. The audit copy is verifiable (SHA against the on-disk file +
  * ADR 0009 allow-list verdict). The QC Cloud backtest id is operator-
- * recorded — there is no automated verification path against QC Cloud yet,
- * so the row labels itself "Operator-recorded, not auto-verified" rather
- * than the forbidden "QC-approved" / "verified backtest" /
- * "Byte-identical to backtest" copy that VCR-0014 documented.
+ * recorded — no automated verification path against QC Cloud exists yet, so
+ * the row labels itself "Operator-recorded, not auto-verified" rather than
+ * the forbidden "QC-approved" / "verified backtest" / "Byte-identical to
+ * backtest" copy.
  */
 @Component({
-  selector: 'app-broker-provenance-card',
+  selector: 'app-audit-trail-accordion',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
-  templateUrl: './broker-provenance-card.component.html',
-  styleUrl: './broker-provenance-card.component.scss',
+  imports: [DatePipe, Accordion, AccordionPanel, AccordionHeader, AccordionContent],
+  templateUrl: './audit-trail-accordion.component.html',
+  styleUrl: './audit-trail-accordion.component.scss',
 })
-export class BrokerProvenanceCardComponent {
+export class AuditTrailAccordionComponent {
   readonly provenance = input.required<InstanceProvenance>();
 
   readonly runIdShort = computed<string>(() => shortSha(this.provenance().run_id));

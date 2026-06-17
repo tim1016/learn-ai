@@ -1,0 +1,65 @@
+<section class="card incidents-card" aria-labelledby="incidents-heading">
+  <header class="card-header">
+    <div>
+      <h2 id="incidents-heading">Recent Incidents</h2>
+      <p>Warnings and errors from the live engine, translated into operator language. Click a row for the recommended next step.</p>
+    </div>
+    @if (hasData()) {
+      <span class="status-chip bad">{{ rows().length }} incidents</span>
+    } @else if (runId() && !incidentsResource.isLoading()) {
+      <span class="status-chip ok">No recent incidents</span>
+    }
+  </header>
+
+  @if (incidentsResource.isLoading() && !hasData()) {
+    <p class="muted">Loading incidents…</p>
+  } @else if (!runId()) {
+    <p class="muted">Select a bot to see its incidents.</p>
+  } @else if (!hasData()) {
+    <p class="muted">No warnings or errors for this run.</p>
+  } @else {
+    <ul class="incidents">
+      @for (r of rows(); track trackRow($index, r); let i = $index) {
+        @let open = isExpanded(i);
+        <li
+          class="incident-row"
+          [class.tone-warning]="r.copy.severity === 'warning'"
+          [class.tone-critical]="r.copy.severity === 'critical'"
+          [class.tone-blocking]="r.copy.severity === 'blocking'"
+          [class.tone-unknown]="r.copy.severity === 'unknown'"
+          [class.expanded]="open"
+        >
+          <button
+            type="button"
+            class="incident-head"
+            (click)="toggle(i)"
+            [attr.aria-expanded]="open"
+          >
+            <span class="severity-tag">{{ r.copy.severity }}</span>
+            <span class="ts mono" [title]="'logger: ' + r.logger">{{ r.raw_ts }}</span>
+            <span class="title">{{ r.copy.title }}</span>
+            <i class="pi" [class.pi-chevron-down]="!open" [class.pi-chevron-up]="open" aria-hidden="true"></i>
+          </button>
+          @if (open) {
+            <div class="incident-body">
+              <p class="message">{{ r.copy.message }}</p>
+              <p class="recommended"><strong>Recommended:</strong> {{ r.copy.recommendedAction }}</p>
+              <div class="actions">
+                <button type="button" class="raw-log-button" (click)="openRawLog()">
+                  <i class="pi pi-file" aria-hidden="true"></i>
+                  <span>View raw log</span>
+                </button>
+              </div>
+              @if (r.traceback) {
+                <details class="raw-detail">
+                  <summary>Original traceback</summary>
+                  <pre class="traceback mono">{{ r.traceback }}</pre>
+                </details>
+              }
+            </div>
+          }
+        </li>
+      }
+    </ul>
+  }
+</section>
