@@ -65,6 +65,12 @@
     @let hero = heroStatus(s);
     @let runLogTarget = logTarget(s);
     <article class="control-panel" aria-label="Instance status">
+      <app-sticky-control-bar
+        [status]="s"
+        [isPaper]="isPaperAccount()"
+        (jumpToControlsRequested)="scrollToStartStopCard()"
+      />
+
       <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
         <div class="hero-copy">
           <p class="mode-line">Paper trading mode - no real money at risk</p>

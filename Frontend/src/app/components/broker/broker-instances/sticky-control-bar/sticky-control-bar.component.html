@@ -1,0 +1,59 @@
+<div
+  class="sticky-control-bar"
+  role="region"
+  aria-label="Bot status and controls"
+  data-testid="sticky-control-bar"
+>
+  @if (isPaper()) {
+    <span class="paper-pill" aria-label="Paper trading mode" data-testid="paper-pill">
+      PAPER
+    </span>
+  }
+
+  <span class="bot-name" [title]="botName()" data-testid="bot-name">
+    {{ botName() }}
+  </span>
+
+  <span
+    class="state-pill"
+    [class.running]="statePill().kind === 'running'"
+    [class.stopping]="statePill().kind === 'stopping'"
+    [class.stopped]="statePill().kind === 'stopped'"
+    [class.idle]="statePill().kind === 'idle'"
+    [class.unreachable]="statePill().kind === 'unreachable'"
+    data-testid="state-pill"
+  >
+    {{ statePill().label }}
+  </span>
+
+  <span
+    class="readiness-pill"
+    [class.ready]="readinessPill().kind === 'ready'"
+    [class.blocked]="readinessPill().kind === 'blocked'"
+    [class.degraded]="readinessPill().kind === 'degraded'"
+    [class.unknown]="readinessPill().kind === 'unknown'"
+    [class.no_readiness]="readinessPill().kind === 'no_readiness'"
+    data-testid="readiness-pill"
+  >
+    {{ readinessPill().label }}
+  </span>
+
+  @if (hasPoisonFlag()) {
+    <span class="poison-chip" data-testid="poison-chip" title="Run flagged unsafe">
+      🚨 POISONED
+    </span>
+  }
+
+  <span class="spacer" aria-hidden="true"></span>
+
+  <button
+    type="button"
+    class="jump-to-controls"
+    (click)="onJumpToControlsClick()"
+    data-testid="jump-to-controls"
+    aria-label="Scroll to Start / Pause / Stop controls"
+  >
+    <i class="pi pi-arrow-down" aria-hidden="true"></i>
+    <span>Jump to controls</span>
+  </button>
+</div>
