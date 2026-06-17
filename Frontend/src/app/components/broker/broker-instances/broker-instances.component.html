@@ -10,32 +10,13 @@
     </a>
   </header>
 
-  <app-broker-connectivity-strip />
-
-  @let acct = account.value();
-  @if (acct) {
-    <section class="card account-card" aria-labelledby="account-heading" [class.problem]="acct.verdict === 'contaminated'">
-      <header class="card-header">
-        <div>
-          <h2 id="account-heading">Account Status</h2>
-          <p>Is my account clean?</p>
-        </div>
-        <span class="status-chip" [class.ok]="acct.verdict === 'clean'" [class.bad]="acct.verdict === 'contaminated'" [class.warn]="acct.verdict === 'unknown'">
-          {{ accountBadge(acct) }}
-        </span>
-      </header>
-      <p class="plain-text">{{ acct.summary }}</p>
-      @if (residualRows(acct).length) {
-        <ul class="position-pills" aria-label="Unrecognized positions">
-          @for (r of residualRows(acct); track r.symbol) {
-            <li><span>{{ r.symbol }}</span><strong>{{ r.qty }}</strong></li>
-          }
-        </ul>
-      } @else {
-        <p class="plain-text">Every open position in your account is managed by a known strategy. Nothing unexpected.</p>
-      }
-    </section>
-  }
+  <app-fleet-header
+    [account]="account.value() ?? null"
+    [selectedInstanceId]="selectedInstanceId()"
+    [busyEmergencyFlatten]="busyEmergencyFlatten()"
+    [commandError]="commandError()"
+    (emergencyFlattenRequested)="issueEmergencyFlatten()"
+  />
 
   @if (fleet.isLoading()) {
     <p>Loading bot instances...</p>
@@ -355,22 +336,8 @@
             @if (!s.live_binding) {
               <p class="disabled-reason">Advanced actions need a live bot session. Start the bot first.</p>
             }
-            <div class="emergency-actions" role="group" aria-label="Emergency actions">
-              <p class="notice danger">
-                Kill-switch: liquidates ALL account positions via the broker, even
-                with no live bot — use when a halted/poisoned bot may have left a
-                position open.
-              </p>
-              <button
-                type="button"
-                class="danger"
-                (click)="issueEmergencyFlatten()"
-                [disabled]="busyEmergencyFlatten()"
-                title="Place market orders to liquidate every position on the account."
-              >
-                {{ busyEmergencyFlatten() ? 'Flattening…' : 'Emergency flatten (account-wide)' }}
-              </button>
-              @if (isPaperAccount()) {
+            @if (isPaperAccount()) {
+              <div class="paper-reset" role="group" aria-label="Paper account reset">
                 <p class="notice">
                   Paper-only: the IBKR paper account replays its day's execution
                   history at every connect. A foreign fill earlier today (e.g. a
@@ -391,8 +358,8 @@
                   Resets cash to $1,000,000, clears positions and execution history. IBKR-side only —
                   no API available, so we can't trigger it for you.
                 </small>
-              }
-            </div>
+              </div>
+            }
             <app-broker-operation-result [error]="commandError()" />
             @if (commandEntries().length) {
               <ul class="command-timeline" aria-label="Command timeline">

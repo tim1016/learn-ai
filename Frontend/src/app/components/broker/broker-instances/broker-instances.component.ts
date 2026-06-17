@@ -12,7 +12,6 @@ import { RouterLink } from '@angular/router';
 import type {
   DecisionColumnDescriptor,
   DesiredStateAction,
-  FleetContamination,
   InstanceBrokerView,
   InstanceLastExit,
   IntentActuation,
@@ -24,8 +23,8 @@ import type {
 import type { CommandEntry, CommandVerb } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
-import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
+import { FleetHeaderComponent } from './fleet-header/fleet-header.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
 import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
 import { BrokerSizingCardComponent } from '../broker-sizing-card/broker-sizing-card.component';
@@ -212,7 +211,7 @@ function titleizeKey(key: string): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink,
-    BrokerConnectivityStripComponent,
+    FleetHeaderComponent,
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
     BrokerProvenanceCardComponent,
@@ -516,12 +515,6 @@ export class BrokerInstancesComponent {
     return value.length > 12 ? `${value.slice(0, 8)}...` : value;
   }
 
-  accountBadge(acct: FleetContamination): string {
-    if (acct.verdict === 'clean') return 'ALL POSITIONS ACCOUNTED FOR';
-    if (acct.verdict === 'contaminated') return 'UNRECOGNIZED POSITIONS DETECTED';
-    return 'ACCOUNT STATUS UNKNOWN';
-  }
-
   healthRows(s: LiveInstanceStatus): HealthRow[] {
     const engineOk = s.process.state === 'running' || s.process.state === 'stopping';
     // Broker connectivity is a global fact (one IBKR session per gateway),
@@ -756,11 +749,6 @@ export class BrokerInstancesComponent {
   /** The instance's namespace-attributed owned positions as rows (#398). */
   brokerPositions(broker: InstanceBrokerView): { symbol: string; qty: number }[] {
     return Object.entries(broker.owned_positions).map(([symbol, qty]) => ({ symbol, qty }));
-  }
-
-  /** Account residual (unattributed) positions as rows (#399). */
-  residualRows(fleet: FleetContamination): { symbol: string; qty: number }[] {
-    return Object.entries(fleet.residual).map(([symbol, qty]) => ({ symbol, qty }));
   }
 
   /** True when a STOPPED instance can be recovered by re-deploying a fresh
