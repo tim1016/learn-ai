@@ -1,45 +1,38 @@
 # Broker Instance Operator Surface — Runbook
 
-Status: shipping with #565 PR 13 (cleanup).  
+Status: shipping with #565 PR 13 (cleanup); IA revised 2026-06-17 via `grill-with-docs` (see "IA revision 2026-06-17" below).  
 Audience: operators (traders) running paper / live bots from `/broker/instances/:id`.  
-Engineer view: keep this in lockstep with the per-card disclosures and the bottom Audit & Diagnostics accordion.
+Engineer view: keep this in lockstep with the per-card disclosures and the Detective section tabs.
 
 ## What this page answers
 
-The page is reorganized around five questions a trader actually asks during an incident, in decision priority order:
+The page is reorganized around **six** questions a trader actually asks during an incident, in decision priority order:
 
-1. **Can it trade?** — readiness verdict, gates that are not passing
-2. **Is it safe to let it trade?** — last session ended cleanly vs. fatal halt / poisoned
-3. **What is it holding right now?** — current risk, positions, pending orders, daily cap
-4. **What did it just do?** — chart, latest signal strip, recent trades
-5. **What do I need to fix?** — recent incidents, audit & diagnostics
+1. **What is it configured to do?** — strategy + order mode + daily cap + sizing rule (a 6th question added 2026-06-17; promoted above readiness because pre-trade verification asks this before anything else)
+2. **What is it holding right now?** — current risk, positions, pending orders, daily cap
+3. **Can it trade?** — readiness verdict, gates that are not passing
+4. **Is it safe to let it trade?** — last session ended cleanly vs. fatal halt / poisoned
+5. **What did it just do?** — chart, latest signal strip, recent trades
+6. **What do I need to fix?** — recent incidents, audit & diagnostics
 
-Anything that doesn't help answer one of those questions lives behind a disclosure or in the Audit & Diagnostics accordion.
+Anything that doesn't help answer one of those questions lives behind a disclosure or in the Detective section's Diagnostics tab.
 
-## Layout — top to bottom
+The banner answers the at-a-glance form of questions 3 and 4 via pills (readiness pill + prior-run success/failure chip), which is why the full Can-It-Trade card is demoted to a collapsed default and only auto-expands when the verdict needs attention.
 
-| Section | Component | What it answers |
-|---------|-----------|-----------------|
-| Fleet header | `<app-fleet-header>` | Fleet-wide account state (PAPER pill, IBKR connection, contamination verdict, account safety actions) |
-| Tab strip (≥2 bots) | inline `<nav class="tab-strip">` | Switch between deployed bots; stable deployment order |
-| Sticky control bar | `<app-sticky-control-bar>` | Bot identity + state pill + readiness pill + poison chip; persists while scrolling |
-| Hero header | inline `<header class="hero">` | Strategy name + paper-mode banner + hero status |
-| Provenance / Audit-trail (PR4) | `<app-audit-trail-accordion>` | Engineer-mode disclosure (run_id, commit, contract SHA, runtime config) |
-| Sizing | `<app-broker-sizing-card>` | Sizing policy, governed_by, per-trade audit |
-| Strategy Rules (PR7) | `<app-strategy-rules-card>` | Strategy / order mode / daily cap / sizing summary; Redeploy with new rules; Show advanced |
-| Current Risk (PR9) | `<app-current-risk-card>` | Posture (Flat/Long/Short/Mixed), open positions, pending orders, daily cap, sizing |
-| Last Session (PR10) | `<app-last-session-card>` | Thin stub on clean exit; full card with fix on dirty exit |
-| Readiness (PR11) | `<app-readiness-card>` | "READY · N checks pass" strip or BLOCKED/DEGRADED/UNKNOWN full card |
-| Pre-Trade Checklist | inline `<section class="card checklist-card">` | Detailed per-gate affordances (button / nav-link / read-only note) |
-| Start / Stop card | `<app-broker-start-stop-card>` | Start / Stop controls (source of truth for safety-critical controls) |
-| Chart card | `<app-bot-trade-chart-card>` | OHLCV candles + trade markers |
-| Latest Signal strip (PR8) | `<app-latest-signal-strip>` | Signal pill + descriptor-backed decision fields below the chart |
-| Recent Trades (PR5) | `<app-bot-trades-table>` | Closed entry/exit pairs |
-| Recent Incidents (PR6) | `<app-incidents-panel>` | Categorized incidents with operator-language copy + raw-log drawer |
-| Bot Behavior | inline | Intent setting (PAUSE / RESUME / STOP) |
-| Strategy State | inline | Decision columns from the engine |
-| Broker / Managed Positions | inline | Namespace-attributed positions (deprecated overlap with Current Risk — see Follow-ups) |
-| Advanced Actions | inline | FLATTEN, MARK_POISONED, paper reset (deprecated overlap with sticky kebab — see Follow-ups) |
+## Layout — top to bottom (revised 2026-06-17)
+
+The layout is now ranked by the six trader questions above. Cards default to a one-line summary in steady state and auto-expand when the operator needs to act (see "Page-wide collapse rule" under Honest contracts).
+
+| Rank | Section | Component | What it answers |
+|------|---------|-----------|-----------------|
+| — | Fleet header | `<app-fleet-header>` | Fleet-wide account state (PAPER pill, IBKR **connection** liveness, contamination verdict, account safety actions) |
+| — | Tab strip (≥2 bots) | inline `<nav class="tab-strip">` | Switch between deployed bots; stable deployment order |
+| **1** | **Sticky banner** | `<app-sticky-control-bar>` (extended) | Bot identity + intent pill (RUNNING/PAUSED/STOPPED) + process state pill (running/stopping/exited/unreachable) + safety verdict pill (ADR 0011: paper-only/unsafe/unknown) + prior-run success/failure chip + action toolbar (`p-toolbar`: Resume / Pause / Flatten-and-pause / kebab→Stop). Disabled actions render a `DISABLED_REASON_COPY` tooltip. |
+| **2** | **Configuration card** | `<app-configuration-card>` (new — fuses today's Strategy Rules + Sizing) | Always-visible summary row: strategy + order mode + daily cap + sizing summary + Redeploy CTA. Expands when readiness has a *config-shaped failing gate*. When expanded, the card header pins a Current Risk summary chip (posture + pending count + $-at-risk). Sizing detail is a nested accordion; portfolio audit collapsed inside; per-trade audit embedded as a table. |
+| **3** | **Current Risk card** | `<app-current-risk-card>` | Collapsed to a one-line posture summary when **Flat AND no pending orders**; expanded otherwise. Positions, pending orders, daily cap, sizing. |
+| **4** | **Can-It-Trade card** | `<app-can-it-trade-card>` (renamed from Readiness card) | Collapsed `READY · N checks pass` with **green** border when READY. Auto-expanded with **amber** border on DEGRADED, **red** border on BLOCKED, **grey** border on UNKNOWN. Passive — never auto-pops the checklist modal. The banner's readiness pill deep-links into this card AND into the floating checklist modal. |
+| **5** | **Detective section (tabbed)** | inline `<nav>` + tab panels | Tabs: **Activity** (Chart + Latest Signal strip + Trades table) / **Diagnostics** (Recent Incidents + Last Session detail + Audit accordion). Compact icon-button `View run log` lives in the Audit accordion header (no run_id on the button face; run_id appears inside the modal). Poison button lives in the **Diagnostics tab header** — forces the operator to switch to the evidence tab before quarantining. |
+| **6** | **Floating Pre-Trade Checklist** | `<p-dialog>` non-modal at `position="bottomright"` | Minimized chat-bubble FAB by default ("Checklist · N fail" with failing-count badge). Operator-triggered only (no auto-pop). Expanded panel shows failing gates first; passed gates collapsed behind "Show N passed ▾". Minimize-only (never fully dismissible). |
 
 ## Honest contracts
 
@@ -47,7 +40,10 @@ Anything that doesn't help answer one of those questions lives behind a disclosu
 - **Position posture** — Current Risk (PR9) filters zero-qty entries out before deciding `Flat / Long / Short / Mixed`. A residual stale entry can't flip the posture silently.
 - **Daily cap** — the count is read verbatim from `readiness.gates` where `name === 'orders_cap'`. When the engine has not emitted a typed cap, the card says so honestly ("Daily cap status not reported by the engine") — no fabricated counter.
 - **Incidents** — backend `IncidentCategory` enum + `parse_incidents` classifier (#565 PR 1, #566) is the single source of truth. The frontend `INCIDENT_COPY` map (PR6) is operator-language presentation only; unknown categories degrade to "Unknown error — see raw traceback."
-- **Readiness** — gate-by-gate detail strings are surfaced verbatim. The Readiness card (PR11) leads with the verdict and proportional count; the existing Pre-Trade Checklist below renders the affordance-per-gate UX.
+- **Readiness** — gate-by-gate detail strings are surfaced verbatim. The Can-It-Trade card leads with the verdict and proportional count; the floating Pre-Trade Checklist renders the affordance-per-gate UX.
+- **Page-wide collapse rule** (added 2026-06-17) — cards collapse to a one-line summary in steady state and **auto-expand when the operator needs to act**. The expansion trigger is *always a server-authored verdict* (readiness verdict, posture computed from server-side filtered positions, prior-run exit class) — never a frontend-derived heuristic. This is the same single-source-of-truth principle ADR 0011 applies to the broker safety verdict, generalized to the page's reactive layout. Implications: (a) a new card MUST identify its server-authored expand trigger before being added; (b) two clients viewing the same status payload MUST resolve to the same expanded/collapsed configuration; (c) "feels off, let me expand it ambient-style" is not a valid trigger — if a card has no verdict-driven expand condition, it doesn't belong in the page flow.
+- **Disabled-action tooltip rule** (added 2026-06-17) — every disabled banner action renders an operator-language reason from a `DISABLED_REASON_COPY` map keyed by the structured reason code returned by the API (e.g. `broker_safety_not_paper_only` per ADR 0011, `unresolved_uncertain_intent` per ADR 0008, `reconciliation_not_clean` per ADR 0010 § Decision 3). The tooltip is verdict-level only; per-gate detail lives in the Can-It-Trade card. Unknown reason codes degrade to "*This action can't be taken right now — see Can-It-Trade card.*" The tooltip never invents a reason — same pattern as `INCIDENT_COPY`.
+- **Banner operator-action contract** (added 2026-06-17) — the banner action toolbar contains exactly **Resume, Pause, Flatten-and-pause**, plus a kebab for **Stop**. Mark-poisoned lives in the Detective Diagnostics tab header (not the banner). All five affordances and their primitives are governed by ADR 0010 — the cosmetic Stop-into-kebab decision is the only deviation and does not revise the ADR (it is a UI layout call, not a contract change).
 
 ## What is deferred
 
@@ -69,6 +65,21 @@ Once PRs 4 – 12 land, the following surfaces become reachable-but-redundant an
 - The legacy `bot-failures-table` folder was deleted by PR6; spot-check no stale imports or routes reference it after PR6 merges.
 
 These are not done in this PR because PR 13 is independently branched from `master` and the redundancies only exist *after* the new components land. The sweep is mechanical and will be a small follow-up once the 12 cards are on `master`.
+
+## IA revision 2026-06-17
+
+A `grill-with-docs` session resolved a set of operator-feedback proposals against ADRs 0010, 0011 and this runbook. The locked outcome is reflected in the rewritten "What this page answers" and "Layout — top to bottom" sections above. The migration work it implies:
+
+- **Delete the System Health panel.** Its three checks (broker connection, trading-engine state, bot intent) are now fully subsumed by (a) the fleet header's IBKR connection liveness pill, (b) the banner's process-state pill, and (c) the banner's intent pill. The deletion loses no information — but the banner's visual hierarchy must read all three pills at a glance for the substitution to be honest.
+- **Promote operator actions into the banner.** `<app-broker-start-stop-card>` is removed in favor of a `p-toolbar` inside the sticky banner containing Resume, Pause, Flatten-and-pause, and a kebab containing Stop. Mark-poisoned moves into the Detective Diagnostics tab header. The "Jump to controls" affordance the sticky bar emits today is removed — the controls *are* the banner.
+- **Fuse Strategy Rules + Sizing into a single `<app-configuration-card>`** (ranked 2). The merged card uses nested disclosures for sizing detail and portfolio audit; per-trade audit is embedded as a table. When expanded during a configure flow, the card header pins a Current Risk summary chip so the operator does not change rules while blind to held risk.
+- **Promote Current Risk to rank 3**, collapsed to a one-line posture summary when **Flat AND no pending orders**.
+- **Demote the Readiness card** (now Can-It-Trade) to rank 4 with verdict-coloured borders: green/READY-collapsed, amber/DEGRADED-expanded, red/BLOCKED-expanded, grey/UNKNOWN-expanded. Passive — never auto-pops the floating checklist.
+- **Group chart + trades + audit + history into a tabbed Detective section** (rank 5). Activity tab contains chart + Latest Signal strip + Trades table; Diagnostics tab contains Recent Incidents + Last Session detail + Audit accordion. The `View run log` button moves into the Audit accordion header as a compact icon-button — the run_id is *not* displayed on the button face; it appears inside the modal that opens. The Audit accordion's white bottom-border is fixed to `var(--panel-border)`.
+- **Move the Pre-Trade Checklist into a floating `p-dialog`** at `position="bottomright"` (rank 6). Default is a minimized chat-bubble FAB ("Checklist · N fail"); expanded panel shows failing gates first. Operator-triggered only — no auto-pop on BLOCKED. The banner readiness pill deep-links into both the Can-It-Trade card and the checklist modal.
+- **Last Session full content moves into the Detective Diagnostics tab.** Only a small success/failure chip remains in the banner.
+
+These changes are net-additive to the runbook's "five trader questions" framing — the framing is now six. The IA revision honours every contract in ADRs 0010 and 0011 unchanged; no ADR revisions came out of this grilling.
 
 ## Quick visual audit before deploy
 

@@ -516,3 +516,44 @@ different homes.
   + AAPL all-in) deploy successfully on the same cash account and *will* fight for
   shared buying power. This is an accepted v1 trade-off, not an oversight; the
   capital-sleeve layer closes it.
+
+## Page-wide collapse rule (resolved 2026-06-17)
+
+A reactive layout principle for the operator console, generalized from the
+broker-instances page IA revision (see `docs/runbooks/broker-instance-operator-surface.md`
+§ "IA revision 2026-06-17"). It is *the same single-source-of-truth principle*
+ADR 0011 applies to the broker safety verdict — extended from a single pill to
+the whole page's expand/collapse behavior.
+
+- **Rule.** Cards collapse to a one-line summary in *steady state* and
+  auto-expand when the operator needs to act. The expand trigger is **always a
+  server-authored verdict** — readiness verdict, posture computed from
+  server-filtered positions, prior-run exit class, safety verdict. The frontend
+  never re-derives the trigger from raw fields.
+- **Why server-authored.** Two clients viewing the same status payload must
+  resolve to the same expanded/collapsed configuration. A frontend-derived
+  trigger (e.g., "expand if any gate label looks like sizing") would let two
+  clients disagree on what the operator should be looking at — the same failure
+  mode ADR 0011 § Decision 7 closes for the safety verdict.
+- **Implications.**
+  - A new card MUST identify its server-authored expand trigger before being
+    added to the page. "Always visible" is allowed as an explicit choice; "feels
+    off, let me expand it ambient-style" is not a valid trigger.
+  - Steady-state copy is the one-line summary — never a placeholder ("…") or a
+    spinner. If the verdict is `UNKNOWN`, the card auto-expands and the
+    `UNKNOWN` border surfaces that ambiguity honestly, never silently.
+  - Cards with no possible verdict (e.g., the fleet header, the sticky banner)
+    are always-visible by *design choice*, not by default — their always-on
+    status is documented in the runbook.
+- **What this is not.** It is not a CSS convention; it is a contract about
+  *which signal* an expand state is bound to. A card that uses `<details>` /
+  `<summary>` but expands on `localStorage` flip or a `(click)` toggle alone
+  does not satisfy the rule — the toggle is an operator override of the
+  server-authored default, never a replacement for it.
+- **Live anchors.** The current consumers of the rule are:
+  - `<app-configuration-card>` — expands when readiness has a *config-shaped
+    failing gate*
+  - `<app-current-risk-card>` — collapses when posture is `Flat AND no pending
+    orders`
+  - `<app-can-it-trade-card>` — collapses on `READY`; auto-expands on
+    `DEGRADED` / `BLOCKED` / `UNKNOWN`
