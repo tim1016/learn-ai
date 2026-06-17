@@ -36,6 +36,7 @@ import { type OperationError, type OperationKind, toOperationError } from '../op
 import { BotTradeChartCardComponent } from './bot-trade-chart-card/bot-trade-chart-card.component';
 import { BotTradesTableComponent } from './bot-trades-table/bot-trades-table.component';
 import { BotFailuresTableComponent } from './bot-failures-table/bot-failures-table.component';
+import { ReadinessCardComponent } from './readiness-card/readiness-card.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -223,6 +224,7 @@ function titleizeKey(key: string): string {
     BotTradeChartCardComponent,
     BotTradesTableComponent,
     BotFailuresTableComponent,
+    ReadinessCardComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -745,6 +747,17 @@ export class BrokerInstancesComponent {
   private haltTriggerStory(e: InstanceLastExit): string {
     if (!e.halt_trigger) return '';
     return HALT_TRIGGER_COPY[e.halt_trigger] ?? `Safety trigger: ${e.halt_trigger}.`;
+  }
+
+  /** Label-only projection of `GATE_LABELS` for the Readiness card surface,
+   * which only renders the operator-language gate name (the meaning + fix
+   * still live on the Pre-Trade Checklist below). */
+  readinessGateLabels(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const key of Object.keys(GATE_LABELS)) {
+      out[key] = GATE_LABELS[key].label;
+    }
+    return out;
   }
 
   checklistRows(r: ReadinessVector | null): ChecklistRow[] {
