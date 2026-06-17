@@ -190,6 +190,31 @@ class FailureRecord(BaseModel):
     traceback: str | None = None
 
 
+class IncidentRecord(BaseModel):
+    """One WARNING/ERROR/CRITICAL block parsed from live.log, with a
+    backend-classified ``incident_category`` the frontend keys its copy
+    map on.
+
+    Mirrors :class:`app.services.live_log_failures.IncidentRow` as the wire
+    DTO. The ``incident_category`` enum is the single source of truth for
+    classification — the frontend never re-derives meaning from the raw
+    log text. A missing or unrecognised category is rendered as
+    ``unknown`` on the frontend for rollout safety.
+
+    Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord`:
+    ``raw_ts`` is the display string, ``ts_ms`` is ordering/cursor-only
+    until the engine emits canonical UTC ms timestamps.
+    """
+
+    ts_ms: int
+    raw_ts: str
+    level: Literal["WARNING", "ERROR", "CRITICAL"]
+    logger: str
+    message: str
+    traceback: str | None = None
+    incident_category: str
+
+
 HydratePolicy = Literal["require", "optional", "disabled"]
 
 

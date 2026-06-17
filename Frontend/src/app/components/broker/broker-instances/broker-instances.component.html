@@ -235,7 +235,10 @@
           [symbol]="s.symbol"
         />
         <app-bot-trades-table [runId]="chartRunId" />
-        <app-bot-failures-table [runId]="chartRunId" />
+        <app-incidents-panel
+          [runId]="chartRunId"
+          (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
+        />
 
         <section #behaviorCard tabindex="-1" class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">
