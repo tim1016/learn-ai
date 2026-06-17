@@ -127,7 +127,7 @@
         </section>
 
         @if (s.provenance) {
-          <app-broker-provenance-card [provenance]="s.provenance" />
+          <app-audit-trail-accordion [provenance]="s.provenance" />
         }
 
         @if (s.sizing) {

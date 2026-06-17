@@ -29,7 +29,7 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { FleetHeaderComponent } from './fleet-header/fleet-header.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
-import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
+import { AuditTrailAccordionComponent } from '../audit-trail-accordion/audit-trail-accordion.component';
 import { BrokerSizingCardComponent } from '../broker-sizing-card/broker-sizing-card.component';
 import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
@@ -217,7 +217,7 @@ function titleizeKey(key: string): string {
     FleetHeaderComponent,
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
-    BrokerProvenanceCardComponent,
+    AuditTrailAccordionComponent,
     BrokerSizingCardComponent,
     BrokerRunLogModalComponent,
     BotTradeChartCardComponent,
