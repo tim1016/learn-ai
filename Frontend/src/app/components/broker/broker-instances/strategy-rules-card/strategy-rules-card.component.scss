@@ -1,7 +1,12 @@
+:host {
+  display: block;
+}
+
 .strategy-rules-card {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  height: 100%;
 
   .primary-rules,
   .advanced-rules {
@@ -18,16 +23,16 @@
 
     dt {
       font-weight: 600;
-      color: var(--text-secondary, #586573);
+      color: var(--text-secondary);
     }
 
     dd {
       margin: 0;
-      color: var(--text-primary, #1f2937);
+      color: var(--text-primary);
     }
 
     dd.mono {
-      font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+      font-family: var(--font-mono);
       font-size: 0.85em;
       word-break: break-all;
     }
@@ -45,39 +50,40 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.4rem 0.8rem;
-    border: 1px solid var(--brand-color, #1976d2);
+    border: 1px solid var(--accent);
     border-radius: 4px;
     text-decoration: none;
-    color: var(--brand-color, #1976d2);
+    color: var(--accent);
     font-weight: 600;
 
     &:hover,
     &:focus-visible {
-      background: rgba(25, 118, 210, 0.08);
+      background: var(--accent-soft);
     }
   }
 
   .redeploy-note {
     margin: 0;
-    color: var(--text-secondary, #586573);
+    color: var(--text-secondary);
     font-style: italic;
   }
 
   .advanced {
-    border-top: 1px solid var(--border-color, #d8dee5);
+    border-top: 1px solid var(--border);
     padding-top: 0.5rem;
+    margin-top: auto;
 
     summary {
       cursor: pointer;
       display: flex;
       flex-direction: column;
       gap: 0.1rem;
-      color: var(--text-primary, #1f2937);
+      color: var(--text-primary);
       font-weight: 600;
 
       small {
         font-weight: 400;
-        color: var(--text-secondary, #586573);
+        color: var(--text-secondary);
       }
     }
 
