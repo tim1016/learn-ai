@@ -1,7 +1,8 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
+import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import type { InstanceProvenance } from '../../../api/live-instances.types';
-import { BrokerProvenanceCardComponent } from './broker-provenance-card.component';
+import { AuditTrailAccordionComponent } from './audit-trail-accordion.component';
 
 function makeProv(overrides: Partial<InstanceProvenance> = {}): InstanceProvenance {
   return {
@@ -22,38 +23,61 @@ function makeProv(overrides: Partial<InstanceProvenance> = {}): InstanceProvenan
   };
 }
 
-function render(prov: InstanceProvenance): HTMLElement {
-  const fixture = TestBed.createComponent(BrokerProvenanceCardComponent);
+function render(prov: InstanceProvenance): ComponentFixture<AuditTrailAccordionComponent> {
+  TestBed.configureTestingModule({
+    imports: [NoopAnimationsModule],
+  });
+  const fixture = TestBed.createComponent(AuditTrailAccordionComponent);
   fixture.componentRef.setInput('provenance', prov);
   fixture.detectChanges();
-  return fixture.nativeElement as HTMLElement;
+  return fixture;
+}
+
+function expand(fixture: ComponentFixture<AuditTrailAccordionComponent>): void {
+  const header = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>(
+    '[data-pc-section="header"], p-accordion-header, .p-accordionheader',
+  );
+  if (!header) throw new Error('accordion header not found');
+  header.click();
+  fixture.detectChanges();
 }
 
 afterEach(() => TestBed.resetTestingModule());
 
-describe('BrokerProvenanceCardComponent', () => {
-  it('explains what the run identity proves in plain language', () => {
-    const text = render(makeProv()).textContent ?? '';
+describe('AuditTrailAccordionComponent', () => {
+  it('renders the Audit & Diagnostics heading and is collapsed by default', () => {
+    const fixture = render(makeProv());
+    const el = fixture.nativeElement as HTMLElement;
 
-    expect(text).toContain('Identity & Provenance');
+    expect(el.textContent).toContain('Audit & Diagnostics');
+    // The accordion is closed by default — no panel carries the active class.
+    expect(el.querySelector('.p-accordionpanel-active')).toBeNull();
+  });
+
+  it('reveals plain-language proofs once expanded', () => {
+    const fixture = render(makeProv());
+    expand(fixture);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+
     expect(text).toContain('abcdef012345'); // short run_id
     expect(text).toContain('Ran this committed code');
     // VCR-0014 / Phase 7D — the QC provenance row is split into two
     // honest proofs. The audit copy is a verifiable SHA; the QC Cloud
     // backtest id is operator-recorded.
     expect(text).toContain('Audit copy');
-    expect(text).toContain('SpyEmaCrossoverAlgorithm.py'); // audit-copy filename
+    expect(text).toContain('SpyEmaCrossoverAlgorithm.py');
     expect(text).toContain('QC Cloud backtest');
     expect(text).toContain('d2fe45a7142e88575f6fbd75229f8681');
     expect(text).toContain('Operator-recorded, not auto-verified');
     expect(text).toContain('DU1234567');
-    // live_config is part of the identity hash — surface it as a proof row.
     expect(text).toContain('Runtime config');
     expect(text).toContain('symbol=SPY');
   });
 
-  it('never renders the forbidden VCR-0014 strings', () => {
-    const text = render(makeProv()).textContent ?? '';
+  it('never renders the forbidden VCR-0014 strings, even when expanded', () => {
+    const fixture = render(makeProv());
+    expand(fixture);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
 
     // PRD §7D forbids these labels until a real QC Cloud API verification
     // path exists. The card was the original source of "QC-approved" /
@@ -63,8 +87,10 @@ describe('BrokerProvenanceCardComponent', () => {
     expect(text).not.toContain('verified backtest');
   });
 
-  it('keeps the full fingerprints behind a disclosure', () => {
-    const details = render(makeProv()).querySelector('details.fingerprints');
+  it('keeps the full fingerprints behind a nested disclosure', () => {
+    const fixture = render(makeProv());
+    expand(fixture);
+    const details = (fixture.nativeElement as HTMLElement).querySelector('details.fingerprints');
 
     expect(details).toBeTruthy();
     expect(details?.textContent).toContain('c0ffee1234deadbeef'); // full code sha
@@ -72,15 +98,16 @@ describe('BrokerProvenanceCardComponent', () => {
   });
 
   it('omits proofs a legacy ledger did not record', () => {
-    const text =
-      render(
-        makeProv({
-          code_sha: '',
-          qc_cloud_backtest_id: '',
-          qc_audit_copy_sha256: '',
-          qc_audit_copy_path: '',
-        }),
-      ).textContent ?? '';
+    const fixture = render(
+      makeProv({
+        code_sha: '',
+        qc_cloud_backtest_id: '',
+        qc_audit_copy_sha256: '',
+        qc_audit_copy_path: '',
+      }),
+    );
+    expand(fixture);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
 
     expect(text).not.toContain('Ran this committed code');
     expect(text).not.toContain('Audit copy');

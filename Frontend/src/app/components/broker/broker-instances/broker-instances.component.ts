@@ -29,13 +29,16 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { FleetHeaderComponent } from './fleet-header/fleet-header.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
-import { BrokerProvenanceCardComponent } from '../broker-provenance-card/broker-provenance-card.component';
+import { AuditTrailAccordionComponent } from '../audit-trail-accordion/audit-trail-accordion.component';
 import { BrokerSizingCardComponent } from '../broker-sizing-card/broker-sizing-card.component';
 import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 import { BotTradeChartCardComponent } from './bot-trade-chart-card/bot-trade-chart-card.component';
 import { BotTradesTableComponent } from './bot-trades-table/bot-trades-table.component';
-import { BotFailuresTableComponent } from './bot-failures-table/bot-failures-table.component';
+import { IncidentsPanelComponent } from './incidents-panel/incidents-panel.component';
+import { CurrentRiskCardComponent } from './current-risk-card/current-risk-card.component';
+import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-strip.component';
+import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
 import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
 
 // Advanced command verb -> operation kind for the error map.
@@ -218,12 +221,15 @@ function titleizeKey(key: string): string {
     FleetHeaderComponent,
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
-    BrokerProvenanceCardComponent,
+    AuditTrailAccordionComponent,
     BrokerSizingCardComponent,
     BrokerRunLogModalComponent,
     BotTradeChartCardComponent,
     BotTradesTableComponent,
-    BotFailuresTableComponent,
+    IncidentsPanelComponent,
+    CurrentRiskCardComponent,
+    LatestSignalStripComponent,
+    StrategyRulesCardComponent,
     LastSessionCardComponent,
   ],
   templateUrl: './broker-instances.component.html',
