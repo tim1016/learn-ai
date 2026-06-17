@@ -1,0 +1,77 @@
+<section class="fleet-header" aria-label="Fleet status">
+  @if (platformUpdateAvailable()) {
+    <div class="platform-update-banner" role="status" data-testid="platform-update-banner">
+      <i class="pi pi-refresh" aria-hidden="true"></i>
+      <div>
+        <strong>Platform update available.</strong>
+        <span>Restart the live engine to apply the newest fixes.</span>
+      </div>
+    </div>
+  }
+
+  <app-broker-connectivity-strip />
+
+  @let acct = account();
+  @if (acct) {
+    <section
+      class="card account-card"
+      aria-labelledby="account-heading"
+      [class.problem]="acct.verdict === 'contaminated'"
+    >
+      <header class="card-header">
+        <div>
+          <h2 id="account-heading">Account Status</h2>
+          <p>Is my account clean?</p>
+        </div>
+        <span
+          class="status-chip"
+          [class.ok]="acct.verdict === 'clean'"
+          [class.bad]="acct.verdict === 'contaminated'"
+          [class.warn]="acct.verdict === 'unknown'"
+        >
+          {{ accountBadge(acct) }}
+        </span>
+      </header>
+      <p class="plain-text">{{ acct.summary }}</p>
+      @if (residualRows(acct).length) {
+        <ul class="position-pills" aria-label="Unrecognized positions">
+          @for (r of residualRows(acct); track r.symbol) {
+            <li><span>{{ r.symbol }}</span><strong>{{ r.qty }}</strong></li>
+          }
+        </ul>
+      } @else {
+        <p class="plain-text">
+          Every open position in your account is managed by a known strategy. Nothing unexpected.
+        </p>
+      }
+
+      <details class="account-safety-actions">
+        <summary>Account Safety Actions</summary>
+        <div class="emergency-actions" role="group" aria-label="Account safety actions">
+          <p class="notice danger">
+            Kill-switch: liquidates ALL account positions via the broker, even
+            with no live bot — use when a halted/poisoned bot may have left a
+            position open.
+          </p>
+          <button
+            type="button"
+            class="danger"
+            (click)="requestEmergencyFlatten()"
+            [disabled]="busyEmergencyFlatten() || !hasSelection()"
+            [title]="
+              hasSelection()
+                ? 'Place market orders to liquidate every position on the account.'
+                : 'Select a bot above to enable account-wide flatten.'
+            "
+          >
+            {{ busyEmergencyFlatten() ? 'Flattening…' : 'Emergency flatten (account-wide)' }}
+          </button>
+          @if (!hasSelection()) {
+            <p class="notice">Select a bot above to enable the account-wide flatten command.</p>
+          }
+          <app-broker-operation-result [error]="commandError()" />
+        </div>
+      </details>
+    </section>
+  }
+</section>
