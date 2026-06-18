@@ -1,0 +1,62 @@
+@if (fabVisible()) {
+  <button
+    type="button"
+    class="fab"
+    (click)="toggleOpen()"
+    data-testid="pre-trade-fab"
+    [attr.aria-label]="open() ? 'Close pre-trade checklist' : 'Open pre-trade checklist'"
+    [attr.aria-expanded]="open()"
+  >
+    <i class="pi pi-list" aria-hidden="true"></i>
+    <span>Pre-trade checklist</span>
+    @if (failingGates().length) {
+      <span class="badge">{{ failingGates().length }}</span>
+    }
+  </button>
+}
+
+@if (open()) {
+  <aside
+    class="dialog"
+    role="dialog"
+    aria-modal="false"
+    aria-labelledby="pre-trade-dialog-heading"
+    data-testid="pre-trade-dialog"
+  >
+    <header class="dialog-header">
+      <h3 id="pre-trade-dialog-heading">Pre-trade checklist</h3>
+      <button
+        type="button"
+        class="close"
+        (click)="close()"
+        data-testid="pre-trade-close"
+        aria-label="Close pre-trade checklist"
+      >
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </header>
+    @if (failingGates().length) {
+      <ul class="items">
+        @for (g of failingGates(); track g.name) {
+          <li class="item" [class.acknowledged]="acknowledged().has(g.name)">
+            <div class="item-body">
+              <strong>{{ g.name }}</strong>
+              <p class="detail">{{ g.detail }}</p>
+            </div>
+            <button
+              type="button"
+              class="ack"
+              (click)="acknowledge(g.name)"
+              [disabled]="acknowledged().has(g.name)"
+              [attr.data-testid]="'pre-trade-ack-' + g.name"
+            >
+              {{ acknowledged().has(g.name) ? 'Acknowledged' : 'Acknowledge' }}
+            </button>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="empty">All gates pass — nothing to triage.</p>
+    }
+  </aside>
+}

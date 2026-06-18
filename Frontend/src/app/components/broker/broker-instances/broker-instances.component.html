@@ -68,8 +68,16 @@
       <app-sticky-control-bar
         [status]="s"
         [isPaper]="isPaperAccount()"
+        [cockpit]="cockpitEnabled()"
         (jumpToControlsRequested)="scrollToStartStopCard()"
       />
+
+      @if (cockpitEnabled()) {
+        <app-pre-trade-checklist
+          [fleetState]="fleetStateOf(s)"
+          [gates]="gatesOf(s)"
+        />
+      }
 
       <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
         <div class="hero-copy">
@@ -136,18 +144,25 @@
           <app-audit-trail-accordion [provenance]="s.provenance" />
         }
 
-        @if (s.sizing) {
-          <app-broker-sizing-card [sizing]="s.sizing" />
-        }
+        @if (cockpitEnabled()) {
+          <app-configuration-card
+            [startDefaults]="s.start_defaults"
+            [sizing]="s.sizing"
+          />
+        } @else {
+          @if (s.sizing) {
+            <app-broker-sizing-card [sizing]="s.sizing" />
+          }
 
-        <app-strategy-rules-card
-          [startDefaults]="s.start_defaults"
-          [provenance]="s.provenance"
-          [sizing]="s.sizing"
-          [instanceId]="s.strategy_instance_id"
-          [canRedeploy]="canRedeploy(s)"
-          [redeployQueryParams]="redeployQueryParams(s)"
-        />
+          <app-strategy-rules-card
+            [startDefaults]="s.start_defaults"
+            [provenance]="s.provenance"
+            [sizing]="s.sizing"
+            [instanceId]="s.strategy_instance_id"
+            [canRedeploy]="canRedeploy(s)"
+            [redeployQueryParams]="redeployQueryParams(s)"
+          />
+        }
 
         <app-current-risk-card
           [broker]="s.broker"
@@ -163,7 +178,7 @@
           (viewRunLogRequested)="openRunLog($event)"
         />
 
-        <app-readiness-card
+        <app-can-it-trade-card
           [readiness]="s.readiness"
           [gateLabels]="readinessGateLabels"
         />
@@ -231,19 +246,44 @@
         <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
 
         @let chartRunId = s.live_binding?.run_id ?? s.evidence_binding?.run_id ?? null;
-        <app-bot-trade-chart-card
-          [strategyInstanceId]="s.strategy_instance_id"
-          [symbol]="s.symbol"
-        />
-        <app-latest-signal-strip
-          [decisionColumns]="s.decision_columns"
-          [latestDecision]="s.latest_decision"
-        />
-        <app-bot-trades-table [runId]="chartRunId" />
-        <app-incidents-panel
-          [runId]="chartRunId"
-          (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
-        />
+        @if (cockpitEnabled()) {
+          <app-detective-section
+            [activeTab]="detectiveTab()"
+            (tabRequested)="onDetectiveTabRequested($event)"
+          >
+            <div activity>
+              <app-bot-trade-chart-card
+                [strategyInstanceId]="s.strategy_instance_id"
+                [symbol]="s.symbol"
+              />
+              <app-latest-signal-strip
+                [decisionColumns]="s.decision_columns"
+                [latestDecision]="s.latest_decision"
+              />
+              <app-bot-trades-table [runId]="chartRunId" />
+            </div>
+            <div diagnostics>
+              <app-incidents-panel
+                [runId]="chartRunId"
+                (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
+              />
+            </div>
+          </app-detective-section>
+        } @else {
+          <app-bot-trade-chart-card
+            [strategyInstanceId]="s.strategy_instance_id"
+            [symbol]="s.symbol"
+          />
+          <app-latest-signal-strip
+            [decisionColumns]="s.decision_columns"
+            [latestDecision]="s.latest_decision"
+          />
+          <app-bot-trades-table [runId]="chartRunId" />
+          <app-incidents-panel
+            [runId]="chartRunId"
+            (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
+          />
+        }
 
         <section #behaviorCard tabindex="-1" class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">

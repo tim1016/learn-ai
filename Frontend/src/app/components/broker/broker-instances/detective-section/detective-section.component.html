@@ -1,0 +1,34 @@
+<section class="detective-section" aria-labelledby="detective-heading">
+  <h2 id="detective-heading" class="sr-only">Detective</h2>
+  <div role="tablist" class="tab-strip" aria-label="Detective view">
+    <button
+      type="button"
+      role="tab"
+      class="tab"
+      [class.active]="activeTab() === 'activity'"
+      [attr.aria-selected]="activeTab() === 'activity'"
+      (click)="onTabClick('activity')"
+      data-testid="detective-tab-activity"
+    >
+      Activity
+    </button>
+    <button
+      type="button"
+      role="tab"
+      class="tab"
+      [class.active]="activeTab() === 'diagnostics'"
+      [attr.aria-selected]="activeTab() === 'diagnostics'"
+      (click)="onTabClick('diagnostics')"
+      data-testid="detective-tab-diagnostics"
+    >
+      Diagnostics
+    </button>
+  </div>
+  <div class="tab-body" role="tabpanel">
+    @if (activeTab() === 'activity') {
+      <ng-content select="[activity]" />
+    } @else {
+      <ng-content select="[diagnostics]" />
+    }
+  </div>
+</section>

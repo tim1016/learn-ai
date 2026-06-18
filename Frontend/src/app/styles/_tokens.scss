@@ -108,6 +108,23 @@ $container-lg: 1400px;
   --info:           #{$info};
   --info-soft:      rgba(41, 182, 246, 0.12);
 
+  // Semantic: Verdict (broker-instances cockpit-v2 — aliases above)
+  // Paper-only deliberately uses --info, not --bull, so the safety verdict
+  // pill reads as distinct from the readiness verdict at a glance. See
+  // docs/design/broker-instances-cockpit-2026-06-17.md § Color tokens.
+  --verdict-ready:         var(--bull);
+  --verdict-ready-soft:    var(--bull-soft);
+  --verdict-degraded:      var(--warn);
+  --verdict-degraded-soft: var(--warn-soft);
+  --verdict-blocked:       var(--bear);
+  --verdict-blocked-soft:  var(--bear-soft);
+  --verdict-unknown:       var(--text-muted);
+  --verdict-unknown-soft:  rgba(107, 111, 122, 0.15);
+  --verdict-paper:         var(--info);
+  --verdict-paper-soft:    var(--info-soft);
+  --verdict-unsafe:        var(--bear);
+  --verdict-unsafe-soft:   var(--bear-soft);
+
   // Data availability (per-day cells in the ticker-range picker)
   --day-complete:   #{$day-complete};
   --day-partial:    #{$day-partial};

@@ -12,35 +12,24 @@ interface FailedGateRow {
  * "Can It Trade?" — the operator-priority verdict surface that answers the
  * single question the trader has every time they open the page.
  *
- * Issue #565 PR 11.
- *
- * Layouts:
- *   - READY → a calm one-line "READY · N checks pass" bar (User Story #14,
- *     so the page doesn't shout green-on-green).
+ * Issue #583 (renamed from ReadinessCardComponent). Layouts:
+ *   - READY → a calm one-line "READY · N checks pass" bar.
  *   - BLOCKED / DEGRADED / UNKNOWN → a tall card with the verdict, the
- *     X / N proportional count (User Story #57), and a list of the failing
- *     gates so the operator can act.
+ *     X / N proportional count, and a list of the failing gates.
  *
- * Affordances per failing gate (User Stories #11–13: button / nav-link /
- * read-only note) stay rendered by the parent's existing Pre-Trade
- * Checklist for now — the affordance taxonomy is intertwined with parent
- * state (busyAction, expandedGate, runFix). This card is the verdict
- * surface above that checklist; full extraction of the affordance logic
- * is tracked as a follow-up after the sticky control bar lands.
- *
- * Maps gate.name → operator-language label via the same shared map the
- * Pre-Trade Checklist uses (the parent already documents these in
- * GATE_LABELS); when an unknown gate.name slips through, it falls back to
- * the raw name so the surface degrades to "still readable" rather than
- * silently dropping data.
+ * Maps gate.name → operator-language label via the shared map the parent
+ * owns; falls back to the raw name on miss.
  */
 @Component({
-  selector: 'app-readiness-card',
+  selector: 'app-can-it-trade-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './readiness-card.component.html',
-  styleUrl: './readiness-card.component.scss',
+  templateUrl: './can-it-trade-card.component.html',
+  styleUrl: './can-it-trade-card.component.scss',
+  host: {
+    '[attr.data-verdict]': 'verdictAttr()',
+  },
 })
-export class ReadinessCardComponent {
+export class CanItTradeCardComponent {
   readonly readiness = input.required<ReadinessVector | null>();
   /** Operator-language labels for known gates. The parent owns the map
    * (Pre-Trade Checklist uses the same source); this card receives it
@@ -69,6 +58,19 @@ export class ReadinessCardComponent {
         severity: g.severity,
         detail: g.detail,
       }));
+  });
+
+  readonly verdictAttr = computed<'ready' | 'degraded' | 'blocked' | 'unknown'>(() => {
+    switch (this.verdict()) {
+      case 'READY':
+        return 'ready';
+      case 'BLOCKED':
+        return 'blocked';
+      case 'DEGRADED':
+        return 'degraded';
+      default:
+        return 'unknown';
+    }
   });
 
   readonly verdictTone = computed<'ok' | 'warn' | 'bad' | 'unknown'>(() => {

@@ -3,6 +3,7 @@ import type {
   LiveInstanceStatus,
   ReadinessVerdict,
 } from '../../../../api/live-instances.types';
+import { deriveFleetState, type FleetState } from './fleet-state';
 
 type StatePillKind = 'running' | 'stopping' | 'stopped' | 'idle' | 'unreachable';
 type ReadinessPillKind = 'ready' | 'blocked' | 'degraded' | 'unknown' | 'no_readiness';
@@ -56,6 +57,13 @@ export class StickyControlBarComponent {
    * surfaced by the fleet header. The sticky bar receives it as an input
    * so it doesn't re-derive paper-vs-live from heuristics. */
   readonly isPaper = input.required<boolean>();
+  /** When true, the bar renders the cockpit-v2 cluster (fleet-state pill,
+   * keycap toolbar, attention strip) instead of the legacy process /
+   * readiness pills. Parent component gates this on the broker-instances-v2
+   * feature flag (issue #583). */
+  readonly cockpit = input<boolean>(false);
+
+  readonly fleetState = computed<FleetState>(() => deriveFleetState(this.status()));
 
   readonly statePill = computed<StatePill>(() => {
     const state = this.status().process.state;

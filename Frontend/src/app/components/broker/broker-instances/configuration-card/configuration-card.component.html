@@ -1,0 +1,32 @@
+@if (hasConfiguration()) {
+  <section class="card configuration-card" aria-labelledby="configuration-heading">
+    <header class="card-header">
+      <h2 id="configuration-heading">Configuration</h2>
+      <button
+        type="button"
+        class="edit"
+        (click)="onEditClick()"
+        data-testid="configuration-edit"
+      >
+        Edit
+      </button>
+    </header>
+    <dl class="rows">
+      <div class="row">
+        <dt>Strategy</dt>
+        <dd data-testid="configuration-strategy">{{ strategyName() }}</dd>
+      </div>
+      <div class="row">
+        <dt>Sizing</dt>
+        <dd data-testid="configuration-sizing">{{ sizingLabel() }}</dd>
+      </div>
+    </dl>
+  </section>
+} @else {
+  <section class="card configuration-card empty" data-testid="configuration-empty">
+    <p>No strategy configured.</p>
+    <button type="button" class="cta" (click)="onEditClick()" data-testid="configuration-edit">
+      Configure to trade
+    </button>
+  </section>
+}
