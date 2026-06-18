@@ -37,7 +37,9 @@
       </span>
     }
 
-    <span class="pill-divider" aria-hidden="true"></span>
+    @if (isPaper() || priorRunText || hasPoisonFlag()) {
+      <span class="pill-divider" aria-hidden="true"></span>
+    }
 
     @if (isPaper()) {
       <span

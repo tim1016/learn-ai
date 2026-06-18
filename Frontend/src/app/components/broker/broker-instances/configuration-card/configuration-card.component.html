@@ -29,9 +29,13 @@
     </div>
   </section>
 } @else {
-  <section class="card configuration-card empty" data-testid="configuration-empty">
+  <section
+    class="card configuration-card empty"
+    aria-labelledby="configuration-empty-heading"
+    data-testid="configuration-empty"
+  >
     <div class="card-head">
-      <div class="card-label">CONFIGURATION</div>
+      <div class="card-label" id="configuration-empty-heading">CONFIGURATION</div>
       <div class="card-summary muted">No strategy configured.</div>
       <div class="card-actions">
         <a

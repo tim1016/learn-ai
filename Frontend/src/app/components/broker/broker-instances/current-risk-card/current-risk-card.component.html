@@ -69,13 +69,13 @@
         <dt>Sizing</dt>
         <dd>{{ sizingSummary() }}</dd>
       </div>
-
-      @if (namespaceCaption()) {
-        <p class="namespace-caption" data-testid="namespace-caption">
-          Positions are filtered to this bot's order namespace:
-          <code>{{ namespaceCaption() }}</code>
-        </p>
-      }
     </dl>
+
+    @if (namespaceCaption()) {
+      <p class="namespace-caption" data-testid="namespace-caption">
+        Positions are filtered to this bot's order namespace:
+        <code>{{ namespaceCaption() }}</code>
+      </p>
+    }
   </div>
 </section>
