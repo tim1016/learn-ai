@@ -1,5 +1,6 @@
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActionPlan } from '../../../../api/action-plan.types';
 import { ActionPlanCardComponent } from './action-plan-card.component';
@@ -152,6 +153,34 @@ describe('ActionPlanCardComponent', () => {
 
     const entry = el.querySelector<HTMLElement>('[data-testid="action-plan-entry-spy_abs"]');
     expect(entry?.textContent ?? '').toContain('2026-06-25');
+  });
+
+  // Slice 1E (#598) — "Redeploy with changes" CTA + deep link.
+
+  it('does not render the redeploy CTA when no parent run is known', () => {
+    const el = render({ on_enter: [], on_exit: [] });
+
+    expect(
+      el.querySelector('[data-testid="action-plan-card-redeploy-cta"]'),
+    ).toBeNull();
+  });
+
+  it('renders the redeploy CTA with parent_run_id in the deploy-form deep link when provided', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection(), provideRouter([])],
+    });
+    const fixture = TestBed.createComponent(ActionPlanCardComponent);
+    fixture.componentRef.setInput('actionPlan', { on_enter: [], on_exit: [] });
+    fixture.componentRef.setInput('parentRunId', 'run-abc12345');
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    const cta = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="action-plan-card-redeploy-cta"]',
+    );
+    expect(cta).not.toBeNull();
+    expect(cta?.getAttribute('href')).toContain('parent_run_id=run-abc12345');
   });
 
   it('renders an absolute expiry in the NY tz when UTC has rolled to the next day', () => {

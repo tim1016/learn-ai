@@ -146,7 +146,18 @@ export interface LiveInstanceStatus {
    * (every current strategy is ``explicit``). ``null`` when nothing is
    * deployed or the strategy isn't in the registry. */
   instrument_surface: 'policy' | 'explicit' | null;
+  /** PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy lineage
+   * sourced from the ledger's ``lineage`` block. ``null`` when nothing
+   * is deployed or the ledger pre-dates the field. */
+  lineage: ActionPlanLineage | null;
   fetched_at_ms: number;
+}
+
+export interface ActionPlanLineage {
+  parent_run_id: string | null;
+  redeploy_reason: string | null;
+  /** Wall-clock ``int64`` ms UTC when the redeploy was issued. */
+  redeployed_at_ms: number | null;
 }
 
 /** ADR 0009 § 11 — one row of the per-trade audit list. The cockpit renders

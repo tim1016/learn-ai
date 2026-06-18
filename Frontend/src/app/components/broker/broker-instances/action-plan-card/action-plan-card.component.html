@@ -9,6 +9,14 @@
       <p class="not-active-banner" data-testid="action-plan-not-active-banner">
         Declared action plan — not active until engine consumption (Slice 4)
       </p>
+      @if (redeployQueryParams(); as qp) {
+        <a
+          class="redeploy-cta"
+          data-testid="action-plan-card-redeploy-cta"
+          [routerLink]="['/broker/deploy']"
+          [queryParams]="qp"
+        >Redeploy with changes</a>
+      }
     </div>
 
     <div class="card-body">

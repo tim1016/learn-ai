@@ -103,6 +103,11 @@ export class BrokerDeployFormComponent {
   // attests to declared intent; ADR 0012 §"Scope" says the engine
   // doesn't consume it until Slice 4.
   readonly actionPlan = signal<ActionPlan>({ on_enter: [], on_exit: [] });
+  // PRD #593 Slice 1E (#598) — unhashed redeploy lineage. Seeded from
+  // the cockpit's "Redeploy with changes" deep-link query param;
+  // forwarded at the top level of the submit payload (NOT inside
+  // ``live_config`` — lineage is unhashed; ADR 0012 §7).
+  readonly parentRunId = signal<string | null>(null);
   // ADR 0009 § 7 — position-sizing preset. Defaults to Safe canary
   // (FixedShares(1)); the $250k surprise from the first deployment-validation
   // run is opt-in. Reference parity is gated by the audit-copy allow-list
@@ -305,6 +310,8 @@ export class BrokerDeployFormComponent {
     if (seedAuditCopy) this.qcAuditCopyPath.set(seedAuditCopy);
     const seedInstanceId = qp.get('instance_id');
     if (seedInstanceId) this.instanceId.set(seedInstanceId);
+    const seedParent = qp.get('parent_run_id');
+    if (seedParent) this.parentRunId.set(seedParent);
 
     effect(() => {
       if (this.manualSpecPath()) return;
@@ -427,6 +434,8 @@ export class BrokerDeployFormComponent {
       },
       start: this.startNow(),
     };
+    const parent = this.parentRunId();
+    if (parent) request.parent_run_id = parent;
     // Only attach launch knobs when actually starting — otherwise a deploy-only
     // request carries irrelevant start_options that still get validated (and a
     // cleared "max orders" field would serialize NaN → null and fail).

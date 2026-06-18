@@ -370,6 +370,16 @@ class HostRunnerDeployRequest(BaseModel):
     # When true, chain a host-runner start after a successful create.
     start: bool = False
     start_options: HostRunnerStartRequest = Field(default_factory=HostRunnerStartRequest)
+    # PRD #593 Slice 1E (#598) / ADR 0012 §7 — redeploy lineage. Both
+    # fields are **unhashed**: they are persisted in the ledger's
+    # ``lineage`` block alongside other unhashed metadata (``code_sha``,
+    # ``sizing_provenance``, ``created_at_ms``) but are NOT in
+    # ``LIVE_CONFIG_LEDGER_KEYS`` and NOT in ``compute_run_id``.
+    # Otherwise re-deploying the same plan from two different parents
+    # would mint two ``run_id``s and break the idempotent-redeploy
+    # contract Slice 1A pinned.
+    parent_run_id: str | None = None
+    redeploy_reason: str | None = None
 
     @field_validator("live_config", mode="after")
     @classmethod
@@ -880,6 +890,12 @@ class LiveInstanceStatus(BaseModel):
     # contract refuses an unknown value rather than silently passing it
     # to the cockpit (ADR 0012 §6 — the enum is the source of truth).
     instrument_surface: Literal["policy", "explicit"] | None = None
+    # PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy lineage,
+    # sourced from the ledger's ``lineage`` block. Typed as ``dict`` so
+    # the response shape stays open for the trio ``{parent_run_id,
+    # redeploy_reason, redeployed_at_ms}``. ``None`` when nothing is
+    # deployed or the ledger pre-dates the field.
+    lineage: dict | None = None
     fetched_at_ms: int
 
 

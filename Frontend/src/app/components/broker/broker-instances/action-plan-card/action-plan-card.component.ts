@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import type {
   ActionPlan,
   ActionPlanEntryLeg,
@@ -25,11 +26,23 @@ import { optionSummary } from '../../../../api/action-plan-format';
 @Component({
   selector: 'app-action-plan-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   templateUrl: './action-plan-card.component.html',
   styleUrl: './action-plan-card.component.scss',
 })
 export class ActionPlanCardComponent {
   readonly actionPlan = input.required<ActionPlan | null>();
+  /** Slice 1E (#598) — when the bound run carries an identity to deep-
+   * link from, the card renders a "Redeploy with changes" CTA that
+   * navigates to the deploy form with ``parent_run_id`` pre-set in the
+   * query params. ``null`` (default) hides the CTA — pre-Slice-1E
+   * ledgers don't carry the parent. */
+  readonly parentRunId = input<string | null>(null);
+
+  readonly redeployQueryParams = computed<Record<string, string> | null>(() => {
+    const id = this.parentRunId();
+    return id ? { parent_run_id: id } : null;
+  });
 
   readonly hasPlan = computed<boolean>(() => this.actionPlan() !== null);
 

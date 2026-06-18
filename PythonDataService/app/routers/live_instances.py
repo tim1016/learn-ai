@@ -690,6 +690,28 @@ def _resolve_action_plan(
     return action if isinstance(action, dict) else None
 
 
+def _resolve_lineage(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> dict | None:
+    """PRD #593 Slice 1E (#598) — surface the bound (or evidence) run's
+    redeploy lineage to the cockpit. The block is persisted by the
+    daemon at deploy time alongside other unhashed metadata; it lives
+    OUTSIDE ``live_config`` so the fields stay out of ``run_id``.
+
+    Returns ``None`` when nothing is deployed, the ledger is unreadable,
+    or the ledger pre-dates the lineage block (legacy runs).
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+    lineage = ledger.get("lineage")
+    return lineage if isinstance(lineage, dict) else None
+
+
 def _resolve_instrument_surface(
     root: Path, live_binding: LiveBinding | None, runs: list[dict]
 ) -> Literal["policy", "explicit"] | None:
@@ -1175,6 +1197,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         symbol=_resolve_symbol(root, live_binding, runs),
         action_plan=_resolve_action_plan(root, live_binding, runs),
         instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
+        lineage=_resolve_lineage(root, live_binding, runs),
         fetched_at_ms=_now_ms(),
     )
 
