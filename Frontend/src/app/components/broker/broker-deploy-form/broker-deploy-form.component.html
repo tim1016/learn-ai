@@ -239,6 +239,19 @@
         </label>
       </section>
 
+      <section class="action-plan" aria-labelledby="action-plan-picker-heading">
+        <h2 id="action-plan-picker-heading">Action plan</h2>
+        <p class="muted">
+          Declare the instrument(s) the bot opens on entry and closes on exit.
+          Engine consumption lands in Slice 4 — until then the plan is
+          persisted in the ledger but not acted on.
+        </p>
+        <app-action-plan-picker
+          [(actionPlan)]="actionPlan"
+          [prefillUnderlying]="selectedFixture()?.symbols?.[0] ?? null"
+        />
+      </section>
+
       <app-broker-operation-result [error]="error()" />
     </form>
 

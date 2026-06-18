@@ -17,6 +17,8 @@ import type {
   SizingPreset,
   SpecStrategyFixture,
 } from '../../../api/live-runs.types';
+import type { ActionPlan } from '../../../api/action-plan.types';
+import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -47,7 +49,12 @@ const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '
 @Component({
   selector: 'app-broker-deploy-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, BrokerConnectivityStripComponent, BrokerOperationResultComponent],
+  imports: [
+    RouterLink,
+    BrokerConnectivityStripComponent,
+    BrokerOperationResultComponent,
+    ActionPlanPickerComponent,
+  ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
 })
@@ -90,6 +97,12 @@ export class BrokerDeployFormComponent {
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(50_000);
   readonly startNow = signal<boolean>(false);
+  // PRD #593 Slice 1B (#595) — operator-declared action plan. Empty by
+  // default; the picker mutates it in place. The submitted ``live_config``
+  // always carries a plan (empty or otherwise) so ``run_id`` honestly
+  // attests to declared intent; ADR 0012 §"Scope" says the engine
+  // doesn't consume it until Slice 4.
+  readonly actionPlan = signal<ActionPlan>({ on_enter: [], on_exit: [] });
   // ADR 0009 § 7 — position-sizing preset. Defaults to Safe canary
   // (FixedShares(1)); the $250k surprise from the first deployment-validation
   // run is opt-in. Reference parity is gated by the audit-copy allow-list
@@ -408,7 +421,10 @@ export class BrokerDeployFormComponent {
       start_date_ms: this.startDateMs,
       strategy_instance_id: this.instanceId().trim(),
       strategy_key: strategyKey,
-      live_config: { sizing: this.resolveSizingPolicy() },
+      live_config: {
+        sizing: this.resolveSizingPolicy(),
+        action: this.actionPlan(),
+      },
       start: this.startNow(),
     };
     // Only attach launch knobs when actually starting — otherwise a deploy-only

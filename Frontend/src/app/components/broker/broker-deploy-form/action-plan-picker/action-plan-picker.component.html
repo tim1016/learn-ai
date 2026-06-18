@@ -1,0 +1,74 @@
+<section
+  class="picker-section"
+  aria-labelledby="action-plan-picker-enter-heading"
+  data-testid="action-plan-picker-enter"
+>
+  <div class="picker-section-head">
+    <h4 id="action-plan-picker-enter-heading" class="picker-section-heading">ON ENTER</h4>
+    <button
+      type="button"
+      class="picker-add"
+      data-testid="action-plan-picker-enter-add"
+      (click)="addStockEntry()"
+    >+ Add</button>
+  </div>
+
+  @if (entryLegs().length === 0) {
+    <p class="muted">No entry legs declared yet.</p>
+  } @else {
+    <ul class="leg-list">
+      @for (leg of entryLegs(); track leg.leg_id) {
+        <li class="leg-row" [attr.data-testid]="'action-plan-picker-enter-leg-' + leg.leg_id">
+          <code class="leg-id">{{ leg.leg_id }}</code>
+          <span class="leg-position">{{ leg.position }}</span>
+          <span class="leg-instrument">{{ leg.instrument.underlying }}</span>
+          <span class="leg-qty">× {{ leg.qty_ratio }}</span>
+          <button
+            type="button"
+            class="picker-remove"
+            [attr.data-testid]="'action-plan-picker-enter-remove-' + leg.leg_id"
+            (click)="removeEntry(leg.leg_id)"
+            [attr.aria-label]="'Remove entry leg ' + leg.leg_id"
+          >Remove</button>
+        </li>
+      }
+    </ul>
+  }
+</section>
+
+<section
+  class="picker-section"
+  aria-labelledby="action-plan-picker-exit-heading"
+  data-testid="action-plan-picker-exit"
+>
+  <div class="picker-section-head">
+    <h4 id="action-plan-picker-exit-heading" class="picker-section-heading">ON EXIT</h4>
+    <button
+      type="button"
+      class="picker-add"
+      data-testid="action-plan-picker-exit-add"
+      disabled
+      aria-label="Add exit action — only close_leg references to declared entries are supported in Slice 1B"
+    >+ Add</button>
+  </div>
+
+  @if (exitEntities().length === 0) {
+    <p class="muted">No exit actions declared (entry legs will not be closed by this plan).</p>
+  } @else {
+    <ul class="leg-list">
+      @for (exit of exitEntities(); track exit.entry_leg_id) {
+        <li class="leg-row" [attr.data-testid]="'action-plan-picker-exit-leg-' + exit.entry_leg_id">
+          <span class="exit-kind">CLOSE</span>
+          <code class="leg-id">{{ exit.entry_leg_id }}</code>
+          <button
+            type="button"
+            class="picker-remove"
+            [attr.data-testid]="'action-plan-picker-exit-remove-' + exit.entry_leg_id"
+            (click)="removeExit(exit.entry_leg_id)"
+            [attr.aria-label]="'Remove close_leg for ' + exit.entry_leg_id"
+          >Remove</button>
+        </li>
+      }
+    </ul>
+  }
+</section>

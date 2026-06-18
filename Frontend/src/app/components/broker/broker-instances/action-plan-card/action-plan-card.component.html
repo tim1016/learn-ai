@@ -18,9 +18,43 @@
           deploy form once the picker scaffold ships (Slice 1B).
         </p>
       } @else {
-        <p class="muted">
-          {{ entryLegCount() }} entry leg(s) / {{ exitEntityCount() }} exit action(s).
-        </p>
+        <section class="plan-section" aria-labelledby="action-plan-enter-heading">
+          <h4 id="action-plan-enter-heading" class="plan-section-heading">ON ENTER</h4>
+          <ul class="leg-list">
+            @for (leg of entryLegs(); track leg.leg_id) {
+              <li
+                class="leg-row"
+                [attr.data-testid]="'action-plan-entry-' + leg.leg_id"
+              >
+                <code class="leg-id">{{ leg.leg_id }}</code>
+                <span class="leg-position" [class.long]="leg.position === 'long'" [class.short]="leg.position === 'short'">
+                  {{ leg.position | uppercase }}
+                </span>
+                <span class="leg-instrument">{{ leg.instrument.underlying }}</span>
+                <span class="leg-qty">× {{ leg.qty_ratio }}</span>
+              </li>
+            }
+          </ul>
+        </section>
+
+        <section class="plan-section" aria-labelledby="action-plan-exit-heading">
+          <h4 id="action-plan-exit-heading" class="plan-section-heading">ON EXIT</h4>
+          @if (exitEntities().length === 0) {
+            <p class="muted">No exit actions declared (entry legs will not be closed by this plan).</p>
+          } @else {
+            <ul class="leg-list">
+              @for (exit of exitEntities(); track exit.entry_leg_id) {
+                <li
+                  class="leg-row"
+                  [attr.data-testid]="'action-plan-exit-' + exit.entry_leg_id"
+                >
+                  <span class="exit-kind">CLOSE</span>
+                  <code class="leg-id">{{ exit.entry_leg_id }}</code>
+                </li>
+              }
+            </ul>
+          }
+        </section>
       }
     </div>
   </section>
