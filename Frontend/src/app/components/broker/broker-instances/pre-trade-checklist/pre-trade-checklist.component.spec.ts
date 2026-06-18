@@ -94,19 +94,20 @@ describe('PreTradeChecklistComponent', () => {
   });
 
   it('closes the dialog when the close button is clicked', () => {
-    const { el, component, detectChanges } = render({
+    const { el, detectChanges } = render({
       status: makeStatus({ verdict: 'DEGRADED' }),
     });
-    component.toggleOpen();
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
     detectChanges();
 
     el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-close"]')?.click();
+    detectChanges();
 
-    expect(component.open()).toBe(false);
+    expect(el.querySelector('[data-testid="pre-trade-dialog"]')).toBeNull();
   });
 
   it('lists each failing gate in the dialog body', () => {
-    const { el, component, detectChanges } = render({
+    const { el, detectChanges } = render({
       status: makeStatus({
         verdict: 'BLOCKED',
         gates: [
@@ -116,28 +117,32 @@ describe('PreTradeChecklistComponent', () => {
         ],
       }),
     });
-    component.toggleOpen();
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
     detectChanges();
 
-    const text = el.textContent ?? '';
-    expect(text).toContain('desired_state');
-    expect(text).toContain('broker_connection');
-    expect(text).not.toContain('orders_cap');
+    expect(el.querySelector('[data-testid="pre-trade-ack-desired_state"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="pre-trade-ack-broker_connection"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="pre-trade-ack-orders_cap"]')).toBeNull();
   });
 
-  it('marks a gate acknowledged when its Acknowledge button is clicked', () => {
-    const { el, component, detectChanges } = render({
+  it('disables the ack button and shows "Acknowledged" after clicking it', () => {
+    const { el, detectChanges } = render({
       status: makeStatus({
         verdict: 'BLOCKED',
         gates: [makeGate({ name: 'desired_state', status: 'fail' })],
       }),
     });
-    component.toggleOpen();
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
     detectChanges();
 
     el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-ack-desired_state"]')?.click();
+    detectChanges();
 
-    expect(component.acknowledged().has('desired_state')).toBe(true);
+    const ackBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="pre-trade-ack-desired_state"]',
+    );
+    expect(ackBtn?.disabled).toBe(true);
+    expect(ackBtn?.textContent?.trim()).toBe('Acknowledged');
   });
 
   it('drops an ack when the gate stops failing and reappears failing later', () => {
@@ -149,42 +154,56 @@ describe('PreTradeChecklistComponent', () => {
       verdict: 'READY',
       gates: [makeGate({ name: 'desired_state', status: 'pass' })],
     });
-    const { component, setStatus, detectChanges } = render({ status: failing });
+    const { el, setStatus, detectChanges } = render({ status: failing });
 
-    component.acknowledge('desired_state');
-    expect(component.acknowledged().has('desired_state')).toBe(true);
+    // Open dialog and acknowledge the failing gate.
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
+    detectChanges();
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-ack-desired_state"]')?.click();
+    detectChanges();
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-ack-desired_state"]')?.disabled,
+    ).toBe(true);
 
+    // Status flips to all-pass — the gate row disappears.
     setStatus(passing);
     detectChanges();
-    expect(component.acknowledged().has('desired_state')).toBe(false);
+    expect(el.textContent ?? '').toContain('All gates pass');
 
+    // Status flips back to failing — the ack should be dropped.
     setStatus(failing);
     detectChanges();
-    expect(component.acknowledged().has('desired_state')).toBe(false);
+    const ackBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="pre-trade-ack-desired_state"]',
+    );
+    expect(ackBtn?.disabled).toBe(false);
+    expect(ackBtn?.textContent?.trim()).toBe('Acknowledge');
   });
 
   it('closes the dialog when Escape is pressed inside the dialog', () => {
-    const { el, component, detectChanges } = render({
+    const { el, detectChanges } = render({
       status: makeStatus({ verdict: 'DEGRADED' }),
     });
-    component.toggleOpen();
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
     detectChanges();
 
     const dialog = el.querySelector<HTMLElement>('[data-testid="pre-trade-dialog"]');
     dialog?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    detectChanges();
 
-    expect(component.open()).toBe(false);
+    expect(el.querySelector('[data-testid="pre-trade-dialog"]')).toBeNull();
   });
 
   it('does NOT close when Escape is dispatched outside the dialog', () => {
-    const { component, detectChanges } = render({
+    const { el, detectChanges } = render({
       status: makeStatus({ verdict: 'DEGRADED' }),
     });
-    component.toggleOpen();
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
     detectChanges();
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    detectChanges();
 
-    expect(component.open()).toBe(true);
+    expect(el.querySelector('[data-testid="pre-trade-dialog"]')).not.toBeNull();
   });
 });

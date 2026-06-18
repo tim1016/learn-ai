@@ -4,9 +4,7 @@ import { environment } from '../../../../environments/environment';
 
 @Injectable({ providedIn: 'root' })
 export class BrokerInstancesV2FlagService {
-  private readonly _enabled = signal(
-    environment.flags?.brokerInstancesV2 ?? false,
-  );
+  private readonly _enabled = signal(environment.flags.brokerInstancesV2);
 
   readonly enabled = this._enabled.asReadonly();
 

@@ -94,7 +94,7 @@ describe('ConfigurationCardComponent', () => {
   it('routes the empty-state CTA to /broker/deploy', () => {
     const el = render({ startDefaults: null, canRedeploy: false });
 
-    const link = el.querySelector<HTMLAnchorElement>('a[data-testid="configuration-edit"]');
+    const link = el.querySelector<HTMLAnchorElement>('a[data-testid="configuration-cta"]');
     expect(link?.getAttribute('href')).toContain('/broker/deploy');
   });
 });
