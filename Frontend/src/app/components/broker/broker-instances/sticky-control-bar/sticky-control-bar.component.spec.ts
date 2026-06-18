@@ -35,6 +35,7 @@ function makeStatus(
 function render(opts: {
   status: LiveInstanceStatus;
   isPaper?: boolean;
+  cockpit?: boolean;
 }): { el: HTMLElement; component: StickyControlBarComponent } {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -43,11 +44,39 @@ function render(opts: {
   const fixture = TestBed.createComponent(StickyControlBarComponent);
   fixture.componentRef.setInput('status', opts.status);
   fixture.componentRef.setInput('isPaper', opts.isPaper ?? true);
+  fixture.componentRef.setInput('cockpit', opts.cockpit ?? false);
   fixture.detectChanges();
   return {
     el: fixture.nativeElement as HTMLElement,
     component: fixture.componentInstance,
   };
+}
+
+function makeReadyStatus(): LiveInstanceStatus {
+  return {
+    strategy_instance_id: 'spy_15m',
+    process: { state: 'running' } as InstanceProcessView,
+    live_binding: null,
+    evidence_binding: null,
+    desired_state: null,
+    readiness: {
+      kind: 'live_readiness',
+      as_of_ms: 0,
+      source: 'engine',
+      verdict: 'READY',
+      summary: '',
+      gates: [],
+    },
+    latest_decision: null,
+    decision_columns: [],
+    broker: null,
+    start_defaults: null,
+    provenance: null,
+    sizing: null,
+    last_exit: null,
+    symbol: null,
+    fetched_at_ms: 0,
+  } as unknown as LiveInstanceStatus;
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -174,5 +203,51 @@ describe('StickyControlBarComponent', () => {
     el.querySelector<HTMLButtonElement>('[data-testid="jump-to-controls"]')?.click();
 
     expect(fired).toBe(1);
+  });
+
+  describe('cockpit mode (broker-instances-v2 flag on)', () => {
+    function statusWith(verdict: 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN' | undefined): LiveInstanceStatus {
+      return {
+        ...makeReadyStatus(),
+        readiness: verdict
+          ? {
+              kind: 'live_readiness',
+              as_of_ms: 0,
+              source: 'engine',
+              verdict,
+              summary: '',
+              gates: [],
+            }
+          : null,
+      } as unknown as LiveInstanceStatus;
+    }
+
+    it.each([
+      ['READY', 'STEADY'],
+      ['DEGRADED', 'CONFIGURE'],
+      ['BLOCKED', 'BLOCKED'],
+      ['UNKNOWN', 'BLOCKED'],
+    ] as const)('renders the %s readiness as %s fleet-state pill', (verdict, label) => {
+      const { el } = render({ status: statusWith(verdict), cockpit: true });
+
+      const pill = el.querySelector<HTMLElement>('[data-testid="cockpit-fleet-state-pill"]');
+      expect(pill?.textContent ?? '').toContain(label);
+      expect(pill?.getAttribute('data-state')).toBe(label);
+    });
+
+    it('hides the legacy state and readiness pills when cockpit is on', () => {
+      const { el } = render({ status: makeReadyStatus(), cockpit: true });
+
+      expect(el.querySelector('[data-testid="state-pill"]')).toBeNull();
+      expect(el.querySelector('[data-testid="readiness-pill"]')).toBeNull();
+    });
+
+    it('renders the legacy pills when cockpit is off', () => {
+      const { el } = render({ status: makeReadyStatus(), cockpit: false });
+
+      expect(el.querySelector('[data-testid="state-pill"]')).not.toBeNull();
+      expect(el.querySelector('[data-testid="readiness-pill"]')).not.toBeNull();
+      expect(el.querySelector('[data-testid="cockpit-fleet-state-pill"]')).toBeNull();
+    });
   });
 });

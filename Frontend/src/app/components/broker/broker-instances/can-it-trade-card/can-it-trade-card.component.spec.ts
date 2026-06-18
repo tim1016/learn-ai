@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ReadinessGate, ReadinessVector } from '../../../../api/live-instances.types';
-import { ReadinessCardComponent } from './readiness-card.component';
+import { CanItTradeCardComponent } from './can-it-trade-card.component';
 
 const LABELS: Record<string, string> = {
   desired_state: 'Bot Intent Set',
@@ -43,7 +43,7 @@ function render(opts: {
   TestBed.configureTestingModule({
     providers: [provideZonelessChangeDetection()],
   });
-  const fixture = TestBed.createComponent(ReadinessCardComponent);
+  const fixture = TestBed.createComponent(CanItTradeCardComponent);
   fixture.componentRef.setInput('readiness', opts.readiness);
   fixture.componentRef.setInput('gateLabels', opts.gateLabels ?? LABELS);
   fixture.detectChanges();
@@ -52,8 +52,8 @@ function render(opts: {
 
 afterEach(() => TestBed.resetTestingModule());
 
-describe('ReadinessCardComponent', () => {
-  it('renders the calm "READY · N checks pass" strip when verdict is READY (User Story #14)', () => {
+describe('CanItTradeCardComponent', () => {
+  it('renders the calm "READY · N checks pass" strip when verdict is READY', () => {
     const el = render({
       readiness: makeReadiness('READY', [
         makeGate({ name: 'desired_state' }),
@@ -61,12 +61,11 @@ describe('ReadinessCardComponent', () => {
       ]),
     });
 
-    const strip = el.querySelector<HTMLElement>('[data-testid="readiness-ready-strip"]');
+    const strip = el.querySelector<HTMLElement>('[data-testid="can-it-trade-ready-strip"]');
     expect(strip).not.toBeNull();
     expect(strip?.textContent ?? '').toContain('READY');
     expect(strip?.textContent ?? '').toContain('2 / 2 checks pass');
-    // The strip is *not* the full card.
-    expect(el.querySelector('[data-testid="readiness-card"]')).toBeNull();
+    expect(el.querySelector('[data-testid="can-it-trade-card"]')).toBeNull();
   });
 
   it('renders the full card when verdict is BLOCKED', () => {
@@ -77,15 +76,15 @@ describe('ReadinessCardComponent', () => {
       ]),
     });
 
-    const card = el.querySelector<HTMLElement>('[data-testid="readiness-card"]');
+    const card = el.querySelector<HTMLElement>('[data-testid="can-it-trade-card"]');
     expect(card).not.toBeNull();
     expect(card?.classList.contains('bad')).toBe(true);
     expect(
-      el.querySelector('[data-testid="readiness-verdict-chip"]')?.textContent?.trim(),
+      el.querySelector('[data-testid="can-it-trade-verdict-chip"]')?.textContent?.trim(),
     ).toBe('BLOCKED');
   });
 
-  it('shows the proportional X / N count (User Story #57)', () => {
+  it('shows the proportional X / N count', () => {
     const el = render({
       readiness: makeReadiness('DEGRADED', [
         makeGate({ name: 'desired_state', status: 'pass' }),
@@ -96,7 +95,7 @@ describe('ReadinessCardComponent', () => {
     });
 
     expect(
-      el.querySelector('[data-testid="readiness-proportion"]')?.textContent?.trim(),
+      el.querySelector('[data-testid="can-it-trade-proportion"]')?.textContent?.trim(),
     ).toBe('2 / 4 checks pass');
   });
 
@@ -142,10 +141,29 @@ describe('ReadinessCardComponent', () => {
     const el = render({ readiness: null });
 
     const chip = el.querySelector<HTMLElement>(
-      '[data-testid="readiness-verdict-chip"]',
+      '[data-testid="can-it-trade-verdict-chip"]',
     );
     expect(chip?.textContent?.trim()).toBe('NO READINESS');
     expect(el.textContent ?? '').toContain('engine has not emitted a readiness vector');
+  });
+
+  it.each([
+    ['READY', 'ready'],
+    ['BLOCKED', 'blocked'],
+    ['DEGRADED', 'degraded'],
+    ['UNKNOWN', 'unknown'],
+  ] as const)('maps readiness verdict %s to data-verdict="%s" on the host', (verdict, attr) => {
+    const el = render({
+      readiness: makeReadiness(verdict, [makeGate({ name: 'desired_state' })]),
+    });
+
+    expect(el.getAttribute('data-verdict')).toBe(attr);
+  });
+
+  it('maps null readiness to data-verdict="unknown" on the host', () => {
+    const el = render({ readiness: null });
+
+    expect(el.getAttribute('data-verdict')).toBe('unknown');
   });
 
   it('renders the warn-tone card when verdict is DEGRADED', () => {
@@ -161,7 +179,7 @@ describe('ReadinessCardComponent', () => {
       ]),
     });
 
-    const card = el.querySelector<HTMLElement>('[data-testid="readiness-card"]');
+    const card = el.querySelector<HTMLElement>('[data-testid="can-it-trade-card"]');
     expect(card?.classList.contains('warn')).toBe(true);
   });
 });

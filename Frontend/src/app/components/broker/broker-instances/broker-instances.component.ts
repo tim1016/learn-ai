@@ -40,8 +40,12 @@ import { CurrentRiskCardComponent } from './current-risk-card/current-risk-card.
 import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-strip.component';
 import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
 import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
-import { ReadinessCardComponent } from './readiness-card/readiness-card.component';
+import { CanItTradeCardComponent } from './can-it-trade-card/can-it-trade-card.component';
 import { StickyControlBarComponent } from './sticky-control-bar/sticky-control-bar.component';
+import { BrokerInstancesV2FlagService } from './broker-instances-v2-flag.service';
+import { ConfigurationCardComponent } from './configuration-card/configuration-card.component';
+import { DetectiveSectionComponent, type DetectiveTab } from './detective-section/detective-section.component';
+import { PreTradeChecklistComponent } from './pre-trade-checklist/pre-trade-checklist.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -241,8 +245,11 @@ function titleizeKey(key: string): string {
     LatestSignalStripComponent,
     StrategyRulesCardComponent,
     LastSessionCardComponent,
-    ReadinessCardComponent,
+    CanItTradeCardComponent,
     StickyControlBarComponent,
+    ConfigurationCardComponent,
+    DetectiveSectionComponent,
+    PreTradeChecklistComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -252,6 +259,17 @@ export class BrokerInstancesComponent {
   private readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly v2Flag = inject(BrokerInstancesV2FlagService);
+
+  readonly cockpitEnabled = this.v2Flag.enabled;
+
+  // Detective section tab state. URL-param sync (?tab=activity|diagnostics)
+  // ships as a follow-up.
+  readonly detectiveTab = signal<DetectiveTab>('activity');
+
+  onDetectiveTabRequested(tab: DetectiveTab): void {
+    this.detectiveTab.set(tab);
+  }
 
   /** The id segment of ``/broker/instances/:id``, or ``null`` on the bare URL.
    * Used as one input to ``selectedInstanceId``; the resolution falls through
