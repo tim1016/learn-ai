@@ -71,7 +71,7 @@
         (jumpToControlsRequested)="scrollToStartStopCard()"
       />
 
-      <app-pre-trade-checklist [status]="s" />
+      <app-pre-trade-checklist [status]="s" [gateLabels]="readinessGateLabels" />
 
       <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
         <div class="hero-copy">

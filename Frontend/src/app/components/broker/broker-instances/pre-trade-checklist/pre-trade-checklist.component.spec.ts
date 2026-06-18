@@ -37,8 +37,14 @@ function makeStatus(opts: {
   } as unknown as LiveInstanceStatus;
 }
 
+const LABELS: Record<string, string> = {
+  desired_state: 'Bot Intent Set',
+  broker_connection: 'Broker Connection Live',
+};
+
 function render(opts: {
   status: LiveInstanceStatus;
+  gateLabels?: Record<string, string>;
 }): {
   el: HTMLElement;
   component: PreTradeChecklistComponent;
@@ -51,6 +57,7 @@ function render(opts: {
   });
   const fixture = TestBed.createComponent(PreTradeChecklistComponent);
   fixture.componentRef.setInput('status', opts.status);
+  fixture.componentRef.setInput('gateLabels', opts.gateLabels ?? LABELS);
   fixture.detectChanges();
   return {
     el: fixture.nativeElement as HTMLElement,
@@ -123,6 +130,23 @@ describe('PreTradeChecklistComponent', () => {
     expect(el.querySelector('[data-testid="pre-trade-ack-desired_state"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="pre-trade-ack-broker_connection"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="pre-trade-ack-orders_cap"]')).toBeNull();
+  });
+
+  it('renders the operator-language label for each failing gate (not the raw name)', () => {
+    const { el, detectChanges } = render({
+      status: makeStatus({
+        verdict: 'BLOCKED',
+        gates: [
+          makeGate({ name: 'desired_state', status: 'fail', detail: 'No intent set' }),
+        ],
+      }),
+    });
+    el.querySelector<HTMLButtonElement>('[data-testid="pre-trade-fab"]')?.click();
+    detectChanges();
+
+    const text = el.textContent ?? '';
+    expect(text).toContain('Bot Intent Set');
+    expect(text).not.toContain('desired_state');
   });
 
   it('disables the ack button and shows "Acknowledged" after clicking it', () => {

@@ -40,20 +40,20 @@
     </header>
     @if (failingGates().length) {
       <ul class="items">
-        @for (g of failingGates(); track g.name) {
-          <li class="item" [class.acknowledged]="acknowledged().has(g.name)">
+        @for (g of failingGates(); track g.key) {
+          <li class="item" [class.acknowledged]="acknowledged().has(g.key)">
             <div class="item-body">
-              <strong>{{ g.name }}</strong>
+              <strong>{{ g.label }}</strong>
               <p class="detail">{{ g.detail }}</p>
             </div>
             <button
               type="button"
               class="ack"
-              (click)="acknowledge(g.name)"
-              [disabled]="acknowledged().has(g.name)"
-              [attr.data-testid]="'pre-trade-ack-' + g.name"
+              (click)="acknowledge(g.key)"
+              [disabled]="acknowledged().has(g.key)"
+              [attr.data-testid]="'pre-trade-ack-' + g.key"
             >
-              {{ acknowledged().has(g.name) ? 'Acknowledged' : 'Acknowledge' }}
+              {{ acknowledged().has(g.key) ? 'Acknowledged' : 'Acknowledge' }}
             </button>
           </li>
         }

@@ -9,12 +9,10 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import type {
-  LiveInstanceStatus,
-  ReadinessGate,
-} from '../../../../api/live-instances.types';
+import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 
 import { deriveFleetState } from '../fleet-state';
+import { projectFailingGates, type FailingGateRow } from '../failing-gates';
 
 /**
  * Pre-trade checklist — floating action button (FAB) + dialog. Issue #587.
@@ -25,6 +23,10 @@ import { deriveFleetState } from '../fleet-state';
  * UI state — it doesn't change the underlying engine verdict, and a gate
  * that stops failing has its ack pruned, so an old ack can't quietly
  * carry over when the gate breaks again.
+ *
+ * Renders the same operator-language labels as `<app-can-it-trade-card>`
+ * by sharing the parent's gate-labels map and the `projectFailingGates`
+ * helper.
  */
 @Component({
   selector: 'app-pre-trade-checklist',
@@ -34,14 +36,16 @@ import { deriveFleetState } from '../fleet-state';
 })
 export class PreTradeChecklistComponent {
   readonly status = input.required<LiveInstanceStatus>();
+  /** Operator-language labels for known gates. Shared with
+   * `<app-can-it-trade-card>` so the FAB and the page card never drift. */
+  readonly gateLabels = input.required<Record<string, string>>();
 
   readonly fleetState = computed(() => deriveFleetState(this.status()));
   readonly fabVisible = computed<boolean>(() => this.fleetState() !== 'STEADY');
 
-  readonly failingGates = computed<ReadinessGate[]>(() => {
-    const gates = this.status().readiness?.gates ?? [];
-    return gates.filter((g) => g.status !== 'pass');
-  });
+  readonly failingGates = computed<FailingGateRow[]>(() =>
+    projectFailingGates(this.status().readiness, this.gateLabels()),
+  );
 
   private readonly _open = signal(false);
   readonly open = this._open.asReadonly();
@@ -55,7 +59,7 @@ export class PreTradeChecklistComponent {
     // Prune acks for gates that are no longer failing. If a gate later
     // starts failing again it presents as un-acknowledged.
     effect(() => {
-      const failing = new Set(this.failingGates().map((g) => g.name));
+      const failing = new Set(this.failingGates().map((g) => g.key));
       untracked(() => {
         this._acknowledged.update((acks) => {
           if (acks.size === 0) return acks;
@@ -82,7 +86,7 @@ export class PreTradeChecklistComponent {
     this._open.set(false);
   }
 
-  acknowledge(gateName: string): void {
-    this._acknowledged.update((set) => new Set([...set, gateName]));
+  acknowledge(gateKey: string): void {
+    this._acknowledged.update((set) => new Set([...set, gateKey]));
   }
 }
