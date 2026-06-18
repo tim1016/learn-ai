@@ -1,4 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, input, model } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  computed,
+  effect,
+  inject,
+  input,
+  model,
+  signal,
+} from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Subject, debounceTime } from 'rxjs';
 import type {
   ActionPlan,
   ActionPlanEntryLeg,
@@ -7,29 +19,29 @@ import type {
   StockEntryLeg,
 } from '../../../../api/action-plan.types';
 import { isOptionLeg } from '../../../../api/action-plan.types';
+import {
+  ActionPlanPreviewService,
+  type ParityWarning,
+} from '../../../../api/action-plan-preview.service';
 
 /**
  * Deploy-form picker for the operator-declared action plan
- * (PRD #593 Slices 1B + 1C, issues #595 / #596).
+ * (PRD #593 Slices 1B + 1C + 1D, issues #595 / #596 / #597).
  *
  * Two sections — "On ENTER" + "On EXIT" — each with ``[+ Add]``. Adding
- * a stock entry leg auto-fills a mirrored ``close_leg`` reference on the
+ * an entry leg auto-fills a mirrored ``close_leg`` reference on the
  * EXIT side; removing the entry cascades. Removing the close_leg only
- * leaves the entry leg untouched. Operator can edit either side
- * independently.
+ * leaves the entry leg untouched.
  *
- * ``prefillUnderlying`` is UX sugar (e.g. ``live_config.symbol``) — it
- * fills the new leg's ``instrument.underlying`` at add time, but the
- * stored leg always carries the literal value (no implicit
- * context-dependence at the wire format; ADR 0012 §5).
- *
- * Slice 1C: distinct ``[+ Add stock]`` / ``[+ Add option]`` buttons;
- * option legs spawn with sensible defaults (long call, ATM strike,
- * min_dte 14d). The picker exposes the option-specific row so the
- * cockpit can show it conditionally — actual selector-editing controls
- * are kept minimal in 1B/1C (operator can edit in JSON-ish form via the
- * preview endpoint once Slice 1D lands).
+ * Slice 1D wires parity diagnostics: every plan change debounces a
+ * ~150ms call to ``ActionPlanPreviewService.preview`` and renders the
+ * returned warning rows inline. **Submit is enabled regardless of
+ * warning count** — operator-override is honored. Hard schema errors
+ * (Pydantic-rejected, 422) come back through the deploy boundary as
+ * before, not through this preview path.
  */
+const PREVIEW_DEBOUNCE_MS = 150;
+
 @Component({
   selector: 'app-action-plan-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -42,10 +54,23 @@ export class ActionPlanPickerComponent {
 
   readonly entryLegs = computed<ActionPlanEntryLeg[]>(() => this.actionPlan().on_enter);
   readonly exitEntities = computed<CloseLegExit[]>(() => this.actionPlan().on_exit);
+  readonly warnings = signal<ParityWarning[]>([]);
 
-  /** Type guard exposed to the template so ``@if (isOption(leg))`` works
-   * as a discriminating predicate inside the ``@for`` loop. */
   isOption = isOptionLeg;
+
+  private readonly preview = inject(ActionPlanPreviewService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly _changes = new Subject<ActionPlan>();
+
+  constructor() {
+    this._changes
+      .pipe(debounceTime(PREVIEW_DEBOUNCE_MS), takeUntilDestroyed(this.destroyRef))
+      .subscribe((plan) => this._fetchPreview(plan));
+
+    effect(() => {
+      this._changes.next(this.actionPlan());
+    });
+  }
 
   addStockEntry(): void {
     const newLeg: StockEntryLeg = {
@@ -86,9 +111,6 @@ export class ActionPlanPickerComponent {
     });
   }
 
-  /** Auto-assigned ids count from ``leg_1``; the operator may rename to
-   * anything matching ``^[a-z0-9_]{1,32}$`` later. Avoids collisions with
-   * already-declared ids. */
   private _nextLegId(): string {
     const taken = new Set(this.entryLegs().map((l) => l.leg_id));
     let i = 1;
@@ -103,5 +125,16 @@ export class ActionPlanPickerComponent {
       on_enter: [...current.on_enter, leg],
       on_exit: [...current.on_exit, mirroredExit],
     });
+  }
+
+  private async _fetchPreview(plan: ActionPlan): Promise<void> {
+    try {
+      const response = await this.preview.preview(plan);
+      this.warnings.set(response.warnings);
+    } catch {
+      // Preview is best-effort UX sugar; Pydantic is authoritative at
+      // submit. A network blip should not block the operator.
+      this.warnings.set([]);
+    }
   }
 }

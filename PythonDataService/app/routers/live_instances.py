@@ -50,6 +50,8 @@ from app.routers.live_runs import (
     _validate_path_segment,
     build_command_timeline,
 )
+from app.engine.action_plan.parity import parity_diagnostics
+from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse, ParityWarning
 from app.schemas.live_runs import (
     ActiveDateEntry,
     AuditCopySizingLookup,
@@ -845,6 +847,27 @@ def _parse_action_response(result: dict) -> HostRunnerActionResponse:
             status.HTTP_502_BAD_GATEWAY,
             detail="host daemon returned an invalid start/stop payload",
         ) from exc
+
+
+@router.post("/preview-action-plan", response_model=ActionPlanPreviewResponse)
+async def preview_action_plan(plan: ActionPlan) -> ActionPlanPreviewResponse:
+    """PRD #593 Slice 1D (#597) — non-blocking parity preview.
+
+    Stateless, side-effect-free. Pydantic rejects malformed plans (422)
+    at the body-validation step; semantically valid plans pass through
+    to ``parity_diagnostics``. The response is always 200 OK regardless
+    of warning count — submit-time gating is the operator's call (the
+    deploy boundary enforces only the schema). ADR 0012 §"Architectural
+    decisions" pins that this endpoint MUST NOT consult
+    ``live_config.symbol``, the instance roster, or any other session
+    context; the plan is the only input.
+    """
+
+    warnings = [
+        ParityWarning(code=w.code.value, message=w.message, leg_id=w.leg_id)
+        for w in parity_diagnostics(plan)
+    ]
+    return ActionPlanPreviewResponse(warnings=warnings)
 
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)

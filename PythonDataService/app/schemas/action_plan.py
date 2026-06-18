@@ -154,6 +154,28 @@ class CloseLegExit(BaseModel):
     entry_leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
 
 
+class ParityWarning(BaseModel):
+    """Wire shape for a single parity warning — Slice 1D (#597).
+
+    Produced by ``app.engine.action_plan.parity.parity_diagnostics`` and
+    exposed via ``POST /api/live-instances/preview-action-plan``. Codes
+    extend as new diagnostic kinds land (e.g. asymmetric position
+    direction). The picker keys its inline-error renderer off ``code``.
+    """
+
+    code: Literal["orphan_entry"]
+    message: str
+    leg_id: str | None = None
+
+
+class ActionPlanPreviewResponse(BaseModel):
+    """Response envelope for the preview endpoint. Stable shape: the
+    response is always ``{warnings: [...]}`` so adding warning kinds
+    never requires the client to re-discriminate on top-level keys."""
+
+    warnings: list[ParityWarning]
+
+
 class ActionPlan(BaseModel):
     """Operator-declared instrument plan, hashed into ``run_id``.
 
