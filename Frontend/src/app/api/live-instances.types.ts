@@ -8,6 +8,7 @@ import type {
   SizingProvenance,
 } from './live-runs.types';
 import type { DesiredStateView } from './live-runs-controls.types';
+import type { ActionPlan } from './action-plan.types';
 
 export type InstanceProcessState =
   | 'running'
@@ -134,6 +135,17 @@ export interface LiveInstanceStatus {
    * consumers must treat null as "unknown" and NOT fall back to a hardcoded
    * default (the prior 'SPY' default was the bug Slice 2 closes). */
   symbol: string | null;
+  /** PRD #593 Slice 1A — operator-declared instrument plan for the bound
+   * run, sourced from ``ledger.live_config.action``. ``null`` when nothing
+   * is deployed OR the ledger pre-dates the field — the cockpit must
+   * distinguish "declared empty" (`{on_enter: [], on_exit: []}`) from
+   * "pre-Slice-1A ledger" (null). Engine consumption is Slice 4. */
+  action_plan: ActionPlan | null;
+  /** PRD #593 Slice 1A — the strategy registry's ``instrument_surface``
+   * value for the bound run's strategy. Informational in Slices 1–3
+   * (every current strategy is ``explicit``). ``null`` when nothing is
+   * deployed or the strategy isn't in the registry. */
+  instrument_surface: 'policy' | 'explicit' | null;
   fetched_at_ms: number;
 }
 

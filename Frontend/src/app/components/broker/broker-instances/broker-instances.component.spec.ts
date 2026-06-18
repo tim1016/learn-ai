@@ -70,6 +70,8 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
     sizing: null,
     last_exit: null,
     symbol: 'SPY',
+    action_plan: null,
+    instrument_surface: null,
     fetched_at_ms: 1,
     ...overrides,
   };
@@ -970,6 +972,46 @@ describe('BrokerInstancesComponent', () => {
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Reset paper account');
     expect(text).toContain('Paper Trading Account Reset');
+  });
+
+  // PRD #593 Slice 1A (#594) — cockpit surfaces the declared action plan.
+  it('renders the action-plan card when the status carries an empty action_plan', async () => {
+    const { fixture, component, svc } = setup();
+    svc.getInstanceStatus.mockResolvedValue(
+      makeStatus({
+        action_plan: { on_enter: [], on_exit: [] },
+        instrument_surface: 'explicit',
+      }),
+    );
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    const card = fixture.nativeElement.querySelector('[data-testid="action-plan-card"]');
+    expect(card).not.toBeNull();
+    expect(card?.textContent ?? '').toContain(
+      'Declared action plan — not active until engine consumption (Slice 4)',
+    );
+  });
+
+  it('does not render the action-plan card when the ledger pre-dates the field', async () => {
+    const { fixture, component } = setup();
+    // The default fake returns action_plan: null (pre-Slice-1A ledger).
+    await flush();
+    fixture.detectChanges();
+
+    component.select('spy_ema_paper');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(
+      fixture.nativeElement.querySelector('[data-testid="action-plan-card"]'),
+    ).toBeNull();
   });
 });
 

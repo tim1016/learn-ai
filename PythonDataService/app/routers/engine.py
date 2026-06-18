@@ -378,6 +378,17 @@ class StrategyRegistration:
     # deploy-form sizing selector is disabled + labelled "self-sized" and
     # the required ``live_config.sizing`` is ``StrategyExplicit``.
     sizing_surface: Literal["policy", "explicit"] = "policy"
+    # ADR 0012 / PRD #593 Slice 1A — which boundary chooses the
+    # *instrument* this strategy trades. ``"explicit"`` (default in
+    # Slices 1–3 — every current strategy) means the strategy code
+    # itself names the instrument (e.g. ``set_holdings("SPY", 1.0)``),
+    # and ``live_config.action`` is informational only. ``"policy"``
+    # is forward-compatible with Slice 4: future strategies that emit a
+    # generic ``SignalIntent`` and let the deploy-time action plan
+    # resolve to concrete instruments. The deploy boundary STORES this
+    # field in the run ledger but does not refuse deploys based on it
+    # in Slices 1–3 — enforcement lands with consumption (Slice 4).
+    instrument_surface: Literal["policy", "explicit"] = "explicit"
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {

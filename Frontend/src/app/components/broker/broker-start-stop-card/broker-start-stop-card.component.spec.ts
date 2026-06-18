@@ -28,6 +28,8 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
     sizing: null,
     last_exit: null,
     symbol: null,
+    action_plan: null,
+    instrument_surface: null,
     fetched_at_ms: 1,
     ...overrides,
   };
