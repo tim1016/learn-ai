@@ -598,8 +598,11 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('An operator manually flagged this run unsafe');
   });
 
-  it('marks a hard-failing readiness gate as Blocking', async () => {
+  it('marks a hard-failing readiness gate as FAIL · HARD', async () => {
     // makeStatus's default readiness has orders_cap failing with severity 'hard'.
+    // Terminal Cockpit (#591) renders the severity as `FAIL · HARD` / `FAIL · SOFT`
+    // — the historic operator-language "Blocking" / "Advisory" copy moved into
+    // the visible mark.
     const { fixture, component } = setup();
     await flush();
     fixture.detectChanges();
@@ -609,7 +612,7 @@ describe('BrokerInstancesComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain('Blocking');
+    expect(fixture.nativeElement.textContent).toContain('FAIL · HARD');
   });
 
   it('does not show a "why it stopped" panel for a live instance', async () => {

@@ -53,11 +53,6 @@
                 <div class="gate-name">{{ g.label }}</div>
                 <p class="gate-desc">{{ g.detail }}</p>
                 <code class="gate-key">{{ g.key }}</code>
-                <span
-                  class="severity sr-only"
-                  [class.hard]="g.severity === 'hard'"
-                  [class.soft]="g.severity === 'soft'"
-                >{{ g.severity === 'hard' ? 'Blocking' : 'Advisory' }}</span>
               </div>
             </li>
           }

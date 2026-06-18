@@ -3,9 +3,14 @@ import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { deriveFleetState, type FleetState } from '../fleet-state';
 
 type PillTone = 'running' | 'paused' | 'stopped' | 'stopping' | 'unknown';
-type Verdict = 'paper' | 'unsafe' | 'unknown' | 'ready' | 'degraded' | 'blocked';
+type Verdict = 'paper' | 'unknown' | 'ready' | 'degraded' | 'blocked';
 type PriorRun = 'success' | 'failure' | null;
-type Attention = 'ready' | 'degraded' | 'blocked';
+
+const FLEET_VERDICT: Record<FleetState, 'ready' | 'degraded' | 'blocked'> = {
+  STEADY: 'ready',
+  CONFIGURE: 'degraded',
+  BLOCKED: 'blocked',
+};
 
 /**
  * Sticky control bar — the persistent per-bot identity + status strip that
@@ -43,15 +48,11 @@ export class StickyControlBarComponent {
 
   readonly botName = computed<string>(() => this.status().strategy_instance_id);
 
-  readonly hasPoisonFlag = computed<boolean>(() => {
-    const trigger = this.status().last_exit?.halt_trigger;
-    return trigger !== null && trigger !== undefined;
-  });
+  readonly hasPoisonFlag = computed<boolean>(
+    () => this.status().last_exit?.halt_trigger != null,
+  );
 
-  readonly processLabel = computed<string>(() => {
-    const s = this.status().process.state;
-    return s.toUpperCase();
-  });
+  readonly processLabel = computed<string>(() => this.status().process.state);
 
   readonly processTone = computed<PillTone>(() => {
     switch (this.status().process.state) {
@@ -67,10 +68,9 @@ export class StickyControlBarComponent {
     }
   });
 
-  readonly intentLabel = computed<string | null>(() => {
-    const intent = this.status().desired_state?.state;
-    return intent ? intent : null;
-  });
+  readonly intentLabel = computed<string | null>(
+    () => this.status().desired_state?.state ?? null,
+  );
 
   readonly intentTone = computed<PillTone>(() => {
     switch (this.status().desired_state?.state) {
@@ -85,52 +85,41 @@ export class StickyControlBarComponent {
     }
   });
 
-  readonly safetyVerdict = computed<Verdict>(() => {
-    if (this.hasPoisonFlag()) return 'unsafe';
-    return this.isPaper() ? 'paper' : 'unknown';
-  });
+  /** Safety pill is paper/live only. Poison is surfaced separately by the
+   * POISONED chip + the LAST RUN FAULT chip — see #591 review F2/M5: do
+   * not duplicate the same fact across pills. */
+  readonly safetyVerdict = computed<Verdict>(() => (this.isPaper() ? 'paper' : 'unknown'));
 
-  readonly safetyLabel = computed<string>(() => {
-    if (this.hasPoisonFlag()) return 'UNSAFE';
-    return this.isPaper() ? 'PAPER-ONLY' : 'LIVE';
-  });
+  readonly safetyLabel = computed<string>(() => (this.isPaper() ? 'PAPER-ONLY' : 'LIVE'));
 
   readonly priorRun = computed<PriorRun>(() => {
     const exit = this.status().last_exit;
     if (!exit) return null;
-    if (exit.halt_trigger !== null && exit.halt_trigger !== undefined) return 'failure';
+    if (exit.halt_trigger != null) return 'failure';
     if (exit.exit_code === 0 || exit.exit_reason === 'normal') return 'success';
-    if (exit.exit_code !== null && exit.exit_code !== 0) return 'failure';
+    if (exit.exit_code != null) return 'failure';
     return null;
   });
 
-  readonly priorRunLabel = computed<string>(() =>
-    this.priorRun() === 'failure' ? 'LAST RUN FAULT' : 'LAST RUN CLEAN',
+  /** Returns `null` when there is no prior run to report — callers must
+   * hide the LAST RUN pill in that case. Defaulting to "CLEAN" on no-data
+   * would be a false positive on a freshly deployed bot. */
+  readonly priorRunLabel = computed<string | null>(() => {
+    switch (this.priorRun()) {
+      case 'failure':
+        return 'LAST RUN FAULT';
+      case 'success':
+        return 'LAST RUN CLEAN';
+      default:
+        return null;
+    }
+  });
+
+  /** Single mapping; both the FLEET pill's `data-verdict` and the banner's
+   * `data-attention` attribute consume the same value — #591 review F1. */
+  readonly fleetVerdict = computed<'ready' | 'degraded' | 'blocked'>(
+    () => FLEET_VERDICT[this.fleetState()],
   );
-
-  readonly fleetVerdict = computed<Verdict>(() => {
-    switch (this.fleetState()) {
-      case 'STEADY':
-        return 'ready';
-      case 'CONFIGURE':
-        return 'degraded';
-      case 'BLOCKED':
-        return 'blocked';
-      default:
-        return 'unknown';
-    }
-  });
-
-  readonly attentionState = computed<Attention>(() => {
-    switch (this.fleetState()) {
-      case 'STEADY':
-        return 'ready';
-      case 'CONFIGURE':
-        return 'degraded';
-      default:
-        return 'blocked';
-    }
-  });
 
   /** Emitted when the operator clicks "Jump to controls". The parent
    * scrolls the existing Start/Stop card into view; the sticky bar does

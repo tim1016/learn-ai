@@ -1,10 +1,11 @@
 @let intent = intentLabel();
+@let priorRunText = priorRunLabel();
 <section
   class="cockpit-banner"
   role="region"
   aria-label="Bot status and controls"
   data-testid="sticky-control-bar"
-  [attr.data-attention]="attentionState()"
+  [attr.data-attention]="fleetVerdict()"
 >
   <div class="bot-id">
     <div class="name" [title]="botName()" data-testid="bot-name">{{ botName() }}</div>
@@ -49,9 +50,11 @@
       </span>
     }
 
-    <span class="pill prior-run" [attr.data-priorrun]="priorRun()">
-      {{ priorRunLabel() }}
-    </span>
+    @if (priorRunText) {
+      <span class="pill prior-run" [attr.data-priorrun]="priorRun()">
+        {{ priorRunText }}
+      </span>
+    }
 
     @if (hasPoisonFlag()) {
       <span class="pill" data-verdict="unsafe" data-testid="poison-chip" title="Run flagged unsafe">
