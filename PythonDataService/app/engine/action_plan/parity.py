@@ -12,31 +12,16 @@ concern, NOT a schema concern. This function does NOT consult
 ``live_config.symbol``, the instance roster, or any other session state.
 The plan supplies all context via explicit ``instrument.underlying`` (ADR
 0012 §5).
+
+Engine ↔ schemas: the input ``ActionPlan`` already crosses this boundary
+(schemas → engine), so the output ``ParityWarning`` Pydantic type is
+imported from the same place rather than maintained as a parallel
+dataclass + translation layer. One source of truth per wire shape.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
-
-from app.schemas.action_plan import ActionPlan
-
-
-class ParityWarningCode(StrEnum):
-    """Single source of truth for the warning-code enum. The HTTP layer
-    serializes via the string value; the frontend's discriminated union
-    of warning shapes keys off the same code."""
-
-    orphan_entry = "orphan_entry"
-
-
-@dataclass(frozen=True, slots=True)
-class ParityWarning:
-    code: ParityWarningCode
-    message: str
-    # The originating ``leg_id`` when locatable; ``None`` for plan-level
-    # warnings without a single anchor leg.
-    leg_id: str | None
+from app.schemas.action_plan import ActionPlan, ParityWarning
 
 
 def parity_diagnostics(plan: ActionPlan) -> list[ParityWarning]:
@@ -49,24 +34,23 @@ def parity_diagnostics(plan: ActionPlan) -> list[ParityWarning]:
       they have not declared how to close. Warning, not error: calendar /
       roll plans legitimately omit closes.
 
-    Future warning kinds (asymmetric position direction, etc.) extend the
-    enum; the HTTP envelope shape is stable.
+    Future warning kinds (asymmetric position direction, etc.) extend
+    the ``ParityWarning.code`` ``Literal`` union; the HTTP envelope
+    shape is stable.
     """
 
     closed_entry_ids: set[str] = {
         exit_entry.entry_leg_id for exit_entry in plan.on_exit
     }
-    warnings: list[ParityWarning] = []
-    for leg in plan.on_enter:
-        if leg.leg_id not in closed_entry_ids:
-            warnings.append(
-                ParityWarning(
-                    code=ParityWarningCode.orphan_entry,
-                    message=(
-                        f"Entry leg {leg.leg_id!r} has no matching close_leg — "
-                        "operator-declared position will not be closed by this plan."
-                    ),
-                    leg_id=leg.leg_id,
-                )
-            )
-    return warnings
+    return [
+        ParityWarning(
+            code="orphan_entry",
+            message=(
+                f"Entry leg {leg.leg_id!r} has no matching close_leg — "
+                "operator-declared position will not be closed by this plan."
+            ),
+            leg_id=leg.leg_id,
+        )
+        for leg in plan.on_enter
+        if leg.leg_id not in closed_entry_ids
+    ]

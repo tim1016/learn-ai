@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.engine.action_plan.parity import ParityWarningCode, parity_diagnostics
+from app.engine.action_plan.parity import parity_diagnostics
 from app.schemas.action_plan import ActionPlan
 
 
@@ -56,7 +56,7 @@ def test_orphan_entry_leg_produces_orphan_entry_warning() -> None:
     warnings = parity_diagnostics(plan)
 
     assert len(warnings) == 1
-    assert warnings[0].code == ParityWarningCode.orphan_entry
+    assert warnings[0].code == "orphan_entry"
     assert warnings[0].leg_id == "spy_long"
 
 
@@ -72,7 +72,7 @@ def test_two_orphan_entries_produce_two_warnings() -> None:
     warnings = parity_diagnostics(plan)
 
     assert {w.leg_id for w in warnings} == {"spy_long", "qqq_long"}
-    assert all(w.code == ParityWarningCode.orphan_entry for w in warnings)
+    assert all(w.code == "orphan_entry" for w in warnings)
 
 
 def test_parity_diagnostics_does_not_consult_external_state() -> None:
@@ -110,5 +110,5 @@ def test_parity_symmetric_fixture_has_no_warnings() -> None:
 def test_parity_orphan_entry_fixture_warns_on_the_open_leg() -> None:
     warnings = parity_diagnostics(_load("parity_orphan_entry.json"))
 
-    assert [w.code for w in warnings] == [ParityWarningCode.orphan_entry]
+    assert [w.code for w in warnings] == ["orphan_entry"]
     assert warnings[0].leg_id == "spy_long"

@@ -3,14 +3,13 @@ import {
   Component,
   DestroyRef,
   computed,
-  effect,
   inject,
   input,
   model,
   signal,
 } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Subject, debounceTime } from 'rxjs';
+import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
+import { debounceTime } from 'rxjs';
 import type {
   ActionPlan,
   ActionPlanEntryLeg,
@@ -59,17 +58,16 @@ export class ActionPlanPickerComponent {
   isOption = isOptionLeg;
 
   private readonly preview = inject(ActionPlanPreviewService);
-  private readonly destroyRef = inject(DestroyRef);
-  private readonly _changes = new Subject<ActionPlan>();
 
   constructor() {
-    this._changes
-      .pipe(debounceTime(PREVIEW_DEBOUNCE_MS), takeUntilDestroyed(this.destroyRef))
+    // One transformation: the actionPlan signal IS the source. No
+    // Subject + effect() bridge. ``toObservable`` runs the
+    // signal-to-Rx conversion in an injection context (the constructor)
+    // and ``takeUntilDestroyed`` ties the subscription lifetime to the
+    // component without an explicit DestroyRef plumb-through.
+    toObservable(this.actionPlan)
+      .pipe(debounceTime(PREVIEW_DEBOUNCE_MS), takeUntilDestroyed(inject(DestroyRef)))
       .subscribe((plan) => this._fetchPreview(plan));
-
-    effect(() => {
-      this._changes.next(this.actionPlan());
-    });
   }
 
   addStockEntry(): void {

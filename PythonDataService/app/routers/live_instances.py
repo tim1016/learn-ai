@@ -51,7 +51,7 @@ from app.routers.live_runs import (
     build_command_timeline,
 )
 from app.engine.action_plan.parity import parity_diagnostics
-from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse, ParityWarning
+from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.live_runs import (
     ActiveDateEntry,
     AuditCopySizingLookup,
@@ -855,19 +855,15 @@ async def preview_action_plan(plan: ActionPlan) -> ActionPlanPreviewResponse:
 
     Stateless, side-effect-free. Pydantic rejects malformed plans (422)
     at the body-validation step; semantically valid plans pass through
-    to ``parity_diagnostics``. The response is always 200 OK regardless
-    of warning count — submit-time gating is the operator's call (the
-    deploy boundary enforces only the schema). ADR 0012 §"Architectural
+    to ``parity_diagnostics``. Always 200 OK regardless of warning
+    count — submit-time gating is the operator's call (the deploy
+    boundary enforces only the schema). ADR 0012 §"Architectural
     decisions" pins that this endpoint MUST NOT consult
     ``live_config.symbol``, the instance roster, or any other session
     context; the plan is the only input.
     """
 
-    warnings = [
-        ParityWarning(code=w.code.value, message=w.message, leg_id=w.leg_id)
-        for w in parity_diagnostics(plan)
-    ]
-    return ActionPlanPreviewResponse(warnings=warnings)
+    return ActionPlanPreviewResponse(warnings=parity_diagnostics(plan))
 
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
