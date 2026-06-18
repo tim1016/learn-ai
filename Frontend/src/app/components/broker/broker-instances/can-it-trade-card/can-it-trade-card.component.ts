@@ -1,12 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import type { ReadinessVector } from '../../../../api/live-instances.types';
 
-interface FailedGateRow {
-  key: string;
-  label: string;
-  severity: 'hard' | 'soft';
-  detail: string;
-}
+import { projectFailingGates, type FailingGateRow } from '../failing-gates';
 
 /**
  * "Can It Trade?" — the operator-priority verdict surface that answers the
@@ -46,19 +41,9 @@ export class CanItTradeCardComponent {
     () => this.readiness()?.gates.filter((g) => g.status === 'pass').length ?? 0,
   );
 
-  readonly failingGates = computed<FailedGateRow[]>(() => {
-    const r = this.readiness();
-    if (!r) return [];
-    const labels = this.gateLabels();
-    return r.gates
-      .filter((g) => g.status !== 'pass')
-      .map<FailedGateRow>((g) => ({
-        key: g.name,
-        label: labels[g.name] ?? g.name,
-        severity: g.severity,
-        detail: g.detail,
-      }));
-  });
+  readonly failingGates = computed<FailingGateRow[]>(() =>
+    projectFailingGates(this.readiness(), this.gateLabels()),
+  );
 
   readonly verdictAttr = computed<'ready' | 'degraded' | 'blocked' | 'unknown'>(() => {
     switch (this.verdict()) {

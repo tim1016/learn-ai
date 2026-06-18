@@ -4,12 +4,10 @@ export type DetectiveTab = 'activity' | 'diagnostics';
 
 /**
  * Detective section — owns the Activity / Diagnostics split for the bot's
- * downstream evidence. Always rendered; the `tabbed` input gates whether
- * the two slots collapse into a single tab strip (cockpit-v2 mode) or
- * render inline as a flat list (legacy mode). Issue #586.
+ * downstream evidence. Issue #586.
  *
  * Slot contract:
- *   <app-detective-section [tabbed]="..." [activeTab]="...">
+ *   <app-detective-section [activeTab]="..." (tabRequested)="...">
  *     <div slot="activity">…chart + signal + trades…</div>
  *     <div slot="diagnostics">…incidents-panel…</div>
  *   </app-detective-section>
@@ -21,7 +19,6 @@ export type DetectiveTab = 'activity' | 'diagnostics';
   styleUrl: './detective-section.component.scss',
 })
 export class DetectiveSectionComponent {
-  readonly tabbed = input.required<boolean>();
   readonly activeTab = input<DetectiveTab>('activity');
 
   readonly tabRequested = output<DetectiveTab>();

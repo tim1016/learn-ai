@@ -1,22 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import type {
-  LiveInstanceStatus,
-  ReadinessVerdict,
-} from '../../../../api/live-instances.types';
+import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { deriveFleetState, type FleetState } from '../fleet-state';
-
-type StatePillKind = 'running' | 'stopping' | 'stopped' | 'idle' | 'unreachable';
-type ReadinessPillKind = 'ready' | 'blocked' | 'degraded' | 'unknown' | 'no_readiness';
-
-interface StatePill {
-  label: string;
-  kind: StatePillKind;
-}
-
-interface ReadinessPill {
-  label: string;
-  kind: ReadinessPillKind;
-}
 
 /**
  * Sticky control bar — the persistent per-bot identity + status strip that
@@ -28,7 +12,7 @@ interface ReadinessPill {
  * - #1, #2 sticky positioning so the bot's identity + status never leave
  *   the viewport while the trader is reading any of the down-page cards
  * - #3 persistent PAPER pill so paper mode is never confused with live
- * - #51 lead with the most-urgent fact (readiness verdict pill goes first)
+ * - #51 lead with the most-urgent fact (fleet-state pill goes first)
  *
  * User stories deferred to a follow-up so that Start / Pause / Stop logic
  * does not move underneath an in-flight refactor:
@@ -57,45 +41,8 @@ export class StickyControlBarComponent {
    * surfaced by the fleet header. The sticky bar receives it as an input
    * so it doesn't re-derive paper-vs-live from heuristics. */
   readonly isPaper = input.required<boolean>();
-  /** When true, the bar renders the cockpit-v2 cluster (fleet-state pill,
-   * keycap toolbar, attention strip) instead of the legacy process /
-   * readiness pills. Parent component gates this on the broker-instances-v2
-   * feature flag (issue #583). */
-  readonly cockpit = input<boolean>(false);
 
   readonly fleetState = computed<FleetState>(() => deriveFleetState(this.status()));
-
-  readonly statePill = computed<StatePill>(() => {
-    const state = this.status().process.state;
-    switch (state) {
-      case 'running':
-        return { label: 'RUNNING', kind: 'running' };
-      case 'stopping':
-        return { label: 'STOPPING', kind: 'stopping' };
-      case 'exited':
-      case 'idle':
-        return { label: 'STOPPED', kind: 'stopped' };
-      case 'unreachable':
-        return { label: 'UNREACHABLE', kind: 'unreachable' };
-      default:
-        return { label: 'UNKNOWN', kind: 'idle' };
-    }
-  });
-
-  readonly readinessPill = computed<ReadinessPill>(() => {
-    const verdict: ReadinessVerdict | undefined = this.status().readiness?.verdict;
-    if (!verdict) return { label: 'NO READINESS', kind: 'no_readiness' };
-    switch (verdict) {
-      case 'READY':
-        return { label: 'READY', kind: 'ready' };
-      case 'BLOCKED':
-        return { label: 'BLOCKED', kind: 'blocked' };
-      case 'DEGRADED':
-        return { label: 'DEGRADED', kind: 'degraded' };
-      default:
-        return { label: 'UNKNOWN', kind: 'unknown' };
-    }
-  });
 
   readonly botName = computed<string>(() => this.status().strategy_instance_id);
 

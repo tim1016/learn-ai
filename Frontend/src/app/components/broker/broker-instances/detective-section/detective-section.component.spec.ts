@@ -9,7 +9,6 @@ import { DetectiveSectionComponent, type DetectiveTab } from './detective-sectio
   imports: [DetectiveSectionComponent],
   template: `
     <app-detective-section
-      [tabbed]="tabbed"
       [activeTab]="activeTab"
       (tabRequested)="onTabRequested($event)"
     >
@@ -19,7 +18,6 @@ import { DetectiveSectionComponent, type DetectiveTab } from './detective-sectio
   `,
 })
 class TestHostComponent {
-  tabbed = false;
   activeTab: DetectiveTab = 'activity';
   lastEmitted: DetectiveTab | null = null;
   onTabRequested(tab: DetectiveTab): void {
@@ -27,7 +25,7 @@ class TestHostComponent {
   }
 }
 
-function render(opts: { tabbed?: boolean; activeTab?: DetectiveTab } = {}): {
+function render(opts: { activeTab?: DetectiveTab } = {}): {
   el: HTMLElement;
   host: TestHostComponent;
 } {
@@ -36,7 +34,6 @@ function render(opts: { tabbed?: boolean; activeTab?: DetectiveTab } = {}): {
     providers: [provideZonelessChangeDetection()],
   });
   const fixture = TestBed.createComponent(TestHostComponent);
-  fixture.componentInstance.tabbed = opts.tabbed ?? false;
   fixture.componentInstance.activeTab = opts.activeTab ?? 'activity';
   fixture.detectChanges();
   return {
@@ -52,59 +49,39 @@ function isHidden(el: Element | null): boolean {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('DetectiveSectionComponent', () => {
-  describe('untabbed (legacy) mode', () => {
-    it('does not render the tab strip', () => {
-      const { el } = render({ tabbed: false });
+  it('renders the tab strip', () => {
+    const { el } = render();
 
-      expect(el.querySelector('[data-testid="detective-tab-activity"]')).toBeNull();
-      expect(el.querySelector('[data-testid="detective-tab-diagnostics"]')).toBeNull();
-    });
-
-    it('renders both projected slots inline', () => {
-      const { el } = render({ tabbed: false });
-
-      expect(isHidden(el.querySelector('.slot-activity'))).toBe(false);
-      expect(isHidden(el.querySelector('.slot-diagnostics'))).toBe(false);
-      expect(el.textContent ?? '').toContain('ACTIVITY BODY');
-      expect(el.textContent ?? '').toContain('DIAGNOSTICS BODY');
-    });
+    expect(el.querySelector('[data-testid="detective-tab-activity"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="detective-tab-diagnostics"]')).not.toBeNull();
   });
 
-  describe('tabbed (cockpit) mode', () => {
-    it('renders the tab strip', () => {
-      const { el } = render({ tabbed: true });
+  it('marks the Activity tab as selected by default', () => {
+    const { el } = render();
 
-      expect(el.querySelector('[data-testid="detective-tab-activity"]')).not.toBeNull();
-      expect(el.querySelector('[data-testid="detective-tab-diagnostics"]')).not.toBeNull();
-    });
+    const activityTab = el.querySelector<HTMLElement>('[data-testid="detective-tab-activity"]');
+    expect(activityTab?.getAttribute('aria-selected')).toBe('true');
+  });
 
-    it('marks the Activity tab as selected by default', () => {
-      const { el } = render({ tabbed: true });
+  it('hides the diagnostics slot when activity is active', () => {
+    const { el } = render({ activeTab: 'activity' });
 
-      const activityTab = el.querySelector<HTMLElement>('[data-testid="detective-tab-activity"]');
-      expect(activityTab?.getAttribute('aria-selected')).toBe('true');
-    });
+    expect(isHidden(el.querySelector('.slot-activity'))).toBe(false);
+    expect(isHidden(el.querySelector('.slot-diagnostics'))).toBe(true);
+  });
 
-    it('hides the diagnostics slot when activity is active', () => {
-      const { el } = render({ tabbed: true, activeTab: 'activity' });
+  it('hides the activity slot when diagnostics is active', () => {
+    const { el } = render({ activeTab: 'diagnostics' });
 
-      expect(isHidden(el.querySelector('.slot-activity'))).toBe(false);
-      expect(isHidden(el.querySelector('.slot-diagnostics'))).toBe(true);
-    });
+    expect(isHidden(el.querySelector('.slot-activity'))).toBe(true);
+    expect(isHidden(el.querySelector('.slot-diagnostics'))).toBe(false);
+  });
 
-    it('hides the activity slot when diagnostics is active', () => {
-      const { el } = render({ tabbed: true, activeTab: 'diagnostics' });
+  it('emits tabRequested with the clicked tab id', () => {
+    const { el, host } = render({ activeTab: 'activity' });
 
-      expect(isHidden(el.querySelector('.slot-activity'))).toBe(true);
-      expect(isHidden(el.querySelector('.slot-diagnostics'))).toBe(false);
-    });
+    el.querySelector<HTMLButtonElement>('[data-testid="detective-tab-diagnostics"]')?.click();
 
-    it('emits tabRequested with the clicked tab id', () => {
-      const { el, host } = render({ tabbed: true, activeTab: 'activity' });
-
-      el.querySelector<HTMLButtonElement>('[data-testid="detective-tab-diagnostics"]')?.click();
-
-      expect(host.lastEmitted).toBe('diagnostics');
-    });
+    expect(host.lastEmitted).toBe('diagnostics');
   });
 });
