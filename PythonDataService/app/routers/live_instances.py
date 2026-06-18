@@ -17,7 +17,7 @@ import logging
 import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
@@ -686,7 +686,7 @@ def _resolve_action_plan(
 
 def _resolve_instrument_surface(
     root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> str | None:
+) -> Literal["policy", "explicit"] | None:
     """PRD #593 Slice 1A — surface the registered ``instrument_surface``
     for the bound run's strategy. Informational in Slices 1–3 (every
     current strategy is ``explicit``); Slice 4 introduces enforcement.

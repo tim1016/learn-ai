@@ -875,8 +875,11 @@ class LiveInstanceStatus(BaseModel):
     # value for the bound run's ``strategy_key``. Informational only in
     # Slices 1–3 (every current strategy registers as ``explicit``).
     # ``None`` when nothing is deployed, the ledger has no
-    # ``strategy_key``, or the strategy isn't in the registry.
-    instrument_surface: str | None = None
+    # ``strategy_key``, or the strategy isn't in the registry. Pinned to
+    # the registry's ``Literal["policy", "explicit"]`` so the wire
+    # contract refuses an unknown value rather than silently passing it
+    # to the cockpit (ADR 0012 §6 — the enum is the source of truth).
+    instrument_surface: Literal["policy", "explicit"] | None = None
     fetched_at_ms: int
 
 
