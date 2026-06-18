@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRoute, provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrokerService } from '../../../services/broker.service';
@@ -112,11 +112,7 @@ function setup(
     daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
     reload: vi.fn(),
   };
-  const queryParamMap = {
-    get: (key: string) => opts.queryParams?.[key] ?? null,
-    has: (key: string) => key in (opts.queryParams ?? {}),
-    keys: Object.keys(opts.queryParams ?? {}),
-  };
+  const queryParamMap = convertToParamMap(opts.queryParams ?? {});
   TestBed.configureTestingModule({
     providers: [
       provideRouter([]),

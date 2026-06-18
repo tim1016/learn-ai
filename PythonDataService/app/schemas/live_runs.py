@@ -836,6 +836,21 @@ class InstanceSizing(BaseModel):
     per_trade_audit: list[SizingAuditRow] = Field(default_factory=list)
 
 
+class RedeployLineage(BaseModel):
+    """PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy
+    lineage. Persisted in the ledger's ``lineage`` block alongside
+    ``code_sha`` and ``sizing_provenance`` (NOT inside ``live_config``),
+    so the fields stay out of the content hash that produces ``run_id``.
+
+    Wire-shape mirror of the TypeScript ``ActionPlanLineage`` interface.
+    """
+
+    parent_run_id: str | None = None
+    redeploy_reason: str | None = None
+    # ``int64`` ms UTC wall-clock when the redeploy was issued.
+    redeployed_at_ms: int | None = None
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -891,11 +906,12 @@ class LiveInstanceStatus(BaseModel):
     # to the cockpit (ADR 0012 §6 — the enum is the source of truth).
     instrument_surface: Literal["policy", "explicit"] | None = None
     # PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy lineage,
-    # sourced from the ledger's ``lineage`` block. Typed as ``dict`` so
-    # the response shape stays open for the trio ``{parent_run_id,
-    # redeploy_reason, redeployed_at_ms}``. ``None`` when nothing is
-    # deployed or the ledger pre-dates the field.
-    lineage: dict | None = None
+    # sourced from the ledger's ``lineage`` block. Typed precisely so
+    # the wire contract is the single source of truth (matches the
+    # Slice 1A precedent for ``instrument_surface``). Pydantic accepts
+    # unknown extras by default so a future daemon-side enrichment
+    # passes through without breaking the cockpit.
+    lineage: RedeployLineage | None = None
     fetched_at_ms: int
 
 
