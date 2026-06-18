@@ -97,3 +97,4 @@ The `<app-action-plan-card>` carries the explicit literal label *"Declared actio
 * Treating parity warnings as hard errors — asymmetric structures are legitimate.
 * Shipping speculative `ActionIntent` / `Execution` Pydantic types in Slice 1 — they would drift before Slice 4 lands the real resolver/broker contracts. `ExecutionRow` already exists.
 * Loosening the `instrument_surface` capability flag to refuse deploys in Slices 1–3 — no current strategy can be refused (every one is `explicit`), and the deploy form's picker is shown unconditionally so operators can declare plans before consumption lands.
+
