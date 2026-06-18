@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from app.engine.live.run_ledger import compute_run_id
 
-
 _BASE_IDENTITY: dict[str, object] = {
     "code_sha": "abc",
     "strategy_spec_sha256": "spec-sha",

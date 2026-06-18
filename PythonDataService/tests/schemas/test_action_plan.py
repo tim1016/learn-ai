@@ -10,6 +10,9 @@ Prior art: tests/schemas/test_host_runner_deploy_request_sizing.py.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.schemas.action_plan import ActionPlan
 
 
@@ -26,3 +29,12 @@ def test_empty_action_plan_constructs_from_defaults() -> None:
 
     assert plan.on_enter == []
     assert plan.on_exit == []
+
+
+def test_unknown_top_level_key_rejected() -> None:
+    """`extra="forbid"` pins the deploy-boundary invariant: an operator typo
+    like ``on_entry`` (instead of ``on_enter``) fails validation instead of
+    silently round-tripping a malformed plan into the ledger."""
+
+    with pytest.raises(ValidationError, match=r"on_entry"):
+        ActionPlan.model_validate({"on_enter": [], "on_exit": [], "on_entry": []})

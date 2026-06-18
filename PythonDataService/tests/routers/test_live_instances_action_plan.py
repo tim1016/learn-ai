@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
@@ -53,7 +54,7 @@ def _write_ledger_with_action(
 
 
 @pytest.fixture
-def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, Path]:
     root = tmp_path / "live_runs"
     root.mkdir()
     stub = SimpleNamespace(

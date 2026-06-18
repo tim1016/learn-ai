@@ -51,7 +51,7 @@ Every leg carries an explicit `instrument.underlying` (e.g. `"SPY"`). The deploy
 
 ### 6. `instrument_surface ∈ {policy, explicit}` capability flag — informational in Slices 1–3
 
-New `StrategyRegistration.instrument_surface` field — parallels `sizing_surface` per ADR 0009 §6. **Every current strategy registers as `"explicit"`** in Slices 1–3 (set as the default so adding a strategy doesn't silently adopt `policy`). The deploy boundary **stores** the registered value in the run ledger (via `/status`) but does **NOT refuse** deploys based on it — informational only. Slice 4 introduces enforcement: a `"policy"`-surface strategy that calls `set_holdings` directly will be rejected at runtime, mirroring the `sizing_surface="policy"` ↔ `set_holdings` enforcement in `live_portfolio.py`.
+New `StrategyRegistration.instrument_surface` field — parallels `sizing_surface` per ADR 0009 §6. **Every current strategy registers as `"explicit"`** in Slices 1–3 (set as the default so adding a strategy doesn't silently adopt `policy`). The `/status` response reads the registered value from the strategy registry at request time (keyed by `strategy_key` recovered from the ledger) and surfaces it on the cockpit. The deploy boundary does **NOT refuse** deploys based on it — informational only. Slice 4 introduces enforcement: a `"policy"`-surface strategy that calls `set_holdings` directly will be rejected at runtime, mirroring the `sizing_surface="policy"` ↔ `set_holdings` enforcement in `live_portfolio.py`.
 
 ### 7. Unhashed redeploy lineage — `parent_run_id` + `redeploy_reason` (Slice 1E #598)
 

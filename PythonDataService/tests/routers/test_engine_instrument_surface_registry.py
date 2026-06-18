@@ -15,7 +15,6 @@ import pytest
 
 from app.routers.engine import _STRATEGY_REGISTRY
 
-
 _EXPECTED_INSTRUMENT_SURFACE = "explicit"
 
 

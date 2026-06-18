@@ -11,7 +11,7 @@ consumption is Slice 4 (follow-up PRD + ADR 0013).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActionPlan(BaseModel):
@@ -22,6 +22,8 @@ class ActionPlan(BaseModel):
     persistence, ``run_id`` hashing, and cockpit display all have a
     stable container to round-trip through before the leg variants land.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     on_enter: list = Field(default_factory=list)
     on_exit: list = Field(default_factory=list)

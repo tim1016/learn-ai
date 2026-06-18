@@ -675,7 +675,11 @@ def _resolve_action_plan(
         return None
     try:
         ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning(
+            "Failed to resolve action_plan from run ledger",
+            extra={"run_dir": str(run_dir), "error": repr(exc)},
+        )
         return None
     live_config = ledger.get("live_config") or {}
     if not isinstance(live_config, dict):
@@ -701,7 +705,11 @@ def _resolve_instrument_surface(
         return None
     try:
         ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning(
+            "Failed to resolve instrument_surface from run ledger",
+            extra={"run_dir": str(run_dir), "error": repr(exc)},
+        )
         return None
     strategy_key = ledger.get("strategy_key")
     if not isinstance(strategy_key, str) or not strategy_key:
