@@ -377,7 +377,10 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Can it trade?');
+    // Card label rendered as mono uppercase per the Terminal Cockpit
+    // visual identity (#591) — the historic "Can it trade?" prose
+    // moved into the mono "CAN IT TRADE" header.
+    expect(text).toContain('CAN IT TRADE');
     expect(text).toContain('0 / 1 checks pass');
     expect(text).toContain('Daily Trade Limit Available');
     expect(text).toContain('4 / 4 orders used');
@@ -595,8 +598,11 @@ describe('BrokerInstancesComponent', () => {
     expect(text).toContain('An operator manually flagged this run unsafe');
   });
 
-  it('marks a hard-failing readiness gate as Blocking', async () => {
+  it('marks a hard-failing readiness gate as FAIL · HARD', async () => {
     // makeStatus's default readiness has orders_cap failing with severity 'hard'.
+    // Terminal Cockpit (#591) renders the severity as `FAIL · HARD` / `FAIL · SOFT`
+    // — the historic operator-language "Blocking" / "Advisory" copy moved into
+    // the visible mark.
     const { fixture, component } = setup();
     await flush();
     fixture.detectChanges();
@@ -606,7 +612,7 @@ describe('BrokerInstancesComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain('Blocking');
+    expect(fixture.nativeElement.textContent).toContain('FAIL · HARD');
   });
 
   it('does not show a "why it stopped" panel for a live instance', async () => {

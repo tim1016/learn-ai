@@ -119,9 +119,9 @@ describe('CanItTradeCardComponent', () => {
 
     const text = el.textContent ?? '';
     expect(text).toContain('Broker Connection Live');
-    expect(text).toContain('Blocking');
+    expect(text).toContain('FAIL · HARD');
     expect(text).toContain('Daily Trade Limit Available');
-    expect(text).toContain('Advisory');
+    expect(text).toContain('FAIL · SOFT');
     expect(text).toContain('IBKR gateway not reachable');
     expect(text).toContain('3 of 3 daily orders used');
   });

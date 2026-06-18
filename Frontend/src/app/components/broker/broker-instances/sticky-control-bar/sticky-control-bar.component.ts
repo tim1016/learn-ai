@@ -2,32 +2,34 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { deriveFleetState, type FleetState } from '../fleet-state';
 
+type PillTone = 'running' | 'paused' | 'stopped' | 'stopping' | 'unknown';
+type Verdict = 'paper' | 'unknown' | 'ready' | 'degraded' | 'blocked';
+type PriorRun = 'success' | 'failure' | null;
+
+const FLEET_VERDICT: Record<FleetState, 'ready' | 'degraded' | 'blocked'> = {
+  STEADY: 'ready',
+  CONFIGURE: 'degraded',
+  BLOCKED: 'blocked',
+};
+
 /**
  * Sticky control bar — the persistent per-bot identity + status strip that
  * stays visible while the operator scrolls the long control panel.
  *
- * Issue #565 PR 12 — MVP scope.
+ * Terminal Cockpit visual identity (issue #591): renders a 3-column grid —
+ * bot identity (name + strategy_instance_id sid), a centered pill cluster
+ * (STATE / INTENT / SAFETY / LAST RUN + fleet-state verdict), and an action
+ * toolbar with keycap-styled buttons. A 4-pixel attention strip sits along
+ * the banner's bottom edge tinted by the fleet verdict (ready / degraded /
+ * blocked), serving as a peripheral-vision indicator while the operator's
+ * eyes are deep in the page.
  *
- * User stories covered in this MVP:
- * - #1, #2 sticky positioning so the bot's identity + status never leave
- *   the viewport while the trader is reading any of the down-page cards
- * - #3 persistent PAPER pill so paper mode is never confused with live
- * - #51 lead with the most-urgent fact (fleet-state pill goes first)
- *
- * User stories deferred to a follow-up so that Start / Pause / Stop logic
- * does not move underneath an in-flight refactor:
- * - #31-#40 destructive kebab menu, conditional Restart & Update, paper
- *   reset — kebab affordance ships with this PR as a "scroll to advanced
- *   actions" link only, so destructive logic stays where it has been
- *   end-to-end tested. Real kebab dialogs land in a follow-up that owns
- *   only the dialog wiring.
- *
- * Per the issue body: "Safety-critical controls land LAST so the existing
- * parent component remains the source of truth for Start/Pause/Stop until
- * the surrounding context is stable." This MVP honours that by NOT
- * duplicating the Start / Pause / Stop buttons in the sticky bar — a
- * "Jump to controls" button scrolls the existing Start/Stop card into
- * view instead. Full control extraction lands in PR13 cleanup.
+ * Command wiring stays where it is — this bar's `Jump to controls` keycap
+ * scrolls the existing Start/Pause/Stop card into view rather than
+ * duplicating destructive controls. Full keycap action rewire (PAUSE /
+ * FLATTEN&PAUSE / kebab dialog) lands as a follow-up (slice #584) so that
+ * sticky-banner UX and command-flow changes ship as separate, reviewable
+ * diffs.
  */
 @Component({
   selector: 'app-sticky-control-bar',
@@ -46,10 +48,78 @@ export class StickyControlBarComponent {
 
   readonly botName = computed<string>(() => this.status().strategy_instance_id);
 
-  readonly hasPoisonFlag = computed<boolean>(() => {
-    const trigger = this.status().last_exit?.halt_trigger;
-    return trigger !== null && trigger !== undefined;
+  readonly hasPoisonFlag = computed<boolean>(
+    () => this.status().last_exit?.halt_trigger != null,
+  );
+
+  readonly processLabel = computed<string>(() => this.status().process.state);
+
+  readonly processTone = computed<PillTone>(() => {
+    switch (this.status().process.state) {
+      case 'running':
+        return 'running';
+      case 'stopping':
+        return 'stopping';
+      case 'exited':
+      case 'idle':
+        return 'stopped';
+      default:
+        return 'unknown';
+    }
   });
+
+  readonly intentLabel = computed<string | null>(
+    () => this.status().desired_state?.state ?? null,
+  );
+
+  readonly intentTone = computed<PillTone>(() => {
+    switch (this.status().desired_state?.state) {
+      case 'RUNNING':
+        return 'running';
+      case 'PAUSED':
+        return 'paused';
+      case 'STOPPED':
+        return 'stopped';
+      default:
+        return 'unknown';
+    }
+  });
+
+  /** Safety pill is paper/live only. Poison is surfaced separately by the
+   * POISONED chip + the LAST RUN FAULT chip — see #591 review F2/M5: do
+   * not duplicate the same fact across pills. */
+  readonly safetyVerdict = computed<Verdict>(() => (this.isPaper() ? 'paper' : 'unknown'));
+
+  readonly safetyLabel = computed<string>(() => (this.isPaper() ? 'PAPER-ONLY' : 'LIVE'));
+
+  readonly priorRun = computed<PriorRun>(() => {
+    const exit = this.status().last_exit;
+    if (!exit) return null;
+    if (exit.halt_trigger != null) return 'failure';
+    if (exit.exit_code === 0 || exit.exit_reason === 'normal') return 'success';
+    if (exit.exit_code != null) return 'failure';
+    return null;
+  });
+
+  /** Returns `null` when there is no prior run to report — callers must
+   * hide the LAST RUN pill in that case. Defaulting to "CLEAN" on no-data
+   * would be a false positive on a freshly deployed bot. */
+  readonly priorRunLabel = computed<string | null>(() => {
+    switch (this.priorRun()) {
+      case 'failure':
+        return 'LAST RUN FAULT';
+      case 'success':
+        return 'LAST RUN CLEAN';
+      default:
+        return null;
+    }
+  });
+
+  /** Single mapping; both the FLEET pill's `data-verdict` and the banner's
+   * `data-attention` attribute consume the same value — #591 review F1. */
+  readonly fleetVerdict = computed<'ready' | 'degraded' | 'blocked'>(
+    () => FLEET_VERDICT[this.fleetState()],
+  );
 
   /** Emitted when the operator clicks "Jump to controls". The parent
    * scrolls the existing Start/Stop card into view; the sticky bar does
