@@ -1,0 +1,27 @@
+@if (hasPlan()) {
+  <section
+    class="card action-plan-card"
+    aria-labelledby="action-plan-heading"
+    data-testid="action-plan-card"
+  >
+    <div class="card-head">
+      <div class="card-label" id="action-plan-heading">ACTION PLAN</div>
+      <p class="not-active-banner" data-testid="action-plan-not-active-banner">
+        Declared action plan — not active until engine consumption (Slice 4)
+      </p>
+    </div>
+
+    <div class="card-body">
+      @if (isEmpty()) {
+        <p class="muted" data-testid="action-plan-empty-state">
+          No legs declared. Operator-declared entry and exit legs land in the
+          deploy form once the picker scaffold ships (Slice 1B).
+        </p>
+      } @else {
+        <p class="muted">
+          {{ entryLegCount() }} entry leg(s) / {{ exitEntityCount() }} exit action(s).
+        </p>
+      }
+    </div>
+  </section>
+}

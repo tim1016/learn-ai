@@ -25,6 +25,10 @@ LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
         "run_dir",
         "max_submit_latency_ms",
         "sizing",
+        # PRD #593 Slice 1A — operator-declared instrument plan.
+        # Hashed into ``run_id`` like every other key here; engine
+        # consumption is deferred to Slice 4 (ADR 0012 §"Scope").
+        "action",
     }
 )
 

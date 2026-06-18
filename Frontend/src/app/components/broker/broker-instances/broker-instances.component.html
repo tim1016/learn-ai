@@ -145,6 +145,8 @@
           [redeployQueryParams]="redeployQueryParams(s)"
         />
 
+        <app-action-plan-card [actionPlan]="s.action_plan" />
+
         <app-current-risk-card
           [broker]="s.broker"
           [readiness]="s.readiness"

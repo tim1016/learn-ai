@@ -1,0 +1,159 @@
+"""Slice 1A — ``/status`` surfaces ``action_plan`` and ``instrument_surface``.
+
+PRD #593 §"API contracts": ``GET /api/live-instances/{id}/status`` exposes
+the bound run's declared ``live_config.action`` plan and the strategy's
+registered ``instrument_surface`` value.
+
+Slice 1A only ships the empty-plan case from the ledger side. Stock and
+option legs (#595 / #596) extend the ledger payload but the response
+plumbing is identical — this test pins the empty-plan attestation today
+so the response shape is fixed before the leg variants arrive.
+
+Prior art: ``tests/routers/test_live_instances.py``.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.engine.live import host_daemon_client
+from app.routers import live_instances
+
+
+def _write_ledger_with_action(
+    root: Path,
+    *,
+    run_id: str,
+    sid: str,
+    strategy_key: str,
+    action_plan: dict | None,
+) -> None:
+    """Mirror the prod ledger shape (``live_config`` carries ``action`` when
+    present). Mirrors ``tests/routers/test_live_instances._write_ledger``
+    but with the extra fields Slice 1A reads."""
+
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True)
+    live_config: dict = {"sizing": {"kind": "FixedShares", "value": 1}}
+    if action_plan is not None:
+        live_config["action"] = action_plan
+    payload: dict = {
+        "run_id": run_id,
+        "strategy_instance_id": sid,
+        "strategy_key": strategy_key,
+        "created_at_ms": 100,
+        "live_config": live_config,
+    }
+    (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.fixture
+def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / "live_runs"
+    root.mkdir()
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        fleet_dirty_blocks_starts=False,
+        mode="paper",
+        readonly=False,
+    )
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    from app.main import app
+
+    return app, root
+
+
+def _set_daemon(
+    monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None
+) -> None:
+    async def fake_instances(_base_url: str) -> dict | None:
+        return instances
+
+    async def fake_process(_base_url: str, _sid: str) -> dict | None:
+        return process
+
+    monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
+    monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
+
+
+async def test_status_surfaces_empty_action_plan_from_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger_with_action(
+        root,
+        run_id="run-aaa",
+        sid="spy_ema_paper",
+        strategy_key="spy_ema_crossover",
+        action_plan={"on_enter": [], "on_exit": []},
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-aaa", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action_plan"] == {"on_enter": [], "on_exit": []}
+
+
+async def test_status_surfaces_registered_explicit_instrument_surface(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger_with_action(
+        root,
+        run_id="run-bbb",
+        sid="spy_ema_paper",
+        strategy_key="spy_ema_crossover",
+        action_plan={"on_enter": [], "on_exit": []},
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-bbb", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instrument_surface"] == "explicit"
+
+
+async def test_status_action_plan_is_null_when_ledger_omits_action(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy / pre-Slice-1A ledgers carry no ``action`` key. The status
+    payload must surface ``None`` rather than fabricating an empty plan,
+    so the cockpit can distinguish "operator declared an empty plan" from
+    "the ledger pre-dates the field". """
+
+    app, root = app_with_root
+    _write_ledger_with_action(
+        root,
+        run_id="run-ccc",
+        sid="spy_ema_paper",
+        strategy_key="spy_ema_crossover",
+        action_plan=None,
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-ccc", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action_plan"] is None

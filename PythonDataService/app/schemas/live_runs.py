@@ -399,6 +399,7 @@ class HostRunnerDeployRequest(BaseModel):
             policy_to_ledger_dict,
         )
         from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS
+        from app.schemas.action_plan import ActionPlan
 
         unknown = set(value.keys()) - LIVE_CONFIG_LEDGER_KEYS
         if unknown:
@@ -412,6 +413,8 @@ class HostRunnerDeployRequest(BaseModel):
             )
         policy = parse_sizing_policy(sizing)
         value["sizing"] = policy_to_ledger_dict(policy)
+        if "action" in value:
+            value["action"] = ActionPlan.model_validate(value["action"]).model_dump()
         return value
 
 
@@ -860,6 +863,20 @@ class LiveInstanceStatus(BaseModel):
     # ledger predates the symbol field — the UI must treat null as "unknown"
     # rather than substituting a default.
     symbol: str | None = None
+    # PRD #593 Slice 1A — the operator-declared instrument plan for the
+    # bound (or evidence) run, sourced from ``ledger.live_config.action``.
+    # ``None`` when nothing is deployed OR the ledger pre-dates the
+    # field — the cockpit must distinguish "declared empty" (an empty
+    # ``ActionPlan`` dict) from "ledger pre-dates the field" (``None``).
+    # Typed as ``dict`` so the response shape stays open while leg
+    # variants are still being added in #595 (stock) and #596 (option).
+    action_plan: dict | None = None
+    # PRD #593 Slice 1A — the strategy registry's ``instrument_surface``
+    # value for the bound run's ``strategy_key``. Informational only in
+    # Slices 1–3 (every current strategy registers as ``explicit``).
+    # ``None`` when nothing is deployed, the ledger has no
+    # ``strategy_key``, or the strategy isn't in the registry.
+    instrument_surface: str | None = None
     fetched_at_ms: int
 
 

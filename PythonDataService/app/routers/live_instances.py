@@ -659,6 +659,61 @@ def _sizing(
     )
 
 
+def _resolve_action_plan(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> dict | None:
+    """PRD #593 Slice 1A — surface the bound (or evidence) run's declared
+    instrument plan to the cockpit.
+
+    Returns ``None`` when nothing is deployed, the ledger is unreadable,
+    or the ledger pre-dates the ``live_config.action`` key — the cockpit
+    distinguishes that case from "operator declared an empty plan", which
+    serializes as ``{"on_enter": [], "on_exit": []}``.
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+    live_config = ledger.get("live_config") or {}
+    if not isinstance(live_config, dict):
+        return None
+    action = live_config.get("action")
+    return action if isinstance(action, dict) else None
+
+
+def _resolve_instrument_surface(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> str | None:
+    """PRD #593 Slice 1A — surface the registered ``instrument_surface``
+    for the bound run's strategy. Informational in Slices 1–3 (every
+    current strategy is ``explicit``); Slice 4 introduces enforcement.
+
+    Returns ``None`` when nothing is deployed, the ledger is unreadable,
+    the ledger has no ``strategy_key``, or the strategy is not registered
+    — the cockpit treats null as "unknown" rather than substituting a
+    default.
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+    strategy_key = ledger.get("strategy_key")
+    if not isinstance(strategy_key, str) or not strategy_key:
+        return None
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    reg = _STRATEGY_REGISTRY.get(strategy_key)
+    if reg is None:
+        return None
+    return reg.instrument_surface
+
+
 def _provenance(
     root: Path, live_binding: LiveBinding | None, runs: list[dict]
 ) -> InstanceProvenance | None:
@@ -1091,6 +1146,8 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         sizing=_sizing(root, live_binding, runs, sid),
         last_exit=_instance_last_exit(runs),
         symbol=_resolve_symbol(root, live_binding, runs),
+        action_plan=_resolve_action_plan(root, live_binding, runs),
+        instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
         fetched_at_ms=_now_ms(),
     )
 

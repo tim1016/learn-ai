@@ -37,6 +37,7 @@ import { LastSessionCardComponent } from './last-session-card/last-session-card.
 import { CanItTradeCardComponent } from './can-it-trade-card/can-it-trade-card.component';
 import { StickyControlBarComponent } from './sticky-control-bar/sticky-control-bar.component';
 import { ConfigurationCardComponent } from './configuration-card/configuration-card.component';
+import { ActionPlanCardComponent } from './action-plan-card/action-plan-card.component';
 import { DetectiveSectionComponent, type DetectiveTab } from './detective-section/detective-section.component';
 import { PreTradeChecklistComponent } from './pre-trade-checklist/pre-trade-checklist.component';
 
@@ -170,6 +171,7 @@ const READINESS_GATE_LABELS: Record<string, string> = {
     CanItTradeCardComponent,
     StickyControlBarComponent,
     ConfigurationCardComponent,
+    ActionPlanCardComponent,
     DetectiveSectionComponent,
     PreTradeChecklistComponent,
   ],
