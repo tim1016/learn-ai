@@ -31,7 +31,7 @@
                   <span class="leg-summary">{{ optionSummary(leg) }}</span>
                 } @else {
                   <span class="leg-position" [class.long]="leg.position === 'long'" [class.short]="leg.position === 'short'">
-                    {{ leg.position | uppercase }}
+                    {{ leg.position }}
                   </span>
                 }
                 <span class="leg-instrument">{{ leg.instrument.underlying }}</span>
