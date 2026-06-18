@@ -158,3 +158,49 @@ async def test_status_action_plan_is_null_when_ledger_omits_action(
     assert response.status_code == 200
     body = response.json()
     assert body["action_plan"] is None
+
+
+# ---------------------------------------------------------------------------
+# Slice 1B (#595) — stock entry leg + close_leg exit persistence.
+
+_STOCK_PLAN: dict = {
+    "on_enter": [
+        {
+            "leg_id": "spy_long",
+            "instrument": {"kind": "stock", "underlying": "SPY"},
+            "position": "long",
+            "qty_ratio": 1,
+        }
+    ],
+    "on_exit": [{"kind": "close_leg", "entry_leg_id": "spy_long"}],
+}
+
+
+async def test_status_surfaces_stock_plan_from_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end demo from PRD #593 §"The operator workflow": an
+    operator builds 'buy 100 SPY on ENTER / sell 100 SPY on EXIT' from
+    the UI, submits, sees it persisted in the ledger, and sees it
+    rendered in the cockpit card. Slice 1B closes the persistence +
+    surfacing half (the picker UI is the other half)."""
+
+    app, root = app_with_root
+    _write_ledger_with_action(
+        root,
+        run_id="run-stock",
+        sid="spy_ema_paper",
+        strategy_key="spy_ema_crossover",
+        action_plan=_STOCK_PLAN,
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-stock", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action_plan"] == _STOCK_PLAN

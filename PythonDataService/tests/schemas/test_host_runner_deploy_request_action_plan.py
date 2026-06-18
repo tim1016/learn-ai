@@ -10,6 +10,9 @@ through ``HostRunnerDeployRequest`` and be accepted in the
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS
 from app.schemas.live_runs import HostRunnerDeployRequest
 
@@ -51,3 +54,64 @@ def test_empty_action_plan_round_trips_through_deploy_request() -> None:
 
     assert req.live_config["action"] == {"on_enter": [], "on_exit": []}
     assert req.live_config["sizing"] == {"kind": "FixedShares", "value": 1}
+
+
+# ---------------------------------------------------------------------------
+# Slice 1B (#595) — stock action plan acceptance + rejection.
+
+
+_VALID_STOCK_PLAN: dict = {
+    "on_enter": [
+        {
+            "leg_id": "spy_long",
+            "instrument": {"kind": "stock", "underlying": "SPY"},
+            "position": "long",
+            "qty_ratio": 1,
+        }
+    ],
+    "on_exit": [{"kind": "close_leg", "entry_leg_id": "spy_long"}],
+}
+
+
+def test_stock_action_plan_round_trips_through_deploy_request() -> None:
+    """A valid stock plan survives Pydantic round-trip through
+    ``ActionPlan.model_validate`` and is persisted in the parsed
+    ``live_config`` dict ready for ``run_id`` hashing."""
+
+    req = HostRunnerDeployRequest(
+        **_base_kwargs(
+            live_config={
+                "sizing": {"kind": "FixedShares", "value": 1},
+                "action": _VALID_STOCK_PLAN,
+            }
+        )
+    )
+
+    assert req.live_config["action"] == _VALID_STOCK_PLAN
+
+
+def test_malformed_stock_plan_rejected_at_deploy_boundary() -> None:
+    """A bad plan (missing ``instrument.underlying``) is rejected by
+    Pydantic at the deploy boundary so it never enters the ledger or
+    contaminates ``run_id``."""
+
+    bad_plan = {
+        "on_enter": [
+            {
+                "leg_id": "spy_long",
+                "instrument": {"kind": "stock"},
+                "position": "long",
+                "qty_ratio": 1,
+            }
+        ],
+        "on_exit": [],
+    }
+    with pytest.raises(ValidationError, match=r"underlying"):
+        HostRunnerDeployRequest(
+            **_base_kwargs(
+                live_config={
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": bad_plan,
+                }
+            )
+        )

@@ -1,0 +1,49 @@
+.picker-section {
+  display: block;
+  margin-block: 0.75rem;
+}
+
+.picker-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 0.5rem;
+}
+
+.picker-section-heading {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.picker-add {
+  font-size: 0.85rem;
+}
+
+.muted {
+  opacity: 0.7;
+}
+
+.leg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.leg-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 0.35rem;
+}
+
+.leg-id {
+  font-family: monospace;
+}
+
+.picker-remove {
+  margin-inline-start: auto;
+  font-size: 0.8rem;
+}

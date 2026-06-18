@@ -41,4 +41,46 @@ describe('ActionPlanCardComponent', () => {
     const card = el.querySelector<HTMLElement>('[data-testid="action-plan-card"]');
     expect(card?.textContent ?? '').toContain('No legs declared');
   });
+
+  // Slice 1B — stock entry leg + close_leg.
+
+  it('renders a stock entry leg with underlying, position, and qty_ratio', () => {
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'spy_long',
+          instrument: { kind: 'stock', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [],
+    });
+
+    const entry = el.querySelector<HTMLElement>('[data-testid="action-plan-entry-spy_long"]');
+    expect(entry).not.toBeNull();
+    const text = entry?.textContent ?? '';
+    expect(text).toContain('SPY');
+    expect(text.toLowerCase()).toContain('long');
+    expect(text).toContain('spy_long');
+  });
+
+  it('renders a close_leg reference pointing at its entry leg', () => {
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'spy_long',
+          instrument: { kind: 'stock', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+    });
+
+    const exitRow = el.querySelector<HTMLElement>('[data-testid="action-plan-exit-spy_long"]');
+    expect(exitRow).not.toBeNull();
+    expect(exitRow?.textContent ?? '').toContain('spy_long');
+    expect((exitRow?.textContent ?? '').toLowerCase()).toContain('close');
+  });
 });

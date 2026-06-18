@@ -182,6 +182,52 @@ describe('BrokerDeployFormComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('run-new');
   });
 
+  // PRD #593 Slice 1B (#595) — the deploy form carries the operator-
+  // declared action plan into ``live_config.action``.
+  it('submits an empty action plan when the operator declared no legs', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config?.action).toEqual({ on_enter: [], on_exit: [] });
+  });
+
+  it('submits the operator-built stock plan via live_config.action', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+
+    component.actionPlan.set({
+      on_enter: [
+        {
+          leg_id: 'spy_long',
+          instrument: { kind: 'stock', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+    });
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config?.action).toEqual({
+      on_enter: [
+        {
+          leg_id: 'spy_long',
+          instrument: { kind: 'stock', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+    });
+  });
+
   it('defaults the sizing preset to Safe canary and submits FixedShares(1)', async () => {
     const { svc, component } = setup();
     await flush();
@@ -189,7 +235,10 @@ describe('BrokerDeployFormComponent', () => {
     await component.submit();
 
     const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.live_config).toEqual({ sizing: { kind: 'FixedShares', value: 1 } });
+    expect(req.live_config).toEqual({
+      sizing: { kind: 'FixedShares', value: 1 },
+      action: { on_enter: [], on_exit: [] },
+    });
     expect(component.sizingPreset()).toBe('safe_canary');
   });
 
@@ -239,7 +288,10 @@ describe('BrokerDeployFormComponent', () => {
     await component.submit();
 
     const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.live_config).toEqual({ sizing: { kind: 'StrategyExplicit' } });
+    expect(req.live_config).toEqual({
+      sizing: { kind: 'StrategyExplicit' },
+      action: { on_enter: [], on_exit: [] },
+    });
   });
 
   it('emits a Custom FixedShares policy from the kind/value inputs', async () => {
@@ -253,7 +305,10 @@ describe('BrokerDeployFormComponent', () => {
     await component.submit();
 
     const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.live_config).toEqual({ sizing: { kind: 'FixedShares', value: 25 } });
+    expect(req.live_config).toEqual({
+      sizing: { kind: 'FixedShares', value: 25 },
+      action: { on_enter: [], on_exit: [] },
+    });
   });
 
   it('emits a Custom FixedNotional policy with the value as a decimal string', async () => {
@@ -267,7 +322,10 @@ describe('BrokerDeployFormComponent', () => {
     await component.submit();
 
     const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.live_config).toEqual({ sizing: { kind: 'FixedNotional', value: '1500.50' } });
+    expect(req.live_config).toEqual({
+      sizing: { kind: 'FixedNotional', value: '1500.50' },
+      action: { on_enter: [], on_exit: [] },
+    });
   });
 
   it('rejects Custom FixedShares values that parseInt would silently truncate', async () => {
