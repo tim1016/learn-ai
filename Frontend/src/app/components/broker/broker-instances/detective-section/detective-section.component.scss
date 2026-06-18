@@ -46,6 +46,10 @@
   }
 }
 
-.tab-body {
-  display: block;
+.slot {
+  display: contents;
+}
+
+.slot.hidden {
+  display: none;
 }

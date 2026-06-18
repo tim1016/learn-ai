@@ -17,11 +17,14 @@
 
 @if (open()) {
   <aside
+    #dialogEl
     class="dialog"
     role="dialog"
     aria-modal="false"
     aria-labelledby="pre-trade-dialog-heading"
     data-testid="pre-trade-dialog"
+    tabindex="-1"
+    (keydown.escape)="close()"
   >
     <header class="dialog-header">
       <h3 id="pre-trade-dialog-heading">Pre-trade checklist</h3>

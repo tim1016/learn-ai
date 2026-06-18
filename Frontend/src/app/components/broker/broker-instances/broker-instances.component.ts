@@ -44,10 +44,8 @@ import { CanItTradeCardComponent } from './can-it-trade-card/can-it-trade-card.c
 import { StickyControlBarComponent } from './sticky-control-bar/sticky-control-bar.component';
 import { BrokerInstancesV2FlagService } from './broker-instances-v2-flag.service';
 import { ConfigurationCardComponent } from './configuration-card/configuration-card.component';
-import { DetectiveSectionComponent } from './detective-section/detective-section.component';
-import type { DetectiveTab } from './detective-section/detective-tab';
+import { DetectiveSectionComponent, type DetectiveTab } from './detective-section/detective-section.component';
 import { PreTradeChecklistComponent } from './pre-trade-checklist/pre-trade-checklist.component';
-import { deriveFleetState } from './sticky-control-bar/fleet-state';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -266,19 +264,11 @@ export class BrokerInstancesComponent {
   readonly cockpitEnabled = this.v2Flag.enabled;
 
   // Detective section tab state. URL-param sync (?tab=activity|diagnostics)
-  // ships as a follow-up; the signal default matches deriveActiveTab(null).
+  // ships as a follow-up.
   readonly detectiveTab = signal<DetectiveTab>('activity');
 
   onDetectiveTabRequested(tab: DetectiveTab): void {
     this.detectiveTab.set(tab);
-  }
-
-  fleetStateOf(s: LiveInstanceStatus) {
-    return deriveFleetState(s);
-  }
-
-  gatesOf(s: LiveInstanceStatus): ReadinessGate[] {
-    return s.readiness?.gates ?? [];
   }
 
   /** The id segment of ``/broker/instances/:id``, or ``null`` on the bare URL.

@@ -1,4 +1,4 @@
-import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
+import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 
 export type FleetState = 'STEADY' | 'CONFIGURE' | 'BLOCKED';
 

@@ -1,11 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import type { InstanceSizing, InstanceStartDefaults } from '../../../../api/live-instances.types';
 
 /**
  * "Configuration" — merges Strategy Rules + Sizing into the v2 cockpit's
  * single configuration surface. Renders the resolved strategy + sizing
- * summary and emits `editRequested` when the operator wants to change
- * either. Issue #585.
+ * summary and navigates to /broker/deploy (mirroring strategy-rules-card)
+ * when the operator wants to change either. Issue #585.
  *
  * Scope deferred to follow-ups (same flag-gated branch):
  *   - per-trade audit table (SizingAuditRow projection)
@@ -15,14 +16,15 @@ import type { InstanceSizing, InstanceStartDefaults } from '../../../../api/live
 @Component({
   selector: 'app-configuration-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   templateUrl: './configuration-card.component.html',
   styleUrl: './configuration-card.component.scss',
 })
 export class ConfigurationCardComponent {
   readonly startDefaults = input.required<InstanceStartDefaults | null>();
   readonly sizing = input.required<InstanceSizing | null>();
-
-  readonly editRequested = output();
+  readonly canRedeploy = input.required<boolean>();
+  readonly redeployQueryParams = input.required<Record<string, string>>();
 
   readonly strategyName = computed<string | null>(
     () => this.startDefaults()?.strategy || null,
@@ -38,10 +40,6 @@ export class ConfigurationCardComponent {
   readonly hasConfiguration = computed<boolean>(
     () => this.strategyName() !== null,
   );
-
-  onEditClick(): void {
-    this.editRequested.emit(undefined);
-  }
 }
 
 function formatPreset(preset: string): string {

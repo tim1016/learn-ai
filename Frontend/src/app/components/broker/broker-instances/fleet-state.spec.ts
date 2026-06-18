@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LiveInstanceStatus, ReadinessVerdict } from '../../../../api/live-instances.types';
+import type { LiveInstanceStatus, ReadinessVerdict } from '../../../api/live-instances.types';
 
 import { deriveFleetState } from './fleet-state';
 

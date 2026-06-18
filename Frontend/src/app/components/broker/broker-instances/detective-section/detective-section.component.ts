@@ -1,15 +1,18 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 
-import type { DetectiveTab } from './detective-tab';
+export type DetectiveTab = 'activity' | 'diagnostics';
 
 /**
- * Detective section — tab strip owning the Activity ↔ Diagnostics switch.
- * Issue #586. The parent broker-instances component owns URL sync
- * (?tab=activity|diagnostics) so this component stays pure and easy to
- * test — it just renders the tabs and emits a request when the operator
- * clicks an inactive tab. The bodies of the two tabs are content-projected
- * by the parent (Activity = latest-signal-strip + bot-trades-table;
- * Diagnostics = can-it-trade explanations).
+ * Detective section — owns the Activity / Diagnostics split for the bot's
+ * downstream evidence. Always rendered; the `tabbed` input gates whether
+ * the two slots collapse into a single tab strip (cockpit-v2 mode) or
+ * render inline as a flat list (legacy mode). Issue #586.
+ *
+ * Slot contract:
+ *   <app-detective-section [tabbed]="..." [activeTab]="...">
+ *     <div slot="activity">…chart + signal + trades…</div>
+ *     <div slot="diagnostics">…incidents-panel…</div>
+ *   </app-detective-section>
  */
 @Component({
   selector: 'app-detective-section',
@@ -18,7 +21,8 @@ import type { DetectiveTab } from './detective-tab';
   styleUrl: './detective-section.component.scss',
 })
 export class DetectiveSectionComponent {
-  readonly activeTab = input.required<DetectiveTab>();
+  readonly tabbed = input.required<boolean>();
+  readonly activeTab = input<DetectiveTab>('activity');
 
   readonly tabRequested = output<DetectiveTab>();
 

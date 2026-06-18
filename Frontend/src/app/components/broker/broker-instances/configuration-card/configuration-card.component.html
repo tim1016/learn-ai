@@ -2,14 +2,20 @@
   <section class="card configuration-card" aria-labelledby="configuration-heading">
     <header class="card-header">
       <h2 id="configuration-heading">Configuration</h2>
-      <button
-        type="button"
-        class="edit"
-        (click)="onEditClick()"
-        data-testid="configuration-edit"
-      >
-        Edit
-      </button>
+      @if (canRedeploy()) {
+        <a
+          class="edit"
+          routerLink="/broker/deploy"
+          [queryParams]="redeployQueryParams()"
+          data-testid="configuration-edit"
+        >
+          Edit
+        </a>
+      } @else {
+        <span class="edit-disabled" data-testid="configuration-edit-disabled">
+          Edit available after stop
+        </span>
+      }
     </header>
     <dl class="rows">
       <div class="row">
@@ -25,8 +31,13 @@
 } @else {
   <section class="card configuration-card empty" data-testid="configuration-empty">
     <p>No strategy configured.</p>
-    <button type="button" class="cta" (click)="onEditClick()" data-testid="configuration-edit">
+    <a
+      class="cta"
+      routerLink="/broker/deploy"
+      [queryParams]="redeployQueryParams()"
+      data-testid="configuration-edit"
+    >
       Configure to trade
-    </button>
+    </a>
   </section>
 }

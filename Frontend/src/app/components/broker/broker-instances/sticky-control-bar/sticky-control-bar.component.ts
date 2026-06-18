@@ -3,7 +3,7 @@ import type {
   LiveInstanceStatus,
   ReadinessVerdict,
 } from '../../../../api/live-instances.types';
-import { deriveFleetState, type FleetState } from './fleet-state';
+import { deriveFleetState, type FleetState } from '../fleet-state';
 
 type StatePillKind = 'running' | 'stopping' | 'stopped' | 'idle' | 'unreachable';
 type ReadinessPillKind = 'ready' | 'blocked' | 'degraded' | 'unknown' | 'no_readiness';

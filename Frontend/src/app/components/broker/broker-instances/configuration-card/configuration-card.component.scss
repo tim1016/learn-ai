@@ -31,6 +31,8 @@
 
   .edit,
   .cta {
+    display: inline-flex;
+    align-items: center;
     background: var(--bg-elevated);
     border: 1px solid var(--border-light);
     color: var(--text-primary);
@@ -38,10 +40,17 @@
     border-radius: var(--radius);
     cursor: pointer;
     font-size: var(--fs-sm);
+    text-decoration: none;
 
     &:hover {
       background: var(--bg-hover);
     }
+  }
+
+  .edit-disabled {
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+    font-style: italic;
   }
 
   .rows {

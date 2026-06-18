@@ -73,10 +73,7 @@
       />
 
       @if (cockpitEnabled()) {
-        <app-pre-trade-checklist
-          [fleetState]="fleetStateOf(s)"
-          [gates]="gatesOf(s)"
-        />
+        <app-pre-trade-checklist [status]="s" />
       }
 
       <header class="hero" [class.ok]="hero.tone === 'ok'" [class.warn]="hero.tone === 'warn'" [class.bad]="hero.tone === 'bad'" [class.unknown]="hero.tone === 'unknown'">
@@ -148,6 +145,8 @@
           <app-configuration-card
             [startDefaults]="s.start_defaults"
             [sizing]="s.sizing"
+            [canRedeploy]="canRedeploy(s)"
+            [redeployQueryParams]="redeployQueryParams(s)"
           />
         } @else {
           @if (s.sizing) {
@@ -184,6 +183,7 @@
         />
 
         @let r = s.readiness;
+        @if (!cockpitEnabled()) {
         <section class="card checklist-card" aria-labelledby="checklist-heading">
           <header class="card-header">
             <div>
@@ -242,48 +242,34 @@
             <p class="actuation live" role="status">{{ fixNotice() }}</p>
           }
         </section>
+        }
 
         <app-broker-start-stop-card [status]="s" (changed)="onStartStopChanged()" />
 
         @let chartRunId = s.live_binding?.run_id ?? s.evidence_binding?.run_id ?? null;
-        @if (cockpitEnabled()) {
-          <app-detective-section
-            [activeTab]="detectiveTab()"
-            (tabRequested)="onDetectiveTabRequested($event)"
-          >
-            <div activity>
-              <app-bot-trade-chart-card
-                [strategyInstanceId]="s.strategy_instance_id"
-                [symbol]="s.symbol"
-              />
-              <app-latest-signal-strip
-                [decisionColumns]="s.decision_columns"
-                [latestDecision]="s.latest_decision"
-              />
-              <app-bot-trades-table [runId]="chartRunId" />
-            </div>
-            <div diagnostics>
-              <app-incidents-panel
-                [runId]="chartRunId"
-                (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
-              />
-            </div>
-          </app-detective-section>
-        } @else {
-          <app-bot-trade-chart-card
-            [strategyInstanceId]="s.strategy_instance_id"
-            [symbol]="s.symbol"
-          />
-          <app-latest-signal-strip
-            [decisionColumns]="s.decision_columns"
-            [latestDecision]="s.latest_decision"
-          />
-          <app-bot-trades-table [runId]="chartRunId" />
-          <app-incidents-panel
-            [runId]="chartRunId"
-            (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
-          />
-        }
+        <app-detective-section
+          [tabbed]="cockpitEnabled()"
+          [activeTab]="detectiveTab()"
+          (tabRequested)="onDetectiveTabRequested($event)"
+        >
+          <div slot="activity">
+            <app-bot-trade-chart-card
+              [strategyInstanceId]="s.strategy_instance_id"
+              [symbol]="s.symbol"
+            />
+            <app-latest-signal-strip
+              [decisionColumns]="s.decision_columns"
+              [latestDecision]="s.latest_decision"
+            />
+            <app-bot-trades-table [runId]="chartRunId" />
+          </div>
+          <div slot="diagnostics">
+            <app-incidents-panel
+              [runId]="chartRunId"
+              (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
+            />
+          </div>
+        </app-detective-section>
 
         <section #behaviorCard tabindex="-1" class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">
