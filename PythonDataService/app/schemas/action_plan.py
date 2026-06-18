@@ -24,7 +24,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 # ``leg_id`` regex from ADR 0012 §3 — lowercase ASCII + digits + underscore,
 # bounded to 32 chars so it embeds cleanly in logs, parquet column names,
 # and future broker-side ``orderRef`` tags without escaping.
