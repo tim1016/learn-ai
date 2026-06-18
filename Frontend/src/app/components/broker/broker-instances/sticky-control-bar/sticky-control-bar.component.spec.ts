@@ -55,9 +55,10 @@ describe('StickyControlBarComponent', () => {
   it('renders the PAPER pill when isPaper is true (User Story #3)', () => {
     const { el } = render({ status: makeStatus(), isPaper: true });
 
-    expect(el.querySelector('[data-testid="paper-pill"]')?.textContent?.trim()).toBe(
-      'PAPER',
-    );
+    const pill = el.querySelector<HTMLElement>('[data-testid="paper-pill"]');
+    expect(pill).not.toBeNull();
+    expect(pill?.textContent ?? '').toContain('PAPER');
+    expect(pill?.getAttribute('data-verdict')).toBe('paper');
   });
 
   it('hides the PAPER pill on a live account', () => {

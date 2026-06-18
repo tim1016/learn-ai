@@ -245,4 +245,24 @@ $container-lg: 1400px;
   --ind-cat-volatility-faint: rgba(242, 173, 61, 0.04);
   --ind-cat-trend-faint:      rgba(77, 141, 255, 0.04);
   --ind-cat-momentum-faint:   rgba(167, 139, 250, 0.04);
+
+  // ─ Verdict layer ──────────────────────────────────────────
+  // Semantic colors for the broker-instances cockpit verdict
+  // surface (Can-It-Trade card, sticky banner attention strip,
+  // FAB badge). Maps the engine's readiness verdict
+  // (READY / DEGRADED / BLOCKED / UNKNOWN) plus paper-mode and
+  // safety-unsafe onto the existing bull/warn/bear/info tokens
+  // so the cockpit shares the TV-dark palette but stays a
+  // distinct semantic dimension from market direction.
+  --verdict-ready:         var(--bull);
+  --verdict-ready-soft:    var(--bull-soft);
+  --verdict-degraded:      var(--warn);
+  --verdict-degraded-soft: var(--warn-soft);
+  --verdict-blocked:       var(--bear);
+  --verdict-blocked-soft:  var(--bear-soft);
+  --verdict-unknown:       var(--text-muted);
+  --verdict-unknown-soft:  rgba(107, 111, 122, 0.15);
+  --verdict-paper:         var(--info);
+  --verdict-paper-soft:    var(--info-soft);
+  --verdict-unsafe:        var(--bear);
 }

@@ -377,7 +377,10 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Can it trade?');
+    // Card label rendered as mono uppercase per the Terminal Cockpit
+    // visual identity (#591) — the historic "Can it trade?" prose
+    // moved into the mono "CAN IT TRADE" header.
+    expect(text).toContain('CAN IT TRADE');
     expect(text).toContain('0 / 1 checks pass');
     expect(text).toContain('Daily Trade Limit Available');
     expect(text).toContain('4 / 4 orders used');

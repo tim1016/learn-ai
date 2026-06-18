@@ -1,43 +1,48 @@
 @if (hasConfiguration()) {
   <section class="card configuration-card" aria-labelledby="configuration-heading">
-    <header class="card-header">
-      <h2 id="configuration-heading">Configuration</h2>
-      @if (canRedeploy()) {
-        <a
-          class="edit"
-          routerLink="/broker/deploy"
-          [queryParams]="redeployQueryParams()"
-          data-testid="configuration-edit"
-        >
-          Edit
-        </a>
-      } @else {
-        <span class="edit-disabled" data-testid="configuration-edit-disabled">
-          Edit available after stop
+    <div class="card-head">
+      <div class="card-label" id="configuration-heading">CONFIGURATION</div>
+      <div class="card-summary">
+        <span class="strong" data-testid="configuration-strategy">{{ strategyName() }}</span>
+        <span class="sep" aria-hidden="true">·</span>
+        <span class="meta">
+          Sizing
+          <span class="strong" data-testid="configuration-sizing">{{ sizingLabel() }}</span>
         </span>
-      }
-    </header>
-    <dl class="rows">
-      <div class="row">
-        <dt>Strategy</dt>
-        <dd data-testid="configuration-strategy">{{ strategyName() }}</dd>
       </div>
-      <div class="row">
-        <dt>Sizing</dt>
-        <dd data-testid="configuration-sizing">{{ sizingLabel() }}</dd>
+      <div class="card-actions">
+        @if (canRedeploy()) {
+          <a
+            class="btn-ghost btn-ghost--accent"
+            routerLink="/broker/deploy"
+            [queryParams]="redeployQueryParams()"
+            data-testid="configuration-edit"
+          >
+            REDEPLOY
+          </a>
+        } @else {
+          <span class="edit-disabled" data-testid="configuration-edit-disabled">
+            Edit available after stop
+          </span>
+        }
       </div>
-    </dl>
+    </div>
   </section>
 } @else {
   <section class="card configuration-card empty" data-testid="configuration-empty">
-    <p>No strategy configured.</p>
-    <a
-      class="cta"
-      routerLink="/broker/deploy"
-      [queryParams]="redeployQueryParams()"
-      data-testid="configuration-cta"
-    >
-      Configure to trade
-    </a>
+    <div class="card-head">
+      <div class="card-label">CONFIGURATION</div>
+      <div class="card-summary muted">No strategy configured.</div>
+      <div class="card-actions">
+        <a
+          class="btn-ghost btn-ghost--accent"
+          routerLink="/broker/deploy"
+          [queryParams]="redeployQueryParams()"
+          data-testid="configuration-cta"
+        >
+          Configure to trade
+        </a>
+      </div>
+    </div>
   </section>
 }

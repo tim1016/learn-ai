@@ -3,73 +3,79 @@
   aria-labelledby="current-risk-heading"
   data-testid="current-risk-card"
 >
-  <header class="card-header">
-    <div>
-      <h2 id="current-risk-heading">Current Risk</h2>
-      <p>What the bot is holding right now.</p>
-    </div>
-    <span
-      class="posture-chip"
-      [class.flat]="posture() === 'flat'"
-      [class.long]="posture() === 'long'"
-      [class.short]="posture() === 'short'"
-      [class.mixed]="posture() === 'mixed'"
-      [class.unknown]="posture() === 'unknown'"
-      data-testid="posture-chip"
-    >
-      {{ postureLabel() }}
-    </span>
-  </header>
-
-  <div class="rows">
-    <div class="row positions-row">
-      <span class="label">Open positions</span>
-      @if (positions().length === 0) {
-        <span class="value muted" data-testid="positions-empty">None</span>
-      } @else {
-        <ul class="position-pills" data-testid="positions-list">
-          @for (p of positions(); track p.symbol) {
-            <li
-              class="position-pill"
-              [class.long]="p.side === 'long'"
-              [class.short]="p.side === 'short'"
-            >
-              <span class="symbol">{{ p.symbol }}</span>
-              <strong>{{ p.qty }}</strong>
-            </li>
-          }
-        </ul>
-      }
-    </div>
-
-    <div class="row">
-      <span class="label">Pending orders</span>
-      <span class="value" data-testid="pending-count">
-        {{ pendingOrderCount() }}
+  <div class="card-head">
+    <div class="card-label" id="current-risk-heading">CURRENT RISK</div>
+    <div class="card-summary">
+      <span
+        class="posture-chip"
+        [class.flat]="posture() === 'flat'"
+        [class.long]="posture() === 'long'"
+        [class.short]="posture() === 'short'"
+        [class.mixed]="posture() === 'mixed'"
+        [class.unknown]="posture() === 'unknown'"
+        [attr.data-posture]="posture()"
+        data-testid="posture-chip"
+      >{{ postureLabel() }}</span>
+      <span class="sep" aria-hidden="true">·</span>
+      <span class="summary-line">
+        <span data-testid="pending-count">{{ pendingOrderCount() }}</span> pending
+        ·
+        <span
+          class="cap-inline"
+          [class.ok]="ordersGate().status === 'pass'"
+          [class.fail]="ordersGate().status === 'fail'"
+          [class.unknown]="ordersGate().status === 'unknown'"
+        >{{ ordersGate().detail }}</span>
       </span>
     </div>
+  </div>
 
-    <div
-      class="row orders-cap-row"
-      [class.ok]="ordersGate().status === 'pass'"
-      [class.fail]="ordersGate().status === 'fail'"
-      [class.unknown]="ordersGate().status === 'unknown'"
-      data-testid="orders-cap-row"
-    >
-      <span class="label">Daily order cap</span>
-      <span class="value">{{ ordersGate().detail }}</span>
-    </div>
+  <div class="card-body">
+    <dl class="rows">
+      <div class="row positions-row">
+        <dt>Open positions</dt>
+        <dd>
+          @if (positions().length === 0) {
+            <span class="muted" data-testid="positions-empty">None</span>
+          } @else {
+            <ul class="position-pills" data-testid="positions-list">
+              @for (p of positions(); track p.symbol) {
+                <li
+                  class="position-pill"
+                  [class.long]="p.side === 'long'"
+                  [class.short]="p.side === 'short'"
+                >
+                  <span class="symbol">{{ p.symbol }}</span>
+                  <strong>{{ p.qty }}</strong>
+                </li>
+              }
+            </ul>
+          }
+        </dd>
+      </div>
 
-    <div class="row">
-      <span class="label">Sizing</span>
-      <span class="value">{{ sizingSummary() }}</span>
-    </div>
+      <div
+        class="row orders-cap-row"
+        [class.ok]="ordersGate().status === 'pass'"
+        [class.fail]="ordersGate().status === 'fail'"
+        [class.unknown]="ordersGate().status === 'unknown'"
+        data-testid="orders-cap-row"
+      >
+        <dt>Daily order cap</dt>
+        <dd>{{ ordersGate().detail }}</dd>
+      </div>
 
-    @if (namespaceCaption()) {
-      <p class="namespace-caption" data-testid="namespace-caption">
-        Positions are filtered to this bot's order namespace:
-        <code>{{ namespaceCaption() }}</code>
-      </p>
-    }
+      <div class="row">
+        <dt>Sizing</dt>
+        <dd>{{ sizingSummary() }}</dd>
+      </div>
+
+      @if (namespaceCaption()) {
+        <p class="namespace-caption" data-testid="namespace-caption">
+          Positions are filtered to this bot's order namespace:
+          <code>{{ namespaceCaption() }}</code>
+        </p>
+      }
+    </dl>
   </div>
 </section>

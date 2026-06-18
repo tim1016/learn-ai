@@ -2,32 +2,29 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { deriveFleetState, type FleetState } from '../fleet-state';
 
+type PillTone = 'running' | 'paused' | 'stopped' | 'stopping' | 'unknown';
+type Verdict = 'paper' | 'unsafe' | 'unknown' | 'ready' | 'degraded' | 'blocked';
+type PriorRun = 'success' | 'failure' | null;
+type Attention = 'ready' | 'degraded' | 'blocked';
+
 /**
  * Sticky control bar — the persistent per-bot identity + status strip that
  * stays visible while the operator scrolls the long control panel.
  *
- * Issue #565 PR 12 — MVP scope.
+ * Terminal Cockpit visual identity (issue #591): renders a 3-column grid —
+ * bot identity (name + strategy_instance_id sid), a centered pill cluster
+ * (STATE / INTENT / SAFETY / LAST RUN + fleet-state verdict), and an action
+ * toolbar with keycap-styled buttons. A 4-pixel attention strip sits along
+ * the banner's bottom edge tinted by the fleet verdict (ready / degraded /
+ * blocked), serving as a peripheral-vision indicator while the operator's
+ * eyes are deep in the page.
  *
- * User stories covered in this MVP:
- * - #1, #2 sticky positioning so the bot's identity + status never leave
- *   the viewport while the trader is reading any of the down-page cards
- * - #3 persistent PAPER pill so paper mode is never confused with live
- * - #51 lead with the most-urgent fact (fleet-state pill goes first)
- *
- * User stories deferred to a follow-up so that Start / Pause / Stop logic
- * does not move underneath an in-flight refactor:
- * - #31-#40 destructive kebab menu, conditional Restart & Update, paper
- *   reset — kebab affordance ships with this PR as a "scroll to advanced
- *   actions" link only, so destructive logic stays where it has been
- *   end-to-end tested. Real kebab dialogs land in a follow-up that owns
- *   only the dialog wiring.
- *
- * Per the issue body: "Safety-critical controls land LAST so the existing
- * parent component remains the source of truth for Start/Pause/Stop until
- * the surrounding context is stable." This MVP honours that by NOT
- * duplicating the Start / Pause / Stop buttons in the sticky bar — a
- * "Jump to controls" button scrolls the existing Start/Stop card into
- * view instead. Full control extraction lands in PR13 cleanup.
+ * Command wiring stays where it is — this bar's `Jump to controls` keycap
+ * scrolls the existing Start/Pause/Stop card into view rather than
+ * duplicating destructive controls. Full keycap action rewire (PAUSE /
+ * FLATTEN&PAUSE / kebab dialog) lands as a follow-up (slice #584) so that
+ * sticky-banner UX and command-flow changes ship as separate, reviewable
+ * diffs.
  */
 @Component({
   selector: 'app-sticky-control-bar',
@@ -49,6 +46,90 @@ export class StickyControlBarComponent {
   readonly hasPoisonFlag = computed<boolean>(() => {
     const trigger = this.status().last_exit?.halt_trigger;
     return trigger !== null && trigger !== undefined;
+  });
+
+  readonly processLabel = computed<string>(() => {
+    const s = this.status().process.state;
+    return s.toUpperCase();
+  });
+
+  readonly processTone = computed<PillTone>(() => {
+    switch (this.status().process.state) {
+      case 'running':
+        return 'running';
+      case 'stopping':
+        return 'stopping';
+      case 'exited':
+      case 'idle':
+        return 'stopped';
+      default:
+        return 'unknown';
+    }
+  });
+
+  readonly intentLabel = computed<string | null>(() => {
+    const intent = this.status().desired_state?.state;
+    return intent ? intent : null;
+  });
+
+  readonly intentTone = computed<PillTone>(() => {
+    switch (this.status().desired_state?.state) {
+      case 'RUNNING':
+        return 'running';
+      case 'PAUSED':
+        return 'paused';
+      case 'STOPPED':
+        return 'stopped';
+      default:
+        return 'unknown';
+    }
+  });
+
+  readonly safetyVerdict = computed<Verdict>(() => {
+    if (this.hasPoisonFlag()) return 'unsafe';
+    return this.isPaper() ? 'paper' : 'unknown';
+  });
+
+  readonly safetyLabel = computed<string>(() => {
+    if (this.hasPoisonFlag()) return 'UNSAFE';
+    return this.isPaper() ? 'PAPER-ONLY' : 'LIVE';
+  });
+
+  readonly priorRun = computed<PriorRun>(() => {
+    const exit = this.status().last_exit;
+    if (!exit) return null;
+    if (exit.halt_trigger !== null && exit.halt_trigger !== undefined) return 'failure';
+    if (exit.exit_code === 0 || exit.exit_reason === 'normal') return 'success';
+    if (exit.exit_code !== null && exit.exit_code !== 0) return 'failure';
+    return null;
+  });
+
+  readonly priorRunLabel = computed<string>(() =>
+    this.priorRun() === 'failure' ? 'LAST RUN FAULT' : 'LAST RUN CLEAN',
+  );
+
+  readonly fleetVerdict = computed<Verdict>(() => {
+    switch (this.fleetState()) {
+      case 'STEADY':
+        return 'ready';
+      case 'CONFIGURE':
+        return 'degraded';
+      case 'BLOCKED':
+        return 'blocked';
+      default:
+        return 'unknown';
+    }
+  });
+
+  readonly attentionState = computed<Attention>(() => {
+    switch (this.fleetState()) {
+      case 'STEADY':
+        return 'ready';
+      case 'CONFIGURE':
+        return 'degraded';
+      default:
+        return 'blocked';
+    }
   });
 
   /** Emitted when the operator clicks "Jump to controls". The parent

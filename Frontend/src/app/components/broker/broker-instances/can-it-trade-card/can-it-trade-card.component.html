@@ -5,10 +5,12 @@
     aria-label="Bot readiness"
     data-testid="can-it-trade-ready-strip"
   >
-    <i class="pi pi-check-circle" aria-hidden="true"></i>
-    <strong>READY</strong>
-    <span class="dot" aria-hidden="true">·</span>
-    <span>{{ proportionLabel() }}</span>
+    <span class="strip-label">CAN IT TRADE</span>
+    <span class="strip-verdict" data-verdict="ready">
+      <i class="pi pi-check-circle" aria-hidden="true"></i>
+      READY
+    </span>
+    <span class="strip-proportion">{{ proportionLabel() }}</span>
   </aside>
 } @else {
   <section
@@ -19,55 +21,57 @@
     aria-labelledby="can-it-trade-heading"
     data-testid="can-it-trade-card"
   >
-    <header class="card-header">
-      <div>
-        <h2 id="can-it-trade-heading">Can it trade?</h2>
-        <p>What's holding the bot back from acting on the next signal.</p>
+    <div class="card-head">
+      <div class="card-label" id="can-it-trade-heading">CAN IT TRADE</div>
+      <div class="card-summary">
+        <span
+          class="verdict-chip"
+          [class.warn]="verdictTone() === 'warn'"
+          [class.bad]="verdictTone() === 'bad'"
+          [class.unknown]="verdictTone() === 'unknown'"
+          data-testid="can-it-trade-verdict-chip"
+        >{{ v === 'NO_READINESS' ? 'NO READINESS' : v }}</span>
+        <span class="sep" aria-hidden="true">·</span>
+        <span class="proportion" data-testid="can-it-trade-proportion">{{ proportionLabel() }}</span>
       </div>
-      <span
-        class="verdict-chip"
-        [class.warn]="verdictTone() === 'warn'"
-        [class.bad]="verdictTone() === 'bad'"
-        [class.unknown]="verdictTone() === 'unknown'"
-        data-testid="can-it-trade-verdict-chip"
-      >
-        {{ v === 'NO_READINESS' ? 'NO READINESS' : v }}
-      </span>
-    </header>
+    </div>
 
-    <p class="proportion" data-testid="can-it-trade-proportion">
-      {{ proportionLabel() }}
-    </p>
-
-    @if (failingGates().length) {
-      <ul class="failing-gates" aria-label="Gates not passing">
-        @for (g of failingGates(); track g.key) {
-          <li
-            class="gate"
-            [class.hard]="g.severity === 'hard'"
-            [class.soft]="g.severity === 'soft'"
-          >
-            <strong>{{ g.label }}</strong>
-            <span
-              class="severity"
+    <div class="card-body">
+      @if (failingGates().length) {
+        <ul class="gate-grid" aria-label="Gates not passing">
+          @for (g of failingGates(); track g.key) {
+            <li
+              class="gate-row"
+              [attr.data-status]="'fail'"
               [class.hard]="g.severity === 'hard'"
               [class.soft]="g.severity === 'soft'"
             >
-              {{ g.severity === 'hard' ? 'Blocking' : 'Advisory' }}
-            </span>
-            <p class="detail">{{ g.detail }}</p>
-          </li>
-        }
-      </ul>
-      <p class="affordance-hint">
-        Use the Pre-Trade Checklist below to act on each gate. Detailed
-        affordance-by-gate buttons are tracked as a follow-up.
-      </p>
-    } @else if (v === 'NO_READINESS') {
-      <p class="muted">
-        The engine has not emitted a readiness vector yet — start the bot or
-        wait for its first poll.
-      </p>
-    }
+              <span class="gate-mark">
+                FAIL · {{ g.severity === 'hard' ? 'HARD' : 'SOFT' }}
+              </span>
+              <div class="gate-body">
+                <div class="gate-name">{{ g.label }}</div>
+                <p class="gate-desc">{{ g.detail }}</p>
+                <code class="gate-key">{{ g.key }}</code>
+                <span
+                  class="severity sr-only"
+                  [class.hard]="g.severity === 'hard'"
+                  [class.soft]="g.severity === 'soft'"
+                >{{ g.severity === 'hard' ? 'Blocking' : 'Advisory' }}</span>
+              </div>
+            </li>
+          }
+        </ul>
+        <p class="affordance-hint">
+          Per-gate FIX actions are tracked in slice #583 — for now,
+          open the Pre-Trade Checklist FAB to acknowledge each gate.
+        </p>
+      } @else if (v === 'NO_READINESS') {
+        <p class="muted">
+          The engine has not emitted a readiness vector yet — start the bot or
+          wait for its first poll.
+        </p>
+      }
+    </div>
   </section>
 }
