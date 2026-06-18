@@ -83,4 +83,100 @@ describe('ActionPlanCardComponent', () => {
     expect(exitRow?.textContent ?? '').toContain('spy_long');
     expect((exitRow?.textContent ?? '').toLowerCase()).toContain('close');
   });
+
+  // Slice 1C — human-readable option summaries.
+
+  it('renders an option leg as "Long call · ATM · min_dte 14d"', () => {
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'spy_long_call',
+          instrument: { kind: 'option', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+          right: 'call',
+          strike: { selector: 'atm' },
+          expiry: { selector: 'min_dte', days: 14 },
+        },
+      ],
+      on_exit: [],
+    });
+
+    const entry = el.querySelector<HTMLElement>(
+      '[data-testid="action-plan-entry-spy_long_call"]',
+    );
+    expect(entry?.textContent ?? '').toContain('Long call · ATM · min_dte 14d');
+  });
+
+  it('renders an atm_offset strike as "ATM+5" and a short put leg', () => {
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'short_otm_put',
+          instrument: { kind: 'option', underlying: 'SPY' },
+          position: 'short',
+          qty_ratio: 1,
+          right: 'put',
+          strike: { selector: 'atm_offset', offset: -5 },
+          expiry: { selector: 'nearest_weekly' },
+        },
+      ],
+      on_exit: [],
+    });
+
+    const entry = el.querySelector<HTMLElement>(
+      '[data-testid="action-plan-entry-short_otm_put"]',
+    );
+    expect(entry?.textContent ?? '').toContain('Short put · ATM-5 · nearest weekly');
+  });
+
+  it('renders an absolute expiry as the New York date (no UTC drift)', () => {
+    // 2026-06-25 16:00 ET (option expiry close) = 2026-06-25 20:00 UTC.
+    // The UTC date is also 2026-06-25, but using a wall-clock moment
+    // where UTC and NY disagree would only verify the date crosses
+    // midnight differently — here we just pin the display.
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'spy_abs',
+          instrument: { kind: 'option', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+          right: 'call',
+          strike: { selector: 'atm' },
+          expiry: { selector: 'absolute', expiration_ms: 1_782_417_600_000 },
+        },
+      ],
+      on_exit: [],
+    });
+
+    const entry = el.querySelector<HTMLElement>('[data-testid="action-plan-entry-spy_abs"]');
+    expect(entry?.textContent ?? '').toContain('2026-06-25');
+  });
+
+  it('renders an absolute expiry in the NY tz when UTC has rolled to the next day', () => {
+    // Pick a moment that's NY-side 2026-06-25 23:30 EDT = 2026-06-26 03:30 UTC.
+    // The UTC date is 2026-06-26 but the NY date is 2026-06-25 — this
+    // pins the timestamp-policy conversion at the rendering boundary.
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'spy_late',
+          instrument: { kind: 'option', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+          right: 'call',
+          strike: { selector: 'atm' },
+          expiry: {
+            selector: 'absolute',
+            expiration_ms: new Date('2026-06-25T23:30:00-04:00').getTime(),
+          },
+        },
+      ],
+      on_exit: [],
+    });
+
+    const entry = el.querySelector<HTMLElement>('[data-testid="action-plan-entry-spy_late"]');
+    expect(entry?.textContent ?? '').toContain('2026-06-25');
+  });
 });

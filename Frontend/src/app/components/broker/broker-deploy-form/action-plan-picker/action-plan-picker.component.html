@@ -10,7 +10,13 @@
       class="picker-add"
       data-testid="action-plan-picker-enter-add"
       (click)="addStockEntry()"
-    >+ Add</button>
+    >+ Add stock</button>
+    <button
+      type="button"
+      class="picker-add"
+      data-testid="action-plan-picker-enter-add-option"
+      (click)="addOptionEntry()"
+    >+ Add option</button>
   </div>
 
   @if (entryLegs().length === 0) {
@@ -23,6 +29,16 @@
           <span class="leg-position">{{ leg.position }}</span>
           <span class="leg-instrument">{{ leg.instrument.underlying }}</span>
           <span class="leg-qty">× {{ leg.qty_ratio }}</span>
+          @if (isOption(leg)) {
+            <span
+              class="leg-option-fields"
+              [attr.data-testid]="'action-plan-picker-option-fields-' + leg.leg_id"
+            >
+              <span class="leg-right">{{ leg.right }}</span>
+              <span class="leg-strike">{{ leg.strike.selector }}</span>
+              <span class="leg-expiry">{{ leg.expiry.selector }}</span>
+            </span>
+          }
           <button
             type="button"
             class="picker-remove"

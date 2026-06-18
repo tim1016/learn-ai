@@ -1,0 +1,46 @@
+{
+  "on_enter": [
+    {
+      "leg_id": "short_otm_put",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "short",
+      "qty_ratio": 1,
+      "right": "put",
+      "strike": { "selector": "atm_offset", "offset": -5 },
+      "expiry": { "selector": "nearest_weekly" }
+    },
+    {
+      "leg_id": "long_far_otm_put",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "long",
+      "qty_ratio": 1,
+      "right": "put",
+      "strike": { "selector": "atm_offset", "offset": -10 },
+      "expiry": { "selector": "nearest_weekly" }
+    },
+    {
+      "leg_id": "short_otm_call",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "short",
+      "qty_ratio": 1,
+      "right": "call",
+      "strike": { "selector": "atm_offset", "offset": 5 },
+      "expiry": { "selector": "nearest_weekly" }
+    },
+    {
+      "leg_id": "long_far_otm_call",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "long",
+      "qty_ratio": 1,
+      "right": "call",
+      "strike": { "selector": "atm_offset", "offset": 10 },
+      "expiry": { "selector": "nearest_weekly" }
+    }
+  ],
+  "on_exit": [
+    { "kind": "close_leg", "entry_leg_id": "short_otm_put" },
+    { "kind": "close_leg", "entry_leg_id": "long_far_otm_put" },
+    { "kind": "close_leg", "entry_leg_id": "short_otm_call" },
+    { "kind": "close_leg", "entry_leg_id": "long_far_otm_call" }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "on_enter": [
+    {
+      "leg_id": "long_atm_call",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "long",
+      "qty_ratio": 1,
+      "right": "call",
+      "strike": { "selector": "atm" },
+      "expiry": { "selector": "nearest_weekly" }
+    },
+    {
+      "leg_id": "short_otm_call",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "short",
+      "qty_ratio": 1,
+      "right": "call",
+      "strike": { "selector": "atm_offset", "offset": 5 },
+      "expiry": { "selector": "nearest_weekly" }
+    }
+  ],
+  "on_exit": [
+    { "kind": "close_leg", "entry_leg_id": "long_atm_call" },
+    { "kind": "close_leg", "entry_leg_id": "short_otm_call" }
+  ]
+}
