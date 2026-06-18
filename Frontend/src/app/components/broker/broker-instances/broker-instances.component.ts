@@ -1,13 +1,11 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  ElementRef,
   computed,
   effect,
   inject,
   resource,
   signal,
-  viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -20,8 +18,6 @@ import type {
   IntentActuation,
   LiveInstanceSummary,
   LiveInstanceStatus,
-  ReadinessGate,
-  ReadinessVector,
 } from '../../../api/live-instances.types';
 import type { CommandEntry, CommandVerb } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -30,7 +26,6 @@ import { BrokerOperationResultComponent } from '../broker-operation-result/broke
 import { FleetHeaderComponent } from './fleet-header/fleet-header.component';
 import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
 import { AuditTrailAccordionComponent } from '../audit-trail-accordion/audit-trail-accordion.component';
-import { BrokerSizingCardComponent } from '../broker-sizing-card/broker-sizing-card.component';
 import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
 import { BotTradeChartCardComponent } from './bot-trade-chart-card/bot-trade-chart-card.component';
@@ -38,11 +33,9 @@ import { BotTradesTableComponent } from './bot-trades-table/bot-trades-table.com
 import { IncidentsPanelComponent } from './incidents-panel/incidents-panel.component';
 import { CurrentRiskCardComponent } from './current-risk-card/current-risk-card.component';
 import { LatestSignalStripComponent } from './latest-signal-strip/latest-signal-strip.component';
-import { StrategyRulesCardComponent } from './strategy-rules-card/strategy-rules-card.component';
 import { LastSessionCardComponent } from './last-session-card/last-session-card.component';
 import { CanItTradeCardComponent } from './can-it-trade-card/can-it-trade-card.component';
 import { StickyControlBarComponent } from './sticky-control-bar/sticky-control-bar.component';
-import { BrokerInstancesV2FlagService } from './broker-instances-v2-flag.service';
 import { ConfigurationCardComponent } from './configuration-card/configuration-card.component';
 import { DetectiveSectionComponent, type DetectiveTab } from './detective-section/detective-section.component';
 import { PreTradeChecklistComponent } from './pre-trade-checklist/pre-trade-checklist.component';
@@ -70,32 +63,6 @@ interface HealthRow {
   tone: 'ok' | 'warn' | 'bad';
   technicalKey: string;
   guide: string;
-}
-
-interface ChecklistRow {
-  key: string;
-  label: string;
-  status: 'pass' | 'fail' | 'unknown';
-  /** 'hard' fails block trading; 'soft' fails are advisory (degrade, don't block). */
-  severity: 'hard' | 'soft';
-  detail: string;
-  meaning: string;
-  fix: string;
-}
-
-/** What the per-gate "Fix this" button does. `set-intent` scrolls to Bot
- * Behavior so the operator can pick PAUSE/RESUME/STOP; `view-log` opens the
- * run-log modal to inspect a halt; `reveal` just expands the written guidance
- * when no one-click remedy exists (the only mode for ``latest_reconcile``
- * after Phase 4 — runtime reconcile is not wired). */
-type GateActionKind = 'set-intent' | 'view-log' | 'reveal';
-
-interface GateAction {
-  kind: GateActionKind;
-  label: string;
-  disabled?: boolean;
-  /** Overrides `row.fix` as the button tooltip when the action is gated. */
-  hint?: string;
 }
 
 /** The run a log view should target, plus whether it's still being written. */
@@ -154,68 +121,6 @@ const ADVANCED_ACTIONS: readonly AdvancedAction[] = [
   { verb: 'MARK_POISONED', label: 'Flag this instance as unsafe and halt all trading', description: 'Warning: marks this instance unsafe until an operator investigates.', tone: 'danger' },
 ];
 
-const GATE_LABELS: Record<string, { label: string; meaning: string; fix: string }> = {
-  desired_state: {
-    label: 'Bot Intent Set',
-    meaning: 'You have told the bot whether it should pause, resume, or stay stopped.',
-    fix: 'Choose Pause, Resume, or Stop in Bot Behavior.',
-  },
-  poison_sentinel: {
-    label: 'No Emergency Stop',
-    meaning: 'No safety halt was triggered for this bot.',
-    fix: 'Open Advanced Actions only after reviewing the halt reason.',
-  },
-  prior_day_halt: {
-    label: 'Yesterday Ended Cleanly',
-    meaning: 'No issue carried over from the previous session.',
-    fix: 'Review the prior session before restarting.',
-  },
-  latest_reconcile: {
-    label: 'Account Reconciled',
-    meaning: 'The bot confirmed your account balances match expectations.',
-    // VCR-0002 / Phase 4 — until ADR 0008 is fully wired, runtime reconcile
-    // is a no-op. The honest fix is restart + manual broker verification;
-    // the cockpit no longer offers a button that pretends otherwise.
-    fix: 'Runtime reconcile is not wired yet. Restart the bot and verify the broker positions match the cockpit before resuming.',
-  },
-  orders_cap: {
-    label: 'Daily Trade Limit Available',
-    meaning: 'The bot has not used every trade allowed by today\'s safety cap.',
-    fix: 'Wait for the next session or raise the safety cap before starting.',
-  },
-  // VCR-0018-C — server emits these four readiness gates but the frontend
-  // was rendering raw enum tokens for them; adding operator-facing copy so
-  // the cockpit no longer surfaces developer strings.
-  broker_connection: {
-    label: 'Broker Connection Live',
-    meaning: 'The runner can reach IBKR Gateway / TWS on the configured port.',
-    fix: 'Confirm Gateway is running on the paper port (default 7497) and the credentials match.',
-  },
-  session_window: {
-    label: 'Inside Trading Session',
-    meaning: 'The current wall-clock time is inside the strategy\'s configured session window (typically 09:30-16:00 ET).',
-    fix: 'Wait for the session to open, or adjust the configured window if the strategy supports it.',
-  },
-  submission_mode: {
-    label: 'Submission Mode Ready',
-    meaning: 'The runner can submit orders (paper-only) — no halt.flag, no durable PAUSE, no readonly override.',
-    fix: 'Resolve any active halt or pause before resuming.',
-  },
-  data_provenance: {
-    label: 'Bar Source Trusted',
-    meaning: 'The bar feed matches the source recorded at deploy time; no silent feed swap.',
-    fix: 'Redeploy from the canonical source if the provenance drifted.',
-  },
-};
-
-// Stable label-only projection of GATE_LABELS for the Readiness card surface.
-// Computed once at module load so [gateLabels] is a stable reference across
-// change-detection passes — otherwise the child input would invalidate every
-// tick under signal-driven CD.
-const READINESS_GATE_LABELS: Record<string, string> = Object.fromEntries(
-  Object.entries(GATE_LABELS).map(([key, value]) => [key, value.label]),
-);
-
 function titleizeKey(key: string): string {
   return key
     .split('_')
@@ -223,6 +128,25 @@ function titleizeKey(key: string): string {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
 }
+
+// Operator-facing labels for the engine's readiness gates. Passed to
+// `<app-can-it-trade-card>` and `<app-pre-trade-checklist>` so each surface
+// renders the same phrasing. Defined at module load so the input identity is
+// stable across signal-driven change detection.
+const READINESS_GATE_LABELS: Record<string, string> = {
+  desired_state: 'Bot Intent Set',
+  poison_sentinel: 'No Emergency Stop',
+  prior_day_halt: 'Yesterday Ended Cleanly',
+  latest_reconcile: 'Account Reconciled',
+  orders_cap: 'Daily Trade Limit Available',
+  // VCR-0018-C — server emits these four readiness gates but the frontend
+  // was rendering raw enum tokens for them; adding operator-facing copy so
+  // the cockpit no longer surfaces developer strings.
+  broker_connection: 'Broker Connection Live',
+  session_window: 'Inside Trading Session',
+  submission_mode: 'Submission Mode Ready',
+  data_provenance: 'Bar Source Trusted',
+};
 
 /**
  * Trader-facing instance control panel.
@@ -236,14 +160,12 @@ function titleizeKey(key: string): string {
     BrokerOperationResultComponent,
     BrokerStartStopCardComponent,
     AuditTrailAccordionComponent,
-    BrokerSizingCardComponent,
     BrokerRunLogModalComponent,
     BotTradeChartCardComponent,
     BotTradesTableComponent,
     IncidentsPanelComponent,
     CurrentRiskCardComponent,
     LatestSignalStripComponent,
-    StrategyRulesCardComponent,
     LastSessionCardComponent,
     CanItTradeCardComponent,
     StickyControlBarComponent,
@@ -259,9 +181,6 @@ export class BrokerInstancesComponent {
   private readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
-  private readonly v2Flag = inject(BrokerInstancesV2FlagService);
-
-  readonly cockpitEnabled = this.v2Flag.enabled;
 
   // Detective section tab state. URL-param sync (?tab=activity|diagnostics)
   // ships as a follow-up.
@@ -401,16 +320,6 @@ export class BrokerInstancesComponent {
   // Run-log modal: the run currently shown, or null when closed.
   readonly runLog = signal<LogTarget | null>(null);
 
-  // Checklist "Fix this" state: which gate's written guidance is expanded, and
-  // the busy/result of a one-click reconcile fix (kept separate from the
-  // Advanced-card command error so each surface owns its own feedback).
-  readonly expandedGate = signal<string | null>(null);
-  readonly busyFixKey = signal<string | null>(null);
-  readonly fixError = signal<OperationError | null>(null);
-  readonly fixNotice = signal<string | null>(null);
-
-  private readonly behaviorCard = viewChild<ElementRef<HTMLElement>>('behaviorCard');
-
   /** Keeps the URL in sync with the resolved selection. Fires whenever the
    * computed ``selectedInstanceId`` differs from the URL's ``:id`` segment —
    * the bare URL boot, a deep link to a deleted instance, or a roster row
@@ -437,9 +346,6 @@ export class BrokerInstancesComponent {
     this.intentError.set(null);
     this.commandError.set(null);
     this.runLog.set(null);
-    this.expandedGate.set(null);
-    this.fixError.set(null);
-    this.fixNotice.set(null);
     return this.router.navigate(['/broker/instances', instanceId]);
   }
 
@@ -797,50 +703,11 @@ export class BrokerInstancesComponent {
     return HALT_TRIGGER_COPY[e.halt_trigger] ?? `Safety trigger: ${e.halt_trigger}.`;
   }
 
-  /** Label-only projection of `GATE_LABELS` for the Readiness card surface,
-   * which only renders the operator-language gate name (the meaning + fix
-   * still live on the Pre-Trade Checklist below). Reference is stable
-   * across change-detection passes (see READINESS_GATE_LABELS at module
-   * scope). */
+  /** Operator-language labels for the engine's readiness gates. Passed to
+   * `<app-can-it-trade-card>` and `<app-pre-trade-checklist>` so each surface
+   * renders the same phrasing. Reference is stable across change detection
+   * (see READINESS_GATE_LABELS at module scope). */
   readonly readinessGateLabels = READINESS_GATE_LABELS;
-
-  checklistRows(r: ReadinessVector | null): ChecklistRow[] {
-    if (!r) {
-      return [
-        {
-          key: 'readiness',
-          label: 'Pre-Trade Status Loaded',
-          status: 'unknown',
-          severity: 'soft',
-          detail: 'No checklist is available yet.',
-          meaning: 'The bot has not reported whether it can trade.',
-          fix: 'Refresh the page or start the bot to load readiness.',
-        },
-      ];
-    }
-    return r.gates.map((gate) => this.checklistRow(gate));
-  }
-
-  checklistRow(gate: ReadinessGate): ChecklistRow {
-    const copy = GATE_LABELS[gate.name] ?? {
-      label: titleizeKey(gate.name),
-      meaning: gate.detail,
-      fix: 'Open the details for this check and review the latest bot status.',
-    };
-    return {
-      key: gate.name,
-      label: copy.label,
-      status: gate.status,
-      severity: gate.severity,
-      detail: gate.detail,
-      meaning: copy.meaning,
-      fix: copy.fix,
-    };
-  }
-
-  checksPassed(r: ReadinessVector | null): number {
-    return this.checklistRows(r).filter((row) => row.status === 'pass').length;
-  }
 
   currentIntent(s: LiveInstanceStatus): DesiredStateAction | null {
     switch (s.desired_state?.state) {
@@ -922,66 +789,4 @@ export class BrokerInstancesComponent {
     this.runLog.set(null);
   }
 
-  /** What "Fix this" does for a given gate. Resolved against live status because
-   * the right remedy depends on whether the bot is running and whether a run
-   * log exists to inspect. */
-  fixAction(row: ChecklistRow, s: LiveInstanceStatus): GateAction {
-    switch (row.key) {
-      case 'latest_reconcile':
-        // VCR-0002 / Phase 4 — runtime RECONCILE is not wired. The honest
-        // affordance is to reveal the manual-restart guidance; the previous
-        // "Re-sync now" button dispatched a backend no-op that pretended to
-        // refresh state. Phase 5B promotes this to a real "reconcile on next
-        // restart" affordance.
-        return {
-          kind: 'reveal',
-          label: 'How to fix',
-          hint: 'Runtime reconcile is not wired yet. Stop the bot, verify the broker positions match the cockpit, then restart.',
-        };
-      case 'desired_state':
-        return { kind: 'set-intent', label: 'Set bot intent' };
-      case 'poison_sentinel':
-      case 'prior_day_halt':
-        // Reviewing the run log is the actual first step for a halt / carried-
-        // over issue. Only offer it when there's a run to read.
-        return this.logTarget(s)
-          ? { kind: 'view-log', label: 'View run log' }
-          : { kind: 'reveal', label: 'How to fix' };
-      default:
-        return { kind: 'reveal', label: 'How to fix' };
-    }
-  }
-
-  /** Dispatch the gate's "Fix this" action. */
-  runFix(row: ChecklistRow, s: LiveInstanceStatus): void {
-    const action = this.fixAction(row, s);
-    switch (action.kind) {
-      case 'set-intent':
-        this.scrollToBehavior();
-        return;
-      case 'view-log': {
-        const target = this.logTarget(s);
-        if (target) this.openRunLog(target);
-        else this.toggleGuidance(row.key);
-        return;
-      }
-      case 'reveal':
-        this.toggleGuidance(row.key);
-        return;
-    }
-  }
-
-  /** Bring the Bot Behavior card into view and move focus to the card itself
-   * (not its first segment — that would nudge the operator toward Pause and
-   * no-op while a save is in flight and the buttons are disabled). */
-  private scrollToBehavior(): void {
-    const el = this.behaviorCard()?.nativeElement;
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.focus({ preventScroll: true });
-  }
-
-  toggleGuidance(key: string): void {
-    this.expandedGate.update((current) => (current === key ? null : key));
-  }
 }

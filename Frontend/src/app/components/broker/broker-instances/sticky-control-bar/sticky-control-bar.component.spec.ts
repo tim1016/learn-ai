@@ -5,7 +5,6 @@ import type {
   InstanceLastExit,
   InstanceProcessView,
   LiveInstanceStatus,
-  ReadinessVector,
 } from '../../../../api/live-instances.types';
 import { StickyControlBarComponent } from './sticky-control-bar.component';
 
@@ -35,7 +34,6 @@ function makeStatus(
 function render(opts: {
   status: LiveInstanceStatus;
   isPaper?: boolean;
-  cockpit?: boolean;
 }): { el: HTMLElement; component: StickyControlBarComponent } {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -44,39 +42,11 @@ function render(opts: {
   const fixture = TestBed.createComponent(StickyControlBarComponent);
   fixture.componentRef.setInput('status', opts.status);
   fixture.componentRef.setInput('isPaper', opts.isPaper ?? true);
-  fixture.componentRef.setInput('cockpit', opts.cockpit ?? false);
   fixture.detectChanges();
   return {
     el: fixture.nativeElement as HTMLElement,
     component: fixture.componentInstance,
   };
-}
-
-function makeReadyStatus(): LiveInstanceStatus {
-  return {
-    strategy_instance_id: 'spy_15m',
-    process: { state: 'running' } as InstanceProcessView,
-    live_binding: null,
-    evidence_binding: null,
-    desired_state: null,
-    readiness: {
-      kind: 'live_readiness',
-      as_of_ms: 0,
-      source: 'engine',
-      verdict: 'READY',
-      summary: '',
-      gates: [],
-    },
-    latest_decision: null,
-    decision_columns: [],
-    broker: null,
-    start_defaults: null,
-    provenance: null,
-    sizing: null,
-    last_exit: null,
-    symbol: null,
-    fetched_at_ms: 0,
-  } as unknown as LiveInstanceStatus;
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -106,59 +76,35 @@ describe('StickyControlBarComponent', () => {
     );
   });
 
-  it('renders the RUNNING state pill in the running tone', () => {
+  it.each([
+    ['READY', 'STEADY'],
+    ['DEGRADED', 'CONFIGURE'],
+    ['BLOCKED', 'BLOCKED'],
+    ['UNKNOWN', 'BLOCKED'],
+  ] as const)('renders the %s readiness verdict as %s fleet-state pill', (verdict, label) => {
     const { el } = render({
-      status: makeStatus({ process: { state: 'running' } as InstanceProcessView }),
+      status: makeStatus({
+        readiness: {
+          kind: 'live_readiness',
+          as_of_ms: 0,
+          source: 'engine',
+          verdict,
+          summary: '',
+          gates: [],
+        },
+      }),
     });
-    const pill = el.querySelector<HTMLElement>('[data-testid="state-pill"]');
 
-    expect(pill?.textContent?.trim()).toBe('RUNNING');
-    expect(pill?.classList.contains('running')).toBe(true);
+    const pill = el.querySelector<HTMLElement>('[data-testid="cockpit-fleet-state-pill"]');
+    expect(pill?.textContent ?? '').toContain(label);
+    expect(pill?.getAttribute('data-state')).toBe(label);
   });
 
-  it('renders STOPPED on idle process state', () => {
-    const { el } = render({ status: makeStatus() });
-    const pill = el.querySelector<HTMLElement>('[data-testid="state-pill"]');
-
-    expect(pill?.textContent?.trim()).toBe('STOPPED');
-  });
-
-  it('renders the readiness pill verdict in the verdict tone', () => {
-    const ready: ReadinessVector = {
-      kind: 'live_readiness',
-      as_of_ms: 0,
-      source: 'engine',
-      verdict: 'READY',
-      summary: '',
-      gates: [],
-    };
-    const { el } = render({ status: makeStatus({ readiness: ready }) });
-    const pill = el.querySelector<HTMLElement>('[data-testid="readiness-pill"]');
-
-    expect(pill?.textContent?.trim()).toBe('READY');
-    expect(pill?.classList.contains('ready')).toBe(true);
-  });
-
-  it('renders BLOCKED readiness in the blocked tone', () => {
-    const blocked: ReadinessVector = {
-      kind: 'live_readiness',
-      as_of_ms: 0,
-      source: 'engine',
-      verdict: 'BLOCKED',
-      summary: '',
-      gates: [],
-    };
-    const { el } = render({ status: makeStatus({ readiness: blocked }) });
-    const pill = el.querySelector<HTMLElement>('[data-testid="readiness-pill"]');
-
-    expect(pill?.classList.contains('blocked')).toBe(true);
-  });
-
-  it('renders NO READINESS when the engine has not emitted a vector', () => {
+  it('renders BLOCKED fleet-state when the engine has not emitted a readiness vector', () => {
     const { el } = render({ status: makeStatus() });
 
-    const pill = el.querySelector<HTMLElement>('[data-testid="readiness-pill"]');
-    expect(pill?.textContent?.trim()).toBe('NO READINESS');
+    const pill = el.querySelector<HTMLElement>('[data-testid="cockpit-fleet-state-pill"]');
+    expect(pill?.getAttribute('data-state')).toBe('BLOCKED');
   });
 
   it('renders the poison chip when the last_exit carries a halt_trigger (User Story #9)', () => {
@@ -203,51 +149,5 @@ describe('StickyControlBarComponent', () => {
     el.querySelector<HTMLButtonElement>('[data-testid="jump-to-controls"]')?.click();
 
     expect(fired).toBe(1);
-  });
-
-  describe('cockpit mode (broker-instances-v2 flag on)', () => {
-    function statusWith(verdict: 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN' | undefined): LiveInstanceStatus {
-      return {
-        ...makeReadyStatus(),
-        readiness: verdict
-          ? {
-              kind: 'live_readiness',
-              as_of_ms: 0,
-              source: 'engine',
-              verdict,
-              summary: '',
-              gates: [],
-            }
-          : null,
-      } as unknown as LiveInstanceStatus;
-    }
-
-    it.each([
-      ['READY', 'STEADY'],
-      ['DEGRADED', 'CONFIGURE'],
-      ['BLOCKED', 'BLOCKED'],
-      ['UNKNOWN', 'BLOCKED'],
-    ] as const)('renders the %s readiness as %s fleet-state pill', (verdict, label) => {
-      const { el } = render({ status: statusWith(verdict), cockpit: true });
-
-      const pill = el.querySelector<HTMLElement>('[data-testid="cockpit-fleet-state-pill"]');
-      expect(pill?.textContent ?? '').toContain(label);
-      expect(pill?.getAttribute('data-state')).toBe(label);
-    });
-
-    it('hides the legacy state and readiness pills when cockpit is on', () => {
-      const { el } = render({ status: makeReadyStatus(), cockpit: true });
-
-      expect(el.querySelector('[data-testid="state-pill"]')).toBeNull();
-      expect(el.querySelector('[data-testid="readiness-pill"]')).toBeNull();
-    });
-
-    it('renders the legacy pills when cockpit is off', () => {
-      const { el } = render({ status: makeReadyStatus(), cockpit: false });
-
-      expect(el.querySelector('[data-testid="state-pill"]')).not.toBeNull();
-      expect(el.querySelector('[data-testid="readiness-pill"]')).not.toBeNull();
-      expect(el.querySelector('[data-testid="cockpit-fleet-state-pill"]')).toBeNull();
-    });
   });
 });

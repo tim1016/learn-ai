@@ -366,7 +366,7 @@ describe('BrokerInstancesComponent', () => {
     expect(svc.issueInstanceCommand).toHaveBeenCalledWith('spy_ema_paper', { verb: 'FLATTEN' });
   });
 
-  it('renders the engine-authored readiness verdict and gates', async () => {
+  it('renders the engine-authored readiness verdict and gates on Can it trade?', async () => {
     const { fixture, component } = setup();
     await flush();
     fixture.detectChanges();
@@ -377,8 +377,8 @@ describe('BrokerInstancesComponent', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Pre-Trade Checklist');
-    expect(text).toContain('0 / 1 checks passed');
+    expect(text).toContain('Can it trade?');
+    expect(text).toContain('0 / 1 checks pass');
     expect(text).toContain('Daily Trade Limit Available');
     expect(text).toContain('4 / 4 orders used');
   });
@@ -808,36 +808,6 @@ describe('BrokerInstancesComponent', () => {
     });
   }
 
-  function findFixButton(fixture: { nativeElement: HTMLElement }, text: string): HTMLElement | undefined {
-    const buttons = Array.from(fixture.nativeElement.querySelectorAll('.fix-button'));
-    return buttons.find((b) => b.textContent?.includes(text)) as HTMLElement | undefined;
-  }
-
-  // VCR-0002 / VCR-0008 / Phase 4 — runtime RECONCILE is not wired. The
-  // cockpit no longer renders a "Re-sync now" button on the reconcile gate;
-  // the only affordance is "How to fix" which reveals the manual-restart
-  // guidance.
-  it('reveals manual-restart guidance for the reconcile gate (does not dispatch RECONCILE)', async () => {
-    const { fixture, component, svc } = setup();
-    svc.getInstanceStatus.mockResolvedValue(reconcileGateStatus());
-    await flush();
-    fixture.detectChanges();
-
-    component.select('spy_ema_paper');
-    fixture.detectChanges();
-    await flush();
-    fixture.detectChanges();
-
-    expect(findFixButton(fixture, 'Re-sync now')).toBeUndefined();
-    const btn = findFixButton(fixture, 'How to fix');
-    expect(btn).toBeTruthy();
-    btn?.click();
-    fixture.detectChanges();
-
-    expect(svc.issueInstanceCommand).not.toHaveBeenCalled();
-    expect(fixture.nativeElement.textContent).toContain('Runtime reconcile is not wired');
-  });
-
   it('renders the ADR 0008 not-wired banner whenever a live binding exists', async () => {
     const { fixture, component, svc } = setup();
     svc.getInstanceStatus.mockResolvedValue(reconcileGateStatus());
@@ -924,56 +894,6 @@ describe('BrokerInstancesComponent', () => {
     component.closeRunLog();
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.runlog-dialog')).toBeNull();
-  });
-
-  it('offers "View run log" as the fix for a halt gate and opens the modal', async () => {
-    const { fixture, component, svc } = setup();
-    svc.getInstanceStatus.mockResolvedValue(
-      makeStatus({
-        process: { state: 'idle' },
-        live_binding: null,
-        evidence_binding: { run_id: 'run-old', state: 'latest_run_by_ledger', is_live: false },
-        last_exit: {
-          run_id: 'run-old',
-          ended_at_ms: 200,
-          exit_code: 1,
-          exit_reason: 'fatal_halt',
-          hydration_accepted: null,
-          hydration_failure_reason: null,
-          halt_trigger: 'outside_mutation',
-          halt_at_ms: 1_700_000_000_000,
-          halt_detail: {},
-        },
-        readiness: {
-          kind: 'start_readiness',
-          as_of_ms: 1,
-          source: 'backend_derived',
-          verdict: 'BLOCKED',
-          summary: 'Emergency stop active.',
-          gates: [
-            { name: 'poison_sentinel', status: 'fail', severity: 'hard', detail: 'poisoned.flag present' },
-          ],
-        },
-      }),
-    );
-    await flush();
-    fixture.detectChanges();
-
-    component.select('spy_ema_paper');
-    fixture.detectChanges();
-    await flush();
-    fixture.detectChanges();
-
-    const btn = findFixButton(fixture, 'View run log');
-    expect(btn).toBeTruthy();
-    btn?.click();
-    fixture.detectChanges();
-    await flush();
-    fixture.detectChanges();
-
-    // The crashed run's log is fetched once (not the live poll path).
-    expect(svc.getLogTail).toHaveBeenCalledWith('run-old', expect.any(Number));
-    expect(fixture.nativeElement.querySelector('.runlog-dialog')).toBeTruthy();
   });
 
   it('hides the Reset Paper Account button when the session is not on paper', async () => {

@@ -36,8 +36,7 @@
     text-overflow: ellipsis;
   }
 
-  .state-pill,
-  .readiness-pill,
+  .fleet-state-pill,
   .poison-chip {
     padding: 0.2rem 0.55rem;
     border-radius: 999px;
@@ -49,46 +48,22 @@
     color: var(--text-secondary);
   }
 
-  .state-pill.running {
+  .fleet-state-pill[data-state='STEADY'] {
     background: var(--bull-soft);
     color: var(--bull);
     border-color: var(--bull);
   }
 
-  .state-pill.stopping {
+  .fleet-state-pill[data-state='CONFIGURE'] {
     background: var(--warn-soft);
     color: var(--warn);
     border-color: var(--warn);
   }
 
-  .state-pill.stopped,
-  .state-pill.idle {
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-  }
-
-  .state-pill.unreachable {
+  .fleet-state-pill[data-state='BLOCKED'] {
     background: var(--bear-soft);
     color: var(--bear);
     border-color: var(--bear);
-  }
-
-  .readiness-pill.ready {
-    background: var(--bull-soft);
-    color: var(--bull);
-    border-color: var(--bull);
-  }
-
-  .readiness-pill.blocked {
-    background: var(--bear-soft);
-    color: var(--bear);
-    border-color: var(--bear);
-  }
-
-  .readiness-pill.degraded {
-    background: var(--warn-soft);
-    color: var(--warn);
-    border-color: var(--warn);
   }
 
   .poison-chip {

@@ -14,39 +14,13 @@
     {{ botName() }}
   </span>
 
-  @if (cockpit()) {
-    <span
-      class="fleet-state-pill"
-      [attr.data-state]="fleetState()"
-      data-testid="cockpit-fleet-state-pill"
-    >
-      {{ fleetState() }}
-    </span>
-  } @else {
-    <span
-      class="state-pill"
-      [class.running]="statePill().kind === 'running'"
-      [class.stopping]="statePill().kind === 'stopping'"
-      [class.stopped]="statePill().kind === 'stopped'"
-      [class.idle]="statePill().kind === 'idle'"
-      [class.unreachable]="statePill().kind === 'unreachable'"
-      data-testid="state-pill"
-    >
-      {{ statePill().label }}
-    </span>
-
-    <span
-      class="readiness-pill"
-      [class.ready]="readinessPill().kind === 'ready'"
-      [class.blocked]="readinessPill().kind === 'blocked'"
-      [class.degraded]="readinessPill().kind === 'degraded'"
-      [class.unknown]="readinessPill().kind === 'unknown'"
-      [class.no_readiness]="readinessPill().kind === 'no_readiness'"
-      data-testid="readiness-pill"
-    >
-      {{ readinessPill().label }}
-    </span>
-  }
+  <span
+    class="fleet-state-pill"
+    [attr.data-state]="fleetState()"
+    data-testid="cockpit-fleet-state-pill"
+  >
+    {{ fleetState() }}
+  </span>
 
   @if (hasPoisonFlag()) {
     <span class="poison-chip" data-testid="poison-chip" title="Run flagged unsafe">
