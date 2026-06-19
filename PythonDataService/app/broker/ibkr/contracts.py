@@ -154,6 +154,61 @@ async def build_option_contract(
     return qualified[0]
 
 
+async def search_option_contracts(
+    client: IbkrClient,
+    *,
+    symbol: str,
+    expiry_ms: int,
+    strike: float,
+    right: OptionRight,
+) -> list:
+    """Qualify one (symbol, expiry, strike, right) option drill-down pick
+    and return the rich ``OptionContractMatch`` rows (Slice 1F, #605).
+
+    Mirrors ``build_option_contract`` but returns repo-native DTOs
+    carrying ``con_id`` + ``local_symbol`` + ``trading_class`` +
+    ``multiplier`` because the cockpit action-plan picker persists those
+    alongside the leg. Returns ``[]`` when IBKR cannot qualify the
+    contract — the picker shows the empty result inline rather than
+    raising, which is consistent with the broker's "no such contract"
+    response.
+    """
+    from ib_async import Option
+
+    from app.schemas.broker_search import OptionContractMatch
+
+    client.require_connected()
+    contract = Option(
+        symbol=symbol,
+        lastTradeDateOrContractMonth=expiry_ms_to_yyyymmdd(expiry_ms),
+        strike=float(strike),
+        right=right,
+        exchange="SMART",
+        currency="USD",
+        multiplier="100",
+    )
+    raw = await client.ib.qualifyContractsAsync(contract)
+    out: list[OptionContractMatch] = []
+    for c in raw:
+        if c is None:
+            continue
+        out.append(
+            OptionContractMatch(
+                con_id=int(c.conId),
+                symbol=c.symbol,
+                local_symbol=c.localSymbol,
+                trading_class=c.tradingClass,
+                exchange=c.exchange,
+                currency=c.currency,
+                expiry_ms=yyyymmdd_to_expiry_ms(c.lastTradeDateOrContractMonth),
+                strike=float(c.strike),
+                right=c.right,
+                multiplier=int(c.multiplier),
+            )
+        )
+    return out
+
+
 async def list_qualified_strikes(
     client: IbkrClient,
     symbol: str,

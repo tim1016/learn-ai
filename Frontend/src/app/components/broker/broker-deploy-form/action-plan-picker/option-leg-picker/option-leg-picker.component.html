@@ -1,0 +1,103 @@
+<div class="option-leg-picker">
+  <header class="picker-header">
+    <span class="picker-symbol">{{ symbol().symbol }}</span>
+    <span class="picker-exchange">{{ symbol().exchange }}</span>
+  </header>
+
+  @if (error(); as msg) {
+    <p class="status status-error" role="alert">{{ msg }}</p>
+  }
+
+  <section class="picker-section">
+    <h4 class="picker-title">Expiry</h4>
+    @if (loadingExpirations()) {
+      <p class="status">Loading expirations…</p>
+    } @else if (expirations().length === 0) {
+      <p class="status">No expirations.</p>
+    } @else {
+      <ul class="chips" role="listbox" aria-label="Expirations">
+        @for (ms of expirations(); track trackExpiry($index, ms)) {
+          <li role="option" [attr.aria-selected]="selectedExpiryMs() === ms">
+            <button
+              type="button"
+              class="chip"
+              [class.chip-selected]="selectedExpiryMs() === ms"
+              (click)="selectExpiry(ms)"
+            >
+              {{ ms | date: 'yyyy-MM-dd' : 'UTC' }}
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  @if (selectedExpiryMs() !== null) {
+    <section class="picker-section">
+      <h4 class="picker-title">Strike</h4>
+      @if (loadingStrikes()) {
+        <p class="status">Loading strikes…</p>
+      } @else if (strikes().length === 0) {
+        <p class="status">No strikes for this expiry.</p>
+      } @else {
+        <ul class="chips chips-strikes" role="listbox" aria-label="Strikes">
+          @for (strike of strikes(); track trackStrike($index, strike)) {
+            <li role="option" [attr.aria-selected]="selectedStrike() === strike">
+              <button
+                type="button"
+                class="chip"
+                [class.chip-selected]="selectedStrike() === strike"
+                (click)="selectStrike(strike)"
+              >
+                {{ strike | number: '1.0-2' }}
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  }
+
+  @if (selectedStrike() !== null) {
+    <section class="picker-section">
+      <h4 class="picker-title">Right</h4>
+      <div class="right-toggle" role="radiogroup" aria-label="Option right">
+        <button
+          type="button"
+          class="chip"
+          [class.chip-selected]="selectedRight() === 'C'"
+          role="radio"
+          [attr.aria-checked]="selectedRight() === 'C'"
+          (click)="selectRight('C')"
+        >
+          Call
+        </button>
+        <button
+          type="button"
+          class="chip"
+          [class.chip-selected]="selectedRight() === 'P'"
+          role="radio"
+          [attr.aria-checked]="selectedRight() === 'P'"
+          (click)="selectRight('P')"
+        >
+          Put
+        </button>
+      </div>
+    </section>
+  }
+
+  <footer class="picker-footer">
+    <button
+      type="button"
+      class="qualify-button"
+      [disabled]="!canQualify() || qualifying()"
+      (click)="qualifyContract()"
+    >
+      @if (qualifying()) {
+        Qualifying…
+      } @else {
+        Add option leg
+      }
+    </button>
+  </footer>
+</div>

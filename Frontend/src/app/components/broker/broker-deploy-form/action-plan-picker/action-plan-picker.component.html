@@ -31,15 +31,45 @@
       type="button"
       class="picker-add"
       data-testid="action-plan-picker-enter-add"
-      (click)="addStockEntry()"
+      (click)="beginAddStock()"
     >+ Add stock</button>
     <button
       type="button"
       class="picker-add"
       data-testid="action-plan-picker-enter-add-option"
-      (click)="addOptionEntry()"
+      (click)="beginAddOption()"
     >+ Add option</button>
   </div>
+
+  @let picker = pickerState();
+  @switch (picker.mode) {
+    @case ('symbol') {
+      <div
+        class="broker-picker-shell"
+        [attr.data-testid]="'action-plan-picker-' + picker.intent + '-symbol'"
+      >
+        <app-broker-instrument-card
+          [secType]="'STK'"
+          [placeholder]="
+            picker.intent === 'stock'
+              ? 'Search ticker for stock leg…'
+              : 'Search underlying for option leg…'
+          "
+          (pick)="onSymbolPicked($event)"
+        />
+        <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+      </div>
+    }
+    @case ('drill') {
+      <div class="broker-picker-shell" data-testid="action-plan-picker-option-drill">
+        <app-option-leg-picker
+          [symbol]="picker.symbol"
+          (qualify)="onOptionLegQualified($event)"
+        />
+        <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+      </div>
+    }
+  }
 
   @if (entryLegs().length === 0) {
     <p class="muted">No entry legs declared yet.</p>
@@ -57,8 +87,8 @@
               [attr.data-testid]="'action-plan-picker-option-fields-' + leg.leg_id"
             >
               <span class="leg-right">{{ leg.right }}</span>
-              <span class="leg-strike">{{ leg.strike.selector }}</span>
-              <span class="leg-expiry">{{ leg.expiry.selector }}</span>
+              <span class="leg-strike">{{ formatStrike(leg) }}</span>
+              <span class="leg-expiry">{{ formatExpiry(leg) }}</span>
             </span>
           }
           <button

@@ -45,7 +45,15 @@ export interface AtmOffsetStrike {
   offset: number;
 }
 
-export type StrikeSelector = AtmStrike | AtmOffsetStrike;
+/** Broker-derived strike — Slice 1F. Emitted by the option-leg picker
+ * after IBKR ``reqContractDetails`` qualifies the operator's drill-down
+ * pick. The strike is the concrete number IBKR listed. */
+export interface AbsoluteStrike {
+  selector: 'absolute';
+  strike: number;
+}
+
+export type StrikeSelector = AtmStrike | AtmOffsetStrike | AbsoluteStrike;
 
 // ---- Expiry selectors (Slice 1C) ------------------------------------------
 

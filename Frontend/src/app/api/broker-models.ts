@@ -170,3 +170,37 @@ export interface IbkrStrikeList {
   strikes: number[];
   fetched_at_ms: number;
 }
+
+// ── REST shape: /api/broker/symbols/search (Slice 1F) ────────────────
+
+export interface SymbolMatch {
+  symbol: string;
+  name: string;
+  exchange: string;
+  currency: string;
+  sec_type: 'STK' | 'OPT' | 'FUT' | 'FOP' | 'IND' | 'CASH' | 'BOND' | 'CFD' | 'CMDTY';
+  derivative_sec_types: string[];
+}
+
+export interface SymbolSearchResponse {
+  matches: SymbolMatch[];
+}
+
+// ── REST shape: /api/broker/option-contracts/{symbol} (Slice 1F) ─────
+
+export interface OptionContractMatch {
+  con_id: number;
+  symbol: string;
+  local_symbol: string;
+  trading_class: string;
+  exchange: string;
+  currency: string;
+  expiry_ms: number;
+  strike: number;
+  right: 'C' | 'P';
+  multiplier: number;
+}
+
+export interface OptionContractsResponse {
+  matches: OptionContractMatch[];
+}

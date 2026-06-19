@@ -11,6 +11,8 @@ import type {
   IbkrOrderSpec,
   IbkrPositionsSnapshot,
   IbkrStrikeList,
+  OptionContractsResponse,
+  SymbolSearchResponse,
 } from '../api/broker-models';
 
 /**
@@ -21,6 +23,17 @@ import type {
  * ``brokerSse()`` helper in ``broker-sse.ts`` so each component owns
  * the EventSource lifetime explicitly.
  */
+export type SymbolSearchSecType =
+  | 'STK'
+  | 'OPT'
+  | 'FUT'
+  | 'FOP'
+  | 'IND'
+  | 'CASH'
+  | 'BOND'
+  | 'CFD'
+  | 'CMDTY';
+
 @Injectable({ providedIn: 'root' })
 export class BrokerService {
   private readonly http = inject(HttpClient);
@@ -71,6 +84,39 @@ export class BrokerService {
       this.http.get<IbkrStrikeList>(
         `${this.base}/strikes/${encodeURIComponent(symbol)}`,
         { params: { expiry_ms: expiryMs } },
+      ),
+    );
+  }
+
+  /**
+   * Slice 1F — proxy to IBKR ``reqMatchingSymbols``. Returns matching
+   * contracts for the typed pattern; the cockpit's leg picker debounces
+   * before calling so a single keystroke does not draw an IBKR token.
+   */
+  searchSymbols(q: string, secType?: SymbolSearchSecType): Promise<SymbolSearchResponse> {
+    const params: Record<string, string> = { q };
+    if (secType !== undefined) params['sec_type'] = secType;
+    return firstValueFrom(
+      this.http.get<SymbolSearchResponse>(`${this.base}/symbols/search`, { params }),
+    );
+  }
+
+  /**
+   * Slice 1F — proxy to IBKR ``reqContractDetails``. Qualifies a
+   * drill-down (symbol, expiry, strike, right) pick and returns
+   * ``con_id`` + ``local_symbol`` + multiplier for persistence with the
+   * declared option leg.
+   */
+  searchOptionContracts(
+    symbol: string,
+    expiryMs: number,
+    strike: number,
+    right: 'C' | 'P',
+  ): Promise<OptionContractsResponse> {
+    return firstValueFrom(
+      this.http.get<OptionContractsResponse>(
+        `${this.base}/option-contracts/${encodeURIComponent(symbol)}`,
+        { params: { expiry_ms: expiryMs, strike, right } },
       ),
     );
   }

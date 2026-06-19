@@ -18,10 +18,17 @@ import type {
   StockEntryLeg,
 } from '../../../../api/action-plan.types';
 import { isOptionLeg } from '../../../../api/action-plan.types';
+import { formatExpiry, formatStrike } from '../../../../api/action-plan-format';
 import {
   ActionPlanPreviewService,
   type ParityWarning,
 } from '../../../../api/action-plan-preview.service';
+import type {
+  OptionContractMatch,
+  SymbolMatch,
+} from '../../../../api/broker-models';
+import { BrokerInstrumentCardComponent } from '../../../../shared/broker-instrument-card/broker-instrument-card.component';
+import { OptionLegPickerComponent } from './option-leg-picker/option-leg-picker.component';
 
 /**
  * Deploy-form picker for the operator-declared action plan
@@ -44,6 +51,7 @@ const PREVIEW_DEBOUNCE_MS = 150;
 @Component({
   selector: 'app-action-plan-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [BrokerInstrumentCardComponent, OptionLegPickerComponent],
   templateUrl: './action-plan-picker.component.html',
   styleUrl: './action-plan-picker.component.scss',
 })
@@ -55,7 +63,20 @@ export class ActionPlanPickerComponent {
   readonly exitEntities = computed<CloseLegExit[]>(() => this.actionPlan().on_exit);
   readonly warnings = signal<ParityWarning[]>([]);
 
+  /** Broker-coupled picker workflow as a tagged union so the symbol
+   * captured during the option-add flow can never drift apart from the
+   * picker stage. ``intent`` discriminates the "Add stock" vs "Add
+   * option" entry path; the drill state carries the already-picked
+   * underlying so the template never needs a null narrowing dance. */
+  readonly pickerState = signal<
+    | { mode: 'idle' }
+    | { mode: 'symbol'; intent: 'stock' | 'option' }
+    | { mode: 'drill'; symbol: SymbolMatch }
+  >({ mode: 'idle' });
+
   isOption = isOptionLeg;
+  formatStrike = formatStrike;
+  formatExpiry = formatExpiry;
 
   private readonly preview = inject(ActionPlanPreviewService);
 
@@ -70,27 +91,52 @@ export class ActionPlanPickerComponent {
       .subscribe((plan) => this._fetchPreview(plan));
   }
 
-  addStockEntry(): void {
-    const newLeg: StockEntryLeg = {
-      leg_id: this._nextLegId(),
-      instrument: { kind: 'stock', underlying: this.prefillUnderlying() ?? '' },
-      position: 'long',
-      qty_ratio: 1,
-    };
-    this._appendEntry(newLeg);
+  beginAddStock(): void {
+    this.pickerState.set({ mode: 'symbol', intent: 'stock' });
   }
 
-  addOptionEntry(): void {
+  beginAddOption(): void {
+    this.pickerState.set({ mode: 'symbol', intent: 'option' });
+  }
+
+  cancelPicker(): void {
+    this.pickerState.set({ mode: 'idle' });
+  }
+
+  onSymbolPicked(match: SymbolMatch): void {
+    const state = this.pickerState();
+    if (state.mode !== 'symbol') return;
+    if (state.intent === 'stock') {
+      const newLeg: StockEntryLeg = {
+        leg_id: this._nextLegId(),
+        instrument: { kind: 'stock', underlying: match.symbol },
+        position: 'long',
+        qty_ratio: 1,
+      };
+      this._appendEntry(newLeg);
+      this.pickerState.set({ mode: 'idle' });
+      return;
+    }
+    this.pickerState.set({ mode: 'drill', symbol: match });
+  }
+
+  onOptionLegQualified(match: OptionContractMatch): void {
+    // Schema accepts ``absolute`` selectors so the broker-qualified
+    // strike + expiry round-trips into ``run_id`` exactly as the
+    // operator picked them. Slice 4's resolver will re-qualify against
+    // the live broker; the persisted ``con_id`` lives unhashed in the
+    // ledger alongside the leg.
     const newLeg: OptionEntryLeg = {
       leg_id: this._nextLegId(),
-      instrument: { kind: 'option', underlying: this.prefillUnderlying() ?? '' },
+      instrument: { kind: 'option', underlying: match.symbol },
       position: 'long',
       qty_ratio: 1,
-      right: 'call',
-      strike: { selector: 'atm' },
-      expiry: { selector: 'min_dte', days: 14 },
+      right: match.right === 'C' ? 'call' : 'put',
+      strike: { selector: 'absolute', strike: match.strike },
+      expiry: { selector: 'absolute', expiration_ms: match.expiry_ms },
     };
     this._appendEntry(newLeg);
+    this.pickerState.set({ mode: 'idle' });
   }
 
   removeEntry(legId: string): void {

@@ -49,6 +49,7 @@ from app.broker.ibkr.client import (
     get_client_lifecycle_lock,
     set_client,
 )
+from app.broker.ibkr.contracts import search_option_contracts
 from app.broker.ibkr.diagnostics import run_diagnostics
 from app.broker.ibkr.health import (
     build_broker_health,
@@ -95,7 +96,10 @@ from app.broker.ibkr.surface import (
 from app.broker.ibkr.surface import (
     stream_option_surface,
 )
+from app.broker.ibkr.symbol_search import search_symbols
+from app.schemas.broker_search import OptionContractMatch, SymbolMatch
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+from app.utils.throttle import TokenBucket, TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
@@ -116,6 +120,31 @@ _lifecycle_lock = get_client_lifecycle_lock()
 # without having ``ib_async`` installed. Production callers see the real
 # class; tests substitute a fake.
 _ibkr_client_factory: type[IbkrClient] = IbkrClient
+
+
+# Slice 1F — broker search throttle + 60s response cache. Token bucket
+# is at the IBKR-published ``reqMatchingSymbols`` cadence (~1 req / 5s)
+# with a burst of 1 so a single typo does not waste the operator's
+# allowance. Cache keys are ``(pattern, sec_type)`` for the symbol
+# search and ``(symbol, expiry_ms, strike, right)`` for the option
+# drill-down (drill-down qualification is heavy but not rate-limited
+# upstream).
+_SYMBOL_SEARCH_BUCKET: TokenBucket = TokenBucket(rate_per_second=0.2, capacity=1)
+_SYMBOL_SEARCH_CACHE: TtlCache[tuple[str, str | None], list[SymbolMatch]] = TtlCache(
+    ttl_seconds=60.0, max_size=256
+)
+_OPTION_CONTRACTS_CACHE: TtlCache[
+    tuple[str, int, float, str], list[OptionContractMatch]
+] = TtlCache(ttl_seconds=300.0, max_size=512)
+
+
+def reset_broker_search_state_for_testing() -> None:
+    """Test-only hook — flush the throttle bucket and TTL cache so an
+    earlier test cannot starve the next one of tokens."""
+    global _SYMBOL_SEARCH_BUCKET, _SYMBOL_SEARCH_CACHE, _OPTION_CONTRACTS_CACHE
+    _SYMBOL_SEARCH_BUCKET = TokenBucket(rate_per_second=0.2, capacity=1)
+    _SYMBOL_SEARCH_CACHE = TtlCache(ttl_seconds=60.0, max_size=256)
+    _OPTION_CONTRACTS_CACHE = TtlCache(ttl_seconds=300.0, max_size=512)
 
 
 # ── /health ────────────────────────────────────────────────────────────
@@ -384,6 +413,98 @@ async def list_strikes_endpoint(
         strikes=strikes,
         fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
     )
+
+
+# ── /symbols/search ────────────────────────────────────────────────────
+
+
+@router.get("/symbols/search")
+async def symbols_search_endpoint(
+    q: Annotated[str, Query(min_length=1, max_length=32, description="Symbol pattern.")],
+    sec_type: Annotated[
+        str | None,
+        Query(description="Optional secType filter: STK, OPT, FUT, FOP, IND, CASH, etc."),
+    ] = None,
+) -> dict:
+    """Slice 1F — IBKR ``reqMatchingSymbols`` proxy for the cockpit's
+    leg picker. Token-bucket rate-limited per ``(q, sec_type)`` at the
+    IBKR-published ~1 req/5s ceiling; 60s TTL cache short-circuits
+    repeated patterns without consulting the bucket.
+    """
+    # Canonicalize before keying so " SPY " and "SPY" share one cache /
+    # throttle slot, and treat an empty ``sec_type`` query string as
+    # "no filter" (FastAPI will otherwise pass it through to the
+    # wrapper as an empty literal that drops every row).
+    client = _require_connected_or_503()
+    q_norm = q.strip()
+    sec_type_norm = sec_type if sec_type else None
+    key = (q_norm, sec_type_norm)
+    cached = _SYMBOL_SEARCH_CACHE.get(key)
+    if cached is not None:
+        return {"matches": [m.model_dump() for m in cached]}
+
+    # Single global key — IBKR's ``reqMatchingSymbols`` ceiling is per
+    # connection, not per pattern. Per-pattern keys would let a fast
+    # typist drain N quotas while still tripping the upstream limit.
+    retry_after = _SYMBOL_SEARCH_BUCKET.try_acquire("ibkr")
+    if retry_after > 0.0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Symbol search rate limit exceeded; retry shortly.",
+            headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+        )
+
+    try:
+        matches = await search_symbols(client, q_norm, sec_type=sec_type_norm)
+    except NotConnectedError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "IBKR client not connected.",
+        ) from exc
+
+    _SYMBOL_SEARCH_CACHE.set(key, matches)
+    return {"matches": [m.model_dump() for m in matches]}
+
+
+# ── /option-contracts/{symbol} ─────────────────────────────────────────
+
+
+@router.get("/option-contracts/{symbol}")
+async def option_contracts_endpoint(
+    symbol: str,
+    expiry_ms: Annotated[int, Query(gt=0, description="Expiry timestamp in int64 ms UTC.")],
+    strike: Annotated[float, Query(gt=0, description="Option strike.")],
+    right: Annotated[str, Query(pattern="^[CP]$", description="C for call, P for put.")],
+) -> dict:
+    """Slice 1F — IBKR ``reqContractDetails`` qualification for the
+    cockpit's option leg picker. Returns the rich ``OptionContractMatch``
+    (with ``con_id``, ``local_symbol``, etc.) that the picker persists
+    alongside the declared leg. ``conId`` is the broker-canonical
+    identity the Slice 4 resolver will key against.
+    """
+    client = _require_connected_or_503()
+    sym = symbol.upper()
+    key = (sym, expiry_ms, float(strike), right)
+    cached = _OPTION_CONTRACTS_CACHE.get(key)
+    if cached is not None:
+        return {"matches": [m.model_dump() for m in cached]}
+
+    try:
+        matches = await search_option_contracts(
+            client,
+            symbol=sym,
+            expiry_ms=expiry_ms,
+            strike=float(strike),
+            right=right,  # type: ignore[arg-type]
+        )
+    except NotConnectedError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "IBKR client not connected.",
+        ) from exc
+
+    _OPTION_CONTRACTS_CACHE.set(key, matches)
+    return {"matches": [m.model_dump() for m in matches]}
 
 
 # ── /option-chain (SSE) ────────────────────────────────────────────────
