@@ -182,7 +182,39 @@ async def test_symbols_search_rate_limit_fires_on_new_pattern_burst(
     assert ok.status_code == 200
     assert throttled.status_code == 429
     assert "Retry-After" in throttled.headers
-    assert float(throttled.headers["Retry-After"]) > 0
+    # Retry-After must be an integer for parser interop; previous decimal
+    # form ("0.1") confuses some clients.
+    retry_after = throttled.headers["Retry-After"]
+    assert retry_after == str(int(retry_after))
+    assert int(retry_after) >= 1
+
+
+async def test_symbols_search_normalizes_whitespace_and_empty_sec_type(
+    monkeypatch, _connected_broker
+):
+    """`"SPY "` and `"SPY"` share one cache slot; `sec_type=""` means "no
+    filter" instead of degrading to a hard filter that drops every row
+    (the wrapper would otherwise compare against the empty string)."""
+    from app.routers import broker as broker_router
+
+    received: list[tuple[str, object]] = []
+
+    async def fake_search(_client, pattern, *, sec_type=None):
+        received.append((pattern, sec_type))
+        return [_spy_match()]
+
+    monkeypatch.setattr(broker_router, "search_symbols", fake_search)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        first = await c.get("/api/broker/symbols/search", params={"q": "SPY ", "sec_type": ""})
+        second = await c.get("/api/broker/symbols/search", params={"q": "SPY"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # One IBKR call — the normalized key collapses across whitespace and
+    # the second request is served from cache.
+    assert len(received) == 1
+    assert received[0] == ("SPY", None)
 
 
 # ─── /option-contracts/{symbol} ────────────────────────────────────────

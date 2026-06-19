@@ -431,8 +431,14 @@ async def symbols_search_endpoint(
     IBKR-published ~1 req/5s ceiling; 60s TTL cache short-circuits
     repeated patterns without consulting the bucket.
     """
+    # Canonicalize before keying so " SPY " and "SPY" share one cache /
+    # throttle slot, and treat an empty ``sec_type`` query string as
+    # "no filter" (FastAPI will otherwise pass it through to the
+    # wrapper as an empty literal that drops every row).
     client = _require_connected_or_503()
-    key = (q, sec_type)
+    q_norm = q.strip()
+    sec_type_norm = sec_type if sec_type else None
+    key = (q_norm, sec_type_norm)
     cached = _SYMBOL_SEARCH_CACHE.get(key)
     if cached is not None:
         return {"matches": [m.model_dump() for m in cached]}
@@ -445,11 +451,11 @@ async def symbols_search_endpoint(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Symbol search rate limit exceeded; retry shortly.",
-            headers={"Retry-After": f"{retry_after:.1f}"},
+            headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
         )
 
     try:
-        matches = await search_symbols(client, q, sec_type=sec_type)
+        matches = await search_symbols(client, q_norm, sec_type=sec_type_norm)
     except NotConnectedError as exc:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,

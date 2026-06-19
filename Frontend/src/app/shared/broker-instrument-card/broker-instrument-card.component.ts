@@ -88,10 +88,18 @@ export class BrokerInstrumentCardComponent {
     this.searching.set(true);
     this.disconnected.set(false);
     this.rateLimited.set(false);
+    const issuedFor = trimmed;
+    const issuedSecType = this.secType();
     try {
-      const response = await this.broker.searchSymbols(trimmed, this.secType());
+      const response = await this.broker.searchSymbols(trimmed, issuedSecType);
+      // Drop the response if the operator has typed past this query (or
+      // cleared it) while IBKR was responding. Without this guard the
+      // dropdown could surface stale matches for a query the operator
+      // no longer cares about.
+      if (this.query().trim() !== issuedFor || this.secType() !== issuedSecType) return;
       this.matches.set(response.matches);
     } catch (err: unknown) {
+      if (this.query().trim() !== issuedFor || this.secType() !== issuedSecType) return;
       this.matches.set([]);
       const status = (err as { status?: number })?.status ?? 0;
       if (status === 503) this.disconnected.set(true);
@@ -99,7 +107,9 @@ export class BrokerInstrumentCardComponent {
       // Other transport errors: silent — picker shows an empty dropdown,
       // operator can retry. Server logs the failure.
     } finally {
-      this.searching.set(false);
+      if (this.query().trim() === issuedFor && this.secType() === issuedSecType) {
+        this.searching.set(false);
+      }
     }
   }
 }

@@ -119,26 +119,48 @@ export class OptionLegPickerComponent {
   trackStrike = (_: number, s: number): number => s;
 
   private async _loadExpirations(): Promise<void> {
+    const issuedFor = this.symbol().symbol;
     this.loadingExpirations.set(true);
+    this.error.set(null);
     try {
-      const response = await this.broker.expirations(this.symbol().symbol);
+      const response = await this.broker.expirations(issuedFor);
+      // Drop the response if the operator picked a different underlying
+      // while IBKR was responding — expirations from the old symbol
+      // would otherwise overwrite the new chain.
+      if (this.symbol().symbol !== issuedFor) return;
       this.expirations.set(response.expirations_ms);
     } catch (err: unknown) {
+      if (this.symbol().symbol !== issuedFor) return;
       this.error.set(this._formatError(err, 'Failed to load expirations.'));
     } finally {
-      this.loadingExpirations.set(false);
+      if (this.symbol().symbol === issuedFor) this.loadingExpirations.set(false);
     }
   }
 
   private async _loadStrikes(expiryMs: number): Promise<void> {
+    const issuedSymbol = this.symbol().symbol;
     this.loadingStrikes.set(true);
+    this.error.set(null);
     try {
-      const response = await this.broker.strikes(this.symbol().symbol, expiryMs);
+      const response = await this.broker.strikes(issuedSymbol, expiryMs);
+      // Drop the response if (a) the operator switched symbols or
+      // (b) picked a different expiry while we were waiting. Without
+      // this guard the table can show strikes from expiry A while
+      // selectedExpiryMs points at B, and a subsequent qualify would
+      // submit the wrong (expiry, strike) pair.
+      if (this.symbol().symbol !== issuedSymbol || this.selectedExpiryMs() !== expiryMs) {
+        return;
+      }
       this.strikes.set(response.strikes);
     } catch (err: unknown) {
+      if (this.symbol().symbol !== issuedSymbol || this.selectedExpiryMs() !== expiryMs) {
+        return;
+      }
       this.error.set(this._formatError(err, 'Failed to load strikes.'));
     } finally {
-      this.loadingStrikes.set(false);
+      if (this.symbol().symbol === issuedSymbol && this.selectedExpiryMs() === expiryMs) {
+        this.loadingStrikes.set(false);
+      }
     }
   }
 
