@@ -1,0 +1,14 @@
+{
+  "on_enter": [
+    {
+      "leg_id": "spy_long_call",
+      "instrument": { "kind": "option", "underlying": "SPY" },
+      "position": "long",
+      "qty_ratio": 1,
+      "right": "call",
+      "strike": { "selector": "atm" },
+      "expiry": { "selector": "min_dte", "days": 14 }
+    }
+  ],
+  "on_exit": [{ "kind": "close_leg", "entry_leg_id": "spy_long_call" }]
+}

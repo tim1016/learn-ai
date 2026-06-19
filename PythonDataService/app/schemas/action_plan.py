@@ -1,28 +1,34 @@
-"""Action-plan schema — PRD #593 Slices 1A (#594) and 1B (#595).
+"""Action-plan schema — PRD #593 Slices 1A (#594), 1B (#595), 1C (#596).
 
 Slice 1A shipped the empty-plan envelope.
-Slice 1B adds the first concrete leg shape: stock ``ActionEntity`` entry
-legs and the ``close_leg`` ``ExitEntity`` reference. Option legs and
-their strike / expiry selectors land in Slice 1C (#596).
+Slice 1B added the stock ``ActionEntity`` entry leg + ``close_leg`` exit.
+Slice 1C adds the option ``ActionEntity`` and the strike / expiry
+selector discriminated unions.
 
 ADR 0012 fixes the invariants this schema encodes:
-* every entry leg carries a stable ``leg_id`` (regex ``^[a-z0-9_]{1,32}$``)
-  so the future resolver can persist a ``leg_id -> conId`` map and exits
-  target the exact contract entered (§3);
+* every entry leg carries a stable ``leg_id`` (regex
+  ``^[a-z0-9_]{1,32}$``) so the future resolver can persist a
+  ``leg_id -> conId`` map (§3);
 * every leg carries an explicit ``instrument.underlying`` — no implicit
   fallback from ``live_config.symbol`` (§5);
 * ``qty_ratio`` is a declarative positive integer; composition against
   ``live_config.sizing`` is deferred to Slice 4 (§4);
 * exit entries are lifecycle actions — Slice 1 ships only ``close_leg``,
   which references an entry by ``entry_leg_id``. Exits NEVER redeclare
-  selectors (§3).
+  selectors (§3);
+* the ``delta`` strike selector is deliberately omitted from the
+  deployable schema until Slice 6 ships its resolver, so an operator
+  cannot deploy a plan the engine cannot run;
+* the ``absolute`` expiry selector carries ``expiration_ms: int64`` ms
+  UTC per the repo's timestamp policy; display conversion to
+  ``America/New_York`` is a UI-layer concern.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
 # ``leg_id`` regex from ADR 0012 §3 — lowercase ASCII + digits + underscore,
 # bounded to 32 chars so it embeds cleanly in logs, parquet column names,
@@ -31,19 +37,66 @@ _LEG_ID_PATTERN = r"^[a-z0-9_]{1,32}$"
 
 
 class StockInstrument(BaseModel):
-    """Stock leg instrument — Slice 1B. Option instruments land in #596."""
-
     kind: Literal["stock"]
     underlying: Annotated[str, Field(min_length=1)]
 
 
-class StockEntryLeg(BaseModel):
-    """Stock ``ActionEntity`` — Slice 1B (#595).
+class OptionInstrument(BaseModel):
+    kind: Literal["option"]
+    underlying: Annotated[str, Field(min_length=1)]
 
-    Operator-declared instrument the bot opens on entry. The ``leg_id``
-    becomes the leg's stable identity for the run lifetime; exits
-    reference it via ``close_leg.entry_leg_id``.
-    """
+
+# ---- Strike selectors (Slice 1C) ------------------------------------------
+
+
+class AtmStrike(BaseModel):
+    selector: Literal["atm"]
+
+
+class AtmOffsetStrike(BaseModel):
+    selector: Literal["atm_offset"]
+    offset: int
+
+
+# Slice 6 will land a ``DeltaStrike`` variant once the chain-lookup
+# resolver is in place. Deliberately absent until then so an operator
+# cannot deploy a plan the engine cannot run (ADR 0012 §"Anti-patterns").
+StrikeSelector = Annotated[
+    AtmStrike | AtmOffsetStrike,
+    Field(discriminator="selector"),
+]
+
+
+# ---- Expiry selectors (Slice 1C) ------------------------------------------
+
+
+class MinDteExpiry(BaseModel):
+    selector: Literal["min_dte"]
+    days: Annotated[int, Field(ge=1)]
+
+
+class NearestWeeklyExpiry(BaseModel):
+    selector: Literal["nearest_weekly"]
+
+
+class AbsoluteExpiry(BaseModel):
+    selector: Literal["absolute"]
+    # ``int64`` ms UTC per the repo timestamp policy. Display conversion
+    # to ``America/New_York`` lives at the UI boundary, not here.
+    expiration_ms: int
+
+
+ExpirySelector = Annotated[
+    MinDteExpiry | NearestWeeklyExpiry | AbsoluteExpiry,
+    Field(discriminator="selector"),
+]
+
+
+# ---- Entry-leg variants ---------------------------------------------------
+
+
+class StockEntryLeg(BaseModel):
+    """Stock ``ActionEntity`` — Slice 1B."""
 
     leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
     instrument: StockInstrument
@@ -51,13 +104,51 @@ class StockEntryLeg(BaseModel):
     qty_ratio: Annotated[int, Field(ge=1)]
 
 
-class CloseLegExit(BaseModel):
-    """``close_leg`` ``ExitEntity`` — Slice 1B.
+class OptionEntryLeg(BaseModel):
+    """Option ``ActionEntity`` — Slice 1C.
 
-    Lifecycle action that closes a previously-opened entry leg by its
-    stable ``leg_id``. The plan-level validator enforces referential
-    integrity (the referenced leg must exist on ``on_enter``).
+    Adds ``right``, ``strike``, ``expiry`` on top of the common entry-leg
+    fields. ``leg_id`` is the same stable identity stock legs carry —
+    each option leg of a multi-leg structure resolves to its own
+    ``conId`` at consumption time, even when several legs share the same
+    expiry-selector inputs.
     """
+
+    leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
+    instrument: OptionInstrument
+    position: Literal["long", "short"]
+    qty_ratio: Annotated[int, Field(ge=1)]
+    right: Literal["call", "put"]
+    strike: StrikeSelector
+    expiry: ExpirySelector
+
+
+def _entry_leg_kind(v: object) -> str | None:
+    """Pull the nested ``instrument.kind`` discriminator for the
+    ``ActionEntity`` union. Pydantic returns a clear "unknown
+    discriminator value" error when this returns an unexpected string,
+    and a "missing discriminator field" error when it returns ``None``."""
+
+    if isinstance(v, dict):
+        instrument = v.get("instrument")
+        if isinstance(instrument, dict):
+            return instrument.get("kind")
+        return None
+    instrument = getattr(v, "instrument", None)
+    return getattr(instrument, "kind", None)
+
+
+# Discriminated on ``instrument.kind`` so a malformed option leg cannot
+# silently fall back to the stock variant. Slice 1B = stock only;
+# Slice 1C adds the option variant.
+ActionEntity = Annotated[
+    Annotated[StockEntryLeg, Tag("stock")] | Annotated[OptionEntryLeg, Tag("option")],
+    Discriminator(_entry_leg_kind),
+]
+
+
+class CloseLegExit(BaseModel):
+    """``close_leg`` ``ExitEntity`` — Slice 1B."""
 
     kind: Literal["close_leg"]
     entry_leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
@@ -66,28 +157,26 @@ class CloseLegExit(BaseModel):
 class ActionPlan(BaseModel):
     """Operator-declared instrument plan, hashed into ``run_id``.
 
-    Slice 1A shipped the empty-plan envelope. Slice 1B adds stock entry
-    legs and ``close_leg`` exits; Slice 1C will add option legs and
-    selectors. Hard schema rejections (orphan close_leg, duplicate
-    leg_id, missing underlying, qty_ratio < 1, malformed leg_id) live
-    here. Parity *warnings* (asymmetric structures, etc.) are computed
+    Slice 1A shipped the empty-plan envelope; Slice 1B added stock entry
+    legs + ``close_leg`` exits; Slice 1C adds option entry legs and the
+    strike / expiry selector unions. Hard schema rejections live here.
+    Parity *warnings* (asymmetric structures, etc.) are computed
     separately by ``parity_diagnostics`` in Slice 1D (#597).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    on_enter: list[StockEntryLeg] = Field(default_factory=list)
+    on_enter: list[ActionEntity] = Field(default_factory=list)
     on_exit: list[CloseLegExit] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_referential_integrity(self) -> ActionPlan:
-        leg_ids: list[str] = [leg.leg_id for leg in self.on_enter]
         seen: set[str] = set()
         duplicates: set[str] = set()
-        for lid in leg_ids:
-            if lid in seen:
-                duplicates.add(lid)
-            seen.add(lid)
+        for leg in self.on_enter:
+            if leg.leg_id in seen:
+                duplicates.add(leg.leg_id)
+            seen.add(leg.leg_id)
         if duplicates:
             raise ValueError(
                 f"duplicate leg_id within action plan: {sorted(duplicates)}"

@@ -135,3 +135,133 @@ def test_orphan_close_leg_referencing_unknown_entry_id_rejected() -> None:
             on_enter=[_STOCK_LEG],
             on_exit=[{"kind": "close_leg", "entry_leg_id": "does_not_exist"}],
         )
+
+
+# ---------------------------------------------------------------------------
+# Slice 1C (#596) — option entry leg + strike/expiry selectors.
+
+_OPTION_LEG: dict = {
+    "leg_id": "spy_long_call",
+    "instrument": {"kind": "option", "underlying": "SPY"},
+    "position": "long",
+    "qty_ratio": 1,
+    "right": "call",
+    "strike": {"selector": "atm"},
+    "expiry": {"selector": "min_dte", "days": 14},
+}
+
+
+def test_single_option_entry_leg_round_trips() -> None:
+    plan = ActionPlan(on_enter=[_OPTION_LEG], on_exit=[])
+
+    assert plan.model_dump()["on_enter"] == [_OPTION_LEG]
+
+
+def test_option_entry_leg_missing_right_rejected() -> None:
+    bad = dict(_OPTION_LEG)
+    del bad["right"]
+    with pytest.raises(ValidationError, match=r"right"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_option_entry_leg_missing_strike_rejected() -> None:
+    bad = dict(_OPTION_LEG)
+    del bad["strike"]
+    with pytest.raises(ValidationError, match=r"strike"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_option_entry_leg_missing_expiry_rejected() -> None:
+    bad = dict(_OPTION_LEG)
+    del bad["expiry"]
+    with pytest.raises(ValidationError, match=r"expiry"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_unknown_strike_selector_rejected() -> None:
+    bad = dict(_OPTION_LEG, strike={"selector": "wild_guess"})
+    with pytest.raises(ValidationError, match=r"selector"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_delta_strike_selector_deliberately_unavailable() -> None:
+    """ADR 0012 §"Schema shape" / Slice 1C — ``delta`` is hidden from the
+    deployable schema until Slice 6 ships its resolver. An operator must
+    not be able to deploy a plan the engine cannot run."""
+
+    bad = dict(_OPTION_LEG, strike={"selector": "delta", "target": 0.3})
+    with pytest.raises(ValidationError, match=r"selector"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_atm_offset_selector_round_trips() -> None:
+    plan = ActionPlan(
+        on_enter=[dict(_OPTION_LEG, strike={"selector": "atm_offset", "offset": 5})],
+        on_exit=[],
+    )
+
+    assert plan.on_enter[0].strike.selector == "atm_offset"
+
+
+def test_min_dte_days_below_one_rejected() -> None:
+    bad = dict(_OPTION_LEG, expiry={"selector": "min_dte", "days": 0})
+    with pytest.raises(ValidationError, match=r"days"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_absolute_expiry_missing_expiration_ms_rejected() -> None:
+    bad = dict(_OPTION_LEG, expiry={"selector": "absolute"})
+    with pytest.raises(ValidationError, match=r"expiration_ms"):
+        ActionPlan(on_enter=[bad], on_exit=[])
+
+
+def test_absolute_expiry_round_trips_as_int64_ms() -> None:
+    """ADR 0012 §"Schema shape" / repo timestamp policy — wire format is
+    ``int64`` ms UTC. Display conversion to ``America/New_York`` lives at
+    the UI boundary, not in the schema."""
+
+    plan = ActionPlan(
+        on_enter=[
+            dict(
+                _OPTION_LEG,
+                expiry={"selector": "absolute", "expiration_ms": 1_750_000_000_000},
+            )
+        ],
+        on_exit=[],
+    )
+
+    assert plan.on_enter[0].expiry.expiration_ms == 1_750_000_000_000
+
+
+def test_nearest_weekly_round_trips() -> None:
+    plan = ActionPlan(
+        on_enter=[dict(_OPTION_LEG, expiry={"selector": "nearest_weekly"})],
+        on_exit=[],
+    )
+
+    assert plan.on_enter[0].expiry.selector == "nearest_weekly"
+
+
+def test_vertical_spread_two_option_legs_round_trips() -> None:
+    """Two option legs sharing expiry — the multi-leg structure
+    Slice 1C unblocks. ADR 0012 §3: each leg keeps its own stable
+    ``leg_id`` so the future resolver maps each to a distinct
+    ``conId`` even when they share strike-resolution inputs."""
+
+    long_call = dict(_OPTION_LEG, leg_id="long_atm_call")
+    short_call = dict(
+        _OPTION_LEG,
+        leg_id="short_otm_call",
+        strike={"selector": "atm_offset", "offset": 5},
+    )
+
+    plan = ActionPlan(
+        on_enter=[long_call, short_call],
+        on_exit=[
+            {"kind": "close_leg", "entry_leg_id": "long_atm_call"},
+            {"kind": "close_leg", "entry_leg_id": "short_otm_call"},
+        ],
+    )
+
+    assert len(plan.on_enter) == 2
+    assert len(plan.on_exit) == 2

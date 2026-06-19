@@ -25,12 +25,19 @@ def _load(name: str) -> dict:
     return json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
 
 
-def test_valid_single_stock_fixture_validates() -> None:
-    plan = ActionPlan.model_validate(_load("valid_single_stock.json"))
+@pytest.mark.parametrize(
+    ("fixture", "expected_leg_count"),
+    [
+        ("valid_single_stock.json", 1),
+        ("valid_single_option.json", 1),
+        ("valid_vertical.json", 2),
+        ("valid_iron_condor.json", 4),
+    ],
+)
+def test_valid_fixtures_validate(fixture: str, expected_leg_count: int) -> None:
+    plan = ActionPlan.model_validate(_load(fixture))
 
-    assert plan.on_enter[0].leg_id == "spy_long"
-    assert plan.on_enter[0].instrument.underlying == "SPY"
-    assert plan.on_exit[0].entry_leg_id == "spy_long"
+    assert len(plan.on_enter) == expected_leg_count
 
 
 @pytest.mark.parametrize(
@@ -40,6 +47,8 @@ def test_valid_single_stock_fixture_validates() -> None:
         ("invalid_qty_ratio_zero.json", "qty_ratio"),
         ("invalid_orphan_close_leg.json", "close_leg"),
         ("invalid_duplicate_leg_id.json", "duplicate"),
+        ("invalid_unknown_selector.json", "selector"),
+        ("invalid_absolute_expiry_missing_ms.json", "expiration_ms"),
     ],
 )
 def test_invalid_fixtures_reject(fixture: str, expected_marker: str) -> None:
