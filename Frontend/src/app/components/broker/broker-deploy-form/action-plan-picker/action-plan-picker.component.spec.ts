@@ -291,11 +291,4 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     expect(plan.on_exit).toEqual([]);
   });
 
-  it('formatStrike renders ATM, ATM±N, and absolute pretty-prints', () => {
-    const { component } = setup();
-    expect(component.formatStrike({ selector: 'atm' })).toBe('ATM');
-    expect(component.formatStrike({ selector: 'atm_offset', offset: 5 })).toBe('ATM+5');
-    expect(component.formatStrike({ selector: 'atm_offset', offset: -3 })).toBe('ATM-3');
-    expect(component.formatStrike({ selector: 'absolute', strike: 650 })).toBe('$650');
-  });
 });

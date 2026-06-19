@@ -48,6 +48,12 @@ describe('optionSummary', () => {
       ),
     ).toBe('Long call · ATM · 2026-06-25');
   });
+
+  it('renders absolute strike as ``$N`` — Slice 1F broker-derived pick', () => {
+    expect(
+      optionSummary(makeOption({ strike: { selector: 'absolute', strike: 650 } })),
+    ).toBe('Long call · $650 · min_dte 14d');
+  });
 });
 
 describe('formatNyDate', () => {

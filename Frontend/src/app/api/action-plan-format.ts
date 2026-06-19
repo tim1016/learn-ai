@@ -29,6 +29,8 @@ export function formatStrike(leg: OptionEntryLeg): string {
       return 'ATM';
     case 'atm_offset':
       return s.offset >= 0 ? `ATM+${s.offset}` : `ATM${s.offset}`;
+    case 'absolute':
+      return `$${s.strike}`;
   }
 }
 

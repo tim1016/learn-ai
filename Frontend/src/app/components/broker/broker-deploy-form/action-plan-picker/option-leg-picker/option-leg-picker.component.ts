@@ -1,3 +1,4 @@
+import { DatePipe, DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -34,6 +35,7 @@ import { BrokerService } from '../../../../../services/broker.service';
 @Component({
   selector: 'app-option-leg-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [DatePipe, DecimalPipe],
   templateUrl: './option-leg-picker.component.html',
   styleUrl: './option-leg-picker.component.scss',
 })

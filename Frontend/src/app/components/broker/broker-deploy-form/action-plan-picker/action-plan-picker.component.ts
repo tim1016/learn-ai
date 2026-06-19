@@ -14,12 +14,11 @@ import type {
   ActionPlan,
   ActionPlanEntryLeg,
   CloseLegExit,
-  ExpirySelector,
   OptionEntryLeg,
   StockEntryLeg,
-  StrikeSelector,
 } from '../../../../api/action-plan.types';
 import { isOptionLeg } from '../../../../api/action-plan.types';
+import { formatExpiry, formatStrike } from '../../../../api/action-plan-format';
 import {
   ActionPlanPreviewService,
   type ParityWarning,
@@ -76,28 +75,8 @@ export class ActionPlanPickerComponent {
   >({ mode: 'idle' });
 
   isOption = isOptionLeg;
-
-  formatStrike(strike: StrikeSelector): string {
-    switch (strike.selector) {
-      case 'atm':
-        return 'ATM';
-      case 'atm_offset':
-        return `ATM${strike.offset >= 0 ? '+' : ''}${strike.offset}`;
-      case 'absolute':
-        return `$${strike.strike}`;
-    }
-  }
-
-  formatExpiry(expiry: ExpirySelector): string {
-    switch (expiry.selector) {
-      case 'min_dte':
-        return `${expiry.days}d+`;
-      case 'nearest_weekly':
-        return 'weekly';
-      case 'absolute':
-        return new Date(expiry.expiration_ms).toISOString().slice(0, 10);
-    }
-  }
+  formatStrike = formatStrike;
+  formatExpiry = formatExpiry;
 
   private readonly preview = inject(ActionPlanPreviewService);
 

@@ -87,8 +87,8 @@
               [attr.data-testid]="'action-plan-picker-option-fields-' + leg.leg_id"
             >
               <span class="leg-right">{{ leg.right }}</span>
-              <span class="leg-strike">{{ formatStrike(leg.strike) }}</span>
-              <span class="leg-expiry">{{ formatExpiry(leg.expiry) }}</span>
+              <span class="leg-strike">{{ formatStrike(leg) }}</span>
+              <span class="leg-expiry">{{ formatExpiry(leg) }}</span>
             </span>
           }
           <button
