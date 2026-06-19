@@ -41,34 +41,29 @@
     >+ Add option</button>
   </div>
 
-  @if (pickerMode() === 'stock-symbol') {
-    <div class="broker-picker-shell" data-testid="action-plan-picker-stock-symbol">
-      <app-broker-instrument-card
-        [secType]="'STK'"
-        placeholder="Search ticker for stock leg…"
-        (pick)="onStockSymbolPicked($event)"
-      />
-      <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
-    </div>
-  }
-
-  @if (pickerMode() === 'option-symbol') {
-    <div class="broker-picker-shell" data-testid="action-plan-picker-option-symbol">
-      <app-broker-instrument-card
-        [secType]="'STK'"
-        placeholder="Search underlying for option leg…"
-        (pick)="onOptionSymbolPicked($event)"
-      />
-      <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
-    </div>
-  }
-
-  @if (pickerMode() === 'option-drill') {
-    @let sym = optionSymbol();
-    @if (sym !== null) {
+  @let picker = pickerState();
+  @switch (picker.mode) {
+    @case ('symbol') {
+      <div
+        class="broker-picker-shell"
+        [attr.data-testid]="'action-plan-picker-' + picker.intent + '-symbol'"
+      >
+        <app-broker-instrument-card
+          [secType]="'STK'"
+          [placeholder]="
+            picker.intent === 'stock'
+              ? 'Search ticker for stock leg…'
+              : 'Search underlying for option leg…'
+          "
+          (pick)="onSymbolPicked($event)"
+        />
+        <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+      </div>
+    }
+    @case ('drill') {
       <div class="broker-picker-shell" data-testid="action-plan-picker-option-drill">
         <app-option-leg-picker
-          [symbol]="sym"
+          [symbol]="picker.symbol"
           (qualify)="onOptionLegQualified($event)"
         />
         <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>

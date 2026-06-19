@@ -123,6 +123,7 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     fixture.detectChanges();
 
     expect(el.querySelector('[data-testid="action-plan-picker-stock-symbol"]')).not.toBeNull();
+    expect(fixture.componentInstance.pickerState()).toEqual({ mode: 'symbol', intent: 'stock' });
     // No leg should be created yet — the picker is awaiting symbol selection.
     expect(fixture.componentInstance.actionPlan().on_enter).toEqual([]);
   });
@@ -131,7 +132,7 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     const { fixture, component } = setup();
 
     component.beginAddStock();
-    component.onStockSymbolPicked(SPY);
+    component.onSymbolPicked(SPY);
     fixture.detectChanges();
 
     const plan = fixture.componentInstance.actionPlan();
@@ -139,14 +140,14 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     expect(plan.on_enter[0].instrument).toEqual({ kind: 'stock', underlying: 'SPY' });
     expect(plan.on_exit.length).toBe(1);
     expect(plan.on_exit[0]).toMatchObject({ kind: 'close_leg', entry_leg_id: plan.on_enter[0].leg_id });
-    expect(component.pickerMode()).toBe('idle');
+    expect(component.pickerState().mode).toBe('idle');
   });
 
   it('qualifying an option leg appends one with absolute selectors from the broker', () => {
     const { fixture, component } = setup();
 
     component.beginAddOption();
-    component.onOptionSymbolPicked(SPY);
+    component.onSymbolPicked(SPY);
     component.onOptionLegQualified(QUALIFIED_CALL);
     fixture.detectChanges();
 
@@ -161,7 +162,7 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
       strike: { selector: 'absolute', strike: 650 },
       expiry: { selector: 'absolute', expiration_ms: 1_766_188_800_000 },
     });
-    expect(component.pickerMode()).toBe('idle');
+    expect(component.pickerState().mode).toBe('idle');
   });
 
   it('cancelPicker closes the picker without creating a leg', () => {
@@ -182,7 +183,7 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     const { fixture, component, el } = setup();
 
     component.beginAddStock();
-    component.onStockSymbolPicked(SPY);
+    component.onSymbolPicked(SPY);
     fixture.detectChanges();
     const legId = fixture.componentInstance.actionPlan().on_enter[0].leg_id;
 
@@ -198,9 +199,9 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     const { fixture, component, el } = setup();
 
     component.beginAddStock();
-    component.onStockSymbolPicked(SPY);
+    component.onSymbolPicked(SPY);
     component.beginAddOption();
-    component.onOptionSymbolPicked(SPY);
+    component.onSymbolPicked(SPY);
     component.onOptionLegQualified(QUALIFIED_CALL);
     fixture.detectChanges();
 
@@ -225,10 +226,10 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
       preview.preview.mockClear();
 
       component.beginAddStock();
-      component.onStockSymbolPicked(SPY);
+      component.onSymbolPicked(SPY);
       fixture.detectChanges();
       component.beginAddStock();
-      component.onStockSymbolPicked(SPY);
+      component.onSymbolPicked(SPY);
       fixture.detectChanges();
       // Two rapid changes — preview should only fire after the debounce window settles.
       expect(preview.preview).not.toHaveBeenCalled();
@@ -259,7 +260,7 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
       });
 
       component.beginAddStock();
-      component.onStockSymbolPicked(SPY);
+      component.onSymbolPicked(SPY);
       fixture.detectChanges();
       await flushPreview(fixture);
 
@@ -278,7 +279,7 @@ describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
     const { fixture, component, el } = setup();
 
     component.beginAddStock();
-    component.onStockSymbolPicked(SPY);
+    component.onSymbolPicked(SPY);
     fixture.detectChanges();
     const legId = fixture.componentInstance.actionPlan().on_enter[0].leg_id;
 

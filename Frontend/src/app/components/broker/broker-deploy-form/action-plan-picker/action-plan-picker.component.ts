@@ -64,12 +64,16 @@ export class ActionPlanPickerComponent {
   readonly exitEntities = computed<CloseLegExit[]>(() => this.actionPlan().on_exit);
   readonly warnings = signal<ParityWarning[]>([]);
 
-  /** Stage of the broker-coupled picker workflow. */
-  readonly pickerMode = signal<'idle' | 'stock-symbol' | 'option-symbol' | 'option-drill'>(
-    'idle',
-  );
-  /** Symbol captured during the option-add workflow before drill-down. */
-  readonly optionSymbol = signal<SymbolMatch | null>(null);
+  /** Broker-coupled picker workflow as a tagged union so the symbol
+   * captured during the option-add flow can never drift apart from the
+   * picker stage. ``intent`` discriminates the "Add stock" vs "Add
+   * option" entry path; the drill state carries the already-picked
+   * underlying so the template never needs a null narrowing dance. */
+  readonly pickerState = signal<
+    | { mode: 'idle' }
+    | { mode: 'symbol'; intent: 'stock' | 'option' }
+    | { mode: 'drill'; symbol: SymbolMatch }
+  >({ mode: 'idle' });
 
   isOption = isOptionLeg;
 
@@ -109,33 +113,32 @@ export class ActionPlanPickerComponent {
   }
 
   beginAddStock(): void {
-    this.pickerMode.set('stock-symbol');
+    this.pickerState.set({ mode: 'symbol', intent: 'stock' });
   }
 
   beginAddOption(): void {
-    this.optionSymbol.set(null);
-    this.pickerMode.set('option-symbol');
+    this.pickerState.set({ mode: 'symbol', intent: 'option' });
   }
 
   cancelPicker(): void {
-    this.pickerMode.set('idle');
-    this.optionSymbol.set(null);
+    this.pickerState.set({ mode: 'idle' });
   }
 
-  onStockSymbolPicked(match: SymbolMatch): void {
-    const newLeg: StockEntryLeg = {
-      leg_id: this._nextLegId(),
-      instrument: { kind: 'stock', underlying: match.symbol },
-      position: 'long',
-      qty_ratio: 1,
-    };
-    this._appendEntry(newLeg);
-    this.pickerMode.set('idle');
-  }
-
-  onOptionSymbolPicked(match: SymbolMatch): void {
-    this.optionSymbol.set(match);
-    this.pickerMode.set('option-drill');
+  onSymbolPicked(match: SymbolMatch): void {
+    const state = this.pickerState();
+    if (state.mode !== 'symbol') return;
+    if (state.intent === 'stock') {
+      const newLeg: StockEntryLeg = {
+        leg_id: this._nextLegId(),
+        instrument: { kind: 'stock', underlying: match.symbol },
+        position: 'long',
+        qty_ratio: 1,
+      };
+      this._appendEntry(newLeg);
+      this.pickerState.set({ mode: 'idle' });
+      return;
+    }
+    this.pickerState.set({ mode: 'drill', symbol: match });
   }
 
   onOptionLegQualified(match: OptionContractMatch): void {
@@ -154,8 +157,7 @@ export class ActionPlanPickerComponent {
       expiry: { selector: 'absolute', expiration_ms: match.expiry_ms },
     };
     this._appendEntry(newLeg);
-    this.pickerMode.set('idle');
-    this.optionSymbol.set(null);
+    this.pickerState.set({ mode: 'idle' });
   }
 
   removeEntry(legId: string): void {
