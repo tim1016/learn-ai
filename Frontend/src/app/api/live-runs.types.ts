@@ -300,6 +300,13 @@ export interface HostRunnerDeployRequest {
   force?: boolean;
   start?: boolean;
   start_options?: HostRunnerStartRequest;
+  /** PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy lineage.
+   * Top-level (NOT inside ``live_config``) so the ledger persists it
+   * outside the content hash that produces ``run_id``. Same plan
+   * redeployed from two different parents collapses to the same
+   * ``run_id``. */
+  parent_run_id?: string;
+  redeploy_reason?: string;
 }
 
 export interface HostRunnerDeployResponse {

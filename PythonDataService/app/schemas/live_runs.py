@@ -370,6 +370,16 @@ class HostRunnerDeployRequest(BaseModel):
     # When true, chain a host-runner start after a successful create.
     start: bool = False
     start_options: HostRunnerStartRequest = Field(default_factory=HostRunnerStartRequest)
+    # PRD #593 Slice 1E (#598) / ADR 0012 §7 — redeploy lineage. Both
+    # fields are **unhashed**: they are persisted in the ledger's
+    # ``lineage`` block alongside other unhashed metadata (``code_sha``,
+    # ``sizing_provenance``, ``created_at_ms``) but are NOT in
+    # ``LIVE_CONFIG_LEDGER_KEYS`` and NOT in ``compute_run_id``.
+    # Otherwise re-deploying the same plan from two different parents
+    # would mint two ``run_id``s and break the idempotent-redeploy
+    # contract Slice 1A pinned.
+    parent_run_id: str | None = None
+    redeploy_reason: str | None = None
 
     @field_validator("live_config", mode="after")
     @classmethod
@@ -826,6 +836,21 @@ class InstanceSizing(BaseModel):
     per_trade_audit: list[SizingAuditRow] = Field(default_factory=list)
 
 
+class RedeployLineage(BaseModel):
+    """PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy
+    lineage. Persisted in the ledger's ``lineage`` block alongside
+    ``code_sha`` and ``sizing_provenance`` (NOT inside ``live_config``),
+    so the fields stay out of the content hash that produces ``run_id``.
+
+    Wire-shape mirror of the TypeScript ``ActionPlanLineage`` interface.
+    """
+
+    parent_run_id: str | None = None
+    redeploy_reason: str | None = None
+    # ``int64`` ms UTC wall-clock when the redeploy was issued.
+    redeployed_at_ms: int | None = None
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -880,6 +905,13 @@ class LiveInstanceStatus(BaseModel):
     # contract refuses an unknown value rather than silently passing it
     # to the cockpit (ADR 0012 §6 — the enum is the source of truth).
     instrument_surface: Literal["policy", "explicit"] | None = None
+    # PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy lineage,
+    # sourced from the ledger's ``lineage`` block. Typed precisely so
+    # the wire contract is the single source of truth (matches the
+    # Slice 1A precedent for ``instrument_surface``). Pydantic accepts
+    # unknown extras by default so a future daemon-side enrichment
+    # passes through without breaking the cockpit.
+    lineage: RedeployLineage | None = None
     fetched_at_ms: int
 
 

@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrokerService } from '../../../services/broker.service';
@@ -27,6 +27,7 @@ function setup(
       actual_rule: unknown;
     };
     positions?: { symbol: string; quantity: number }[];
+    queryParams?: Record<string, string>;
     strategies?: {
       name: string;
       display_name: string;
@@ -111,12 +112,17 @@ function setup(
     daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
     reload: vi.fn(),
   };
+  const queryParamMap = convertToParamMap(opts.queryParams ?? {});
   TestBed.configureTestingModule({
     providers: [
       provideRouter([]),
       { provide: LiveRunsService, useValue: svc },
       { provide: BrokerService, useValue: broker },
       { provide: BrokerConnectivityService, useValue: connectivity },
+      {
+        provide: ActivatedRoute,
+        useValue: { snapshot: { queryParamMap } },
+      },
     ],
   });
   const fixture = TestBed.createComponent(BrokerDeployFormComponent);
@@ -180,6 +186,23 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.start_options).toBeUndefined();
     expect(fixture.nativeElement.textContent).toContain('Deployment created');
     expect(fixture.nativeElement.textContent).toContain('run-new');
+  });
+
+  // PRD #593 Slice 1E (#598) — query-param-deep-linked redeploy carries
+  // the parent_run_id at the top level of the submit payload (NOT
+  // inside live_config — lineage is unhashed).
+  it('flows parent_run_id from the route query param into the submit payload at the top level', async () => {
+    const { svc, component } = setup({ queryParams: { parent_run_id: 'run-parent-abc' } });
+    await flush();
+    fillRequired(component);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.parent_run_id).toBe('run-parent-abc');
+    // Belt-and-braces: lineage MUST NOT sneak into live_config — it's
+    // unhashed (ADR 0012 §7 / Slice 1E load-bearing invariant).
+    expect(Object.keys(req.live_config ?? {})).not.toContain('parent_run_id');
   });
 
   // PRD #593 Slice 1B (#595) — the deploy form carries the operator-

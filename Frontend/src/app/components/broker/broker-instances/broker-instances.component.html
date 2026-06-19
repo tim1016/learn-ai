@@ -145,7 +145,10 @@
           [redeployQueryParams]="redeployQueryParams(s)"
         />
 
-        <app-action-plan-card [actionPlan]="s.action_plan" />
+        <app-action-plan-card
+          [actionPlan]="s.action_plan"
+          [parentRunId]="s.live_binding?.run_id ?? s.evidence_binding?.run_id ?? null"
+        />
 
         <app-current-risk-card
           [broker]="s.broker"

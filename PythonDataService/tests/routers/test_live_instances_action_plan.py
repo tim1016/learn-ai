@@ -176,6 +176,80 @@ _STOCK_PLAN: dict = {
 }
 
 
+async def test_status_surfaces_lineage_block_from_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 1E (#598) — ``/status`` exposes the redeploy lineage
+    (parent_run_id, redeploy_reason, redeployed_at_ms) from the
+    ledger's ``lineage`` block. Persistence lives outside ``live_config``
+    so the fields stay unhashed; reading them is a read of the same
+    on-disk file the status helper already opens."""
+
+    app, root = app_with_root
+    run_dir = root / "run-lineage"
+    run_dir.mkdir(parents=True)
+    import json
+
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-lineage",
+                "strategy_instance_id": "spy_ema_paper",
+                "strategy_key": "spy_ema_crossover",
+                "created_at_ms": 100,
+                "live_config": {"sizing": {"kind": "FixedShares", "value": 1}},
+                "lineage": {
+                    "parent_run_id": "run-parent",
+                    "redeploy_reason": "quantity bump after live read",
+                    "redeployed_at_ms": 200,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-lineage", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lineage"] == {
+        "parent_run_id": "run-parent",
+        "redeploy_reason": "quantity bump after live read",
+        "redeployed_at_ms": 200,
+    }
+
+
+async def test_status_lineage_is_null_when_ledger_omits_it(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy / pre-Slice-1E ledgers carry no lineage block — surface
+    ``None``, not a fabricated empty record."""
+
+    app, root = app_with_root
+    _write_ledger_with_action(
+        root,
+        run_id="run-no-lineage",
+        sid="spy_ema_paper",
+        strategy_key="spy_ema_crossover",
+        action_plan=None,
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-no-lineage", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    assert response.json()["lineage"] is None
+
+
 async def test_status_surfaces_stock_plan_from_ledger(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
