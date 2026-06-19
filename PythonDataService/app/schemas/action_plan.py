@@ -26,7 +26,7 @@ ADR 0012 fixes the invariants this schema encodes:
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
@@ -62,7 +62,7 @@ class AtmOffsetStrike(BaseModel):
 # resolver is in place. Deliberately absent until then so an operator
 # cannot deploy a plan the engine cannot run (ADR 0012 §"Anti-patterns").
 StrikeSelector = Annotated[
-    Union[AtmStrike, AtmOffsetStrike],
+    AtmStrike | AtmOffsetStrike,
     Field(discriminator="selector"),
 ]
 
@@ -87,7 +87,7 @@ class AbsoluteExpiry(BaseModel):
 
 
 ExpirySelector = Annotated[
-    Union[MinDteExpiry, NearestWeeklyExpiry, AbsoluteExpiry],
+    MinDteExpiry | NearestWeeklyExpiry | AbsoluteExpiry,
     Field(discriminator="selector"),
 ]
 
@@ -142,10 +142,7 @@ def _entry_leg_kind(v: object) -> str | None:
 # silently fall back to the stock variant. Slice 1B = stock only;
 # Slice 1C adds the option variant.
 ActionEntity = Annotated[
-    Union[
-        Annotated[StockEntryLeg, Tag("stock")],
-        Annotated[OptionEntryLeg, Tag("option")],
-    ],
+    Annotated[StockEntryLeg, Tag("stock")] | Annotated[OptionEntryLeg, Tag("option")],
     Discriminator(_entry_leg_kind),
 ]
 
