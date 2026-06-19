@@ -17,7 +17,6 @@ from pathlib import Path
 from app.engine.action_plan.parity import parity_diagnostics
 from app.schemas.action_plan import ActionPlan
 
-
 _STOCK_LEG: dict = {
     "leg_id": "spy_long",
     "instrument": {"kind": "stock", "underlying": "SPY"},

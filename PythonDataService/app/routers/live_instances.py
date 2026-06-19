@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
 from app.broker.ibkr.config import get_settings
+from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
@@ -50,7 +51,6 @@ from app.routers.live_runs import (
     _validate_path_segment,
     build_command_timeline,
 )
-from app.engine.action_plan.parity import parity_diagnostics
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.live_runs import (
     ActiveDateEntry,
