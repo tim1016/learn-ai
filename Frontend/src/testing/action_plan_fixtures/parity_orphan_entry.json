@@ -1,0 +1,11 @@
+{
+  "on_enter": [
+    {
+      "leg_id": "spy_long",
+      "instrument": { "kind": "stock", "underlying": "SPY" },
+      "position": "long",
+      "qty_ratio": 1
+    }
+  ],
+  "on_exit": []
+}

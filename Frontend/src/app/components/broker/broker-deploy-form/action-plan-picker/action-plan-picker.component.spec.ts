@@ -1,26 +1,51 @@
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionPlan } from '../../../../api/action-plan.types';
+import {
+  ActionPlanPreviewService,
+  type ActionPlanPreviewResponse,
+} from '../../../../api/action-plan-preview.service';
 import { ActionPlanPickerComponent } from './action-plan-picker.component';
 
 function setup(opts: {
   initial?: ActionPlan;
   prefillUnderlying?: string | null;
+  previewResponse?: ActionPlanPreviewResponse;
 } = {}): {
   fixture: ComponentFixture<ActionPlanPickerComponent>;
   component: ActionPlanPickerComponent;
+  preview: { preview: ReturnType<typeof vi.fn> };
   el: HTMLElement;
 } {
   TestBed.resetTestingModule();
+  const preview = {
+    preview: vi.fn().mockResolvedValue(opts.previewResponse ?? { warnings: [] }),
+  };
   TestBed.configureTestingModule({
-    providers: [provideZonelessChangeDetection()],
+    providers: [
+      provideZonelessChangeDetection(),
+      { provide: ActionPlanPreviewService, useValue: preview },
+    ],
   });
   const fixture = TestBed.createComponent(ActionPlanPickerComponent);
   fixture.componentRef.setInput('actionPlan', opts.initial ?? { on_enter: [], on_exit: [] });
   fixture.componentRef.setInput('prefillUnderlying', opts.prefillUnderlying ?? null);
   fixture.detectChanges();
-  return { fixture, component: fixture.componentInstance, el: fixture.nativeElement as HTMLElement };
+  return {
+    fixture,
+    component: fixture.componentInstance,
+    preview,
+    el: fixture.nativeElement as HTMLElement,
+  };
+}
+
+async function flushPreview(fixture: ComponentFixture<ActionPlanPickerComponent>) {
+  // Debounce window is 150ms; advance fake timers then flush microtasks.
+  await vi.advanceTimersByTimeAsync(200);
+  fixture.detectChanges();
+  await Promise.resolve();
+  fixture.detectChanges();
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -134,6 +159,63 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
     expect(
       el.querySelector(`[data-testid="action-plan-picker-option-fields-${stockLegId}"]`),
     ).toBeNull();
+  });
+
+  // Slice 1D (#597) — debounced preview-endpoint call + inline warnings.
+
+  it('debounces calls to the preview endpoint on plan change', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fixture, el, preview } = setup({ prefillUnderlying: 'SPY' });
+      preview.preview.mockClear();
+
+      queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+      fixture.detectChanges();
+      queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+      fixture.detectChanges();
+      // Two rapid changes — preview should only fire after the debounce
+      // window settles.
+      expect(preview.preview).not.toHaveBeenCalled();
+
+      await flushPreview(fixture);
+
+      expect(preview.preview).toHaveBeenCalledTimes(1);
+      const sentPlan = preview.preview.mock.calls[0][0];
+      expect(sentPlan.on_enter.length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders warning rows from the preview response', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fixture, el } = setup({
+        prefillUnderlying: 'SPY',
+        previewResponse: {
+          warnings: [
+            {
+              code: 'orphan_entry',
+              message: "Entry leg 'leg_1' has no matching close_leg.",
+              leg_id: 'leg_1',
+            },
+          ],
+        },
+      });
+
+      queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+      fixture.detectChanges();
+      await flushPreview(fixture);
+
+      const warnings = el.querySelector<HTMLElement>(
+        '[data-testid="action-plan-picker-warnings"]',
+      );
+      expect(warnings).not.toBeNull();
+      expect(warnings?.textContent ?? '').toContain('orphan_entry');
+      expect(warnings?.textContent ?? '').toContain('leg_1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('removing a close_leg leaves its entry leg in place', () => {

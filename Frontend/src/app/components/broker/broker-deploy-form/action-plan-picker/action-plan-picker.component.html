@@ -1,3 +1,25 @@
+@if (warnings().length > 0) {
+  <section
+    class="picker-warnings"
+    role="status"
+    aria-label="Action-plan parity warnings"
+    data-testid="action-plan-picker-warnings"
+  >
+    <h4 class="picker-warnings-heading">Parity warnings (non-blocking)</h4>
+    <ul>
+      @for (w of warnings(); track w.code + ':' + (w.leg_id ?? '')) {
+        <li class="picker-warning" [attr.data-code]="w.code">
+          <code class="picker-warning-code">{{ w.code }}</code>
+          @if (w.leg_id) {
+            <code class="picker-warning-leg">{{ w.leg_id }}</code>
+          }
+          <span class="picker-warning-message">{{ w.message }}</span>
+        </li>
+      }
+    </ul>
+  </section>
+}
+
 <section
   class="picker-section"
   aria-labelledby="action-plan-picker-enter-heading"
