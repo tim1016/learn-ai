@@ -58,11 +58,26 @@ class AtmOffsetStrike(BaseModel):
     offset: int
 
 
+class AbsoluteStrike(BaseModel):
+    """Broker-derived strike — Slice 1F (#605).
+
+    Emitted by the cockpit's option-leg-picker after the operator drills
+    down through ``broker.expirations`` → ``broker.strikes`` → call/put
+    and ``broker.searchOptionContracts`` qualifies the choice. The
+    strike is the concrete number IBKR listed; ``run_id`` hashes the
+    operator's exact pick, not a relative selector that might resolve
+    differently at consumption time.
+    """
+
+    selector: Literal["absolute"]
+    strike: float = Field(gt=0)
+
+
 # Slice 6 will land a ``DeltaStrike`` variant once the chain-lookup
 # resolver is in place. Deliberately absent until then so an operator
 # cannot deploy a plan the engine cannot run (ADR 0012 §"Anti-patterns").
 StrikeSelector = Annotated[
-    AtmStrike | AtmOffsetStrike,
+    AtmStrike | AtmOffsetStrike | AbsoluteStrike,
     Field(discriminator="selector"),
 ]
 

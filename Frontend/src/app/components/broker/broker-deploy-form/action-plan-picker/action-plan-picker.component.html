@@ -31,15 +31,50 @@
       type="button"
       class="picker-add"
       data-testid="action-plan-picker-enter-add"
-      (click)="addStockEntry()"
+      (click)="beginAddStock()"
     >+ Add stock</button>
     <button
       type="button"
       class="picker-add"
       data-testid="action-plan-picker-enter-add-option"
-      (click)="addOptionEntry()"
+      (click)="beginAddOption()"
     >+ Add option</button>
   </div>
+
+  @if (pickerMode() === 'stock-symbol') {
+    <div class="broker-picker-shell" data-testid="action-plan-picker-stock-symbol">
+      <app-broker-instrument-card
+        [secType]="'STK'"
+        placeholder="Search ticker for stock leg…"
+        (pick)="onStockSymbolPicked($event)"
+      />
+      <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+    </div>
+  }
+
+  @if (pickerMode() === 'option-symbol') {
+    <div class="broker-picker-shell" data-testid="action-plan-picker-option-symbol">
+      <app-broker-instrument-card
+        [secType]="'STK'"
+        placeholder="Search underlying for option leg…"
+        (pick)="onOptionSymbolPicked($event)"
+      />
+      <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+    </div>
+  }
+
+  @if (pickerMode() === 'option-drill') {
+    @let sym = optionSymbol();
+    @if (sym !== null) {
+      <div class="broker-picker-shell" data-testid="action-plan-picker-option-drill">
+        <app-option-leg-picker
+          [symbol]="sym"
+          (qualify)="onOptionLegQualified($event)"
+        />
+        <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+      </div>
+    }
+  }
 
   @if (entryLegs().length === 0) {
     <p class="muted">No entry legs declared yet.</p>
@@ -57,8 +92,8 @@
               [attr.data-testid]="'action-plan-picker-option-fields-' + leg.leg_id"
             >
               <span class="leg-right">{{ leg.right }}</span>
-              <span class="leg-strike">{{ leg.strike.selector }}</span>
-              <span class="leg-expiry">{{ leg.expiry.selector }}</span>
+              <span class="leg-strike">{{ formatStrike(leg.strike) }}</span>
+              <span class="leg-expiry">{{ formatExpiry(leg.expiry) }}</span>
             </span>
           }
           <button

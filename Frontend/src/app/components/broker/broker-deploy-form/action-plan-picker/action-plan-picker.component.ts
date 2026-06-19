@@ -14,14 +14,22 @@ import type {
   ActionPlan,
   ActionPlanEntryLeg,
   CloseLegExit,
+  ExpirySelector,
   OptionEntryLeg,
   StockEntryLeg,
+  StrikeSelector,
 } from '../../../../api/action-plan.types';
 import { isOptionLeg } from '../../../../api/action-plan.types';
 import {
   ActionPlanPreviewService,
   type ParityWarning,
 } from '../../../../api/action-plan-preview.service';
+import type {
+  OptionContractMatch,
+  SymbolMatch,
+} from '../../../../api/broker-models';
+import { BrokerInstrumentCardComponent } from '../../../../shared/broker-instrument-card/broker-instrument-card.component';
+import { OptionLegPickerComponent } from './option-leg-picker/option-leg-picker.component';
 
 /**
  * Deploy-form picker for the operator-declared action plan
@@ -44,6 +52,7 @@ const PREVIEW_DEBOUNCE_MS = 150;
 @Component({
   selector: 'app-action-plan-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [BrokerInstrumentCardComponent, OptionLegPickerComponent],
   templateUrl: './action-plan-picker.component.html',
   styleUrl: './action-plan-picker.component.scss',
 })
@@ -55,7 +64,36 @@ export class ActionPlanPickerComponent {
   readonly exitEntities = computed<CloseLegExit[]>(() => this.actionPlan().on_exit);
   readonly warnings = signal<ParityWarning[]>([]);
 
+  /** Stage of the broker-coupled picker workflow. */
+  readonly pickerMode = signal<'idle' | 'stock-symbol' | 'option-symbol' | 'option-drill'>(
+    'idle',
+  );
+  /** Symbol captured during the option-add workflow before drill-down. */
+  readonly optionSymbol = signal<SymbolMatch | null>(null);
+
   isOption = isOptionLeg;
+
+  formatStrike(strike: StrikeSelector): string {
+    switch (strike.selector) {
+      case 'atm':
+        return 'ATM';
+      case 'atm_offset':
+        return `ATM${strike.offset >= 0 ? '+' : ''}${strike.offset}`;
+      case 'absolute':
+        return `$${strike.strike}`;
+    }
+  }
+
+  formatExpiry(expiry: ExpirySelector): string {
+    switch (expiry.selector) {
+      case 'min_dte':
+        return `${expiry.days}d+`;
+      case 'nearest_weekly':
+        return 'weekly';
+      case 'absolute':
+        return new Date(expiry.expiration_ms).toISOString().slice(0, 10);
+    }
+  }
 
   private readonly preview = inject(ActionPlanPreviewService);
 
@@ -70,27 +108,54 @@ export class ActionPlanPickerComponent {
       .subscribe((plan) => this._fetchPreview(plan));
   }
 
-  addStockEntry(): void {
-    const newLeg: StockEntryLeg = {
-      leg_id: this._nextLegId(),
-      instrument: { kind: 'stock', underlying: this.prefillUnderlying() ?? '' },
-      position: 'long',
-      qty_ratio: 1,
-    };
-    this._appendEntry(newLeg);
+  beginAddStock(): void {
+    this.pickerMode.set('stock-symbol');
   }
 
-  addOptionEntry(): void {
-    const newLeg: OptionEntryLeg = {
+  beginAddOption(): void {
+    this.optionSymbol.set(null);
+    this.pickerMode.set('option-symbol');
+  }
+
+  cancelPicker(): void {
+    this.pickerMode.set('idle');
+    this.optionSymbol.set(null);
+  }
+
+  onStockSymbolPicked(match: SymbolMatch): void {
+    const newLeg: StockEntryLeg = {
       leg_id: this._nextLegId(),
-      instrument: { kind: 'option', underlying: this.prefillUnderlying() ?? '' },
+      instrument: { kind: 'stock', underlying: match.symbol },
       position: 'long',
       qty_ratio: 1,
-      right: 'call',
-      strike: { selector: 'atm' },
-      expiry: { selector: 'min_dte', days: 14 },
     };
     this._appendEntry(newLeg);
+    this.pickerMode.set('idle');
+  }
+
+  onOptionSymbolPicked(match: SymbolMatch): void {
+    this.optionSymbol.set(match);
+    this.pickerMode.set('option-drill');
+  }
+
+  onOptionLegQualified(match: OptionContractMatch): void {
+    // Schema accepts ``absolute`` selectors so the broker-qualified
+    // strike + expiry round-trips into ``run_id`` exactly as the
+    // operator picked them. Slice 4's resolver will re-qualify against
+    // the live broker; the persisted ``con_id`` lives unhashed in the
+    // ledger alongside the leg.
+    const newLeg: OptionEntryLeg = {
+      leg_id: this._nextLegId(),
+      instrument: { kind: 'option', underlying: match.symbol },
+      position: 'long',
+      qty_ratio: 1,
+      right: match.right === 'C' ? 'call' : 'put',
+      strike: { selector: 'absolute', strike: match.strike },
+      expiry: { selector: 'absolute', expiration_ms: match.expiry_ms },
+    };
+    this._appendEntry(newLeg);
+    this.pickerMode.set('idle');
+    this.optionSymbol.set(null);
   }
 
   removeEntry(legId: string): void {

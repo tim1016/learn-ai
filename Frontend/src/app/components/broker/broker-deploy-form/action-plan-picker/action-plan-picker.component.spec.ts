@@ -1,12 +1,39 @@
 import { provideZonelessChangeDetection } from '@angular/core';
-import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionPlan } from '../../../../api/action-plan.types';
 import {
   ActionPlanPreviewService,
   type ActionPlanPreviewResponse,
 } from '../../../../api/action-plan-preview.service';
+import type {
+  OptionContractMatch,
+  SymbolMatch,
+} from '../../../../api/broker-models';
+import { BrokerService } from '../../../../services/broker.service';
 import { ActionPlanPickerComponent } from './action-plan-picker.component';
+
+const SPY: SymbolMatch = {
+  symbol: 'SPY',
+  name: 'SPDR S&P 500 ETF Trust',
+  exchange: 'ARCA',
+  currency: 'USD',
+  sec_type: 'STK',
+  derivative_sec_types: ['OPT'],
+};
+
+const QUALIFIED_CALL: OptionContractMatch = {
+  con_id: 42,
+  symbol: 'SPY',
+  local_symbol: 'SPY   251219C00650000',
+  trading_class: 'SPY',
+  exchange: 'SMART',
+  currency: 'USD',
+  expiry_ms: 1_766_188_800_000,
+  strike: 650.0,
+  right: 'C',
+  multiplier: 100,
+};
 
 function setup(opts: {
   initial?: ActionPlan;
@@ -22,10 +49,25 @@ function setup(opts: {
   const preview = {
     preview: vi.fn().mockResolvedValue(opts.previewResponse ?? { warnings: [] }),
   };
+  // Stub BrokerService — the picker injects it indirectly via the
+  // shared instrument-card and option-leg-picker components even when
+  // the broker UI is not on screen.
+  const broker = {
+    searchSymbols: vi.fn().mockResolvedValue({ matches: [] }),
+    expirations: vi.fn().mockResolvedValue({ symbol: 'SPY', expirations_ms: [] }),
+    strikes: vi.fn().mockResolvedValue({
+      symbol: 'SPY',
+      expiry_ms: 0,
+      strikes: [],
+      fetched_at_ms: 0,
+    }),
+    searchOptionContracts: vi.fn().mockResolvedValue({ matches: [QUALIFIED_CALL] }),
+  };
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
       { provide: ActionPlanPreviewService, useValue: preview },
+      { provide: BrokerService, useValue: broker },
     ],
   });
   const fixture = TestBed.createComponent(ActionPlanPickerComponent);
@@ -58,7 +100,7 @@ function queryButton(root: HTMLElement, selector: string): HTMLButtonElement {
   return el;
 }
 
-describe('ActionPlanPickerComponent — Slice 1B', () => {
+describe('ActionPlanPickerComponent — Slice 1B/1F', () => {
   it('renders ON ENTER and ON EXIT sections, each with [+ Add]', () => {
     const { el } = setup();
 
@@ -72,41 +114,75 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
     expect(el.querySelector('[data-testid="action-plan-picker-exit-add"]')).not.toBeNull();
   });
 
-  it('adding a stock entry leg auto-fills a mirrored close_leg in on_exit', () => {
-    const { fixture, el } = setup({ prefillUnderlying: 'SPY' });
+  // Slice 1F (#605) — broker-driven picker flow.
+
+  it('clicking "+ Add stock" opens the broker symbol picker', () => {
+    const { fixture, el } = setup();
 
     queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="action-plan-picker-stock-symbol"]')).not.toBeNull();
+    // No leg should be created yet — the picker is awaiting symbol selection.
+    expect(fixture.componentInstance.actionPlan().on_enter).toEqual([]);
+  });
+
+  it('picking a stock symbol appends a stock leg with the broker-derived underlying', () => {
+    const { fixture, component } = setup();
+
+    component.beginAddStock();
+    component.onStockSymbolPicked(SPY);
     fixture.detectChanges();
 
     const plan = fixture.componentInstance.actionPlan();
     expect(plan.on_enter.length).toBe(1);
+    expect(plan.on_enter[0].instrument).toEqual({ kind: 'stock', underlying: 'SPY' });
     expect(plan.on_exit.length).toBe(1);
-    expect(plan.on_enter[0].instrument.underlying).toBe('SPY');
-    expect(plan.on_exit[0]).toMatchObject({
-      kind: 'close_leg',
-      entry_leg_id: plan.on_enter[0].leg_id,
-    });
+    expect(plan.on_exit[0]).toMatchObject({ kind: 'close_leg', entry_leg_id: plan.on_enter[0].leg_id });
+    expect(component.pickerMode()).toBe('idle');
   });
 
-  it('the submitted payload carries the literal underlying even when prefill was used', () => {
-    const { fixture, el } = setup({ prefillUnderlying: 'SPY' });
+  it('qualifying an option leg appends one with absolute selectors from the broker', () => {
+    const { fixture, component } = setup();
 
-    queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
-    fixture.detectChanges();
-
-    // Re-render with a different prefill — the already-added leg must
-    // keep "SPY" literally (no implicit context-dependence).
-    fixture.componentRef.setInput('prefillUnderlying', 'QQQ');
+    component.beginAddOption();
+    component.onOptionSymbolPicked(SPY);
+    component.onOptionLegQualified(QUALIFIED_CALL);
     fixture.detectChanges();
 
     const plan = fixture.componentInstance.actionPlan();
-    expect(plan.on_enter[0].instrument.underlying).toBe('SPY');
+    expect(plan.on_enter.length).toBe(1);
+    const leg = plan.on_enter[0];
+    expect(leg.instrument).toEqual({ kind: 'option', underlying: 'SPY' });
+    expect(leg).toMatchObject({
+      position: 'long',
+      qty_ratio: 1,
+      right: 'call',
+      strike: { selector: 'absolute', strike: 650 },
+      expiry: { selector: 'absolute', expiration_ms: 1_766_188_800_000 },
+    });
+    expect(component.pickerMode()).toBe('idle');
+  });
+
+  it('cancelPicker closes the picker without creating a leg', () => {
+    const { fixture, component, el } = setup();
+
+    component.beginAddOption();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="action-plan-picker-option-symbol"]')).not.toBeNull();
+
+    component.cancelPicker();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="action-plan-picker-option-symbol"]')).toBeNull();
+    expect(fixture.componentInstance.actionPlan().on_enter).toEqual([]);
   });
 
   it('removing an entry leg cascades the removal of its mirrored close_leg', () => {
-    const { fixture, el } = setup({ prefillUnderlying: 'SPY' });
+    const { fixture, component, el } = setup();
 
-    queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+    component.beginAddStock();
+    component.onStockSymbolPicked(SPY);
     fixture.detectChanges();
     const legId = fixture.componentInstance.actionPlan().on_enter[0].leg_id;
 
@@ -118,37 +194,16 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
     expect(plan.on_exit).toEqual([]);
   });
 
-  // Slice 1C (#596) — option entry leg + selector reveal.
-
-  it('adding an option entry leg fills sensible selector defaults', () => {
-    const { fixture, el } = setup({ prefillUnderlying: 'SPY' });
-
-    queryButton(el, '[data-testid="action-plan-picker-enter-add-option"]').click();
-    fixture.detectChanges();
-
-    const plan = fixture.componentInstance.actionPlan();
-    expect(plan.on_enter.length).toBe(1);
-    const leg = plan.on_enter[0];
-    expect(leg.instrument).toEqual({ kind: 'option', underlying: 'SPY' });
-    expect(leg).toMatchObject({
-      position: 'long',
-      qty_ratio: 1,
-      right: 'call',
-      strike: { selector: 'atm' },
-      expiry: { selector: 'min_dte', days: 14 },
-    });
-    expect(plan.on_exit[0]).toMatchObject({
-      kind: 'close_leg',
-      entry_leg_id: leg.leg_id,
-    });
-  });
-
   it('reveals option-specific picker rows only when the leg is an option', () => {
-    const { fixture, el } = setup({ prefillUnderlying: 'SPY' });
+    const { fixture, component, el } = setup();
 
-    queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
-    queryButton(el, '[data-testid="action-plan-picker-enter-add-option"]').click();
+    component.beginAddStock();
+    component.onStockSymbolPicked(SPY);
+    component.beginAddOption();
+    component.onOptionSymbolPicked(SPY);
+    component.onOptionLegQualified(QUALIFIED_CALL);
     fixture.detectChanges();
+
     const plan = fixture.componentInstance.actionPlan();
     const stockLegId = plan.on_enter[0].leg_id;
     const optionLegId = plan.on_enter[1].leg_id;
@@ -166,15 +221,16 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
   it('debounces calls to the preview endpoint on plan change', async () => {
     vi.useFakeTimers();
     try {
-      const { fixture, el, preview } = setup({ prefillUnderlying: 'SPY' });
+      const { fixture, component, preview } = setup();
       preview.preview.mockClear();
 
-      queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+      component.beginAddStock();
+      component.onStockSymbolPicked(SPY);
       fixture.detectChanges();
-      queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+      component.beginAddStock();
+      component.onStockSymbolPicked(SPY);
       fixture.detectChanges();
-      // Two rapid changes — preview should only fire after the debounce
-      // window settles.
+      // Two rapid changes — preview should only fire after the debounce window settles.
       expect(preview.preview).not.toHaveBeenCalled();
 
       await flushPreview(fixture);
@@ -190,8 +246,7 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
   it('renders warning rows from the preview response', async () => {
     vi.useFakeTimers();
     try {
-      const { fixture, el } = setup({
-        prefillUnderlying: 'SPY',
+      const { fixture, component, el } = setup({
         previewResponse: {
           warnings: [
             {
@@ -203,7 +258,8 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
         },
       });
 
-      queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+      component.beginAddStock();
+      component.onStockSymbolPicked(SPY);
       fixture.detectChanges();
       await flushPreview(fixture);
 
@@ -219,9 +275,10 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
   });
 
   it('removing a close_leg leaves its entry leg in place', () => {
-    const { fixture, el } = setup({ prefillUnderlying: 'SPY' });
+    const { fixture, component, el } = setup();
 
-    queryButton(el, '[data-testid="action-plan-picker-enter-add"]').click();
+    component.beginAddStock();
+    component.onStockSymbolPicked(SPY);
     fixture.detectChanges();
     const legId = fixture.componentInstance.actionPlan().on_enter[0].leg_id;
 
@@ -231,5 +288,13 @@ describe('ActionPlanPickerComponent — Slice 1B', () => {
     const plan = fixture.componentInstance.actionPlan();
     expect(plan.on_enter.length).toBe(1);
     expect(plan.on_exit).toEqual([]);
+  });
+
+  it('formatStrike renders ATM, ATM±N, and absolute pretty-prints', () => {
+    const { component } = setup();
+    expect(component.formatStrike({ selector: 'atm' })).toBe('ATM');
+    expect(component.formatStrike({ selector: 'atm_offset', offset: 5 })).toBe('ATM+5');
+    expect(component.formatStrike({ selector: 'atm_offset', offset: -3 })).toBe('ATM-3');
+    expect(component.formatStrike({ selector: 'absolute', strike: 650 })).toBe('$650');
   });
 });

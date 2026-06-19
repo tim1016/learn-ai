@@ -1,0 +1,50 @@
+<div class="broker-instrument-card">
+  <label class="search-label">
+    <span class="visually-hidden">Symbol search</span>
+    <input
+      type="search"
+      class="search-input"
+      [value]="query()"
+      (input)="onQueryChange($any($event.target).value)"
+      [placeholder]="placeholder()"
+      autocomplete="off"
+      spellcheck="false"
+      aria-label="Search symbol or name"
+    />
+  </label>
+
+  @if (searching()) {
+    <p class="status" aria-live="polite">Searching IBKR…</p>
+  }
+  @if (disconnected()) {
+    <p class="status status-error" role="alert">
+      Reconnect broker to search — IBKR is offline.
+    </p>
+  }
+  @if (rateLimited()) {
+    <p class="status status-warn" role="alert">
+      Searching too fast — IBKR limits symbol lookups; please wait a moment.
+    </p>
+  }
+  @if (empty()) {
+    <p class="status">No matches.</p>
+  }
+
+  @if (matches().length > 0) {
+    <ul class="matches" role="listbox" aria-label="Symbol matches">
+      @for (match of matches(); track trackMatch($index, match)) {
+        <li class="match-row" role="option" aria-selected="false">
+          <button
+            type="button"
+            class="match-button"
+            (click)="select(match)"
+          >
+            <span class="match-symbol">{{ match.symbol }}</span>
+            <span class="match-name">{{ match.name }}</span>
+            <span class="match-exchange">{{ match.exchange }}</span>
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</div>
