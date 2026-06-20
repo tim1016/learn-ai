@@ -9,7 +9,7 @@
 >
   <div class="bot-id">
     <div class="name" [title]="botName()" data-testid="bot-name">{{ botName() }}</div>
-    <div class="sid">strategy_instance_id · {{ botName() }}</div>
+    <div class="sid" data-testid="strategy-key-line">{{ strategyKey() }}</div>
   </div>
 
   <div class="pills-row" role="status" aria-live="polite">
@@ -37,20 +37,17 @@
       </span>
     }
 
-    @if (isPaper() || priorRunText || hasPoisonFlag()) {
-      <span class="pill-divider" aria-hidden="true"></span>
-    }
+    <span class="pill-divider" aria-hidden="true"></span>
 
-    @if (isPaper()) {
-      <span
-        class="pill"
-        [attr.data-verdict]="safetyVerdict()"
-        data-testid="paper-pill"
-      >
-        <span class="key">SAFETY</span>
-        {{ safetyLabel() }}
-      </span>
-    }
+    <span
+      class="pill"
+      [attr.data-verdict]="safetyVerdict()"
+      data-testid="paper-pill"
+      [title]="'Broker safety verdict — ' + safetyLabel()"
+    >
+      <span class="key">SAFETY</span>
+      {{ safetyLabel() }}
+    </span>
 
     @if (priorRunText) {
       <span class="pill prior-run" [attr.data-priorrun]="priorRun()">
@@ -69,22 +66,49 @@
     <button
       type="button"
       class="keycap"
+      [disabled]="resumeDisabled()"
+      (click)="onResumeClick()"
+      data-testid="banner-resume-keycap"
+      [attr.aria-label]="resumeLabel()"
+      [title]="resumeTooltip()"
+    >
+      <i class="pi pi-play" aria-hidden="true"></i>
+      <span>{{ resumeLabel() }}</span>
+    </button>
+    <button
+      type="button"
+      class="keycap"
+      [disabled]="pauseDisabled()"
+      (click)="onPauseClick()"
+      data-testid="banner-pause-keycap"
+      [attr.aria-label]="pauseLabel()"
+      [title]="pauseTooltip()"
+    >
+      <i class="pi pi-pause" aria-hidden="true"></i>
+      <span>{{ pauseLabel() }}</span>
+    </button>
+    <button
+      type="button"
+      class="keycap keycap--panic"
+      [disabled]="flattenDisabled()"
+      (click)="onFlattenClick()"
+      data-testid="banner-flatten-keycap"
+      aria-label="Flatten and pause"
+      [title]="flattenTooltip()"
+    >
+      <i class="pi pi-stop-circle" aria-hidden="true"></i>
+      <span>Flatten + pause</span>
+    </button>
+    <span class="divider" aria-hidden="true"></span>
+    <button
+      type="button"
+      class="keycap"
       (click)="onJumpToControlsClick()"
       data-testid="jump-to-controls"
       aria-label="Scroll to Start / Pause / Stop controls"
     >
       <i class="pi pi-arrow-down" aria-hidden="true"></i>
       <span>CONTROLS</span>
-    </button>
-    <span class="divider" aria-hidden="true"></span>
-    <button
-      type="button"
-      class="keycap keycap--kebab"
-      disabled
-      aria-label="More actions — coming with #584"
-      title="More actions — wire-up tracked in #584"
-    >
-      ⋯
     </button>
   </div>
 

@@ -160,6 +160,29 @@ export class LiveRunsService {
     );
   }
 
+  /**
+   * Atomic flatten-and-pause (PRD #607 / Slice 3 / #610): wraps the
+   * Python ``POST /api/live-instances/{id}/flatten-and-pause`` endpoint
+   * which persists PAUSED durable intent FIRST then enqueues FLATTEN_NOW
+   * (VCR-0007 / ADR-0010).  Angular MUST NOT recompose this as
+   * ``issueCommand('FLATTEN') + setInstanceDesiredState``; doing so
+   * re-opens the bug VCR-0007 named.
+   *
+   * Returns the same shape as ``setInstanceDesiredState`` so the cockpit
+   * can reuse its post-dispatch ``actuation.actuated`` rendering.
+   */
+  flattenAndPause(
+    instanceId: string,
+    request?: InstanceDesiredStateRequest,
+  ): Promise<SetInstanceDesiredStateResponse> {
+    return firstValueFrom(
+      this.http.post<SetInstanceDesiredStateResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/flatten-and-pause`,
+        request ?? null,
+      ),
+    );
+  }
+
   /** Unified one-shot command timeline for an instance's bound run (#397). */
   getInstanceCommands(instanceId: string): Promise<CommandsSummary> {
     return firstValueFrom(

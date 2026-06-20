@@ -5,9 +5,14 @@ import type {
   InstanceLastExit,
   InstanceProcessView,
   LiveInstanceStatus,
+  OperatorSurface,
 } from '../../../../api/live-instances.types';
 import { DEFAULT_OPERATOR_SURFACE } from '../../../../../testing/operator-surface-fixtures';
 import { StickyControlBarComponent } from './sticky-control-bar.component';
+
+function withSurface(overrides: Partial<OperatorSurface>): OperatorSurface {
+  return { ...DEFAULT_OPERATOR_SURFACE, ...overrides };
+}
 
 function makeStatus(
   overrides: Partial<LiveInstanceStatus> = {},
@@ -57,20 +62,30 @@ function render(opts: {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('StickyControlBarComponent', () => {
-  it('renders the PAPER pill when isPaper is true (User Story #3)', () => {
-    const { el } = render({ status: makeStatus(), isPaper: true });
-
-    const pill = el.querySelector<HTMLElement>('[data-testid="paper-pill"]');
-    expect(pill).not.toBeNull();
-    expect(pill?.textContent ?? '').toContain('PAPER');
-    expect(pill?.getAttribute('data-verdict')).toBe('paper');
-  });
-
-  it('hides the PAPER pill on a live account', () => {
-    const { el } = render({ status: makeStatus(), isPaper: false });
-
-    expect(el.querySelector('[data-testid="paper-pill"]')).toBeNull();
-  });
+  // PRD #607 / Slice 3 (#610): safety pill consumes the server-authored
+  // operator_surface.broker.safety_verdict; the Frontend isPaper()
+  // derivation no longer drives the banner pill.
+  it.each([
+    ['PAPER', 'PAPER-ONLY', 'paper'],
+    ['LIVE', 'LIVE', 'ready'],
+    ['DEGRADED', 'DEGRADED', 'degraded'],
+    ['DISCONNECTED', 'DISCONNECTED', 'blocked'],
+    ['UNKNOWN', 'UNKNOWN', 'unknown'],
+  ] as const)(
+    'renders SAFETY pill from operator_surface verdict %s -> %s',
+    (verdict, label, tone) => {
+      const { el } = render({
+        status: makeStatus({
+          operator_surface: withSurface({ broker: { safety_verdict: verdict } }),
+        }),
+        isPaper: false, // pill no longer depends on isPaper
+      });
+      const pill = el.querySelector<HTMLElement>('[data-testid="paper-pill"]');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent ?? '').toContain(label);
+      expect(pill?.getAttribute('data-verdict')).toBe(tone);
+    },
+  );
 
   it('renders the bot identity (User Story #2)', () => {
     const { el } = render({
@@ -154,6 +169,154 @@ describe('StickyControlBarComponent', () => {
 
     el.querySelector<HTMLButtonElement>('[data-testid="jump-to-controls"]')?.click();
 
+    expect(fired).toBe(1);
+  });
+
+  // PRD #607 / Slice 3 (#610) — banner keycaps.
+
+  it('renders the strategy-key sub-line from start_defaults.strategy', () => {
+    const { el } = render({
+      status: makeStatus({
+        start_defaults: {
+          strategy: 'spy_ema_crossover',
+          readonly: false,
+          hydrate_policy: 'optional',
+          max_orders_per_day: 50,
+          ibkr_host: 'host',
+        },
+      }),
+    });
+    expect(
+      el.querySelector('[data-testid="strategy-key-line"]')?.textContent?.trim(),
+    ).toBe('spy_ema_crossover');
+  });
+
+  it('falls back to strategy_instance_id when start_defaults.strategy is empty', () => {
+    const { el } = render({
+      status: makeStatus({ strategy_instance_id: 'spy_qqq_paper' }),
+    });
+    expect(
+      el.querySelector('[data-testid="strategy-key-line"]')?.textContent?.trim(),
+    ).toBe('spy_qqq_paper');
+  });
+
+  it('renders Resume / Set intent: RUNNING based on effect discriminator', () => {
+    const durable = render({
+      status: makeStatus({
+        operator_surface: withSurface({
+          actions: {
+            ...DEFAULT_OPERATOR_SURFACE.actions,
+            resume: { enabled: true, effect: 'DURABLE_ONLY', disabled_reason_code: null },
+          },
+        }),
+      }),
+    });
+    expect(
+      durable.el
+        .querySelector('[data-testid="banner-resume-keycap"]')
+        ?.textContent?.toLowerCase(),
+    ).toContain('set intent');
+
+    const live = render({
+      status: makeStatus({
+        operator_surface: withSurface({
+          actions: {
+            ...DEFAULT_OPERATOR_SURFACE.actions,
+            resume: { enabled: true, effect: 'LIVE_ACTUATION', disabled_reason_code: null },
+          },
+        }),
+      }),
+    });
+    expect(
+      live.el
+        .querySelector('[data-testid="banner-resume-keycap"]')
+        ?.textContent?.toLowerCase(),
+    ).toContain('resume');
+  });
+
+  it('Resume keycap is enabled across every server snapshot (durable writes always succeed)', () => {
+    const { el } = render({
+      status: makeStatus({
+        operator_surface: withSurface({
+          actions: {
+            ...DEFAULT_OPERATOR_SURFACE.actions,
+            resume: { enabled: true, effect: 'DURABLE_ONLY', disabled_reason_code: null },
+          },
+        }),
+      }),
+    });
+    const btn = el.querySelector<HTMLButtonElement>('[data-testid="banner-resume-keycap"]');
+    expect(btn?.disabled).toBe(false);
+  });
+
+  it('Flatten keycap renders the reason-code tooltip when disabled', () => {
+    const { el } = render({
+      status: makeStatus({
+        operator_surface: withSurface({
+          actions: {
+            ...DEFAULT_OPERATOR_SURFACE.actions,
+            flatten_and_pause: {
+              enabled: false,
+              effect: 'LIVE_ACTUATION',
+              disabled_reason_code: 'NO_LIVE_BINDING',
+            },
+          },
+        }),
+      }),
+    });
+    const btn = el.querySelector<HTMLButtonElement>('[data-testid="banner-flatten-keycap"]');
+    expect(btn?.disabled).toBe(true);
+    expect(btn?.title.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('keycaps disable locally on requestInFlight even when server enables them', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection()],
+    });
+    const fixture = TestBed.createComponent(StickyControlBarComponent);
+    fixture.componentRef.setInput('status', makeStatus());
+    fixture.componentRef.setInput('isPaper', true);
+    fixture.componentRef.setInput('requestInFlight', true);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="banner-resume-keycap"]')?.disabled,
+    ).toBe(true);
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="banner-pause-keycap"]')?.disabled,
+    ).toBe(true);
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="banner-resume-keycap"]')?.title,
+    ).toMatch(/in flight/i);
+  });
+
+  it.each([
+    ['banner-resume-keycap', 'resumeRequested'],
+    ['banner-pause-keycap', 'pauseRequested'],
+    ['banner-flatten-keycap', 'flattenAndPauseRequested'],
+  ] as const)('emits %s -> %s on click', (testid, output) => {
+    const { el, component } = render({
+      status: makeStatus({
+        operator_surface: withSurface({
+          actions: {
+            resume: { enabled: true, effect: 'LIVE_ACTUATION', disabled_reason_code: null },
+            pause: { enabled: true, effect: 'LIVE_ACTUATION', disabled_reason_code: null },
+            flatten_and_pause: {
+              enabled: true,
+              effect: 'LIVE_ACTUATION',
+              disabled_reason_code: null,
+            },
+            mark_poisoned: DEFAULT_OPERATOR_SURFACE.actions.mark_poisoned,
+          },
+        }),
+      }),
+    });
+    let fired = 0;
+    (component[output] as { subscribe: (fn: () => void) => unknown }).subscribe(
+      () => (fired += 1),
+    );
+    el.querySelector<HTMLButtonElement>(`[data-testid="${testid}"]`)?.click();
     expect(fired).toBe(1);
   });
 });
