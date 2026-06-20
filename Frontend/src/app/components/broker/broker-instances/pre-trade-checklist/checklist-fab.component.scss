@@ -1,0 +1,43 @@
+:host {
+  display: contents;
+}
+
+.fab {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.875rem;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  // PRD #607 / Slice 7 (#614) — phosphor border-top.
+  border-top: 2px solid var(--info);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  transition: transform var(--t-fast), box-shadow var(--t-fast);
+
+  &:hover {
+    transform: translateY(-1px);
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.4rem;
+    border-radius: var(--radius-pill);
+    background: var(--verdict-blocked);
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+}

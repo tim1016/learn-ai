@@ -1,20 +1,3 @@
-@if (fabVisible()) {
-  <button
-    type="button"
-    class="fab"
-    (click)="toggleOpen()"
-    data-testid="pre-trade-fab"
-    [attr.aria-label]="open() ? 'Close pre-trade checklist' : 'Open pre-trade checklist'"
-    [attr.aria-expanded]="open()"
-  >
-    <i class="pi pi-list" aria-hidden="true"></i>
-    <span>Pre-trade checklist</span>
-    @if (failingGates().length) {
-      <span class="badge">{{ failingGates().length }}</span>
-    }
-  </button>
-}
-
 @if (open()) {
   <aside
     #dialogEl
@@ -24,14 +7,15 @@
     aria-labelledby="pre-trade-dialog-heading"
     data-testid="pre-trade-dialog"
     tabindex="-1"
-    (keydown.escape)="close()"
+    (keydown.escape)="onClose()"
   >
     <header class="dialog-header">
       <h3 id="pre-trade-dialog-heading">Pre-trade checklist</h3>
       <button
+        #firstFocusable
         type="button"
         class="close"
-        (click)="close()"
+        (click)="onClose()"
         data-testid="pre-trade-close"
         aria-label="Close pre-trade checklist"
       >
@@ -40,7 +24,7 @@
     </header>
     @if (failingGates().length) {
       <ul class="items">
-        @for (g of failingGates(); track g.key) {
+        @for (g of failingGates(); track g.key; let i = $index) {
           <li class="item" [class.acknowledged]="acknowledged().has(g.key)">
             <div class="item-body">
               <strong>{{ g.label }}</strong>
@@ -49,7 +33,7 @@
             <button
               type="button"
               class="ack"
-              (click)="acknowledge(g.key)"
+              (click)="onAck(g.key)"
               [disabled]="acknowledged().has(g.key)"
               [attr.data-testid]="'pre-trade-ack-' + g.key"
             >

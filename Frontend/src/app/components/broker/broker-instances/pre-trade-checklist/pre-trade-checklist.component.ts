@@ -1,43 +1,56 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  ElementRef,
   computed,
   effect,
   input,
   signal,
   untracked,
-  viewChild,
 } from '@angular/core';
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 
 import { deriveFleetState } from '../fleet-state';
 import { projectFailingGates, type FailingGateRow } from '../failing-gates';
+import { ChecklistDialogComponent } from './checklist-dialog.component';
+import { ChecklistFabComponent } from './checklist-fab.component';
 
 /**
- * Pre-trade checklist — floating action button (FAB) + dialog. Issue #587.
+ * Pre-trade checklist orchestrator (PRD #607 / Slice 7 / #614).
  *
- * The FAB is hidden in STEADY state (nothing to triage), visible otherwise.
- * Clicking the FAB opens a dialog listing each failing readiness gate as a
- * checklist item the operator can acknowledge. Acknowledgement is local
- * UI state — it doesn't change the underlying engine verdict, and a gate
- * that stops failing has its ack pruned, so an old ack can't quietly
- * carry over when the gate breaks again.
+ * Owns ``open`` state + ``acknowledged`` set + failing-gate
+ * computation; places the FAB and (conditionally) the dialog as
+ * sibling child components.  Public surface (selector + inputs) is
+ * preserved so existing parent template usage is unaffected.
  *
- * Renders the same operator-language labels as `<app-can-it-trade-card>`
- * by sharing the parent's gate-labels map and the `projectFailingGates`
- * helper.
+ * Focus restoration: when the dialog closes the orchestrator bumps
+ * ``restoreFocusTick`` so the FAB grabs focus back — keyboard
+ * operators are not stranded.
  */
 @Component({
   selector: 'app-pre-trade-checklist',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './pre-trade-checklist.component.html',
-  styleUrl: './pre-trade-checklist.component.scss',
+  imports: [ChecklistFabComponent, ChecklistDialogComponent],
+  template: `
+    <app-checklist-fab
+      [visible]="fabVisible()"
+      [failingCount]="failingGates().length"
+      [open]="open()"
+      [restoreFocusTick]="restoreFocusTick()"
+      (toggleRequested)="toggleOpen()"
+    />
+    <app-checklist-dialog
+      [open]="open()"
+      [failingGates]="failingGates()"
+      [acknowledged]="acknowledged()"
+      (acknowledge)="acknowledge($event)"
+      (closeRequested)="close()"
+    />
+  `,
 })
 export class PreTradeChecklistComponent {
   readonly status = input.required<LiveInstanceStatus>();
   /** Operator-language labels for known gates. Shared with
-   * `<app-can-it-trade-card>` so the FAB and the page card never drift. */
+   * ``<app-can-it-trade-card>`` so the FAB and the page card never drift. */
   readonly gateLabels = input.required<Record<string, string>>();
 
   readonly fleetState = computed(() => deriveFleetState(this.status()));
@@ -53,7 +66,8 @@ export class PreTradeChecklistComponent {
   private readonly _acknowledged = signal<ReadonlySet<string>>(new Set<string>());
   readonly acknowledged = this._acknowledged.asReadonly();
 
-  private readonly dialogEl = viewChild<ElementRef<HTMLElement>>('dialogEl');
+  private readonly _restoreFocusTick = signal<number>(0);
+  readonly restoreFocusTick = this._restoreFocusTick.asReadonly();
 
   constructor() {
     // Prune acks for gates that are no longer failing. If a gate later
@@ -68,25 +82,27 @@ export class PreTradeChecklistComponent {
         });
       });
     });
-
-    // Focus the dialog when it opens so the scoped (keydown.escape) listener
-    // catches Escape without a global document handler.
-    effect(() => {
-      if (!this._open()) return;
-      const el = this.dialogEl();
-      if (el) queueMicrotask(() => el.nativeElement.focus());
-    });
   }
 
   toggleOpen(): void {
     this._open.update((v) => !v);
+    if (!this._open()) {
+      this.bumpRestoreFocus();
+    }
   }
 
   close(): void {
-    this._open.set(false);
+    if (this._open()) {
+      this._open.set(false);
+      this.bumpRestoreFocus();
+    }
   }
 
   acknowledge(gateKey: string): void {
     this._acknowledged.update((set) => new Set([...set, gateKey]));
+  }
+
+  private bumpRestoreFocus(): void {
+    this._restoreFocusTick.update((n) => n + 1);
   }
 }

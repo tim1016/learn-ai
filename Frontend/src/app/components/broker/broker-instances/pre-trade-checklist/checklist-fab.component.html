@@ -1,0 +1,17 @@
+@if (visible()) {
+  <button
+    #fabBtn
+    type="button"
+    class="fab"
+    (click)="onClick()"
+    data-testid="pre-trade-fab"
+    [attr.aria-label]="open() ? 'Close pre-trade checklist' : 'Open pre-trade checklist'"
+    [attr.aria-expanded]="open()"
+  >
+    <i class="pi pi-list" aria-hidden="true"></i>
+    <span>Pre-trade checklist</span>
+    @if (failingCount() > 0) {
+      <span class="badge" data-testid="pre-trade-fab-badge">{{ failingCount() }}</span>
+    }
+  </button>
+}
