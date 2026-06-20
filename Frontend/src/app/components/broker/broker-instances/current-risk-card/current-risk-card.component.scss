@@ -1,5 +1,25 @@
+@use '../../../../styles/card-verdict-border' as verdict;
+
 :host {
   display: block;
+
+  // PRD #607 / Slice 5 (#612) — verdict-glow keyed on host
+  // [data-verdict].  Collapse animation deferred — the current
+  // template already short-circuits posture-only when collapsed in a
+  // future revision; Slice 5 ships the glow + server-driven
+  // collapse attribute for downstream slices to consume.
+  @include verdict.card-verdict-border;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border-light);
+  border-radius: 2px;
 }
 
 .card {

@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import type {
   InstanceBrokerView,
   InstanceSizing,
+  OperatorSurfaceCurrentRisk,
   ReadinessVector,
 } from '../../../../api/live-instances.types';
 
@@ -40,11 +41,18 @@ interface OrdersGate {
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './current-risk-card.component.html',
   styleUrl: './current-risk-card.component.scss',
+  host: {
+    '[attr.data-verdict]': 'verdictAttr()',
+    '[attr.data-collapsed]': 'collapsedAttr()',
+  },
 })
 export class CurrentRiskCardComponent {
   readonly broker = input.required<InstanceBrokerView | null>();
   readonly readiness = input.required<ReadinessVector | null>();
   readonly sizing = input.required<InstanceSizing | null>();
+  /** PRD #607 / Slice 5 (#612) — server-authored posture / pending /
+   * verdict.  Replaces the Frontend's owned_positions derivation. */
+  readonly currentRisk = input.required<OperatorSurfaceCurrentRisk>();
 
   readonly positions = computed<PositionRow[]>(() => {
     const b = this.broker();
@@ -59,19 +67,28 @@ export class CurrentRiskCardComponent {
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
   });
 
-  readonly pendingOrderCount = computed<number>(() => {
-    const b = this.broker();
-    return b?.pending_order_count ?? 0;
-  });
+  /** PRD #607 / Slice 5 (#612) — read server-authored count; null
+   * means broker state unavailable, 0 means known empty. */
+  readonly pendingOrderCount = computed<number | null>(
+    () => this.currentRisk().pending_order_count,
+  );
 
+  /** Server-authored posture (lower-cased to match the existing
+   * Posture union used by the template).  When the server says
+   * UNKNOWN, an "[unknown]" badge renders alongside the row. */
   readonly posture = computed<Posture>(() => {
-    const b = this.broker();
-    if (!b) return 'unknown';
-    const rows = this.positions();
-    if (rows.length === 0) return 'flat';
-    const sides = new Set(rows.map((r) => r.side));
-    if (sides.size > 1) return 'mixed';
-    return rows[0].side;
+    switch (this.currentRisk().posture) {
+      case 'FLAT':
+        return 'flat';
+      case 'LONG':
+        return 'long';
+      case 'SHORT':
+        return 'short';
+      case 'MIXED':
+        return 'mixed';
+      default:
+        return 'unknown';
+    }
   });
 
   readonly postureLabel = computed<string>(() => {
@@ -87,9 +104,28 @@ export class CurrentRiskCardComponent {
       case 'mixed':
         return `Mixed · ${pluralize(n, 'position')}`;
       default:
-        return 'Position posture unknown';
+        return 'Posture: —';
     }
   });
+
+  readonly postureUnknown = computed<boolean>(() => this.posture() === 'unknown');
+
+  // ─ Slice 5 verdict-glow + server-driven collapse ────────────────
+  readonly verdictAttr = computed<'ready' | 'degraded' | 'unknown'>(() => {
+    switch (this.currentRisk().verdict) {
+      case 'READY':
+        return 'ready';
+      case 'ATTENTION':
+        return 'degraded';
+      case 'UNKNOWN':
+      default:
+        return 'unknown';
+    }
+  });
+
+  readonly collapsedAttr = computed<'true' | 'false'>(() =>
+    this.currentRisk().verdict === 'READY' ? 'true' : 'false',
+  );
 
   readonly ordersGate = computed<OrdersGate>(() => {
     const r = this.readiness();

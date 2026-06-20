@@ -3,18 +3,25 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActionPlan } from '../../../../api/action-plan.types';
+import type { OperatorSurfaceActionPlan } from '../../../../api/live-instances.types';
 import { ActionPlanCardComponent } from './action-plan-card.component';
 
-const NOT_ACTIVE_LABEL =
-  'Declared action plan — not active until engine consumption (Slice 4)';
+const READY_PROJECTION: OperatorSurfaceActionPlan = {
+  consumption: 'DECLARATIVE_ONLY',
+  anomaly_verdict: 'READY',
+};
 
-function render(actionPlan: ActionPlan | null): HTMLElement {
+function render(
+  actionPlan: ActionPlan | null,
+  projection: OperatorSurfaceActionPlan = READY_PROJECTION,
+): HTMLElement {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [provideZonelessChangeDetection()],
   });
   const fixture = TestBed.createComponent(ActionPlanCardComponent);
   fixture.componentRef.setInput('actionPlan', actionPlan);
+  fixture.componentRef.setInput('projection', projection);
   fixture.detectChanges();
   return fixture.nativeElement as HTMLElement;
 }
@@ -22,12 +29,15 @@ function render(actionPlan: ActionPlan | null): HTMLElement {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('ActionPlanCardComponent', () => {
-  it('renders the explicit "not active until Slice 4" label for the empty plan', () => {
+  // PRD #607 / Slice 5 (#612) — the previously hardcoded
+  // "not active until Slice 4" string is removed; the one-line
+  // summary's consumption phrasing replaces it.
+  it('renders the consumption-driven one-line summary for an empty plan', () => {
     const el = render({ on_enter: [], on_exit: [] });
 
     const card = el.querySelector<HTMLElement>('[data-testid="action-plan-card"]');
     expect(card).not.toBeNull();
-    expect(card?.textContent ?? '').toContain(NOT_ACTIVE_LABEL);
+    expect(card?.textContent ?? '').toContain('declarative only');
   });
 
   it('renders nothing when the action plan is absent (legacy / pre-Slice-1A ledgers)', () => {
@@ -207,5 +217,77 @@ describe('ActionPlanCardComponent', () => {
 
     const entry = el.querySelector<HTMLElement>('[data-testid="action-plan-entry-spy_late"]');
     expect(entry?.textContent ?? '').toContain('2026-06-25');
+  });
+
+  // PRD #607 / Slice 5 (#612) — consumption-driven phrasing + collapse.
+
+  it.each([
+    ['ACTIVE', 'engine-active'],
+    ['DECLARATIVE_ONLY', 'declarative only'],
+    ['UNKNOWN', 'activation unknown'],
+  ] as const)(
+    'phrases the one-line summary using consumption=%s',
+    (consumption, phrase) => {
+      const el = render({ on_enter: [], on_exit: [] }, {
+        consumption,
+        anomaly_verdict: 'READY',
+      });
+      expect(
+        el
+          .querySelector('[data-testid="action-plan-one-line-summary"]')
+          ?.textContent?.toLowerCase(),
+      ).toContain(phrase);
+    },
+  );
+
+  it('counts entry and exit legs in the one-line summary', () => {
+    const el = render({
+      on_enter: [
+        {
+          leg_id: 'spy_long',
+          instrument: { kind: 'stock', underlying: 'SPY' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+    });
+    expect(
+      el
+        .querySelector('[data-testid="action-plan-one-line-summary"]')
+        ?.textContent ?? '',
+    ).toContain('1 enter · 1 exit');
+  });
+
+  it('collapses on READY verdict and expands on attention verdicts', () => {
+    const ready = render({ on_enter: [], on_exit: [] }, {
+      consumption: 'DECLARATIVE_ONLY',
+      anomaly_verdict: 'READY',
+    });
+    expect(ready.getAttribute('data-collapsed')).toBe('true');
+
+    const attention = render({ on_enter: [], on_exit: [] }, {
+      consumption: 'UNKNOWN',
+      anomaly_verdict: 'UNKNOWN',
+    });
+    expect(attention.getAttribute('data-collapsed')).toBe('false');
+  });
+
+  it('renders no toggle on attention verdicts (Option A)', () => {
+    const el = render({ on_enter: [], on_exit: [] }, {
+      consumption: 'UNKNOWN',
+      anomaly_verdict: 'ATTENTION',
+    });
+    expect(el.querySelector('[data-testid="action-plan-toggle"]')).toBeNull();
+  });
+
+  it('renders a toggle on READY cards that the operator can use to manually expand', () => {
+    const el = render({ on_enter: [], on_exit: [] }, {
+      consumption: 'DECLARATIVE_ONLY',
+      anomaly_verdict: 'READY',
+    });
+    const toggle = el.querySelector<HTMLButtonElement>('[data-testid="action-plan-toggle"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
   });
 });

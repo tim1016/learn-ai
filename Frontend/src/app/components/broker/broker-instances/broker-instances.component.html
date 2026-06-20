@@ -152,6 +152,7 @@
 
         <app-action-plan-card
           [actionPlan]="s.action_plan"
+          [projection]="s.operator_surface.action_plan"
           [parentRunId]="s.live_binding?.run_id ?? s.evidence_binding?.run_id ?? null"
         />
 
@@ -159,6 +160,7 @@
           [broker]="s.broker"
           [readiness]="s.readiness"
           [sizing]="s.sizing"
+          [currentRisk]="s.operator_surface.current_risk"
         />
 
         <app-last-session-card

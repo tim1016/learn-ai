@@ -16,9 +16,25 @@
         [attr.data-posture]="posture()"
         data-testid="posture-chip"
       >{{ postureLabel() }}</span>
+      @if (postureUnknown()) {
+        <span
+          class="badge"
+          data-testid="posture-unknown-badge"
+          title="Broker state unavailable — posture cannot be derived"
+        >
+          [unknown]
+        </span>
+      }
       <span class="sep" aria-hidden="true">·</span>
       <span class="summary-line">
-        <span data-testid="pending-count">{{ pendingOrderCount() }}</span> pending
+        Pending:
+        <span data-testid="pending-count">
+          @if (pendingOrderCount() === null) {
+            —
+          } @else {
+            {{ pendingOrderCount() }}
+          }
+        </span>
         ·
         <span
           class="cap-inline"

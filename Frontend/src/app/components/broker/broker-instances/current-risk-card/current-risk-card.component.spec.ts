@@ -4,9 +4,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type {
   InstanceBrokerView,
   InstanceSizing,
+  OperatorSurfaceCurrentRisk,
   ReadinessVector,
 } from '../../../../api/live-instances.types';
 import { CurrentRiskCardComponent } from './current-risk-card.component';
+
+const DEFAULT_RISK: OperatorSurfaceCurrentRisk = {
+  posture: 'FLAT',
+  pending_order_count: 0,
+  verdict: 'READY',
+  unrealized_pnl: null,
+};
 
 function makeBroker(
   overrides: Partial<InstanceBrokerView> = {},
@@ -47,6 +55,7 @@ function render(opts: {
   broker: InstanceBrokerView | null;
   readiness: ReadinessVector | null;
   sizing: InstanceSizing | null;
+  currentRisk?: OperatorSurfaceCurrentRisk;
 }): HTMLElement {
   TestBed.configureTestingModule({
     providers: [provideZonelessChangeDetection()],
@@ -55,6 +64,7 @@ function render(opts: {
   fixture.componentRef.setInput('broker', opts.broker);
   fixture.componentRef.setInput('readiness', opts.readiness);
   fixture.componentRef.setInput('sizing', opts.sizing);
+  fixture.componentRef.setInput('currentRisk', opts.currentRisk ?? DEFAULT_RISK);
   fixture.detectChanges();
   return fixture.nativeElement as HTMLElement;
 }
@@ -205,5 +215,69 @@ describe('CurrentRiskCardComponent', () => {
     });
 
     expect(el.textContent ?? '').toContain('Pre-policy run (legacy ledger)');
+  });
+
+  // PRD #607 / Slice 5 (#612) — server-authored posture/pending/verdict.
+
+  it.each([
+    ['FLAT', 'flat'],
+    ['LONG', 'long'],
+    ['SHORT', 'short'],
+    ['MIXED', 'mixed'],
+    ['UNKNOWN', 'unknown'],
+  ] as const)('renders posture chip from server-authored %s', (server, ui) => {
+    const el = render({
+      broker: makeBroker(),
+      readiness: makeReadiness(),
+      sizing: makeSizing(),
+      currentRisk: { ...DEFAULT_RISK, posture: server },
+    });
+    expect(
+      el.querySelector('[data-testid="posture-chip"]')?.getAttribute('data-posture'),
+    ).toBe(ui);
+  });
+
+  it('renders [unknown] badge with operator-language tooltip when posture is UNKNOWN', () => {
+    const el = render({
+      broker: makeBroker(),
+      readiness: makeReadiness(),
+      sizing: makeSizing(),
+      currentRisk: { ...DEFAULT_RISK, posture: 'UNKNOWN' },
+    });
+    const badge = el.querySelector('[data-testid="posture-unknown-badge"]');
+    expect(badge).not.toBeNull();
+    expect(badge?.getAttribute('title')?.toLowerCase()).toContain('broker state');
+  });
+
+  it('renders — for null pending and the actual count when 0 or higher', () => {
+    const nullEl = render({
+      broker: makeBroker(),
+      readiness: makeReadiness(),
+      sizing: makeSizing(),
+      currentRisk: { ...DEFAULT_RISK, pending_order_count: null },
+    });
+    expect(
+      nullEl.querySelector('[data-testid="pending-count"]')?.textContent?.trim(),
+    ).toBe('—');
+
+    const zeroEl = render({
+      broker: makeBroker(),
+      readiness: makeReadiness(),
+      sizing: makeSizing(),
+      currentRisk: { ...DEFAULT_RISK, pending_order_count: 0 },
+    });
+    expect(
+      zeroEl.querySelector('[data-testid="pending-count"]')?.textContent?.trim(),
+    ).toBe('0');
+
+    const fiveEl = render({
+      broker: makeBroker(),
+      readiness: makeReadiness(),
+      sizing: makeSizing(),
+      currentRisk: { ...DEFAULT_RISK, pending_order_count: 5 },
+    });
+    expect(
+      fiveEl.querySelector('[data-testid="pending-count"]')?.textContent?.trim(),
+    ).toBe('5');
   });
 });
