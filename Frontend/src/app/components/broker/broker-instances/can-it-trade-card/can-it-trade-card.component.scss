@@ -50,6 +50,8 @@
   }
 }
 
+@use '../../../../styles/card-verdict-border' as verdict;
+
 // ── Verdict-bordered card (non-READY) ──────────────────────
 .card {
   background: var(--bg-surface);
@@ -63,6 +65,15 @@
   display: flex;
   flex-direction: column;
 
+  // PRD #607 / Slice 2 (#609) — verdict glow keyed on the host's
+  // ``[data-verdict]`` attribute (set in component TS from the
+  // verdict computed signal).  Replaces the legacy ``.warn`` /
+  // ``.bad`` class-based selectors used before the shared mixin.
+  @include verdict.card-verdict-border;
+
+  // Legacy class hooks kept for the existing component-spec
+  // assertions and any consumer still toggling tone classes; both
+  // styling paths use the same verdict tokens so they cannot drift.
   &.warn {
     border-color: var(--verdict-degraded);
     box-shadow:

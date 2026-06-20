@@ -10,7 +10,8 @@
     "test:watch": "ng test --watch",
     "test:coverage": "ng test --coverage",
     "lint": "eslint src/ --max-warnings 0",
-    "lint:fix": "eslint src/ --fix"
+    "lint:fix": "eslint src/ --fix",
+    "e2e": "playwright test"
   },
   "private": true,
   "dependencies": {
@@ -57,6 +58,7 @@
     "@angular/platform-browser-dynamic": "^21.0.0",
     "@eslint/js": "^10.0.1",
     "angular-eslint": "^21.3.1",
+    "@playwright/test": "^1.49.1",
     "eslint": "^10.2.0",
     "eslint-plugin-unused-imports": "^4.4.1",
     "jsdom": "^26.1.0",

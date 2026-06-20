@@ -182,4 +182,41 @@ describe('CanItTradeCardComponent', () => {
     const card = el.querySelector<HTMLElement>('[data-testid="can-it-trade-card"]');
     expect(card?.classList.contains('warn')).toBe(true);
   });
+
+  // PRD #607 / Slice 2 (#609) — host carries [data-verdict] so the
+  // verdict-glow mixin can key off the attribute and the Playwright
+  // E2E assertion can select on it (instead of inspecting a
+  // mixin-derived class name).
+  it.each([
+    ['READY', 'ready'],
+    ['DEGRADED', 'degraded'],
+    ['BLOCKED', 'blocked'],
+    ['UNKNOWN', 'unknown'],
+  ] as const)(
+    'sets [data-verdict="%s"] on the host for verdict %s',
+    (verdict, expected) => {
+      const el = render({
+        readiness: makeReadiness(verdict, [makeGate({ status: 'pass' })]),
+      });
+      // The component is the host of the test rendering — the
+      // attribute lives on the rendered element root.
+      expect(el.getAttribute('data-verdict')).toBe(expected);
+    },
+  );
+
+  // Option A semantics: an attention-verdict card has NO collapse
+  // toggle in the DOM.  The Can-It-Trade card never renders one;
+  // pin that with a regression assertion so a future refactor
+  // doesn't silently introduce a collapse affordance.
+  it('does not render a collapse/expand toggle button on attention verdicts', () => {
+    for (const verdict of ['DEGRADED', 'BLOCKED', 'UNKNOWN'] as const) {
+      const el = render({
+        readiness: makeReadiness(verdict, [makeGate({ status: 'fail' })]),
+      });
+      const toggle = el.querySelector<HTMLButtonElement>(
+        'button[aria-expanded], button[aria-label*="ollapse" i], button[aria-label*="xpand" i]',
+      );
+      expect(toggle, `verdict=${verdict}`).toBeNull();
+    }
+  });
 });
