@@ -666,6 +666,14 @@ class ReadinessVector(BaseModel):
     summary: str
     gates: list[ReadinessGate] = Field(default_factory=list)
     live_readiness_available: bool | None = None
+    # PRD #607 / Slice 1 (#608) — structured cap counters emitted by the
+    # engine readiness sidecar so the cockpit's
+    # ``operator_surface.daily_order_cap`` projection consumes integers
+    # rather than parsing the gate prose ``"3 / 50 orders used"``.  Both
+    # ``None`` on start_readiness (backend-derived) and when no cap is
+    # configured.
+    orders_used: int | None = None
+    orders_cap: int | None = None
 
 
 class DecisionColumnDescriptor(BaseModel):
@@ -695,6 +703,11 @@ class InstanceBrokerView(BaseModel):
     bot_order_namespace: str
     owned_positions: dict[str, int] = Field(default_factory=dict)
     pending_order_count: int = 0
+    # PRD #607 / Slice 4 (#611) contract dep on #608: broker-side
+    # unrealized PnL for the operator-surface risk-chip. ``None`` when
+    # the broker connector cannot resolve a value; the cockpit omits the
+    # slot rather than rendering ``0.00`` (#611 §"Pinned risk-chip").
+    unrealized_pnl: float | None = None
 
 
 class InstanceStartDefaults(BaseModel):
@@ -851,6 +864,197 @@ class RedeployLineage(BaseModel):
     redeployed_at_ms: int | None = None
 
 
+HostProcessState = Literal["RUNNING", "STOPPED", "CRASHED", "STARTING", "UNKNOWN"]
+PriorRunClassification = Literal["CLEAN", "HALT_TRIGGERED", "EXITED_WITH_ERROR", "UNKNOWN"]
+BrokerSafetyVerdictEnum = Literal["PAPER", "LIVE", "DEGRADED", "DISCONNECTED", "UNKNOWN"]
+OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
+RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
+ActionPlanConsumption = Literal["ACTIVE", "DECLARATIVE_ONLY", "UNKNOWN"]
+
+
+class OperatorSurfaceCurrentRisk(BaseModel):
+    """Server-authored risk posture for the Current Risk card and the
+    Configuration card's pinned risk-chip (#608 + #611).
+
+    Replaces the Angular derivation in
+    ``current-risk-card.component.ts`` that read ``owned_positions``
+    directly.
+    """
+
+    posture: RiskPosture
+    # ``None`` when broker state is unavailable; ``0`` only when broker
+    # state is known and empty.  The Frontend renders ``—`` for ``None``
+    # and ``0`` for ``0`` (#612 §"Rendering rules").
+    pending_order_count: int | None
+    verdict: OperatorVerdict
+    # PRD #611 contract dep on #608.  ``None`` when the broker connector
+    # cannot supply a value.
+    unrealized_pnl: float | None = None
+
+
+class OperatorSurfaceDailyOrderCap(BaseModel):
+    """Structured daily-order-cap usage for the Configuration card body
+    (#608 + #611 + Slice 1 sidecar contract).
+
+    The engine readiness sidecar emits ``orders_used`` / ``orders_cap``
+    as structured fields alongside the existing gate ``detail`` prose;
+    the projection consumes the structured values.  Either field is
+    ``None`` when not configured / unavailable.
+    """
+
+    used: int | None
+    limit: int | None
+
+
+class OperatorSurfaceActionPlan(BaseModel):
+    """Server-authored action-plan consumption + anomaly verdict (#608).
+
+    Today ``consumption`` is ``DECLARATIVE_ONLY`` and ``anomaly_verdict``
+    is ``READY`` whenever an action plan is present (no detector exists
+    yet); PRD #593 Slice 4 will flip ``consumption`` to ``ACTIVE`` and
+    drive ``anomaly_verdict`` from real anomaly detection, with no
+    Frontend change required.  When the run's stored ``action_plan`` is
+    ``None``, both fields are ``UNKNOWN`` — a missing plan is evidence
+    of nothing, not evidence of health.
+    """
+
+    consumption: ActionPlanConsumption
+    anomaly_verdict: OperatorVerdict
+
+
+class OperatorSurfaceConfiguration(BaseModel):
+    """Server-authored configuration completeness verdict (#608).
+
+    ``verdict`` is ``ATTENTION`` when any of the named configuration
+    rules fail, ``READY`` when none fail, ``UNKNOWN`` when the inputs
+    needed to evaluate any rule are themselves missing.
+    ``reason_codes`` lists the failing rules in a stable
+    ``ALL_CAPS_SNAKE`` vocabulary.
+    """
+
+    verdict: OperatorVerdict
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+ActionEffect = Literal["DURABLE_ONLY", "LIVE_ACTUATION"]
+
+
+class ActionCapability(BaseModel):
+    """Per-action capability emitted by the shared capability evaluator
+    (#608).
+
+    Used both by the status projection (``operator_surface.actions.*``)
+    and by mutation endpoints which re-evaluate eligibility server-side
+    before executing — a stale snapshot must not be exploitable, so the
+    same function is the authority on both sides.
+
+    The ``effect`` discriminator distinguishes durable-intent writes
+    (always succeed, gate the next host start) from live actuation
+    (requires a bound runner).  Resume / Pause are durable-only when no
+    live binding is bound; they are NEVER disabled by the server.
+    """
+
+    enabled: bool
+    effect: ActionEffect
+    # Stable ALL_CAPS_SNAKE token.  ``None`` when ``enabled is True``.
+    disabled_reason_code: str | None = None
+
+
+class OperatorSurfaceActions(BaseModel):
+    """The four banner / Diagnostics actions the cockpit exposes (#608).
+
+    Frontend renders each keycap's enabled state and tooltip text from
+    these capabilities (Slice 3 banner keycaps + Slice 6 POISON RUN).
+    The Frontend reason-code → operator-language lookup is the only
+    place that maps ``disabled_reason_code`` to user-visible copy.
+    """
+
+    resume: ActionCapability
+    pause: ActionCapability
+    flatten_and_pause: ActionCapability
+    mark_poisoned: ActionCapability
+
+
+class OperatorSurfaceBroker(BaseModel):
+    """Server-authored broker safety pill for the banner (#608, #610).
+
+    The cockpit's banner safety pill consumes this enum directly; the
+    Frontend ``isPaperAccount()`` helper is no longer read on the pill
+    path (Slice 3).  Distinct from the ADR-0011
+    ``BrokerSafetyVerdict.final_verdict`` (paper-only/unsafe/unknown)
+    which is about *configuration* safety — this enum is about the
+    operator's view of *operational connection state*.
+    """
+
+    safety_verdict: BrokerSafetyVerdictEnum
+
+
+class OperatorSurfacePriorRun(BaseModel):
+    """Server-authored classification of the instance's last terminated
+    run (#608).
+
+    Replaces the Angular logic in ``broker-instances.component.ts`` and
+    ``sticky-control-bar.component.ts`` that interprets ``exit_code``,
+    ``exit_reason``, and ``halt_trigger`` to drive the LAST RUN banner
+    pill.  Mapping rules are documented in #608 and pinned by the unit
+    tests under ``tests/services/test_operator_surface.py``.
+    """
+
+    classification: PriorRunClassification
+
+
+class OperatorSurfaceHostProcess(BaseModel):
+    """Server-authored host-process surface (ADR-0003 / ADR-0007).
+
+    The host runner is operator-owned: the cockpit writes durable intent
+    via the desired-state knob but it does NOT expose Start/Stop or any
+    programmatic process-control affordance.  This block exists so the
+    cockpit can render an honest "host process is idle" notice and (only
+    when the server can safely author one) a copyable command, without
+    Angular ever constructing the command itself.
+    """
+
+    state: HostProcessState
+    # Operator-language line authored server-side when ``state != RUNNING``.
+    # ``None`` when no notice is appropriate (typically when running).
+    notice: str | None = None
+    # Exact host command the operator can paste, ONLY when the server can
+    # author it safely. Angular renders verbatim and MUST NOT construct,
+    # interpolate, or transform this string. First iteration keeps this
+    # ``None`` everywhere; a future revision teaches the server to author
+    # safe commands when context allows.
+    copyable_command: str | None = None
+
+
+class OperatorSurface(BaseModel):
+    """Operator-facing projection of run state for the Terminal Cockpit
+    (PRD #607 / Slice 1 / #608).
+
+    Single source of truth for operational verdicts, risk posture,
+    structured daily-cap usage, action-plan consumption, broker safety
+    verdict, prior-run classification, host-process state, and per-action
+    capability + reason codes.  Frontend renders these fields; it does
+    not derive verdicts from raw fields.
+
+    The model accumulates per-section blocks across the Slice 1 cycles.
+    Subsequent cycles add the remaining blocks one at a time with the
+    same vertical-slice TDD discipline that the rest of this projection
+    follows.
+    """
+
+    # Bump on breaking shape changes; additive fields (new capability,
+    # new reason code) do NOT bump the version.
+    schema_version: int = 1
+    host_process: OperatorSurfaceHostProcess
+    prior_run: OperatorSurfacePriorRun
+    broker: OperatorSurfaceBroker
+    configuration: OperatorSurfaceConfiguration
+    current_risk: OperatorSurfaceCurrentRisk
+    daily_order_cap: OperatorSurfaceDailyOrderCap
+    action_plan: OperatorSurfaceActionPlan
+    actions: OperatorSurfaceActions
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -912,6 +1116,10 @@ class LiveInstanceStatus(BaseModel):
     # unknown extras by default so a future daemon-side enrichment
     # passes through without breaking the cockpit.
     lineage: RedeployLineage | None = None
+    # PRD #607 / Slice 1 / #608 — operator-facing projection. Always
+    # present (never ``None``); per-section blocks are populated by the
+    # cumulative Slice 1 cycles.
+    operator_surface: OperatorSurface
     fetched_at_ms: int
 
 

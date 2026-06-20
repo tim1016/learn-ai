@@ -6,6 +6,7 @@ import type {
   InstanceProcessView,
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
+import { DEFAULT_OPERATOR_SURFACE } from '../../../../../testing/operator-surface-fixtures';
 import { StickyControlBarComponent } from './sticky-control-bar.component';
 
 function makeStatus(
@@ -29,6 +30,7 @@ function makeStatus(
     action_plan: null,
     instrument_surface: null,
     lineage: null,
+    operator_surface: DEFAULT_OPERATOR_SURFACE,
     fetched_at_ms: 0,
     ...overrides,
   };

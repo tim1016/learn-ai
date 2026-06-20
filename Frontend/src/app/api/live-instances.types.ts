@@ -150,7 +150,110 @@ export interface LiveInstanceStatus {
    * sourced from the ledger's ``lineage`` block. ``null`` when nothing
    * is deployed or the ledger pre-dates the field. */
   lineage: ActionPlanLineage | null;
+  /** PRD #607 / Slice 1 (#608) — server-authored operator-facing
+   * projection.  Always present (never null); per-block fields may be
+   * null per the documented semantics.  Frontend renders these fields;
+   * it does NOT derive verdicts from raw fields. */
+  operator_surface: OperatorSurface;
   fetched_at_ms: number;
+}
+
+// PRD #607 / Slice 1 (#608) — operator surface projection types.
+
+export type OperatorVerdict = 'READY' | 'ATTENTION' | 'UNKNOWN';
+
+export type HostProcessState =
+  | 'RUNNING'
+  | 'STOPPED'
+  | 'CRASHED'
+  | 'STARTING'
+  | 'UNKNOWN';
+
+export type PriorRunClassification =
+  | 'CLEAN'
+  | 'HALT_TRIGGERED'
+  | 'EXITED_WITH_ERROR'
+  | 'UNKNOWN';
+
+export type BrokerSafetyVerdict =
+  | 'PAPER'
+  | 'LIVE'
+  | 'DEGRADED'
+  | 'DISCONNECTED'
+  | 'UNKNOWN';
+
+export type RiskPosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
+
+export type ActionPlanConsumption = 'ACTIVE' | 'DECLARATIVE_ONLY' | 'UNKNOWN';
+
+export type ActionEffect = 'DURABLE_ONLY' | 'LIVE_ACTUATION';
+
+export interface ActionCapability {
+  enabled: boolean;
+  effect: ActionEffect;
+  /** Stable ALL_CAPS_SNAKE token.  ``null`` when ``enabled`` is true. */
+  disabled_reason_code: string | null;
+}
+
+export interface OperatorSurfaceHostProcess {
+  state: HostProcessState;
+  /** Operator-language line authored server-side when state != RUNNING.  ``null`` when running. */
+  notice: string | null;
+  /** Exact host command the operator can paste, ONLY when the server can author it safely.
+   *  Angular renders verbatim and MUST NOT construct, interpolate, or transform this string. */
+  copyable_command: string | null;
+}
+
+export interface OperatorSurfacePriorRun {
+  classification: PriorRunClassification;
+}
+
+export interface OperatorSurfaceBroker {
+  safety_verdict: BrokerSafetyVerdict;
+}
+
+export interface OperatorSurfaceCurrentRisk {
+  posture: RiskPosture;
+  /** ``null`` when broker state is unavailable; ``0`` only when known empty. */
+  pending_order_count: number | null;
+  verdict: OperatorVerdict;
+  /** ``null`` when the broker connector cannot supply a value. */
+  unrealized_pnl: number | null;
+}
+
+export interface OperatorSurfaceDailyOrderCap {
+  used: number | null;
+  limit: number | null;
+}
+
+export interface OperatorSurfaceActionPlan {
+  consumption: ActionPlanConsumption;
+  anomaly_verdict: OperatorVerdict;
+}
+
+export interface OperatorSurfaceConfiguration {
+  verdict: OperatorVerdict;
+  reason_codes: string[];
+}
+
+export interface OperatorSurfaceActions {
+  resume: ActionCapability;
+  pause: ActionCapability;
+  flatten_and_pause: ActionCapability;
+  mark_poisoned: ActionCapability;
+}
+
+export interface OperatorSurface {
+  /** Bump on breaking shape changes; additive fields do NOT bump the version. */
+  schema_version: number;
+  host_process: OperatorSurfaceHostProcess;
+  prior_run: OperatorSurfacePriorRun;
+  broker: OperatorSurfaceBroker;
+  configuration: OperatorSurfaceConfiguration;
+  current_risk: OperatorSurfaceCurrentRisk;
+  daily_order_cap: OperatorSurfaceDailyOrderCap;
+  action_plan: OperatorSurfaceActionPlan;
+  actions: OperatorSurfaceActions;
 }
 
 export interface ActionPlanLineage {

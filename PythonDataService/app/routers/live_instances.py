@@ -86,6 +86,8 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
+from app.services.operator_capability import evaluate_action
+from app.services.operator_surface import compute_operator_surface
 
 # The instance command channel is reserved for one-shot operations; PAUSE/
 # RESUME/STOP are the durable intent knob (POST .../desired-state), not commands.
@@ -1177,6 +1179,18 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
     desired = _resolve_desired_state(root, sid)
     latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
+    last_exit = _instance_last_exit(runs)
+    readiness = _resolve_readiness(root, live_binding, runs, desired.state)
+    _raw_mode = getattr(settings, "mode", None)
+    configured_mode = _raw_mode if _raw_mode in ("paper", "live") else None
+    broker_connection_state = _broker_connection_state_from_readiness(readiness)
+    broker_view = _instance_broker(root, sid)
+    start_defaults = _start_defaults(
+        root, live_binding, runs, readonly_default=_resolve_readonly_default(settings)
+    )
+    sizing = _sizing(root, live_binding, runs, sid)
+    action_plan = _resolve_action_plan(root, live_binding, runs)
+    poisoned = bool(last_exit and last_exit.halt_trigger is not None)
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1184,22 +1198,58 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         live_binding=live_binding,
         evidence_binding=evidence,
         desired_state=desired,
-        readiness=_resolve_readiness(root, live_binding, runs, desired.state),
+        readiness=readiness,
         latest_decision=latest_decision,
         decision_columns=decision_columns,
-        broker=_instance_broker(root, sid),
-        start_defaults=_start_defaults(
-            root, live_binding, runs, readonly_default=_resolve_readonly_default(settings)
-        ),
+        broker=broker_view,
+        start_defaults=start_defaults,
         provenance=_provenance(root, live_binding, runs),
-        sizing=_sizing(root, live_binding, runs, sid),
-        last_exit=_instance_last_exit(runs),
+        sizing=sizing,
+        last_exit=last_exit,
         symbol=_resolve_symbol(root, live_binding, runs),
-        action_plan=_resolve_action_plan(root, live_binding, runs),
+        action_plan=action_plan,
         instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
         lineage=_resolve_lineage(root, live_binding, runs),
+        operator_surface=compute_operator_surface(
+            process=process,
+            last_exit=last_exit,
+            configured_mode=configured_mode,
+            broker_connection_state=broker_connection_state,
+            broker=broker_view,
+            readiness=readiness,
+            action_plan=action_plan,
+            start_defaults=start_defaults,
+            sizing=sizing,
+            instance_broker_self_consistent=None,
+            live_binding=live_binding,
+            poisoned=poisoned,
+        ),
         fetched_at_ms=_now_ms(),
     )
+
+
+def _broker_connection_state_from_readiness(
+    readiness: ReadinessVector | None,
+) -> Literal["connected", "disconnected", "degraded", "unknown"] | None:
+    """Collapse the live readiness ``broker_connection`` gate into the
+    operator-surface broker-connection-state enum.
+
+    The live readiness vector today only emits pass/fail on
+    ``broker_connection`` (see ``app/engine/live/readiness.py``).  When a
+    richer ``BrokerConnectionState`` channel lands on the wire, this
+    helper grows to read it; ``DEGRADED`` is unreachable from the
+    current pass/fail signal, which is the honest answer.
+    """
+    if readiness is None:
+        return None
+    for gate in readiness.gates:
+        if gate.name == "broker_connection":
+            if gate.status == "pass":
+                return "connected"
+            if gate.status == "fail":
+                return "disconnected"
+            return "unknown"
+    return None
 
 
 def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_ms") -> list[dict]:
@@ -1620,6 +1670,33 @@ async def flatten_and_pause_instance(
             status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
         ) from exc
 
+    # PRD #607 / Slice 1 (#608) — shared-capability gate. The status
+    # endpoint's ``operator_surface.actions.flatten_and_pause`` is the
+    # cockpit's authority for when this keycap is enabled; the mutation
+    # endpoint re-evaluates the same function so a stale snapshot
+    # cannot drive this past the same rule.  Re-fetch the daemon state
+    # once now (and reuse it below) so the gate runs against fresh
+    # eligibility.
+    daemon_for_gate = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url, sid
+    )
+    process_for_gate, live_binding_for_gate = _interpret_daemon_process(daemon_for_gate, root)
+    broker_for_gate = _instance_broker(root, sid)
+    owned_positions_empty_for_gate = broker_for_gate is None or not any(
+        qty != 0 for qty in broker_for_gate.owned_positions.values()
+    )
+    gate = evaluate_action(
+        "flatten_and_pause",
+        process=process_for_gate,
+        live_binding=live_binding_for_gate,
+        owned_positions_empty=owned_positions_empty_for_gate,
+    )
+    if not gate.enabled:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"disabled_reason_code": gate.disabled_reason_code},
+        )
+
     payload = body or SetDesiredStateRequest(
         action=DesiredStateAction.pause,
         reason="flatten-and-pause",
@@ -1737,8 +1814,29 @@ async def issue_instance_command(
     settings = get_settings()
     root = Path(settings.live_runs_root)
     daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
+    process_view, live_binding = _interpret_daemon_process(daemon, root)
     run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+
+    # PRD #607 / Slice 1 (#608) — shared-capability gate for the cockpit
+    # actions that flow through this endpoint.  Currently only
+    # ``MARK_POISONED`` has a Slice-1 capability rule (NO_LIVE_BINDING /
+    # ALREADY_POISONED); other one-shots fall back to the legacy
+    # binding check below.
+    if verb is CommandVerb.MARK_POISONED:
+        last_exit = _instance_last_exit(_scan_runs_by_instance(root).get(sid, []))
+        poisoned = bool(last_exit and last_exit.halt_trigger is not None)
+        capability = evaluate_action(
+            "mark_poisoned",
+            process=process_view,
+            live_binding=live_binding,
+            poisoned=poisoned,
+        )
+        if not capability.enabled:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={"disabled_reason_code": capability.disabled_reason_code},
+            )
+
     if run_dir is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command"

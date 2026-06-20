@@ -8,6 +8,7 @@ import type {
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
+import { DEFAULT_OPERATOR_SURFACE } from '../../../../testing/operator-surface-fixtures';
 import { BrokerInstancesComponent } from './broker-instances.component';
 
 const FLEET: LiveInstanceSummary[] = [
@@ -73,6 +74,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
     action_plan: null,
     instrument_surface: null,
     lineage: null,
+    operator_surface: DEFAULT_OPERATOR_SURFACE,
     fetched_at_ms: 1,
     ...overrides,
   };

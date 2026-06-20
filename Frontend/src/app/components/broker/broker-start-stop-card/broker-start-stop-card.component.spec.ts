@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { DEFAULT_OPERATOR_SURFACE } from '../../../../testing/operator-surface-fixtures';
 import { BrokerStartStopCardComponent } from './broker-start-stop-card.component';
 
 function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceStatus {
@@ -31,6 +32,7 @@ function makeStatus(overrides: Partial<LiveInstanceStatus> = {}): LiveInstanceSt
     action_plan: null,
     instrument_surface: null,
     lineage: null,
+    operator_surface: DEFAULT_OPERATOR_SURFACE,
     fetched_at_ms: 1,
     ...overrides,
   };
