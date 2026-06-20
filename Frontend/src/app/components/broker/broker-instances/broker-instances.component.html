@@ -181,7 +181,10 @@
         @let chartRunId = s.live_binding?.run_id ?? s.evidence_binding?.run_id ?? null;
         <app-detective-section
           [activeTab]="detectiveTab()"
+          [markPoisonedCapability]="s.operator_surface.actions.mark_poisoned"
+          [requestInFlight]="busyVerb() !== null"
           (tabRequested)="onDetectiveTabRequested($event)"
+          (poisonRunRequested)="requestPoisonRun()"
         >
           <div slot="activity">
             <app-bot-trade-chart-card
@@ -199,8 +202,17 @@
               [runId]="chartRunId"
               (rawLogRequested)="runLogTarget && openRunLog(runLogTarget)"
             />
+            @if (s.sizing) {
+              <app-sizing-audit-table [rows]="s.sizing.per_trade_audit" />
+            }
           </div>
         </app-detective-section>
+
+        <app-typed-halt-confirm
+          [open]="typedHaltConfirmOpen()"
+          (confirmed)="confirmPoisonRun()"
+          (cancelled)="cancelPoisonRun()"
+        />
 
         <section class="card behavior-card" aria-labelledby="behavior-heading">
           <header class="card-header">

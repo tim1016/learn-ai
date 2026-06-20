@@ -40,6 +40,8 @@ import { ConfigurationCardComponent } from './configuration-card/configuration-c
 import { ActionPlanCardComponent } from './action-plan-card/action-plan-card.component';
 import { DetectiveSectionComponent, type DetectiveTab } from './detective-section/detective-section.component';
 import { PreTradeChecklistComponent } from './pre-trade-checklist/pre-trade-checklist.component';
+import { SizingAuditTableComponent } from './sizing-audit-table/sizing-audit-table.component';
+import { TypedHaltConfirmComponent } from './typed-halt-confirm/typed-halt-confirm.component';
 
 // Advanced command verb -> operation kind for the error map.
 const VERB_TO_KIND: Record<CommandVerb, OperationKind> = {
@@ -174,6 +176,8 @@ const READINESS_GATE_LABELS: Record<string, string> = {
     ActionPlanCardComponent,
     DetectiveSectionComponent,
     PreTradeChecklistComponent,
+    SizingAuditTableComponent,
+    TypedHaltConfirmComponent,
   ],
   templateUrl: './broker-instances.component.html',
   styleUrl: './broker-instances.component.scss',
@@ -318,6 +322,9 @@ export class BrokerInstancesComponent {
   readonly advancedOpen = signal<boolean>(false);
   readonly intentChoices = INTENT_CHOICES;
   readonly advancedActions = ADVANCED_ACTIONS;
+  /** PRD #607 / Slice 6 (#613) — typed-HALT confirm visibility for the
+   * MARK_POISONED gate.  Replaces the legacy ``window.prompt`` flow. */
+  readonly typedHaltConfirmOpen = signal<boolean>(false);
 
   // Run-log modal: the run currently shown, or null when closed.
   readonly runLog = signal<LogTarget | null>(null);
@@ -404,14 +411,31 @@ export class BrokerInstancesComponent {
       if (!ok) return;
     }
     if (verb === 'MARK_POISONED') {
-      const typed = window.prompt(
-        'Flagging this instance as POISONED is IRREVERSIBLE: the current run can ' +
-          'never resume on its run_id. Recovery requires a fresh deployment ' +
-          '(new run_id) after you reconcile the account.\n\nType HALT to confirm.',
-      );
-      if (typed !== 'HALT') return;
+      // PRD #607 / Slice 6 (#613) — typed-HALT friction gate moved
+      // from window.prompt to the styled <app-typed-halt-confirm>
+      // component (single MARK_POISONED entry point per #608/#613).
+      this.requestPoisonRun();
+      return;
     }
     await this.issueCommand(verb);
+  }
+
+  /** Open the typed-HALT confirm dialog for the POISON RUN keycap
+   * (detective-section, Slice 6) AND the legacy Advanced Actions
+   * MARK_POISONED button.  Both end at the same confirm flow + the
+   * existing ``issueCommand('MARK_POISONED')`` dispatch path so there
+   * is exactly one MARK_POISONED entry point end-to-end. */
+  requestPoisonRun(): void {
+    this.typedHaltConfirmOpen.set(true);
+  }
+
+  cancelPoisonRun(): void {
+    this.typedHaltConfirmOpen.set(false);
+  }
+
+  async confirmPoisonRun(): Promise<void> {
+    this.typedHaltConfirmOpen.set(false);
+    await this.issueCommand('MARK_POISONED');
   }
 
   /** Account-wide emergency flatten (§ 7.2 #6) — independent of a live binding,

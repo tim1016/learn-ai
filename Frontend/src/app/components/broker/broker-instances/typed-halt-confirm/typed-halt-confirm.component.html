@@ -1,0 +1,53 @@
+@if (open()) {
+  <button
+    type="button"
+    class="backdrop"
+    aria-label="Cancel"
+    data-testid="typed-halt-confirm-backdrop"
+    (click)="onCancel()"
+  ></button>
+  <aside
+    class="dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="typed-halt-confirm-heading"
+    data-testid="typed-halt-confirm-dialog"
+    (click)="$event.stopPropagation()"
+    (keydown)="$event.stopPropagation()"
+  >
+    <header>
+      <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>
+    </header>
+    <p class="message">{{ message() }}</p>
+    <label class="field">
+      <span class="label">Type <code>{{ requiredToken() }}</code> to confirm</span>
+      <input
+        #tokenInput
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        data-testid="typed-halt-confirm-input"
+        (input)="onTyped(($any($event.target)).value)"
+      />
+    </label>
+    <footer>
+      <button
+        type="button"
+        class="btn-ghost"
+        data-testid="typed-halt-confirm-cancel"
+        (click)="onCancel()"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="btn-danger"
+        data-testid="typed-halt-confirm-submit"
+        [disabled]="!canConfirm()"
+        (click)="onConfirm()"
+      >
+        Mark POISONED
+      </button>
+    </footer>
+  </aside>
+}
