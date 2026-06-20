@@ -40,6 +40,7 @@ import { ConfigurationCardComponent } from './configuration-card/configuration-c
 import { ActionPlanCardComponent } from './action-plan-card/action-plan-card.component';
 import { DetectiveSectionComponent, type DetectiveTab } from './detective-section/detective-section.component';
 import { PreTradeChecklistComponent } from './pre-trade-checklist/pre-trade-checklist.component';
+import { HostProcessNoticeComponent } from './host-process-notice/host-process-notice.component';
 import { SizingAuditTableComponent } from './sizing-audit-table/sizing-audit-table.component';
 import { TypedHaltConfirmComponent } from './typed-halt-confirm/typed-halt-confirm.component';
 
@@ -176,6 +177,7 @@ const READINESS_GATE_LABELS: Record<string, string> = {
     ActionPlanCardComponent,
     DetectiveSectionComponent,
     PreTradeChecklistComponent,
+    HostProcessNoticeComponent,
     SizingAuditTableComponent,
     TypedHaltConfirmComponent,
   ],

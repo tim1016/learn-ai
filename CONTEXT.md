@@ -551,9 +551,14 @@ the whole page's expand/collapse behavior.
   does not satisfy the rule — the toggle is an operator override of the
   server-authored default, never a replacement for it.
 - **Live anchors.** The current consumers of the rule are:
-  - `<app-configuration-card>` — expands when readiness has a *config-shaped
-    failing gate*
-  - `<app-current-risk-card>` — collapses when posture is `Flat AND no pending
-    orders`
+  - `<app-configuration-card>` — expands when
+    `operator_surface.configuration.verdict !== 'READY'` (PRD #607 Slice 4)
+  - `<app-current-risk-card>` — collapses on
+    `operator_surface.current_risk.verdict === 'READY'`; expands on
+    `ATTENTION` / `UNKNOWN` (PRD #607 Slice 5)
   - `<app-can-it-trade-card>` — collapses on `READY`; auto-expands on
     `DEGRADED` / `BLOCKED` / `UNKNOWN`
+  - `<app-action-plan-card>` — expands when
+    `operator_surface.action_plan.anomaly_verdict !== 'READY'`.  Today the
+    server returns `READY` whenever a plan is present; PRD #593 Slice 4
+    flips it without a Frontend change (PRD #607 Slice 5)

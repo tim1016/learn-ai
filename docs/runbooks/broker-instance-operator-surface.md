@@ -81,6 +81,86 @@ A `grill-with-docs` session resolved a set of operator-feedback proposals agains
 
 These changes are net-additive to the runbook's "five trader questions" framing — the framing is now six. The IA revision honours every contract in ADRs 0010 and 0011 unchanged; no ADR revisions came out of this grilling.
 
+## PRD #607 / Slices 1–8 — `operator_surface` projection (2026-06-20)
+
+The `/api/live-instances/{id}/status` response gained an `operator_surface`
+field that is the single source of truth for operational verdicts,
+risk posture, structured daily-cap usage, action-plan consumption,
+broker safety verdict, prior-run classification, host-process state,
+and per-action capability + reason codes.  The Frontend renders these
+fields; it does NOT derive verdicts from raw status fields.
+
+Shape (`schema_version: 1`):
+
+```ts
+operator_surface: {
+  schema_version: 1
+  host_process:     { state, notice, copyable_command }
+  prior_run:        { classification }
+  broker:           { safety_verdict }
+  configuration:    { verdict, reason_codes }
+  current_risk:     { posture, pending_order_count, verdict, unrealized_pnl }
+  daily_order_cap:  { used, limit }
+  action_plan:      { consumption, anomaly_verdict }
+  actions:          { resume, pause, flatten_and_pause, mark_poisoned }
+}
+```
+
+### Four authority layers
+
+1. **Server domain eligibility + verdicts** — Python authors every
+   verdict in `operator_surface`.  Mutation endpoints
+   (`/flatten-and-pause`, `/commands{MARK_POISONED}`) re-evaluate
+   eligibility via the same Python capability evaluator and reject
+   with `409 Conflict` + `disabled_reason_code` when denied.  A stale
+   status snapshot must not be exploitable.
+2. **Angular transient request state** — `busyVerb` /
+   `requestInFlight` lives only in Angular.  Keycaps disable when
+   `requestInFlight === true` regardless of server capability so a
+   double-click cannot fire two requests.  The reason-code vocabulary
+   deliberately excludes `BUSY_VERB_IN_FLIGHT`.
+3. **Angular presentation + operator-controlled expansion** —
+   verdict-glow class application, collapse animation, atmospheric
+   polish, and the single-boolean operator override on READY cards.
+   On attention verdicts the collapse toggle is absent from the DOM
+   (Option A).
+4. **Host-process lifecycle is outside the cockpit's authority**
+   (ADR-0003 + ADR-0007).  The host runner is operator-owned.  The
+   cockpit writes durable intent (Resume / Pause are always available
+   and gate the next host start) and actuates on bound runs (when
+   `actions.<verb>.effect === 'LIVE_ACTUATION'`).  It does NOT expose
+   Start / Stop / process-control affordances — the deleted
+   `<app-broker-start-stop-card>` is the cautionary tale.  When the
+   daemon is idle, the cockpit surfaces the server-authored
+   `host_process.notice` and (only if server-authored) a copyable
+   safe command.  REDEPLOY is a separate surface for creating a new
+   run configuration; it is NOT a restart path.
+
+### Reason-code vocabulary (initial set)
+
+`NO_LIVE_BINDING`, `SAFETY_BLOCK_HALT`, `RECONCILE_NOT_WIRED`,
+`NO_OWNED_POSITIONS`, `ALREADY_POISONED`.  Deliberately removed:
+`BUSY_VERB_IN_FLIGHT`, `ALREADY_RUNNING`, `NOT_RUNNING`.
+
+Adding a new code is a typed addition to the closed enum on both ends
++ an entry in
+`Frontend/src/app/components/broker/broker-instances/action-reason-codes.ts`.
+Unknown codes fall back to rendering the raw token so a gap is
+visible rather than silent.
+
+### Open shortcomings carried forward
+
+- **`order_mode` field** — not yet declarative.  Cockpit does not
+  surface it; a future ADR + multi-stack PRD adds it.
+- **`action_plan.anomaly_verdict`** — server returns `READY` while no
+  detector exists.  PRD #593 Slice 4 wires a real detector; the
+  cockpit consumes the same field, no Frontend change.
+- **`broker.safety_verdict === 'DEGRADED'`** — currently unreachable
+  through the live readiness gate (pass/fail only).  Surfaces when a
+  richer `BrokerConnectionState` channel lands on the wire; the
+  router-side mapping helper is the only thing that grows.
+- **`host_process.copyable_command`** — `null` in the first iteration.
+
 ## Quick visual audit before deploy
 
 After merging PRs 4 – 12, walk the page top-to-bottom on a paper bot:

@@ -1,0 +1,66 @@
+:host {
+  display: block;
+}
+
+.host-process-notice {
+  background: var(--bg-surface);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.875rem;
+  margin: 0.75rem 0;
+
+  .heading {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--warn);
+  }
+
+  .body {
+    margin: 0.5rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+  }
+
+  .desired-intent {
+    margin: 0.5rem 0 0;
+    color: var(--text-subtle);
+    font-size: 0.75rem;
+  }
+
+  .command-block {
+    display: flex;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin-top: 0.625rem;
+
+    pre {
+      flex: 1;
+      margin: 0;
+      padding: 0.5rem 0.625rem;
+      background: var(--bg-sunken);
+      border: 1px solid var(--border-light);
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      overflow-x: auto;
+
+      code {
+        font-family: inherit;
+      }
+    }
+
+    .copy {
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 0.35rem 0.625rem;
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      cursor: pointer;
+    }
+  }
+}

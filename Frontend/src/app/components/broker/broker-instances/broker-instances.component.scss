@@ -752,3 +752,60 @@
     color: var(--text-muted);
   }
 }
+
+// PRD #607 / Slice 8 (#615) — terminal-style ADR-0008 hazard line.
+.adr-hazard-line {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--warn);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+
+  .bar {
+    color: var(--warn);
+    font-weight: 700;
+  }
+
+  .key {
+    color: var(--warn);
+    letter-spacing: 0.08em;
+    font-weight: 700;
+  }
+
+  .meta {
+    font-family: var(--font-sans);
+    color: var(--text-subtle);
+  }
+}
+
+// PRD #607 / Slice 8 (#615) — atmospheric polish scoped to the cockpit
+// host.  Page-level screen-grain via a ::before pseudo-element and a
+// banner-accent radial; both intentionally low-contrast so they read
+// in peripheral vision without competing with the verdict-glow halo.
+:host {
+  position: relative;
+  background:
+    radial-gradient(circle at 50% 0%, var(--accent-soft), transparent 60%)
+      no-repeat,
+    var(--bg-canvas);
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.005;
+    background-image: repeating-linear-gradient(
+      0deg,
+      var(--text-primary) 0,
+      var(--text-primary) 1px,
+      transparent 1px,
+      transparent 2px
+    );
+    z-index: 0;
+  }
+}
