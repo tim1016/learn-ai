@@ -141,6 +141,11 @@
         <app-configuration-card
           [startDefaults]="s.start_defaults"
           [sizing]="s.sizing"
+          [provenance]="s.provenance"
+          [broker]="s.broker"
+          [configuration]="s.operator_surface.configuration"
+          [currentRisk]="s.operator_surface.current_risk"
+          [dailyOrderCap]="s.operator_surface.daily_order_cap"
           [canRedeploy]="canRedeploy(s)"
           [redeployQueryParams]="redeployQueryParams(s)"
         />
