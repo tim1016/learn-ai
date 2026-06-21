@@ -32,6 +32,7 @@ All timestamps are ``int64`` ms UTC at the artifact boundary.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -227,12 +228,10 @@ class DaemonLeaseWriter:
             await asyncio.wait_for(
                 self._task, timeout=max(self._cadence_ms * 2.0 / 1000.0, 0.5)
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
         finally:
             self._task = None
 
@@ -242,7 +241,7 @@ class DaemonLeaseWriter:
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=cadence_s)
                 self._wake.clear()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             self._write_now()
 

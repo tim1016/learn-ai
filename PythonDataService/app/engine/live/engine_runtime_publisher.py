@@ -24,6 +24,7 @@ writes).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -213,12 +214,10 @@ class EngineRuntimePublisher:
             await asyncio.wait_for(
                 self._task, timeout=max(self._steady_state_interval_s * 2.0, 0.5)
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
         finally:
             self._task = None
 
@@ -237,7 +236,7 @@ class EngineRuntimePublisher:
                     self._wake.wait(), timeout=self._steady_state_interval_s
                 )
                 self._wake.clear()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
         # One final flush on shutdown so any post-loop state change is
         # captured. Best-effort — failures are logged, not raised.

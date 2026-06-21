@@ -24,14 +24,11 @@ orphan classification NO_SIDECAR, etc.).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypeVar
 
 from pydantic import BaseModel
 
-_T = TypeVar("_T", bound=BaseModel)
 
-
-def read_pydantic_artifact(path: Path, model: type[_T]) -> _T | None:
+def read_pydantic_artifact[T: BaseModel](path: Path, model: type[T]) -> T | None:
     """Read a JSON artifact and parse it through ``model``.
 
     Returns ``None`` if any of the four failure modes above is hit;

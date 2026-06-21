@@ -43,7 +43,6 @@ from app.engine.live.engine_runtime import (
     read_engine_runtime_snapshot,
 )
 
-
 # A sidecar is considered "stale" past this threshold. The publisher
 # writes at 1Hz (steady-state cadence) plus immediate flushes on
 # safety transitions; 30s gives the publisher ~30 missed ticks before
