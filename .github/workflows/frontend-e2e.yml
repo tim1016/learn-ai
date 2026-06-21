@@ -65,8 +65,18 @@ jobs:
         run: npm run build
 
       - name: Serve build on :4200
+        # PRD #619-A — http-server ``-s`` is silent mode, not SPA
+        # fallback. Without ``--proxy`` any SPA route (e.g.
+        # ``/broker/instances/<id>``) returns 404 and the Playwright
+        # tests see an empty ``<body>``. ``--proxy http://localhost:4200?``
+        # redirects 404s back through the server (the ``?`` makes
+        # http-server serve ``index.html`` from the static root),
+        # which is the canonical SPA-fallback recipe for http-server.
+        # Same root cause as the ``cockpit-e2e has not passed since #609``
+        # finding in PRD #619 — A7 fixed the build, this fixes the
+        # SPA-routing serve step.
         run: |
-          npx http-server dist/frontend/browser -p 4200 -s &
+          npx http-server dist/frontend/browser -p 4200 -s --proxy "http://localhost:4200?" &
           npx wait-on http://localhost:4200 -t 60000
 
       - name: Run Playwright suite
