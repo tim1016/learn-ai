@@ -41,6 +41,7 @@ and belongs in a separate ADR.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -175,12 +176,10 @@ class ChildWatchdog:
             await asyncio.wait_for(
                 self._task, timeout=max(self._poll_cadence_ms * 2.0 / 1000.0, 0.5)
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
         finally:
             self._task = None
 
@@ -190,11 +189,11 @@ class ChildWatchdog:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=cadence_s)
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             try:
                 await self.poll_once()
-            except Exception:  # noqa: BLE001 — watchdog must outlive transient errors
+            except Exception:
                 logger.exception("child watchdog poll failed")
 
     async def poll_once(self) -> None:
