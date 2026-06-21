@@ -67,9 +67,7 @@ def _desired(state: str | None) -> DesiredStateView | None:
         ("nonsense", "UNREACHABLE", True),
     ],
 )
-def test_host_process_base_state_mapping(
-    daemon_state: str, expected: str, expects_notice: bool
-) -> None:
+def test_host_process_base_state_mapping(daemon_state: str, expected: str, expects_notice: bool) -> None:
     surface = _surface(process=InstanceProcessView(state=daemon_state))
     assert surface.host_process.state == expected
     if expects_notice:
@@ -138,21 +136,22 @@ def test_prior_run_classification_mapping(last_exit, expected) -> None:
 
 
 @pytest.mark.parametrize(
-    ("configured_mode", "expected_verdict"),
+    ("safety_verdict_final", "expected_verdict"),
     [
-        ("paper", "PAPER_ONLY"),
-        ("live", "UNSAFE"),
+        ("paper-only", "PAPER_ONLY"),
+        ("unsafe", "UNSAFE"),
+        ("unknown", "UNKNOWN"),
         (None, "UNKNOWN"),
     ],
 )
-def test_broker_safety_verdict_only_depends_on_configured_mode(
-    configured_mode, expected_verdict
-) -> None:
-    # The safety verdict is independent of connection state.  A paper
-    # account is PAPER_ONLY whether or not the broker is connected.
+def test_broker_safety_verdict_consumes_reactive_final_verdict(safety_verdict_final, expected_verdict) -> None:
+    # PRD #616: the safety verdict now consumes ADR-0011's reactive
+    # ``BrokerSafetyVerdict.final_verdict`` instead of ``configured_mode``,
+    # so a mid-session degradation flips the cockpit's SAFETY pill
+    # immediately.  Independent of connection state.
     for connection_state in ("connected", "disconnected", "unknown", None):
         surface = _surface(
-            configured_mode=configured_mode,
+            safety_verdict_final=safety_verdict_final,
             broker_connection_state=connection_state,
         )
         assert surface.broker.safety_verdict == expected_verdict
@@ -168,12 +167,10 @@ def test_broker_safety_verdict_only_depends_on_configured_mode(
         (None, "UNKNOWN"),
     ],
 )
-def test_broker_connection_independent_of_safety(
-    connection_state, expected_connection
-) -> None:
-    for configured_mode in ("paper", "live", None):
+def test_broker_connection_independent_of_safety(connection_state, expected_connection) -> None:
+    for safety_verdict_final in ("paper-only", "unsafe", "unknown", None):
         surface = _surface(
-            configured_mode=configured_mode,
+            safety_verdict_final=safety_verdict_final,
             broker_connection_state=connection_state,
         )
         assert surface.broker.connection == expected_connection
@@ -211,9 +208,7 @@ def test_current_risk_broker_none_renders_unknown_with_nulls() -> None:
         ({"SPY": 0, "QQQ": -1}, "SHORT"),
     ],
 )
-def test_current_risk_posture_derived_from_owned_positions(
-    owned, expected_posture
-) -> None:
+def test_current_risk_posture_derived_from_owned_positions(owned, expected_posture) -> None:
     surface = _surface(broker=_broker(owned_positions=owned))
     assert surface.current_risk.posture == expected_posture
 
@@ -228,9 +223,7 @@ def test_current_risk_posture_derived_from_owned_positions(
     ],
 )
 def test_current_risk_verdict_rule(owned, pending, expected_verdict) -> None:
-    surface = _surface(
-        broker=_broker(owned_positions=owned, pending_order_count=pending)
-    )
+    surface = _surface(broker=_broker(owned_positions=owned, pending_order_count=pending))
     assert surface.current_risk.verdict == expected_verdict
 
 
@@ -383,9 +376,7 @@ def test_configuration_sizing_entirely_missing_flags_both_sizing_codes() -> None
         instance_broker_self_consistent=True,
     )
     assert surface.configuration.verdict == "ATTENTION"
-    assert {"SIZING_PRESET_MISSING", "SIZING_PROVENANCE_MISSING"}.issubset(
-        set(surface.configuration.reason_codes)
-    )
+    assert {"SIZING_PRESET_MISSING", "SIZING_PROVENANCE_MISSING"}.issubset(set(surface.configuration.reason_codes))
 
 
 # ---------------------------------------------------------------------------
@@ -393,35 +384,47 @@ def test_configuration_sizing_entirely_missing_flags_both_sizing_codes() -> None
 # ---------------------------------------------------------------------------
 
 
-def test_resume_pause_always_enabled_regardless_of_binding() -> None:
+def test_resume_pause_under_clean_guards_and_paused_intent() -> None:
+    # PRD #616 — Resume/Pause now consult the shared ``ResumeGuardState``
+    # resolver AND the intent-state pair rules.  Under the
+    # nothing-ever-deployed default (empty guard state, no desired
+    # state sidecar), Resume is refused with ``ALREADY_RUNNING``
+    # because absence is the effective-RUNNING default; Pause is
+    # permitted.
     for binding in (None, _LIVE):
-        surface = _surface(live_binding=binding)
+        surface = _surface(live_binding=binding, desired_state=_desired("PAUSED"))
         assert surface.actions.resume.enabled is True
         assert surface.actions.resume.disabled_reason_code is None
-        assert surface.actions.pause.enabled is True
-        assert surface.actions.pause.disabled_reason_code is None
+        assert surface.actions.pause.enabled is False
+        assert surface.actions.pause.disabled_reason_code == "ALREADY_PAUSED"
 
 
 def test_resume_pause_effect_discriminator_flips_with_binding_and_state() -> None:
-    no_binding = _surface(process=_IDLE_PROC, live_binding=None)
+    no_binding = _surface(process=_IDLE_PROC, live_binding=None, desired_state=_desired("PAUSED"))
     assert no_binding.actions.resume.effect == "DURABLE_ONLY"
     assert no_binding.actions.pause.effect == "DURABLE_ONLY"
-    bound = _surface(process=_PROC, live_binding=_LIVE)
+    bound = _surface(process=_PROC, live_binding=_LIVE, desired_state=_desired("PAUSED"))
     assert bound.actions.resume.effect == "LIVE_ACTUATION"
     assert bound.actions.pause.effect == "LIVE_ACTUATION"
-    bound_idle = _surface(process=_IDLE_PROC, live_binding=_LIVE)
+    bound_idle = _surface(process=_IDLE_PROC, live_binding=_LIVE, desired_state=_desired("PAUSED"))
     assert bound_idle.actions.resume.effect == "DURABLE_ONLY"
 
 
+def test_actions_stop_present_with_intent_state_rules() -> None:
+    # PRD #616 — ``actions.stop`` is now on the operator surface.
+    surface = _surface(desired_state=_desired("PAUSED"))
+    assert surface.actions.stop.enabled is True
+
+    stopped_surface = _surface(desired_state=_desired("STOPPED"))
+    assert stopped_surface.actions.stop.enabled is False
+    assert stopped_surface.actions.stop.disabled_reason_code == "ALREADY_STOPPED"
+
+
 def test_flatten_and_pause_requires_live_binding() -> None:
-    no_binding = _surface(
-        live_binding=None, broker=_broker(owned_positions={"SPY": 1})
-    )
+    no_binding = _surface(live_binding=None, broker=_broker(owned_positions={"SPY": 1}))
     assert no_binding.actions.flatten_and_pause.enabled is False
     assert no_binding.actions.flatten_and_pause.disabled_reason_code == "NO_LIVE_BINDING"
-    bound = _surface(
-        live_binding=_LIVE, broker=_broker(owned_positions={"SPY": 1})
-    )
+    bound = _surface(live_binding=_LIVE, broker=_broker(owned_positions={"SPY": 1}))
     assert bound.actions.flatten_and_pause.enabled is True
     assert bound.actions.flatten_and_pause.effect == "LIVE_ACTUATION"
 
@@ -487,14 +490,138 @@ _SATURDAY = _ny_ms(2026, 6, 27, 12, 0)  # noon Sat
         (_SATURDAY, "CLOSED", False),
     ],
 )
-def test_trading_session_phase_and_permission(
-    now_ms, expected_phase, expected_permits
-) -> None:
+def test_trading_session_phase_and_permission(now_ms, expected_phase, expected_permits) -> None:
     surface = _surface(now_ms=now_ms)
     assert surface.trading_session.phase == expected_phase
     assert surface.trading_session.permits_strategy_activity is expected_permits
     assert surface.trading_session.timezone == "America/New_York"
     assert surface.trading_session.as_of_ms == now_ms
+
+
+def test_trading_session_next_transition_ms_overnight_points_to_pre_open() -> None:
+    # PRD #616 — replace hard-coded None with the real next boundary.
+    surface = _surface(now_ms=_OVERNIGHT)
+    assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 23, 4, 0)
+
+
+def test_trading_session_next_transition_ms_pre_market_points_to_rth_open() -> None:
+    surface = _surface(now_ms=_PRE_MARKET)
+    assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 23, 9, 30)
+
+
+def test_trading_session_next_transition_ms_rth_points_to_close() -> None:
+    surface = _surface(now_ms=_RTH_MID)
+    assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 23, 16, 0)
+
+
+def test_trading_session_next_transition_ms_post_points_to_close_of_post() -> None:
+    surface = _surface(now_ms=_POST_MARKET)
+    assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 23, 20, 0)
+
+
+def test_trading_session_next_transition_ms_weekend_points_to_monday_open() -> None:
+    # Saturday noon → next transition is Monday 04:00 NY.
+    surface = _surface(now_ms=_SATURDAY)
+    expected = _ny_ms(2026, 6, 29, 4, 0)
+    assert surface.trading_session.next_transition_ms == expected
+
+
+def test_trading_session_next_transition_ms_after_post_points_to_next_day() -> None:
+    # 21:00 Tue ET → CLOSED, next boundary is Wed 04:00 ET.
+    now = _ny_ms(2026, 6, 23, 21, 0)
+    surface = _surface(now_ms=now)
+    assert surface.trading_session.phase == "CLOSED"
+    assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 24, 4, 0)
+
+
+# ---------------------------------------------------------------------------
+# readiness_gates — OperatorGate projection
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_gates_empty_when_no_readiness() -> None:
+    assert _surface(readiness=None).readiness_gates == []
+
+
+def test_readiness_gates_passing_gate_has_no_action_but_documented_unavailable_reason() -> None:
+    surface = _surface(
+        readiness=_readiness(
+            gates=[
+                ReadinessGate(
+                    name="broker_connection",
+                    status="pass",
+                    severity="hard",
+                    detail="connected",
+                )
+            ]
+        )
+    )
+    assert len(surface.readiness_gates) == 1
+    gate = surface.readiness_gates[0]
+    assert gate.status == "pass"
+    assert gate.suggested_action is None
+    assert gate.suggested_action_unavailable_reason == "GATE_PASSING"
+
+
+def test_readiness_gates_failing_gate_has_authored_action_or_unavailable_reason() -> None:
+    # PRD #616 mandate: every non-passing gate either ships an action
+    # OR ships ``null`` + a documented unavailable reason.
+    failing_gates = [
+        ReadinessGate(name=name, status="fail", severity="hard", detail="x")
+        for name in (
+            "broker_connection",
+            "poison_sentinel",
+            "fleet_contamination",
+            "daily_order_cap",
+            "warmup",
+            "calendar",
+            "session",
+            "instrument_surface",
+            "indicator_state_hydration",
+            "spec_signature",
+            "intent_wal_clean",
+            "positions_self_consistent",
+            "halt_clear",
+            "totally_invented_gate",
+        )
+    ]
+    surface = _surface(readiness=_readiness(gates=failing_gates))
+    assert len(surface.readiness_gates) == len(failing_gates)
+    for projected in surface.readiness_gates:
+        if projected.suggested_action is None:
+            assert projected.suggested_action_unavailable_reason is not None, projected.name
+            assert projected.suggested_action_unavailable_reason != ""
+        else:
+            assert projected.suggested_action_unavailable_reason is None, projected.name
+
+
+def test_readiness_gates_unknown_gate_name_surfaces_unavailable_reason() -> None:
+    # An unknown gate name fails closed visibly — the cockpit shows
+    # the raw name and the unavailable reason rather than guessing a
+    # remediation.
+    surface = _surface(
+        readiness=_readiness(
+            gates=[
+                ReadinessGate(
+                    name="totally_invented_gate",
+                    status="fail",
+                    severity="hard",
+                    detail="",
+                )
+            ]
+        )
+    )
+    g = surface.readiness_gates[0]
+    assert g.suggested_action is None
+    assert g.suggested_action_unavailable_reason == "UNKNOWN_GATE_NAME"
+
+
+def test_readiness_gates_preserves_engine_order() -> None:
+    names = ["calendar", "broker_connection", "warmup"]
+    surface = _surface(
+        readiness=_readiness(gates=[ReadinessGate(name=n, status="pass", severity="hard", detail="") for n in names])
+    )
+    assert [g.name for g in surface.readiness_gates] == names
 
 
 # ---------------------------------------------------------------------------
@@ -503,35 +630,55 @@ def test_trading_session_phase_and_permission(
 
 
 def test_reason_code_vocabulary_excludes_removed_codes() -> None:
+    # PRD #616 — these legacy codes are removed from the closed
+    # vocabulary in favour of the structured ADR-0011-aligned codes.
     assert "BUSY_VERB_IN_FLIGHT" not in REASON_CODES
-    assert "ALREADY_RUNNING" not in REASON_CODES
     assert "NOT_RUNNING" not in REASON_CODES
+    assert "SAFETY_BLOCK_HALT" not in REASON_CODES
+    assert "RECONCILE_NOT_WIRED" not in REASON_CODES
 
 
 def test_reason_code_vocabulary_lists_documented_codes() -> None:
+    # PRD #616 — the closed vocabulary is the union of the legacy
+    # live-binding codes plus every ResumeGuardState code.
     documented = {
         "NO_LIVE_BINDING",
-        "SAFETY_BLOCK_HALT",
-        "RECONCILE_NOT_WIRED",
         "NO_OWNED_POSITIONS",
         "ALREADY_POISONED",
+        "ALREADY_STOPPED",
+        # ResumeGuardState (PRD #616) closed vocabulary.
+        "BROKER_SAFETY_UNSAFE",
+        "BROKER_SAFETY_UNKNOWN",
+        "RECONCILIATION_FAILED",
+        "RECONCILIATION_STALE",
+        "RECONCILIATION_NOT_AVAILABLE",
+        "RECONCILIATION_UNKNOWN",
+        "UNRESOLVED_UNCERTAIN_INTENT",
+        "UNCERTAIN_INTENT_STATE_UNKNOWN",
+        "ALREADY_RUNNING",
+        "ALREADY_PAUSED",
+        "STOPPED_REQUIRES_REDEPLOY",
+        "REDEPLOY_REQUIRED",
     }
     assert documented.issubset(REASON_CODES)
 
 
 def test_evaluator_only_emits_codes_in_the_documented_vocabulary() -> None:
     emitted: set[str] = set()
-    for action in ("resume", "pause", "flatten_and_pause", "mark_poisoned"):
+    for action in ("resume", "pause", "stop", "flatten_and_pause", "mark_poisoned"):
         for binding in (None, _LIVE):
             for poisoned in (False, True):
                 for owned_empty in (True, False):
-                    cap = evaluate_action(
-                        action,  # type: ignore[arg-type]
-                        process=_PROC,
-                        live_binding=binding,
-                        poisoned=poisoned,
-                        owned_positions_empty=owned_empty,
-                    )
-                    if cap.disabled_reason_code is not None:
-                        emitted.add(cap.disabled_reason_code)
+                    for intent_state in (None, "RUNNING", "PAUSED", "STOPPED"):
+                        cap = evaluate_action(
+                            action,  # type: ignore[arg-type]
+                            process=_PROC,
+                            live_binding=binding,
+                            poisoned=poisoned,
+                            owned_positions_empty=owned_empty,
+                            desired_state=_desired(intent_state),
+                        )
+                        if cap.disabled_reason_code is not None:
+                            emitted.add(cap.disabled_reason_code)
+                        emitted.update(cap.disabled_reasons)
     assert emitted.issubset(REASON_CODES), f"orphan codes emitted: {emitted - REASON_CODES}"

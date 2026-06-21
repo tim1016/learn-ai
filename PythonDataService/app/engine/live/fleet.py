@@ -68,3 +68,132 @@ def compute_fleet_contamination(
         "policy_blocks_starts": policy_blocks_starts and contaminated,
         "summary": summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# PRD #616 — Fleet account-identity summary
+# ---------------------------------------------------------------------------
+
+
+def compute_account_identity(
+    instance_account_ids: dict[str, str | None],
+    broker_connected_account: str | None,
+    *,
+    broker_account_known: bool,
+) -> dict:
+    """Derive the ``FleetAccountSummary`` identity fields.
+
+    Pure logic: ``instance_account_ids`` maps each managed
+    ``strategy_instance_id`` to its ledger-recorded ``account_id``
+    (``None`` when the ledger pre-dates the field).
+    ``broker_connected_account`` is the live IBKR-connected account id
+    (``None`` when the broker is unavailable / not yet wired);
+    ``broker_account_known`` distinguishes "definitively unavailable"
+    (we tried, got nothing) from "never queried" so the reason-code
+    distinguishes ``BROKER_ACCOUNT_UNAVAILABLE`` from silence.
+
+    Returns ``{account_id, account_identity, account_identity_reason_codes}``.
+
+    Rules — the cheapest unambiguous one wins:
+
+    - **No managed instances** → identity is ``UNKNOWN`` with no
+      reason codes (an empty fleet is not an identity disagreement).
+    - **Every instance's account_id is missing** → identity is
+      ``UNKNOWN`` with ``ACCOUNT_ID_MISSING``.
+    - **Mixed account ids across instances** → identity is
+      ``CONFLICTING`` with ``INSTANCE_ACCOUNT_MISMATCH``; the canonical
+      account_id is the most common one (deterministic by sort).
+    - **All instances agree** → the agreed id is canonical.  If
+      ``broker_connected_account`` is set and differs, identity is
+      ``CONFLICTING`` with ``BROKER_ACCOUNT_MISMATCH``.  If
+      ``broker_account_known`` is False, identity is still
+      ``CONSISTENT`` (we don't know enough to disagree) but the
+      ``BROKER_ACCOUNT_UNAVAILABLE`` reason is surfaced
+      informationally.
+    """
+    declared: list[str] = []
+    none_count = 0
+    for sid in sorted(instance_account_ids):
+        v = instance_account_ids[sid]
+        if v is None or not v.strip():
+            none_count += 1
+        else:
+            declared.append(v.strip())
+
+    if not instance_account_ids:
+        return {
+            "account_id": broker_connected_account or None,
+            "account_identity": "UNKNOWN",
+            "account_identity_reason_codes": [],
+        }
+
+    if not declared:
+        return {
+            "account_id": broker_connected_account or None,
+            "account_identity": "UNKNOWN",
+            "account_identity_reason_codes": ["ACCOUNT_ID_MISSING"],
+        }
+
+    # Choose canonical: most common, tie-broken by lexical order.
+    counts: dict[str, int] = {}
+    for v in declared:
+        counts[v] = counts.get(v, 0) + 1
+    max_count = max(counts.values())
+    candidates = sorted(k for k, c in counts.items() if c == max_count)
+    canonical = candidates[0]
+
+    reason_codes: list[str] = []
+    if len(set(declared)) > 1:
+        reason_codes.append("INSTANCE_ACCOUNT_MISMATCH")
+    if none_count > 0:
+        reason_codes.append("ACCOUNT_ID_MISSING")
+
+    if reason_codes:
+        identity = "CONFLICTING"
+    else:
+        identity = "CONSISTENT"
+
+    if broker_account_known:
+        if broker_connected_account and broker_connected_account.strip() != canonical:
+            identity = "CONFLICTING"
+            reason_codes.append("BROKER_ACCOUNT_MISMATCH")
+    else:
+        reason_codes.append("BROKER_ACCOUNT_UNAVAILABLE")
+
+    return {
+        "account_id": canonical,
+        "account_identity": identity,
+        "account_identity_reason_codes": reason_codes,
+    }
+
+
+def compute_fleet_account_summary(
+    *,
+    net_positions: dict[str, int] | None,
+    explained_by_instance: dict[str, dict[str, int]],
+    instance_account_ids: dict[str, str | None],
+    broker_connected_account: str | None,
+    broker_account_known: bool,
+    policy_blocks_starts: bool = False,
+) -> dict:
+    """Compose the ``FleetAccountSummary`` shape.
+
+    Wraps ``compute_fleet_contamination`` and ``compute_account_identity``
+    so the router builds one DTO without duplicating the input wiring.
+    """
+    contamination = compute_fleet_contamination(
+        net_positions,
+        explained_by_instance,
+        policy_blocks_starts=policy_blocks_starts,
+    )
+    identity = compute_account_identity(
+        instance_account_ids,
+        broker_connected_account,
+        broker_account_known=broker_account_known,
+    )
+    return {
+        "account_id": identity["account_id"],
+        "account_identity": identity["account_identity"],
+        "account_identity_reason_codes": identity["account_identity_reason_codes"],
+        "contamination": contamination,
+    }

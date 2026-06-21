@@ -7,9 +7,9 @@ trades, and artifacts. All timestamps are int64 milliseconds UTC.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RunState(StrEnum):
@@ -541,9 +541,7 @@ class DesiredStateRecordResponse(BaseModel):
 class EnqueueCommandRequest(BaseModel):
     """Body for POST /api/live-runs/{run_id}/commands."""
 
-    verb: str = Field(
-        description="PAUSE | RESUME | STOP | FLATTEN | MARK_POISONED | RECONCILE."
-    )
+    verb: str = Field(description="PAUSE | RESUME | STOP | FLATTEN | MARK_POISONED | RECONCILE.")
 
 
 class CommandView(BaseModel):
@@ -950,7 +948,7 @@ ActionEffect = Literal["DURABLE_ONLY", "LIVE_ACTUATION"]
 
 class ActionCapability(BaseModel):
     """Per-action capability emitted by the shared capability evaluator
-    (#608).
+    (#608, extended by PRD #616).
 
     Used both by the status projection (``operator_surface.actions.*``)
     and by mutation endpoints which re-evaluate eligibility server-side
@@ -959,27 +957,42 @@ class ActionCapability(BaseModel):
 
     The ``effect`` discriminator distinguishes durable-intent writes
     (always succeed, gate the next host start) from live actuation
-    (requires a bound runner).  Resume / Pause are durable-only when no
-    live binding is bound; they are NEVER disabled by the server.
+    (requires a bound runner).
+
+    ``disabled_reason_code`` carries the **highest-priority** code for
+    the single-line tooltip; ``disabled_reasons`` carries the full
+    priority-ordered list so the cockpit's expanded view shows every
+    applicable reason.  When ``enabled is True`` both are ``None`` /
+    ``[]``.
     """
 
     enabled: bool
     effect: ActionEffect
-    # Stable ALL_CAPS_SNAKE token.  ``None`` when ``enabled is True``.
     disabled_reason_code: str | None = None
+    disabled_reasons: list[str] = Field(default_factory=list)
 
 
 class OperatorSurfaceActions(BaseModel):
-    """The four banner / Diagnostics actions the cockpit exposes (#608).
+    """The five canonical cockpit actions (ADR-0010 / PRD #616).
 
-    Frontend renders each keycap's enabled state and tooltip text from
-    these capabilities (Slice 3 banner keycaps + Slice 6 POISON RUN).
-    The Frontend reason-code → operator-language lookup is the only
-    place that maps ``disabled_reason_code`` to user-visible copy.
+    Resume, Pause, and Stop are durable-intent writes guarded by the
+    shared ``ResumeGuardState`` resolver (broker safety verdict,
+    reconciliation receipt, uncertain-intent WAL).  Flatten-and-pause
+    requires a live binding plus owned positions.  Mark-poisoned
+    requires a live binding (the canonical render site is the Audit
+    tab; PRD #617).
+
+    Frontend renders each affordance's enabled state and tooltip from
+    these capabilities.  ``disabled_reasons`` carries the full
+    priority-ordered list of applicable codes; the single-line
+    tooltip renders ``disabled_reasons[0]`` (or
+    ``disabled_reason_code`` as a back-compat shorthand for the
+    head).
     """
 
     resume: ActionCapability
     pause: ActionCapability
+    stop: ActionCapability
     flatten_and_pause: ActionCapability
     mark_poisoned: ActionCapability
 
@@ -1062,20 +1075,96 @@ class OperatorSurfaceHostProcess(BaseModel):
     copyable_command: str | None = None
 
 
+class InvokeCapabilityAction(BaseModel):
+    """Suggested action: invoke a non-destructive capability inline.
+
+    Permitted capabilities are non-destructive only — destructive
+    actions (Stop, Mark Poisoned, Flatten-and-pause) never appear via
+    ``invoke_capability``; they reach the operator only through
+    ``focus_action`` so they keep their canonical render site.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["invoke_capability"]
+    capability: Literal["resume", "pause"]
+
+
+class FocusAction(BaseModel):
+    """Suggested action: navigate to a tab and focus a specific
+    affordance.  Destructive actions reach the operator only this way."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["focus_action"]
+    tab: Literal["status", "activity", "audit", "configuration"]
+    action: Literal["flatten_and_pause", "stop", "mark_poisoned"]
+
+
+class RedeployAction(BaseModel):
+    """Suggested action: navigate to the Configuration tab and start a
+    Redeploy (the only path that revives a STOPPED instance — ADR-0010
+    §4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["redeploy"]
+
+
+class OpenRunbookAction(BaseModel):
+    """Suggested action: open an operator runbook (server-authored slug)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["open_runbook"]
+    slug: str
+
+
+GateSuggestedAction = Annotated[
+    InvokeCapabilityAction | FocusAction | RedeployAction | OpenRunbookAction,
+    Field(discriminator="kind"),
+]
+
+
+class OperatorGate(BaseModel):
+    """Operator-facing projection of an engine readiness gate (PRD #616).
+
+    The engine's ``ReadinessGate`` carries name / status / severity /
+    detail.  ``OperatorGate`` adds server-authored remediation metadata
+    so the cockpit never infers a "fix" from the gate name.
+
+    Either ``suggested_action`` is present (a structured, closed-union
+    descriptor), or it is ``None`` AND
+    ``suggested_action_unavailable_reason`` is populated with a stable
+    rationale code (so ``None`` is never ambiguous).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    status: str  # pass | fail | unknown
+    severity: str  # hard | soft
+    detail: str
+    suggested_action: GateSuggestedAction | None = None
+    suggested_action_unavailable_reason: str | None = None
+
+
 class OperatorSurface(BaseModel):
     """Operator-facing projection of run state for the Terminal Cockpit
-    (PRD #607 / Slice 1 / #608).
+    (PRD #607 / Slice 1 / #608, extended by PRD #616).
 
     Single source of truth for operational verdicts, risk posture,
     structured daily-cap usage, action-plan consumption, broker safety
-    verdict, prior-run classification, host-process state, and per-action
-    capability + reason codes.  Frontend renders these fields; it does
-    not derive verdicts from raw fields.
+    verdict, prior-run classification, host-process state, per-action
+    capability + reason codes, and the per-gate operator-facing
+    remediation metadata.  Frontend renders these fields; it does not
+    derive verdicts from raw fields.
 
-    The model accumulates per-section blocks across the Slice 1 cycles.
-    Subsequent cycles add the remaining blocks one at a time with the
-    same vertical-slice TDD discipline that the rest of this projection
-    follows.
+    PRD #616 added ``readiness_gates`` (the ``OperatorGate``
+    projection with structured ``suggested_action`` / unavailable
+    reason) and ``actions.stop`` to the contract.  Both are additive;
+    ``schema_version`` does NOT bump for additive fields (per the
+    existing rule).
     """
 
     # Bump on breaking shape changes; additive fields (new capability,
@@ -1090,6 +1179,11 @@ class OperatorSurface(BaseModel):
     action_plan: OperatorSurfaceActionPlan
     actions: OperatorSurfaceActions
     trading_session: OperatorSurfaceTradingSession
+    # PRD #616 — operator-facing projection of the engine readiness
+    # gates with server-authored remediation metadata.  Empty list when
+    # the engine has no readiness vector (e.g. nothing-deployed).  The
+    # ordering preserves the engine's gate order.
+    readiness_gates: list[OperatorGate] = Field(default_factory=list)
 
 
 class LiveInstanceStatus(BaseModel):
@@ -1213,13 +1307,24 @@ class ActiveDateEntry(BaseModel):
 
 
 class LiveInstanceSummary(BaseModel):
-    """One row in the account fleet overview."""
+    """One row in the account fleet overview.
+
+    PRD #616 added ``readiness_verdict`` and ``readiness_as_of_ms`` so
+    the cockpit can render an honest outer-tab badge
+    (``dep_val_smoke_001 · IDLE · BLOCKED``) for background instances
+    without an N+1 fetch of every instance's full status.  Backend
+    authors these from the same readiness source as the per-instance
+    status endpoint.  ``UNKNOWN`` is the honest answer when readiness
+    cannot be resolved (no run, no engine).
+    """
 
     strategy_instance_id: str
     process_state: str
     bound_run_id: str | None = None
     latest_run_id: str | None = None
     desired_state: str | None = None
+    readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"
+    readiness_as_of_ms: int | None = None
 
 
 class FleetExplainedBucket(BaseModel):
@@ -1243,6 +1348,34 @@ class FleetContamination(BaseModel):
     verdict: str
     policy_blocks_starts: bool = False
     summary: str
+
+
+class FleetAccountSummary(BaseModel):
+    """Account/fleet altitude DTO (PRD #616).
+
+    Server-authored single source of truth for the account row: it
+    separates account identity from position contamination so the
+    cockpit renders one DTO without an Angular-side merge.
+
+    ``account_identity == 'CONSISTENT'`` iff every managed instance
+    agrees on ``account_id`` AND (when known) that id matches the
+    broker-connected account.  ``account_identity_reason_codes`` is a
+    closed ``ALL_CAPS_SNAKE`` vocabulary (``ACCOUNT_ID_MISSING``,
+    ``INSTANCE_ACCOUNT_MISMATCH``, ``BROKER_ACCOUNT_UNAVAILABLE``,
+    ``BROKER_ACCOUNT_MISMATCH``).
+
+    Position contamination semantics are unchanged: ``verdict ==
+    'contaminated'`` iff ``net_broker_positions − Σ managed instance
+    positions ≠ 0``.  Configuration / identity disagreement is reported
+    via ``account_identity``, never overloaded onto ``contamination``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str | None = None
+    account_identity: Literal["CONSISTENT", "CONFLICTING", "UNKNOWN"]
+    account_identity_reason_codes: list[str] = Field(default_factory=list)
+    contamination: FleetContamination
 
 
 class IntentActuation(BaseModel):

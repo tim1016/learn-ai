@@ -26,9 +26,7 @@ from app.engine.live import host_daemon_client
 from app.routers import live_instances
 
 
-def _write_ledger(
-    root: Path, run_id: str, sid: str, created_at_ms: int, spec_path: Path | None = None
-) -> None:
+def _write_ledger(root: Path, run_id: str, sid: str, created_at_ms: int, spec_path: Path | None = None) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
     payload: dict = {"run_id": run_id, "strategy_instance_id": sid, "created_at_ms": created_at_ms}
@@ -99,9 +97,7 @@ async def test_status_response_includes_operator_surface_schema_version_one(
 # ---------------------------------------------------------------------------
 
 
-async def test_host_process_block_stopped_when_daemon_idle(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_host_process_block_stopped_when_daemon_idle(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the host-daemon process is ``idle`` (reachable but nothing
     running for this instance) the projection authors a non-null
     operator-language ``notice`` so the cockpit can surface that the
@@ -235,6 +231,8 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "action_plan",
         "actions",
         "trading_session",
+        # PRD #616 — additive operator-facing projections.
+        "readiness_gates",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
@@ -252,12 +250,94 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     assert session["phase"] in {"PRE", "RTH", "POST", "CLOSED", "UNKNOWN"}
     assert session["timezone"] == "America/New_York"
     assert isinstance(session["as_of_ms"], int)
-    for name in ("resume", "pause", "flatten_and_pause", "mark_poisoned"):
+    # PRD #616 — five canonical actions (stop added); every action
+    # capability carries the full (priority-ordered) reason list and
+    # the head as the single-line tooltip code.
+    for name in ("resume", "pause", "stop", "flatten_and_pause", "mark_poisoned"):
         cap = surface["actions"][name]
-        assert set(cap.keys()) == {"enabled", "effect", "disabled_reason_code"}
+        assert set(cap.keys()) == {
+            "enabled",
+            "effect",
+            "disabled_reason_code",
+            "disabled_reasons",
+        }
         assert cap["effect"] in {"DURABLE_ONLY", "LIVE_ACTUATION"}
-    # Resume / Pause are NEVER disabled by the server.
-    assert surface["actions"]["resume"]["enabled"] is True
-    assert surface["actions"]["pause"]["enabled"] is True
-    assert surface["actions"]["resume"]["disabled_reason_code"] is None
-    assert surface["actions"]["pause"]["disabled_reason_code"] is None
+        if cap["enabled"]:
+            assert cap["disabled_reason_code"] is None
+            assert cap["disabled_reasons"] == []
+        else:
+            assert isinstance(cap["disabled_reasons"], list)
+            assert cap["disabled_reasons"]
+    # readiness_gates projection is always present (even empty).
+    assert isinstance(surface["readiness_gates"], list)
+
+
+# ---------------------------------------------------------------------------
+# PRD #616 — LiveInstanceSummary extensions + FleetAccountSummary endpoint
+# ---------------------------------------------------------------------------
+
+
+async def test_live_instance_summary_carries_readiness_verdict(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PRD #616 — the fleet overview row carries readiness_verdict and
+    readiness_as_of_ms so the cockpit outer tab can render the badge
+    without fetching every instance's full status."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-rdy", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows, "expected at least one fleet row"
+    row = next(r for r in rows if r["strategy_instance_id"] == "spy_ema_paper")
+    assert "readiness_verdict" in row
+    assert row["readiness_verdict"] in {"READY", "BLOCKED", "DEGRADED", "UNKNOWN"}
+    assert "readiness_as_of_ms" in row
+
+
+async def test_account_summary_endpoint_returns_composed_dto(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PRD #616 — ``GET /api/live-instances/account-summary`` returns
+    the composed FleetAccountSummary (account identity + contamination)."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-fff", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account-summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "account_id",
+        "account_identity",
+        "account_identity_reason_codes",
+        "contamination",
+    }
+    assert body["account_identity"] in {"CONSISTENT", "CONFLICTING", "UNKNOWN"}
+    assert isinstance(body["account_identity_reason_codes"], list)
+    # ``contamination`` is the existing FleetContamination shape.
+    contam = body["contamination"]
+    assert contam["verdict"] in {"clean", "contaminated", "unknown"}
+    assert isinstance(contam["policy_blocks_starts"], bool)
+
+
+async def test_legacy_account_endpoint_still_returns_contamination_only(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PRD #616 — the legacy ``/account`` endpoint is preserved for
+    back-compat callers; the cockpit consumes ``/account-summary``."""
+
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] in {"clean", "contaminated", "unknown"}
+    assert "policy_blocks_starts" in body

@@ -1,33 +1,36 @@
-"""Operator-surface projection (PRD #607).
+"""Operator-surface projection (PRD #607, extended by PRD #616).
 
 Pure-function projection of run state into the cockpit-facing
 ``OperatorSurface`` model.  Single source of truth for operational
 verdicts, risk posture, structured daily-cap usage, action-plan
 consumption, broker safety verdict + connection, prior-run
-classification, host-process state, trading-session phase, and
-per-action capability + reason codes.
+classification, host-process state, trading-session phase, per-action
+capability + reason codes, and the per-gate operator-facing
+remediation metadata (``OperatorGate``).
 
 Frontend renders these fields; it does not derive verdicts from raw
 status fields.  See ``docs/runbooks/broker-instance-operator-surface.md``
-for the authority distinction between server domain eligibility,
-Angular transient request state, Angular presentation, and the
-host-process lifecycle that lives outside the cockpit's authority.
+and ``docs/architecture/adrs/0013-operator-surface-judgment-vs-evidence.md``
+for the operator-surface inclusion boundary.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.schemas.live_runs import (
     DesiredStateView,
+    FocusAction,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
     InstanceSizing,
     InstanceStartDefaults,
+    InvokeCapabilityAction,
     LiveBinding,
+    OperatorGate,
     OperatorSurface,
     OperatorSurfaceActionPlan,
     OperatorSurfaceBroker,
@@ -37,9 +40,12 @@ from app.schemas.live_runs import (
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
     OperatorSurfaceTradingSession,
+    ReadinessGate,
     ReadinessVector,
+    RedeployAction,
 )
 from app.services.operator_capability import evaluate_all_actions
+from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
 
 # Server-side canonical input for the broker connection layer.  The
 # router collapses the readiness ``broker_connection`` gate plus (when
@@ -69,18 +75,12 @@ _DAEMON_STATE_TO_HOST_PROCESS_STATE: dict[str, str] = {
 _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
     "STOPPING": "Host process is shutting down.",
     "EXITED": "Host process has exited. Restart it from the host runner to resume actuation.",
-    "IDLE": (
-        "Host runner is reachable but no subprocess is attached to this "
-        "instance. Start it from the host runner."
-    ),
+    "IDLE": ("Host runner is reachable but no subprocess is attached to this instance. Start it from the host runner."),
     "WAITING_FOR_HOST": (
         "Intent is RUNNING, but no host subprocess is attached to this "
         "instance. Start it outside the app to actuate trading."
     ),
-    "UNREACHABLE": (
-        "Host runner daemon is not reachable. The cockpit cannot confirm "
-        "any subprocess state from here."
-    ),
+    "UNREACHABLE": ("Host runner daemon is not reachable. The cockpit cannot confirm any subprocess state from here."),
 }
 
 
@@ -121,16 +121,27 @@ def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePri
 # broker — connection + safety_verdict (two independent enums)
 # ---------------------------------------------------------------------------
 
+# PRD #616 — map ADR-0011's reactive ``final_verdict`` directly.  The
+# previous implementation derived safety from ``configured_mode``
+# alone, which ignored every runtime gate ADR-0011 introduced (port,
+# account prefix, readonly flag).
+_BROKER_FINAL_VERDICT_TO_SAFETY: dict[str, str] = {
+    "paper-only": "PAPER_ONLY",
+    "unsafe": "UNSAFE",
+    "unknown": "UNKNOWN",
+}
+
 
 def _project_broker(
-    configured_mode: Literal["paper", "live"] | None,
+    safety_verdict_final: Literal["paper-only", "unsafe", "unknown"] | None,
     connection_state: BrokerConnectionStateInput | None,
 ) -> OperatorSurfaceBroker:
     # ``connection`` is whether the broker session is up; ``safety_verdict``
     # is whether we're allowed to trade.  They are independent and must
-    # not be composed.  ADR-0011's ``BrokerSafetyVerdict.final_verdict``
-    # is the conceptual ancestor for ``safety_verdict``; the operator's
-    # paper / live mode is the sole input today.
+    # not be composed.  ``safety_verdict_final`` is ADR-0011's reactive
+    # ``BrokerSafetyVerdict.final_verdict``; the cockpit's SAFETY pill
+    # changes when runtime conditions change, not only on configured
+    # mode reconnect.
     if connection_state == "connected":
         connection = "CONNECTED"
     elif connection_state == "disconnected":
@@ -144,12 +155,10 @@ def _project_broker(
     else:
         connection = "UNKNOWN"
 
-    if configured_mode == "paper":
-        safety_verdict = "PAPER_ONLY"
-    elif configured_mode == "live":
-        safety_verdict = "UNSAFE"
-    else:
+    if safety_verdict_final is None:
         safety_verdict = "UNKNOWN"
+    else:
+        safety_verdict = _BROKER_FINAL_VERDICT_TO_SAFETY.get(safety_verdict_final, "UNKNOWN")
 
     return OperatorSurfaceBroker(
         safety_verdict=safety_verdict,  # type: ignore[arg-type]
@@ -231,11 +240,7 @@ def _project_configuration(
     if start_defaults is None or not (start_defaults.strategy or "").strip():
         reasons.append("STRATEGY_KEY_MISSING")
 
-    if (
-        start_defaults is None
-        or start_defaults.max_orders_per_day is None
-        or start_defaults.max_orders_per_day <= 0
-    ):
+    if start_defaults is None or start_defaults.max_orders_per_day is None or start_defaults.max_orders_per_day <= 0:
         reasons.append("MAX_ORDERS_CAP_UNSET")
 
     if sizing is None or sizing.policy is None:
@@ -267,45 +272,79 @@ _PRE_OPEN = time(4, 0)
 _POST_CLOSE = time(20, 0)
 
 
+def _ny_dt(ms: int) -> datetime:
+    return datetime.fromtimestamp(ms / 1000.0, tz=UTC).astimezone(_NY)
+
+
+def _at(ny_day: datetime, t: time) -> datetime:
+    return datetime.combine(ny_day.date(), t, tzinfo=_NY)
+
+
+def _ms_utc(dt: datetime) -> int:
+    return int(dt.astimezone(UTC).timestamp() * 1000)
+
+
+def _next_weekday_open(now_ny: datetime) -> int:
+    """Return the next weekday's 04:00 NY pre-open as int64 ms UTC."""
+    day = now_ny.date()
+    delta = 1
+    while True:
+        candidate = day + timedelta(days=delta)
+        # weekday: 0=Mon ... 6=Sun
+        if candidate.weekday() < 5:
+            target = datetime.combine(candidate, _PRE_OPEN, tzinfo=_NY)
+            return _ms_utc(target)
+        delta += 1
+
+
 def _project_trading_session(
     *,
     now_ms: int,
     strategy_session_policy: Literal["rth_only"] | None = None,
 ) -> OperatorSurfaceTradingSession:
-    """Compute the trading-session phase from server-side NYC wall-clock.
+    """Compute the trading-session phase + the *next* boundary transition.
 
-    Until per-strategy session policies are declarative
-    (``strategy_session_policy`` will read them then), the default is
-    RTH-only.  Weekends collapse to CLOSED.  ``permits_strategy_activity``
-    follows the policy: ``rth_only`` -> True iff phase==RTH.
+    PRD #616 — ``next_transition_ms`` was hard-coded ``None``.  We now
+    compute the next boundary in America/New_York accounting for
+    weekday/weekend and the default RTH-only policy.  Per-strategy
+    session policies (extended hours, RTH+POST, ...) are a future
+    field on the wire; until then the policy defaults to RTH-only.
     """
-    now_utc = datetime.fromtimestamp(now_ms / 1000.0, tz=UTC)
-    now_ny = now_utc.astimezone(_NY)
+    now_ny = _ny_dt(now_ms)
     wall = now_ny.time()
     weekday = now_ny.weekday()  # 0=Mon ... 6=Sun
 
     phase: str
     permits: bool | None
-    next_transition_ms: int | None = None
+    next_transition_ms: int | None
 
-    if weekday >= 5 or wall < _PRE_OPEN:
+    if weekday >= 5:
+        # Weekend → CLOSED until Monday 04:00 ET.
         phase = "CLOSED"
         permits = False
+        next_transition_ms = _next_weekday_open(now_ny)
+    elif wall < _PRE_OPEN:
+        phase = "CLOSED"
+        permits = False
+        next_transition_ms = _ms_utc(_at(now_ny, _PRE_OPEN))
     elif wall < _RTH_OPEN:
         phase = "PRE"
         permits = False
+        next_transition_ms = _ms_utc(_at(now_ny, _RTH_OPEN))
     elif wall < _RTH_CLOSE:
         phase = "RTH"
         permits = True
+        next_transition_ms = _ms_utc(_at(now_ny, _RTH_CLOSE))
     elif wall < _POST_CLOSE:
         phase = "POST"
         permits = False
+        next_transition_ms = _ms_utc(_at(now_ny, _POST_CLOSE))
     else:
+        # After 20:00 ET on a weekday → CLOSED until tomorrow's 04:00 ET.
         phase = "CLOSED"
         permits = False
+        next_transition_ms = _next_weekday_open(now_ny)
 
-    # If the strategy explicitly opted out of the default permission
-    # mapping (future: opts in to extended hours), respect it.
     if strategy_session_policy is None:
         # Default policy = RTH-only.
         permits = phase == "RTH"
@@ -320,6 +359,112 @@ def _project_trading_session(
 
 
 # ---------------------------------------------------------------------------
+# readiness_gates — server-authored remediation metadata (PRD #616)
+# ---------------------------------------------------------------------------
+
+# Per-gate suggested-action authoring rules.  Authoring is data-driven
+# (a small table here) rather than scattered "if gate.name == X" branches
+# so that adding a new gate-fix mapping is a one-line edit.  Each entry
+# is a callable that receives the gate and returns either a
+# ``GateSuggestedAction`` or ``(None, unavailable_reason)``.
+
+_GateActionFn = "callable[[ReadinessGate], object | tuple[None, str]]"
+
+_INVOKE_RESUME = InvokeCapabilityAction(kind="invoke_capability", capability="resume")
+_FOCUS_FLATTEN = FocusAction(kind="focus_action", tab="status", action="flatten_and_pause")
+_FOCUS_MARK_POISONED = FocusAction(kind="focus_action", tab="audit", action="mark_poisoned")
+_REDEPLOY = RedeployAction(kind="redeploy")
+
+
+def _action_for_gate(
+    gate: ReadinessGate,
+) -> tuple[object | None, str | None]:
+    """Return ``(suggested_action, unavailable_reason)``.
+
+    Either ``suggested_action`` is a ``GateSuggestedAction`` instance
+    and ``unavailable_reason`` is ``None``, or ``suggested_action`` is
+    ``None`` and ``unavailable_reason`` is a stable ALL_CAPS_SNAKE
+    code documenting *why* no action is authored.
+    """
+    if gate.status == "pass":
+        return None, "GATE_PASSING"
+
+    name = gate.name
+    if name == "broker_connection":
+        # Reconnection is an operator-out-of-band task — no inline
+        # capability invocation can fix it.  The runbook surfaces the
+        # IBKR Gateway restart procedure.
+        return _REDEPLOY, None  # placeholder route; the real runbook lands when authored
+    if name == "poison_sentinel":
+        # Poisoned runs are revived only by Redeploy — ADR-0010 §4.
+        return _REDEPLOY, None
+    if name == "fleet_contamination":
+        # Account-level contamination is resolved by an operator
+        # action outside the cockpit's authority; we surface a
+        # focused runbook hint rather than an inline button.
+        return None, "REQUIRES_OUT_OF_BAND_RESOLUTION"
+    if name == "daily_order_cap":
+        # Reaching the daily cap is a configuration / next-day matter;
+        # there is no inline fix.
+        return None, "NO_INLINE_REMEDIATION"
+    if name in {"warmup", "calendar", "session", "instrument_surface"}:
+        return None, "WAIT_FOR_CONDITION"
+    if name == "indicator_state_hydration":
+        # Hydration failures invalidate the run; redeploy is the path.
+        return _REDEPLOY, None
+    if name == "spec_signature":
+        # A spec mismatch means the run identity disagrees with the
+        # working tree — the only safe path is Redeploy.
+        return _REDEPLOY, None
+    if name == "intent_wal_clean":
+        # Unresolved uncertain intents require manual reconciliation
+        # *then* Resume; mark-poisoned routes to the Audit tab.
+        return _FOCUS_MARK_POISONED, None
+    if name == "positions_self_consistent":
+        # A self-consistency drift suggests Flatten-and-pause then
+        # reconcile.
+        return _FOCUS_FLATTEN, None
+    if name == "halt_clear":
+        # Halt cleared by Resume *iff* the underlying guards pass.
+        return _INVOKE_RESUME, None
+    # Unknown gate name — surface explicitly rather than silently
+    # dropping the suggestion.  The Frontend reads the unavailable
+    # reason and shows the raw gate name as a fallback.
+    return None, "UNKNOWN_GATE_NAME"
+
+
+def project_readiness_gates(readiness: ReadinessVector | None) -> list[OperatorGate]:
+    """Project engine readiness gates into operator-facing gates with
+    structured remediation metadata.
+
+    PRD #616 — the engine's ``ReadinessGate`` carries ``name`` /
+    ``status`` / ``severity`` / ``detail``.  ``OperatorGate`` adds
+    ``suggested_action`` / ``suggested_action_unavailable_reason`` so
+    the cockpit never infers a "fix" from the gate name.
+
+    The ordering preserves the engine's gate order.  An ``UNKNOWN``
+    status surfaces as a non-passing gate (still gets a suggested
+    action or an unavailable-reason).
+    """
+    if readiness is None:
+        return []
+    out: list[OperatorGate] = []
+    for gate in readiness.gates:
+        action, unavailable = _action_for_gate(gate)
+        out.append(
+            OperatorGate(
+                name=gate.name,
+                status=gate.status,
+                severity=gate.severity,
+                detail=gate.detail,
+                suggested_action=action,  # type: ignore[arg-type]
+                suggested_action_unavailable_reason=unavailable,
+            )
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # compose
 # ---------------------------------------------------------------------------
 
@@ -328,7 +473,7 @@ def compute_operator_surface(
     *,
     process: InstanceProcessView,
     last_exit: InstanceLastExit | None = None,
-    configured_mode: Literal["paper", "live"] | None = None,
+    safety_verdict_final: Literal["paper-only", "unsafe", "unknown"] | None = None,
     broker_connection_state: BrokerConnectionStateInput | None = None,
     broker: InstanceBrokerView | None = None,
     readiness: ReadinessVector | None = None,
@@ -339,27 +484,30 @@ def compute_operator_surface(
     live_binding: LiveBinding | None = None,
     poisoned: bool = False,
     desired_state: DesiredStateView | None = None,
+    guard_state: ResumeGuardState | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
 
     The function is intentionally pure: every input is a primitive value
     or an already-resolved view model.  The router does the source
-    blending (settings, readiness gate, broker health, sidecars,
-    desired-state sidecar, now_ms) and hands the result in.
+    blending (settings, readiness gate, broker safety verdict, sidecars,
+    desired-state sidecar, resume-guard resolution, now_ms) and hands
+    the result in.
+
+    PRD #616 replaced ``configured_mode`` with ``safety_verdict_final``
+    (ADR-0011's reactive final verdict) and added the ``guard_state``
+    parameter; both keyword-only and additive on the call site.
     """
 
-    owned_positions_empty = broker is None or not any(
-        qty != 0 for qty in broker.owned_positions.values()
-    )
+    owned_positions_empty = broker is None or not any(qty != 0 for qty in broker.owned_positions.values())
+    resolved_guards = guard_state if guard_state is not None else empty_guard_state()
 
     return OperatorSurface(
         host_process=_project_host_process(process, desired_state),
         prior_run=_project_prior_run(last_exit),
-        broker=_project_broker(configured_mode, broker_connection_state),
-        configuration=_project_configuration(
-            start_defaults, sizing, instance_broker_self_consistent
-        ),
+        broker=_project_broker(safety_verdict_final, broker_connection_state),
+        configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),
         current_risk=_project_current_risk(broker),
         daily_order_cap=_project_daily_order_cap(readiness),
         action_plan=_project_action_plan(action_plan),
@@ -368,6 +516,9 @@ def compute_operator_surface(
             live_binding=live_binding,
             poisoned=poisoned,
             owned_positions_empty=owned_positions_empty,
+            desired_state=desired_state,
+            guard_state=resolved_guards,
         ),
         trading_session=_project_trading_session(now_ms=now_ms),
+        readiness_gates=project_readiness_gates(readiness),
     )

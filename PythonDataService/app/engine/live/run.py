@@ -208,9 +208,7 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
     _pre_ledger_path = args.run_dir / "run_ledger.json"
     if _pre_ledger_path.is_file():
         try:
-            _ledger_live_config = json.loads(
-                _pre_ledger_path.read_text(encoding="utf-8")
-            ).get("live_config") or {}
+            _ledger_live_config = json.loads(_pre_ledger_path.read_text(encoding="utf-8")).get("live_config") or {}
         except (OSError, json.JSONDecodeError):
             _ledger_live_config = {}
     from app.engine.live.pre_flight import check_sizing_policy_present
@@ -238,9 +236,7 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
             )
             return 2
         managed_symbols = (
-            {s.strip() for s in args.managed_symbols.split(",") if s.strip()}
-            if args.managed_symbols
-            else None
+            {s.strip() for s in args.managed_symbols.split(",") if s.strip()} if args.managed_symbols else None
         )
         checks.append(
             check_unexpected_position(
@@ -496,9 +492,7 @@ async def _recovery_flatten(
     )
 
     try:
-        cancelled = await asyncio.wait_for(
-            broker.cancel_open_orders(), timeout=CANCEL_CONFIRM_TIMEOUT_S
-        )
+        cancelled = await asyncio.wait_for(broker.cancel_open_orders(), timeout=CANCEL_CONFIRM_TIMEOUT_S)
     except TimeoutError as exc:
         logger.error(
             "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
@@ -549,11 +543,7 @@ async def _recovery_flatten(
             continue
         qty_signed = fresh_qty
         action = "SELL" if qty_signed > 0 else "BUY"
-        order_ref = (
-            build_order_ref(resolved_namespace, mint_intent_id())
-            if resolved_namespace
-            else None
-        )
+        order_ref = build_order_ref(resolved_namespace, mint_intent_id()) if resolved_namespace else None
         spec = IbkrOrderSpec(
             symbol=pos.symbol,
             sec_type=pos.sec_type,
@@ -757,9 +747,7 @@ def _build_live_state_writer(
 
     bot_order_namespace = f"learn-ai/{strategy_instance_id}/v1"
     ib_client_id = int(raw_client_id)
-    repo = LiveStateSidecarRepo(
-        stable_live_state_path(artifacts_root, strategy_instance_id)
-    )
+    repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, strategy_instance_id))
 
     # ADR 0009 § 11 — bounded ring-buffer for the per-trade audit list. Keeps
     # the sidecar size predictable on a long-running bot; the cockpit only
@@ -796,9 +784,7 @@ def _build_live_state_writer(
             known_exec_ids=existing.known_exec_ids if existing is not None else [],
             last_processed_bar_ms=bar_close_ms,
             last_artifact_flush_ms=int(time.time() * 1000),
-            expected_position_by_symbol={
-                sym: int(pos.quantity) for sym, pos in portfolio.positions.items()
-            },
+            expected_position_by_symbol={sym: int(pos.quantity) for sym, pos in portfolio.positions.items()},
             sizing_resolutions=combined_audit,
             poisoned_reason=existing.poisoned_reason if existing is not None else None,
         )
@@ -908,9 +894,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         status_path = args.run_dir / "run_status.json"
         if status_path.exists():
             try:
-                existing_reason = json.loads(status_path.read_text(encoding="utf-8")).get(
-                    "exit_reason"
-                )
+                existing_reason = json.loads(status_path.read_text(encoding="utf-8")).get("exit_reason")
             except (OSError, ValueError):
                 existing_reason = None
             if existing_reason in _EXPLANATORY_REASONS:
@@ -1178,8 +1162,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         spec_client_id = spec.client_id
     except (OSError, ValueError) as exc:
         logger.warning(
-            "could not load strategy spec at %s for decision schema; "
-            "falling back to default EMA schema: %s",
+            "could not load strategy spec at %s for decision schema; falling back to default EMA schema: %s",
             ledger.strategy_spec_path,
             exc,
         )
@@ -1214,9 +1197,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     if live_state_writer is not None:
         from app.engine.live.live_state_sidecar import stable_live_state_path
 
-        owned_perm_ids = _read_owned_perm_ids(
-            stable_live_state_path(_artifacts_root, strategy_instance_id)
-        )
+        owned_perm_ids = _read_owned_perm_ids(stable_live_state_path(_artifacts_root, strategy_instance_id))
 
     # Operator command channel (PRD-A § 16.4 Resolution 7 / PR-D). The
     # bot polls ``<run_dir>/commands/`` at 1s, independent of the bar
@@ -1318,9 +1299,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # blank and the instance looks stuck "starting". Record the exit
                 # (3 = runtime broker/IO error, mirroring the position-fetch
                 # failure path below) so the operator sees the real reason.
-                logger.exception(
-                    "IBKR connect() failed before session start", extra={"step": "1"}
-                )
+                logger.exception("IBKR connect() failed before session start", extra={"step": "1"})
                 print(
                     f"[START] could not connect to IBKR: {type(exc).__name__}: {exc}",
                     file=sys.stderr,
@@ -1749,7 +1728,9 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                 # call fails — leaving open broker positions during a panic
                 # is worse than acting without cancel-confirmation. Logged
                 # loudly so the run record shows the unconfirmed cancel.
-                _log(f"WARNING: cancel_open_orders failed ({type(exc).__name__}: {exc}); proceeding with liquidation anyway (force-flatten).")
+                _log(
+                    f"WARNING: cancel_open_orders failed ({type(exc).__name__}: {exc}); proceeding with liquidation anyway (force-flatten)."
+                )
 
             if unconfirmed_cancels_reason is not None:
                 _log(
@@ -1843,9 +1824,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
     return _cmd_set_desired_state(args, DesiredState.PAUSED)
 
 
-def _latest_run_dir_for_instance(
-    artifacts_root: Path, strategy_instance_id: str
-) -> Path | None:
+def _latest_run_dir_for_instance(artifacts_root: Path, strategy_instance_id: str) -> Path | None:
     """Find the most recent ``live_runs/<run_id>/`` whose ``run_ledger.json``
     names this instance. Returns ``None`` if no run dir is found.
 
@@ -1960,54 +1939,58 @@ def _scan_wal_for_unresolved_uncertains(wal_path: Path) -> list[str]:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    """Set durable ``desired_state=RUNNING`` after the Phase 5D / 7B Resume
-    guards pass.
+    """Set durable ``desired_state=RUNNING`` after the shared Resume
+    guards pass (PRD #616).
 
-    Guard #1 (Phase 7B / VCR-0010): refuse Resume when the latest run's
-    persisted ``verdict_snapshot.json`` carries a verdict other than
-    ``"paper-only"``. The engine bar-loop observer writes this file on
-    every check, so the snapshot reflects the last reading before the
-    engine exited. Resume past a non-paper-only verdict can pass
-    ``--force`` after the operator confirms the broker session is back
-    on a paper account.
+    The three Resume guards are now resolved through the canonical
+    :func:`app.services.resume_guard_state.resolve_guard_state_from_paths`
+    so the CLI, the capability projection
+    (``operator_surface.actions.resume``), and the desired-state
+    mutation endpoint agree on enabled / refused and the reason
+    codes.
 
-    Guard #3 (Phase 5D WAL): refuse Resume when the latest run's
-    ``intent_events.jsonl`` carries one or more ``ACK_FAILED_UNCERTAIN``
-    events without a downstream resolution. The operator passes
-    ``--force`` to override after manual reconciliation.
-
-    Guard #2 (cold-start reconciler last verdict == clean) requires
-    artifacts written by Phase 5B; it remains TODO at this surface but
-    the engine-side bar loop is the secondary line of defense.
+    The legacy ``--force`` bypass was deleted in PRD #616 — the
+    cockpit cannot honestly claim "guarded Resume is structurally
+    safe" while a CLI bypass shares the same resolver.  Operators
+    that need to clear a guard must resolve the underlying condition
+    (re-confirm paper-only broker, reconcile uncertain intents,
+    redeploy a poisoned run); each guard has a documented remediation
+    path that does not require bypassing the resolver.
     """
     from app.engine.live.desired_state import DesiredState
+    from app.services.resume_guard_state import resolve_guard_state_from_paths
 
     run_dir = _latest_run_dir_for_instance(args.artifacts_root, args.strategy_instance_id)
     if run_dir is not None:
-        verdict_check = _scan_verdict_snapshot(run_dir / "verdict_snapshot.json")
-        if verdict_check is not None and not getattr(args, "force", False):
+        guard_state = resolve_guard_state_from_paths(
+            verdict_snapshot_path=run_dir / "verdict_snapshot.json",
+            run_dir_for_reconciliation=run_dir,
+            intent_wal_path=run_dir / "intent_events.jsonl",
+        )
+        if not guard_state.allow_resume:
+            head = guard_state.reason_codes[0]
+            all_codes = ", ".join(guard_state.reason_codes)
+            broker_v = guard_state.broker_safety.verdict
+            wal_pending = guard_state.uncertain_intent.unresolved_intent_ids
+            details: list[str] = []
+            if guard_state.broker_safety.state != "SAFE":
+                details.append(f"broker-safety={guard_state.broker_safety.state!s} verdict={broker_v!r}")
+            if guard_state.uncertain_intent.state == "PRESENT":
+                preview = ", ".join(wal_pending[:5])
+                if len(wal_pending) > 5:
+                    preview += f", and {len(wal_pending) - 5} more"
+                details.append(f"unresolved-uncertain-intent=[{preview}]")
+            elif guard_state.uncertain_intent.state == "UNKNOWN":
+                details.append("uncertain-intent-state=UNKNOWN (WAL unreadable)")
+            if guard_state.reconciliation.state not in {"PASSED", "NOT_AVAILABLE"}:
+                details.append(
+                    f"reconciliation={guard_state.reconciliation.state!s} ({guard_state.reconciliation.detail or ''})"
+                )
             print(
-                f"[RESUME] REFUSED: last broker safety verdict was "
-                f"{verdict_check!r} (not 'paper-only') in {run_dir / 'verdict_snapshot.json'}. "
-                "Per PRD §7B Resume guard #1, the engine paused because the "
-                "broker session left paper-only; resuming may submit orders "
-                "to a non-paper account. Confirm the broker is back on a "
-                "paper account, then pass --force to override.",
-                file=sys.stderr,
-            )
-            return 2
-
-        unresolved = _scan_wal_for_unresolved_uncertains(run_dir / "intent_events.jsonl")
-        if unresolved and not getattr(args, "force", False):
-            preview = ", ".join(unresolved[:5])
-            if len(unresolved) > 5:
-                preview += f", and {len(unresolved) - 5} more"
-            print(
-                f"[RESUME] REFUSED: {len(unresolved)} unresolved ACK_FAILED_UNCERTAIN "
-                f"in {run_dir / 'intent_events.jsonl'} (intent_id: {preview}). "
-                "Per PRD §5D Resume guard #3, the broker may have state the engine "
-                "cannot reconstruct. Manually reconcile then pass --force to "
-                "override.",
+                f"[RESUME] REFUSED ({head}): "
+                + "; ".join(details)
+                + f"\n  all applicable reason codes: {all_codes}"
+                + "\n  resolve the underlying condition; --force was removed in PRD #616.",
                 file=sys.stderr,
             )
             return 2
@@ -2274,30 +2257,13 @@ def build_parser() -> argparse.ArgumentParser:
             default=Path("PythonDataService/artifacts"),
             help="Root for cross-session artifacts; must match 'start --artifacts-root'.",
         )
-        verb_parser.add_argument(
-            "--reason", default=None, help="Optional operator note recorded in the file."
-        )
-        verb_parser.add_argument(
-            "--updated-by", default="operator", help="Identity recorded in the file."
-        )
-        if verb == "resume":
-            # Phase 5D Resume guard (PRD §5D) AND Phase 7B Resume guard #1
-            # (PRD §7B / VCR-0010) share the same override. Without this
-            # flag, cmd_resume refuses to set RUNNING when EITHER the
-            # latest run's WAL carries an unresolved ACK_FAILED_UNCERTAIN
-            # OR the persisted verdict_snapshot.json carries a verdict
-            # other than "paper-only". The operator must manually
-            # reconcile broker state / confirm a paper account first.
-            verb_parser.add_argument(
-                "--force",
-                action="store_true",
-                help=(
-                    "Override the Phase 5D WAL guard AND the Phase 7B verdict "
-                    "snapshot guard. Use only after manually reconciling broker "
-                    "state. The override is recorded in desired_state.json via "
-                    "--reason / --updated-by."
-                ),
-            )
+        verb_parser.add_argument("--reason", default=None, help="Optional operator note recorded in the file.")
+        verb_parser.add_argument("--updated-by", default="operator", help="Identity recorded in the file.")
+        # PRD #616 — the legacy ``--force`` bypass on `resume` was
+        # deleted.  The shared ``ResumeGuardState`` resolver is the
+        # authority for every entry point (capability projection,
+        # mutation endpoint, CLI); a CLI-only override would
+        # invalidate the "guarded Resume is structurally safe" claim.
         verb_parser.set_defaults(func=handler)
 
     return parser
