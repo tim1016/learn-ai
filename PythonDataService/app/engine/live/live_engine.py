@@ -51,12 +51,6 @@ from app.engine.live.command_channel import (
 )
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState
-from app.engine.live.runtime_producer import (
-    build_bar_loop_block,
-    build_broker_block,
-    build_command_loop_block,
-    build_control_plane_block_from_lease,
-)
 from app.engine.live.halt import (
     FatalHaltError,
     PoisonedHaltReason,
@@ -75,6 +69,12 @@ from app.engine.live.live_portfolio import (
 )
 from app.engine.live.readiness import build_live_readiness
 from app.engine.live.readiness_sidecar import write_readiness
+from app.engine.live.runtime_producer import (
+    build_bar_loop_block,
+    build_broker_block,
+    build_command_loop_block,
+    build_control_plane_block_from_lease,
+)
 from app.engine.strategy.base import LoggedTrade, Strategy
 
 logger = logging.getLogger(__name__)
@@ -1993,7 +1993,7 @@ class LiveEngine:
         if self._client is not None:
             try:
                 health = self._client.health()
-            except Exception:  # noqa: BLE001 — health is diagnostic; never fatal
+            except Exception:
                 health = None
             if health is not None:
                 connection_state = str(health.connection_state)
@@ -2034,7 +2034,7 @@ class LiveEngine:
             )
         )
 
-    async def _publish_bar_loop_block(self, minute_bar) -> None:  # noqa: ANN001
+    async def _publish_bar_loop_block(self, minute_bar) -> None:
         """PRD #619-B B3 — update the bar-loop block from the current bar.
 
         ``heartbeat_at_ms`` is wall-clock (loop scheduling). The bar's
