@@ -1,6 +1,6 @@
 # ADR 0004 — The operator console is an instance-addressed control room; the process registry owns the live binding; desired-state is the single intent knob
 
-**Status:** Accepted 2026-05-30
+**Status:** Accepted 2026-05-30. **Amended 2026-06-21 (PRD #619-B) — adds daemon `boot_id` + lease + DRAINING semantics, the child watchdog's ordered shutdown contract, and orphan classification on daemon boot. See "Amendment 2026-06-21" block after the Consequences section.**
 **Decision drivers:** PRD-A through PRD-D shipped a per-`run_id` "Paper Run" status page, but the backend identity model is strategy-instance-centric (clientId, order namespace, durable desired-state, and the managed-process registry are all keyed by `strategy_instance_id`). A grilling session found the UI behaves like a *run artifact viewer with controls attached* when it needs to be an *instance control room with the current run/artifacts attached as evidence*. The run-centric framing is the root of half the operator-grade findings.
 **Related:** ADR 0002 (shadow = separate OS process per instance), ADR 0005 (engine-authored readiness & broker ownership), `CONTEXT.md`, `docs/ibkr-paper-deployment-plan.md` § 16.
 
@@ -100,6 +100,91 @@ The command-channel response is canonicalized to a unified, backend-joined timel
 **Non-consequences:**
 - Concurrent *executing* (non-shadow) instances on one account: not unblocked here; that is the deferred broker-executor / virtual-book separation. This ADR only makes the console honest about however many processes the registry manages.
 - The on-disk substrate is unchanged: durable desired-state stays at `artifacts/live_state/<instance_id>/desired_state.json`, per-run commands at `artifacts/live_runs/<run_id>/commands/` (ADR 0001).
+
+## Amendment 2026-06-21 (PRD #619-B) — daemon boot_id + lease + child watchdog + orphan classification
+
+**Driver.** The 2026-04 / -05 audits that triggered PRD #619 found four interrelated control-plane gaps the original ADR did not address:
+
+1. **Process-registry persistence.** `RunnerProcessManager._managed` is an in-memory dict; a daemon restart resets the registry while the child trading processes keep running with `start_new_session=True`. The cockpit reads `IDLE` from the new daemon while the old child is still placing orders.
+2. **Daemon liveness signal.** Children have no way to detect that the daemon they were spawned by has died or restarted — every operator-action path assumes the daemon is up, with no fallback.
+3. **Orphan classification.** A new daemon coming up has no structured way to enumerate runs left behind by a previous boot.
+4. **Child shutdown contract.** When the daemon disappears, the child's mid-flight obligations (block submissions, persist intent, flush evidence, disconnect broker) have no ordered enforcement — the order matters because evidence flushed after broker disconnect captures a torn state.
+
+**Decision.** Add the following to the control plane:
+
+### A. Daemon boot identity + heartbeat lease
+
+- Every daemon process generates a `boot_id` (UUID hex) at startup. The id is immutable for the process lifetime.
+- The daemon renews `artifacts/control_plane/daemon_lease.json` at **1 Hz** with `{schema_version, boot_id, written_at_ms, status, lease_cadence_ms, lease_threshold_ms}`.
+- Freshness threshold is **5 s**. A reader treats the lease as expired iff `now - written_at_ms > lease_threshold_ms`.
+- `status ∈ {CONNECTED, DRAINING}`. `DRAINING` signals graceful daemon shutdown — children pause + flush + disconnect + exit without flattening positions.
+- The daemon's `/health` endpoint exposes `daemon_boot_id` and the lease state for the data plane to observe directly (no file-read for the cockpit hot path).
+- When the daemon spawns a child, it sets `LIVE_RUNNER_DAEMON_BOOT_ID=<boot_id>` in the child's env. The child captures this as `expected_daemon_boot_id` for the lifetime of its run.
+
+### B. Child watchdog (PRD §B5)
+
+A child-side async task polls the lease at the same 1 Hz cadence. **Two failure modes** trigger the lease-loss handler:
+
+1. **Lease expired** — `now - written_at_ms > lease_threshold_ms` OR the file is missing.
+2. **Boot id changed** — `lease.boot_id != expected_daemon_boot_id`.
+
+On either, the watchdog runs the **5-step ordered contract**. Order is the contract; tests assert it:
+
+1. **Block submissions immediately.** No new order can leave the child while we're in the handling path.
+2. **Persist durable `desired_state=PAUSED` and write the `control_plane_lease_lost.json` incident** to the run dir. A next-start reconciliation MUST observe PAUSED.
+3. **Evidence-flush grace** (5–10 s default). Bar loop, command poll, and engine_runtime publisher get bounded time to flush their state.
+4. **Disconnect the broker.** Stops streaming + drops the IBKR socket.
+5. **Request bounded engine exit** (15 s deadline). The watchdog sets the engine's shutdown event; the bar loop observes it on the next iteration.
+
+**No auto-flatten.** Positions are never closed by the watchdog. The child stops creating new exposure; existing positions stay until the operator decides.
+
+### C. Orphan classification on daemon boot (PRD §B6)
+
+On startup the daemon calls `classify_runtime_candidates_on_boot(live_runs_root, this_boot_id, now_ms)` which walks `artifacts/live_runs/` and labels each `engine_runtime.json` it finds:
+
+- **`FRESH_OWNED_BY_THIS_BOOT`** — sidecar age within threshold AND `expected_daemon_boot_id == this_boot_id`.
+- **`ORPHANED_CONTROL_PLANE`** — sidecar age within threshold AND owned by a different `boot_id`. The child may still be trading.
+- **`EXITED_UNMANAGED`** — sidecar older than threshold; producer task has stopped writing.
+- **`NO_SIDECAR`** — run dir without a readable `engine_runtime.json`.
+
+**A sidecar alone never proves a process is alive.** Process identity verification is a separate follow-up step before the daemon decides to block new starts for the instance, signal recovery, or kill the candidate. Verified adoption is explicitly **out of scope** here and belongs in a future ADR.
+
+### D. Backend freshness composition (PRD §B7)
+
+The data plane composes a `RuntimeFreshness` from the per-run `engine_runtime.json` plus the daemon lease + this daemon's `boot_id`. Posture demotes to last-known + actions disable when:
+
+- `command_loop` heartbeat stale > 3 s, OR
+- `broker` probe stale > 25 s (or missing), OR
+- `control_plane` lease stale OR `observed_daemon_boot_id != expected_daemon_boot_id`.
+
+`bar_loop` staleness alone does not demote posture (a closed market is not a posture event) — it is rendered as informational. Thresholds are server config with validated defaults, not Angular constants.
+
+### Wire artifacts pinned by this amendment
+
+| Artifact | Path | Owner |
+|---|---|---|
+| `daemon_lease.json` | `artifacts/control_plane/daemon_lease.json` | daemon |
+| `engine_runtime.json` | `artifacts/live_runs/<run_id>/engine_runtime.json` | child engine_runtime publisher |
+| `control_plane_lease_lost.json` | `artifacts/live_runs/<run_id>/control_plane_lease_lost.json` | child watchdog (on lease loss only) |
+
+All timestamps are `int64 ms UTC` at the artifact boundary per `.claude/rules/numerical-rigor.md`. Atomic writes via `tmp + fsync + replace`.
+
+### Non-decisions (still out of scope)
+
+- **Adoption / reclamation.** The classifier surfaces orphan candidates; the daemon does not re-take ownership without a separate ADR covering process identity, run identity, account identity, namespace ownership, broker reconciliation, and replay-safe handshake semantics.
+- **Auto-flatten on daemon loss.** Explicitly rejected — the child stops creating new exposure but the operator decides on existing positions.
+- **Daemon-enforced mutation idempotency.** Future PRD covers daemon-side `operation_id` deduplication; 619-B carries `mutation_attempt_id` audit-only.
+
+### References (619-B implementation)
+
+- `PythonDataService/app/engine/live/control_plane.py` — `DaemonLease` schema + writer + `DaemonLeaseWriter` task.
+- `PythonDataService/app/engine/live/engine_runtime.py` — `EngineRuntimeSnapshot` schema + atomic writer.
+- `PythonDataService/app/engine/live/engine_runtime_publisher.py` — `EngineRuntimeAggregator` + `EngineRuntimePublisher`.
+- `PythonDataService/app/engine/live/orphan_classifier.py` — `classify_runtime_candidates_on_boot`.
+- `PythonDataService/app/engine/live/child_watchdog.py` — `ChildWatchdog` + 5-step contract.
+- `PythonDataService/app/engine/live/runtime_producer.py` — engine-side block composition.
+- `PythonDataService/app/services/runtime_freshness.py` — backend freshness evaluator.
+- `PythonDataService/app/schemas/artifact_io.py` — canonical fail-closed Pydantic-artifact reader.
 
 ## References
 
