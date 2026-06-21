@@ -35,7 +35,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.live.engine_runtime import EngineRuntimeSnapshot
 
-
 # Reason codes the operator surface renders. Closed vocabulary — any
 # new code lands here and the Frontend lookup table.
 RuntimeFreshnessReasonCode = Literal[
