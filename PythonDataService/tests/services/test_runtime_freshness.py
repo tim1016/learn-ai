@@ -32,6 +32,8 @@ from app.engine.live.engine_runtime import (
 from app.services.runtime_freshness import (
     RuntimeFreshnessConfig,
     evaluate_runtime_freshness,
+    runtime_freshness_reason_codes,
+    unavailable_runtime_freshness,
 )
 
 
@@ -339,3 +341,11 @@ def test_custom_config_overrides_defaults() -> None:
     cfg = RuntimeFreshnessConfig(command_loop_stale_threshold_ms=500)
     result = evaluate_runtime_freshness(snap, now_ms=base + 600, config=cfg)
     assert result.command_loop.state == "STALE"
+
+
+def test_unavailable_runtime_freshness_demotes_with_one_stable_reason() -> None:
+    result = unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
+
+    assert result.posture_demoted is True
+    assert result.command_loop.state == "UNKNOWN"
+    assert runtime_freshness_reason_codes(result) == ["ENGINE_RUNTIME_MISSING"]

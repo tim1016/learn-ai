@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CockpitShellComponent } from './cockpit-shell.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import type { OperatorSurfaceRuntimeFreshness } from '../../../api/live-instances.types';
 
 function makeStatus() {
   return {
@@ -91,6 +92,7 @@ function makeStatus() {
         as_of_ms: 0,
       },
       readiness_gates: [],
+      runtime_freshness: null,
     },
     fetched_at_ms: 0,
   };
@@ -180,6 +182,46 @@ describe('CockpitShellComponent', () => {
     expect(btn).toBeTruthy();
     expect(btn?.disabled).toBe(true);
     expect(btn?.getAttribute('title')).toBe('BROKER_SAFETY_UNSAFE');
+  });
+
+  it('renders runtime demotion reason codes prominently', async () => {
+    const stub = makeStub();
+    const status = makeStatus();
+    const runtimeFreshness: OperatorSurfaceRuntimeFreshness = {
+      posture_demoted: true,
+      stale_reason_codes: ['COMMAND_LOOP_STALE', 'CONTROL_PLANE_LEASE_STALE'],
+      command_loop: {
+        state: 'STALE',
+        age_ms: 4_000,
+        stale_reason_codes: ['COMMAND_LOOP_STALE'],
+      },
+      broker: { state: 'FRESH', age_ms: 500, stale_reason_codes: [] },
+      bar_loop: { state: 'FRESH', age_ms: 500, stale_reason_codes: [] },
+      control_plane: {
+        state: 'STALE',
+        age_ms: 6_000,
+        stale_reason_codes: ['CONTROL_PLANE_LEASE_STALE'],
+      },
+    };
+    const demotedStatus = {
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        runtime_freshness: runtimeFreshness,
+      },
+    };
+    stub.getInstanceStatus = vi.fn().mockResolvedValue(demotedStatus);
+
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const banner = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="runtime-freshness-banner"]',
+    );
+    expect(banner?.textContent).toContain('LAST-KNOWN');
+    expect(banner?.textContent).toContain('COMMAND_LOOP_STALE');
+    expect(banner?.textContent).toContain('CONTROL_PLANE_LEASE_STALE');
   });
 
   it('renders the Stop button only inside the overflow menu (canonical render-site rule)', async () => {

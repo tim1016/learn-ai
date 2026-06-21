@@ -110,6 +110,7 @@ async def test_loader_stamps_observation_after_daemon_fetch() -> None:
     assert ctx.observation_at_ms == 1_700_000_000_050
     assert ctx.strategy_instance_id == "sid-1"
     assert ctx.daemon_boot_id is None  # 619-B fills this.
+    assert ctx.runtime_freshness is None
 
 
 @pytest.mark.asyncio
@@ -137,6 +138,7 @@ async def test_loader_composes_full_context() -> None:
     assert ctx.broker is broker
     assert ctx.owned_positions_empty is False
     assert ctx.guard_state.allow_resume is True
+    assert ctx.runtime_freshness is None
 
 
 @pytest.mark.asyncio

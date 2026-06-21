@@ -53,7 +53,7 @@ The 13-PR sequence intentionally defers the following beyond #565:
 - **Sticky bar Restart & Update button** (User Stories #39 – #40) — conditional render based on platform-code freshness, which doesn't have a backend contract yet.
 - **Per-gate affordances on the Readiness card** (User Stories #11 – #13) — button / nav-link / read-only note per gate. The existing Pre-Trade Checklist already renders these via the parent's `fixAction()` taxonomy; full extraction to the new card lands after the sticky bar takes ownership of Start / Pause / Stop.
 - **Next-evaluation timestamp on the signal strip** (User Story #24) — needs a new backend contract field; today the strip is a no-new-math addition.
-- **Stale-data freezing** (User Stories #41 – #44) — the safety-critical-card freeze + dim + control-disable behavior when the daemon hiccups. Needs a backend freshness contract per resource that doesn't exist yet (the current `poll_interval_ms` is a temporary approximation, not a per-resource staleness signal).
+- **Per-resource transport staleness outside child runtime** (User Stories #41 – #44) — PRD #619-B now supplies child `runtime_freshness` from `engine_runtime.json`, including a `LAST-KNOWN` banner and backend-authored Resume / Flatten gating. PRD #619-C still owns typed data-plane↔daemon transport state (`RETRYING`, `UNREACHABLE`, auth/protocol errors) and browser poll-failure age.
 
 ## Post-merge cleanup (the actual #565 PR 13 sweep)
 
@@ -149,6 +149,14 @@ operator_surface: {
   daily_order_cap:  { used, limit }
   action_plan:      { consumption, anomaly_verdict }
   actions:          { resume, pause, flatten_and_pause, mark_poisoned }
+  runtime_freshness:{
+    posture_demoted,
+    stale_reason_codes,
+    command_loop,
+    broker,
+    bar_loop,
+    control_plane
+  }
 }
 ```
 
@@ -159,7 +167,9 @@ operator_surface: {
    (`/flatten-and-pause`, `/commands{MARK_POISONED}`) re-evaluate
    eligibility via the same Python capability evaluator and reject
    with `409 Conflict` + `disabled_reason_code` when denied.  A stale
-   status snapshot must not be exploitable.
+   status snapshot must not be exploitable. Runtime posture demotion
+   blocks Resume and Flatten-and-pause; durable Pause / Stop remain
+   available as fail-safe intents.
 2. **Angular transient request state** — `busyVerb` /
    `requestInFlight` lives only in Angular.  Keycaps disable when
    `requestInFlight === true` regardless of server capability so a

@@ -1173,6 +1173,25 @@ class OperatorGate(BaseModel):
     suggested_action_unavailable_reason: str | None = None
 
 
+class OperatorSurfaceDomainFreshness(BaseModel):
+    """One backend-authored runtime domain freshness verdict."""
+
+    state: Literal["FRESH", "STALE", "NOT_APPLICABLE", "UNKNOWN", "DEGRADED"]
+    age_ms: int | None = None
+    stale_reason_codes: list[str] = Field(default_factory=list)
+
+
+class OperatorSurfaceRuntimeFreshness(BaseModel):
+    """Child runtime freshness rendered verbatim by the cockpit."""
+
+    posture_demoted: bool
+    stale_reason_codes: list[str] = Field(default_factory=list)
+    command_loop: OperatorSurfaceDomainFreshness
+    broker: OperatorSurfaceDomainFreshness
+    bar_loop: OperatorSurfaceDomainFreshness
+    control_plane: OperatorSurfaceDomainFreshness
+
+
 class OperatorSurface(BaseModel):
     """Operator-facing projection of run state for the Terminal Cockpit
     (PRD #607 / Slice 1 / #608, extended by PRD #616).
@@ -1208,6 +1227,7 @@ class OperatorSurface(BaseModel):
     # the engine has no readiness vector (e.g. nothing-deployed).  The
     # ordering preserves the engine's gate order.
     readiness_gates: list[OperatorGate] = Field(default_factory=list)
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None = None
 
 
 class LiveInstanceStatus(BaseModel):

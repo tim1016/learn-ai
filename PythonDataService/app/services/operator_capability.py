@@ -61,6 +61,7 @@ from app.services.resume_guard_state import (
     empty_guard_state,
     sort_reason_codes,
 )
+from app.services.runtime_freshness import RuntimeFreshness
 
 ActionName = Literal["resume", "pause", "stop", "flatten_and_pause", "mark_poisoned"]
 
@@ -80,6 +81,8 @@ REASON_CODES: frozenset[str] = (
             "ALREADY_POISONED",
             # Stop gate.
             "ALREADY_STOPPED",
+            # Child runtime evidence is stale / unavailable.
+            "POSTURE_DEMOTED",
         }
     )
     | RESUME_REASON_CODES
@@ -146,6 +149,7 @@ def evaluate_action(
     owned_positions_empty: bool = False,
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
+    runtime_freshness: RuntimeFreshness | None = None,
 ) -> ActionCapability:
     """Pure evaluator for a single action.
 
@@ -162,6 +166,13 @@ def evaluate_action(
     effect = _effect(process=process, live_binding=live_binding)
     guards = guard_state if guard_state is not None else empty_guard_state()
     intent = _effective_intent(desired_state)
+
+    if (
+        runtime_freshness is not None
+        and runtime_freshness.posture_demoted
+        and action in {"resume", "flatten_and_pause"}
+    ):
+        return _disabled(effect, ["POSTURE_DEMOTED"])
 
     if action == "resume":
         reasons: list[str] = []
@@ -232,6 +243,7 @@ def evaluate_all_actions(
     owned_positions_empty: bool = False,
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
+    runtime_freshness: RuntimeFreshness | None = None,
 ) -> OperatorSurfaceActions:
     """Convenience wrapper used by the status projection."""
     return OperatorSurfaceActions(
@@ -243,6 +255,7 @@ def evaluate_all_actions(
             owned_positions_empty=owned_positions_empty,
             desired_state=desired_state,
             guard_state=guard_state,
+            runtime_freshness=runtime_freshness,
         ),
         pause=evaluate_action(
             "pause",
@@ -252,6 +265,7 @@ def evaluate_all_actions(
             owned_positions_empty=owned_positions_empty,
             desired_state=desired_state,
             guard_state=guard_state,
+            runtime_freshness=runtime_freshness,
         ),
         stop=evaluate_action(
             "stop",
@@ -261,6 +275,7 @@ def evaluate_all_actions(
             owned_positions_empty=owned_positions_empty,
             desired_state=desired_state,
             guard_state=guard_state,
+            runtime_freshness=runtime_freshness,
         ),
         flatten_and_pause=evaluate_action(
             "flatten_and_pause",
@@ -270,6 +285,7 @@ def evaluate_all_actions(
             owned_positions_empty=owned_positions_empty,
             desired_state=desired_state,
             guard_state=guard_state,
+            runtime_freshness=runtime_freshness,
         ),
         mark_poisoned=evaluate_action(
             "mark_poisoned",
@@ -279,5 +295,6 @@ def evaluate_all_actions(
             owned_positions_empty=owned_positions_empty,
             desired_state=desired_state,
             guard_state=guard_state,
+            runtime_freshness=runtime_freshness,
         ),
     )

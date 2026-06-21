@@ -646,6 +646,7 @@ def test_reason_code_vocabulary_lists_documented_codes() -> None:
         "NO_OWNED_POSITIONS",
         "ALREADY_POISONED",
         "ALREADY_STOPPED",
+        "POSTURE_DEMOTED",
         # ResumeGuardState (PRD #616) closed vocabulary.
         "BROKER_SAFETY_UNSAFE",
         "BROKER_SAFETY_UNKNOWN",

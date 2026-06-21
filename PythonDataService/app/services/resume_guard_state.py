@@ -210,6 +210,7 @@ class ResumeGuardState(BaseModel):
 
 _REASON_PRIORITY: tuple[str, ...] = (
     "STOPPED_REQUIRES_REDEPLOY",
+    "POSTURE_DEMOTED",
     "BROKER_SAFETY_UNSAFE",
     "BROKER_SAFETY_UNKNOWN",
     # Capability codes sit just below identity — a paper-verified
