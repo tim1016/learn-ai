@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
 
+from app.broker.runtime_snapshot import make_live_engine_verdict_provider
 from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
@@ -76,7 +77,6 @@ from app.engine.live.pre_flight import (
     check_yesterday_artifacts_valid,
     run_pre_flight,
 )
-from app.broker.runtime_snapshot import make_live_engine_verdict_provider
 from app.engine.live.run_ledger import read_ledger
 
 logger = logging.getLogger(__name__)

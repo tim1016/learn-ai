@@ -28,8 +28,9 @@ only the pre-write composition.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from app.services.resume_guard_state import ResumeGuardState
 
@@ -84,13 +85,13 @@ class InstanceContext:
     strategy_instance_id: str
     observation_at_ms: int
     daemon_boot_id: str | None
-    process: "InstanceProcessView"
-    live_binding: "LiveBinding | None"
+    process: InstanceProcessView
+    live_binding: LiveBinding | None
     runs: list[dict]
     desired_state: object  # DesiredStateView — kept loose to avoid import cycles
-    last_exit: "InstanceLastExit | None"
+    last_exit: InstanceLastExit | None
     poisoned: bool
-    broker: "InstanceBrokerView | None"
+    broker: InstanceBrokerView | None
     owned_positions_empty: bool
     guard_state: ResumeGuardState
 
@@ -101,14 +102,14 @@ async def load_instance_context(
     now_ms: Callable[[], int],
     fetch_daemon_process: Callable[[str], Awaitable[dict | None]],
     interpret_daemon_process: Callable[
-        [dict | None], tuple["InstanceProcessView", "LiveBinding | None"]
+        [dict | None], tuple[InstanceProcessView, LiveBinding | None]
     ],
     scan_runs_for_instance: Callable[[str], list[dict]],
     resolve_desired_state: Callable[[str], object],
-    instance_last_exit: Callable[[list[dict]], "InstanceLastExit | None"],
-    instance_broker: Callable[[str], "InstanceBrokerView | None"],
+    instance_last_exit: Callable[[list[dict]], InstanceLastExit | None],
+    instance_broker: Callable[[str], InstanceBrokerView | None],
     resolve_guard_state_for: Callable[
-        ["LiveBinding | None", list[dict]], ResumeGuardState
+        [LiveBinding | None, list[dict]], ResumeGuardState
     ],
 ) -> InstanceContext:
     """Compose a single ``InstanceContext`` from explicit dependencies.

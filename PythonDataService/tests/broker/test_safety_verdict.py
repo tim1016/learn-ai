@@ -211,7 +211,7 @@ def test_identity_derivation_independent_of_readonly_and_submit_mode(
     derivation."""
     # submit_mode is a sidecar parameter for matrix coverage — assert
     # that varying it never moves the derived identity.
-    del submit_mode  # noqa: WPS420
+    del submit_mode
 
     verdict = derive_broker_safety_verdict(
         configured_mode=mode,  # type: ignore[arg-type]

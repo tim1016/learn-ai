@@ -26,7 +26,6 @@ from app.services.resume_guard_state import (
     UncertainIntentArtifact,
 )
 
-
 # PRD #619-A — default capability fixture: ``live_paper`` declared and
 # the child constructed with ``readonly=False`` (the common-case
 # paper-execution path). New cases that exercise the capability gate
