@@ -1,3 +1,5 @@
+@use '../../../../styles/card-verdict-border' as verdict;
+
 :host {
   display: block;
 }
@@ -49,8 +51,6 @@
     font-size: 0.825rem;
   }
 }
-
-@use '../../../../styles/card-verdict-border' as verdict;
 
 // ── Verdict-bordered card (non-READY) ──────────────────────
 .card {
