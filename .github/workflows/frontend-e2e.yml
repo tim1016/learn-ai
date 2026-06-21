@@ -10,6 +10,14 @@
 # tracer-bullet workflow that downstream slices extend as needed.
 name: frontend-e2e
 
+# PRD #619-A §A7 — least-privilege GITHUB_TOKEN. This workflow only
+# reads the checked-out source and uploads test artifacts; it never
+# pushes commits, opens PRs, or annotates the checks/contents/issues
+# APIs. Pin contents:read and rely on the default upload-artifact
+# permission instead of inheriting the repository default.
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:
@@ -39,6 +47,16 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # PRD #619-A §A7 — dependency-contract test. echarts-gl 2.0.9
+      # imports from echarts/lib/util/layout and other internal paths
+      # that were removed in echarts ≥ 5.5. The 5.4.3 / 2.0.9 / 5.4.4
+      # triple is the verified-compatible set; pinning all three at
+      # exact versions (no caret) prevents npm dedupe + transitive
+      # bumps from sliding the build back into the failure mode the
+      # cockpit-e2e workflow has been broken under since #609.
+      - name: Verify echarts + echarts-gl + zrender pinned set
+        run: npm ls echarts@5.4.3 echarts-gl@2.0.9 zrender@5.4.4
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

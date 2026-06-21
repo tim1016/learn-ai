@@ -1,6 +1,6 @@
 # ADR 0011 — Broker safety verdict: per-gate, fail-closed, reactive, order-blocking on unsafe, start-blocking on unknown, halt-on-transition on degradation, guarded Resume
 
-**Status:** Proposed 2026-06-14. Vocabulary recorded in `CONTEXT.md` § "Broker safety verdict" and § "QC provenance card split". Grilling session: `grill-with-docs` 2026-06-14 against `docs/audits/vibe-coded-app-remediation-prd.md`. Load-bearing code claims (four-layer paper enforcement in `broker/ibkr/orders.py::place_paper_order`; hardcoded "Paper trading mode" string in `broker-instances` hero per VCR-0010; `qc_cloud_backtest_id` labelled "QC-approved" per VCR-0014) verified before the session.
+**Status:** Proposed 2026-06-14. **Amended 2026-06-21 (PRD #619-A) — Decision §2 derivation: `paper-only` no longer requires `readonly_flag == true`. Identity (`configured_mode=paper ∧ paper_port ∧ DU account`) and submission capability are independent facts. See "Amendment 2026-06-21" block after Decision §9.** Vocabulary recorded in `CONTEXT.md` § "Broker safety verdict" and § "QC provenance card split". Grilling session: `grill-with-docs` 2026-06-14 against `docs/audits/vibe-coded-app-remediation-prd.md`. Load-bearing code claims (four-layer paper enforcement in `broker/ibkr/orders.py::place_paper_order`; hardcoded "Paper trading mode" string in `broker-instances` hero per VCR-0010; `qc_cloud_backtest_id` labelled "QC-approved" per VCR-0014) verified before the session.
 **Decision drivers:** VCR-0010 found the `broker-instances` cockpit hero displays the static string *"Paper trading mode — no real money at risk"* with no reactive consultation of the actual broker mode. The runtime enforces paper-only at four layers — `IBKR_READONLY`, `IBKR_MODE=paper`, port-not-in-`LIVE_PORTS`, `account_id.startswith("DU")` — but the **hero is a trust anchor**: an operator reading it on a misconfigured deploy (one or more enforcement layers in an unexpected state) would receive false reassurance even though the runtime is blocking. The flip case — a future toggle to live mode — would not be reflected in the hero. VCR-0014 found `qc_cloud_backtest_id` labelled "QC-approved" with no verification path; the operator-recorded id is treated as if it were a verified fact. Both are instances of the same UI-truth failure: a label promising a guarantee independent of any verifiable runtime fact. The grilling session generalized this into a verdict design that (a) binds the hero to a server-derived structured judgment, (b) treats the verdict as a runtime gate not just a display, and (c) splits the provenance card so verified facts and operator-recorded facts cannot share a single misleading label.
 **Related:** ADR 0002 (shadow-mode adapter-level no-submit — a sibling enforcement layer), ADR 0006 (deploy / account_id hashed into `run_id` — the deploy-time identity that ADR 0011's connected-account-prefix gate cross-checks at runtime), ADR 0008 (durable submit / order identity — `SUBMIT_UNCERTAIN_HALT` is a sibling halt path with similar Resume-guard semantics), ADR 0010 (operator-action contract — Resume's guarded-write contract composes with this ADR's verdict gate), ADR 0009 (live sizing authority — the audit-copy allow-list this ADR's QC provenance card surfaces), `CONTEXT.md` § "Broker safety verdict", `CONTEXT.md` § "QC provenance card split", `CONTEXT.md` § "Readiness gate", `docs/audits/vibe-coded-app-remediation-prd.md` Phase 7, `.claude/rules/numerical-rigor.md` ("numerical claims require receipts").
 
@@ -122,6 +122,69 @@ Two rows:
 - **QC Cloud backtest:** `{id}` — *Operator-recorded, not auto-verified.*
 
 The following labels are **forbidden** in code and copy until a real QC Cloud API verification path exists: `"QC-approved"`, `"Byte-identical to backtest"`, `"verified backtest"`. The fail-closed framing from the broker safety verdict applies here too: an unverified claim must not be labelled as if it were verified.
+
+## Amendment 2026-06-21 (PRD #619-A) — identity vs. submission capability are independent facts
+
+**Driver.** The original Decision §2 required `readonly_flag == true` for `paper-only`. `IBKR_READONLY=true` blocks order placement at the lowest layer; an executing paper bot must run with `readonly=false`. Under the original derivation, an order-capable paper run can never obtain `paper-only`, but guarded Resume in Decision §6 requires `paper-only`. The two contracts disagree. The audit triggering PRD #619 found `live_instances._resolve_safety_verdict_final` reading non-existent attributes (`client.config.port`, `client.config.read_only_api`) and silently degrading to `unknown` — the regression went unobserved because the identity gate could never be true for a real paper run.
+
+**Decision.** The verdict is split into two independent backend-authored facts. The cockpit and the runtime consult both; the original `BrokerSafetyVerdict` shape carries identity. Submission capability is carried separately at the run/spec level.
+
+**Identity** — what the verdict resolver decides today:
+
+```
+broker_identity =
+  "paper-only"  iff   configured_mode == "paper"
+                  AND port_class == "paper_port"
+                  AND connected_account_prefix == "DU"
+
+              else "unsafe"
+                  iff   configured_mode == "live"
+                     OR port_class == "live_port"
+                     OR connected_account_prefix == "non_DU"
+
+              else "unknown"
+```
+
+`readonly_flag` is **not** in the identity derivation. The field stays on the `BrokerSafetyVerdict` shape (per-gate breakdown is still useful as diagnostic display), but it no longer contributes to `failing_gates` or `unknown_gates`, and `readonly_flag=False` never blocks `paper-only`.
+
+**Submission capability** — independent fact derived from durable child/run evidence (PRD #619-A §A3):
+
+```
+submission_capability =
+  "PAPER_ORDERS_ENABLED" iff declared submit_mode in the spec/ledger == "live_paper"
+                            AND the child's actual readonly setting at construction == False
+  "READ_ONLY"            iff the child's actual readonly setting == True
+  "BLOCKED"              iff lower-layer guards (place_paper_order four-layer)
+                            positively refuse — e.g., a live port + DU prefix mismatch
+  "UNKNOWN"              iff either declared submit_mode or actual readonly cannot
+                            be proven from durable child/run evidence
+```
+
+Capability authority is **durable child/run evidence only** — not a pre-deploy observation of the data-plane singleton. The pre-deploy singleton snapshot is advisory; it never authorizes Resume.
+
+**Effective posture** — composition consumed by the operator surface:
+
+```
+effective_posture =
+  "PAPER_EXECUTION"   iff broker_identity == "paper-only"
+                          AND submission_capability == "PAPER_ORDERS_ENABLED"
+  "PAPER_OBSERVATION" iff broker_identity == "paper-only"
+                          AND submission_capability == "READ_ONLY"
+  "UNSAFE"            iff broker_identity == "unsafe"
+                          OR submission_capability == "BLOCKED"
+  "UNKNOWN"           otherwise
+```
+
+**Composition rules unchanged:**
+
+- The lower-altitude four-layer `place_paper_order` enforcement is unchanged (defense in depth).
+- The connection-time multi-account refusal is unchanged.
+- Halt-on-transition (Decision §5) still fires on any `broker_identity` change out of `paper-only` — the trigger is identity-only.
+- Guarded Resume (Decision §6) now composes four gates: `broker_identity == "paper-only"` AND `submission_capability` satisfies the declared run `submit_mode` AND `reconciliation in {PASSED, NOT_AVAILABLE}` AND `uncertain_intent is CLEAR`. Per-gate availability semantics are gate-specific and backend-authored — there is no universal "NOT_AVAILABLE never blocks" rule.
+
+**Wire shape preserved.** `BrokerSafetyVerdict.final_verdict` continues to carry `paper-only | unsafe | unknown` and continues to mean identity. `submission_capability` and `effective_posture` are carried on the operator surface DTOs separately (see PRD #619-A and the broker-runtime snapshot path). The verdict_snapshot.json file shape is unchanged in PRD #619-A; its identity field remains the carrier for the identity-only resume gate.
+
+**Why this is the right amendment to ADR 0011 rather than a new ADR.** The original derivation conflated identity and capability into one fact; the runtime contracts that consume the verdict (start-blocking on `unknown`, halt-on-transition on degradation, guarded Resume) all reasoned about identity — the readonly clause was the implementation defect, not the design intent. Splitting capability out preserves every other clause of the ADR verbatim and makes the runtime contracts actually achievable.
 
 ## Consequences
 

@@ -22,7 +22,29 @@ from dataclasses import dataclass, field
 from app.services.resume_guard_state import (
     BrokerSafetyArtifact,
     ReconciliationArtifact,
+    SubmissionCapabilityArtifact,
     UncertainIntentArtifact,
+)
+
+
+# PRD #619-A — default capability fixture: ``live_paper`` declared and
+# the child constructed with ``readonly=False`` (the common-case
+# paper-execution path). New cases that exercise the capability gate
+# use the explicit BLOCKED / UNKNOWN fixtures below.
+_CAPABILITY_SATISFIED = SubmissionCapabilityArtifact(
+    state="SATISFIED",
+    declared_submit_mode="live_paper",
+    readonly_at_start=False,
+)
+_CAPABILITY_BLOCKED = SubmissionCapabilityArtifact(
+    state="BLOCKED",
+    declared_submit_mode="live_paper",
+    readonly_at_start=True,
+    detail="declared live_paper but child readonly=True",
+)
+_CAPABILITY_UNKNOWN = SubmissionCapabilityArtifact(
+    state="UNKNOWN",
+    detail="run_status.json absent",
 )
 
 
@@ -39,6 +61,13 @@ class GuardCase:
     broker_safety: BrokerSafetyArtifact
     reconciliation: ReconciliationArtifact
     uncertain_intent: UncertainIntentArtifact
+    # PRD #619-A — new fourth gate. Defaults to SATISFIED so existing
+    # rows continue to express "capability not blocking"; rows that
+    # specifically exercise the capability gate pass an explicit
+    # BLOCKED or UNKNOWN.
+    submission_capability: SubmissionCapabilityArtifact = field(
+        default=_CAPABILITY_SATISFIED
+    )
     current_intent: str | None = None
     poisoned: bool = False
     # Expected output for the *artifact-only* layer (the
@@ -255,5 +284,63 @@ GUARD_CASES: list[GuardCase] = [
         expected_pause_codes=("REDEPLOY_REQUIRED", "ALREADY_PAUSED"),
         expected_stop_enabled=False,
         expected_stop_codes=("REDEPLOY_REQUIRED",),
+    ),
+    # ── PRD #619-A — submission-capability gate ───────────────────────
+    GuardCase(
+        name="capability_blocked_blocks_resume",
+        broker_safety=_SAFE,
+        reconciliation=_RECON_OK,
+        uncertain_intent=_INTENT_CLEAR,
+        submission_capability=_CAPABILITY_BLOCKED,
+        current_intent="PAUSED",
+        expected_allow_resume=False,
+        expected_reason_codes=("SUBMISSION_CAPABILITY_BLOCKED",),
+        expected_resume_enabled=False,
+        expected_resume_codes=("SUBMISSION_CAPABILITY_BLOCKED",),
+        expected_pause_enabled=False,
+        expected_pause_codes=("ALREADY_PAUSED",),
+        expected_stop_enabled=True,
+    ),
+    GuardCase(
+        name="capability_unknown_blocks_resume",
+        broker_safety=_SAFE,
+        reconciliation=_RECON_OK,
+        uncertain_intent=_INTENT_CLEAR,
+        submission_capability=_CAPABILITY_UNKNOWN,
+        current_intent="PAUSED",
+        expected_allow_resume=False,
+        expected_reason_codes=("SUBMISSION_CAPABILITY_UNKNOWN",),
+        expected_resume_enabled=False,
+        expected_resume_codes=("SUBMISSION_CAPABILITY_UNKNOWN",),
+        expected_pause_enabled=False,
+        expected_pause_codes=("ALREADY_PAUSED",),
+        expected_stop_enabled=True,
+    ),
+    GuardCase(
+        # Capability priority is below identity but above uncertain
+        # intent and reconciliation — assert the sort order.
+        name="identity_unsafe_outranks_capability_blocked",
+        broker_safety=_UNSAFE,
+        reconciliation=_RECON_FAILED,
+        uncertain_intent=_INTENT_PRESENT,
+        submission_capability=_CAPABILITY_BLOCKED,
+        current_intent="PAUSED",
+        expected_allow_resume=False,
+        expected_reason_codes=(
+            "BROKER_SAFETY_UNSAFE",
+            "SUBMISSION_CAPABILITY_BLOCKED",
+            "UNRESOLVED_UNCERTAIN_INTENT",
+            "RECONCILIATION_FAILED",
+        ),
+        expected_resume_enabled=False,
+        expected_resume_codes=(
+            "BROKER_SAFETY_UNSAFE",
+            "SUBMISSION_CAPABILITY_BLOCKED",
+            "UNRESOLVED_UNCERTAIN_INTENT",
+            "RECONCILIATION_FAILED",
+        ),
+        expected_pause_enabled=False,
+        expected_pause_codes=("ALREADY_PAUSED",),
+        expected_stop_enabled=True,
     ),
 ]

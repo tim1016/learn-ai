@@ -234,7 +234,7 @@
       </div>
     </section>
 
-    @if (resume.disabled_reasons?.length && resume.disabled_reasons!.length > 1) {
+    @if (resume.disabled_reasons.length > 1) {
       <div class="resume-reasons-expanded" data-testid="resume-disabled-reasons">
         @for (code of resume.disabled_reasons; track code) {
           <span class="reason">{{ code }}</span>

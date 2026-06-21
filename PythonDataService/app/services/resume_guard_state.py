@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 # ---------------------------------------------------------------------------
 # Closed reason-code vocabulary — the only set of disabled reasons the server
@@ -52,9 +52,14 @@ from pydantic import BaseModel, Field
 
 RESUME_REASON_CODES: frozenset[str] = frozenset(
     {
-        # Broker safety verdict gate
+        # Broker safety verdict gate (identity, ADR-0011 amendment)
         "BROKER_SAFETY_UNSAFE",
         "BROKER_SAFETY_UNKNOWN",
+        # Submission-capability gate (ADR-0011 amendment, PRD #619-A).
+        # Identity is paper-only, but the declared submit mode and the
+        # actual readonly setting do not satisfy the run's contract.
+        "SUBMISSION_CAPABILITY_BLOCKED",
+        "SUBMISSION_CAPABILITY_UNKNOWN",
         # Reconciliation receipt gate
         "RECONCILIATION_FAILED",
         "RECONCILIATION_STALE",
@@ -114,6 +119,35 @@ class ReconciliationArtifact:
 
 
 @dataclass(frozen=True)
+class SubmissionCapabilityArtifact:
+    """Resolution of the ADR-0011 amendment submission-capability gate.
+
+    PRD #619-A: identity (``BrokerSafetyArtifact``) and submission
+    capability are independent facts. The capability fact is derived
+    from durable child/run evidence — the declared ``submit_mode`` on
+    the spec/ledger and the actual ``readonly`` setting used to
+    construct the child (today carried on ``run_status.json``).
+
+    ``state``:
+      - ``SATISFIED`` -> declared submit_mode + actual readonly together
+        satisfy the run's contract (``live_paper`` ⇒ ``readonly=False``;
+        ``shadow`` ⇒ no order submission required so any readonly is
+        ok).
+      - ``BLOCKED`` -> declared and actual diverge in a way that would
+        positively refuse order submission (e.g. ``submit_mode=live_paper``
+        but ``readonly_at_start=True``).
+      - ``UNKNOWN`` -> either the declared submit_mode or the actual
+        readonly cannot be proven from durable child/run evidence
+        (run_status.json absent, missing fields, malformed). Fail-closed.
+    """
+
+    state: Literal["SATISFIED", "BLOCKED", "UNKNOWN"]
+    declared_submit_mode: Literal["live_paper", "shadow"] | None = None
+    readonly_at_start: bool | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
 class UncertainIntentArtifact:
     """Resolution of the uncertain-intent gate.
 
@@ -137,25 +171,32 @@ class ResumeGuardState(BaseModel):
     - The desired-state mutation endpoint (re-validation).
     - The CLI ``cmd_resume`` (replacement for ad-hoc artifact scans).
 
-    ``allow_resume`` is True iff every guard is in a permitting state:
-    broker safety SAFE, reconciliation PASSED or NOT_AVAILABLE
-    (allowed today — the receipt writer is not yet wired; the cockpit
-    surfaces this honestly via ``RECONCILIATION_NOT_AVAILABLE`` only
-    when treated as blocking), and uncertain-intent CLEAR.
-
     ``reason_codes`` carries the **full** list of applicable reason
     codes in priority order (highest first).  The single-line tooltip
     renders ``reason_codes[0]``; the structured response carries all.
+
+    PRD #619-A §A6: ``allow_resume`` is a derived ``@computed_field``
+    over ``reason_codes`` — there is one source of truth, and a future
+    writer that forgets to recompute the boolean cannot drift from the
+    list.
     """
 
     broker_safety: BrokerSafetyArtifact = Field()
+    submission_capability: SubmissionCapabilityArtifact = Field()
     reconciliation: ReconciliationArtifact = Field()
     uncertain_intent: UncertainIntentArtifact = Field()
-    # Computed once at construction time.
-    allow_resume: bool
     reason_codes: list[str]
 
     model_config = {"arbitrary_types_allowed": True}
+
+    # PRD #619-A §A6 — collapse ``allow_resume`` to a derived property so
+    # there is exactly one source of truth: the empty/non-empty
+    # ``reason_codes`` list. The previous stored field could drift from
+    # the list if a future writer forgot to recompute it.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def allow_resume(self) -> bool:
+        return not self.reason_codes
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +212,11 @@ _REASON_PRIORITY: tuple[str, ...] = (
     "STOPPED_REQUIRES_REDEPLOY",
     "BROKER_SAFETY_UNSAFE",
     "BROKER_SAFETY_UNKNOWN",
+    # Capability codes sit just below identity — a paper-verified
+    # identity that lacks order capability is more important to
+    # surface than a stale reconciliation receipt.
+    "SUBMISSION_CAPABILITY_BLOCKED",
+    "SUBMISSION_CAPABILITY_UNKNOWN",
     "UNRESOLVED_UNCERTAIN_INTENT",
     "UNCERTAIN_INTENT_STATE_UNKNOWN",
     "RECONCILIATION_FAILED",
@@ -286,6 +332,71 @@ def read_reconciliation_receipt(
     )
 
 
+def read_submission_capability(
+    run_status_path: Path | None,
+) -> SubmissionCapabilityArtifact:
+    """Read the durable child/run capability evidence from ``run_status.json``.
+
+    PRD #619-A: the live engine's ``cmd_start`` writes ``run_status.json``
+    at boot carrying ``submit_mode_at_start`` (declared on the spec) and
+    ``readonly_at_start`` (the actual setting used to construct the
+    child). Both are immutable startup facts, persisted through every
+    subsequent lifecycle write via ``model_copy(update=...)`` so the
+    Resume gate has a stable source even after the engine exits.
+
+    A missing file, missing fields, or a sidecar that predates this PR
+    is ``UNKNOWN`` (fail-closed) — the cockpit surfaces it as
+    ``SUBMISSION_CAPABILITY_UNKNOWN``. Resume blocks until 619-B's
+    ``engine_runtime.json`` arrives or the run is restarted under the
+    new sidecar contract.
+
+    Capability semantics (ADR-0011 amendment):
+
+    - ``submit_mode=live_paper`` + ``readonly=False`` -> SATISFIED
+      (the child is allowed to submit paper orders).
+    - ``submit_mode=live_paper`` + ``readonly=True`` -> BLOCKED
+      (the lower-altitude four-layer would refuse; surface the gate
+      so the operator sees why Resume is disabled).
+    - ``submit_mode=shadow`` + any readonly -> SATISFIED (shadow runs
+      do not submit; readonly is moot for the contract).
+    """
+    import json as _json
+
+    if run_status_path is None or not run_status_path.exists():
+        return SubmissionCapabilityArtifact(state="UNKNOWN", detail="run_status.json absent")
+    try:
+        data = _json.loads(run_status_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return SubmissionCapabilityArtifact(state="UNKNOWN", detail="run_status.json unreadable")
+    if not isinstance(data, dict):
+        return SubmissionCapabilityArtifact(state="UNKNOWN", detail="run_status.json malformed")
+
+    declared = data.get("submit_mode_at_start")
+    readonly = data.get("readonly_at_start")
+    if declared not in ("live_paper", "shadow"):
+        return SubmissionCapabilityArtifact(
+            state="UNKNOWN", detail="submit_mode_at_start missing or invalid"
+        )
+    if not isinstance(readonly, bool):
+        return SubmissionCapabilityArtifact(
+            state="UNKNOWN",
+            declared_submit_mode=declared,
+            detail="readonly_at_start missing or invalid",
+        )
+    if declared == "live_paper" and readonly:
+        return SubmissionCapabilityArtifact(
+            state="BLOCKED",
+            declared_submit_mode=declared,
+            readonly_at_start=readonly,
+            detail="declared submit_mode=live_paper but child constructed with readonly=True",
+        )
+    return SubmissionCapabilityArtifact(
+        state="SATISFIED",
+        declared_submit_mode=declared,
+        readonly_at_start=readonly,
+    )
+
+
 def read_uncertain_intent_state(wal_path: Path | None) -> UncertainIntentArtifact:
     """Pure fold over ``intent_events.jsonl`` for unresolved uncertains.
 
@@ -331,13 +442,30 @@ def read_uncertain_intent_state(wal_path: Path | None) -> UncertainIntentArtifac
 def resolve_guard_state(
     *,
     broker_safety: BrokerSafetyArtifact,
+    submission_capability: SubmissionCapabilityArtifact,
     reconciliation: ReconciliationArtifact,
     uncertain_intent: UncertainIntentArtifact,
 ) -> ResumeGuardState:
-    """Compose the three artifact resolutions into a single state.
+    """Compose the four artifact resolutions into a single state.
 
     Pure: same inputs always produce the same output.  Tests exercise
     every artifact-state combination through this function.
+
+    PRD #619-A: the composition is
+
+    ::
+
+        can_resume =
+            broker_identity is PAPER_VERIFIED
+            AND submission_capability_satisfies(run_submit_mode)
+            AND reconciliation in {PASSED, NOT_AVAILABLE}
+            AND uncertain_intent is CLEAR
+
+    Per-gate availability is gate-specific (PRD authority principle #3):
+    ``reconciliation=NOT_AVAILABLE`` is non-blocking (the writer is not
+    yet wired), but ``submission_capability=UNKNOWN`` and
+    ``uncertain_intent=UNKNOWN`` are both blocking. There is no
+    universal "NOT_AVAILABLE never blocks" rule.
     """
     reason_codes: list[str] = []
 
@@ -345,6 +473,11 @@ def resolve_guard_state(
         reason_codes.append("BROKER_SAFETY_UNSAFE")
     elif broker_safety.state == "UNKNOWN":
         reason_codes.append("BROKER_SAFETY_UNKNOWN")
+
+    if submission_capability.state == "BLOCKED":
+        reason_codes.append("SUBMISSION_CAPABILITY_BLOCKED")
+    elif submission_capability.state == "UNKNOWN":
+        reason_codes.append("SUBMISSION_CAPABILITY_UNKNOWN")
 
     if uncertain_intent.state == "PRESENT":
         reason_codes.append("UNRESOLVED_UNCERTAIN_INTENT")
@@ -358,19 +491,16 @@ def resolve_guard_state(
     elif reconciliation.state == "UNKNOWN":
         reason_codes.append("RECONCILIATION_UNKNOWN")
     # NOT_AVAILABLE is the honest "writer not wired yet" state — surfaced
-    # informationally but not appended as a blocker.  When the writer
-    # lands and downstream callers want to treat NOT_AVAILABLE as
-    # blocking, they can include the receipt-required flag at the
-    # mutation boundary; the resolver does not assume it.
+    # informationally but not appended as a blocker (gate-specific
+    # availability policy per PRD #619-A authority principle #3).
 
     sorted_codes = sort_reason_codes(reason_codes)
-    allow_resume = not sorted_codes
 
     return ResumeGuardState(
         broker_safety=broker_safety,
+        submission_capability=submission_capability,
         reconciliation=reconciliation,
         uncertain_intent=uncertain_intent,
-        allow_resume=allow_resume,
         reason_codes=sorted_codes,
     )
 
@@ -378,10 +508,11 @@ def resolve_guard_state(
 def resolve_guard_state_from_paths(
     *,
     verdict_snapshot_path: Path | None,
+    run_status_path: Path | None,
     run_dir_for_reconciliation: Path | None,
     intent_wal_path: Path | None,
 ) -> ResumeGuardState:
-    """Production helper: read the three artifacts from disk + compose.
+    """Production helper: read the four artifacts from disk + compose.
 
     Used by the desired-state mutation endpoint and the CLI.  The
     capability projection composes the same way against the status
@@ -391,10 +522,12 @@ def resolve_guard_state_from_paths(
         broker_safety = read_broker_safety_verdict(verdict_snapshot_path)
     else:
         broker_safety = BrokerSafetyArtifact(state="UNKNOWN")
+    submission_capability = read_submission_capability(run_status_path)
     reconciliation = read_reconciliation_receipt(run_dir_for_reconciliation)
     uncertain_intent = read_uncertain_intent_state(intent_wal_path)
     return resolve_guard_state(
         broker_safety=broker_safety,
+        submission_capability=submission_capability,
         reconciliation=reconciliation,
         uncertain_intent=uncertain_intent,
     )
@@ -409,8 +542,8 @@ def empty_guard_state() -> ResumeGuardState:
     """
     return ResumeGuardState(
         broker_safety=BrokerSafetyArtifact(state="SAFE"),
+        submission_capability=SubmissionCapabilityArtifact(state="SATISFIED"),
         reconciliation=ReconciliationArtifact(state="NOT_AVAILABLE"),
         uncertain_intent=UncertainIntentArtifact(state="CLEAR"),
-        allow_resume=True,
         reason_codes=[],
     )

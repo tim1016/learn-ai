@@ -50,9 +50,16 @@ class RunStatusSidecar(BaseModel):
 
     Created and maintained by the observer sidecar process, containing
     lifecycle timestamps and process metadata.
+
+    PRD #619-A adds ``submit_mode_at_start`` and ``readonly_at_start``
+    as durable child/run evidence the Resume gate consults for the
+    submission_capability check (ADR-0011 amendment: identity and
+    capability are independent facts). Both are captured at child
+    boot and never mutated after. A legacy 1.x sidecar without either
+    field reads as ``None`` and Resume treats capability as UNKNOWN.
     """
 
-    schema_version: int = 1
+    schema_version: int = 2
     run_id: str
     started_at_ms: int
     last_update_ms: int
@@ -60,6 +67,9 @@ class RunStatusSidecar(BaseModel):
     exit_code: int | None = None
     exit_reason: ExitReason | None = None
     host_pid: int
+    # PRD #619-A — capability evidence.
+    submit_mode_at_start: Literal["live_paper", "shadow"] | None = None
+    readonly_at_start: bool | None = None
 
 
 class LiveRunSummary(BaseModel):

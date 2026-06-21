@@ -8,12 +8,18 @@ its ``final_verdict`` directly without recomputing.
 
 The derivation is fail-closed:
 
-- ``paper-only`` iff EVERY required gate is positively verified.
-- ``unsafe`` iff ANY gate positively indicates live / non-paper risk.
+- ``paper-only`` iff every identity gate positively confirms paper.
+- ``unsafe`` iff any gate positively indicates live / non-paper risk.
 - ``unknown`` otherwise.
 
-The hero is a trust anchor; any missing signal degrades to ``unknown``,
-never to ``paper-only``.
+ADR-0011 amendment (PRD #619-A): identity (``configured_mode``, port,
+account prefix) and submission capability are independent facts.
+``readonly_flag`` is still carried on the wire as a diagnostic field but
+no longer participates in the ``paper-only`` derivation — an executing
+paper bot runs with ``readonly=false`` and must still be able to reach
+``paper-only`` so guarded Resume can compose its four gates. Capability
+authority lives in durable child/run evidence (declared ``submit_mode`` +
+the actual ``readonly`` setting used to construct the child), not here.
 """
 
 from __future__ import annotations
@@ -104,14 +110,11 @@ def derive_broker_safety_verdict(
     elif mode_resolved == "unknown":
         unknown.append("configured_mode")
 
-    if readonly_flag is None:
-        unknown.append("readonly_flag")
-    elif readonly_flag is False:
-        # readonly=False positively states "this is not a read-only session";
-        # combined with paper sentinels it is still allowed, but for the
-        # verdict it counts as an unknown safety signal — the cockpit shows
-        # it as "verify before continuing".
-        unknown.append("readonly_flag")
+    # ADR-0011 amendment (PRD #619-A): readonly_flag is carried verbatim on
+    # the wire as diagnostic detail but no longer contributes to the
+    # identity derivation. Submission capability is a separate fact derived
+    # from durable child/run evidence; see ``operator_surface`` and the
+    # 619-A Resume composition.
 
     port_class = classify_port(port)
     if port_class == "live_port":
