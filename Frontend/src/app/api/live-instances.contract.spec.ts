@@ -33,19 +33,28 @@ describe('operator_surface wire contract', () => {
   });
 
   it('STOPPED fixture surfaces the host-process notice and reflects the unbound state', () => {
-    expect(STOPPED.operator_surface.host_process.state).toBe('STOPPED');
+    // Daemon-`idle` + the test fixture's default desired_state=RUNNING
+    // upgrades the host-process state to WAITING_FOR_HOST; absent desired
+    // intent it stays IDLE.  The fixture captures the unbound (idle)
+    // case.  PRD #616 left this enum unchanged.
+    expect(STOPPED.operator_surface.host_process.state).toBe('IDLE');
     expect(STOPPED.operator_surface.host_process.notice).toMatch(/host runner/i);
     // flatten-and-pause requires a binding -> disabled with reason code.
     expect(STOPPED.operator_surface.actions.flatten_and_pause.enabled).toBe(false);
     expect(STOPPED.operator_surface.actions.flatten_and_pause.disabled_reason_code).toBe(
       'NO_LIVE_BINDING',
     );
-    // resume/pause are durable writes — never disabled by the server.
+    // PRD #616 — resume/pause are now guarded; under the no-deployed
+    // (empty guard state) fixture they remain enabled because the
+    // intent is effectively-RUNNING with clean artifacts.
     expect(STOPPED.operator_surface.actions.resume.enabled).toBe(true);
     expect(STOPPED.operator_surface.actions.pause.enabled).toBe(true);
   });
 
-  it('exposes the same nine top-level keys on every fixture', () => {
+  it('exposes the same top-level keys on every fixture', () => {
+    // PRD #607 (cockpit revision) added ``trading_session``; PRD #616
+    // added ``readiness_gates``.  Both fixtures must carry the full
+    // set so the cockpit-v2 renderer cannot encounter a missing block.
     const expected = new Set([
       'schema_version',
       'host_process',
@@ -56,9 +65,26 @@ describe('operator_surface wire contract', () => {
       'daily_order_cap',
       'action_plan',
       'actions',
+      'trading_session',
+      'readiness_gates',
     ]);
     for (const fixture of [STEADY, STOPPED]) {
       expect(new Set(Object.keys(fixture.operator_surface))).toEqual(expected);
+    }
+  });
+
+  it('every action capability carries the disabled_reasons list (PRD #616)', () => {
+    for (const fixture of [STEADY, STOPPED]) {
+      for (const action of Object.values(fixture.operator_surface.actions)) {
+        expect(Array.isArray(action.disabled_reasons)).toBe(true);
+      }
+    }
+  });
+
+  it('exposes the five canonical actions including stop (PRD #616 / ADR-0010 §A1)', () => {
+    const expected = new Set(['resume', 'pause', 'stop', 'flatten_and_pause', 'mark_poisoned']);
+    for (const fixture of [STEADY, STOPPED]) {
+      expect(new Set(Object.keys(fixture.operator_surface.actions))).toEqual(expected);
     }
   });
 });

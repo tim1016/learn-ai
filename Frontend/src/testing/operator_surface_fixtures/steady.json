@@ -34,22 +34,34 @@
       "flatten_and_pause": {
         "disabled_reason_code": "NO_OWNED_POSITIONS",
         "effect": "LIVE_ACTUATION",
-        "enabled": false
+        "enabled": false,
+        "disabled_reasons": [
+          "NO_OWNED_POSITIONS"
+        ]
       },
       "mark_poisoned": {
         "disabled_reason_code": null,
         "effect": "LIVE_ACTUATION",
-        "enabled": true
+        "enabled": true,
+        "disabled_reasons": []
       },
       "pause": {
         "disabled_reason_code": null,
         "effect": "LIVE_ACTUATION",
-        "enabled": true
+        "enabled": true,
+        "disabled_reasons": []
       },
       "resume": {
         "disabled_reason_code": null,
         "effect": "LIVE_ACTUATION",
-        "enabled": true
+        "enabled": true,
+        "disabled_reasons": []
+      },
+      "stop": {
+        "enabled": true,
+        "effect": "DURABLE_ONLY",
+        "disabled_reason_code": null,
+        "disabled_reasons": []
       }
     },
     "broker": {
@@ -88,7 +100,8 @@
       "permits_strategy_activity": false,
       "phase": "CLOSED",
       "timezone": "America/New_York"
-    }
+    },
+    "readiness_gates": []
   },
   "process": {
     "bound_run_id": "run-steady",
