@@ -39,7 +39,6 @@ from app.engine.live.engine_runtime_publisher import (
 )
 from tests._fixtures.fake_clock import make_test_clock
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
