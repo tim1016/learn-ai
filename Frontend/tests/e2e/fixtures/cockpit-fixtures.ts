@@ -169,7 +169,7 @@ export function buildAccountSummary(opts: {
   const identity = opts.identity ?? 'CONSISTENT';
   const contamination = opts.contamination ?? 'clean';
   return {
-    account_id: opts.accountId ?? 'DU284968',
+    account_id: opts.accountId === undefined ? 'DU284968' : opts.accountId,
     account_identity: identity,
     account_identity_reason_codes:
       identity === 'CONFLICTING'
