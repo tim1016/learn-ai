@@ -49,7 +49,6 @@ from app.engine.live.control_plane import (
 )
 from tests._fixtures.fake_clock import make_test_clock
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
