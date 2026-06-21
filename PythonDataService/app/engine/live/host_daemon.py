@@ -13,6 +13,7 @@ owns subprocess lifecycle.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import ipaddress
 import json
@@ -131,9 +132,32 @@ class RunnerProcessManager:
     "live" is a process fact, not an artifact fact.
     """
 
-    def __init__(self, *, repo_root: Path, live_runs_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        repo_root: Path,
+        live_runs_root: Path,
+        boot_id: str | None = None,
+    ) -> None:
         self.repo_root = repo_root.resolve()
         self.live_runs_root = live_runs_root.resolve()
+        # PRD #619-B — daemon boot identity. Immutable per process
+        # start. Spawned children read it via LIVE_RUNNER_DAEMON_BOOT_ID
+        # and the child watchdog treats a mismatch as BOOT_ID_CHANGED.
+        # Tests can pin a deterministic value; production lets uuid4()
+        # generate a fresh one.
+        import uuid as _uuid
+
+        self.boot_id: str = boot_id if boot_id is not None else _uuid.uuid4().hex
+        # ``artifacts_root`` is ``<live_runs_root>/..`` per the daemon's
+        # existing convention (token + cache live alongside live_runs).
+        self.artifacts_root: Path = self.live_runs_root.parent
+        # PRD #619-B — periodic lease writer + the orphan-candidates list
+        # the data plane reads via /health. Both are populated during the
+        # FastAPI lifespan (``create_app``); ``None`` here until startup
+        # has run.
+        self._lease_writer: object | None = None
+        self._orphan_candidates: list[object] = []
         self._managed: dict[str, ManagedProcess] = {}
         # VCR-P3-P / Phase 6D — per-instance start locks. Each key holds an
         # ``rlock`` so the (check_existing, spawn, register) sequence in
@@ -180,6 +204,14 @@ class RunnerProcessManager:
         """
         running = self._launch_git_sha
         on_disk = self._compute_git_sha()
+        # PRD #619-B — control-plane diagnostics. The lease writer is
+        # populated during the FastAPI lifespan; before that it's None
+        # and the report degrades to "no lease yet" gracefully.
+        lease_status: str | None = None
+        last_written_at_ms: int | None = None
+        if self._lease_writer is not None:
+            lease_status = getattr(self._lease_writer, "status", None)
+            last_written_at_ms = getattr(self._lease_writer, "last_written_at_ms", None)
         return HostRunnerHealth(
             ok=True,
             repo_root=str(self.repo_root),
@@ -190,6 +222,10 @@ class RunnerProcessManager:
             repo_head_sha=on_disk,
             code_stale=bool(running and on_disk and running != on_disk),
             commits_behind=self._commits_behind(running, on_disk),
+            daemon_boot_id=self.boot_id,
+            lease_status=lease_status,
+            last_lease_written_at_ms=last_written_at_ms,
+            orphan_candidates_count=len(self._orphan_candidates),
         )
 
     def _compute_git_sha(self) -> str | None:
@@ -833,6 +869,10 @@ class RunnerProcessManager:
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
         env["IBKR_HOST"] = request.ibkr_host
+        # PRD #619-B — propagate this daemon's boot_id so the spawned
+        # child captures it as ``expected_daemon_boot_id`` and the
+        # watchdog can detect daemon restart.
+        env["LIVE_RUNNER_DAEMON_BOOT_ID"] = self.boot_id
         return env
 
     def _validate_run_dir(self, run_id: str) -> Path:
@@ -887,10 +927,59 @@ def create_app(
     """
     process_manager = manager if manager is not None else _manager_from_env()
     token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
+
+    # PRD #619-B — daemon lease lifespan. On startup: classify orphan
+    # candidates left behind by a previous daemon boot, then spawn the
+    # ``DaemonLeaseWriter`` which writes ``daemon_lease.json`` at 1Hz.
+    # On shutdown: switch to ``DRAINING`` (an immediate flush) and
+    # bounded-stop the writer so the watchdog observes the planned
+    # transition. Failures are logged and tolerated — the daemon must
+    # still start even if the control_plane directory is unwritable.
+    from contextlib import asynccontextmanager
+
+    from app.engine.live.control_plane import DaemonLeaseWriter
+    from app.engine.live.orphan_classifier import classify_runtime_candidates_on_boot
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        try:
+            process_manager._orphan_candidates = classify_runtime_candidates_on_boot(
+                process_manager.live_runs_root,
+                this_boot_id=process_manager.boot_id,
+                now_ms=_now_ms(),
+            )
+        except Exception:
+            logger.exception("orphan classification on boot failed")
+        writer = DaemonLeaseWriter(
+            artifacts_root=process_manager.artifacts_root,
+            boot_id=process_manager.boot_id,
+            now_ms=_now_ms,
+        )
+        process_manager._lease_writer = writer
+        try:
+            await writer.start()
+        except Exception:
+            logger.exception("daemon lease writer failed to start")
+        try:
+            yield
+        finally:
+            writer.set_draining()
+            # Give the writer task one event-loop tick to observe the
+            # ``DRAINING`` wake and write a final lease before we
+            # ``stop()`` it. Without the yield, the writer may not
+            # have run between ``set_draining()`` and ``stop()`` and
+            # the watchdog would see ``CONNECTED`` on the way out.
+            await asyncio.sleep(0)
+            try:
+                await writer.stop()
+            except Exception:
+                logger.exception("daemon lease writer stop failed")
+
     app = FastAPI(
         title="learn-ai host live-run daemon",
         description="Host-side subprocess bridge for IBKR paper-run starts.",
         version="1.0.0",
+        lifespan=_lifespan,
     )
     app.add_middleware(
         CORSMiddleware,

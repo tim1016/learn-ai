@@ -278,6 +278,20 @@ class HostRunnerHealth(BaseModel):
     repo_head_sha: str | None = None
     code_stale: bool = False
     commits_behind: int | None = None
+    # PRD #619-B — control-plane identity. ``daemon_boot_id`` is the UUID
+    # the daemon process generated at startup; spawned children read it
+    # via the ``LIVE_RUNNER_DAEMON_BOOT_ID`` env var and the child
+    # watchdog (B5) treats a mismatch as ``BOOT_ID_CHANGED``. ``lease_status``
+    # mirrors ``daemon_lease.json.status`` (``CONNECTED`` / ``DRAINING``);
+    # ``last_lease_written_at_ms`` is the timestamp of the most recent
+    # successful lease write. ``orphan_candidates_count`` is the size of
+    # the read-only investigation list the orphan classifier (B6)
+    # produced at boot — the daemon does NOT auto-adopt; >0 surfaces on
+    # the cockpit so the operator decides.
+    daemon_boot_id: str | None = None
+    lease_status: str | None = None
+    last_lease_written_at_ms: int | None = None
+    orphan_candidates_count: int = 0
 
 
 class EmergencyFlattenRequest(BaseModel):
