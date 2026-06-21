@@ -93,7 +93,7 @@ def test_write_run_status_correct_fields(tmp_path: Path):
 
     data = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
     assert data["run_id"] == "my-run-42"
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2  # PRD #619-A
     assert data["host_pid"] == 12345
 
 
@@ -105,7 +105,7 @@ def test_write_run_status_schema_version_round_trip(tmp_path: Path):
 
     raw = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
     restored = RunStatusSidecar.model_validate(raw)
-    assert restored.schema_version == 1
+    assert restored.schema_version == 2  # PRD #619-A — bumped for capability fields
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def test_run_status_sidecar_round_trip(reason: ExitReason):
 
     assert restored.run_id == sidecar.run_id
     assert restored.exit_reason == reason
-    assert restored.schema_version == 1
+    assert restored.schema_version == 2  # PRD #619-A — bumped for capability fields
 
 
 def test_run_status_sidecar_active_run_round_trip():

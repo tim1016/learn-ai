@@ -50,11 +50,12 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
 
+from app.broker.runtime_snapshot import make_live_engine_verdict_provider
 from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
@@ -1221,6 +1222,18 @@ def cmd_start(args: argparse.Namespace) -> int:
     # "after session start 00:00 UTC" and tripped a false outside_mutation
     # halt).
     session_start_ms = int(time.time() * 1000)
+    # PRD #619-A §A3 — production wiring of the broker-safety verdict
+    # observer. The closure reads the *child's own* IbkrClient via the
+    # typed ``BrokerRuntimeSnapshot`` builder and emits the ADR-0011
+    # identity verdict that ``LiveEngine._check_verdict_transition_halt``
+    # writes to ``verdict_snapshot.json`` every check. The data-plane
+    # singleton is never consulted for live-run safety authority. Tests
+    # that pass ``broker=`` directly without a client (no real IBKR
+    # session) leave the provider unset — the engine treats ``None`` as
+    # "no observer wired" and skips the gate.
+    verdict_provider = (
+        make_live_engine_verdict_provider(client) if client is not None else None
+    )
     engine = LiveEngine(
         client,
         live_config,
@@ -1251,13 +1264,28 @@ def cmd_start(args: argparse.Namespace) -> int:
         # IntentWal on LivePortfolio. Required since Phase 5B (ADR 0008)
         # fail-fasts when a real-broker portfolio has no IntentWal.
         intent_wal_path=args.run_dir / "intent_events.jsonl",
+        verdict_provider=verdict_provider,
     )
 
+    # PRD #619-A — capture the durable child/run evidence the Resume
+    # gate needs to evaluate ``submission_capability``: the declared
+    # submit mode from the spec (``run_mode`` was resolved above from
+    # ``spec.submit_mode``) and the actual ``readonly`` setting used to
+    # construct the child. Both are immutable startup facts; subsequent
+    # ``write_run_status`` calls use ``model_copy(update={...})`` so
+    # they carry through every lifecycle write. A run whose status
+    # sidecar predates this PR will have ``None`` here and the Resume
+    # gate honestly reports capability=UNKNOWN.
+    _submit_mode_at_start: Literal["live_paper", "shadow"] | None = (
+        run_mode if run_mode in ("live_paper", "shadow") else None
+    )
     _entry_sidecar = RunStatusSidecar(
         run_id=ledger.run_id,
         started_at_ms=now_ms(),
         last_update_ms=now_ms(),
         host_pid=_os.getpid(),
+        submit_mode_at_start=_submit_mode_at_start,
+        readonly_at_start=bool(args.readonly),
     )
     try:
         write_run_status(args.run_dir, _entry_sidecar)
@@ -1964,6 +1992,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if run_dir is not None:
         guard_state = resolve_guard_state_from_paths(
             verdict_snapshot_path=run_dir / "verdict_snapshot.json",
+            run_status_path=run_dir / "run_status.json",
             run_dir_for_reconciliation=run_dir,
             intent_wal_path=run_dir / "intent_events.jsonl",
         )
@@ -1975,6 +2004,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
             details: list[str] = []
             if guard_state.broker_safety.state != "SAFE":
                 details.append(f"broker-safety={guard_state.broker_safety.state!s} verdict={broker_v!r}")
+            # PRD #619-A — submission-capability gate.
+            if guard_state.submission_capability.state != "SATISFIED":
+                cap = guard_state.submission_capability
+                details.append(
+                    f"submission-capability={cap.state!s} "
+                    f"declared={cap.declared_submit_mode!r} "
+                    f"readonly_at_start={cap.readonly_at_start!r}"
+                )
             if guard_state.uncertain_intent.state == "PRESENT":
                 preview = ", ".join(wal_pending[:5])
                 if len(wal_pending) > 5:

@@ -182,6 +182,7 @@ def test_read_uncertain_intent_state_unknown_when_wal_corrupt(tmp_path: Path) ->
 def test_resolve_guard_state_matches_table(case: GuardCase) -> None:
     state = resolve_guard_state(
         broker_safety=case.broker_safety,
+        submission_capability=case.submission_capability,
         reconciliation=case.reconciliation,
         uncertain_intent=case.uncertain_intent,
     )
@@ -191,14 +192,35 @@ def test_resolve_guard_state_matches_table(case: GuardCase) -> None:
 
 def test_resolve_guard_state_from_paths_composes_artifact_readers(tmp_path: Path) -> None:
     # All three artifacts in their happy state.
-    (tmp_path / "verdict_snapshot.json").write_text(json.dumps({"verdict": "paper-only"}), encoding="utf-8")
+    (tmp_path / "verdict_snapshot.json").write_text(
+        json.dumps({"verdict": "paper-only"}), encoding="utf-8"
+    )
+    # PRD #619-A — run_status.json carries the durable child/run
+    # capability evidence (declared submit_mode + actual readonly at
+    # child construction).
+    (tmp_path / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": "r",
+                "started_at_ms": 1,
+                "last_update_ms": 1,
+                "host_pid": 1,
+                "submit_mode_at_start": "live_paper",
+                "readonly_at_start": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     state = resolve_guard_state_from_paths(
         verdict_snapshot_path=tmp_path / "verdict_snapshot.json",
+        run_status_path=tmp_path / "run_status.json",
         run_dir_for_reconciliation=tmp_path,
         intent_wal_path=tmp_path / "intent_events.jsonl",
     )
     assert state.allow_resume is True
     assert state.broker_safety.state == "SAFE"
+    assert state.submission_capability.state == "SATISFIED"
     assert state.reconciliation.state == "NOT_AVAILABLE"
     assert state.uncertain_intent.state == "CLEAR"
 
@@ -228,6 +250,7 @@ def _desired(state: str | None) -> DesiredStateView | None:
 def test_evaluate_action_resume_matches_table(case: GuardCase) -> None:
     guard_state = resolve_guard_state(
         broker_safety=case.broker_safety,
+        submission_capability=case.submission_capability,
         reconciliation=case.reconciliation,
         uncertain_intent=case.uncertain_intent,
     )
@@ -247,6 +270,7 @@ def test_evaluate_action_resume_matches_table(case: GuardCase) -> None:
 def test_evaluate_action_pause_matches_table(case: GuardCase) -> None:
     guard_state = resolve_guard_state(
         broker_safety=case.broker_safety,
+        submission_capability=case.submission_capability,
         reconciliation=case.reconciliation,
         uncertain_intent=case.uncertain_intent,
     )
@@ -266,6 +290,7 @@ def test_evaluate_action_pause_matches_table(case: GuardCase) -> None:
 def test_evaluate_action_stop_matches_table(case: GuardCase) -> None:
     guard_state = resolve_guard_state(
         broker_safety=case.broker_safety,
+        submission_capability=case.submission_capability,
         reconciliation=case.reconciliation,
         uncertain_intent=case.uncertain_intent,
     )
@@ -282,8 +307,15 @@ def test_evaluate_action_stop_matches_table(case: GuardCase) -> None:
 
 
 def test_evaluate_action_resume_returns_priority_ordered_codes() -> None:
+    from app.services.resume_guard_state import SubmissionCapabilityArtifact
+
     state = resolve_guard_state(
         broker_safety=BrokerSafetyArtifact(state="UNSAFE", verdict="unsafe"),
+        submission_capability=SubmissionCapabilityArtifact(
+            state="SATISFIED",
+            declared_submit_mode="live_paper",
+            readonly_at_start=False,
+        ),
         reconciliation=ReconciliationArtifact(state="FAILED", detail=""),
         uncertain_intent=UncertainIntentArtifact(state="PRESENT", unresolved_intent_ids=("x",)),
     )
@@ -331,12 +363,14 @@ def test_sort_reason_codes_preserves_priority_for_unknown_codes_last() -> None:
 
 
 def test_resume_reason_codes_vocabulary_pinned() -> None:
-    # PRD #616 — closed vocabulary the Frontend lookup covers.
+    # PRD #616 / PRD #619-A — closed vocabulary the Frontend lookup covers.
     assert (
         frozenset(
             {
                 "BROKER_SAFETY_UNSAFE",
                 "BROKER_SAFETY_UNKNOWN",
+                "SUBMISSION_CAPABILITY_BLOCKED",
+                "SUBMISSION_CAPABILITY_UNKNOWN",
                 "RECONCILIATION_FAILED",
                 "RECONCILIATION_STALE",
                 "RECONCILIATION_NOT_AVAILABLE",
@@ -391,8 +425,15 @@ def test_evaluate_action_unknown_intent_does_not_block() -> None:
 
 
 def test_resume_guard_state_carries_artifact_diagnostics() -> None:
+    from app.services.resume_guard_state import SubmissionCapabilityArtifact
+
     state = resolve_guard_state(
         broker_safety=BrokerSafetyArtifact(state="UNSAFE", verdict="unsafe"),
+        submission_capability=SubmissionCapabilityArtifact(
+            state="SATISFIED",
+            declared_submit_mode="live_paper",
+            readonly_at_start=False,
+        ),
         reconciliation=ReconciliationArtifact(state="FAILED", detail="residual SPY +1", receipt_path="/x"),
         uncertain_intent=UncertainIntentArtifact(state="PRESENT", unresolved_intent_ids=("intent-x",)),
     )

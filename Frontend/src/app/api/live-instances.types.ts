@@ -199,12 +199,12 @@ export interface ActionCapability {
   /** PRD #616 — single-line tooltip code (head of `disabled_reasons` after
    *  priority sort).  `null` when `enabled` is true. */
   disabled_reason_code: string | null;
-  /** PRD #616 — full priority-ordered list of applicable reason codes.
-   *  Empty when `enabled` is true.  Optional on the type so the
-   *  pre-#616 cockpit components keep type-checking; the server always
-   *  emits the list (default `[]`).  The PRD #617 cockpit replacement
-   *  reads this field. */
-  disabled_reasons?: string[];
+  /** PRD #616 / PRD #619-A — full priority-ordered list of applicable
+   *  reason codes.  Empty (but present) when `enabled` is true.  Now
+   *  required: every pre-#616 fixture has been updated to emit `[]`
+   *  for the empty case so the optional shape is no longer needed
+   *  (PRD #619-A §A6). */
+  disabled_reasons: string[];
 }
 
 export interface OperatorSurfaceHostProcess {
@@ -266,11 +266,11 @@ export interface OperatorSurfaceConfiguration {
 export interface OperatorSurfaceActions {
   resume: ActionCapability;
   pause: ActionCapability;
-  /** PRD #616 — fifth canonical action (ADR-0010 §A1).
-   *  Optional on the type so the pre-#616 cockpit fixtures still
-   *  type-check; the server always emits it.  The PRD #617 cockpit
-   *  replacement reads this field. */
-  stop?: ActionCapability;
+  /** PRD #616 / PRD #619-A — fifth canonical action (ADR-0010 §A1).
+   *  Required: every cockpit fixture has been updated to emit a
+   *  concrete capability; the pre-#616 optionality is removed in
+   *  PRD #619-A §A6. */
+  stop: ActionCapability;
   flatten_and_pause: ActionCapability;
   mark_poisoned: ActionCapability;
 }

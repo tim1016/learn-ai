@@ -466,6 +466,24 @@ def _seed_run_with_wal(
             _json.dumps({"verdict": "paper-only", "observed_at_ms_utc": 1}),
             encoding="utf-8",
         )
+        # PRD #619-A — the four-gate Resume composition consults
+        # ``run_status.json`` for durable child/run capability
+        # evidence. Seed the SATISFIED case (declared live_paper +
+        # readonly=False) alongside the SAFE verdict.
+        (run_dir / "run_status.json").write_text(
+            _json.dumps(
+                {
+                    "schema_version": 2,
+                    "run_id": run_id,
+                    "started_at_ms": 1,
+                    "last_update_ms": 1,
+                    "host_pid": 1,
+                    "submit_mode_at_start": "live_paper",
+                    "readonly_at_start": False,
+                }
+            ),
+            encoding="utf-8",
+        )
     return run_dir
 
 

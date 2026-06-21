@@ -90,6 +90,7 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
+from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.operator_capability import evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -1164,19 +1165,19 @@ async def _fetch_broker_connected_account() -> tuple[str | None, bool]:
     absence" from "could not query at all" (broker not wired) so the
     fleet account summary surfaces ``BROKER_ACCOUNT_UNAVAILABLE``
     only when honest.
-    """
-    try:
-        from app.routers.broker import _require_connected_or_503
 
-        client = _require_connected_or_503()
-    except Exception as exc:
-        logger.info("fleet broker-account fetch unavailable: %s", exc)
+    PRD #619-A: routed through the typed ``BrokerRuntimeSnapshot`` so
+    the read uses public ``IbkrClient`` API only (``connected_account``
+    property). The previous ``getattr(client, "account_id", None)``
+    read a field that does not exist on the real client and silently
+    degraded every call to ``known=False``.
+    """
+    from app.broker.runtime_snapshot import snapshot_data_plane_broker
+
+    snapshot = snapshot_data_plane_broker()
+    if not snapshot.client_available or not snapshot.connected:
         return None, False
-    try:
-        account = getattr(client, "account_id", None)
-    except Exception as exc:
-        logger.info("fleet broker-account read failed: %s", exc)
-        return None, False
+    account = snapshot.connected_account
     if isinstance(account, str) and account.strip():
         return account.strip(), True
     return None, True
@@ -1307,39 +1308,34 @@ def _resolve_safety_verdict_final(
     """PRD #616 — derive ADR-0011's reactive ``BrokerSafetyVerdict.final_verdict``
     for the operator-surface projection.
 
-    Prefer the live broker connection's safety verdict (port, account
-    prefix, readonly flag) so a mid-session degradation is reflected
-    immediately.  Fall back to the configured-mode-only derivation
-    when the broker client is not available (the cockpit still gets a
-    truthful ``UNKNOWN`` instead of ``UNSAFE``-by-omission).
+    PRD #619-A: routed through the typed ``BrokerRuntimeSnapshot`` so
+    the read uses only public ``IbkrClient`` API and a missing/torn-down
+    singleton surfaces as a structured ``client_available=False``
+    snapshot rather than being swallowed by a broad ``except Exception``.
+    Per the ADR-0011 amendment, ``readonly_flag`` is no longer part of
+    the identity derivation; the snapshot still carries it for the
+    per-gate breakdown.
+
+    The fleet-level singleton is the *data-plane* observation; for live
+    runs the authoritative verdict comes from the child's own
+    ``verdict_snapshot.json`` (see PRD #619-A §A3 — the engine writes
+    that file via its ``verdict_provider`` closure).
     """
+    from app.broker.runtime_snapshot import snapshot_data_plane_broker
     from app.broker.safety_verdict import derive_broker_safety_verdict
 
-    try:
-        from app.routers.broker import _require_connected_or_503
-
-        client = _require_connected_or_503()
-        port = getattr(client.config, "port", None) if getattr(client, "config", None) else None
-        account = getattr(client, "account_id", None)
-        readonly_flag = getattr(client.config, "read_only_api", None) if getattr(client, "config", None) else None
-        verdict = derive_broker_safety_verdict(
-            configured_mode=configured_mode,
-            readonly_flag=readonly_flag,
-            port=port,
-            connected_account=account,
-        )
-        return verdict.final_verdict
-    except Exception:
-        # Broker not wired or unreachable — derive from configured mode
-        # alone with conservative defaults so the cockpit's verdict is
-        # honest.  ``derive_broker_safety_verdict`` is pure.
-        verdict = derive_broker_safety_verdict(
-            configured_mode=configured_mode,
-            readonly_flag=None,
-            port=None,
-            connected_account=None,
-        )
-        return verdict.final_verdict
+    snapshot = snapshot_data_plane_broker()
+    # When the singleton is unavailable (broker disabled, lifespan has
+    # not constructed it, or it has been torn down) the snapshot fields
+    # are all ``None``. Feeding those Nones to the pure derivation yields
+    # an honest ``unknown`` driven by the cockpit's own ``configured_mode``.
+    verdict = derive_broker_safety_verdict(
+        configured_mode=configured_mode,
+        readonly_flag=snapshot.readonly,
+        port=snapshot.port,
+        connected_account=snapshot.connected_account,
+    )
+    return verdict.final_verdict
 
 
 def _resolve_resume_guard_state_for(
@@ -1360,8 +1356,40 @@ def _resolve_resume_guard_state_for(
         return empty_guard_state()
     return resolve_guard_state_from_paths(
         verdict_snapshot_path=run_dir / "verdict_snapshot.json",
+        run_status_path=run_dir / "run_status.json",
         run_dir_for_reconciliation=run_dir,
         intent_wal_path=run_dir / "intent_events.jsonl",
+    )
+
+
+async def _load_instance_context_for_router(sid: str) -> InstanceContext:
+    """PRD #619-A §A4 — single-call assembly for the mutation endpoints.
+
+    Wires the pure ``load_instance_context`` service to this router's
+    helpers / settings. Each mutation endpoint calls this once for its
+    pre-write capability gate; the post-write daemon revalidation is a
+    *separate* fetch (the durable write may move daemon-side state).
+    """
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    async def _fetch_daemon(_sid: str) -> dict | None:
+        return await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url, _sid
+        )
+
+    return await load_instance_context(
+        sid,
+        now_ms=_now_ms,
+        fetch_daemon_process=_fetch_daemon,
+        interpret_daemon_process=lambda daemon: _interpret_daemon_process(daemon, root),
+        scan_runs_for_instance=lambda _sid: _scan_runs_by_instance(root).get(_sid, []),
+        resolve_desired_state=lambda _sid: _resolve_desired_state(root, _sid),
+        instance_last_exit=_instance_last_exit,
+        instance_broker=lambda _sid: _instance_broker(root, _sid),
+        resolve_guard_state_for=lambda live_binding, runs: _resolve_resume_guard_state_for(
+            root, live_binding, runs
+        ),
     )
 
 
@@ -1711,31 +1739,21 @@ async def set_instance_desired_state(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
-    # PRD #616 — re-run the shared capability evaluator immediately
-    # before the durable write so a stale status snapshot cannot drive
-    # this mutation past the Resume guards.  ``ResumeGuardState`` is
-    # the canonical resolver; the projection and the CLI consume it
-    # too.
-    daemon_for_gate = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    process_for_gate, live_binding_for_gate = _interpret_daemon_process(daemon_for_gate, root)
-    runs_for_gate = _scan_runs_by_instance(root).get(sid, [])
-    desired_for_gate = _resolve_desired_state(root, sid)
-    last_exit_for_gate = _instance_last_exit(runs_for_gate)
-    poisoned_for_gate = bool(last_exit_for_gate and last_exit_for_gate.halt_trigger is not None)
-    guard_state_for_gate = _resolve_resume_guard_state_for(root, live_binding_for_gate, runs_for_gate)
-    broker_for_gate = _instance_broker(root, sid)
-    owned_positions_empty_for_gate = broker_for_gate is None or not any(
-        qty != 0 for qty in broker_for_gate.owned_positions.values()
-    )
+    # PRD #616 / #619-A §A4 — re-run the shared capability evaluator
+    # immediately before the durable write so a stale status snapshot
+    # cannot drive this mutation past the Resume guards. ``load_instance_context``
+    # is the canonical pre-write assembler; the projection and the CLI
+    # consume the same composition.
+    ctx = await _load_instance_context_for_router(sid)
     action_name = body.action.value  # "pause" | "resume" | "stop"
     gate = evaluate_action(
         action_name,  # type: ignore[arg-type]
-        process=process_for_gate,
-        live_binding=live_binding_for_gate,
-        poisoned=poisoned_for_gate,
-        owned_positions_empty=owned_positions_empty_for_gate,
-        desired_state=desired_for_gate,
-        guard_state=guard_state_for_gate,
+        process=ctx.process,
+        live_binding=ctx.live_binding,
+        poisoned=ctx.poisoned,
+        owned_positions_empty=ctx.owned_positions_empty,
+        desired_state=ctx.desired_state,
+        guard_state=ctx.guard_state,
     )
     if not gate.enabled:
         raise HTTPException(
@@ -1743,7 +1761,7 @@ async def set_instance_desired_state(
             detail={
                 "disabled_reason_code": gate.disabled_reason_code,
                 "disabled_reasons": gate.disabled_reasons,
-                "guard_state": guard_state_for_gate.model_dump(mode="json"),
+                "guard_state": ctx.guard_state.model_dump(mode="json"),
             },
         )
 
@@ -1838,24 +1856,18 @@ async def flatten_and_pause_instance(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
-    # PRD #607 / Slice 1 (#608) — shared-capability gate. The status
-    # endpoint's ``operator_surface.actions.flatten_and_pause`` is the
-    # cockpit's authority for when this keycap is enabled; the mutation
-    # endpoint re-evaluates the same function so a stale snapshot
-    # cannot drive this past the same rule.  Re-fetch the daemon state
-    # once now (and reuse it below) so the gate runs against fresh
-    # eligibility.
-    daemon_for_gate = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    process_for_gate, live_binding_for_gate = _interpret_daemon_process(daemon_for_gate, root)
-    broker_for_gate = _instance_broker(root, sid)
-    owned_positions_empty_for_gate = broker_for_gate is None or not any(
-        qty != 0 for qty in broker_for_gate.owned_positions.values()
-    )
+    # PRD #607 / Slice 1 (#608) / #619-A §A4 — shared-capability gate.
+    # The status endpoint's ``operator_surface.actions.flatten_and_pause``
+    # is the cockpit's authority for when this keycap is enabled; the
+    # mutation endpoint re-evaluates the same function via the canonical
+    # ``load_instance_context`` assembler so a stale snapshot cannot
+    # drive this past the same rule.
+    ctx = await _load_instance_context_for_router(sid)
     gate = evaluate_action(
         "flatten_and_pause",
-        process=process_for_gate,
-        live_binding=live_binding_for_gate,
-        owned_positions_empty=owned_positions_empty_for_gate,
+        process=ctx.process,
+        live_binding=ctx.live_binding,
+        owned_positions_empty=ctx.owned_positions_empty,
     )
     if not gate.enabled:
         raise HTTPException(
@@ -1968,9 +1980,13 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    process_view, live_binding = _interpret_daemon_process(daemon, root)
-    run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+    # PRD #619-A §A4 — single-call assembly. The post-write-style
+    # actuation here still needs ``run_dir`` (filesystem confine), so
+    # we resolve it after the gate from the same observation.
+    ctx = await _load_instance_context_for_router(sid)
+    run_dir = (
+        _visible_live_run_dir(root, ctx.live_binding) if ctx.live_binding is not None else None
+    )
 
     # PRD #607 / Slice 1 (#608) — shared-capability gate for the cockpit
     # actions that flow through this endpoint.  Currently only
@@ -1978,13 +1994,11 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
     # ALREADY_POISONED); other one-shots fall back to the legacy
     # binding check below.
     if verb is CommandVerb.MARK_POISONED:
-        last_exit = _instance_last_exit(_scan_runs_by_instance(root).get(sid, []))
-        poisoned = bool(last_exit and last_exit.halt_trigger is not None)
         capability = evaluate_action(
             "mark_poisoned",
-            process=process_view,
-            live_binding=live_binding,
-            poisoned=poisoned,
+            process=ctx.process,
+            live_binding=ctx.live_binding,
+            poisoned=ctx.poisoned,
         )
         if not capability.enabled:
             raise HTTPException(

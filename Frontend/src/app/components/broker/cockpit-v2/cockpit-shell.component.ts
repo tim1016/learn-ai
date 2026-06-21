@@ -17,6 +17,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   effect,
   inject,
   signal,
@@ -78,12 +79,31 @@ export class CockpitShellComponent {
   private readonly _live = inject(LiveRunsService);
   private readonly _route = inject(ActivatedRoute);
   private readonly _router = inject(Router);
+  private readonly _destroyRef = inject(DestroyRef);
 
   readonly summaries = signal<LiveInstanceSummary[]>([]);
   readonly status = signal<LiveInstanceStatus | null>(null);
   readonly accountSummary = signal<FleetAccountSummary | null>(null);
   readonly accountSummaryExpanded = signal<boolean>(false);
-  readonly errorMessage = signal<string | null>(null);
+  // PRD #619-A §A5 — per-resource error signals. A successful refresh
+  // of one resource clears that resource's error only; a transport
+  // timeout on /status does not erase the user's view that
+  // /account-summary failed two seconds ago. The template-facing
+  // ``errorMessage`` is the first non-null in a documented priority
+  // order (status → summaries → account_summary → mutation) so the
+  // banner still surfaces a single message but the underlying state
+  // is per-resource.
+  readonly statusError = signal<string | null>(null);
+  readonly summariesError = signal<string | null>(null);
+  readonly accountSummaryError = signal<string | null>(null);
+  readonly mutationError = signal<string | null>(null);
+  readonly errorMessage = computed<string | null>(
+    () =>
+      this.mutationError() ??
+      this.statusError() ??
+      this.summariesError() ??
+      this.accountSummaryError(),
+  );
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
 
@@ -156,81 +176,135 @@ export class CockpitShellComponent {
   });
 
   constructor() {
-    // Initial mount: load summaries + account summary + selected status.
-    this._refreshSummaries();
-    this._refreshAccountSummary();
+    // PRD #619-A §A5 — explicit lifecycle. Every timer, every DOM
+    // listener, and the recursive poll scheduler are registered with
+    // ``DestroyRef.onDestroy`` so the cockpit leaves no leaked timer
+    // or listener behind when navigated away from. The poll loop uses
+    // schedule-after-completion (a single in-flight ``_pollTick`` at
+    // a time) so an async refresh that takes longer than the cadence
+    // cannot pile up overlapping fetches.
 
-    // Drive a route-id-aware selection on every navigation.
+    // Initial mount: kick off independent fetches in parallel.
+    void this._refreshSummaries();
+    void this._refreshAccountSummary();
+
+    this._wireRouteSelection();
+    this._wireClockTick();
+    this._wirePollLoop();
+    this._wireFocusRefresh();
+    this._wireSessionBoundaryRefresh();
+  }
+
+  /** Drive route-id-aware instance selection on every navigation. */
+  private _wireRouteSelection(): void {
     this._route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
       const id = params.get('id');
-      if (id) {
-        this._selectInstance(id);
-      }
+      if (id) this._selectInstance(id);
     });
+  }
 
-    // Per-second tick for the clock pill.
-    const tickHandle = setInterval(() => this.tickNow.set(Date.now()), TICK_INTERVAL_MS);
-    // Polling loop for status + summaries.
-    const pollHandle = setInterval(() => {
-      const id = this.selectedInstanceId();
-      if (id) {
-        this._refreshStatus(id);
-      }
-      this._refreshSummaries();
-    }, POLL_INTERVAL_MS);
+  /** Per-second tick for the identity-strip clock pill. */
+  private _wireClockTick(): void {
+    const handle = setInterval(() => this.tickNow.set(Date.now()), TICK_INTERVAL_MS);
+    this._destroyRef.onDestroy(() => clearInterval(handle));
+  }
 
-    // Browser focus / tab visibility refresh.
-    const focusListener = () => {
+  /** Serialized poll loop (status + summaries + account-summary).
+   *
+   * Each tick awaits the in-flight ``_pollTick`` before scheduling the
+   * next ``setTimeout`` so overlapping async callbacks cannot pile up
+   * when the network is slow. The stop flag is a closure local — it
+   * never leaks onto the class because the only consumer is the
+   * recursive call inside this method. */
+  private _wirePollLoop(): void {
+    let stopped = false;
+    let handle: ReturnType<typeof setTimeout> | null = null;
+    const schedule = (): void => {
+      if (stopped) return;
+      handle = setTimeout(() => {
+        void this._pollTick().finally(() => {
+          if (!stopped) schedule();
+        });
+      }, POLL_INTERVAL_MS);
+    };
+    this._destroyRef.onDestroy(() => {
+      stopped = true;
+      if (handle !== null) clearTimeout(handle);
+    });
+    schedule();
+  }
+
+  /** Browser focus / tab visibility refresh. PRD #619-A: the account
+   * summary is part of the focus refresh too (the original code only
+   * re-polled status + summaries, leaving stale account data visible
+   * after a long blur). */
+  private _wireFocusRefresh(): void {
+    const onFocus = (): void => {
       this.browserFocused.set(true);
       const id = this.selectedInstanceId();
-      if (id) this._refreshStatus(id);
-      this._refreshSummaries();
+      if (id) void this._refreshStatus(id);
+      void this._refreshSummaries();
+      void this._refreshAccountSummary();
     };
-    const blurListener = () => this.browserFocused.set(false);
-    const visibilityListener = () => {
-      if (document.visibilityState === 'visible') focusListener();
+    const onBlur = (): void => this.browserFocused.set(false);
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') onFocus();
     };
-    window.addEventListener('focus', focusListener);
-    window.addEventListener('blur', blurListener);
-    document.addEventListener('visibilitychange', visibilityListener);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    this._destroyRef.onDestroy(() => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+    });
+  }
 
-    // Boundary-aligned refresh after a session transition.
-    let boundaryTimer: ReturnType<typeof setTimeout> | null = null;
-    let earlyTimer: ReturnType<typeof setTimeout> | null = null;
-    effect(() => {
+  /** Boundary-aligned refresh after a session transition. Each
+   * ``effect`` run owns its own pair of timeouts via ``onCleanup`` —
+   * Angular runs the cleanup before the next reactive pass AND on
+   * component destroy, so no manual lifecycle bookkeeping is needed. */
+  private _wireSessionBoundaryRefresh(): void {
+    effect((onCleanup) => {
       const s = this.status();
-      if (boundaryTimer) clearTimeout(boundaryTimer);
-      if (earlyTimer) clearTimeout(earlyTimer);
       if (!s) return;
       const { earlyMs, boundaryMs } = this._clock.scheduleBoundaryRefresh(
         s.operator_surface.trading_session.next_transition_ms,
       );
+      let earlyTimer: ReturnType<typeof setTimeout> | null = null;
+      let boundaryTimer: ReturnType<typeof setTimeout> | null = null;
       if (earlyMs !== null) {
         earlyTimer = setTimeout(() => {
           const id = this.selectedInstanceId();
-          if (id) this._refreshStatus(id);
+          if (id) void this._refreshStatus(id);
         }, earlyMs);
       }
       if (boundaryMs !== null) {
         boundaryTimer = setTimeout(() => {
           const id = this.selectedInstanceId();
-          if (id) this._refreshStatus(id);
-          this._refreshSummaries();
+          if (id) void this._refreshStatus(id);
+          void this._refreshSummaries();
         }, boundaryMs);
       }
+      onCleanup(() => {
+        if (earlyTimer !== null) clearTimeout(earlyTimer);
+        if (boundaryTimer !== null) clearTimeout(boundaryTimer);
+      });
     });
+  }
 
-    // Cleanup on destroy.
-    new Promise<void>(() => {
-      /* keep handles alive for the component lifetime; the cockpit
-         is the page-level component and the unload is what tears
-         down these listeners */
-      void tickHandle;
-      void pollHandle;
-      void focusListener;
-      void blurListener;
-      void visibilityListener;
-    });
+  /** Single serialized poll tick — status (foreground instance) +
+   * summaries + account summary. Independent refreshes run in
+   * parallel within one tick; ``Promise.allSettled`` ensures one
+   * resource's failure does not cancel the others. */
+  private async _pollTick(): Promise<void> {
+    const id = this.selectedInstanceId();
+    const work: Promise<unknown>[] = [
+      this._refreshSummaries(),
+      this._refreshAccountSummary(),
+    ];
+    if (id) work.push(this._refreshStatus(id));
+    await Promise.allSettled(work);
   }
 
   selectTab(tab: InnerTab): void {
@@ -263,8 +337,9 @@ export class CockpitShellComponent {
 
   async dispatchStop(): Promise<void> {
     const surface = this.status()?.operator_surface;
-    const stop = surface?.actions.stop;
-    if (!stop?.enabled) return;
+    // PRD #619-A §A6 — ``stop`` is required on ``OperatorSurfaceActions``;
+    // no optional-chaining fallback needed.
+    if (!surface?.actions.stop.enabled) return;
     const confirmed = window.confirm(
       'Stop instance?\n\n' +
         '• Durable intent becomes STOPPED.\n' +
@@ -284,7 +359,7 @@ export class CockpitShellComponent {
     const id = this.selectedInstanceId();
     if (!id) return;
     this.busyAction.set('flatten_and_pause');
-    this.errorMessage.set(null);
+    this.mutationError.set(null);
     try {
       await this._live.flattenAndPause(id, {
         action: 'pause',
@@ -293,7 +368,7 @@ export class CockpitShellComponent {
       });
       await this._refreshStatus(id);
     } catch (err) {
-      this.errorMessage.set(this._humanError(err));
+      this.mutationError.set(this._humanError(err));
     } finally {
       this.busyAction.set(null);
     }
@@ -312,12 +387,13 @@ export class CockpitShellComponent {
     const id = this.selectedInstanceId();
     if (!id) return;
     this.busyAction.set('mark_poisoned');
+    this.mutationError.set(null);
     this.typedHaltOpen.set(false);
     try {
       await this._live.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
       await this._refreshStatus(id);
     } catch (err) {
-      this.errorMessage.set(this._humanError(err));
+      this.mutationError.set(this._humanError(err));
     } finally {
       this.busyAction.set(null);
     }
@@ -389,6 +465,10 @@ export class CockpitShellComponent {
     try {
       const rows = await this._live.getInstances();
       this.summaries.set(rows);
+      // PRD #619-A §A5 — clear *this* resource's error on success.
+      // Other resources' errors stay visible until they themselves
+      // recover (or fail again).
+      this.summariesError.set(null);
       // Apply readiness-transition reducer to every row.
       const foregroundId = this.selectedInstanceId();
       for (const row of rows) {
@@ -411,7 +491,7 @@ export class CockpitShellComponent {
         this._selectInstance(chosen);
       }
     } catch (err) {
-      this.errorMessage.set(this._humanError(err));
+      this.summariesError.set(this._humanError(err));
     }
   }
 
@@ -420,16 +500,18 @@ export class CockpitShellComponent {
       const s = await this._live.getInstanceStatus(id);
       this.status.set(s);
       this._clock.observe(s.fetched_at_ms);
+      this.statusError.set(null);
     } catch (err) {
-      this.errorMessage.set(this._humanError(err));
+      this.statusError.set(this._humanError(err));
     }
   }
 
   private async _refreshAccountSummary(): Promise<void> {
     try {
       this.accountSummary.set(await this._live.getAccountSummary());
+      this.accountSummaryError.set(null);
     } catch (err) {
-      this.errorMessage.set(this._humanError(err));
+      this.accountSummaryError.set(this._humanError(err));
     }
   }
 
@@ -440,12 +522,12 @@ export class CockpitShellComponent {
     const id = this.selectedInstanceId();
     if (!id) return;
     this.busyAction.set(action);
-    this.errorMessage.set(null);
+    this.mutationError.set(null);
     try {
       await this._live.setInstanceDesiredState(id, { action, reason: label, updated_by: 'operator' });
       await this._refreshStatus(id);
     } catch (err) {
-      this.errorMessage.set(this._humanError(err));
+      this.mutationError.set(this._humanError(err));
     } finally {
       this.busyAction.set(null);
     }

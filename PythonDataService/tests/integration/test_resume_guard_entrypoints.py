@@ -47,6 +47,7 @@ from tests._fixtures.resume_guard_cases import GUARD_CASES, GuardCase
 def test_entrypoint_capability_projection(case: GuardCase) -> None:
     state = resolve_guard_state(
         broker_safety=case.broker_safety,
+        submission_capability=case.submission_capability,
         reconciliation=case.reconciliation,
         uncertain_intent=case.uncertain_intent,
     )
@@ -71,10 +72,14 @@ def test_entrypoint_capability_projection(case: GuardCase) -> None:
 
 
 def _seed_instance(tmp_path: Path, sid: str, case: GuardCase) -> Path:
+    # PRD #619-A §A6 — return the run dir directly; the previous
+    # ``_seed_instance.last_run_dir = run_dir`` function-attribute hack
+    # leaked state across parametrized test invocations and made the
+    # CLI test rely on whichever fixture seeded last. Every caller now
+    # receives the run_dir via the return value.
     root = tmp_path / "live_runs"
     run_dir = root / f"{sid}-run-1"
     run_dir.mkdir(parents=True)
-    _seed_instance.last_run_dir = run_dir  # type: ignore[attr-defined]
     (run_dir / "run_ledger.json").write_text(
         json.dumps({"strategy_instance_id": sid, "run_id": run_dir.name}),
         encoding="utf-8",
@@ -190,6 +195,7 @@ async def test_entrypoint_mutation_endpoint(tmp_path: Path, monkeypatch, case: G
 
     actual_state = resolve_guard_state_from_paths(
         verdict_snapshot_path=run_dir / "verdict_snapshot.json",
+        run_status_path=run_dir / "run_status.json",
         run_dir_for_reconciliation=run_dir,
         intent_wal_path=run_dir / "intent_events.jsonl",
     )
@@ -230,7 +236,7 @@ async def test_entrypoint_mutation_endpoint(tmp_path: Path, monkeypatch, case: G
 @pytest.mark.parametrize("case", GUARD_CASES, ids=lambda c: c.name)
 def test_entrypoint_cli_cmd_resume(tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture, case: GuardCase) -> None:
     sid = "cli-sid"
-    _seed_instance(tmp_path, sid, case)
+    run_dir = _seed_instance(tmp_path, sid, case)
 
     # The CLI sets durable state via _cmd_set_desired_state.  For the
     # cases where current_intent is RUNNING/STOPPED/ALREADY_PAUSED the
@@ -256,9 +262,9 @@ def test_entrypoint_cli_cmd_resume(tmp_path: Path, monkeypatch, capsys: pytest.C
     # PRD #616 §"Out of Scope").
     from app.services.resume_guard_state import resolve_guard_state_from_paths
 
-    run_dir = _seed_instance.last_run_dir  # type: ignore[attr-defined]
     actual_state = resolve_guard_state_from_paths(
         verdict_snapshot_path=run_dir / "verdict_snapshot.json",
+        run_status_path=run_dir / "run_status.json",
         run_dir_for_reconciliation=run_dir,
         intent_wal_path=run_dir / "intent_events.jsonl",
     )

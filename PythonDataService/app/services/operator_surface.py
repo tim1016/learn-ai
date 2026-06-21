@@ -30,6 +30,7 @@ from app.schemas.live_runs import (
     InstanceStartDefaults,
     InvokeCapabilityAction,
     LiveBinding,
+    OpenRunbookAction,
     OperatorGate,
     OperatorSurface,
     OperatorSurfaceActionPlan,
@@ -368,69 +369,62 @@ def _project_trading_session(
 # is a callable that receives the gate and returns either a
 # ``GateSuggestedAction`` or ``(None, unavailable_reason)``.
 
-_GateActionFn = "callable[[ReadinessGate], object | tuple[None, str]]"
-
 _INVOKE_RESUME = InvokeCapabilityAction(kind="invoke_capability", capability="resume")
 _FOCUS_FLATTEN = FocusAction(kind="focus_action", tab="status", action="flatten_and_pause")
 _FOCUS_MARK_POISONED = FocusAction(kind="focus_action", tab="audit", action="mark_poisoned")
 _REDEPLOY = RedeployAction(kind="redeploy")
+_OPEN_BROKER_RECONNECT_RUNBOOK = OpenRunbookAction(
+    kind="open_runbook", slug="broker-reconnect"
+)
+
+
+# PRD #619-A §A6 — replace the inlined if/elif chain in ``_action_for_gate``
+# with one backend-authored table mapping ``gate.name`` →
+# (suggested_action, unavailable_reason). Exactly one of the two
+# components is non-None per row. The cockpit consumes the table's
+# output verbatim; gate-routing decisions are not derived in two
+# places.
+#
+# ``broker_connection`` routes to a runbook (``broker-reconnect``)
+# instead of Redeploy: reconnecting the IBKR session is an
+# out-of-band task that Redeploy does not perform. The previous
+# Redeploy entry was annotated as a placeholder; PRD #619-A makes it
+# correct.
+_GATE_ACTION_TABLE: dict[str, tuple[object | None, str | None]] = {
+    "broker_connection": (_OPEN_BROKER_RECONNECT_RUNBOOK, None),
+    "poison_sentinel": (_REDEPLOY, None),
+    "fleet_contamination": (None, "REQUIRES_OUT_OF_BAND_RESOLUTION"),
+    "daily_order_cap": (None, "NO_INLINE_REMEDIATION"),
+    "warmup": (None, "WAIT_FOR_CONDITION"),
+    "calendar": (None, "WAIT_FOR_CONDITION"),
+    "session": (None, "WAIT_FOR_CONDITION"),
+    "instrument_surface": (None, "WAIT_FOR_CONDITION"),
+    "indicator_state_hydration": (_REDEPLOY, None),
+    "spec_signature": (_REDEPLOY, None),
+    "intent_wal_clean": (_FOCUS_MARK_POISONED, None),
+    "positions_self_consistent": (_FOCUS_FLATTEN, None),
+    "halt_clear": (_INVOKE_RESUME, None),
+}
 
 
 def _action_for_gate(
     gate: ReadinessGate,
 ) -> tuple[object | None, str | None]:
-    """Return ``(suggested_action, unavailable_reason)``.
+    """Return ``(suggested_action, unavailable_reason)`` from the
+    backend-authored ``_GATE_ACTION_TABLE``.
 
     Either ``suggested_action`` is a ``GateSuggestedAction`` instance
     and ``unavailable_reason`` is ``None``, or ``suggested_action`` is
     ``None`` and ``unavailable_reason`` is a stable ALL_CAPS_SNAKE
     code documenting *why* no action is authored.
+
+    Passing gates short-circuit to ``GATE_PASSING``; unknown gate
+    names surface ``UNKNOWN_GATE_NAME`` rather than silently dropping
+    the suggestion.
     """
     if gate.status == "pass":
         return None, "GATE_PASSING"
-
-    name = gate.name
-    if name == "broker_connection":
-        # Reconnection is an operator-out-of-band task — no inline
-        # capability invocation can fix it.  The runbook surfaces the
-        # IBKR Gateway restart procedure.
-        return _REDEPLOY, None  # placeholder route; the real runbook lands when authored
-    if name == "poison_sentinel":
-        # Poisoned runs are revived only by Redeploy — ADR-0010 §4.
-        return _REDEPLOY, None
-    if name == "fleet_contamination":
-        # Account-level contamination is resolved by an operator
-        # action outside the cockpit's authority; we surface a
-        # focused runbook hint rather than an inline button.
-        return None, "REQUIRES_OUT_OF_BAND_RESOLUTION"
-    if name == "daily_order_cap":
-        # Reaching the daily cap is a configuration / next-day matter;
-        # there is no inline fix.
-        return None, "NO_INLINE_REMEDIATION"
-    if name in {"warmup", "calendar", "session", "instrument_surface"}:
-        return None, "WAIT_FOR_CONDITION"
-    if name == "indicator_state_hydration":
-        # Hydration failures invalidate the run; redeploy is the path.
-        return _REDEPLOY, None
-    if name == "spec_signature":
-        # A spec mismatch means the run identity disagrees with the
-        # working tree — the only safe path is Redeploy.
-        return _REDEPLOY, None
-    if name == "intent_wal_clean":
-        # Unresolved uncertain intents require manual reconciliation
-        # *then* Resume; mark-poisoned routes to the Audit tab.
-        return _FOCUS_MARK_POISONED, None
-    if name == "positions_self_consistent":
-        # A self-consistency drift suggests Flatten-and-pause then
-        # reconcile.
-        return _FOCUS_FLATTEN, None
-    if name == "halt_clear":
-        # Halt cleared by Resume *iff* the underlying guards pass.
-        return _INVOKE_RESUME, None
-    # Unknown gate name — surface explicitly rather than silently
-    # dropping the suggestion.  The Frontend reads the unavailable
-    # reason and shows the raw gate name as a fallback.
-    return None, "UNKNOWN_GATE_NAME"
+    return _GATE_ACTION_TABLE.get(gate.name, (None, "UNKNOWN_GATE_NAME"))
 
 
 def project_readiness_gates(readiness: ReadinessVector | None) -> list[OperatorGate]:

@@ -36,11 +36,30 @@ def _seed_run_dir(artifacts_root: Path, instance_id: str = "test-instance") -> P
     """Seed ``<artifacts_root>/live_runs/<run_id>/`` with a run_ledger.json
     naming this instance, plus an empty intent_events.jsonl so the
     uncertain-intent guard does not fire.
+
+    PRD #619-A: also seed ``run_status.json`` with the durable child/run
+    capability evidence (``submit_mode_at_start`` + ``readonly_at_start``)
+    so the new submission-capability gate is SATISFIED. Tests that want
+    to exercise capability-UNKNOWN can delete or rewrite the file.
     """
     run_dir = artifacts_root / "live_runs" / f"{instance_id}-run-1"
     run_dir.mkdir(parents=True)
     (run_dir / "run_ledger.json").write_text(json.dumps({"strategy_instance_id": instance_id}), encoding="utf-8")
     (run_dir / "intent_events.jsonl").write_text("", encoding="utf-8")
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": f"{instance_id}-run-1",
+                "started_at_ms": 1_700_000_000_000,
+                "last_update_ms": 1_700_000_000_000,
+                "host_pid": 1,
+                "submit_mode_at_start": "live_paper",
+                "readonly_at_start": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     return run_dir
 
 

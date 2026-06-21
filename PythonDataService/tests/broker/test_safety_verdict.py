@@ -102,18 +102,22 @@ def test_derive_unknown_when_account_missing() -> None:
     assert "connected_account_prefix" in verdict.unknown_gates
 
 
-def test_derive_unknown_when_readonly_unverified() -> None:
-    """The readonly gate must positively confirm True. None or False both
-    degrade to unknown (never paper-only) so the trust anchor stays honest."""
-    for ro in (None, False):
+def test_derive_paper_only_when_readonly_false_post_adr0011_amendment() -> None:
+    """PRD #619-A / ADR-0011 amendment — ``readonly_flag`` is no longer
+    part of the identity derivation. An executing paper bot
+    (``readonly=False``) on a paper port + DU account still reaches
+    ``paper-only`` because submission capability is now an independent
+    fact carried at the run/spec level, not on this verdict."""
+    for ro in (None, False, True):
         verdict = derive_broker_safety_verdict(
             configured_mode="paper",
             readonly_flag=ro,
             port=7497,
             connected_account="DU1234567",
         )
-        assert verdict.final_verdict == "unknown"
-        assert "readonly_flag" in verdict.unknown_gates
+        assert verdict.final_verdict == "paper-only", ro
+        assert "readonly_flag" not in verdict.unknown_gates
+        assert "readonly_flag" not in verdict.failing_gates
 
 
 def test_unsafe_dominates_unknown() -> None:
@@ -165,3 +169,55 @@ def test_broker_safety_verdict_model_serializes() -> None:
     payload = verdict.model_dump()
     assert payload["final_verdict"] == "paper-only"
     assert payload["failing_gates"] == []
+
+
+# ---------------------------------------------------------------------------
+# PRD #619-A / ADR-0011 amendment — identity × capability × submit_mode
+# Cartesian matrix. Identity is per-derivation only (this module); the
+# Resume gate composition adds capability and uncertain-intent. The
+# matrix asserts: identity is driven exclusively by (configured_mode,
+# port, connected_account), and the same identity verdict is reached
+# across every (readonly, submit_mode) cell.
+# ---------------------------------------------------------------------------
+
+
+_IDENTITY_CELLS = [
+    # (mode, port, account, expected_identity)
+    ("paper", 7497, "DU1234567", "paper-only"),
+    ("paper", 4002, "DU0000001", "paper-only"),
+    ("paper", 7496, "DU1234567", "unsafe"),  # paper mode but live port
+    ("live", 7497, "DU1234567", "unsafe"),  # live mode
+    ("paper", 7497, "U1234567", "unsafe"),  # non-DU account
+    ("paper", 8080, "DU1234567", "unknown"),  # unknown port
+    ("paper", 7497, None, "unknown"),  # no account
+]
+
+
+@pytest.mark.parametrize("mode,port,account,expected_identity", _IDENTITY_CELLS)
+@pytest.mark.parametrize("readonly_flag", [True, False, None])
+@pytest.mark.parametrize("submit_mode", ["live_paper", "shadow"])
+def test_identity_derivation_independent_of_readonly_and_submit_mode(
+    mode: str,
+    port: int,
+    account: str | None,
+    expected_identity: str,
+    readonly_flag: bool | None,
+    submit_mode: str,
+) -> None:
+    """ADR-0011 amendment Cartesian: identity is a function of
+    (configured_mode, port, account) only. ``readonly_flag`` and
+    ``submit_mode`` do not move the verdict. submit_mode is consumed
+    by the higher-altitude Resume gate composition, not this
+    derivation."""
+    # submit_mode is a sidecar parameter for matrix coverage — assert
+    # that varying it never moves the derived identity.
+    del submit_mode
+
+    verdict = derive_broker_safety_verdict(
+        configured_mode=mode,  # type: ignore[arg-type]
+        readonly_flag=readonly_flag,
+        port=port,
+        connected_account=account,
+    )
+
+    assert verdict.final_verdict == expected_identity
