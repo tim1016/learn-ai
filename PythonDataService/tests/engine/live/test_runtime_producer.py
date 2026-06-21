@@ -1,0 +1,420 @@
+"""PRD #619-B B3 — runtime_producer composition helpers + LiveEngine wiring.
+
+Two layers:
+
+1. **Pure composition** — ``verdict_to_identity``, ``compose_capability``,
+   ``compose_posture``, the three ``build_*_block`` helpers, and
+   ``build_control_plane_block_from_lease``. Asserted with a Cartesian
+   matrix over the identity × capability inputs and a few lease seeding
+   cases.
+
+2. **Engine wiring** — confirms that when ``LiveEngine`` is constructed
+   with a ``runtime_aggregator``, the producer hooks land on
+   ``run()`` start, every bar tick, the verdict-check path, and the
+   command-poll tick. Tested via a fake aggregator that records every
+   update; we do not exercise the full publisher because that's
+   already covered by ``test_engine_runtime_publisher.py``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.engine.data.trade_bar import TradeBar
+from app.engine.live.control_plane import DaemonLease, write_daemon_lease
+from app.engine.live.engine_runtime import (
+    BarLoopBlock,
+    BrokerBlock,
+    CommandLoopBlock,
+    ControlPlaneBlock,
+)
+from app.engine.live.runtime_producer import (
+    build_bar_loop_block,
+    build_broker_block,
+    build_command_loop_block,
+    build_control_plane_block_from_lease,
+    compose_capability,
+    compose_posture,
+    verdict_to_identity,
+)
+
+# ===========================================================================
+# Layer 1 — pure composition
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "verdict,expected",
+    [
+        ("paper-only", "PAPER_VERIFIED"),
+        ("unsafe", "LIVE_DETECTED"),
+        ("unknown", "UNKNOWN"),
+        (None, "UNKNOWN"),
+        ("", "UNKNOWN"),
+        ("something-else", "UNKNOWN"),
+    ],
+)
+def test_verdict_to_identity(verdict: str | None, expected: str) -> None:
+    assert verdict_to_identity(verdict) == expected
+
+
+@pytest.mark.parametrize(
+    "run_mode,readonly,expected",
+    [
+        ("live_paper", False, "PAPER_ORDERS_ENABLED"),
+        ("live_paper", True, "READ_ONLY"),
+        ("shadow", False, "READ_ONLY"),
+        ("shadow", True, "READ_ONLY"),
+        ("", False, "UNKNOWN"),
+        ("wonky", False, "UNKNOWN"),
+        ("", True, "READ_ONLY"),
+    ],
+)
+def test_compose_capability(run_mode: str, readonly: bool, expected: str) -> None:
+    assert compose_capability(run_mode=run_mode, readonly=readonly) == expected
+
+
+@pytest.mark.parametrize(
+    "identity,capability,expected",
+    [
+        ("PAPER_VERIFIED", "PAPER_ORDERS_ENABLED", "PAPER_EXECUTION"),
+        ("PAPER_VERIFIED", "READ_ONLY", "PAPER_OBSERVATION"),
+        ("PAPER_VERIFIED", "BLOCKED", "UNSAFE"),
+        ("PAPER_VERIFIED", "UNKNOWN", "UNKNOWN"),
+        ("LIVE_DETECTED", "PAPER_ORDERS_ENABLED", "UNSAFE"),
+        ("LIVE_DETECTED", "READ_ONLY", "UNSAFE"),
+        ("LIVE_DETECTED", "BLOCKED", "UNSAFE"),
+        ("LIVE_DETECTED", "UNKNOWN", "UNSAFE"),
+        ("UNKNOWN", "PAPER_ORDERS_ENABLED", "UNKNOWN"),
+        ("UNKNOWN", "READ_ONLY", "UNKNOWN"),
+        ("UNKNOWN", "BLOCKED", "UNSAFE"),
+        ("UNKNOWN", "UNKNOWN", "UNKNOWN"),
+    ],
+)
+def test_compose_posture(identity: str, capability: str, expected: str) -> None:
+    assert (
+        compose_posture(identity=identity, capability=capability)  # type: ignore[arg-type]
+        == expected
+    )
+
+
+def test_build_command_loop_block_paused() -> None:
+    block = build_command_loop_block(heartbeat_at_ms=1_700_000_000_000, paused=True)
+    assert block.heartbeat_at_ms == 1_700_000_000_000
+    assert block.state == "PAUSED"
+
+
+def test_build_command_loop_block_running() -> None:
+    block = build_command_loop_block(heartbeat_at_ms=1_700_000_000_000, paused=False)
+    assert block.state == "RUNNING"
+
+
+def test_build_bar_loop_block_carries_split_heartbeats() -> None:
+    block = build_bar_loop_block(
+        heartbeat_at_ms=1_700_000_000_000,
+        latest_source_bar_ms=1_700_000_000_000 - 60_000,
+        expected_interval_ms=60_000,
+    )
+    assert block.heartbeat_at_ms == 1_700_000_000_000
+    assert block.latest_source_bar_ms == 1_700_000_000_000 - 60_000
+    assert block.expected_interval_ms == 60_000
+
+
+def test_build_broker_block_composes_full_axes() -> None:
+    block = build_broker_block(
+        verdict_value="paper-only",
+        run_mode="live_paper",
+        readonly=False,
+        connection_state="connected",
+        connection_epoch=3,
+        connected_account="DU0123456",
+        port_class="paper_port",
+        observation_at_ms=1_700_000_000_000,
+        probe_completed_at_ms=1_700_000_000_000 - 100,
+        reconnect_attempt=0,
+    )
+    assert block.identity == "PAPER_VERIFIED"
+    assert block.submission_capability == "PAPER_ORDERS_ENABLED"
+    assert block.effective_posture == "PAPER_EXECUTION"
+    assert block.connection_state == "connected"
+    assert block.connection_epoch == 3
+    assert block.connected_account == "DU0123456"
+    assert block.port_class == "paper_port"
+    assert block.observation_at_ms == 1_700_000_000_000
+
+
+def test_build_control_plane_block_with_no_lease(tmp_path: Path) -> None:
+    block = build_control_plane_block_from_lease(tmp_path, now_ms=1_700_000_000_000)
+    assert block.lease_observed_at_ms == 1_700_000_000_000
+    assert block.observed_daemon_boot_id is None
+
+
+def test_build_control_plane_block_with_none_root() -> None:
+    block = build_control_plane_block_from_lease(None, now_ms=1_700_000_000_000)
+    assert block.observed_daemon_boot_id is None
+
+
+def test_build_control_plane_block_reads_existing_lease(tmp_path: Path) -> None:
+    write_daemon_lease(
+        tmp_path,
+        DaemonLease(boot_id="daemon-boot-XYZ", written_at_ms=1_700_000_000_000),
+    )
+
+    block = build_control_plane_block_from_lease(tmp_path, now_ms=1_700_000_000_500)
+
+    assert block.lease_observed_at_ms == 1_700_000_000_500
+    assert block.observed_daemon_boot_id == "daemon-boot-XYZ"
+
+
+# ===========================================================================
+# Layer 2 — LiveEngine producer hooks land on real call sites
+# ===========================================================================
+
+
+class _RecordingAggregator:
+    """Stand-in for ``EngineRuntimeAggregator`` that records every update.
+
+    Tests assert ON THE SEQUENCE OF CALLS, not on the publisher's
+    serialized output (already covered by
+    ``test_engine_runtime_publisher.py``).
+    """
+
+    def __init__(self) -> None:
+        self.command_loop_updates: list[CommandLoopBlock] = []
+        self.broker_updates: list[BrokerBlock] = []
+        self.bar_loop_updates: list[BarLoopBlock] = []
+        self.control_plane_updates: list[ControlPlaneBlock] = []
+
+    async def update_command_loop(self, block: CommandLoopBlock) -> None:
+        self.command_loop_updates.append(block)
+
+    async def update_broker(self, block: BrokerBlock) -> None:
+        self.broker_updates.append(block)
+
+    async def update_bar_loop(self, block: BarLoopBlock) -> None:
+        self.bar_loop_updates.append(block)
+
+    async def update_control_plane(self, block: ControlPlaneBlock) -> None:
+        self.control_plane_updates.append(block)
+
+
+def _bar(minute: int) -> TradeBar:
+    start = datetime(2026, 5, 4, 14, 0, tzinfo=UTC) + timedelta(minutes=minute)
+    return TradeBar(
+        symbol="SPY",
+        time=start,
+        end_time=start + timedelta(minutes=1),
+        open=Decimal("500"),
+        high=Decimal("500"),
+        low=Decimal("500"),
+        close=Decimal("500"),
+        volume=100,
+    )
+
+
+async def _iter_bars(bars: list[TradeBar]) -> AsyncIterator[TradeBar]:
+    for b in bars:
+        yield b
+
+
+@pytest.mark.asyncio
+async def test_engine_publishes_initial_blocks_on_run(tmp_path: Path) -> None:
+    """At ``run()`` entry the engine seeds command_loop + control_plane
+    so the publisher can emit before the first bar arrives."""
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        runtime_aggregator=agg,
+    )
+    await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(3)]))
+
+    # Startup: at least one command_loop + one control_plane update
+    # before any bar lands.
+    assert len(agg.command_loop_updates) >= 1
+    assert len(agg.control_plane_updates) >= 1
+    # First control-plane block has no lease (artifacts_root_for_lease
+    # was not provided), so observed_daemon_boot_id is None.
+    assert agg.control_plane_updates[0].observed_daemon_boot_id is None
+
+
+@pytest.mark.asyncio
+async def test_engine_publishes_bar_loop_block_per_bar(tmp_path: Path) -> None:
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        runtime_aggregator=agg,
+    )
+    bars = [_bar(m) for m in range(5)]
+    await engine.run(_NoopStrategy(), _iter_bars(bars))
+
+    # One bar_loop update per bar consumed by the loop.
+    assert len(agg.bar_loop_updates) == 5
+    # latest_source_bar_ms reflects each bar's end_time.
+    assert agg.bar_loop_updates[0].latest_source_bar_ms == int(
+        bars[0].end_time.timestamp() * 1000
+    )
+    assert agg.bar_loop_updates[-1].latest_source_bar_ms == int(
+        bars[-1].end_time.timestamp() * 1000
+    )
+
+
+@pytest.mark.asyncio
+async def test_engine_publishes_broker_block_on_every_verdict_check(
+    tmp_path: Path,
+) -> None:
+    """The verdict-check path always fires the broker producer (halt
+    or not). After three bars under a paper-only verdict, three
+    broker updates land."""
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        run_mode="live_paper",
+        readonly=False,
+        verdict_provider=lambda: "paper-only",
+        runtime_aggregator=agg,
+    )
+    await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(3)]))
+
+    assert len(agg.broker_updates) == 3
+    block = agg.broker_updates[0]
+    # ADR-0011 amendment composition holds end-to-end.
+    assert block.identity == "PAPER_VERIFIED"
+    assert block.submission_capability == "PAPER_ORDERS_ENABLED"
+    assert block.effective_posture == "PAPER_EXECUTION"
+
+
+@pytest.mark.asyncio
+async def test_engine_publishes_initial_control_plane_block_from_lease(
+    tmp_path: Path,
+) -> None:
+    """When ``artifacts_root_for_lease`` points to a directory with a
+    ``daemon_lease.json``, the startup control-plane block carries the
+    daemon's boot_id verbatim."""
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    write_daemon_lease(
+        artifacts_root,
+        DaemonLease(boot_id="daemon-from-test", written_at_ms=1_700_000_000_000),
+    )
+
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        runtime_aggregator=agg,
+        artifacts_root_for_lease=artifacts_root,
+    )
+    await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(2)]))
+
+    assert any(
+        cp.observed_daemon_boot_id == "daemon-from-test"
+        for cp in agg.control_plane_updates
+    )
+
+
+@pytest.mark.asyncio
+async def test_engine_with_no_aggregator_is_a_noop(tmp_path: Path) -> None:
+    """A LiveEngine without a runtime_aggregator must not raise from
+    any producer hook — replay tests / synthetic engines must remain
+    free of the wire."""
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        verdict_provider=lambda: "paper-only",
+    )
+
+    # Must run without raising — every producer hook is None-guarded.
+    await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(2)]))
