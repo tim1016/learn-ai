@@ -1,0 +1,16 @@
+<span
+  class="session-clock"
+  [attr.data-phase]="phase()"
+  [attr.data-tone]="tone()"
+  data-testid="trading-session-clock"
+  [attr.title]="
+    'Session: ' + phaseLabel() +
+    (permits() === true ? ' · permits strategy activity' : permits() === false ? ' · activity not permitted' : '')
+  "
+>
+  <span class="dot" aria-hidden="true"></span>
+  <span class="key">SESSION</span>
+  <span class="phase" data-testid="trading-session-phase">{{ phaseLabel() }}</span>
+  <span class="sep" aria-hidden="true">·</span>
+  <span class="clock" data-testid="trading-session-time">{{ clockText() }}</span>
+</span>

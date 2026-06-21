@@ -10,8 +10,8 @@ import { HostProcessNoticeComponent } from './host-process-notice.component';
 
 function host(overrides: Partial<OperatorSurfaceHostProcess> = {}): OperatorSurfaceHostProcess {
   return {
-    state: 'STOPPED',
-    notice: 'Host process stopped. Start this instance from the host runner.',
+    state: 'IDLE',
+    notice: 'Host runner is reachable but no subprocess is attached to this instance.',
     copyable_command: null,
     ...overrides,
   };
@@ -41,10 +41,11 @@ describe('HostProcessNoticeComponent', () => {
   });
 
   it.each([
-    ['STOPPED', 'HOST PROCESS STOPPED'],
-    ['CRASHED', 'HOST PROCESS CRASHED'],
-    ['STARTING', 'HOST PROCESS STARTING'],
-    ['UNKNOWN', 'HOST PROCESS STATE UNKNOWN'],
+    ['STOPPING', 'HOST PROCESS STOPPING'],
+    ['EXITED', 'HOST PROCESS EXITED'],
+    ['IDLE', 'HOST RUNNER IDLE'],
+    ['WAITING_FOR_HOST', 'WAITING FOR HOST PROCESS'],
+    ['UNREACHABLE', 'HOST RUNNER UNREACHABLE'],
   ] as const)('renders heading %s for state %s', (state, heading) => {
     const el = render({ hostProcess: host({ state, notice: 'x' }) });
     expect(el.textContent ?? '').toContain(heading);
@@ -89,7 +90,14 @@ describe('HostProcessNoticeComponent', () => {
   });
 });
 
-it.each<HostProcessState>(['RUNNING', 'STOPPED', 'CRASHED', 'STARTING', 'UNKNOWN'])(
+it.each<HostProcessState>([
+  'RUNNING',
+  'STOPPING',
+  'EXITED',
+  'IDLE',
+  'WAITING_FOR_HOST',
+  'UNREACHABLE',
+])(
   'host-process notice block accepts every documented state %s without crashing',
   (state) => {
     expect(() =>

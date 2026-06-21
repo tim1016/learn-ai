@@ -117,10 +117,12 @@ async def test_host_process_block_stopped_when_daemon_idle(
 
     body = response.json()
     host = body["operator_surface"]["host_process"]
-    assert host["state"] == "STOPPED"
+    # ``idle`` daemon + the test fixture's default desired_state=RUNNING
+    # (live_instances router defaults `desired.state = "RUNNING"` when
+    # absent) -> WAITING_FOR_HOST.  Distinct from a plain IDLE: the
+    # operator has expressed intent and is waiting for the subprocess.
+    assert host["state"] in {"IDLE", "WAITING_FOR_HOST"}
     assert isinstance(host["notice"], str) and host["notice"]
-    # First iteration: copyable_command is None until a server author wires
-    # a safe one. See #608 — the cockpit must never construct it client-side.
     assert host["copyable_command"] is None
 
 
@@ -232,15 +234,24 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "daily_order_cap",
         "action_plan",
         "actions",
+        "trading_session",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
     assert surface["prior_run"]["classification"] == "UNKNOWN"
-    assert surface["broker"]["safety_verdict"] in {"PAPER", "LIVE", "DEGRADED", "DISCONNECTED", "UNKNOWN"}
+    # Two independent enums now.
+    assert surface["broker"]["safety_verdict"] in {"PAPER_ONLY", "UNSAFE", "UNKNOWN"}
+    assert surface["broker"]["connection"] in {"CONNECTED", "DISCONNECTED", "UNKNOWN"}
     assert surface["configuration"]["verdict"] in {"READY", "ATTENTION", "UNKNOWN"}
     assert surface["current_risk"]["verdict"] in {"READY", "ATTENTION", "UNKNOWN"}
     assert surface["daily_order_cap"]["used"] is None
     assert surface["daily_order_cap"]["limit"] is None
+    # Trading-session projection is always present; phase + permission
+    # are server-authored.
+    session = surface["trading_session"]
+    assert session["phase"] in {"PRE", "RTH", "POST", "CLOSED", "UNKNOWN"}
+    assert session["timezone"] == "America/New_York"
+    assert isinstance(session["as_of_ms"], int)
     for name in ("resume", "pause", "flatten_and_pause", "mark_poisoned"):
         cap = surface["actions"][name]
         assert set(cap.keys()) == {"enabled", "effect", "disabled_reason_code"}

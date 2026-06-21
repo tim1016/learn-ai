@@ -15,7 +15,7 @@
     "run_id": "run-steady",
     "state": "latest_run_by_ledger"
   },
-  "fetched_at_ms": 1781973199260,
+  "fetched_at_ms": 1782008742401,
   "instrument_surface": null,
   "last_exit": null,
   "latest_decision": null,
@@ -53,7 +53,8 @@
       }
     },
     "broker": {
-      "safety_verdict": "UNKNOWN"
+      "connection": "UNKNOWN",
+      "safety_verdict": "PAPER_ONLY"
     },
     "configuration": {
       "reason_codes": [
@@ -80,7 +81,14 @@
     "prior_run": {
       "classification": "UNKNOWN"
     },
-    "schema_version": 1
+    "schema_version": 1,
+    "trading_session": {
+      "as_of_ms": 1782008742401,
+      "next_transition_ms": null,
+      "permits_strategy_activity": false,
+      "phase": "CLOSED",
+      "timezone": "America/New_York"
+    }
   },
   "process": {
     "bound_run_id": "run-steady",
@@ -103,7 +111,7 @@
     "strategy_spec_sha256": ""
   },
   "readiness": {
-    "as_of_ms": 1781973199258,
+    "as_of_ms": 1782008742399,
     "gates": [
       {
         "detail": "no durable intent recorded",

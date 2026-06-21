@@ -1,63 +1,120 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import type { FleetContamination } from '../../../../api/live-instances.types';
 import type { OperationError } from '../../operation-error';
-import { BrokerConnectivityService } from '../../../../services/broker-connectivity.service';
-import { BrokerConnectivityStripComponent } from '../../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../../broker-operation-result/broker-operation-result.component';
 
 /**
- * Non-sticky fleet header for the trader-first Bot Control Panel (#565 PR 2).
+ * Account / Fleet status disclosure (PRD #607 cockpit revision
+ * 2026-06-21).
  *
- * Composes the existing ``BrokerConnectivityStripComponent`` and the Account
- * Status card content that previously lived inline in
- * ``BrokerInstancesComponent``. Adds:
+ * Collapsed one-line summary:
  *
- *  - a Platform Update banner that surfaces ``daemonFreshness().state ===
- *    'stale'`` in trader-vocabulary copy (the technical "Engine code: Stale"
- *    detail still renders inside the strip below, per the operator-default-
- *    plus-engineer-detail pattern from the PRD);
- *  - an Account Safety Actions disclosure that hosts ``Emergency Flatten
- *    Account``, moved here from the per-bot Advanced section so the action
- *    is owned by the fleet rather than scattered across per-bot tabs.
+ *   ACCOUNT · DU1234 · PAPER · ✓ CLEAN · 137 SPY accounted for       [Safety actions ▾]
  *
- * The typed-confirmation gate (operator must echo their IBKR account id) is
- * preserved by leaving the prompt-and-call flow in the parent — this
- * component only emits ``emergencyFlattenRequested`` and surfaces busy /
- * error state from the parent.
+ * Verdict-driven collapse semantics (Option A):
+ *
+ *  - ``verdict === 'clean'``     -> collapsed by default; the operator
+ *                                    may expand via the toggle.
+ *  - ``verdict === 'contaminated'`` -> EXPANDED, no toggle.  Contamination
+ *                                       is an attention state that the
+ *                                       page-wide collapse rule forbids
+ *                                       hiding behind a default-collapsed
+ *                                       disclosure.
+ *  - ``verdict === 'unknown'``   -> EXPANDED, no toggle.
+ *
+ * Uses the cockpit's own ``collapsible-card`` + ``card-verdict-border``
+ * pattern (grid-template-rows 0fr/1fr).  NOT PrimeNG p-panel; NOT raw
+ * ``<details>`` — the toggle is a real button with ``aria-expanded`` and
+ * ``aria-controls`` so screen-reader semantics match the other cockpit
+ * cards.
  */
 @Component({
   selector: 'app-fleet-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './fleet-header.component.html',
   styleUrl: './fleet-header.component.scss',
-  imports: [BrokerConnectivityStripComponent, BrokerOperationResultComponent],
+  imports: [BrokerOperationResultComponent],
+  host: {
+    '[attr.data-verdict]': 'verdictAttr()',
+    '[attr.data-collapsed]': 'collapsedAttr()',
+  },
 })
 export class FleetHeaderComponent {
-  private readonly connectivity = inject(BrokerConnectivityService);
-
   readonly account = input<FleetContamination | null>(null);
   readonly selectedInstanceId = input<string | null>(null);
   readonly busyEmergencyFlatten = input<boolean>(false);
   readonly commandError = input<OperationError | null>(null);
+  readonly accountId = input<string | null>(null);
+  readonly isPaper = input<boolean>(false);
 
   readonly emergencyFlattenRequested = output();
 
-  /** Surfaces the existing strip-level "stale engine code" check as a
-   * trader-vocabulary banner. The strip below continues to render the
-   * technical detail (commits-behind, copy-restart-command); the banner
-   * just answers "is there an update I should know about?" in plain
-   * English. */
-  protected readonly platformUpdateAvailable = computed<boolean>(
-    () => this.connectivity.daemonFreshness().state === 'stale',
+  protected readonly hasSelection = computed<boolean>(
+    () => this.selectedInstanceId() !== null,
   );
 
-  protected readonly hasSelection = computed<boolean>(() => this.selectedInstanceId() !== null);
+  protected readonly verdict = computed<'clean' | 'contaminated' | 'unknown'>(() => {
+    const acct = this.account();
+    return acct?.verdict ?? 'unknown';
+  });
 
-  protected accountBadge(acct: FleetContamination): string {
-    if (acct.verdict === 'clean') return 'ALL POSITIONS ACCOUNTED FOR';
-    if (acct.verdict === 'contaminated') return 'UNRECOGNIZED POSITIONS DETECTED';
-    return 'ACCOUNT STATUS UNKNOWN';
+  /** Attention states cannot be manually collapsed. */
+  protected readonly isAttentionVerdict = computed<boolean>(
+    () => this.verdict() !== 'clean',
+  );
+
+  /** Single-boolean operator override that's only honored in the calm
+   *  (``clean``) state; verdict-tightening forces the card open. */
+  private readonly _manuallyExpanded = signal<boolean>(false);
+
+  protected toggle(): void {
+    if (this.isAttentionVerdict()) return;
+    this._manuallyExpanded.update((v) => !v);
   }
+
+  protected readonly expanded = computed<boolean>(
+    () => this.isAttentionVerdict() || this._manuallyExpanded(),
+  );
+
+  protected readonly collapsedAttr = computed<'true' | 'false'>(() =>
+    this.expanded() ? 'false' : 'true',
+  );
+
+  protected readonly verdictAttr = computed<'ready' | 'degraded' | 'unknown'>(() => {
+    switch (this.verdict()) {
+      case 'clean':
+        return 'ready';
+      case 'contaminated':
+        return 'degraded';
+      default:
+        return 'unknown';
+    }
+  });
+
+  protected readonly accountedSummary = computed<string>(() => {
+    const acct = this.account();
+    if (!acct || !acct.net_positions) return '0 positions tracked';
+    const symbols = Object.entries(acct.explained_total).filter(([, qty]) => qty !== 0);
+    if (symbols.length === 0) return '0 positions tracked';
+    return symbols
+      .map(([sym, qty]) => `${qty} ${sym}`)
+      .join(' · ');
+  });
+
+  protected readonly verdictLabel = computed<string>(() => {
+    switch (this.verdict()) {
+      case 'clean':
+        return '✓ CLEAN';
+      case 'contaminated':
+        return '⚠ CONTAMINATED';
+      default:
+        return '? UNKNOWN';
+    }
+  });
+
+  protected readonly modeLabel = computed<string>(() =>
+    this.isPaper() ? 'PAPER' : 'LIVE',
+  );
 
   protected residualRows(acct: FleetContamination): { symbol: string; qty: number }[] {
     return Object.entries(acct.residual ?? {}).map(([symbol, qty]) => ({ symbol, qty }));

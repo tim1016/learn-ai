@@ -1,30 +1,38 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import type {
   ActionCapability,
+  BrokerConnectionState,
   BrokerSafetyVerdict,
+  HostProcessState,
   LiveInstanceStatus,
   PriorRunClassification,
 } from '../../../../api/live-instances.types';
 import { getActionReasonCopy } from '../action-reason-codes';
 import { deriveFleetState, type FleetState } from '../fleet-state';
+import { TradingSessionClockComponent } from '../trading-session-clock/trading-session-clock.component';
 
 type PillTone = 'running' | 'paused' | 'stopped' | 'stopping' | 'unknown';
-type Verdict = 'paper' | 'unknown' | 'ready' | 'degraded' | 'blocked';
+type Verdict = 'paper' | 'unknown' | 'ready' | 'degraded' | 'blocked' | 'unsafe';
 type PriorRun = 'success' | 'failure' | null;
 
-/** Server-authored safety-verdict -> banner-pill tone map. */
+/** Server-authored safety-verdict -> banner-pill tone map.  Three
+ *  values per cockpit revision 2026-06-21: PAPER_ONLY / UNSAFE /
+ *  UNKNOWN.  ``UNSAFE`` does NOT use the same tone as DISCONNECTED
+ *  (those are independent enums now). */
 const SAFETY_TONE: Record<BrokerSafetyVerdict, Verdict> = {
-  PAPER: 'paper',
-  LIVE: 'ready',
-  DEGRADED: 'degraded',
-  DISCONNECTED: 'blocked',
+  PAPER_ONLY: 'paper',
+  UNSAFE: 'unsafe',
   UNKNOWN: 'unknown',
 };
 
 const SAFETY_LABEL: Record<BrokerSafetyVerdict, string> = {
-  PAPER: 'PAPER-ONLY',
-  LIVE: 'LIVE',
-  DEGRADED: 'DEGRADED',
+  PAPER_ONLY: 'PAPER-ONLY',
+  UNSAFE: 'UNSAFE',
+  UNKNOWN: 'UNKNOWN',
+};
+
+const CONNECTION_LABEL: Record<BrokerConnectionState, string> = {
+  CONNECTED: 'CONNECTED',
   DISCONNECTED: 'DISCONNECTED',
   UNKNOWN: 'UNKNOWN',
 };
@@ -34,6 +42,15 @@ const PRIOR_RUN_FROM_PROJECTION: Record<PriorRunClassification, PriorRun> = {
   HALT_TRIGGERED: 'failure',
   EXITED_WITH_ERROR: 'failure',
   UNKNOWN: null,
+};
+
+const HOST_PROCESS_LABEL: Record<HostProcessState, string> = {
+  RUNNING: 'RUNNING',
+  STOPPING: 'STOPPING',
+  EXITED: 'EXITED',
+  IDLE: 'IDLE',
+  WAITING_FOR_HOST: 'WAITING FOR HOST',
+  UNREACHABLE: 'UNREACHABLE',
 };
 
 const FLEET_VERDICT: Record<FleetState, 'ready' | 'degraded' | 'blocked'> = {
@@ -64,6 +81,7 @@ const FLEET_VERDICT: Record<FleetState, 'ready' | 'degraded' | 'blocked'> = {
 @Component({
   selector: 'app-sticky-control-bar',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TradingSessionClockComponent],
   templateUrl: './sticky-control-bar.component.html',
   styleUrl: './sticky-control-bar.component.scss',
 })
@@ -146,6 +164,34 @@ export class StickyControlBarComponent {
 
   readonly safetyLabel = computed<string>(
     () => SAFETY_LABEL[this.status().operator_surface.broker.safety_verdict],
+  );
+
+  /** Broker connection (independent of safety_verdict). */
+  readonly brokerConnection = computed<BrokerConnectionState>(
+    () => this.status().operator_surface.broker.connection,
+  );
+
+  readonly brokerConnectionLabel = computed<string>(
+    () => CONNECTION_LABEL[this.brokerConnection()],
+  );
+
+  /** Host-process state, surfaced through the sticky banner so the
+   *  operator can read engine reality directly.  Distinct from the
+   *  INTENT pill (durable desired-state).  WAITING FOR HOST is the
+   *  cockpit's signal that the operator has saved RUNNING intent but
+   *  no subprocess is attached. */
+  readonly hostProcessState = computed<HostProcessState>(
+    () => this.status().operator_surface.host_process.state,
+  );
+
+  readonly hostProcessLabel = computed<string>(
+    () => HOST_PROCESS_LABEL[this.hostProcessState()],
+  );
+
+  /** "Host: RUNNING · Broker: CONNECTED" tagline.  Composed from two
+   *  independent server enums; the cockpit MUST NOT collapse them. */
+  readonly engineBrokerTagline = computed<string>(
+    () => `Host: ${this.hostProcessLabel()} · Broker: ${this.brokerConnectionLabel()}`,
   );
 
   /** PRD #607 / Slice 3 (#610) — prior-run pill consumes the

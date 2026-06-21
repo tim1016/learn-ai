@@ -164,10 +164,11 @@ export type OperatorVerdict = 'READY' | 'ATTENTION' | 'UNKNOWN';
 
 export type HostProcessState =
   | 'RUNNING'
-  | 'STOPPED'
-  | 'CRASHED'
-  | 'STARTING'
-  | 'UNKNOWN';
+  | 'STOPPING'
+  | 'EXITED'
+  | 'IDLE'
+  | 'WAITING_FOR_HOST'
+  | 'UNREACHABLE';
 
 export type PriorRunClassification =
   | 'CLEAN'
@@ -175,11 +176,15 @@ export type PriorRunClassification =
   | 'EXITED_WITH_ERROR'
   | 'UNKNOWN';
 
-export type BrokerSafetyVerdict =
-  | 'PAPER'
-  | 'LIVE'
-  | 'DEGRADED'
-  | 'DISCONNECTED'
+export type BrokerSafetyVerdict = 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
+
+export type BrokerConnectionState = 'CONNECTED' | 'DISCONNECTED' | 'UNKNOWN';
+
+export type TradingSessionPhase =
+  | 'PRE'
+  | 'RTH'
+  | 'POST'
+  | 'CLOSED'
   | 'UNKNOWN';
 
 export type RiskPosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
@@ -210,6 +215,21 @@ export interface OperatorSurfacePriorRun {
 
 export interface OperatorSurfaceBroker {
   safety_verdict: BrokerSafetyVerdict;
+  /** Independent of safety_verdict: whether the broker session is up.
+   *  A paper-only account whose IBKR session has dropped is
+   *  ``safety_verdict=PAPER_ONLY`` AND ``connection=DISCONNECTED``;
+   *  composing them is forbidden. */
+  connection: BrokerConnectionState;
+}
+
+export interface OperatorSurfaceTradingSession {
+  phase: TradingSessionPhase;
+  /** Server-derived: phase + strategy's session policy.  Frontend does
+   *  not derive this from the phase enum. */
+  permits_strategy_activity: boolean | null;
+  next_transition_ms: number | null;
+  timezone: string;
+  as_of_ms: number;
 }
 
 export interface OperatorSurfaceCurrentRisk {
@@ -254,6 +274,7 @@ export interface OperatorSurface {
   daily_order_cap: OperatorSurfaceDailyOrderCap;
   action_plan: OperatorSurfaceActionPlan;
   actions: OperatorSurfaceActions;
+  trading_session: OperatorSurfaceTradingSession;
 }
 
 export interface ActionPlanLineage {

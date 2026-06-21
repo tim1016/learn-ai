@@ -66,24 +66,44 @@ describe('StickyControlBarComponent', () => {
   // operator_surface.broker.safety_verdict; the Frontend isPaper()
   // derivation no longer drives the banner pill.
   it.each([
-    ['PAPER', 'PAPER-ONLY', 'paper'],
-    ['LIVE', 'LIVE', 'ready'],
-    ['DEGRADED', 'DEGRADED', 'degraded'],
-    ['DISCONNECTED', 'DISCONNECTED', 'blocked'],
+    ['PAPER_ONLY', 'PAPER-ONLY', 'paper'],
+    ['UNSAFE', 'UNSAFE', 'unsafe'],
     ['UNKNOWN', 'UNKNOWN', 'unknown'],
   ] as const)(
     'renders SAFETY pill from operator_surface verdict %s -> %s',
     (verdict, label, tone) => {
       const { el } = render({
         status: makeStatus({
-          operator_surface: withSurface({ broker: { safety_verdict: verdict } }),
+          operator_surface: withSurface({
+            broker: { safety_verdict: verdict, connection: 'UNKNOWN' },
+          }),
         }),
-        isPaper: false, // pill no longer depends on isPaper
+        isPaper: false,
       });
       const pill = el.querySelector<HTMLElement>('[data-testid="paper-pill"]');
       expect(pill).not.toBeNull();
       expect(pill?.textContent ?? '').toContain(label);
       expect(pill?.getAttribute('data-verdict')).toBe(tone);
+    },
+  );
+
+  it.each([
+    ['CONNECTED'],
+    ['DISCONNECTED'],
+    ['UNKNOWN'],
+  ] as const)(
+    'renders the Host/Broker tagline including connection state %s',
+    (connection) => {
+      const { el } = render({
+        status: makeStatus({
+          operator_surface: withSurface({
+            broker: { safety_verdict: 'PAPER_ONLY', connection },
+          }),
+        }),
+      });
+      const tagline = el.querySelector('[data-testid="engine-broker-tagline"]');
+      expect(tagline).not.toBeNull();
+      expect(tagline?.textContent ?? '').toContain(`Broker: ${connection}`);
     },
   );
 

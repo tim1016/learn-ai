@@ -15,7 +15,7 @@
     "run_id": "run-stopped",
     "state": "latest_run_by_ledger"
   },
-  "fetched_at_ms": 1781973199261,
+  "fetched_at_ms": 1782008742405,
   "instrument_surface": null,
   "last_exit": null,
   "latest_decision": null,
@@ -49,7 +49,8 @@
       }
     },
     "broker": {
-      "safety_verdict": "UNKNOWN"
+      "connection": "UNKNOWN",
+      "safety_verdict": "PAPER_ONLY"
     },
     "configuration": {
       "reason_codes": [
@@ -70,13 +71,20 @@
     },
     "host_process": {
       "copyable_command": null,
-      "notice": "Host process stopped. Start this instance from the host runner.",
-      "state": "STOPPED"
+      "notice": "Host runner is reachable but no subprocess is attached to this instance. Start it from the host runner.",
+      "state": "IDLE"
     },
     "prior_run": {
       "classification": "UNKNOWN"
     },
-    "schema_version": 1
+    "schema_version": 1,
+    "trading_session": {
+      "as_of_ms": 1782008742405,
+      "next_transition_ms": null,
+      "permits_strategy_activity": false,
+      "phase": "CLOSED",
+      "timezone": "America/New_York"
+    }
   },
   "process": {
     "bound_run_id": null,
@@ -99,7 +107,7 @@
     "strategy_spec_sha256": ""
   },
   "readiness": {
-    "as_of_ms": 1781973199261,
+    "as_of_ms": 1782008742405,
     "gates": [
       {
         "detail": "no durable intent recorded",

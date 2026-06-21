@@ -7,9 +7,12 @@
   data-testid="sticky-control-bar"
   [attr.data-attention]="fleetVerdict()"
 >
-  <div class="bot-id">
-    <div class="name" [title]="botName()" data-testid="bot-name">{{ botName() }}</div>
-    <div class="sid" data-testid="strategy-key-line">{{ strategyKey() }}</div>
+  <div class="identity-block">
+    <div class="bot-id">
+      <div class="name" [title]="botName()" data-testid="bot-name">{{ botName() }}</div>
+      <div class="sid" data-testid="strategy-key-line">{{ strategyKey() }}</div>
+    </div>
+    <p class="tagline" data-testid="engine-broker-tagline">{{ engineBrokerTagline() }}</p>
   </div>
 
   <div class="pills-row" role="status" aria-live="polite">
@@ -24,20 +27,18 @@
       {{ fleetState() }}
     </span>
 
-    <span class="pill" [attr.data-tone]="processTone()">
+    <span class="pill" [attr.data-tone]="processTone()" data-testid="state-pill">
       <span class="dot" aria-hidden="true"></span>
       <span class="key">STATE</span>
       {{ processLabel() }}
     </span>
 
     @if (intent) {
-      <span class="pill" [attr.data-tone]="intentTone()">
+      <span class="pill" [attr.data-tone]="intentTone()" data-testid="intent-pill">
         <span class="key">INTENT</span>
         {{ intent }}
       </span>
     }
-
-    <span class="pill-divider" aria-hidden="true"></span>
 
     <span
       class="pill"
@@ -50,7 +51,7 @@
     </span>
 
     @if (priorRunText) {
-      <span class="pill prior-run" [attr.data-priorrun]="priorRun()">
+      <span class="pill prior-run" [attr.data-priorrun]="priorRun()" data-testid="last-run-pill">
         {{ priorRunText }}
       </span>
     }
@@ -60,6 +61,8 @@
         POISONED
       </span>
     }
+
+    <app-trading-session-clock [session]="status().operator_surface.trading_session" />
   </div>
 
   <div class="toolbar" role="toolbar" aria-label="Operator actions">
@@ -98,17 +101,6 @@
     >
       <i class="pi pi-stop-circle" aria-hidden="true"></i>
       <span>Flatten + pause</span>
-    </button>
-    <span class="divider" aria-hidden="true"></span>
-    <button
-      type="button"
-      class="keycap"
-      (click)="onJumpToControlsClick()"
-      data-testid="jump-to-controls"
-      aria-label="Scroll to Start / Pause / Stop controls"
-    >
-      <i class="pi pi-arrow-down" aria-hidden="true"></i>
-      <span>CONTROLS</span>
     </button>
   </div>
 

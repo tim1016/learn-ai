@@ -864,12 +864,21 @@ class RedeployLineage(BaseModel):
     redeployed_at_ms: int | None = None
 
 
-HostProcessState = Literal["RUNNING", "STOPPED", "CRASHED", "STARTING", "UNKNOWN"]
+HostProcessState = Literal[
+    "RUNNING",
+    "STOPPING",
+    "EXITED",
+    "IDLE",
+    "WAITING_FOR_HOST",
+    "UNREACHABLE",
+]
 PriorRunClassification = Literal["CLEAN", "HALT_TRIGGERED", "EXITED_WITH_ERROR", "UNKNOWN"]
-BrokerSafetyVerdictEnum = Literal["PAPER", "LIVE", "DEGRADED", "DISCONNECTED", "UNKNOWN"]
+BrokerSafetyVerdictEnum = Literal["PAPER_ONLY", "UNSAFE", "UNKNOWN"]
+BrokerConnectionState = Literal["CONNECTED", "DISCONNECTED", "UNKNOWN"]
 OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
 ActionPlanConsumption = Literal["ACTIVE", "DECLARATIVE_ONLY", "UNKNOWN"]
+TradingSessionPhase = Literal["PRE", "RTH", "POST", "CLOSED", "UNKNOWN"]
 
 
 class OperatorSurfaceCurrentRisk(BaseModel):
@@ -976,17 +985,44 @@ class OperatorSurfaceActions(BaseModel):
 
 
 class OperatorSurfaceBroker(BaseModel):
-    """Server-authored broker safety pill for the banner (#608, #610).
+    """Server-authored broker block — two independent enums for the
+    banner SAFETY pill and the tagline's "Broker: CONNECTED" half
+    (PRD #607 / cockpit revision 2026-06-21).
 
-    The cockpit's banner safety pill consumes this enum directly; the
-    Frontend ``isPaperAccount()`` helper is no longer read on the pill
-    path (Slice 3).  Distinct from the ADR-0011
-    ``BrokerSafetyVerdict.final_verdict`` (paper-only/unsafe/unknown)
-    which is about *configuration* safety — this enum is about the
-    operator's view of *operational connection state*.
+    ``safety_verdict`` is whether the cockpit is allowed to trade
+    against this account (ADR-0011: paper-only vs unsafe vs unknown).
+    ``connection`` is whether the broker session is up.  They are
+    independent: a paper-only account whose IBKR session has dropped
+    is ``safety_verdict=PAPER_ONLY`` AND ``connection=DISCONNECTED``;
+    composing them into a single enum collapses two facts the
+    operator needs to read separately.
     """
 
     safety_verdict: BrokerSafetyVerdictEnum
+    connection: BrokerConnectionState
+
+
+class OperatorSurfaceTradingSession(BaseModel):
+    """Server-authored trading-session projection
+    (PRD #607 / cockpit revision 2026-06-21).
+
+    The server owns session boundaries (the strategy's configured
+    session policy, exchange-aligned bar starts, etc.); Angular only
+    advances and formats the visible HH:MM:SS clock from its local
+    wall-clock.  Hard-coding RTH in Angular is forbidden because
+    every future strategy may declare different hours.
+
+    ``permits_strategy_activity`` is the boolean the cockpit reads to
+    decide whether the clock pill should read calm-green vs muted; it
+    is server-derived from the phase + the strategy's session policy
+    rather than the cockpit deriving it from the phase enum.
+    """
+
+    phase: TradingSessionPhase
+    permits_strategy_activity: bool | None = None
+    next_transition_ms: int | None = None
+    timezone: str = "America/New_York"
+    as_of_ms: int
 
 
 class OperatorSurfacePriorRun(BaseModel):
@@ -1053,6 +1089,7 @@ class OperatorSurface(BaseModel):
     daily_order_cap: OperatorSurfaceDailyOrderCap
     action_plan: OperatorSurfaceActionPlan
     actions: OperatorSurfaceActions
+    trading_session: OperatorSurfaceTradingSession
 
 
 class LiveInstanceStatus(BaseModel):

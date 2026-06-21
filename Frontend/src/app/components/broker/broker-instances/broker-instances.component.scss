@@ -753,6 +753,109 @@
   }
 }
 
+// PRD #607 cockpit revision 2026-06-21 — non-sticky utility row +
+// cockpit-sticky header wrapper that pins {tab strip + sticky bar}.
+.utility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+
+  .utility-key {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+
+    .brand {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--text-secondary);
+    }
+
+    .subtitle {
+      margin: 0;
+      font-size: 0.78rem;
+      color: var(--text-subtle);
+    }
+  }
+
+  .deploy-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.875rem;
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border-radius: 2px;
+    text-decoration: none;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+
+    &:hover {
+      background: var(--accent-hover);
+    }
+  }
+}
+
+.cockpit-sticky {
+  // The single source of cockpit sticky-ness.  The sticky-control-bar
+  // and tab-strip inside MUST NOT redeclare sticky.  Sits above cards,
+  // host-process notice, and ADR-0008 hazard line; below the FAB and
+  // modal backdrops (FAB z-index 60, modal 90 — see typed-halt-confirm).
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg-canvas);
+  display: flex;
+  flex-direction: column;
+
+  .tab-strip {
+    display: flex;
+    gap: 0;
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--border);
+
+    .tab {
+      flex: 0 0 auto;
+      padding: 0.4rem 0.875rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-subtle);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+
+      &.selected {
+        color: var(--text-primary);
+        border-bottom-color: var(--accent);
+      }
+
+      .state-chip {
+        padding: 0.1rem 0.35rem;
+        border: 1px solid var(--border-light);
+        border-radius: 2px;
+        font-size: 0.62rem;
+        color: var(--text-muted);
+
+        &.live {
+          color: var(--verdict-ready);
+          border-color: var(--verdict-ready);
+        }
+      }
+    }
+  }
+}
+
 // PRD #607 / Slice 8 (#615) — terminal-style ADR-0008 hazard line.
 .adr-hazard-line {
   display: flex;

@@ -81,6 +81,52 @@ A `grill-with-docs` session resolved a set of operator-feedback proposals agains
 
 These changes are net-additive to the runbook's "five trader questions" framing — the framing is now six. The IA revision honours every contract in ADRs 0010 and 0011 unchanged; no ADR revisions came out of this grilling.
 
+## PRD #607 cockpit revision (2026-06-21)
+
+The Slices 1–8 contract below is amended with the following
+**non-additive** changes; ``schema_version`` stays at ``1`` because the
+revision lands before any external consumer ships against it.
+
+- ``host_process.state`` enum is now ``RUNNING / STOPPING / EXITED /
+  IDLE / WAITING_FOR_HOST / UNREACHABLE``.  ``IDLE`` means the host
+  daemon is reachable but no subprocess is tracked for this instance.
+  ``WAITING_FOR_HOST`` is derived: ``IDLE`` PLUS durable intent
+  ``RUNNING`` — the operator has expressed intent and is waiting for
+  the subprocess to be started outside the cockpit.  Distinct from
+  ``STARTING`` (which the cockpit does NOT emit — it cannot start
+  anything; ADR-0003 / ADR-0007).
+- ``broker`` carries **two independent enums**:
+  - ``safety_verdict``: ``PAPER_ONLY / UNSAFE / UNKNOWN`` (ADR-0011).
+  - ``connection``: ``CONNECTED / DISCONNECTED / UNKNOWN`` (broker
+    session liveness).
+  They MUST be read separately.  A paper-only account whose IBKR
+  session has dropped is ``PAPER_ONLY`` + ``DISCONNECTED``; composing
+  them collapses two operator-relevant facts.
+- ``trading_session`` block added:
+  ``{ phase, permits_strategy_activity, next_transition_ms, timezone,
+  as_of_ms }``.  ``phase`` is one of ``PRE / RTH / POST / CLOSED /
+  UNKNOWN``.  The server owns boundaries (per-strategy session policy
+  or RTH default); Angular only advances and formats the visible
+  HH:MM:SS string from its local wall clock.  Hard-coding session
+  hours in Angular is forbidden.
+
+### Sticky-header behavior
+
+The cockpit page renders a single ``<header class="cockpit-sticky">``
+wrapping {bot tab-strip + sticky-control-bar + attention strip}.  The
+wrapper owns ``position: sticky; top: 0``; inner children must not
+redeclare sticky.  Fixed via a Playwright assertion that scrolls the
+page and compares the wrapper's bounding rect before/after.
+
+### Eight legacy surfaces removed in this revision
+
+The legacy hero, ``panel-toolbar`` View Run Log row, ``system-health``
+card, ``behavior-card``, ``strategy-state`` card,
+``broker-card`` (Managed Positions), ``advanced-card``, and
+``<app-broker-start-stop-card>`` reference are deleted from the
+broker-instances template.  Their information is subsumed by the
+sticky banner + host-process notice + verdict-bordered cards.
+
 ## PRD #607 / Slices 1–8 — `operator_surface` projection (2026-06-20)
 
 The `/api/live-instances/{id}/status` response gained an `operator_surface`

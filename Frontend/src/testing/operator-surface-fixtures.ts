@@ -1,21 +1,20 @@
-// PRD #607 / Slice 1 (#608) — test helpers for the operator-surface
-// projection.  Specs that build a ``LiveInstanceStatus`` inline use
-// ``DEFAULT_OPERATOR_SURFACE`` to satisfy the now-required
-// ``operator_surface`` field without re-specifying every block.
+// PRD #607 — test helper for the revised operator_surface contract
+// (cockpit revision 2026-06-21).
 
 import type { OperatorSurface } from '../app/api/live-instances.types';
 
 /**
  * A benign all-defaults projection useful for fixtures that don't care
- * about cockpit verdicts.  Resume / Pause are enabled as durable-only
- * writes; flatten-and-pause and mark-poisoned are disabled with
- * ``NO_LIVE_BINDING`` (the unbound default).
+ * about cockpit verdicts.  Resume / Pause enabled as durable-only
+ * writes; flatten-and-pause and mark-poisoned disabled with
+ * NO_LIVE_BINDING (unbound default).  Trading session is UNKNOWN so
+ * tests opt in to a specific phase.
  */
 export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
   schema_version: 1,
-  host_process: { state: 'UNKNOWN', notice: null, copyable_command: null },
+  host_process: { state: 'IDLE', notice: null, copyable_command: null },
   prior_run: { classification: 'UNKNOWN' },
-  broker: { safety_verdict: 'UNKNOWN' },
+  broker: { safety_verdict: 'UNKNOWN', connection: 'UNKNOWN' },
   configuration: { verdict: 'UNKNOWN', reason_codes: [] },
   current_risk: {
     posture: 'UNKNOWN',
@@ -38,5 +37,12 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
       effect: 'LIVE_ACTUATION',
       disabled_reason_code: 'NO_LIVE_BINDING',
     },
+  },
+  trading_session: {
+    phase: 'UNKNOWN',
+    permits_strategy_activity: null,
+    next_transition_ms: null,
+    timezone: 'America/New_York',
+    as_of_ms: 0,
   },
 };

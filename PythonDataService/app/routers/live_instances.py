@@ -1223,6 +1223,8 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             instance_broker_self_consistent=None,
             live_binding=live_binding,
             poisoned=poisoned,
+            desired_state=desired,
+            now_ms=_now_ms(),
         ),
         fetched_at_ms=_now_ms(),
     )

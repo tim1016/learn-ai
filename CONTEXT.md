@@ -562,3 +562,9 @@ the whole page's expand/collapse behavior.
     `operator_surface.action_plan.anomaly_verdict !== 'READY'`.  Today the
     server returns `READY` whenever a plan is present; PRD #593 Slice 4
     flips it without a Frontend change (PRD #607 Slice 5)
+  - `<app-fleet-header>` (account/fleet disclosure) — collapsed by
+    default when `FleetContamination.verdict === 'clean'`; expanded with
+    NO toggle when `verdict === 'contaminated'` or `'unknown'`
+    (PRD #607 cockpit revision 2026-06-21).  The collapse target hides
+    the emergency-flatten controls behind a one-line summary; attention
+    states cannot be manually collapsed.

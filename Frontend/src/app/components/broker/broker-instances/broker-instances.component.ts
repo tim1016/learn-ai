@@ -22,9 +22,8 @@ import type {
 import type { CommandEntry, CommandVerb } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
-import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
+import { BrokerHealthService } from '../../../services/broker-health.service';
 import { FleetHeaderComponent } from './fleet-header/fleet-header.component';
-import { BrokerStartStopCardComponent } from '../broker-start-stop-card/broker-start-stop-card.component';
 import { AuditTrailAccordionComponent } from '../audit-trail-accordion/audit-trail-accordion.component';
 import { BrokerRunLogModalComponent } from '../broker-run-log-modal/broker-run-log-modal.component';
 import { type OperationError, type OperationKind, toOperationError } from '../operation-error';
@@ -161,8 +160,6 @@ const READINESS_GATE_LABELS: Record<string, string> = {
   imports: [
     RouterLink,
     FleetHeaderComponent,
-    BrokerOperationResultComponent,
-    BrokerStartStopCardComponent,
     AuditTrailAccordionComponent,
     BrokerRunLogModalComponent,
     BotTradeChartCardComponent,
@@ -187,6 +184,7 @@ const READINESS_GATE_LABELS: Record<string, string> = {
 export class BrokerInstancesComponent {
   private readonly svc = inject(LiveRunsService);
   private readonly connectivity = inject(BrokerConnectivityService);
+  private readonly brokerHealth = inject(BrokerHealthService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
@@ -484,17 +482,12 @@ export class BrokerInstancesComponent {
     return this.connectivity.isPaper() === true;
   }
 
-  /** PR12 — scroll the existing Start/Stop card into view when the operator
-   * clicks "Jump to controls" on the sticky bar. The sticky bar does not
-   * own the controls (issue #565 explicitly says safety-critical controls
-   * land LAST so the parent stays the source of truth); the bar just
-   * surfaces the affordance to reach them. */
-  scrollToStartStopCard(): void {
-    const el = document.querySelector('app-broker-start-stop-card');
-    if (el instanceof HTMLElement) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }
+  /** PRD #607 cockpit revision 2026-06-21 — IBKR account id for the
+   *  account disclosure summary line.  Same source the broker-banner
+   *  uses (``BrokerHealthService.health().account_id``). */
+  accountId = computed<string | null>(
+    () => this.brokerHealth.health()?.account_id ?? null,
+  );
 
   /** The freshest known process state for a roster row. The fleet roster
    * is a 15-s cached account-level summary — when an instance exits

@@ -3,9 +3,10 @@
 }
 
 .cockpit-banner {
-  position: sticky;
-  top: 0;
-  z-index: 50;
+  // PRD #607 cockpit revision 2026-06-21: sticky now lives on the
+  // parent ``<header class="cockpit-sticky">`` wrapper that encloses
+  // {tab strip + this banner + attention strip}.  Keeping sticky here
+  // would double-pin and break the wrapper's z-index ordering.
   background: linear-gradient(180deg, var(--bg-surface), var(--bg-surface) 92%, transparent);
   border-bottom: 1px solid var(--border-light);
   padding: 0.875rem 1.25rem 0 1.25rem;
@@ -20,6 +21,21 @@
     grid-template-columns: 1fr;
     gap: 0.75rem;
     padding: 0.75rem 0.875rem 0 0.875rem;
+  }
+}
+
+.identity-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 16rem;
+
+  .tagline {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    letter-spacing: 0.03em;
   }
 }
 

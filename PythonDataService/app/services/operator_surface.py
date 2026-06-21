@@ -1,24 +1,27 @@
-"""Operator-surface projection (PRD #607 / Slice 1 / #608).
+"""Operator-surface projection (PRD #607).
 
 Pure-function projection of run state into the cockpit-facing
 ``OperatorSurface`` model.  Single source of truth for operational
 verdicts, risk posture, structured daily-cap usage, action-plan
-consumption, broker safety verdict, prior-run classification,
-host-process state, and per-action capability + reason codes.
+consumption, broker safety verdict + connection, prior-run
+classification, host-process state, trading-session phase, and
+per-action capability + reason codes.
 
 Frontend renders these fields; it does not derive verdicts from raw
 status fields.  See ``docs/runbooks/broker-instance-operator-surface.md``
-(updated as part of Slice 8) for the authority distinction between
-server domain eligibility, Angular transient request state, Angular
-presentation, and the host-process lifecycle that lives outside the
-cockpit's authority.
+for the authority distinction between server domain eligibility,
+Angular transient request state, Angular presentation, and the
+host-process lifecycle that lives outside the cockpit's authority.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, time
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from app.schemas.live_runs import (
+    DesiredStateView,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
@@ -33,13 +36,15 @@ from app.schemas.live_runs import (
     OperatorSurfaceDailyOrderCap,
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
+    OperatorSurfaceTradingSession,
     ReadinessVector,
 )
 from app.services.operator_capability import evaluate_all_actions
 
-# Server-side canonical input for broker connection state.  Composed by
-# the router from the readiness ``broker_connection`` gate plus (when
-# richer health is on the wire) the broker monitor's recovery overlay.
+# Server-side canonical input for the broker connection layer.  The
+# router collapses the readiness ``broker_connection`` gate plus (when
+# available) the broker monitor's recovery overlay into one of these
+# tokens; the projection maps them to the wire-facing enums.
 BrokerConnectionStateInput = Literal["connected", "disconnected", "degraded", "unknown"]
 
 
@@ -47,25 +52,51 @@ BrokerConnectionStateInput = Literal["connected", "disconnected", "degraded", "u
 # host_process
 # ---------------------------------------------------------------------------
 
+# Daemon ``process.state`` (``running | stopping | exited | idle |
+# unreachable``) -> operator-facing ``host_process.state`` enum.  ``idle``
+# means the daemon answered but is tracking no subprocess for this
+# instance; it stays ``IDLE`` unless the operator has indicated
+# durable intent ``RUNNING``, in which case the projection upgrades it
+# to ``WAITING_FOR_HOST`` (computed below).
 _DAEMON_STATE_TO_HOST_PROCESS_STATE: dict[str, str] = {
     "running": "RUNNING",
-    "stopping": "RUNNING",
-    "idle": "STOPPED",
-    "exited": "STOPPED",
-    "unreachable": "UNKNOWN",
+    "stopping": "STOPPING",
+    "exited": "EXITED",
+    "idle": "IDLE",
+    "unreachable": "UNREACHABLE",
 }
 
 _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
-    "STOPPED": "Host process stopped. Start this instance from the host runner.",
-    "CRASHED": "Host process crashed. Investigate logs before restarting from the host runner.",
-    "STARTING": "Host process starting. The cockpit will pick up live actuation once it is up.",
-    "UNKNOWN": "Host process state is unknown. The cockpit cannot confirm liveness from here.",
+    "STOPPING": "Host process is shutting down.",
+    "EXITED": "Host process has exited. Restart it from the host runner to resume actuation.",
+    "IDLE": (
+        "Host runner is reachable but no subprocess is attached to this "
+        "instance. Start it from the host runner."
+    ),
+    "WAITING_FOR_HOST": (
+        "Intent is RUNNING, but no host subprocess is attached to this "
+        "instance. Start it outside the app to actuate trading."
+    ),
+    "UNREACHABLE": (
+        "Host runner daemon is not reachable. The cockpit cannot confirm "
+        "any subprocess state from here."
+    ),
 }
 
 
-def _project_host_process(process: InstanceProcessView) -> OperatorSurfaceHostProcess:
-    state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNKNOWN")
+def _project_host_process(
+    process: InstanceProcessView,
+    desired_state: DesiredStateView | None,
+) -> OperatorSurfaceHostProcess:
+    state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
+    # WAITING_FOR_HOST: daemon reachable + no tracked subprocess + the
+    # operator has set durable intent to RUNNING.  Distinct from STARTING
+    # (the cockpit cannot start anything; ADR-0003 / ADR-0007).
+    if state == "IDLE" and desired_state is not None and desired_state.state == "RUNNING":
+        state = "WAITING_FOR_HOST"
     notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)
+    # ``copyable_command`` stays ``None`` until the server can author a
+    # safe one per instance context (#608 host-process authority).
     return OperatorSurfaceHostProcess(state=state, notice=notice, copyable_command=None)
 
 
@@ -87,23 +118,43 @@ def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePri
 
 
 # ---------------------------------------------------------------------------
-# broker.safety_verdict
+# broker — connection + safety_verdict (two independent enums)
 # ---------------------------------------------------------------------------
 
 
-def _project_broker_safety(
+def _project_broker(
     configured_mode: Literal["paper", "live"] | None,
     connection_state: BrokerConnectionStateInput | None,
 ) -> OperatorSurfaceBroker:
-    if connection_state == "disconnected":
-        return OperatorSurfaceBroker(safety_verdict="DISCONNECTED")
-    if connection_state == "degraded":
-        return OperatorSurfaceBroker(safety_verdict="DEGRADED")
-    if connection_state == "connected" and configured_mode == "paper":
-        return OperatorSurfaceBroker(safety_verdict="PAPER")
-    if connection_state == "connected" and configured_mode == "live":
-        return OperatorSurfaceBroker(safety_verdict="LIVE")
-    return OperatorSurfaceBroker(safety_verdict="UNKNOWN")
+    # ``connection`` is whether the broker session is up; ``safety_verdict``
+    # is whether we're allowed to trade.  They are independent and must
+    # not be composed.  ADR-0011's ``BrokerSafetyVerdict.final_verdict``
+    # is the conceptual ancestor for ``safety_verdict``; the operator's
+    # paper / live mode is the sole input today.
+    if connection_state == "connected":
+        connection = "CONNECTED"
+    elif connection_state == "disconnected":
+        connection = "DISCONNECTED"
+    elif connection_state == "degraded":
+        # Currently unreachable from the live readiness gate (pass/fail
+        # only).  When a richer health channel lands on the wire we
+        # surface this honestly as DISCONNECTED-with-recovery rather
+        # than inventing a third enum value for the cockpit.
+        connection = "DISCONNECTED"
+    else:
+        connection = "UNKNOWN"
+
+    if configured_mode == "paper":
+        safety_verdict = "PAPER_ONLY"
+    elif configured_mode == "live":
+        safety_verdict = "UNSAFE"
+    else:
+        safety_verdict = "UNKNOWN"
+
+    return OperatorSurfaceBroker(
+        safety_verdict=safety_verdict,  # type: ignore[arg-type]
+        connection=connection,  # type: ignore[arg-type]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +163,6 @@ def _project_broker_safety(
 
 
 def _derive_posture(owned_positions: dict[str, int]) -> str:
-    # Zero-qty entries can linger in the engine's tally; ignore them.
     non_zero = {sym: qty for sym, qty in owned_positions.items() if qty != 0}
     if not non_zero:
         return "FLAT"
@@ -124,9 +174,6 @@ def _derive_posture(owned_positions: dict[str, int]) -> str:
 
 def _project_current_risk(broker: InstanceBrokerView | None) -> OperatorSurfaceCurrentRisk:
     if broker is None:
-        # Broker state unavailable -> posture UNKNOWN, pending null,
-        # verdict UNKNOWN.  The cockpit reads these nulls explicitly
-        # (see #612 §"Rendering rules").
         return OperatorSurfaceCurrentRisk(
             posture="UNKNOWN",
             pending_order_count=None,
@@ -135,8 +182,6 @@ def _project_current_risk(broker: InstanceBrokerView | None) -> OperatorSurfaceC
         )
     posture = _derive_posture(broker.owned_positions)
     pending = broker.pending_order_count
-    # READY only when posture is FLAT AND pending is exactly 0 (known
-    # empty, not null).  Anything else is ATTENTION.
     verdict = "READY" if posture == "FLAT" and pending == 0 else "ATTENTION"
     return OperatorSurfaceCurrentRisk(
         posture=posture,  # type: ignore[arg-type]
@@ -154,9 +199,6 @@ def _project_current_risk(broker: InstanceBrokerView | None) -> OperatorSurfaceC
 def _project_daily_order_cap(readiness: ReadinessVector | None) -> OperatorSurfaceDailyOrderCap:
     if readiness is None:
         return OperatorSurfaceDailyOrderCap(used=None, limit=None)
-    # Read the structured fields the engine sidecar now emits (#608
-    # § "Engine sidecar precondition — structured cap fields").  The
-    # gate prose ``"3 / 50 orders used"`` is no longer parsed.
     return OperatorSurfaceDailyOrderCap(used=readiness.orders_used, limit=readiness.orders_cap)
 
 
@@ -167,12 +209,7 @@ def _project_daily_order_cap(readiness: ReadinessVector | None) -> OperatorSurfa
 
 def _project_action_plan(action_plan: dict | None) -> OperatorSurfaceActionPlan:
     if action_plan is None:
-        # Missing plan -> both fields UNKNOWN.  A missing plan is
-        # evidence of nothing, not evidence of health (#608).
         return OperatorSurfaceActionPlan(consumption="UNKNOWN", anomaly_verdict="UNKNOWN")
-    # Slice 4 (PRD #593) will flip consumption to ACTIVE and drive
-    # anomaly_verdict from a real detector.  Until then, a present plan
-    # is DECLARATIVE_ONLY and anomaly_verdict is READY.
     return OperatorSurfaceActionPlan(consumption="DECLARATIVE_ONLY", anomaly_verdict="READY")
 
 
@@ -186,25 +223,14 @@ def _project_configuration(
     sizing: InstanceSizing | None,
     instance_broker_self_consistent: bool | None,
 ) -> OperatorSurfaceConfiguration:
-    """Apply the five named configuration rules (#608).
-
-    Each failing rule appends one ``ALL_CAPS_SNAKE`` token to
-    ``reason_codes``.  ``verdict`` is ``UNKNOWN`` when the inputs to
-    every rule are themselves missing (nothing-deployed instance);
-    ``ATTENTION`` when any rule fails; ``READY`` when none fail.
-    """
-    # Nothing deployed -> can't evaluate any rule; honest UNKNOWN.
     if start_defaults is None and sizing is None and instance_broker_self_consistent is None:
         return OperatorSurfaceConfiguration(verdict="UNKNOWN", reason_codes=[])
 
     reasons: list[str] = []
 
-    # STRATEGY_KEY_MISSING — start_defaults.strategy is empty.
     if start_defaults is None or not (start_defaults.strategy or "").strip():
         reasons.append("STRATEGY_KEY_MISSING")
 
-    # MAX_ORDERS_CAP_UNSET — start_defaults.max_orders_per_day is None
-    # or non-positive.
     if (
         start_defaults is None
         or start_defaults.max_orders_per_day is None
@@ -212,23 +238,85 @@ def _project_configuration(
     ):
         reasons.append("MAX_ORDERS_CAP_UNSET")
 
-    # SIZING_PRESET_MISSING — sizing.policy is None.
     if sizing is None or sizing.policy is None:
         reasons.append("SIZING_PRESET_MISSING")
 
-    # SIZING_PROVENANCE_MISSING — sizing.sizing_provenance is missing
-    # / unreadable.
     if sizing is None or not getattr(sizing, "sizing_provenance", None):
         reasons.append("SIZING_PROVENANCE_MISSING")
 
-    # INSTANCE_BROKER_SELF_INCONSISTENT — the instance-broker
-    # self-consistency gate (ADR-0005 / #398) is failing.  ``None``
-    # means the gate could not be evaluated.
     if instance_broker_self_consistent is False:
         reasons.append("INSTANCE_BROKER_SELF_INCONSISTENT")
 
     verdict = "ATTENTION" if reasons else "READY"
     return OperatorSurfaceConfiguration(verdict=verdict, reason_codes=reasons)
+
+
+# ---------------------------------------------------------------------------
+# trading_session — server-authored phase + permission + next-transition
+# ---------------------------------------------------------------------------
+
+_NY = ZoneInfo("America/New_York")
+
+# Default RTH window when a strategy has not declared its own session
+# policy.  Per the cockpit-revision contract, this default lives
+# server-side; Angular MUST NOT hard-code it.  When per-strategy
+# session policies ship, this helper grows to read them.
+_RTH_OPEN = time(9, 30)
+_RTH_CLOSE = time(16, 0)
+_PRE_OPEN = time(4, 0)
+_POST_CLOSE = time(20, 0)
+
+
+def _project_trading_session(
+    *,
+    now_ms: int,
+    strategy_session_policy: Literal["rth_only"] | None = None,
+) -> OperatorSurfaceTradingSession:
+    """Compute the trading-session phase from server-side NYC wall-clock.
+
+    Until per-strategy session policies are declarative
+    (``strategy_session_policy`` will read them then), the default is
+    RTH-only.  Weekends collapse to CLOSED.  ``permits_strategy_activity``
+    follows the policy: ``rth_only`` -> True iff phase==RTH.
+    """
+    now_utc = datetime.fromtimestamp(now_ms / 1000.0, tz=UTC)
+    now_ny = now_utc.astimezone(_NY)
+    wall = now_ny.time()
+    weekday = now_ny.weekday()  # 0=Mon ... 6=Sun
+
+    phase: str
+    permits: bool | None
+    next_transition_ms: int | None = None
+
+    if weekday >= 5 or wall < _PRE_OPEN:
+        phase = "CLOSED"
+        permits = False
+    elif wall < _RTH_OPEN:
+        phase = "PRE"
+        permits = False
+    elif wall < _RTH_CLOSE:
+        phase = "RTH"
+        permits = True
+    elif wall < _POST_CLOSE:
+        phase = "POST"
+        permits = False
+    else:
+        phase = "CLOSED"
+        permits = False
+
+    # If the strategy explicitly opted out of the default permission
+    # mapping (future: opts in to extended hours), respect it.
+    if strategy_session_policy is None:
+        # Default policy = RTH-only.
+        permits = phase == "RTH"
+
+    return OperatorSurfaceTradingSession(
+        phase=phase,  # type: ignore[arg-type]
+        permits_strategy_activity=permits,
+        next_transition_ms=next_transition_ms,
+        timezone="America/New_York",
+        as_of_ms=now_ms,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,13 +338,15 @@ def compute_operator_surface(
     instance_broker_self_consistent: bool | None = None,
     live_binding: LiveBinding | None = None,
     poisoned: bool = False,
+    desired_state: DesiredStateView | None = None,
+    now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
 
     The function is intentionally pure: every input is a primitive value
     or an already-resolved view model.  The router does the source
-    blending (settings, readiness gate, broker health, sidecars) and
-    hands the result in.
+    blending (settings, readiness gate, broker health, sidecars,
+    desired-state sidecar, now_ms) and hands the result in.
     """
 
     owned_positions_empty = broker is None or not any(
@@ -264,9 +354,9 @@ def compute_operator_surface(
     )
 
     return OperatorSurface(
-        host_process=_project_host_process(process),
+        host_process=_project_host_process(process, desired_state),
         prior_run=_project_prior_run(last_exit),
-        broker=_project_broker_safety(configured_mode, broker_connection_state),
+        broker=_project_broker(configured_mode, broker_connection_state),
         configuration=_project_configuration(
             start_defaults, sizing, instance_broker_self_consistent
         ),
@@ -279,4 +369,5 @@ def compute_operator_surface(
             poisoned=poisoned,
             owned_positions_empty=owned_positions_empty,
         ),
+        trading_session=_project_trading_session(now_ms=now_ms),
     )
