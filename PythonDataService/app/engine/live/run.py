@@ -1221,6 +1221,35 @@ def cmd_start(args: argparse.Namespace) -> int:
     # "after session start 00:00 UTC" and tripped a false outside_mutation
     # halt).
     session_start_ms = int(time.time() * 1000)
+    # PRD #619-B B3 — engine_runtime.json producer wiring. The
+    # aggregator + publisher live for the lifetime of one engine.run().
+    # The publisher is started just before engine.run() and stopped in
+    # the outer finally so a transient writer failure cannot leave a
+    # stale snapshot on disk. ``expected_daemon_boot_id`` comes from
+    # the env var the daemon sets when spawning the child (619-B
+    # daemon-integration follow-up); ``None`` until that integration
+    # lands. ``process_start_identity`` is a fresh per-process id so
+    # the orphan classifier (619-B B6) can distinguish two runs of the
+    # same instance.
+    from uuid import uuid4
+
+    from app.engine.live.engine_runtime_publisher import (
+        EngineRuntimeAggregator,
+        EngineRuntimePublisher,
+    )
+
+    _runtime_aggregator = EngineRuntimeAggregator(
+        strategy_instance_id=strategy_instance_id,
+        run_id=ledger.run_id,
+        pid=_os.getpid(),
+        process_start_identity=uuid4().hex,
+        expected_daemon_boot_id=_os.environ.get("LIVE_RUNNER_DAEMON_BOOT_ID"),
+    )
+    _runtime_publisher = EngineRuntimePublisher(
+        _runtime_aggregator,
+        run_dir=args.run_dir,
+        now_ms=lambda: int(time.time() * 1000),
+    )
     engine = LiveEngine(
         client,
         live_config,
@@ -1251,6 +1280,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         # IntentWal on LivePortfolio. Required since Phase 5B (ADR 0008)
         # fail-fasts when a real-broker portfolio has no IntentWal.
         intent_wal_path=args.run_dir / "intent_events.jsonl",
+        runtime_aggregator=_runtime_aggregator,
+        artifacts_root_for_lease=_artifacts_root,
     )
 
     _entry_sidecar = RunStatusSidecar(
@@ -1430,6 +1461,12 @@ def cmd_start(args: argparse.Namespace) -> int:
                 return 1
 
             try:
+                # PRD #619-B B3 — start the runtime publisher just
+                # before the bar loop so the first publish lands as
+                # soon as the engine's startup hooks populate all
+                # four blocks. ``finally`` below stops it bounded so
+                # a final snapshot is flushed.
+                await _runtime_publisher.start()
                 await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
                 # Write exit sidecar — use keyboard_interrupt if signal was received
                 if shutdown_event.is_set():
@@ -1583,6 +1620,14 @@ def cmd_start(args: argparse.Namespace) -> int:
                     )
                 return 3
         finally:
+            # PRD #619-B B3 — bounded shutdown of the runtime publisher
+            # BEFORE the client disconnect so a final snapshot
+            # captures the disconnect-imminent state, not a half-torn
+            # post-disconnect state.
+            try:
+                await _runtime_publisher.stop()
+            except Exception:
+                logger.exception("runtime publisher stop failed", extra={"step": "8"})
             if client is not None:
                 try:
                     await client.disconnect()

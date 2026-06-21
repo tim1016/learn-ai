@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -50,6 +51,12 @@ from app.engine.live.command_channel import (
 )
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState
+from app.engine.live.runtime_producer import (
+    build_bar_loop_block,
+    build_broker_block,
+    build_command_loop_block,
+    build_control_plane_block_from_lease,
+)
 from app.engine.live.halt import (
     FatalHaltError,
     PoisonedHaltReason,
@@ -398,6 +405,18 @@ class LiveEngine:
         # transition" contract. ``None`` (the default) keeps the
         # pre-Phase-7B behavior (no observer).
         verdict_provider: object = None,
+        # PRD #619-B B3 — engine_runtime.json producer side. When wired,
+        # the engine updates the aggregator on every bar iteration,
+        # command-poll tick, and verdict check. The publisher that
+        # consumes the aggregator is owned by the caller (cmd_start);
+        # the engine only writes into the aggregator. ``None`` keeps
+        # replay tests and synthetic-engine callers free of the wire.
+        runtime_aggregator: object = None,
+        # PRD #619-B B3 — for the control-plane block bootstrap. When
+        # set, the engine reads ``<artifacts_root>/control_plane/daemon_lease.json``
+        # at startup to seed ``ControlPlaneBlock.observed_daemon_boot_id``.
+        # B5 will replace this single read with a periodic watchdog.
+        artifacts_root_for_lease: object = None,
         # Phase 5C / VCR-0002 — managed cancel/flatten paths await per-order
         # cancel confirms with this timeout. Tests pass a short value
         # (e.g. 0.05s) to exercise the timeout path without waiting 5s.
@@ -484,6 +503,12 @@ class LiveEngine:
         self._intent_wal_path = intent_wal_path
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
+        # PRD #619-B B3 — engine_runtime aggregator. Producer hooks below
+        # update it on bar / command-poll / verdict ticks. The publisher
+        # is owned by the caller (cmd_start); a ``None`` aggregator
+        # disables every producer call site.
+        self._runtime_aggregator = runtime_aggregator
+        self._artifacts_root_for_lease = artifacts_root_for_lease
         # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
         self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
         # Phase 3 / VCR-0006 — reconnect re-validation. Each bar iteration
@@ -719,6 +744,14 @@ class LiveEngine:
             await self._broker.start_event_stream()
             started_event_stream = True
 
+        # PRD #619-B B3 — engine_runtime aggregator startup hooks. The
+        # publisher (owned by the caller) starts emitting as soon as
+        # all four blocks land. We seed command_loop + control_plane
+        # immediately; bar_loop and broker land on their first
+        # natural producer tick.
+        await self._publish_command_loop_block()
+        await self._publish_initial_control_plane_block()
+
         # Operator command-channel poll task. Spawned only when a
         # channel is configured; cancelled in the finally block. The
         # task needs a shutdown_event to honor STOP / MARK_POISONED,
@@ -753,6 +786,16 @@ class LiveEngine:
                     break
                 last_bar = minute_bar
                 self._raise_if_event_stream_failed()
+                # PRD #619-B B3 — bar-loop heartbeat. ``heartbeat_at_ms``
+                # is loop scheduling (we just woke); ``latest_source_bar_ms``
+                # is market-data freshness (the bar's close time).
+                # Splitting them lets the backend freshness evaluator
+                # tell a halted engine apart from a closed market.
+                await self._publish_bar_loop_block(minute_bar)
+                # Also re-emit the command-loop heartbeat on every bar
+                # — bar-loop liveness implies command-loop liveness
+                # without waiting for the next 1s command-poll tick.
+                await self._publish_command_loop_block()
                 # VCR-0007 / Phase 6A — service the FLATTEN_NOW one-shot
                 # between bars BEFORE per-bar consolidation/strategy work.
                 # The flatten cancels owned opens + liquidates positions
@@ -948,8 +991,10 @@ class LiveEngine:
                 # transitions out of paper-only halts the run proactively
                 # (rather than catching the next submit's exception). The
                 # halt.flag write + raise mirrors PRD §5D's SUBMIT_UNCERTAIN
-                # halt semantics.
-                self._check_verdict_transition_halt(portfolio)
+                # halt semantics. PRD #619-B B3 — the check is async so it
+                # can update the runtime aggregator's broker block on the
+                # same path that writes verdict_snapshot.json.
+                await self._check_verdict_transition_halt(portfolio)
 
                 # PAUSE drops new orders this bar before submit. The
                 # strategy still consumes the bar (indicators advance),
@@ -1390,6 +1435,10 @@ class LiveEngine:
         """
         assert self._command_channel is not None
         while not shutdown_event.is_set():
+            # PRD #619-B B3 — command-loop heartbeat on every poll tick.
+            # This is the 1Hz cadence the backend freshness evaluator
+            # uses to detect command-loop hangs.
+            await self._publish_command_loop_block()
             try:
                 pending = self._command_channel.read_pending()
             except CommandChannelCorruptError:
@@ -1875,7 +1924,7 @@ class LiveEngine:
             connected_account,
         )
 
-    def _check_verdict_transition_halt(self, portfolio: LivePortfolio) -> None:
+    async def _check_verdict_transition_halt(self, portfolio: LivePortfolio) -> None:
         """Phase 7B / VCR-0010 — broker safety verdict observer.
 
         Consult ``self._verdict_provider`` (if set). On every check (NOT
@@ -1893,12 +1942,20 @@ class LiveEngine:
         event. The WAL event is gated on the broker-lifecycle
         WAL-location decision and is omitted here; ``halt.flag`` +
         the exception carry the same forensic payload.
+
+        PRD #619-B B3 — when a ``runtime_aggregator`` is wired, the
+        verdict literal + the engine's static run-mode/readonly facts
+        + the IbkrClient's health snapshot compose into
+        ``engine_runtime.json``'s broker block. The composition is
+        independent of the halt path so the broker block stays fresh
+        on every check, halt or not.
         """
         if self._verdict_provider is None:
             return
         verdict_value = self._verdict_provider()  # type: ignore[operator]
         if self._output_dir is not None:
             self._write_verdict_snapshot(verdict_value)
+        await self._publish_broker_block(verdict_value)
         if verdict_value is None or verdict_value == "paper-only":
             return
         portfolio.pending_orders.clear()
@@ -1914,6 +1971,109 @@ class LiveEngine:
                     "halt.flag write failed for verdict transition halt"
                 )
         raise BrokerSafetyVerdictTransitionHaltError(verdict=str(verdict_value))
+
+    async def _publish_broker_block(self, verdict_value: object) -> None:
+        """PRD #619-B B3 — update the engine_runtime broker block.
+
+        No-op when the aggregator is not wired (replay tests, synthetic
+        engines). When wired, composes the block from the verdict
+        literal + the engine's run_mode/readonly + the IbkrClient
+        health snapshot, and pushes it onto the aggregator. The
+        publisher reads the aggregator on its own cadence.
+        """
+        if self._runtime_aggregator is None:
+            return
+        verdict_str = verdict_value if isinstance(verdict_value, str) else None
+        now_ms = int(time.time() * 1000)
+        connection_state: str = "disabled"
+        connected_account: str | None = None
+        port_class = "unknown"
+        probe_completed_at_ms: int | None = None
+        reconnect_attempt = 0
+        if self._client is not None:
+            try:
+                health = self._client.health()
+            except Exception:  # noqa: BLE001 — health is diagnostic; never fatal
+                health = None
+            if health is not None:
+                connection_state = str(health.connection_state)
+                connected_account = health.account_id
+                probe_completed_at_ms = health.last_probe_ms
+                # port_class is derived from settings.port
+                from app.broker.safety_verdict import classify_port
+
+                port_class = classify_port(self._client.settings.port)
+                reconnect_attempt = health.reconnect_attempt or 0
+        block = build_broker_block(
+            verdict_value=verdict_str,
+            run_mode=self._run_mode,
+            readonly=self._readonly,
+            connection_state=connection_state,  # type: ignore[arg-type]
+            connection_epoch=self._connection_epoch,
+            connected_account=connected_account,
+            port_class=port_class,  # type: ignore[arg-type]
+            observation_at_ms=now_ms,
+            probe_completed_at_ms=probe_completed_at_ms,
+            reconnect_attempt=reconnect_attempt,
+        )
+        await self._runtime_aggregator.update_broker(block)
+
+    async def _publish_command_loop_block(self) -> None:
+        """PRD #619-B B3 — update the command-loop block.
+
+        Stamped on every command-poll tick AND on every bar-loop
+        iteration so the backend freshness evaluator's command-loop
+        check is always sourced from the freshest of the two paths.
+        """
+        if self._runtime_aggregator is None:
+            return
+        await self._runtime_aggregator.update_command_loop(
+            build_command_loop_block(
+                heartbeat_at_ms=int(time.time() * 1000),
+                paused=self._paused,
+            )
+        )
+
+    async def _publish_bar_loop_block(self, minute_bar) -> None:  # noqa: ANN001
+        """PRD #619-B B3 — update the bar-loop block from the current bar.
+
+        ``heartbeat_at_ms`` is wall-clock (loop scheduling). The bar's
+        close time is the market-data freshness signal — a closed
+        market has a fresh heartbeat but a stale latest_source_bar_ms.
+        ``expected_interval_ms`` comes from the strategy spec / config
+        when wired; ``None`` for replay tests.
+        """
+        if self._runtime_aggregator is None:
+            return
+        latest_source_bar_ms: int | None
+        try:
+            latest_source_bar_ms = int(minute_bar.end_time.timestamp() * 1000)
+        except (AttributeError, TypeError):
+            latest_source_bar_ms = None
+        await self._runtime_aggregator.update_bar_loop(
+            build_bar_loop_block(
+                heartbeat_at_ms=int(time.time() * 1000),
+                latest_source_bar_ms=latest_source_bar_ms,
+                expected_interval_ms=None,
+            )
+        )
+
+    async def _publish_initial_control_plane_block(self) -> None:
+        """PRD #619-B B3 — seed the control-plane block at startup.
+
+        Reads ``<artifacts_root>/control_plane/daemon_lease.json`` if
+        an ``artifacts_root_for_lease`` was provided; otherwise emits a
+        sentinel block with ``observed_daemon_boot_id=None``. 619-B B5
+        will replace this single startup read with a periodic
+        watchdog producer.
+        """
+        if self._runtime_aggregator is None:
+            return
+        artifacts_root = self._artifacts_root_for_lease
+        path = artifacts_root if isinstance(artifacts_root, Path) else None
+        await self._runtime_aggregator.update_control_plane(
+            build_control_plane_block_from_lease(path, now_ms=int(time.time() * 1000))
+        )
 
     def _write_verdict_snapshot(self, verdict_value: object) -> None:
         """Phase 7B Guard #1 — persist the latest verdict reading so
