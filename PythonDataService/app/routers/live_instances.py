@@ -29,7 +29,10 @@ from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
-from app.engine.live.fleet import compute_fleet_contamination
+from app.engine.live.fleet import (
+    compute_fleet_account_summary,
+    compute_fleet_contamination,
+)
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -64,6 +67,7 @@ from app.schemas.live_runs import (
     EmergencyFlattenRequest,
     EnqueueCommandRequest,
     EvidenceBinding,
+    FleetAccountSummary,
     FleetContamination,
     HostRunnerActionResponse,
     HostRunnerDeployRequest,
@@ -85,6 +89,13 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
+)
+from app.services.operator_capability import evaluate_action
+from app.services.operator_surface import compute_operator_surface
+from app.services.resume_guard_state import (
+    ResumeGuardState,
+    empty_guard_state,
+    resolve_guard_state_from_paths,
 )
 
 # The instance command channel is reserved for one-shot operations; PAUSE/
@@ -128,9 +139,7 @@ def _validate_instance_id(strategy_instance_id: str) -> str:
     try:
         safe = _validate_path_segment(strategy_instance_id, field="strategy_instance_id")
     except ValueError as exc:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
-        ) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
     if _INSTANCE_ID_RE.fullmatch(safe) is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -169,9 +178,7 @@ def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
     return out
 
 
-def _interpret_daemon_process(
-    daemon: dict | None, root: Path
-) -> tuple[InstanceProcessView, LiveBinding | None]:
+def _interpret_daemon_process(daemon: dict | None, root: Path) -> tuple[InstanceProcessView, LiveBinding | None]:
     """Turn the daemon's process snapshot into a process view + live binding.
 
     ``None`` (daemon unreachable) is rendered as ``unreachable`` with no live
@@ -251,9 +258,7 @@ def _resolve_readiness(
     )
 
 
-def _strategy_state(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> tuple[dict | None, list[dict]]:
+def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> tuple[dict | None, list[dict]]:
     """Latest decision row + spec-derived column descriptors for the instance.
 
     Reads from the live run when visible, else the latest evidence run. The
@@ -304,9 +309,7 @@ def _resolve_readonly_default(settings: object) -> bool:
     return operator_readonly or mode != "paper"
 
 
-def _resolve_evidence_run_dir(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> Path | None:
+def _resolve_evidence_run_dir(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> Path | None:
     """The run dir the status view describes: the visible live run, else the
     latest evidence run, else None (nothing deployed). Shared by start-defaults
     and provenance so they always read the same ledger."""
@@ -353,9 +356,7 @@ def _start_defaults(
     )
 
 
-def _resolve_symbol(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> str | None:
+def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
     """Traded symbol for the instance.
 
     Resolution order:
@@ -539,9 +540,7 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
                     # as ``None`` — preserved as ``None`` rather than
                     # coerced to a sentinel string so the frontend can
                     # render the "unknown" badge variant.
-                    "sizing_provenance_at_resolve_time": (
-                        event.sizing_provenance_at_resolve_time or None
-                    ),
+                    "sizing_provenance_at_resolve_time": (event.sizing_provenance_at_resolve_time or None),
                 }
             )
 
@@ -585,9 +584,7 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
                     # "unknown" badge variant uniformly across WAL and
                     # skip rows. If a future sizing_skip.jsonl revision
                     # adds the field, pass it through here.
-                    "sizing_provenance_at_resolve_time": payload.get(
-                        "sizing_provenance_at_resolve_time"
-                    ),
+                    "sizing_provenance_at_resolve_time": payload.get("sizing_provenance_at_resolve_time"),
                 }
             except (TypeError, ValueError):
                 # ``int(<list>)`` raises TypeError; ``int("not-a-number")``
@@ -661,9 +658,7 @@ def _sizing(
     )
 
 
-def _resolve_action_plan(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> dict | None:
+def _resolve_action_plan(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> dict | None:
     """PRD #593 Slice 1A — surface the bound (or evidence) run's declared
     instrument plan to the cockpit.
 
@@ -690,9 +685,7 @@ def _resolve_action_plan(
     return action if isinstance(action, dict) else None
 
 
-def _resolve_lineage(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> dict | None:
+def _resolve_lineage(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> dict | None:
     """PRD #593 Slice 1E (#598) — surface the bound (or evidence) run's
     redeploy lineage to the cockpit. The block is persisted by the
     daemon at deploy time alongside other unhashed metadata; it lives
@@ -746,9 +739,7 @@ def _resolve_instrument_surface(
     return reg.instrument_surface
 
 
-def _provenance(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> InstanceProvenance | None:
+def _provenance(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> InstanceProvenance | None:
     """What the bound/evidence run's content-addressed identity attests to (the
     hashed deploy inputs), so the console can explain the hashes instead of
     dumping them. ``None`` when nothing is deployed or the ledger is unreadable;
@@ -808,6 +799,17 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
             proc_state = "offline" if daemon_reachable else "unreachable"
             bound = None
         desired = _resolve_desired_state(root, sid)
+        # PRD #616 — surface the per-instance readiness verdict so the
+        # cockpit can render the outer-tab badge (PROCESS · READINESS)
+        # without an N+1 fetch of every instance's full status.
+        live_binding_for_sid = LiveBinding(run_id=bound) if bound is not None else None
+        readiness = _resolve_readiness(root, live_binding_for_sid, runs, desired.state)
+        readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"]
+        if readiness is None or readiness.verdict not in ("READY", "BLOCKED", "DEGRADED"):
+            readiness_verdict = "UNKNOWN"
+        else:
+            readiness_verdict = readiness.verdict  # type: ignore[assignment]
+        readiness_as_of_ms = readiness.as_of_ms if readiness is not None else None
         summaries.append(
             LiveInstanceSummary(
                 strategy_instance_id=sid,
@@ -815,15 +817,15 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
                 bound_run_id=bound,
                 latest_run_id=runs[0]["run_id"] if runs else None,
                 desired_state=desired.state,
+                readiness_verdict=readiness_verdict,
+                readiness_as_of_ms=readiness_as_of_ms,
             )
         )
     return summaries
 
 
 @router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
-async def deploy_instance(
-    body: HostRunnerDeployRequest, response: Response
-) -> HostRunnerDeployResponse:
+async def deploy_instance(body: HostRunnerDeployRequest, response: Response) -> HostRunnerDeployResponse:
     """Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
 
     Deploy is a host-daemon operation: ``init-ledger`` runs a git clean-tree
@@ -838,9 +840,7 @@ async def deploy_instance(
     """
     settings = get_settings()
     try:
-        result = await host_daemon_client.deploy(
-            settings.live_runner_daemon_url, body.model_dump()
-        )
+        result = await host_daemon_client.deploy(settings.live_runner_daemon_url, body.model_dump())
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -906,9 +906,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     settings = get_settings()
     try:
-        result = await host_daemon_client.start_run(
-            settings.live_runner_daemon_url, run_id, body.model_dump()
-        )
+        result = await host_daemon_client.start_run(settings.live_runner_daemon_url, run_id, body.model_dump())
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     return _parse_action_response(result)
@@ -927,9 +925,7 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
 
     settings = get_settings()
     try:
-        result = await host_daemon_client.stop_run(
-            settings.live_runner_daemon_url, run_id, body.model_dump()
-        )
+        result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, body.model_dump())
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     return _parse_action_response(result)
@@ -1144,10 +1140,56 @@ async def get_qc_audit_copies() -> QcAuditCopyListing:
         ) from exc
 
 
+def _instance_ledger_account_id(root: Path, sid: str) -> str | None:
+    """Latest ledger ``account_id`` for ``sid`` (``None`` when no ledger
+    or the ledger pre-dates the field).  Pure read; used by the fleet
+    account-identity aggregation."""
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    if not runs:
+        return None
+    try:
+        ledger = _read_ledger(Path(runs[0]["run_dir"]))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = ledger.get("account_id")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
+async def _fetch_broker_connected_account() -> tuple[str | None, bool]:
+    """Return ``(connected_account_id, known)``.
+
+    ``known`` distinguishes "queried and got a value or definitive
+    absence" from "could not query at all" (broker not wired) so the
+    fleet account summary surfaces ``BROKER_ACCOUNT_UNAVAILABLE``
+    only when honest.
+    """
+    try:
+        from app.routers.broker import _require_connected_or_503
+
+        client = _require_connected_or_503()
+    except Exception as exc:
+        logger.info("fleet broker-account fetch unavailable: %s", exc)
+        return None, False
+    try:
+        account = getattr(client, "account_id", None)
+    except Exception as exc:
+        logger.info("fleet broker-account read failed: %s", exc)
+        return None, False
+    if isinstance(account, str) and account.strip():
+        return account.strip(), True
+    return None, True
+
+
 @router.get("/account", response_model=FleetContamination)
 async def get_account_fleet() -> FleetContamination:
     """Account/fleet contamination: net account position vs the sum of every
     managed instance's namespace-attributed expected position (ADR 0005, #399).
+
+    Retained as the legacy contamination-only endpoint.  PRD #616
+    introduced ``GET /api/live-instances/account-summary`` which
+    composes contamination with account identity into a single DTO.
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
@@ -1157,10 +1199,40 @@ async def get_account_fleet() -> FleetContamination:
         if broker is not None and broker.owned_positions:
             explained[sid] = broker.owned_positions
     net = await _fetch_net_positions()
-    result = compute_fleet_contamination(
-        net, explained, policy_blocks_starts=settings.fleet_dirty_blocks_starts
-    )
+    result = compute_fleet_contamination(net, explained, policy_blocks_starts=settings.fleet_dirty_blocks_starts)
     return FleetContamination(**result)
+
+
+@router.get("/account-summary", response_model=FleetAccountSummary)
+async def get_account_summary() -> FleetAccountSummary:
+    """PRD #616 — server-authored account row.
+
+    Composes position contamination with account-identity verification
+    so the cockpit renders the account block from one DTO.  Account
+    identity is separate from contamination: a CONFLICTING identity
+    does not imply contamination, and vice versa.
+    """
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    explained: dict[str, dict[str, int]] = {}
+    account_ids: dict[str, str | None] = {}
+    for sid in _scan_runs_by_instance(root):
+        broker = _instance_broker(root, sid)
+        if broker is not None and broker.owned_positions:
+            explained[sid] = broker.owned_positions
+        account_ids[sid] = _instance_ledger_account_id(root, sid)
+    net = await _fetch_net_positions()
+    broker_account, broker_known = await _fetch_broker_connected_account()
+    payload = compute_fleet_account_summary(
+        net_positions=net,
+        explained_by_instance=explained,
+        instance_account_ids=account_ids,
+        broker_connected_account=broker_account,
+        broker_account_known=broker_known,
+        policy_blocks_starts=settings.fleet_dirty_blocks_starts,
+    )
+    payload["contamination"] = FleetContamination(**payload["contamination"])
+    return FleetAccountSummary(**payload)
 
 
 @router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)
@@ -1177,6 +1249,18 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
     desired = _resolve_desired_state(root, sid)
     latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
+    last_exit = _instance_last_exit(runs)
+    readiness = _resolve_readiness(root, live_binding, runs, desired.state)
+    _raw_mode = getattr(settings, "mode", None)
+    configured_mode = _raw_mode if _raw_mode in ("paper", "live") else None
+    safety_verdict_final = _resolve_safety_verdict_final(configured_mode)
+    broker_connection_state = _broker_connection_state_from_readiness(readiness)
+    broker_view = _instance_broker(root, sid)
+    start_defaults = _start_defaults(root, live_binding, runs, readonly_default=_resolve_readonly_default(settings))
+    sizing = _sizing(root, live_binding, runs, sid)
+    action_plan = _resolve_action_plan(root, live_binding, runs)
+    poisoned = bool(last_exit and last_exit.halt_trigger is not None)
+    guard_state = _resolve_resume_guard_state_for(root, live_binding, runs)
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1184,22 +1268,125 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         live_binding=live_binding,
         evidence_binding=evidence,
         desired_state=desired,
-        readiness=_resolve_readiness(root, live_binding, runs, desired.state),
+        readiness=readiness,
         latest_decision=latest_decision,
         decision_columns=decision_columns,
-        broker=_instance_broker(root, sid),
-        start_defaults=_start_defaults(
-            root, live_binding, runs, readonly_default=_resolve_readonly_default(settings)
-        ),
+        broker=broker_view,
+        start_defaults=start_defaults,
         provenance=_provenance(root, live_binding, runs),
-        sizing=_sizing(root, live_binding, runs, sid),
-        last_exit=_instance_last_exit(runs),
+        sizing=sizing,
+        last_exit=last_exit,
         symbol=_resolve_symbol(root, live_binding, runs),
-        action_plan=_resolve_action_plan(root, live_binding, runs),
+        action_plan=action_plan,
         instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
         lineage=_resolve_lineage(root, live_binding, runs),
+        operator_surface=compute_operator_surface(
+            process=process,
+            last_exit=last_exit,
+            safety_verdict_final=safety_verdict_final,
+            broker_connection_state=broker_connection_state,
+            broker=broker_view,
+            readiness=readiness,
+            action_plan=action_plan,
+            start_defaults=start_defaults,
+            sizing=sizing,
+            instance_broker_self_consistent=None,
+            live_binding=live_binding,
+            poisoned=poisoned,
+            desired_state=desired,
+            guard_state=guard_state,
+            now_ms=_now_ms(),
+        ),
         fetched_at_ms=_now_ms(),
     )
+
+
+def _resolve_safety_verdict_final(
+    configured_mode: Literal["paper", "live"] | None,
+) -> Literal["paper-only", "unsafe", "unknown"]:
+    """PRD #616 — derive ADR-0011's reactive ``BrokerSafetyVerdict.final_verdict``
+    for the operator-surface projection.
+
+    Prefer the live broker connection's safety verdict (port, account
+    prefix, readonly flag) so a mid-session degradation is reflected
+    immediately.  Fall back to the configured-mode-only derivation
+    when the broker client is not available (the cockpit still gets a
+    truthful ``UNKNOWN`` instead of ``UNSAFE``-by-omission).
+    """
+    from app.broker.safety_verdict import derive_broker_safety_verdict
+
+    try:
+        from app.routers.broker import _require_connected_or_503
+
+        client = _require_connected_or_503()
+        port = getattr(client.config, "port", None) if getattr(client, "config", None) else None
+        account = getattr(client, "account_id", None)
+        readonly_flag = getattr(client.config, "read_only_api", None) if getattr(client, "config", None) else None
+        verdict = derive_broker_safety_verdict(
+            configured_mode=configured_mode,
+            readonly_flag=readonly_flag,
+            port=port,
+            connected_account=account,
+        )
+        return verdict.final_verdict
+    except Exception:
+        # Broker not wired or unreachable — derive from configured mode
+        # alone with conservative defaults so the cockpit's verdict is
+        # honest.  ``derive_broker_safety_verdict`` is pure.
+        verdict = derive_broker_safety_verdict(
+            configured_mode=configured_mode,
+            readonly_flag=None,
+            port=None,
+            connected_account=None,
+        )
+        return verdict.final_verdict
+
+
+def _resolve_resume_guard_state_for(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+) -> ResumeGuardState:
+    """Resolve the canonical ``ResumeGuardState`` for an instance.
+
+    The bound run's artifacts are the truth; absent a binding the
+    most recent evidence run is consulted (so an EXITED instance
+    still surfaces its last verdict / WAL state).  When no run
+    exists at all, ``empty_guard_state()`` is returned (nothing to
+    safeguard yet).
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return empty_guard_state()
+    return resolve_guard_state_from_paths(
+        verdict_snapshot_path=run_dir / "verdict_snapshot.json",
+        run_dir_for_reconciliation=run_dir,
+        intent_wal_path=run_dir / "intent_events.jsonl",
+    )
+
+
+def _broker_connection_state_from_readiness(
+    readiness: ReadinessVector | None,
+) -> Literal["connected", "disconnected", "degraded", "unknown"] | None:
+    """Collapse the live readiness ``broker_connection`` gate into the
+    operator-surface broker-connection-state enum.
+
+    The live readiness vector today only emits pass/fail on
+    ``broker_connection`` (see ``app/engine/live/readiness.py``).  When a
+    richer ``BrokerConnectionState`` channel lands on the wire, this
+    helper grows to read it; ``DEGRADED`` is unreachable from the
+    current pass/fail signal, which is the honest answer.
+    """
+    if readiness is None:
+        return None
+    for gate in readiness.gates:
+        if gate.name == "broker_connection":
+            if gate.status == "pass":
+                return "connected"
+            if gate.status == "fail":
+                return "disconnected"
+            return "unknown"
+    return None
 
 
 def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_ms") -> list[dict]:
@@ -1305,11 +1492,7 @@ def _resolve_chart_bars(
     from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
     if is_today:
-        bars = (
-            LIVE_BAR_AGGREGATOR.snapshot(symbol)
-            if resolution == "1m"
-            else LIVE_BAR_AGGREGATOR.snapshot_5s(symbol)
-        )
+        bars = LIVE_BAR_AGGREGATOR.snapshot(symbol) if resolution == "1m" else LIVE_BAR_AGGREGATOR.snapshot_5s(symbol)
         if bars:
             return [_bar_to_dict(b) for b in bars]
 
@@ -1383,9 +1566,7 @@ async def get_chart_snapshot(
             # carries has_bars=false from persistence.
             logger.info("ensure_subscribed for %s/%s declined: %s", symbol, resolution, exc)
 
-    bars = _resolve_chart_bars(
-        symbol=symbol, resolution=resolution, day=day, is_today=is_today
-    )
+    bars = _resolve_chart_bars(symbol=symbol, resolution=resolution, day=day, is_today=is_today)
 
     runs_today = _runs_active_on(runs, day, live_binding=live_binding)
     snapshot_runs: list[ChartSnapshotRun] = []
@@ -1528,9 +1709,44 @@ async def set_instance_desired_state(
     try:
         sidecar_dir = _confine(artifacts_root / "live_state", sid)
     except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+
+    # PRD #616 — re-run the shared capability evaluator immediately
+    # before the durable write so a stale status snapshot cannot drive
+    # this mutation past the Resume guards.  ``ResumeGuardState`` is
+    # the canonical resolver; the projection and the CLI consume it
+    # too.
+    daemon_for_gate = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process_for_gate, live_binding_for_gate = _interpret_daemon_process(daemon_for_gate, root)
+    runs_for_gate = _scan_runs_by_instance(root).get(sid, [])
+    desired_for_gate = _resolve_desired_state(root, sid)
+    last_exit_for_gate = _instance_last_exit(runs_for_gate)
+    poisoned_for_gate = bool(last_exit_for_gate and last_exit_for_gate.halt_trigger is not None)
+    guard_state_for_gate = _resolve_resume_guard_state_for(root, live_binding_for_gate, runs_for_gate)
+    broker_for_gate = _instance_broker(root, sid)
+    owned_positions_empty_for_gate = broker_for_gate is None or not any(
+        qty != 0 for qty in broker_for_gate.owned_positions.values()
+    )
+    action_name = body.action.value  # "pause" | "resume" | "stop"
+    gate = evaluate_action(
+        action_name,  # type: ignore[arg-type]
+        process=process_for_gate,
+        live_binding=live_binding_for_gate,
+        poisoned=poisoned_for_gate,
+        owned_positions_empty=owned_positions_empty_for_gate,
+        desired_state=desired_for_gate,
+        guard_state=guard_state_for_gate,
+    )
+    if not gate.enabled:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
-        ) from exc
+            status.HTTP_409_CONFLICT,
+            detail={
+                "disabled_reason_code": gate.disabled_reason_code,
+                "disabled_reasons": gate.disabled_reasons,
+                "guard_state": guard_state_for_gate.model_dump(mode="json"),
+            },
+        )
+
     repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
     record = repo.set(
         _ACTION_TO_STATE[body.action],
@@ -1546,6 +1762,10 @@ async def set_instance_desired_state(
         version=record.version,
     )
 
+    # Re-fetch the daemon state for the actuation step (the durable
+    # write may have triggered a daemon-side response we should
+    # reflect).  Using a fresh fetch keeps the actuation reasoning
+    # against the latest binding.
     daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
@@ -1616,9 +1836,32 @@ async def flatten_and_pause_instance(
     try:
         sidecar_dir = _confine(artifacts_root / "live_state", sid)
     except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+
+    # PRD #607 / Slice 1 (#608) — shared-capability gate. The status
+    # endpoint's ``operator_surface.actions.flatten_and_pause`` is the
+    # cockpit's authority for when this keycap is enabled; the mutation
+    # endpoint re-evaluates the same function so a stale snapshot
+    # cannot drive this past the same rule.  Re-fetch the daemon state
+    # once now (and reuse it below) so the gate runs against fresh
+    # eligibility.
+    daemon_for_gate = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process_for_gate, live_binding_for_gate = _interpret_daemon_process(daemon_for_gate, root)
+    broker_for_gate = _instance_broker(root, sid)
+    owned_positions_empty_for_gate = broker_for_gate is None or not any(
+        qty != 0 for qty in broker_for_gate.owned_positions.values()
+    )
+    gate = evaluate_action(
+        "flatten_and_pause",
+        process=process_for_gate,
+        live_binding=live_binding_for_gate,
+        owned_positions_empty=owned_positions_empty_for_gate,
+    )
+    if not gate.enabled:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id"
-        ) from exc
+            status.HTTP_409_CONFLICT,
+            detail={"disabled_reason_code": gate.disabled_reason_code},
+        )
 
     payload = body or SetDesiredStateRequest(
         action=DesiredStateAction.pause,
@@ -1657,17 +1900,12 @@ async def flatten_and_pause_instance(
         detail = (
             "PAUSE persisted; no live binding so FLATTEN_NOW was not enqueued"
             if live_binding is None
-            else (
-                f"PAUSE persisted; bound run {live_binding.run_id} is not visible locally, "
-                "FLATTEN_NOW not enqueued"
-            )
+            else (f"PAUSE persisted; bound run {live_binding.run_id} is not visible locally, FLATTEN_NOW not enqueued")
         )
         actuation = IntentActuation(actuated=False, detail=detail)
     else:
         try:
-            command = CommandChannel(live_run_dir / "commands").write_from_operator(
-                CommandVerb.FLATTEN
-            )
+            command = CommandChannel(live_run_dir / "commands").write_from_operator(CommandVerb.FLATTEN)
         except Exception as exc:
             # PAUSE is already persisted — surface the failure honestly.
             # The durable PAUSE keeps the bar loop from re-entering even
@@ -1676,8 +1914,7 @@ async def flatten_and_pause_instance(
                 actuated=False,
                 run_id=live_binding.run_id,
                 detail=(
-                    "PAUSE persisted but FLATTEN_NOW failed to enqueue — retry the "
-                    f"flatten one-shot manually: {exc}"
+                    f"PAUSE persisted but FLATTEN_NOW failed to enqueue — retry the flatten one-shot manually: {exc}"
                 ),
             )
         else:
@@ -1685,10 +1922,7 @@ async def flatten_and_pause_instance(
                 actuated=True,
                 run_id=live_binding.run_id,
                 command_seq=command.seq,
-                detail=(
-                    f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; "
-                    "awaiting flatten ack"
-                ),
+                detail=(f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; awaiting flatten ack"),
             )
 
     return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
@@ -1715,9 +1949,7 @@ async def get_instance_commands(strategy_instance_id: str) -> CommandsTimeline:
 
 
 @router.post("/{strategy_instance_id}/commands", response_model=CommandView)
-async def issue_instance_command(
-    strategy_instance_id: str, body: EnqueueCommandRequest
-) -> CommandView:
+async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommandRequest) -> CommandView:
     """Enqueue a one-shot command on the instance's bound run (#397).
 
     Reserved to FLATTEN / RECONCILE / MARK_POISONED — PAUSE/RESUME/STOP are the
@@ -1737,12 +1969,31 @@ async def issue_instance_command(
     settings = get_settings()
     root = Path(settings.live_runs_root)
     daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
+    process_view, live_binding = _interpret_daemon_process(daemon, root)
     run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
-    if run_dir is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command"
+
+    # PRD #607 / Slice 1 (#608) — shared-capability gate for the cockpit
+    # actions that flow through this endpoint.  Currently only
+    # ``MARK_POISONED`` has a Slice-1 capability rule (NO_LIVE_BINDING /
+    # ALREADY_POISONED); other one-shots fall back to the legacy
+    # binding check below.
+    if verb is CommandVerb.MARK_POISONED:
+        last_exit = _instance_last_exit(_scan_runs_by_instance(root).get(sid, []))
+        poisoned = bool(last_exit and last_exit.halt_trigger is not None)
+        capability = evaluate_action(
+            "mark_poisoned",
+            process=process_view,
+            live_binding=live_binding,
+            poisoned=poisoned,
         )
+        if not capability.enabled:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={"disabled_reason_code": capability.disabled_reason_code},
+            )
+
+    if run_dir is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command")
     command = CommandChannel(run_dir / "commands").write_from_operator(verb)
     return CommandView(seq=command.seq, verb=command.verb.value)
 
@@ -1764,16 +2015,12 @@ async def emergency_flatten_instance(
     """
     sid = _validate_instance_id(strategy_instance_id)
     if not body.confirm:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true"
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
     settings = get_settings()
     root = Path(settings.live_runs_root)
     runs = _scan_runs_by_instance(root).get(sid, [])
     if not runs:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, detail=f"no run found for instance {sid!r} to flatten"
-        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"no run found for instance {sid!r} to flatten")
     run_id = str(runs[0]["run_id"])
     try:
         body_json = await host_daemon_client.emergency_flatten_run(

@@ -235,9 +235,7 @@ async def _empty_bars() -> AsyncIterator[TradeBar]:
     yield  # pragma: no cover - makes this an async generator
 
 
-def test_start_refuses_when_desired_state_stopped(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_start_refuses_when_desired_state_stopped(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     run_dir = _build_started_ledger(tmp_path)
     artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
@@ -266,9 +264,7 @@ def test_start_refuses_when_desired_state_stopped(
     assert broker.orders == []
 
 
-def test_start_keys_desired_state_off_ledger_instance_id(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_start_keys_desired_state_off_ledger_instance_id(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """UI-0: cmd_start must key the durable desired-state gate off the
     LEDGER's strategy_instance_id, NOT off --strategy. A STOPPED state at
     the LEDGER-id path refuses the start even when --strategy differs."""
@@ -424,9 +420,7 @@ def test_pause_resume_stop_subcommands_write_versioned_state(tmp_path: Path) -> 
 
 
 def test_pause_subcommand_parses() -> None:
-    args = build_parser().parse_args(
-        ["pause", "--strategy-instance-id", "x", "--artifacts-root", "/tmp/a"]
-    )
+    args = build_parser().parse_args(["pause", "--strategy-instance-id", "x", "--artifacts-root", "/tmp/a"])
     assert args.command == "pause"
     assert args.strategy_instance_id == "x"
     assert args.updated_by == "operator"
@@ -441,9 +435,18 @@ def _seed_run_with_wal(
     sid: str,
     run_id: str,
     wal_events: list[dict],
+    seed_paper_verdict: bool = True,
 ) -> Path:
     """Lay down a minimal ``live_runs/<run_id>/`` containing a ``run_ledger.json``
-    naming ``sid`` and an ``intent_events.jsonl`` of the given events."""
+    naming ``sid`` and an ``intent_events.jsonl`` of the given events.
+
+    PRD #616: the shared Resume guard resolver consults
+    ``verdict_snapshot.json`` and treats absence as
+    ``BROKER_SAFETY_UNKNOWN`` (fail-closed).  Tests that want to
+    exercise *only* the WAL guard seed a paper-only verdict so the
+    broker gate is clean; the snapshot can be omitted by callers that
+    want the broker gate to fire too.
+    """
     import json as _json
 
     run_dir = artifacts_root / "live_runs" / run_id
@@ -456,6 +459,11 @@ def _seed_run_with_wal(
     if wal_events:
         wal_path.write_text(
             "\n".join(_json.dumps(e) for e in wal_events) + "\n",
+            encoding="utf-8",
+        )
+    if seed_paper_verdict:
+        (run_dir / "verdict_snapshot.json").write_text(
+            _json.dumps({"verdict": "paper-only", "observed_at_ms_utc": 1}),
             encoding="utf-8",
         )
     return run_dir
@@ -548,43 +556,24 @@ def test_resume_allowed_when_uncertain_is_resolved(tmp_path: Path) -> None:
     assert rec.desired_state is DesiredState.RUNNING
 
 
-def test_resume_force_overrides_guard(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
-    """The operator passes --force after manual reconciliation; Resume
-    proceeds even with an unresolved uncertain in the WAL."""
-    sid = "spy_ema_crossover"
-    _seed_run_with_wal(
-        tmp_path,
-        sid=sid,
-        run_id="r1",
-        wal_events=[
-            _build_intent_event(seq=1, event_type="PENDING_INTENT", intent_id="ccccc"),
-            _build_intent_event(seq=2, event_type="ACK_FAILED_UNCERTAIN", intent_id="ccccc"),
-        ],
-    )
-
-    rc = main(
-        [
-            "resume",
-            "--strategy-instance-id",
-            sid,
-            "--artifacts-root",
-            str(tmp_path),
-            "--force",
-            "--reason",
-            "manual reconcile via TWS",
-        ]
-    )
-
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "REFUSED" not in err
-    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, sid))
-    rec = repo.read()
-    assert rec is not None
-    assert rec.desired_state is DesiredState.RUNNING
-    assert rec.reason == "manual reconcile via TWS"
+def test_resume_force_flag_removed_in_prd_616() -> None:
+    """PRD #616 — the legacy ``--force`` flag was deleted from the CLI
+    because the cockpit's structural-safety claim ("guarded Resume is
+    structurally safe across every entry point") cannot hold with a
+    CLI-only bypass.  Operators must resolve the underlying guard
+    condition (re-confirm paper-only broker, reconcile uncertain
+    intents, redeploy a poisoned run) — each has a documented
+    remediation path."""
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "resume",
+                "--strategy-instance-id",
+                "anything",
+                "--force",
+            ]
+        )
 
 
 def test_resume_proceeds_when_no_live_runs_dir_yet(tmp_path: Path) -> None:
@@ -609,9 +598,7 @@ def test_resume_proceeds_when_no_live_runs_dir_yet(tmp_path: Path) -> None:
     assert rec.desired_state is DesiredState.RUNNING
 
 
-def test_resume_refused_on_corrupt_wal(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_resume_refused_on_corrupt_wal(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """A corrupt WAL must NOT silently allow Resume — surface it as a
     refusal so the operator inspects before resuming."""
     sid = "spy_ema_crossover"
@@ -634,4 +621,6 @@ def test_resume_refused_on_corrupt_wal(
     assert rc == 2
     err = capsys.readouterr().err
     assert "REFUSED" in err
-    assert "wal-corrupt" in err
+    # PRD #616 — a corrupt WAL is surfaced as ``UNCERTAIN_INTENT_STATE_UNKNOWN``
+    # in the shared resolver's closed reason-code vocabulary.
+    assert "UNCERTAIN_INTENT_STATE_UNKNOWN" in err

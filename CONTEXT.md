@@ -551,9 +551,98 @@ the whole page's expand/collapse behavior.
   does not satisfy the rule — the toggle is an operator override of the
   server-authored default, never a replacement for it.
 - **Live anchors.** The current consumers of the rule are:
-  - `<app-configuration-card>` — expands when readiness has a *config-shaped
-    failing gate*
-  - `<app-current-risk-card>` — collapses when posture is `Flat AND no pending
-    orders`
+  - `<app-configuration-card>` — expands when
+    `operator_surface.configuration.verdict !== 'READY'` (PRD #607 Slice 4)
+  - `<app-current-risk-card>` — collapses on
+    `operator_surface.current_risk.verdict === 'READY'`; expands on
+    `ATTENTION` / `UNKNOWN` (PRD #607 Slice 5)
   - `<app-can-it-trade-card>` — collapses on `READY`; auto-expands on
     `DEGRADED` / `BLOCKED` / `UNKNOWN`
+  - `<app-action-plan-card>` — expands when
+    `operator_surface.action_plan.anomaly_verdict !== 'READY'`.  Today the
+    server returns `READY` whenever a plan is present; PRD #593 Slice 4
+    flips it without a Frontend change (PRD #607 Slice 5)
+  - `<app-fleet-header>` (account/fleet disclosure) — collapsed by
+    default when `FleetContamination.verdict === 'clean'`; expanded with
+    NO toggle when `verdict === 'contaminated'` or `'unknown'`
+    (PRD #607 cockpit revision 2026-06-21).  The collapse target hides
+    the emergency-flatten controls behind a one-line summary; attention
+    states cannot be manually collapsed.
+
+## Operator-surface inclusion boundary (resolved 2026-06-20)
+
+`operator_surface` contains **verdicts, semantic classifications,
+capabilities, attention-routing inputs, notices, and remediation
+descriptors**.  Decisions, trades, incidents, sizing audit rows,
+provenance, charts, and logs remain **evidence** on their canonical
+channels.  Angular may format evidence and map stable classifications
+to display copy.  Angular MUST NOT derive verdicts, action eligibility,
+or remediation behavior from evidence.
+
+- **Authority document.** ADR 0013 — operator-surface judgment vs
+  evidence (2026-06-20).  Inclusion test for new fields is in §5 of
+  that ADR.
+- **Structural enforcement.** Every Playwright scenario in the cockpit
+  suite asserts independent PROCESS, INTENT, READINESS, BROKER, and
+  SAFETY values — the meta-rule that catches synthetic-verdict
+  regressions when prose drifts.
+- **Inclusion examples.** `actions.resume.disabled_reasons` (operator
+  decision), `readiness_gates[].suggested_action` (remediation),
+  `broker.safety_verdict` (ADR-0011 final verdict), `fleet_account_summary.account_identity`
+  (cross-instance classification) all belong on `operator_surface`.
+  Raw decision rows, trade rows, incident rows belong on their
+  evidence channels with classification fields (`incident_category`)
+  separately surfaced.
+
+## Destructive-action canonical render site (resolved 2026-06-20)
+
+Each destructive action (Stop, Mark Poisoned, Flatten-and-pause) has
+**exactly one** canonical render site in the cockpit (ADR 0010 §A2,
+PRD #617):
+
+- **Mark Poisoned** → Audit tab, typed-HALT confirmation.
+- **Stop** → identity-strip overflow menu, retirement confirmation.
+- **Flatten-and-pause** → identity-strip primary button.
+
+`OperatorGate.suggested_action` (PRD #616) authors only non-destructive
+actions inline (`invoke_capability`); destructive actions reach the
+operator only via `focus_action`, a navigation hint to the canonical
+render site, never an inline button.  A future cockpit change that
+adds a second render site for any destructive action is rejected at
+review.
+
+## Account identity vs position contamination (resolved 2026-06-20)
+
+The fleet altitude ships `FleetAccountSummary` (server-authored):
+
+- **Account identity** (`CONSISTENT` / `CONFLICTING` / `UNKNOWN` with
+  closed reason codes `ACCOUNT_ID_MISSING`, `INSTANCE_ACCOUNT_MISMATCH`,
+  `BROKER_ACCOUNT_UNAVAILABLE`, `BROKER_ACCOUNT_MISMATCH`).
+- **Position contamination** (`clean` / `contaminated` / `unknown` —
+  the existing `FleetContamination`).
+
+The two are **separate altitudes**: identity disagreement never raises
+the contamination verdict; position contamination never raises the
+identity verdict.  Cockpit attention is computed Frontend-side from a
+stable formula:
+`account_identity !== 'CONSISTENT' || contamination.verdict !== 'clean' || contamination.policy_blocks_starts`.
+`policy_blocks_starts` stays in the formula even when currently
+impossible-with-clean so future policy semantics do not require an
+Angular change.
+
+## Resume / Pause / Stop guards — shared resolver (resolved 2026-06-20)
+
+ADR 0010 §A3 and PRD #616 — the three Resume guards (broker safety
+verdict, reconciliation receipt, uncertain-intent WAL) are resolved
+once-per-request by `ResumeGuardState` and shared across:
+
+- the capability projection (`operator_surface.actions.resume / pause / stop`)
+- the desired-state mutation endpoint (re-validates before the durable
+  write)
+- the CLI `cmd_resume` (no bypass — the `--force` flag was deleted in
+  PRD #616)
+
+The closed reason-code vocabulary, the priority order for the
+single-line tooltip, and the structured `disabled_reasons` list are
+the only set of disabled-reason codes the cockpit's typed lookup
+covers.  Unknown codes fail closed.

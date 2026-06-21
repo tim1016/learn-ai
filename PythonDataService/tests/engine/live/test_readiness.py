@@ -73,6 +73,26 @@ def test_live_readiness_bar_source_fallback_is_degraded_soft() -> None:
     assert v["verdict"] == "DEGRADED"  # hard gates pass, soft warns
 
 
+def test_live_readiness_emits_structured_orders_used_and_cap() -> None:
+    """PRD #607 / Slice 1 (#608) — the engine sidecar surfaces
+    ``orders_used`` and ``orders_cap`` as structured top-level fields
+    alongside the existing ``orders_cap`` gate prose so the operator
+    surface projection consumes integers, not parsed strings."""
+    v = _live(orders_used=3, orders_cap=50)
+    assert v["orders_used"] == 3
+    assert v["orders_cap"] == 50
+
+
+def test_live_readiness_emits_structured_fields_even_when_cap_is_none() -> None:
+    """When no cap is configured the gate is omitted, but the
+    structured fields still surface (``orders_cap`` is ``None``); the
+    projection then renders ``DAILY CAP —`` rather than an absence."""
+    v = _live(orders_used=2, orders_cap=None)
+    assert v["orders_used"] == 2
+    assert v["orders_cap"] is None
+    assert not any(g["name"] == "orders_cap" for g in v["gates"])
+
+
 def test_start_readiness_stopped_blocks() -> None:
     v = build_start_readiness(
         as_of_ms=1, desired_state="STOPPED", poisoned=False, halted=False, reconcile_passed=True

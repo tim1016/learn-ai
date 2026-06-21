@@ -83,3 +83,49 @@ Fleet contamination is surfaced on the instance page as an **inherited banner**,
 - `PythonDataService/app/engine/live/cold_start_reconciler.py` — namespace-scoped broker queries (attribution mechanism).
 - `PythonDataService/app/routers/live_runs.py` — transports live-readiness; computes start-readiness + fleet contamination.
 - `CONTEXT.md` — readiness + broker-ownership glossary.
+
+---
+
+## Amendment 2026-06-20 — PRD #616 operator-surface projection layer
+
+**Status:** Amended 2026-06-20 alongside PRD #616 cockpit-redesign work. The original ADR established the engine readiness sidecar (`ReadinessVector` / `ReadinessGate`) and the two altitudes (instance + fleet). It did not name the *projection layer* the cockpit consumes. This amendment records that layer and the cross-altitude separation of account identity from position contamination.
+
+### B1. `operator_surface` is the Python-authored projection layer
+
+The engine readiness sidecar's contract (gate `{name, status, severity, detail}`) is unchanged. The cockpit consumes a *projection* of that contract on `operator_surface.readiness_gates` — each `OperatorGate` carries the engine fields plus `suggested_action: GateSuggestedAction | None` and `suggested_action_unavailable_reason: str | None`. The projection lives in `app/services/operator_surface.py`; the engine sidecar carries no UI navigation concepts (cockpit tab names, dispatch verbs, button identifiers).
+
+The projection authority rule is asymmetric on purpose:
+
+- The **engine** authors gates against bar-loop runtime conditions; it does not know about cockpit affordances.
+- The **operator-surface projection** maps gate evidence to operator-language remediation hints and authors the structured `suggested_action` union the cockpit dispatches.
+- The **cockpit** renders the hints, dispatches the actions, and never re-derives the suggestion from `gate.name`.
+
+This separation keeps the engine's structural contract small (the sidecar shape does not change when a new cockpit tab is named) while keeping the cockpit's behaviour data-driven (a server-authored gate → suggested-action mapping change does not require a Frontend change).
+
+### B2. `OperatorGate.suggested_action` is a closed discriminated union
+
+The shape is a closed `kind` union (`invoke_capability` | `focus_action` | `redeploy` | `open_runbook`); see ADR 0013 for the inclusion rationale and PRD #616 for the field definitions. Either `suggested_action` is a valid descriptor, or it is `null` AND `suggested_action_unavailable_reason` is populated with a documented rationale code — `null` alone is never ambiguous. An unknown gate name fails closed visibly (the projection returns `suggested_action=null, suggested_action_unavailable_reason="UNKNOWN_GATE_NAME"`); the cockpit renders the raw gate name and the unavailable reason rather than guessing a remediation.
+
+Destructive actions (Mark Poisoned, Stop, Flatten-and-pause) never appear inline via `invoke_capability` — they reach the operator only through `focus_action`, which navigates to the canonical render site (PRD #617). The shape of the union enforces this rule structurally rather than via prose.
+
+### B3. Account identity is a separate altitude from position contamination
+
+The fleet altitude now ships `FleetAccountSummary { account_id, account_identity, account_identity_reason_codes, contamination: FleetContamination }`. Account identity (`CONSISTENT` / `CONFLICTING` / `UNKNOWN` with reason codes from a closed vocabulary — `ACCOUNT_ID_MISSING`, `INSTANCE_ACCOUNT_MISMATCH`, `BROKER_ACCOUNT_UNAVAILABLE`, `BROKER_ACCOUNT_MISMATCH`) is **separate from position contamination**:
+
+- A `CONFLICTING` account identity does NOT raise the contamination verdict.
+- A `contaminated` position verdict does NOT raise the account-identity verdict.
+- The cockpit's account-row attention formula reads `account_identity !== 'CONSISTENT' || contamination.verdict !== 'clean' || contamination.policy_blocks_starts`; the formula is stable so that future policy semantics (`policy_blocks_starts`) do not require an Angular change.
+
+This separation closes the original two-altitude split's gap: position contamination is the *engine's* fleet authority (engines see net broker minus their attributed positions); account identity is the *configuration* author's authority (every managed instance must agree on the account, and that account must match the broker session). Conflating the two — as a "verdict" overloaded with identity disagreement — would be a category error.
+
+### B4. `LiveInstanceSummary` carries the readiness verdict
+
+The fleet overview row now carries `readiness_verdict` (`READY` / `BLOCKED` / `DEGRADED` / `UNKNOWN`) and `readiness_as_of_ms`, authored from the same readiness source as the per-instance status. This lets the cockpit render the outer-tab badge (`dep_val_smoke_001 · IDLE · BLOCKED`) without an N+1 fetch of every instance's full status. The new fields are additive; consumers that ignore them see no change.
+
+### B5. References
+
+- `PythonDataService/app/services/operator_surface.py` — owns the `OperatorGate` projection, the reactive `_project_broker`, and the real `_project_trading_session.next_transition_ms` computation.
+- `PythonDataService/app/services/operator_capability.py` — shared capability evaluator consuming `ResumeGuardState` (see ADR 0010 §Amendment 2026-06-20).
+- `PythonDataService/app/engine/live/fleet.py` — `compute_fleet_account_summary` composes contamination with identity.
+- `docs/architecture/adrs/0013-operator-surface-judgment-vs-evidence.md` — the operator-surface inclusion boundary (judgment vs evidence).
+

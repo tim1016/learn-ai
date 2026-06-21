@@ -1,0 +1,65 @@
+# PRD #607 / Slice 2 (#609) — cockpit Playwright E2E job.
+#
+# Builds the Frontend container, starts it on localhost:4200, runs the
+# Playwright suite, and archives the HTML report + traces on failure.
+# The suite is hermetic — every cockpit state fixture lives under
+# Frontend/src/testing/operator_surface_fixtures/ and is injected via
+# page.route() — so this job needs no backend, no database, no broker.
+#
+# Container orchestration details are intentionally minimal; this is a
+# tracer-bullet workflow that downstream slices extend as needed.
+name: frontend-e2e
+
+on:
+  pull_request:
+    paths:
+      - 'Frontend/**'
+      - '.github/workflows/frontend-e2e.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'Frontend/**'
+      - '.github/workflows/frontend-e2e.yml'
+
+jobs:
+  cockpit-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: Frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Frontend
+        run: npm run build
+
+      - name: Serve build on :4200
+        run: |
+          npx http-server dist/frontend/browser -p 4200 -s &
+          npx wait-on http://localhost:4200 -t 60000
+
+      - name: Run Playwright suite
+        run: npm run e2e
+
+      - name: Archive Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            Frontend/playwright-report/
+            Frontend/test-results/
+          retention-days: 7

@@ -1,0 +1,28 @@
+@if (visible()) {
+  <section class="host-process-notice" data-testid="host-process-notice">
+    <header class="head">
+      <span class="heading">{{ heading() }}</span>
+    </header>
+    @if (notice()) {
+      <p class="body" data-testid="host-process-notice-body">{{ notice() }}</p>
+    }
+    @if (desiredIntent()) {
+      <p class="desired-intent" data-testid="host-process-desired-intent">
+        Desired intent: <strong>{{ desiredIntent() }}</strong>
+      </p>
+    }
+    @if (copyableCommand(); as cmd) {
+      <div class="command-block" data-testid="host-process-copyable-command">
+        <pre><code>{{ cmd }}</code></pre>
+        <button
+          type="button"
+          class="copy"
+          data-testid="host-process-copy-button"
+          (click)="copyCommand()"
+        >
+          Copy
+        </button>
+      </div>
+    }
+  </section>
+}

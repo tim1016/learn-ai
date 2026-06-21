@@ -1,0 +1,33 @@
+// PRD #607 / Slice 2 (#609) — animatable collapsible-card pattern.
+//
+// ``display: none`` cannot be transitioned.  Use the standard
+// grid-template-rows 0fr/1fr pattern that grid containers DO animate.
+//
+// Markup contract:
+//   - The card root carries ``data-collapsed="true|false"``.
+//   - The body wrapper carries class ``collapsible-body`` and contains
+//     a single direct child wrapping the body content.  That child must
+//     set ``min-height: 0`` so the grid track can collapse to zero.
+//   - On attention verdicts (non-READY) the toggle BUTTON is absent
+//     from the DOM entirely (Option A) — the card is permanently
+//     expanded and ``aria-expanded`` has no element to live on.
+//   - On READY cards the toggle button carries ``aria-expanded`` (true
+//     when expanded) and ``aria-controls="<body-id>"`` pointing at the
+//     ``collapsible-body`` element's id (component-instance-derived).
+
+@mixin collapsible-card-body() {
+  .collapsible-body {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 200ms ease-out;
+    overflow: hidden;
+
+    & > * {
+      min-height: 0;
+    }
+  }
+
+  &[data-collapsed='true'] .collapsible-body {
+    grid-template-rows: 0fr;
+  }
+}

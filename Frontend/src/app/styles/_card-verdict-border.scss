@@ -1,0 +1,45 @@
+// PRD #607 / Slice 2 (#609) — verdict-glow mixin.
+//
+// Encapsulates the 2px border thicken + 32px outer shadow + 150ms
+// ease-out transition that gives a verdict-bearing card its
+// peripheral-vision halo.  Applied to ``<app-can-it-trade-card>``,
+// ``<app-configuration-card>``, and ``<app-current-risk-card>``;
+// reusable by any future verdict-bordered card.
+//
+// The component MUST set ``[attr.data-verdict]`` on its host (the
+// E2E and component-spec assertions select on this attribute and on
+// the resulting computed style).  Valid values: ready / degraded /
+// blocked / unknown.
+
+@use 'sass:string';
+
+// Apply verdict-driven border + shadow to a host element keyed on its
+// ``[data-verdict]`` attribute.  Pass the variant name (one of:
+// degraded / blocked / unknown) and the selector uses the matching
+// ``--verdict-*`` and ``--verdict-*-soft`` tokens emitted in
+// ``_tokens.scss``.
+@mixin verdict-glow($variant) {
+  $verdict-token: string.unquote('--verdict-#{$variant}');
+  $soft-token: string.unquote('--verdict-#{$variant}-soft');
+
+  &[data-verdict='#{$variant}'] {
+    border-width: 2px;
+    border-style: solid;
+    border-color: var(#{$verdict-token});
+    box-shadow: 0 0 32px -6px var(#{$soft-token});
+    transition:
+      border-color 150ms ease-out,
+      box-shadow 150ms ease-out,
+      border-width 150ms ease-out;
+  }
+}
+
+// Apply the glow for every attention-state variant in one shot.  The
+// host needs a base ``border-width: 1px`` rule outside this mixin so
+// the READY / calm state stays a quiet 1px border before flipping to
+// 2px under glow.
+@mixin card-verdict-border() {
+  @include verdict-glow('degraded');
+  @include verdict-glow('blocked');
+  @include verdict-glow('unknown');
+}

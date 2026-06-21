@@ -1,0 +1,44 @@
+@if (hasRows()) {
+  <section class="audit-table-wrap" data-testid="sizing-audit-table">
+    <header class="head">
+      <h3>PER-TRADE SIZING AUDIT</h3>
+      <span class="muted">{{ rows().length }} rows (newest first)</span>
+    </header>
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">TS</th>
+          <th scope="col">SYM</th>
+          <th scope="col">POLICY</th>
+          <th scope="col">VALUE</th>
+          <th scope="col">INTENDED QTY</th>
+          <th scope="col">REFERENCE PRICE</th>
+          <th scope="col">SIZED VIA</th>
+          <th scope="col">PROVENANCE</th>
+          <th scope="col">RESULT</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (r of rows(); track r.ts_ms + '|' + r.symbol) {
+          <tr [class.skipped]="r.skipped === true">
+            <td class="ts">
+              {{ r.ts_ms | date: 'yyyy-MM-dd HH:mm:ss' : 'America/New_York' }}
+            </td>
+            <td>{{ r.symbol }}</td>
+            <td>{{ r.policy_kind }}</td>
+            <td>{{ r.policy_value }}</td>
+            <td class="num">{{ r.intended_qty }}</td>
+            <td class="num">{{ r.reference_price }}</td>
+            <td>{{ r.sized_via }}</td>
+            <td>
+              <span class="badge">
+                [{{ provenanceBadge(r.sizing_provenance_at_resolve_time) }}]
+              </span>
+            </td>
+            <td>{{ resultLabel(r) }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </section>
+}

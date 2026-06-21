@@ -223,8 +223,8 @@ export const routes: Routes = [
     path: "broker/instances",
     loadComponent: () =>
       import(
-        "./components/broker/broker-instances/broker-instances.component"
-      ).then((m) => m.BrokerInstancesComponent),
+        "./components/broker/cockpit-v2/cockpit-shell.component"
+      ).then((m) => m.CockpitShellComponent),
   },
   {
     // Deep-linkable per-bot URL (#565 PR 3). The component resolves
@@ -234,8 +234,8 @@ export const routes: Routes = [
     path: "broker/instances/:id",
     loadComponent: () =>
       import(
-        "./components/broker/broker-instances/broker-instances.component"
-      ).then((m) => m.BrokerInstancesComponent),
+        "./components/broker/cockpit-v2/cockpit-shell.component"
+      ).then((m) => m.CockpitShellComponent),
   },
   {
     // Deploy form — stage 1 of the deploy pipeline (ADR 0006, #417).

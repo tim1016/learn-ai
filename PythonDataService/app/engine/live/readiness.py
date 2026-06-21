@@ -107,6 +107,11 @@ def build_live_readiness(
         gates.append(gate("data_provenance", PASS, SOFT, bar_source or "n/a"))
 
     verdict = derive_verdict(gates)
+    # PRD #607 / Slice 1 (#608) — emit ``orders_used`` / ``orders_cap``
+    # as structured top-level fields alongside the existing
+    # ``orders_cap`` gate ``detail`` prose.  The cockpit's
+    # ``operator_surface.daily_order_cap`` projection consumes the
+    # structured fields; the gate prose stays for human readability.
     return {
         "kind": "live_readiness",
         "as_of_ms": as_of_ms,
@@ -114,6 +119,8 @@ def build_live_readiness(
         "verdict": verdict,
         "summary": _summarize(gates, verdict),
         "gates": gates,
+        "orders_used": orders_used,
+        "orders_cap": orders_cap,
     }
 
 

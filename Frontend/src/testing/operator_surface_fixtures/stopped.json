@@ -1,0 +1,180 @@
+{
+  "action_plan": null,
+  "broker": null,
+  "decision_columns": [],
+  "desired_state": {
+    "path_status": "absent",
+    "reason": null,
+    "state": null,
+    "updated_at_ms": null,
+    "updated_by": null,
+    "version": null
+  },
+  "evidence_binding": {
+    "is_live": false,
+    "run_id": "run-stopped",
+    "state": "latest_run_by_ledger"
+  },
+  "fetched_at_ms": 1782008742405,
+  "instrument_surface": null,
+  "last_exit": null,
+  "latest_decision": null,
+  "lineage": null,
+  "live_binding": null,
+  "operator_surface": {
+    "action_plan": {
+      "anomaly_verdict": "UNKNOWN",
+      "consumption": "UNKNOWN"
+    },
+    "actions": {
+      "flatten_and_pause": {
+        "disabled_reason_code": "NO_LIVE_BINDING",
+        "effect": "LIVE_ACTUATION",
+        "enabled": false,
+        "disabled_reasons": [
+          "NO_LIVE_BINDING"
+        ]
+      },
+      "mark_poisoned": {
+        "disabled_reason_code": "NO_LIVE_BINDING",
+        "effect": "LIVE_ACTUATION",
+        "enabled": false,
+        "disabled_reasons": [
+          "NO_LIVE_BINDING"
+        ]
+      },
+      "pause": {
+        "disabled_reason_code": null,
+        "effect": "DURABLE_ONLY",
+        "enabled": true,
+        "disabled_reasons": []
+      },
+      "resume": {
+        "disabled_reason_code": null,
+        "effect": "DURABLE_ONLY",
+        "enabled": true,
+        "disabled_reasons": []
+      },
+      "stop": {
+        "enabled": true,
+        "effect": "DURABLE_ONLY",
+        "disabled_reason_code": null,
+        "disabled_reasons": []
+      }
+    },
+    "broker": {
+      "connection": "UNKNOWN",
+      "safety_verdict": "PAPER_ONLY"
+    },
+    "configuration": {
+      "reason_codes": [
+        "STRATEGY_KEY_MISSING",
+        "SIZING_PRESET_MISSING"
+      ],
+      "verdict": "ATTENTION"
+    },
+    "current_risk": {
+      "pending_order_count": null,
+      "posture": "UNKNOWN",
+      "unrealized_pnl": null,
+      "verdict": "UNKNOWN"
+    },
+    "daily_order_cap": {
+      "limit": null,
+      "used": null
+    },
+    "host_process": {
+      "copyable_command": null,
+      "notice": "Host runner is reachable but no subprocess is attached to this instance. Start it from the host runner.",
+      "state": "IDLE"
+    },
+    "prior_run": {
+      "classification": "UNKNOWN"
+    },
+    "schema_version": 1,
+    "trading_session": {
+      "as_of_ms": 1782008742405,
+      "next_transition_ms": null,
+      "permits_strategy_activity": false,
+      "phase": "CLOSED",
+      "timezone": "America/New_York"
+    },
+    "readiness_gates": []
+  },
+  "process": {
+    "bound_run_id": null,
+    "pid": null,
+    "started_at_ms": null,
+    "state": "idle"
+  },
+  "provenance": {
+    "account_id": "",
+    "code_sha": "",
+    "created_at_ms": 100,
+    "live_config": {},
+    "qc_audit_copy_path": "",
+    "qc_audit_copy_sha256": "",
+    "qc_cloud_backtest_id": "",
+    "run_id": "run-stopped",
+    "schema_version": "",
+    "start_date_ms": null,
+    "strategy_spec_path": "",
+    "strategy_spec_sha256": ""
+  },
+  "readiness": {
+    "as_of_ms": 1782008742405,
+    "gates": [
+      {
+        "detail": "no durable intent recorded",
+        "name": "desired_state",
+        "severity": "hard",
+        "status": "unknown"
+      },
+      {
+        "detail": "clear",
+        "name": "poison_sentinel",
+        "severity": "hard",
+        "status": "pass"
+      },
+      {
+        "detail": "clear",
+        "name": "prior_day_halt",
+        "severity": "hard",
+        "status": "pass"
+      },
+      {
+        "detail": "no reconcile receipt",
+        "name": "latest_reconcile",
+        "severity": "soft",
+        "status": "unknown"
+      }
+    ],
+    "kind": "start_readiness",
+    "live_readiness_available": false,
+    "orders_cap": null,
+    "orders_used": null,
+    "source": "backend_derived",
+    "summary": "Degraded: desired_state \u2014 no durable intent recorded.",
+    "verdict": "DEGRADED"
+  },
+  "sizing": {
+    "governed_by": "live_config",
+    "per_trade_audit": [],
+    "policy": null,
+    "preset": null,
+    "sizing_provenance": "live_override"
+  },
+  "start_defaults": {
+    "account_id": "",
+    "hydrate_policy": "require",
+    "ibkr_host": "127.0.0.1",
+    "max_orders_per_day": 50000,
+    "qc_audit_copy_path": "",
+    "qc_cloud_backtest_id": "",
+    "readonly": false,
+    "strategy": "",
+    "strategy_spec_path": ""
+  },
+  "strategy_instance_id": "spy_ema_paper",
+  "symbol": null
+}

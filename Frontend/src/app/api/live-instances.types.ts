@@ -150,8 +150,210 @@ export interface LiveInstanceStatus {
    * sourced from the ledger's ``lineage`` block. ``null`` when nothing
    * is deployed or the ledger pre-dates the field. */
   lineage: ActionPlanLineage | null;
+  /** PRD #607 / Slice 1 (#608) — server-authored operator-facing
+   * projection.  Always present (never null); per-block fields may be
+   * null per the documented semantics.  Frontend renders these fields;
+   * it does NOT derive verdicts from raw fields. */
+  operator_surface: OperatorSurface;
   fetched_at_ms: number;
 }
+
+// PRD #607 / Slice 1 (#608) — operator surface projection types.
+
+export type OperatorVerdict = 'READY' | 'ATTENTION' | 'UNKNOWN';
+
+export type HostProcessState =
+  | 'RUNNING'
+  | 'STOPPING'
+  | 'EXITED'
+  | 'IDLE'
+  | 'WAITING_FOR_HOST'
+  | 'UNREACHABLE';
+
+export type PriorRunClassification =
+  | 'CLEAN'
+  | 'HALT_TRIGGERED'
+  | 'EXITED_WITH_ERROR'
+  | 'UNKNOWN';
+
+export type BrokerSafetyVerdict = 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
+
+export type BrokerConnectionState = 'CONNECTED' | 'DISCONNECTED' | 'UNKNOWN';
+
+export type TradingSessionPhase =
+  | 'PRE'
+  | 'RTH'
+  | 'POST'
+  | 'CLOSED'
+  | 'UNKNOWN';
+
+export type RiskPosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
+
+export type ActionPlanConsumption = 'ACTIVE' | 'DECLARATIVE_ONLY' | 'UNKNOWN';
+
+export type ActionEffect = 'DURABLE_ONLY' | 'LIVE_ACTUATION';
+
+export interface ActionCapability {
+  enabled: boolean;
+  effect: ActionEffect;
+  /** PRD #616 — single-line tooltip code (head of `disabled_reasons` after
+   *  priority sort).  `null` when `enabled` is true. */
+  disabled_reason_code: string | null;
+  /** PRD #616 — full priority-ordered list of applicable reason codes.
+   *  Empty when `enabled` is true.  Optional on the type so the
+   *  pre-#616 cockpit components keep type-checking; the server always
+   *  emits the list (default `[]`).  The PRD #617 cockpit replacement
+   *  reads this field. */
+  disabled_reasons?: string[];
+}
+
+export interface OperatorSurfaceHostProcess {
+  state: HostProcessState;
+  /** Operator-language line authored server-side when state != RUNNING.  ``null`` when running. */
+  notice: string | null;
+  /** Exact host command the operator can paste, ONLY when the server can author it safely.
+   *  Angular renders verbatim and MUST NOT construct, interpolate, or transform this string. */
+  copyable_command: string | null;
+}
+
+export interface OperatorSurfacePriorRun {
+  classification: PriorRunClassification;
+}
+
+export interface OperatorSurfaceBroker {
+  safety_verdict: BrokerSafetyVerdict;
+  /** Independent of safety_verdict: whether the broker session is up.
+   *  A paper-only account whose IBKR session has dropped is
+   *  ``safety_verdict=PAPER_ONLY`` AND ``connection=DISCONNECTED``;
+   *  composing them is forbidden. */
+  connection: BrokerConnectionState;
+}
+
+export interface OperatorSurfaceTradingSession {
+  phase: TradingSessionPhase;
+  /** Server-derived: phase + strategy's session policy.  Frontend does
+   *  not derive this from the phase enum. */
+  permits_strategy_activity: boolean | null;
+  next_transition_ms: number | null;
+  timezone: string;
+  as_of_ms: number;
+}
+
+export interface OperatorSurfaceCurrentRisk {
+  posture: RiskPosture;
+  /** ``null`` when broker state is unavailable; ``0`` only when known empty. */
+  pending_order_count: number | null;
+  verdict: OperatorVerdict;
+  /** ``null`` when the broker connector cannot supply a value. */
+  unrealized_pnl: number | null;
+}
+
+export interface OperatorSurfaceDailyOrderCap {
+  used: number | null;
+  limit: number | null;
+}
+
+export interface OperatorSurfaceActionPlan {
+  consumption: ActionPlanConsumption;
+  anomaly_verdict: OperatorVerdict;
+}
+
+export interface OperatorSurfaceConfiguration {
+  verdict: OperatorVerdict;
+  reason_codes: string[];
+}
+
+export interface OperatorSurfaceActions {
+  resume: ActionCapability;
+  pause: ActionCapability;
+  /** PRD #616 — fifth canonical action (ADR-0010 §A1).
+   *  Optional on the type so the pre-#616 cockpit fixtures still
+   *  type-check; the server always emits it.  The PRD #617 cockpit
+   *  replacement reads this field. */
+  stop?: ActionCapability;
+  flatten_and_pause: ActionCapability;
+  mark_poisoned: ActionCapability;
+}
+
+// PRD #616 — closed discriminated union for the server-authored
+// suggested fix on a non-passing readiness gate.  The cockpit MUST
+// match on `kind` exhaustively; an unknown kind fails closed visibly.
+
+export interface InvokeCapabilityAction {
+  kind: 'invoke_capability';
+  /** Non-destructive only.  Destructive actions never appear via
+   *  invoke_capability; they reach the operator via focus_action so
+   *  they retain their canonical render site (ADR 0010 §A2). */
+  capability: 'resume' | 'pause';
+}
+
+export interface FocusAction {
+  kind: 'focus_action';
+  tab: 'status' | 'activity' | 'audit' | 'configuration';
+  action: 'flatten_and_pause' | 'stop' | 'mark_poisoned';
+}
+
+export interface RedeployAction {
+  kind: 'redeploy';
+}
+
+export interface OpenRunbookAction {
+  kind: 'open_runbook';
+  slug: string;
+}
+
+export type GateSuggestedAction =
+  | InvokeCapabilityAction
+  | FocusAction
+  | RedeployAction
+  | OpenRunbookAction;
+
+export interface OperatorGate {
+  name: string;
+  status: string;
+  severity: string;
+  detail: string;
+  /** Either a structured suggested-action OR null + an explicit unavailable reason.
+   *  Never null without a reason. */
+  suggested_action: GateSuggestedAction | null;
+  suggested_action_unavailable_reason: string | null;
+}
+
+export interface OperatorSurface {
+  /** Bump on breaking shape changes; additive fields do NOT bump the version. */
+  schema_version: number;
+  host_process: OperatorSurfaceHostProcess;
+  prior_run: OperatorSurfacePriorRun;
+  broker: OperatorSurfaceBroker;
+  configuration: OperatorSurfaceConfiguration;
+  current_risk: OperatorSurfaceCurrentRisk;
+  daily_order_cap: OperatorSurfaceDailyOrderCap;
+  action_plan: OperatorSurfaceActionPlan;
+  actions: OperatorSurfaceActions;
+  trading_session: OperatorSurfaceTradingSession;
+  /** PRD #616 — operator-facing projection of engine readiness gates with
+   *  server-authored remediation metadata.  Empty list when no readiness
+   *  vector is available.  Order preserves the engine's gate order. */
+  readiness_gates: OperatorGate[];
+}
+
+// PRD #616 — fleet account altitude DTO (server-authored).  Separates
+// account identity from position contamination; the cockpit's account
+// row reads exactly this shape.
+
+export type AccountIdentity = 'CONSISTENT' | 'CONFLICTING' | 'UNKNOWN';
+
+export interface FleetAccountSummary {
+  account_id: string | null;
+  account_identity: AccountIdentity;
+  /** Closed reason-code vocabulary: ACCOUNT_ID_MISSING,
+   *  INSTANCE_ACCOUNT_MISMATCH, BROKER_ACCOUNT_UNAVAILABLE,
+   *  BROKER_ACCOUNT_MISMATCH. */
+  account_identity_reason_codes: string[];
+  contamination: FleetContamination;
+}
+
+export type ReadinessVerdictEnum = 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN';
 
 export interface ActionPlanLineage {
   parent_run_id: string | null;
@@ -253,6 +455,11 @@ export interface LiveInstanceSummary {
   bound_run_id?: string | null;
   latest_run_id?: string | null;
   desired_state?: string | null;
+  /** PRD #616 — per-instance readiness verdict so the outer-tab badge
+   *  ("dep_val_smoke_001 · IDLE · BLOCKED") renders without an N+1 fetch.
+   *  ``UNKNOWN`` when readiness cannot be resolved. */
+  readiness_verdict?: ReadinessVerdictEnum;
+  readiness_as_of_ms?: number | null;
 }
 
 // --- Single operator intent knob (ADR 0004) ---

@@ -1,0 +1,34 @@
+<div class="activity-tab" data-testid="activity-tab">
+  <section class="subsection" data-testid="activity-latest-signal" aria-label="Latest signal">
+    <h3>Latest signal</h3>
+    <app-latest-signal-strip
+      [decisionColumns]="status().decision_columns"
+      [latestDecision]="status().latest_decision"
+    />
+  </section>
+
+  <section class="subsection" data-testid="activity-trade-chart" aria-label="Trade chart">
+    <h3>Trade chart</h3>
+    <app-bot-trade-chart-card
+      [strategyInstanceId]="status().strategy_instance_id"
+      [symbol]="status().symbol"
+    />
+  </section>
+
+  <section class="subsection" data-testid="activity-trades-table" aria-label="Trades table">
+    <h3>Trades</h3>
+    <app-bot-trades-table [runId]="chartRunId()" />
+  </section>
+
+  <section class="subsection" data-testid="activity-incidents" aria-label="Incidents">
+    <h3>Incidents</h3>
+    <app-incidents-panel [runId]="chartRunId()" />
+  </section>
+
+  @if (sizingRows().length || status().sizing) {
+    <section class="subsection" data-testid="activity-sizing-audit" aria-label="Sizing audit">
+      <h3>Sizing audit</h3>
+      <app-sizing-audit-table [rows]="sizingRows()" />
+    </section>
+  }
+</div>
