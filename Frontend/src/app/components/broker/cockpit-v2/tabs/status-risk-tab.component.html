@@ -1,0 +1,123 @@
+<div class="status-risk-grid" data-testid="status-risk-grid">
+  <section class="can-it-trade" data-testid="can-it-trade-column" aria-label="Can it trade?">
+    <header class="column-header">
+      <h2>Can it trade?</h2>
+      <span class="verdict-badge {{ status().readiness?.verdict | lowercase }}" data-testid="readiness-verdict-pill">
+        {{ status().readiness?.verdict ?? 'UNKNOWN' }}
+      </span>
+    </header>
+
+    @if (nonPassingGates().length === 0 && passingGates().length === 0) {
+      <p class="empty">No readiness vector available.</p>
+    }
+
+    @if (nonPassingGates().length) {
+      <ul class="gate-list" data-testid="non-passing-gates">
+        @for (gate of nonPassingGates(); track gate.name) {
+          @let action = renderAction(gate);
+          <li
+            class="gate"
+            [class.fail]="gate.status === 'fail'"
+            [class.unknown]="gate.status === 'unknown'"
+            [attr.data-gate-name]="gate.name"
+          >
+            <div class="gate-head">
+              <span class="status-icon" aria-hidden="true">
+                @if (gate.status === 'fail') { ✗ } @else { ? }
+              </span>
+              <span class="gate-name">{{ gate.name }}</span>
+              <span class="severity">{{ gate.severity }}</span>
+            </div>
+            <p class="detail">{{ gate.detail }}</p>
+            @if (action) {
+              <button
+                type="button"
+                class="gate-action"
+                [class.primary]="action.variant === 'primary'"
+                [class.link]="action.variant === 'link'"
+                [attr.data-testid]="'gate-action-' + gate.name"
+                (click)="action.invoke()"
+              >
+                {{ action.label }}
+              </button>
+            } @else if (gate.suggested_action_unavailable_reason) {
+              <span class="no-action" [attr.data-testid]="'gate-no-action-' + gate.name">
+                No inline fix — {{ gate.suggested_action_unavailable_reason }}
+              </span>
+            }
+          </li>
+        }
+      </ul>
+    }
+
+    @if (passingGates().length) {
+      <details class="passing-gates">
+        <summary>Passing gates ({{ passingGates().length }})</summary>
+        <ul class="gate-list small">
+          @for (gate of passingGates(); track gate.name) {
+            <li class="gate pass">
+              <span class="status-icon" aria-hidden="true">✓</span>
+              <span class="gate-name">{{ gate.name }}</span>
+              <span class="detail">{{ gate.detail }}</span>
+            </li>
+          }
+        </ul>
+      </details>
+    }
+  </section>
+
+  <section class="current-risk" data-testid="current-risk-column" aria-label="Current risk">
+    <header class="column-header">
+      <h2>Current risk</h2>
+      <span
+        class="verdict-badge"
+        [class.ready]="currentRisk().verdict === 'READY'"
+        [class.attention]="currentRisk().verdict === 'ATTENTION'"
+        [class.unknown]="currentRisk().verdict === 'UNKNOWN'"
+        data-testid="current-risk-verdict"
+      >
+        {{ currentRisk().verdict }}
+      </span>
+    </header>
+
+    <dl class="risk-grid">
+      <dt>Posture</dt>
+      <dd data-testid="risk-posture">{{ currentRisk().posture }}</dd>
+
+      <dt>Pending orders</dt>
+      <dd data-testid="risk-pending">{{ currentRisk().pending_order_count ?? '—' }}</dd>
+
+      @if (currentRisk().unrealized_pnl !== null) {
+        <dt>Unrealized P&amp;L</dt>
+        <dd data-testid="risk-unrealized">
+          {{ currentRisk().unrealized_pnl | number: '1.2-2' }}
+        </dd>
+      }
+
+      <dt>Daily orders</dt>
+      <dd data-testid="risk-cap">
+        {{ dailyOrderCap().used ?? '—' }} / {{ dailyOrderCap().limit ?? '—' }}
+      </dd>
+
+      @if (broker(); as br) {
+        <dt>Owned positions</dt>
+        <dd data-testid="risk-owned">
+          @if ((br.owned_positions | keyvalue).length === 0) {
+            none
+          } @else {
+            @for (entry of br.owned_positions | keyvalue; track entry.key) {
+              <span class="position-chip">{{ entry.key }}&nbsp;{{ entry.value }}</span>
+            }
+          }
+        </dd>
+      }
+
+      @if (sizing()?.policy; as policy) {
+        <dt>Sizing policy</dt>
+        <dd data-testid="risk-sizing">
+          {{ policy.kind }} — {{ sizing()?.sizing_provenance ?? '—' }}
+        </dd>
+      }
+    </dl>
+  </section>
+</div>

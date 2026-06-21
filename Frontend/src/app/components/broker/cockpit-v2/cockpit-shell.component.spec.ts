@@ -1,0 +1,203 @@
+// PRD #617 — cockpit shell component spec.  Uses TestBed (Vitest +
+// Angular's bundled testing) to drive the component without the
+// @testing-library/angular runtime dependency, mirroring the existing
+// spec style under cockpit-v2/reused/.
+
+import { provideZonelessChangeDetection } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideRouter } from '@angular/router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { CockpitShellComponent } from './cockpit-shell.component';
+import { LiveRunsService } from '../../../services/live-runs.service';
+
+function makeStatus() {
+  return {
+    strategy_instance_id: 'sid-x',
+    process: { state: 'running', pid: 1, bound_run_id: 'r1', started_at_ms: 0 },
+    live_binding: { run_id: 'r1', run_dir: null, source: 'registry' },
+    evidence_binding: null,
+    desired_state: {
+      state: 'RUNNING',
+      path_status: 'ok',
+      updated_at_ms: 0,
+      updated_by: 'op',
+      reason: null,
+      version: 1,
+    },
+    readiness: {
+      kind: 'live_readiness',
+      as_of_ms: 0,
+      source: 'engine',
+      verdict: 'BLOCKED',
+      summary: '',
+      gates: [],
+      orders_used: null,
+      orders_cap: null,
+    },
+    latest_decision: null,
+    decision_columns: [],
+    broker: null,
+    start_defaults: null,
+    provenance: null,
+    sizing: null,
+    last_exit: null,
+    symbol: 'SPY',
+    action_plan: null,
+    instrument_surface: null,
+    lineage: null,
+    operator_surface: {
+      schema_version: 1,
+      host_process: { state: 'RUNNING', notice: null, copyable_command: null },
+      prior_run: { classification: 'UNKNOWN' },
+      broker: { safety_verdict: 'UNSAFE', connection: 'DISCONNECTED' },
+      configuration: { verdict: 'READY', reason_codes: [] },
+      current_risk: {
+        posture: 'FLAT',
+        pending_order_count: 0,
+        verdict: 'READY',
+        unrealized_pnl: null,
+      },
+      daily_order_cap: { used: null, limit: null },
+      action_plan: { consumption: 'UNKNOWN', anomaly_verdict: 'UNKNOWN' },
+      actions: {
+        resume: {
+          enabled: false,
+          effect: 'LIVE_ACTUATION',
+          disabled_reason_code: 'BROKER_SAFETY_UNSAFE',
+          disabled_reasons: ['BROKER_SAFETY_UNSAFE'],
+        },
+        pause: { enabled: true, effect: 'LIVE_ACTUATION', disabled_reason_code: null, disabled_reasons: [] },
+        stop: { enabled: true, effect: 'LIVE_ACTUATION', disabled_reason_code: null, disabled_reasons: [] },
+        flatten_and_pause: {
+          enabled: false,
+          effect: 'LIVE_ACTUATION',
+          disabled_reason_code: 'NO_OWNED_POSITIONS',
+          disabled_reasons: ['NO_OWNED_POSITIONS'],
+        },
+        mark_poisoned: {
+          enabled: true,
+          effect: 'LIVE_ACTUATION',
+          disabled_reason_code: null,
+          disabled_reasons: [],
+        },
+      },
+      trading_session: {
+        phase: 'RTH',
+        permits_strategy_activity: true,
+        next_transition_ms: null,
+        timezone: 'America/New_York',
+        as_of_ms: 0,
+      },
+      readiness_gates: [],
+    },
+    fetched_at_ms: 0,
+  };
+}
+
+function makeStub(): Partial<LiveRunsService> {
+  return {
+    getInstances: vi.fn().mockResolvedValue([
+      {
+        strategy_instance_id: 'sid-x',
+        process_state: 'running',
+        readiness_verdict: 'BLOCKED',
+        readiness_as_of_ms: 0,
+      },
+    ]),
+    getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+    getAccountSummary: vi.fn().mockResolvedValue({
+      account_id: 'DU1',
+      account_identity: 'CONSISTENT',
+      account_identity_reason_codes: [],
+      contamination: {
+        net_positions: {},
+        explained_total: {},
+        explained_by_instance: [],
+        residual: {},
+        verdict: 'clean',
+        policy_blocks_starts: false,
+        summary: 'clean',
+      },
+    }),
+    setInstanceDesiredState: vi.fn(),
+    flattenAndPause: vi.fn(),
+    issueInstanceCommand: vi.fn(),
+  };
+}
+
+async function renderShell(stub: Partial<LiveRunsService>) {
+  TestBed.resetTestingModule();
+  TestBed.configureTestingModule({
+    providers: [
+      provideZonelessChangeDetection(),
+      provideHttpClient(),
+      provideRouter([]),
+      { provide: LiveRunsService, useValue: stub },
+    ],
+  });
+  const fixture = TestBed.createComponent(CockpitShellComponent);
+  fixture.detectChanges();
+  // Flush the constructor-time refresh promises.
+  await Promise.resolve();
+  await Promise.resolve();
+  fixture.detectChanges();
+  return fixture;
+}
+
+describe('CockpitShellComponent', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders five independent indicators on the identity strip', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    for (const id of [
+      'indicator-process',
+      'indicator-intent',
+      'indicator-readiness',
+      'indicator-broker',
+      'indicator-safety',
+    ]) {
+      expect(el.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
+    }
+  });
+
+  it('disables Resume with the guarded reason on the title attribute', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const btn = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="action-resume"]',
+    ) as HTMLButtonElement | null;
+    expect(btn).toBeTruthy();
+    expect(btn?.disabled).toBe(true);
+    expect(btn?.getAttribute('title')).toBe('BROKER_SAFETY_UNSAFE');
+  });
+
+  it('renders the Stop button only inside the overflow menu (canonical render-site rule)', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const stops = el.querySelectorAll('[data-testid="action-stop"]');
+    expect(stops.length).toBe(1);
+    const overflow = el.querySelector('[data-testid="overflow-menu"]');
+    expect(overflow?.contains(stops[0])).toBe(true);
+  });
+
+  it('does not render any Mark Poisoned trigger on the Status tab', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="audit-mark-poisoned-trigger"]')).toBeNull();
+  });
+});

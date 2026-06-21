@@ -24,6 +24,7 @@ import type {
   SpecStrategyFixture,
 } from '../api/live-runs.types';
 import type {
+  FleetAccountSummary,
   FleetContamination,
   InstanceDesiredStateRequest,
   LiveInstanceStatus,
@@ -218,6 +219,17 @@ export class LiveRunsService {
   /** Account/fleet contamination: net vs Σ instance expecteds (ADR 0005, #399). */
   getAccountFleet(): Promise<FleetContamination> {
     return firstValueFrom(this.http.get<FleetContamination>(`${this.instancesBase}/account`));
+  }
+
+  /**
+   * PRD #616 — composed account-row DTO (account identity + position
+   * contamination).  The new cockpit (PRD #617) reads this; the legacy
+   * `/account` endpoint stays for back-compat callers.
+   */
+  getAccountSummary(): Promise<FleetAccountSummary> {
+    return firstValueFrom(
+      this.http.get<FleetAccountSummary>(`${this.instancesBase}/account-summary`),
+    );
   }
 
   /** Deploy (create a run): data plane forwards to the daemon (ADR 0006, #415).

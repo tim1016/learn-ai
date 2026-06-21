@@ -1,0 +1,365 @@
+<div class="cockpit-shell" data-testid="cockpit-shell">
+  <!-- Page utility row -->
+  <header class="page-utility-row" data-testid="page-utility-row">
+    <div class="cockpit-title">
+      <span class="title-text">Terminal Cockpit</span>
+      <span class="env">{{ status() ? 'PAPER' : '' }}</span>
+    </div>
+    <div class="clock-pill" data-testid="clock-pill">
+      <span class="local-clock">Local time: {{ formatClock(clockPill().serverNowMs) }} ET</span>
+      @if (status()?.operator_surface?.trading_session?.phase; as phase) {
+        <span class="session" data-testid="session-phase">Session: {{ phase }}</span>
+      }
+      @if (clockPill().advisory) {
+        <span class="advisory" data-testid="clock-difference-advisory">
+          CLOCK DIFFERENCE: {{ clockPill().offsetSeconds }}s
+        </span>
+      }
+    </div>
+  </header>
+
+  <!-- Account / fleet summary -->
+  @if (accountSummary(); as account) {
+    <section
+      class="account-summary"
+      [class.attention]="accountAttention().isAttention"
+      [class.collapsible]="accountAttention().isCollapsible"
+      [class.expanded]="accountRowExpanded()"
+      data-testid="account-summary"
+    >
+      <header
+        class="account-row"
+        [class.clickable]="accountAttention().isCollapsible"
+        (click)="toggleAccountSummary()"
+        (keyup.enter)="toggleAccountSummary()"
+        tabindex="0"
+        role="button"
+        [attr.aria-expanded]="accountRowExpanded()"
+      >
+        <span class="label">ACCOUNT</span>
+        <span class="account-id">{{ account.account_id ?? '—' }}</span>
+        <span
+          class="identity-badge"
+          [class.consistent]="account.account_identity === 'CONSISTENT'"
+          [class.conflicting]="account.account_identity === 'CONFLICTING'"
+          [class.unknown]="account.account_identity === 'UNKNOWN'"
+          data-testid="account-identity"
+        >
+          {{ account.account_identity }}
+        </span>
+        <span
+          class="contamination-badge"
+          [class.clean]="account.contamination.verdict === 'clean'"
+          [class.contaminated]="account.contamination.verdict === 'contaminated'"
+          [class.unknown]="account.contamination.verdict === 'unknown'"
+          data-testid="contamination-verdict"
+        >
+          {{ account.contamination.verdict | uppercase }}
+        </span>
+        <span class="residual-count">
+          {{ (account.contamination.residual | keyvalue).length }} residual positions
+        </span>
+      </header>
+      @if (accountRowExpanded()) {
+        <div class="account-detail" data-testid="account-detail">
+          <p class="summary-line">{{ account.contamination.summary }}</p>
+          @if (account.account_identity_reason_codes.length) {
+            <ul class="reason-list">
+              @for (code of account.account_identity_reason_codes; track code) {
+                <li class="reason-code">{{ code }}</li>
+              }
+            </ul>
+          }
+          @if (account.contamination.policy_blocks_starts) {
+            <p class="policy-blocks" data-testid="policy-blocks-starts">
+              Fleet policy blocks starts while account is contaminated.
+            </p>
+          }
+        </div>
+      }
+    </section>
+  }
+
+  @if (errorMessage(); as err) {
+    <div class="error-banner" role="alert" data-testid="error-banner">{{ err }}</div>
+  }
+
+  <!-- Outer instance tabs -->
+  @if (outerTabs().length) {
+    <nav
+      class="outer-tabs"
+      data-testid="outer-instance-tabs"
+      role="tablist"
+      aria-label="Strategy instances"
+    >
+      @for (tab of outerTabs(); track tab.id) {
+        <button
+          type="button"
+          class="outer-tab"
+          role="tab"
+          [class.selected]="tab.id === selectedInstanceId()"
+          [class.ready]="tab.readiness_verdict === 'READY'"
+          [class.blocked]="tab.readiness_verdict === 'BLOCKED'"
+          [class.degraded]="tab.readiness_verdict === 'DEGRADED'"
+          [class.unknown]="tab.readiness_verdict === 'UNKNOWN'"
+          [attr.aria-selected]="tab.id === selectedInstanceId()"
+          [attr.data-testid]="'outer-tab-' + tab.id"
+          (click)="selectInstance(tab.id)"
+        >
+          <span class="instance-id">{{ tab.id }}</span>
+          <span class="meta">
+            <span class="process-state">{{ tab.process_state | uppercase }}</span>
+            <span class="readiness-verdict">{{ tab.readinessLabel }}</span>
+            @if (tab.attentionUnseen) {
+              <span class="attention-marker" aria-label="attention pending">
+                <span aria-hidden="true">●</span>
+                <span class="visually-hidden">attention pending</span>
+                ATTN
+              </span>
+            }
+          </span>
+        </button>
+      }
+    </nav>
+  }
+
+  @if (status(); as s) {
+    <!-- Identity / control strip -->
+    <section class="identity-strip" data-testid="identity-strip">
+      <div class="identity">
+        <span class="instance-label">{{ s.strategy_instance_id }}</span>
+        <span class="provenance-hint">
+          @if (s.provenance?.code_sha) {
+            <span class="sha">code {{ s.provenance!.code_sha.substring(0, 8) }}</span>
+          }
+        </span>
+      </div>
+
+      <div class="indicators">
+        <!-- Each indicator is independent — no synthetic master status. -->
+        <span
+          class="indicator process"
+          [attr.data-testid]="'indicator-process'"
+          [attr.data-value]="s.operator_surface.host_process.state"
+        >
+          PROCESS · {{ s.operator_surface.host_process.state }}
+        </span>
+        <span
+          class="indicator intent"
+          [attr.data-testid]="'indicator-intent'"
+          [attr.data-value]="intentLabel(s.desired_state?.state)"
+        >
+          INTENT · {{ intentLabel(s.desired_state?.state) }}
+        </span>
+        <span
+          class="indicator readiness"
+          [attr.data-testid]="'indicator-readiness'"
+          [attr.data-value]="s.readiness?.verdict ?? 'UNKNOWN'"
+        >
+          READINESS · {{ s.readiness?.verdict ?? 'UNKNOWN' }}
+        </span>
+        <span
+          class="indicator broker"
+          [attr.data-testid]="'indicator-broker'"
+          [attr.data-value]="s.operator_surface.broker.connection"
+        >
+          BROKER · {{ s.operator_surface.broker.connection }}
+        </span>
+        <span
+          class="indicator safety"
+          [attr.data-testid]="'indicator-safety'"
+          [attr.data-value]="s.operator_surface.broker.safety_verdict"
+        >
+          SAFETY · {{ s.operator_surface.broker.safety_verdict }}
+        </span>
+        <span class="indicator last-run" data-testid="indicator-last-run">
+          LAST RUN · {{ s.operator_surface.prior_run.classification }}
+        </span>
+        <span class="indicator session" data-testid="indicator-session">
+          SESSION · {{ s.operator_surface.trading_session.phase }}
+        </span>
+      </div>
+
+      <div class="actions">
+        @let resume = s.operator_surface.actions.resume;
+        @let pause = s.operator_surface.actions.pause;
+        @let stop = s.operator_surface.actions.stop;
+        @let flatten = s.operator_surface.actions.flatten_and_pause;
+        <button
+          type="button"
+          class="action-button resume"
+          data-testid="action-resume"
+          [disabled]="!resume.enabled || busyAction() !== null"
+          [attr.title]="resume.disabled_reason_code ?? 'Resume'"
+          (click)="dispatchResume()"
+        >
+          Resume
+        </button>
+        <button
+          type="button"
+          class="action-button pause"
+          data-testid="action-pause"
+          [disabled]="!pause.enabled || busyAction() !== null"
+          [attr.title]="pause.disabled_reason_code ?? 'Pause'"
+          (click)="dispatchPause()"
+        >
+          Pause
+        </button>
+        <button
+          type="button"
+          class="action-button flatten-and-pause"
+          data-testid="action-flatten-and-pause"
+          [disabled]="!flatten.enabled || busyAction() !== null"
+          [attr.title]="flatten.disabled_reason_code ?? 'Flatten and pause'"
+          (click)="dispatchFlattenAndPause()"
+        >
+          Flatten and pause
+        </button>
+        <!-- Stop lives in the overflow menu, never inline. -->
+        @if (stop) {
+          <details class="overflow-menu" data-testid="overflow-menu">
+            <summary aria-label="Overflow actions">⋯</summary>
+            <button
+              type="button"
+              class="overflow-button stop"
+              data-testid="action-stop"
+              [disabled]="!stop.enabled || busyAction() !== null"
+              [attr.title]="stop.disabled_reason_code ?? 'Stop instance'"
+              (click)="dispatchStop()"
+            >
+              Stop instance…
+            </button>
+          </details>
+        }
+      </div>
+    </section>
+
+    @if (resume.disabled_reasons?.length && resume.disabled_reasons!.length > 1) {
+      <div class="resume-reasons-expanded" data-testid="resume-disabled-reasons">
+        @for (code of resume.disabled_reasons; track code) {
+          <span class="reason">{{ code }}</span>
+        }
+      </div>
+    }
+
+    <!-- ADR-0008 hazard line lives outside the inner tabs — load-bearing -->
+    @if (s.live_binding) {
+      <aside
+        class="adr-hazard-line"
+        role="status"
+        data-testid="adr-0008-not-wired-banner"
+        title="Runtime reconcile is not wired yet. After a crash / restart or any suspected broker drift, stop the bot, verify the broker positions match the cockpit, and only then restart."
+      >
+        <span class="bar" aria-hidden="true">▌</span>
+        <span class="key">RECONCILE · NOT WIRED</span>
+        <span class="meta">stop &amp; verify after any crash, restart, or suspected drift</span>
+      </aside>
+    }
+
+    <!-- Host-process notice — server-authored copy -->
+    @if (s.operator_surface.host_process.notice) {
+      <aside class="host-process-notice" role="status" data-testid="host-process-notice">
+        <strong>HOST · {{ s.operator_surface.host_process.state }}</strong>
+        <span class="msg">{{ s.operator_surface.host_process.notice }}</span>
+        @if (s.operator_surface.host_process.copyable_command) {
+          <code class="copyable">{{ s.operator_surface.host_process.copyable_command }}</code>
+        }
+      </aside>
+    }
+
+    <!-- Inner view tabs -->
+    <nav
+      class="inner-tabs"
+      role="tablist"
+      aria-label="Cockpit views"
+      data-testid="inner-tabs"
+    >
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'status'"
+        [attr.aria-selected]="selectedTab() === 'status'"
+        data-testid="inner-tab-status"
+        (click)="selectTab('status')"
+      >
+        Status &amp; Risk
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'activity'"
+        [attr.aria-selected]="selectedTab() === 'activity'"
+        data-testid="inner-tab-activity"
+        (click)="selectTab('activity')"
+      >
+        Activity
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'audit'"
+        [attr.aria-selected]="selectedTab() === 'audit'"
+        data-testid="inner-tab-audit"
+        (click)="selectTab('audit')"
+      >
+        Audit
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'configuration'"
+        [attr.aria-selected]="selectedTab() === 'configuration'"
+        data-testid="inner-tab-configuration"
+        (click)="selectTab('configuration')"
+      >
+        Configuration
+      </button>
+    </nav>
+
+    <section class="active-panel" data-testid="active-panel">
+      @switch (selectedTab()) {
+        @case ('status') {
+          <app-status-risk-tab
+            [status]="s"
+            (invokeResume)="dispatchResume()"
+            (invokePause)="dispatchPause()"
+            (invokeFlattenAndPause)="dispatchFlattenAndPause()"
+            (focusTab)="selectTab($event)"
+            (redeploy)="onGateRedeploy()"
+            (openRunbook)="onGateOpenRunbook($event)"
+          />
+        }
+        @case ('activity') {
+          <app-activity-tab [status]="s" />
+        }
+        @case ('audit') {
+          <app-audit-tab
+            [status]="s"
+            [busyAction]="busyAction()"
+            (markPoisonedRequested)="openTypedHalt()"
+          />
+        }
+        @case ('configuration') {
+          <app-configuration-tab
+            [status]="s"
+            [redeployQueryParams]="redeployQueryParams()"
+          />
+        }
+      }
+    </section>
+  }
+
+  <app-typed-halt-confirm
+    [open]="typedHaltOpen()"
+    heading="Mark this run POISONED"
+    [message]="
+      'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.'
+    "
+    (confirmed)="confirmTypedHalt()"
+    (cancelled)="closeTypedHalt()"
+  />
+</div>
