@@ -29,7 +29,6 @@ from app.engine.live.engine_runtime import (
     ControlPlaneBlock,
 )
 
-
 # ---------------------------------------------------------------------------
 # Verdict / capability / posture composition
 # ---------------------------------------------------------------------------
