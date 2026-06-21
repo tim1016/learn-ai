@@ -82,6 +82,44 @@ from app.engine.live.run_ledger import read_ledger
 logger = logging.getLogger(__name__)
 
 
+def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
+    """PRD #619-B B5 follow-up — return a factory the LiveEngine calls
+    to construct a configured ``ChildWatchdog``.
+
+    Reads ``LIVE_RUNNER_DAEMON_BOOT_ID`` from the env (the host daemon
+    sets this on every child spawn — see ``host_daemon._build_child_env``).
+    When the env var is unset (CLI runs without the daemon), the
+    factory returns a watchdog with ``expected_daemon_boot_id=None``,
+    which skips the ``BOOT_ID_CHANGED`` check but still detects an
+    expired lease.
+    """
+    import os as _os
+
+    def _factory(
+        *,
+        block_submissions,
+        persist_paused,
+        disconnect_broker,
+        request_engine_exit,
+        aggregator=None,
+    ):
+        from app.engine.live.child_watchdog import ChildWatchdog
+
+        return ChildWatchdog(
+            artifacts_root=artifacts_root,
+            run_dir=run_dir,
+            expected_daemon_boot_id=_os.environ.get("LIVE_RUNNER_DAEMON_BOOT_ID"),
+            block_submissions=block_submissions,
+            persist_paused=persist_paused,
+            disconnect_broker=disconnect_broker,
+            request_engine_exit=request_engine_exit,
+            now_ms=lambda: int(time.time() * 1000),
+            aggregator=aggregator,
+        )
+
+    return _factory
+
+
 # ──────────────────────────── init-ledger subcommand ─────────────────
 
 
@@ -1297,6 +1335,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         verdict_provider=verdict_provider,
         runtime_aggregator=_runtime_aggregator,
         artifacts_root_for_lease=_artifacts_root,
+        watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
     )
 
     # PRD #619-A — capture the durable child/run evidence the Resume

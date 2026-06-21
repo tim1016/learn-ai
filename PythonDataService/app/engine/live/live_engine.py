@@ -415,8 +415,18 @@ class LiveEngine:
         # PRD #619-B B3 — for the control-plane block bootstrap. When
         # set, the engine reads ``<artifacts_root>/control_plane/daemon_lease.json``
         # at startup to seed ``ControlPlaneBlock.observed_daemon_boot_id``.
-        # B5 will replace this single read with a periodic watchdog.
+        # When ``watchdog_factory`` is also wired (B5 follow-up below)
+        # this single read becomes a periodic producer.
         artifacts_root_for_lease: object = None,
+        # PRD #619-B B5 follow-up — child watchdog factory. When set,
+        # the engine constructs a ``ChildWatchdog`` from this callable
+        # before the bar loop starts and stops it in the outer
+        # ``finally``. The factory receives the four engine-side
+        # callbacks (block_submissions, persist_paused, disconnect_broker,
+        # request_engine_exit) and returns a configured watchdog. The
+        # engine owns the lifecycle; the factory owns the configuration
+        # (cadence, threshold, expected_daemon_boot_id from env).
+        watchdog_factory: object = None,
         # Phase 5C / VCR-0002 — managed cancel/flatten paths await per-order
         # cancel confirms with this timeout. Tests pass a short value
         # (e.g. 0.05s) to exercise the timeout path without waiting 5s.
@@ -509,6 +519,17 @@ class LiveEngine:
         # disables every producer call site.
         self._runtime_aggregator = runtime_aggregator
         self._artifacts_root_for_lease = artifacts_root_for_lease
+        self._watchdog_factory = watchdog_factory
+        # PRD #619-B B5 follow-up — submissions-blocked flag set by the
+        # watchdog's step 1 ``block_submissions`` callback. The bar loop
+        # checks this alongside ``self._paused`` and clears any pending
+        # orders without sending them when set. The flag is sticky: once
+        # the watchdog has decided to fail-close, the engine never
+        # un-blocks itself (the operator restart starts a fresh process).
+        self._submissions_blocked = False
+        # Holds the watchdog instance for the duration of ``run()``; set
+        # in the startup block, awaited in the outer finally.
+        self._watchdog: object | None = None
         # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
         self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
         # Phase 3 / VCR-0006 — reconnect re-validation. Each bar iteration
@@ -751,6 +772,19 @@ class LiveEngine:
         # natural producer tick.
         await self._publish_command_loop_block()
         await self._publish_initial_control_plane_block()
+
+        # PRD #619-B B5 follow-up — child watchdog. The factory builds
+        # a configured ``ChildWatchdog`` from the engine's four side-
+        # effect callbacks; the engine owns the lifecycle. When the
+        # watchdog fires its 5-step contract, ``_submissions_blocked``
+        # flips True (step 1), durable PAUSED + incident lands (step 2),
+        # then disconnect + shutdown_event.set() drain the bar loop.
+        if (
+            self._watchdog_factory is not None
+            and self._runtime_aggregator is not None
+            and shutdown_event is not None
+        ):
+            self._watchdog = await self._start_child_watchdog(shutdown_event)
 
         # Operator command-channel poll task. Spawned only when a
         # channel is configured; cancelled in the finally block. The
@@ -1000,7 +1034,7 @@ class LiveEngine:
                 # strategy still consumes the bar (indicators advance),
                 # but nothing new reaches the broker. RESUME flips the
                 # flag and the next bar's queue gets submitted normally.
-                if self._paused:
+                if self._paused or self._submissions_blocked:
                     portfolio.pending_orders.clear()
                 # Predictive cap check: refuse to submit the pending batch if
                 # it would push the day's total past ``max_orders_per_day``,
@@ -1095,6 +1129,17 @@ class LiveEngine:
                         self._write_execution(writers, engine_event)
                         last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
         finally:
+            # PRD #619-B B5 follow-up — stop the child watchdog FIRST so
+            # its periodic lease-reading task is settled before we touch
+            # the broker session or the command poll. The watchdog's own
+            # ``stop()`` is bounded; if it has already fired its 5-step
+            # contract (state == EXITED) the call is a no-op.
+            if self._watchdog is not None:
+                try:
+                    await self._watchdog.stop()
+                except Exception:
+                    logger.exception("child watchdog stop failed")
+                self._watchdog = None
             # Stop the command-channel poller before any other cleanup
             # so a late-arriving operator command doesn't race with
             # shutdown writes.
@@ -2074,6 +2119,49 @@ class LiveEngine:
         await self._runtime_aggregator.update_control_plane(
             build_control_plane_block_from_lease(path, now_ms=int(time.time() * 1000))
         )
+
+    async def _start_child_watchdog(self, shutdown_event: asyncio.Event) -> object:
+        """PRD #619-B B5 follow-up — construct and start the watchdog.
+
+        Builds the four engine-side side-effect callbacks (block
+        submissions, persist durable PAUSED + incident, disconnect
+        broker, request engine exit) and hands them to the caller's
+        factory. The factory is the seam that lets ``cmd_start`` read
+        the daemon lease path + the expected ``boot_id`` from env
+        without coupling the engine to either.
+        """
+        def _block_submissions() -> None:
+            self._submissions_blocked = True
+
+        def _persist_paused(reason: str) -> None:
+            from app.engine.live.desired_state import DesiredState
+
+            self._persist_desired_state(
+                DesiredState.PAUSED,
+                f"control_plane_lease_lost:{reason}",
+            )
+
+        async def _disconnect_broker() -> None:
+            if self._client is not None:
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    logger.exception(
+                        "child watchdog: broker disconnect failed",
+                    )
+
+        def _request_engine_exit() -> None:
+            shutdown_event.set()
+
+        watchdog = self._watchdog_factory(  # type: ignore[misc]
+            block_submissions=_block_submissions,
+            persist_paused=_persist_paused,
+            disconnect_broker=_disconnect_broker,
+            request_engine_exit=_request_engine_exit,
+            aggregator=self._runtime_aggregator,
+        )
+        await watchdog.start()
+        return watchdog
 
     def _write_verdict_snapshot(self, verdict_value: object) -> None:
         """Phase 7B Guard #1 — persist the latest verdict reading so
