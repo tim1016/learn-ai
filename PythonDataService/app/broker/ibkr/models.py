@@ -444,6 +444,16 @@ class IbkrOrderEvent(BaseModel):
     event_type: OrderEventType
     status: OrderStatus | None = None
 
+    # ADR 0008 / Phase 5A — broker-echoed deterministic
+    # ``{bot_order_namespace}:{intent_id}`` token, captured here so the
+    # reconciliation publisher can join each callback (status or fill) back to
+    # the originating engine intent unambiguously. Set on every event whose
+    # underlying ib_async object carries a non-empty ``orderRef``; ``None`` for
+    # status events on orders placed before this field shipped, fills with no
+    # echoed orderRef (a foreign exec under our account, by definition), and
+    # error events without an associated trade.
+    order_ref: str | None = None
+
     # Fill payload (event_type == "fill")
     exec_id: str | None = None
     client_id: int | None = None

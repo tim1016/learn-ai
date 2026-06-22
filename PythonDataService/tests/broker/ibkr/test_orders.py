@@ -522,6 +522,87 @@ async def test_stream_order_events_populates_exec_id_and_client_id_on_fill() -> 
 
 
 @pytest.mark.asyncio
+async def test_stream_order_events_round_trips_namespaced_order_ref() -> None:
+    """ADR 0008 / Phase 5A: the deterministic ``{bot_order_namespace}:{intent_id}``
+    token we stamp on outbound orders must round-trip back on both status and
+    fill events, so the reconciliation publisher can join broker callbacks
+    to engine intents by namespace. Empty-string ``orderRef`` (ib_async's
+    "field absent" default) must coerce to ``None`` so a missing echo stays
+    distinguishable from a present one."""
+    from itertools import chain, repeat
+
+    order_ref = "learn-ai/sid-abc/v1:intent-xyz"
+
+    trade_v1 = _trade_namespace(order_id=42, status_str="Submitted")
+    trade_v1.order.orderRef = order_ref
+    trade_v2 = _trade_namespace(
+        order_id=42, status_str="Filled", filled=10, remaining=0
+    )
+    trade_v2.order.orderRef = order_ref
+    trade_v2.fills = [
+        SimpleNamespace(
+            execution=SimpleNamespace(
+                execId="exec-abc-1",
+                clientId=42,
+                shares=10.0,
+                price=500.5,
+                orderRef=order_ref,
+            )
+        )
+    ]
+    snapshots = chain([[trade_v1]], repeat([trade_v2]))
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 3:
+            break
+
+    status_events = [e for e in out if e.event_type != "fill"]
+    fill_event = next(e for e in out if e.event_type == "fill")
+    assert all(e.order_ref == order_ref for e in status_events)
+    assert fill_event.order_ref == order_ref
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_treats_empty_order_ref_as_none() -> None:
+    """ib_async's ``Execution.orderRef`` defaults to ``''`` when the broker
+    omits the echo. The event must surface ``None`` (absent) rather than
+    propagating the empty string, so the reconciliation publisher can treat
+    "no echo" as definitively foreign instead of as a falsy-but-present token."""
+    from itertools import chain, repeat
+
+    trade_v1 = _trade_namespace(order_id=42, status_str="Submitted")
+    trade_v2 = _trade_namespace(
+        order_id=42, status_str="Filled", filled=10, remaining=0
+    )
+    trade_v2.fills = [
+        SimpleNamespace(
+            execution=SimpleNamespace(
+                execId="exec-foreign-1",
+                clientId=99,
+                shares=10.0,
+                price=500.5,
+                orderRef="",
+            )
+        )
+    ]
+    snapshots = chain([[trade_v1]], repeat([trade_v2]))
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 3:
+            break
+
+    assert all(e.order_ref is None for e in out)
+
+
+@pytest.mark.asyncio
 async def test_stream_order_events_partial_fills_report_running_totals() -> None:
     """Regression (B-09): when two executions land in one poll window, each
     fill event must carry the running totals true *after that execution*, not
