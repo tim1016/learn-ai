@@ -72,6 +72,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
   readiness_gates: [],
   runtime_freshness: null,
   control_plane: null,
+  broker_observation_consistency: null,
 };
 
 // ---------------------------------------------------------------------------

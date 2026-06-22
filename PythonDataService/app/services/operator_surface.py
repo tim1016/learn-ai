@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.schemas.live_runs import (
+    BrokerObservationConsistency,
     DesiredStateView,
     FocusAction,
     InstanceBrokerView,
@@ -578,6 +579,7 @@ def compute_operator_surface(
     runtime_freshness: RuntimeFreshness | None = None,
     control_plane_state: DaemonConnectivityState | None = None,
     latest_mutation: MutationAttempt | None = None,
+    broker_observation_consistency: BrokerObservationConsistency | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -618,4 +620,5 @@ def compute_operator_surface(
         readiness_gates=project_readiness_gates(readiness),
         runtime_freshness=_project_runtime_freshness(runtime_freshness),
         control_plane=_project_control_plane(control_plane_state),
+        broker_observation_consistency=broker_observation_consistency,
     )
