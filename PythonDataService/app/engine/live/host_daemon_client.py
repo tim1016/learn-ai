@@ -11,7 +11,7 @@ The ``DaemonResult`` classifies the transport outcome (CONNECTED / UNREACHABLE
 parsed body iff ``result.kind == "CONNECTED"``. Callers that only need
 fail-closed semantics keep checking ``payload is None`` — the typed result is
 additive context for log/UX surfacing and for the connectivity monitor
-(``probe_daemon_health``) to fold into a running state.
+(``fetch_health``) to fold into a running state.
 
 Write path: POST helpers continue to raise ``HostDaemonError`` for now. The
 typed mutation classification (619-C5) is a separate refactor that ties
@@ -284,40 +284,58 @@ async def fetch_audit_copy_sizing_lookup(
     )
 
 
-async def probe_daemon_health(base_url: str) -> DaemonResult:
-    """GET /health. Parsed against ``HostRunnerHealth`` for the typed result.
+async def fetch_health(
+    base_url: str,
+) -> tuple[DaemonResult, HostRunnerHealth | None]:
+    """GET /health. Returns ``(DaemonResult, HostRunnerHealth | None)``.
 
-    Used by ``DaemonConnectivityMonitor`` (619-C2). Returns only the
-    ``DaemonResult`` — the monitor cares about the connectivity classification
-    + the daemon's declared ``daemon_boot_id``, not the full health envelope.
+    The parsed envelope is non-None iff ``result.kind == "CONNECTED"``.
+
+    Two consumers, two read patterns:
+
+    - ``DaemonConnectivityMonitor`` (619-C2) discards the envelope and
+      keeps only the typed result. The monitor cares about the
+      connectivity classification + the daemon's declared
+      ``daemon_boot_id``, both carried on ``DaemonResult``.
+    - The data plane's instance-less ``/daemon-health`` route forwards
+      the envelope so the cockpit / deploy form connectivity strip can
+      observe the authenticated probe through the data plane (the
+      browser never holds the daemon token; see host_daemon.py docstring
+      on PRD #619-C P2).
 
     Parse failures classify via the typed signal:
 
-    - ``pydantic.ValidationError`` (response shape doesn't match the contract)
-      → ``DaemonResult.incompatible_contract(...)``
-    - ``ValueError`` from JSON decode → ``DaemonResult.malformed_body(...)``
+    - ``pydantic.ValidationError`` → ``DaemonResult.incompatible_contract(...)``
+    - JSON decode ``ValueError`` → ``DaemonResult.malformed_body(...)``
     """
     result, response = await _classify_http(
         f"{base_url.rstrip('/')}/health", method="GET"
     )
     if response is None:
-        return result
+        return result, None
     try:
         health = HostRunnerHealth.model_validate_json(response.content)
     except ValidationError as exc:
-        return DaemonResult.incompatible_contract(
-            status=response.status_code, detail=str(exc)
+        return (
+            DaemonResult.incompatible_contract(
+                status=response.status_code, detail=str(exc)
+            ),
+            None,
         )
     except ValueError as exc:
-        return DaemonResult.malformed_body(
-            status=response.status_code, detail=str(exc)
+        return (
+            DaemonResult.malformed_body(
+                status=response.status_code, detail=str(exc)
+            ),
+            None,
         )
-    # ``HostRunnerHealth`` doesn't carry an ``api_version`` field yet; when it
-    # does (forward-compat tracking), pass it through here.
-    return DaemonResult.connected(
-        status=response.status_code,
-        daemon_boot_id=health.daemon_boot_id,
-        daemon_api_version=None,
+    return (
+        DaemonResult.connected(
+            status=response.status_code,
+            daemon_boot_id=health.daemon_boot_id,
+            daemon_api_version=None,
+        ),
+        health,
     )
 
 
@@ -344,7 +362,7 @@ async def _classify_http(
     """Classify the transport outcome of one daemon HTTP exchange.
 
     Shared chokepoint for ``_typed_get_json`` / ``_typed_post_json`` /
-    ``probe_daemon_health``. Returns:
+    ``fetch_health``. Returns:
 
     - ``(connected, response)`` when the daemon answered with 2xx — the
       raw ``httpx.Response`` is passed back so the caller can parse the

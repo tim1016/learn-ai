@@ -81,6 +81,7 @@ from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerDeployRequest,
     HostRunnerDeployResponse,
+    HostRunnerHealth,
     HostRunnerStartRequest,
     HostRunnerStopRequest,
     InstanceBrokerView,
@@ -1265,6 +1266,46 @@ async def get_qc_audit_copies() -> QcAuditCopyListing:
             status.HTTP_502_BAD_GATEWAY,
             detail="host daemon returned an invalid QC audit-copy listing",
         ) from exc
+
+
+@router.get("/daemon-health", response_model=HostRunnerHealth)
+async def get_daemon_health() -> HostRunnerHealth:
+    """Authenticated /health probe forwarded from the daemon (PRD #619-C P2).
+
+    The browser cannot hit the daemon's /health directly any more because
+    every daemon route now requires ``X-Live-Runner-Token`` (host_daemon.py
+    docstring; ADR 0007: "the browser must never hold that shared secret").
+    The data plane holds the token via the artifacts bind mount, so this
+    route is the cockpit / deploy form's path to "is the daemon up?".
+
+    Maps the typed daemon result to HTTP status so the frontend's existing
+    resource error/value handling does the right thing without learning a
+    new envelope:
+
+    - CONNECTED   → 200 + HostRunnerHealth body (the deploy form reads
+                    ``ok``, ``git_sha``, ``commits_behind``, …)
+    - AUTH_FAILED → 502 ("daemon rejected our token")
+    - UNREACHABLE → 503 (daemon process down or network error)
+    - any other   → 502 (protocol / contract mismatch)
+    """
+    settings = get_settings()
+    result, health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
+    if health is not None:
+        return health
+    if result.kind == "AUTH_FAILED":
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon rejected the data plane's token",
+        )
+    if result.kind == "UNREACHABLE":
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=result.detail or "host daemon unreachable",
+        )
+    raise HTTPException(
+        status.HTTP_502_BAD_GATEWAY,
+        detail=result.detail or f"host daemon returned {result.kind}",
+    )
 
 
 def _instance_ledger_account_id(root: Path, sid: str) -> str | None:

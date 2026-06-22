@@ -23,16 +23,24 @@
         >{{ chip.label }}</span>
       }
     </div>
-    <div class="clock-pill" data-testid="clock-pill">
-      <span class="local-clock">Local time: {{ formatClock(clockPill().serverNowMs) }} ET</span>
-      @if (status()?.operator_surface?.trading_session?.phase; as phase) {
-        <span class="session" data-testid="session-phase">Session: {{ phase }}</span>
-      }
-      @if (clockPill().advisory) {
-        <span class="advisory" data-testid="clock-difference-advisory">
-          CLOCK DIFFERENCE: {{ clockPill().offsetSeconds }}s
-        </span>
-      }
+    <div class="page-utility-actions">
+      <a
+        class="deploy-button"
+        [routerLink]="['/broker/deploy']"
+        data-testid="deploy-new-strategy"
+        title="Deploy a new strategy instance"
+      >Deploy new strategy</a>
+      <div class="clock-pill" data-testid="clock-pill">
+        <span class="local-clock">Local time: {{ formatClock(clockPill().serverNowMs) }} ET</span>
+        @if (status()?.operator_surface?.trading_session?.phase; as phase) {
+          <span class="session" data-testid="session-phase">Session: {{ phase }}</span>
+        }
+        @if (clockPill().advisory) {
+          <span class="advisory" data-testid="clock-difference-advisory">
+            CLOCK DIFFERENCE: {{ clockPill().offsetSeconds }}s
+          </span>
+        }
+      </div>
     </div>
   </header>
 

@@ -1323,6 +1323,104 @@ async def test_qc_audit_copies_failclosed_to_empty(
     assert response.json()["entries"] == []
 
 
+# ── daemon-health proxy (PRD #619-C P2 — /health is auth-gated) ──────
+
+
+def _idle_health() -> dict:
+    """A minimal HostRunnerHealth payload shaped for the schema validator."""
+    return {
+        "ok": True,
+        "repo_root": "/repo",
+        "live_runs_root": "/repo/artifacts/live_runs",
+        "fetched_at_ms": 1700000000000,
+        "process": {
+            "state": "idle",
+            "run_id": None,
+            "pid": None,
+            "started_at_ms": None,
+            "ended_at_ms": None,
+            "exit_code": None,
+            "command": [],
+            "log_path": None,
+            "message": None,
+        },
+        "daemon_boot_id": "boot-abc",
+    }
+
+
+async def test_daemon_health_forwards_envelope(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The browser cannot send X-Live-Runner-Token. The data plane probes
+    the daemon and forwards the parsed envelope so the cockpit / deploy
+    form can render Daemon up = OK."""
+    from app.engine.live.daemon_transport import DaemonResult
+    from app.schemas.live_runs import HostRunnerHealth
+
+    app, _ = app_with_root
+    payload = _idle_health()
+
+    async def fake_fetch(_base_url: str):
+        return DaemonResult.connected(daemon_boot_id="boot-abc"), HostRunnerHealth.model_validate(payload)
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/daemon-health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["daemon_boot_id"] == "boot-abc"
+
+
+async def test_daemon_health_auth_failed_surfaces_as_502(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale/rotated token would have silently shown the deploy form
+    "Live engine unavailable" before this route existed. Surfacing 502
+    lets the connectivity strip distinguish auth from unreachable."""
+    from app.engine.live.daemon_transport import DaemonResult
+
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str):
+        return DaemonResult.auth_failed(status=401, detail="bad token"), None
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/daemon-health")
+
+    assert response.status_code == 502
+    assert "token" in response.json()["detail"].lower()
+
+
+async def test_daemon_health_unreachable_surfaces_as_503(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Daemon process down → 503, matching the existing operation-error
+    map's remediation copy for "live engine unavailable"."""
+    import httpx
+
+    from app.engine.live.daemon_transport import DaemonResult
+
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str):
+        return (
+            DaemonResult.from_httpx_exception(httpx.ConnectError("connection refused")),
+            None,
+        )
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/daemon-health")
+
+    assert response.status_code == 503
+
+
 # ── start / stop proxy (ADR 0007 — token forwarded server-side) ──────
 
 

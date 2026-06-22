@@ -44,6 +44,37 @@
   }
 }
 
+.page-utility-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.deploy-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.18));
+  border-radius: 4px;
+  background: var(--surface-raised, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary, #d6e1f5);
+  font-size: var(--fs-xs, 0.7rem);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--surface-raised-hover, rgba(255, 255, 255, 0.09));
+    outline: none;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--focus-ring, rgba(120, 170, 255, 0.55));
+  }
+}
+
 .clock-pill {
   display: inline-flex;
   align-items: center;

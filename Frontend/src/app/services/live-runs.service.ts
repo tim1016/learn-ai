@@ -1,7 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import { environment } from '../../environments/environment';
 import type {
   AuditCopySizingLookup,
   CommandsSummary,
@@ -37,7 +36,6 @@ export class LiveRunsService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/live-runs';
   private readonly instancesBase = '/api/live-instances';
-  private readonly daemonBase = environment.liveRunnerDaemonUrl;
 
   listRuns(params?: {
     limit?: number;
@@ -103,15 +101,20 @@ export class LiveRunsService {
     );
   }
 
+  // Routed through the data plane, not the daemon directly: PRD #619-C P2
+  // made /health auth-gated alongside every other daemon route (host_daemon.py
+  // docstring; ADR 0007 — "the browser must never hold that shared secret").
+  // The data plane attaches X-Live-Runner-Token from the artifacts bind mount
+  // and forwards the result.
   getHostRunnerHealth(): Promise<HostRunnerHealth> {
-    return firstValueFrom(this.http.get<HostRunnerHealth>(`${this.daemonBase}/health`));
+    return firstValueFrom(
+      this.http.get<HostRunnerHealth>(`${this.instancesBase}/daemon-health`),
+    );
   }
 
-  // Start/Stop route through the data plane, not the daemon directly: the
-  // daemon enforces a mandatory X-Live-Runner-Token on every actuation route
-  // (ADR 0007), and the browser must never hold that shared secret. The data
-  // plane forwards the token from the artifacts bind mount. (/health stays
-  // daemon-direct above — it is the one unauthenticated route.)
+  // Start/Stop route through the data plane for the same reason — the daemon
+  // enforces a mandatory X-Live-Runner-Token on every actuation route
+  // (ADR 0007), and the browser must never hold that shared secret.
   startHostRunner(runId: string, request: HostRunnerStartRequest): Promise<HostRunnerActionResponse> {
     return firstValueFrom(
       this.http.post<HostRunnerActionResponse>(
