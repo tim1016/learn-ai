@@ -51,6 +51,9 @@ from app.routers import (
     walk_forward,
 )
 from app.routers import (
+    broker_activity as broker_activity_router,
+)
+from app.routers import (
     live_instances as live_instances_router,
 )
 from app.routers import (
@@ -191,6 +194,13 @@ async def lifespan(app: FastAPI):
         if daemon_monitor is not None:
             await daemon_monitor.stop()
             set_daemon_monitor(None)
+        # ADR 0014 — stop every broker-activity publisher before tearing
+        # down the broker connection so each publisher's WAL append +
+        # subscriber drain completes cleanly. Safe to call even when no
+        # publishers were registered (registry stop_all is a no-op).
+        from app.services.broker_activity_publisher import get_publisher_registry
+
+        await get_publisher_registry().stop_all()
         # Stop the broker monitor BEFORE disconnecting so a tick-in-flight
         # doesn't observe the close and immediately try to reconnect.
         if monitor is not None:
@@ -315,6 +325,11 @@ app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures
 # Layer 3: inode-tracked incremental deque on log tail.
 app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
 app.include_router(live_instances_router.router, prefix="/api/live-instances", tags=["live-instances"])
+# ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
+# The router carries its own ``/api/live-instances`` prefix internally
+# (so the path is sibling to the live-instances router), keeping the
+# operator-facing URL space consistent.
+app.include_router(broker_activity_router.router)
 
 # Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
 # When disabled, the prefix has no registered routes; clients get 404.

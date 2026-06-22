@@ -527,6 +527,17 @@ class HostRunnerDeployRequest(BaseModel):
         value["sizing"] = policy_to_ledger_dict(policy)
         if "action" in value:
             value["action"] = ActionPlan.model_validate(value["action"]).model_dump()
+        # ADR 0014 §6 — round-trip the reconciliation_timing_policy block
+        # through its Pydantic model so the deploy boundary rejects
+        # mis-shaped configs (e.g. excessive_lag_ms <= caveat_lag_ms) at
+        # admission time, not at runtime when the publisher starts.
+        if "reconciliation_timing_policy" in value:
+            from app.schemas.broker_activity import ReconciliationTimingPolicy
+
+            policy_block = value["reconciliation_timing_policy"]
+            value["reconciliation_timing_policy"] = (
+                ReconciliationTimingPolicy.model_validate(policy_block).model_dump()
+            )
         return value
 
 
