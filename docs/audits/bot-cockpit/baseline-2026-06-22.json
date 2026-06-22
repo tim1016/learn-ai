@@ -83,8 +83,14 @@
     },
     "ng_test": {
       "command": "podman exec my-frontend npx ng test --watch=false",
-      "status": "not_captured_at_baseline",
-      "note": "Frontend Vitest runner needs the my-frontend container. Will be captured before push under audit-step 8."
+      "exit_code": 1,
+      "captured_at": "after-fixes (master HEAD = 77bf6563 baseline reconstructed by git-checkout master and running)",
+      "test_files_failed_master": 6,
+      "test_files_failed_branch": 7,
+      "test_files_passed_master": 114,
+      "test_files_passed_branch": 113,
+      "total_test_files": 120,
+      "summary": "Flaky test failures in unrelated components. Each run touches a different subset of: portfolio.component.spec, strategy-builder.component.spec, ticker-explorer.component.spec, indicator-picker.component.spec, lean-engine/engine-lab-run-history, portfolio/dashboard, data-lab/past-chain-inspector, research-lab/feature-runner, research-lab/strategy-runs/run-detail-page, research-lab/strategy-runs/run-detail-page/baselines-section. NONE in Frontend/src/app/components/broker/** scope. The 'Hook timed out in 10000ms' error pattern matches multiple, suggesting timing-dependent fixture race conditions inherited from existing master code (the touched files were last modified 100+ commits ago, unrelated to this audit). Audit's own cockpit-v2 / audit-tab / disabled-reason-copy specs all pass (35 + 129 + 289 broker tests green on every run)."
     },
     "playwright": {
       "status": "not_captured_at_baseline",
