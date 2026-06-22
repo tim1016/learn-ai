@@ -160,6 +160,57 @@ describe('CockpitShellComponent', () => {
     vi.useRealTimers();
   });
 
+  // ── ADR-0011 / ADR-0013 §1 — env chip honesty (P1-001) ──────────────
+
+  async function renderShellWithSafetyVerdict(
+    verdict: 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN',
+  ) {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        broker: { ...status.operator_surface.broker, safety_verdict: verdict },
+      },
+    });
+    return renderShell(stub);
+  }
+
+  it.each([
+    ['PAPER_ONLY', 'PAPER'] as const,
+    ['UNSAFE', 'UNSAFE'] as const,
+    ['UNKNOWN', 'UNKNOWN'] as const,
+  ])(
+    'env chip renders %s verdict as label "%s" (not synthesized from status truthiness)',
+    async (verdict, expectedLabel) => {
+      const fixture = await renderShellWithSafetyVerdict(verdict);
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const chip = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="env-chip"]',
+      );
+      expect(chip).toBeTruthy();
+      expect(chip?.textContent?.trim()).toBe(expectedLabel);
+      expect(chip?.getAttribute('data-value')).toBe(verdict);
+    },
+  );
+
+  it('env chip is absent before the first status response (no claim is honest)', async () => {
+    const stub = makeStub();
+    // Make the first /status fetch hang so status() stays null.
+    stub.getInstanceStatus = vi.fn().mockReturnValue(new Promise(() => undefined));
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const chip = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="env-chip"]',
+    );
+    expect(chip).toBeNull();
+  });
+
   it('renders five independent indicators on the identity strip', async () => {
     const fixture = await renderShell(makeStub());
     await fixture.whenStable();

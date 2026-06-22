@@ -3,7 +3,25 @@
   <header class="page-utility-row" data-testid="page-utility-row">
     <div class="cockpit-title">
       <span class="title-text">Terminal Cockpit</span>
-      <span class="env">{{ status() ? 'PAPER' : '' }}</span>
+      <!--
+        ADR-0011 + ADR-0013 §1 — the environment chip renders the
+        server-authored ``broker.safety_verdict`` verbatim.  It must
+        not derive PAPER from any other signal (the original
+        ``status() ? 'PAPER' : ''`` was a synthetic-verdict
+        regression: it claimed PAPER whenever a status response had
+        been received, even if the verdict was UNSAFE / UNKNOWN).
+      -->
+      @if (envChip(); as chip) {
+        <span
+          class="env"
+          [class.paper]="chip.value === 'PAPER_ONLY'"
+          [class.unsafe]="chip.value === 'UNSAFE'"
+          [class.unknown]="chip.value === 'UNKNOWN'"
+          [attr.data-testid]="'env-chip'"
+          [attr.data-value]="chip.value"
+          [attr.title]="chip.tooltip"
+        >{{ chip.label }}</span>
+      }
     </div>
     <div class="clock-pill" data-testid="clock-pill">
       <span class="local-clock">Local time: {{ formatClock(clockPill().serverNowMs) }} ET</span>

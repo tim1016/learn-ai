@@ -175,6 +175,42 @@ export class CockpitShellComponent {
     return !!(s && s.last_exit && s.last_exit.halt_trigger);
   });
 
+  /** ADR-0011 + ADR-0013 §1 — environment chip rendering for the page
+   *  utility row.  Drives directly from the server-authored
+   *  ``operator_surface.broker.safety_verdict`` so the chip cannot
+   *  claim PAPER when the verdict is UNSAFE / UNKNOWN.  Returns
+   *  ``null`` until a status response is available, so the cockpit
+   *  makes no claim before the first refresh.
+   *
+   *  ``label`` is the rendered short text; ``value`` is the closed
+   *  enum value (for CSS hooks + ``data-value`` testing); ``tooltip``
+   *  is the operator-language hover copy.
+   */
+  readonly envChip = computed<{
+    value: 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
+    label: 'PAPER' | 'UNSAFE' | 'UNKNOWN';
+    tooltip: string;
+  } | null>(() => {
+    const verdict = this.status()?.operator_surface.broker.safety_verdict ?? null;
+    if (verdict === null) return null;
+    switch (verdict) {
+      case 'PAPER_ONLY':
+        return { value: 'PAPER_ONLY', label: 'PAPER', tooltip: 'Broker safety verdict: paper-only.' };
+      case 'UNSAFE':
+        return {
+          value: 'UNSAFE',
+          label: 'UNSAFE',
+          tooltip: 'Broker safety verdict is UNSAFE — non-paper signals detected. Resume is disabled by the server.',
+        };
+      case 'UNKNOWN':
+        return {
+          value: 'UNKNOWN',
+          label: 'UNKNOWN',
+          tooltip: 'Broker safety verdict is UNKNOWN — not enough signal to confirm paper. Resume is disabled by the server.',
+        };
+    }
+  });
+
   /** PRD #619-C4 — host-daemon control-plane banner.
    *
    *  Returns ``null`` when the control plane is healthy (CONNECTED) or
