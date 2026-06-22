@@ -1022,6 +1022,13 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     plane reads the token from the artifacts bind mount and forwards it. The
     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
     missing run -> 404, subprocess/daemon unreachable -> 503.
+
+    Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
+    a successful start the broker-activity publisher is registered for
+    the running instance. Failure to bootstrap (broker disconnected,
+    envelope not yet visible) is logged but does NOT roll back the
+    start: the lazy ``_ensure_publisher`` fallback in
+    ``broker_activity.py`` re-attempts on the cockpit's first hit.
     """
     try:
         run_id = _validate_path_segment(run_id, field="run_id")
@@ -1035,7 +1042,54 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         _raise_outcome_unknown("start_run", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    return _parse_action_response(result)
+    response = _parse_action_response(result)
+    await _maybe_start_broker_activity_publisher(response)
+    return response
+
+
+async def _maybe_start_broker_activity_publisher(
+    response: HostRunnerActionResponse,
+) -> None:
+    """Best-effort deploy-time bootstrap of the broker-activity publisher.
+
+    Slice 3 / ADR 0011 amendment. Called after a successful
+    ``start_run`` so the publisher is up before the cockpit's first hit
+    on the Activity tab — which both surfaces the reconnect-sweep state
+    sooner and ensures the submission halt fires for orders placed in
+    the first few seconds of a fresh run.
+
+    The hook is fail-open: a bootstrap failure (envelope not yet
+    visible, broker disconnected, etc.) is logged at WARNING and the
+    start response is returned unchanged. The lazy fallback in
+    ``broker_activity.py::_ensure_publisher`` recovers when the cockpit
+    arrives.
+    """
+    if not response.accepted:
+        return
+    sid = response.process.strategy_instance_id
+    if not sid:
+        return
+    # Local import keeps the live-instances router free of a top-level
+    # dep on the broker-activity router (which imports the broker
+    # singleton). The full import graph is tolerated; the per-call cost
+    # is module-level cache after the first invocation.
+    from app.routers.broker_activity import (
+        PublisherBootstrapError,
+        bootstrap_publisher_for_instance,
+    )
+
+    try:
+        await bootstrap_publisher_for_instance(sid)
+    except PublisherBootstrapError as exc:
+        logger.warning(
+            "deploy-time broker-activity publisher bootstrap deferred (%s): %s",
+            exc.code,
+            exc.detail,
+            extra={
+                "strategy_instance_id": sid,
+                "bootstrap_error_code": exc.code,
+            },
+        )
 
 
 @router.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse)

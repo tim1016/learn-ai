@@ -736,3 +736,51 @@ async def test_stream_order_events_handles_fill_with_no_execution_object() -> No
     fill_event = next(e for e in out if e.event_type == "fill")
     assert fill_event.exec_id is None
     assert fill_event.client_id is None
+
+
+# ── Slice 3 / ADR 0011 amendment — reconnect-recovery halt gate ───────
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_refused_during_reconnect_recovery_sweep(
+    monkeypatch,
+) -> None:
+    """Slice 3: ``place_paper_order`` must refuse when any broker-activity
+    publisher is mid reconnect-recovery sweep — the broker is replaying
+    history and a new order would race the sweep's exec_id dedupe set.
+    The check fires BEFORE ``require_live``, so even a fully-healthy
+    connection is gated."""
+    from app.broker.ibkr.orders import OrderRefusedDuringReconnectRecoveryError
+    from app.services.broker_activity_publisher import get_publisher_registry
+
+    client = _client()
+    # Stub the registry so ``any_recovery_active`` returns True without
+    # standing up a real publisher.
+    registry = get_publisher_registry()
+    monkeypatch.setattr(registry, "any_recovery_active", lambda: True)
+
+    with pytest.raises(
+        OrderRefusedDuringReconnectRecoveryError,
+        match="reconnect-recovery sweep is in progress",
+    ):
+        await place_paper_order(client, _spec())
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_proceeds_when_no_sweep_active(
+    monkeypatch,
+) -> None:
+    """Regression: the recovery-halt gate must default to allowing
+    submission. A bug in ``any_recovery_active`` that pinned True would
+    otherwise silently freeze every submission across every instance."""
+    from app.services.broker_activity_publisher import get_publisher_registry
+
+    client = _client()
+    registry = get_publisher_registry()
+    # Explicit stub to ensure no test ordering pollutes the gate.
+    monkeypatch.setattr(registry, "any_recovery_active", lambda: False)
+
+    ack = await place_paper_order(client, _spec())
+    assert ack.order_id == 42
+    client.ib.placeOrder.assert_called_once()

@@ -138,9 +138,28 @@ async def lifespan(app: FastAPI):
         # observe the disconnected state and retry per the backoff policy.
         from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
+        # Slice 3 / ADR 0011 amendment — the broker-activity publisher
+        # registry's reconnect-recovery sweep rides the same chain as the
+        # bar aggregator's resubscribe-all. Order matters: the bar
+        # aggregator runs first (restore market-data subscriptions so
+        # the engine sees prices again ASAP) then the broker-activity
+        # sweep (replay the day's executions to catch anything missed
+        # mid-drop). The sweep itself flips a process-wide submission
+        # halt that ``place_paper_order`` consults — see the
+        # ``broker_activity_publisher`` module docstring for details.
+        from app.services.broker_activity_publisher import (
+            get_publisher_registry as get_broker_activity_publisher_registry,
+        )
+
+        async def _sweep_broker_activity_after_reconnect() -> None:
+            await get_broker_activity_publisher_registry().sweep_all_for_recovery()
+
         monitor = AutoReconnectMonitor(
             ibkr_client,
-            recovery_callbacks=[LIVE_BAR_AGGREGATOR.resubscribe_all],
+            recovery_callbacks=[
+                LIVE_BAR_AGGREGATOR.resubscribe_all,
+                _sweep_broker_activity_after_reconnect,
+            ],
         )
         monitor.start()
         set_monitor(monitor)

@@ -33,7 +33,10 @@ from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr.client import get_client
 from app.broker.ibkr.config import get_settings
-from app.broker.ibkr.orders import stream_order_events
+from app.broker.ibkr.orders import (
+    executions_for_reconnect_recovery,
+    stream_order_events,
+)
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
@@ -48,6 +51,22 @@ from app.services.broker_activity_publisher import (
     get_publisher_registry,
 )
 
+
+class PublisherBootstrapError(Exception):
+    """Raised when ``bootstrap_publisher_for_instance`` cannot build a publisher.
+
+    Carries a short ``code`` ("no_envelope", "envelope_corrupt",
+    "broker_disconnected", "broker_disabled", "no_run_dir") so callers
+    that surface to HTTP can map to status codes and callers that just
+    want best-effort startup (the deploy-time hook in
+    ``live_instances.start_run``) can log and continue.
+    """
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -56,21 +75,29 @@ router = APIRouter(
 )
 
 
-async def _ensure_publisher(
+async def bootstrap_publisher_for_instance(
     strategy_instance_id: str,
 ) -> BrokerActivityPublisher:
-    """Return the publisher for the instance, bootstrapping one on demand.
+    """Construct (or return the running) publisher for the instance.
 
-    Lazy registration: if no publisher is running for this instance, we
-    check whether (a) a ``live_state.json`` envelope exists on disk —
-    i.e. the instance is currently active — and (b) the IBKR client is
-    connected — i.e. the publisher would have something to consume.
-    When both are true, we construct and register a publisher. When
-    either is false, the endpoint surfaces a 404 / 503.
+    Slice 3: extracted from ``_ensure_publisher`` so the deploy-time
+    start hook in ``live_instances.start_run`` can call it after a
+    successful daemon start, NOT just on the cockpit's first
+    broker-activity hit. Raises ``PublisherBootstrapError`` (with a
+    short ``code``) when the publisher cannot be built so the caller
+    can map to either an HTTP status (cockpit lazy path) or a structured
+    log entry (deploy-time best-effort path).
 
-    This pattern keeps the deploy-lifecycle changes out of slice 1 —
-    auto-start on deploy lands in slice 3 alongside the reconnect
-    protocol (when the publisher lifecycle is touched anyway).
+    Preconditions checked in order: the instance's ``live_state.json``
+    sidecar exists and is readable; the IBKR broker singleton is
+    installed and connected; the instance's latest run dir resolves
+    locally. Each missing precondition emits a distinct ``code``.
+
+    The publisher carries both the live event source (the existing
+    ``stream_order_events`` async iterator) AND the reconnect-recovery
+    source (the new ``executions_for_reconnect_recovery`` adapter, which
+    wraps ``IB.reqExecutionsAsync`` into ``IbkrOrderEvent``s the
+    publisher's sweep authors with ``reconnect_recovery_active=True``).
     """
     registry = get_publisher_registry()
     existing = registry.get(strategy_instance_id)
@@ -81,44 +108,41 @@ async def _ensure_publisher(
     artifacts_root = FsPath(settings.live_runs_root).parent
     envelope_path = stable_live_state_path(artifacts_root, strategy_instance_id)
     if not envelope_path.is_file():
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"no live envelope for strategy_instance_id="
-            f"{strategy_instance_id!r}",
+        raise PublisherBootstrapError(
+            "no_envelope",
+            f"no live envelope for strategy_instance_id={strategy_instance_id!r}",
         )
     try:
         envelope = LiveStateSidecarRepo(envelope_path).read()
     except LiveStateSidecarCorruptError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"live envelope is corrupt: {exc}",
+        raise PublisherBootstrapError(
+            "envelope_corrupt", f"live envelope is corrupt: {exc}"
         ) from exc
     if envelope is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
+        raise PublisherBootstrapError(
+            "no_envelope",
             f"live envelope empty for {strategy_instance_id!r}",
         )
 
     try:
         client = get_client()
-        if not client.is_connected():
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "IBKR broker disconnected; cannot start broker-activity publisher.",
-            )
-    except RuntimeError as exc:  # client never installed (broker disabled)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
+    except Exception as exc:  # NotConnectedError when singleton missing
+        raise PublisherBootstrapError(
+            "broker_disabled",
             "IBKR broker disabled; broker-activity surface unavailable.",
         ) from exc
+    if not client.is_connected():
+        raise PublisherBootstrapError(
+            "broker_disconnected",
+            "IBKR broker disconnected; cannot start broker-activity publisher.",
+        )
 
     from app.engine.live.run import _latest_run_dir_for_instance
 
     run_dir = _latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
     if run_dir is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"no run directory for {strategy_instance_id!r}",
+        raise PublisherBootstrapError(
+            "no_run_dir", f"no run directory for {strategy_instance_id!r}"
         )
 
     timing_policy_dict = (
@@ -139,10 +163,45 @@ async def _ensure_publisher(
         artifacts_root=artifacts_root,
         timing_policy=timing_policy,
         event_source_factory=partial(stream_order_events, client),
+        recovery_source_factory=partial(executions_for_reconnect_recovery, client),
     )
     return await registry.register(
         publisher, strategy_instance_id=strategy_instance_id
     )
+
+
+# Map bootstrap error codes to HTTP status codes for the cockpit lazy
+# path. ``broker_disconnected`` and ``broker_disabled`` are both 503;
+# ``no_envelope`` / ``no_run_dir`` are 404; ``envelope_corrupt`` is 503.
+_BOOTSTRAP_ERROR_STATUS: dict[str, int] = {
+    "no_envelope": status.HTTP_404_NOT_FOUND,
+    "envelope_corrupt": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "broker_disconnected": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "broker_disabled": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "no_run_dir": status.HTTP_404_NOT_FOUND,
+}
+
+
+async def _ensure_publisher(
+    strategy_instance_id: str,
+) -> BrokerActivityPublisher:
+    """Lazy-bootstrap path for cockpit-first scenarios.
+
+    Slice 3: the hot path is now "registry already has a running
+    publisher; return it" because ``live_instances.start_run`` registers
+    the publisher at deploy time. This fallback only fires when the
+    cockpit hits the broker-activity surface before any start_run hook
+    has run for the instance (e.g. an operator opens the Activity tab
+    on a still-bootstrapping run, or the deploy-time hook saw a
+    transient broker disconnect and bailed out).
+    """
+    try:
+        return await bootstrap_publisher_for_instance(strategy_instance_id)
+    except PublisherBootstrapError as exc:
+        status_code = _BOOTSTRAP_ERROR_STATUS.get(
+            exc.code, status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+        raise HTTPException(status_code, exc.detail) from exc
 
 
 @router.get(
@@ -259,4 +318,8 @@ async def broker_activity_stream(
     )
 
 
-__all__ = ["router"]
+__all__ = [
+    "PublisherBootstrapError",
+    "bootstrap_publisher_for_instance",
+    "router",
+]

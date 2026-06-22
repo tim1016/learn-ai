@@ -105,8 +105,9 @@ The Activity tab's existing components are replaced, not supplemented:
 ### 8. What this does NOT cover
 
 - **Account-level NLV / cash reconciliation across the singleton account.** Out of scope for v1. The data plane's IBKR connection is shared across multiple deployed instances; per-account ledger snapshots cannot be attributed to a single instance's trades. Per-instance reconciliation via `order_ref` namespace is the only authoritative join.
-- **Reconnect-recovery sweep semantics.** Scoped to ADR 0011 amendment landing with the slice 3 implementation. Until then, the publisher pauses authoring during disconnects; rows are backfilled on reconnect by replay of the broker's execution stream.
 - **CP Web API mechanics** (REST `/portfolio/.../ledger`, WebSocket topic syntax, `cOID`, `/tickle`, 10-req/sec global limit). The repo's broker layer uses TWS API via `ib_async`; CP Web API specifics from the design research are explicitly NOT carried into the implementation or the repo's reference docs.
+
+**Resolved in slice 3 (2026-06-22):** Reconnect-recovery sweep semantics shipped with the ADR 0011 amendment — `BrokerActivityPublisher.sweep_reconnect_recovery` runs on every successful reconnect via the `AutoReconnectMonitor.recovery_callbacks` chain, fetches the day's executions via `IB.reqExecutionsAsync`, dedupes by `exec_id`, and authors any unseen executions with `reconnect_recovery_active=True` so the `reconnect_recovery` template fires. `place_paper_order` refuses new submissions while any sweep is active.
 
 ## Consequences
 
