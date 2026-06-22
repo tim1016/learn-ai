@@ -185,24 +185,59 @@ operator_surface: {
    cockpit writes durable intent (Resume / Pause are always available
    and gate the next host start) and actuates on bound runs (when
    `actions.<verb>.effect === 'LIVE_ACTUATION'`).  It does NOT expose
-   Start / Stop / process-control affordances — the deleted
-   `<app-broker-start-stop-card>` is the cautionary tale.  When the
+   Start / Stop / process-control affordances — the legacy
+   `<app-broker-start-stop-card>` is the cautionary tale (PRD
+   #607 Slice 8 superseded it with `<app-host-process-notice>`;
+   the orphaned directory was deleted by the 2026-06-22 audit
+   P3-007 after the route-table / import-graph proof of
+   non-reference).  When the
    daemon is idle, the cockpit surfaces the server-authored
    `host_process.notice` and (only if server-authored) a copyable
    safe command.  REDEPLOY is a separate surface for creating a new
    run configuration; it is NOT a restart path.
 
-### Reason-code vocabulary (initial set)
+### Reason-code vocabulary (closed, updated 2026-06-22)
 
-`NO_LIVE_BINDING`, `SAFETY_BLOCK_HALT`, `RECONCILE_NOT_WIRED`,
-`NO_OWNED_POSITIONS`, `ALREADY_POISONED`.  Deliberately removed:
-`BUSY_VERB_IN_FLIGHT`, `ALREADY_RUNNING`, `NOT_RUNNING`.
+The full closed set, source of truth on the server:
 
-Adding a new code is a typed addition to the closed enum on both ends
-+ an entry in
-`Frontend/src/app/components/broker/broker-instances/action-reason-codes.ts`.
-Unknown codes fall back to rendering the raw token so a gap is
-visible rather than silent.
+- `PythonDataService/app/services/operator_capability.py` →
+  `REASON_CODES` — action-conflict-matrix codes
+  (`MUTATION_UNRESOLVED_START/STOP/FLATTEN/RESUME`), the durable
+  mutation transport code (`OUTCOME_UNKNOWN`), and the live-binding
+  / live-effect codes (`NO_LIVE_BINDING`, `NO_OWNED_POSITIONS`,
+  `ALREADY_POISONED`, `ALREADY_STOPPED`, `POSTURE_DEMOTED`).
+- `PythonDataService/app/services/resume_guard_state.py` →
+  `RESUME_REASON_CODES` — Resume / Pause / Stop intent-state codes
+  (`ALREADY_RUNNING`, `ALREADY_PAUSED`, `STOPPED_REQUIRES_REDEPLOY`,
+  `REDEPLOY_REQUIRED`), the broker safety identity gate
+  (`BROKER_SAFETY_UNSAFE`, `BROKER_SAFETY_UNKNOWN`), the
+  submission-capability gate
+  (`SUBMISSION_CAPABILITY_BLOCKED`, `SUBMISSION_CAPABILITY_UNKNOWN`),
+  the reconciliation-receipt gate (`RECONCILIATION_*`), and the
+  uncertain-intent gate
+  (`UNRESOLVED_UNCERTAIN_INTENT`, `UNCERTAIN_INTENT_STATE_UNKNOWN`).
+
+Deliberately removed (pre-PRD #616 vocabulary): `SAFETY_BLOCK_HALT`,
+`RECONCILE_NOT_WIRED`, `BUSY_VERB_IN_FLIGHT`, `NOT_RUNNING`.
+
+**Frontend copy map.** The cockpit's operator-language lookup lives
+at
+`Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.ts`
+(landed by the 2026-06-22 audit's P2-002 fix). Adding a new code is
+a typed addition to the closed Python enum + an entry in the
+TypeScript `OperatorReasonCode` union + an operator-language string
+in `OPERATOR_REASON_COPY`. The Vitest parity test
+`disabled-reason-copy.spec.ts` fails on any drift between the
+cockpit map and the Python source-of-truth set. Unknown codes are
+rendered as ``Unrecognized reason code: <code>`` so a gap is
+visibly diagnosable rather than silent — the operator can still
+read the raw token and search the runbook.
+
+Two Frontend-only codes live alongside the server set and are
+clearly prefixed `LOCAL_*` so they cannot pretend to be server
+authority: `LOCAL_TRANSPORT_STALE` (control-plane transport is not
+CONNECTED — the cockpit refuses local dispatch fail-closed) and
+`LOCAL_REQUEST_IN_FLIGHT` (a previous request is still pending).
 
 ### Open shortcomings carried forward
 
@@ -221,7 +256,7 @@ visible rather than silent.
 
 After merging PRs 4 – 12, walk the page top-to-bottom on a paper bot:
 
-1. PAPER pill visible in the sticky bar
+1. PAPER chip visible in the page utility row AND `SAFETY · PAPER_ONLY` indicator visible in the identity strip (both consume the same server-authored `operator_surface.broker.safety_verdict`; mismatch is structurally blocked by the 2026-06-22 audit's P1-001 fix)
 2. Bot identity + state pill + readiness pill visible
 3. Posture chip on Current Risk matches expected positions (Flat for a brand-new bot)
 4. Last Session shows thin stub on a clean prior exit, full card with `Re-deploy (fresh run_id)` on a dirty one
@@ -234,15 +269,33 @@ If any of those land wrong, the corresponding PR in the series is the place to l
 
 ## PRD #619-D mutation uncertainty + recovery (2026-06-22)
 
+### Reconcile procedure (no cockpit button yet)
+
+**There is no Reconcile button in the cockpit-v2 UI today** — the visible `RECONCILE · NOT WIRED` hazard banner is the honest statement of that gap. The 2026-06-22 audit found the cockpit's earlier tooltip copy directed operators to "Use Reconcile on the Audit tab," which would have sent them looking for a control that does not exist. The corrected tooltip points to this runbook section.
+
+The reconcile endpoint is server-authored (`POST /api/live-instances/{strategy_instance_id}/reconcile-mutation`, defined in `PythonDataService/app/routers/live_instances.py`); the cockpit just hasn't wired a button. Until it does, the operator procedure is:
+
+```bash
+# Inspect the most recent mutation_attempt for the instance
+curl -s http://localhost:8000/api/live-instances/<id>/status | jq '.operator_surface.actions'
+
+# Call the Reconcile endpoint to classify the prior attempt
+curl -s -X POST http://localhost:8000/api/live-instances/<id>/reconcile-mutation | jq
+```
+
+The response carries the `MutationAttempt.dispatch_state` advanced to one of the four terminals below (`EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE`). When the attempt becomes `EFFECT_CONFIRMED`, the action-conflict matrix disengages and the cockpit's Resume / Stop / Flatten button re-enables on the next status poll.
+
+Wiring this into the cockpit UI is a follow-up. The action-conflict-matrix tooltips were corrected in this audit; the button itself is the deferred work.
+
 ### Incident vocabulary
 
-This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The cockpit renders the codes verbatim; the runbook entry tells the operator what each code means and what to do about it.
+This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The cockpit renders operator-language strings via the shared `disabled-reason-copy.ts` map (2026-06-22 audit P2-002); the runbook entry below carries the deep procedural detail.
 
 #### `OUTCOME_UNKNOWN` (PRD #619-C5, durable in 619-D1)
 
 **What it means.** A mutation request (Deploy / Start / Stop / Flatten / Resume / Pause) was sent to the host daemon, but the response did not arrive intact. The daemon may or may not have observed the request.
 
-**What to do.** Do not blindly retry. Click Reconcile on the instance. The cockpit will inspect daemon state, the child's `engine_runtime.json`, and broker positions, then advance the attempt to one of:
+**What to do.** Do not blindly retry. Reconcile the attempt (see "Reconcile procedure" above). The endpoint inspects daemon state, the child's `engine_runtime.json`, and broker positions, then advances the attempt to one of:
 
 - `EFFECT_CONFIRMED` — the intended effect is observable; the mutation did land.
 - `EFFECT_NOT_OBSERVED` — no evidence of the effect; the mutation likely did not land, but Reconcile is **not** permission to retry — read the next-action guidance below.
@@ -255,7 +308,7 @@ This section pins the operator-facing copy for every new reason / state code int
 
 `MUTATION_UNRESOLVED_START` is reserved in the vocabulary but does not block any operator-surface action in v1 — Start mutations are gated at the router level (`start_run` / Redeploy).
 
-**What to do.** Click Reconcile. The matrix disengages when the prior attempt reaches `EFFECT_CONFIRMED`. If Reconcile classifies as `EFFECT_NOT_OBSERVED`, you must decide whether to re-issue the mutation; the system does **not** auto-retry, and the matrix stays engaged until the next action explicitly advances state.
+**What to do.** Reconcile the attempt (see "Reconcile procedure" above). The matrix disengages when the prior attempt reaches `EFFECT_CONFIRMED`. If Reconcile classifies as `EFFECT_NOT_OBSERVED`, you must decide whether to re-issue the mutation; the system does **not** auto-retry, and the matrix stays engaged until the next action explicitly advances state.
 
 #### `EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE` (PRD #619-D3)
 

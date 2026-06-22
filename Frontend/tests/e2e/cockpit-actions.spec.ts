@@ -42,7 +42,12 @@ test.describe('cockpit actions', () => {
     await expect(page.getByTestId('action-pause')).toBeDisabled();
   });
 
-  test('PAUSED + UNSAFE broker: Resume disabled with BROKER_SAFETY_UNSAFE', async ({ page }) => {
+  test('PAUSED + UNSAFE broker: Resume disabled with operator-language tooltip (not raw code)', async ({ page }) => {
+    // 2026-06-22 audit P2-002 — the tooltip routes the server-authored
+    // ``BROKER_SAFETY_UNSAFE`` code through the shared operator-copy
+    // map, so the operator no longer sees the raw enum. The button
+    // still carries the underlying code on ``data-disabled-reason-code``
+    // for diagnostics.
     const status = buildScenarioStatus({
       strategyInstanceId: SID,
       intent: 'PAUSED',
@@ -55,8 +60,13 @@ test.describe('cockpit actions', () => {
       account: buildAccountSummary({}),
     });
     await page.goto(`/broker/instances/${SID}`);
-    await expect(page.getByTestId('action-resume')).toBeDisabled();
-    await expect(page.getByTestId('action-resume')).toHaveAttribute('title', 'BROKER_SAFETY_UNSAFE');
+    const resume = page.getByTestId('action-resume');
+    await expect(resume).toBeDisabled();
+    const title = await resume.getAttribute('title');
+    expect(title).not.toBe('BROKER_SAFETY_UNSAFE');
+    expect(title).toContain('UNSAFE');
+    expect(title?.toLowerCase()).toContain('paper-only');
+    await expect(resume).toHaveAttribute('data-disabled-reason-code', 'BROKER_SAFETY_UNSAFE');
     await expect(page.getByTestId('indicator-safety')).toContainText('UNSAFE');
   });
 
@@ -91,7 +101,9 @@ test.describe('cockpit actions', () => {
     await expect(page.getByTestId('action-flatten-and-pause')).toBeEnabled();
   });
 
-  test('Flatten without owned positions: disabled with NO_OWNED_POSITIONS', async ({ page }) => {
+  test('Flatten without owned positions: disabled with operator-language tooltip (not raw code)', async ({ page }) => {
+    // 2026-06-22 audit P2-002 — operator copy, raw code preserved
+    // on ``data-disabled-reason-code`` for diagnostics.
     const status = buildScenarioStatus({ strategyInstanceId: SID, processState: 'running' });
     await installRoutes(page, {
       summaries: [buildSummary({ strategyInstanceId: SID })],
@@ -99,8 +111,13 @@ test.describe('cockpit actions', () => {
       account: buildAccountSummary({}),
     });
     await page.goto(`/broker/instances/${SID}`);
-    await expect(page.getByTestId('action-flatten-and-pause')).toBeDisabled();
-    await expect(page.getByTestId('action-flatten-and-pause')).toHaveAttribute('title', 'NO_OWNED_POSITIONS');
+    const flatten = page.getByTestId('action-flatten-and-pause');
+    await expect(flatten).toBeDisabled();
+    const title = await flatten.getAttribute('title');
+    expect(title).not.toBe('NO_OWNED_POSITIONS');
+    expect(title?.toLowerCase()).toContain('flatten');
+    expect(title?.toLowerCase()).toContain('positions');
+    await expect(flatten).toHaveAttribute('data-disabled-reason-code', 'NO_OWNED_POSITIONS');
   });
 
   test('Mark Poisoned only renders on the Audit tab (typed-HALT)', async ({ page }) => {

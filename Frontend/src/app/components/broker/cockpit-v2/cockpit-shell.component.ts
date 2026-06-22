@@ -36,6 +36,7 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 
 import { projectAccountAttention } from './lib/account-summary-attention';
 import { ClockSync } from './lib/clock-sync';
+import { actionTooltip, disabledReasonCopy } from './lib/disabled-reason-copy';
 import {
   DEFAULT_INSTANCE_TAB_STATE,
   type InnerTab,
@@ -173,6 +174,42 @@ export class CockpitShellComponent {
   readonly isPoisoned = computed(() => {
     const s = this.status();
     return !!(s && s.last_exit && s.last_exit.halt_trigger);
+  });
+
+  /** ADR-0011 + ADR-0013 §1 — environment chip rendering for the page
+   *  utility row.  Drives directly from the server-authored
+   *  ``operator_surface.broker.safety_verdict`` so the chip cannot
+   *  claim PAPER when the verdict is UNSAFE / UNKNOWN.  Returns
+   *  ``null`` until a status response is available, so the cockpit
+   *  makes no claim before the first refresh.
+   *
+   *  ``label`` is the rendered short text; ``value`` is the closed
+   *  enum value (for CSS hooks + ``data-value`` testing); ``tooltip``
+   *  is the operator-language hover copy.
+   */
+  readonly envChip = computed<{
+    value: 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
+    label: 'PAPER' | 'UNSAFE' | 'UNKNOWN';
+    tooltip: string;
+  } | null>(() => {
+    const verdict = this.status()?.operator_surface.broker.safety_verdict ?? null;
+    if (verdict === null) return null;
+    switch (verdict) {
+      case 'PAPER_ONLY':
+        return { value: 'PAPER_ONLY', label: 'PAPER', tooltip: 'Broker safety verdict: paper-only.' };
+      case 'UNSAFE':
+        return {
+          value: 'UNSAFE',
+          label: 'UNSAFE',
+          tooltip: 'Broker safety verdict is UNSAFE — non-paper signals detected. Resume is disabled by the server.',
+        };
+      case 'UNKNOWN':
+        return {
+          value: 'UNKNOWN',
+          label: 'UNKNOWN',
+          tooltip: 'Broker safety verdict is UNKNOWN — not enough signal to confirm paper. Resume is disabled by the server.',
+        };
+    }
   });
 
   /** PRD #619-C4 — host-daemon control-plane banner.
@@ -366,11 +403,23 @@ export class CockpitShellComponent {
 
   // ── operator dispatch (operator_surface.actions) ──────────────────────
 
-  /** PRD #619-C4 — local fail-closed guard. Returns true when the click
-   *  must NOT proceed because the data plane reports the host daemon as
-   *  not CONNECTED. Both the button disable predicate (visual) and the
-   *  dispatch methods (defense) consult this, so a programmatic call
-   *  bypassing the button still no-ops. */
+  /** PRD #619-C4 — local fail-closed guard for actions that require
+   *  trustworthy live actuation (Resume + Flatten-and-pause).
+   *
+   *  ADR-0004 amendment D (PRD #619-B7) makes action policy asymmetric
+   *  by safety effect:
+   *  - Resume + Flatten-and-pause are gated by transport-stale +
+   *    posture-demoted because they require current runtime evidence.
+   *  - Durable Pause + Stop remain available during the same
+   *    conditions — removing the operator's fail-safe intent controls
+   *    during a control-plane / runtime incident would be *less*
+   *    safe.
+   *  - Mark-poisoned remains available as an incident-recovery
+   *    action.
+   *
+   *  Both the button [disabled] binding (visual) and the dispatch
+   *  methods (defense) consult this, so a programmatic call bypassing
+   *  the button still no-ops. */
   private _refuseOnStaleTransport(operationLabel: string): boolean {
     if (!this.localTransportStale()) return false;
     this.mutationError.set(
@@ -386,7 +435,8 @@ export class CockpitShellComponent {
   }
 
   async dispatchPause(): Promise<void> {
-    if (this._refuseOnStaleTransport('Pause')) return;
+    // ADR-0004 amendment D — durable Pause remains available during
+    // control-plane / runtime incidents (fail-safe intent control).
     await this._setIntent('pause', 'Pause');
   }
 
@@ -395,7 +445,8 @@ export class CockpitShellComponent {
     // PRD #619-A §A6 — ``stop`` is required on ``OperatorSurfaceActions``;
     // no optional-chaining fallback needed.
     if (!surface?.actions.stop.enabled) return;
-    if (this._refuseOnStaleTransport('Stop')) return;
+    // ADR-0004 amendment D — durable Stop remains available during
+    // control-plane / runtime incidents (fail-safe intent control).
     const confirmed = window.confirm(
       'Stop instance?\n\n' +
         '• Durable intent becomes STOPPED.\n' +
@@ -433,7 +484,9 @@ export class CockpitShellComponent {
 
   openTypedHalt(): void {
     if (!this.status()?.operator_surface.actions.mark_poisoned.enabled) return;
-    if (this._refuseOnStaleTransport('Mark poisoned')) return;
+    // ADR-0004 amendment D — Mark-poisoned remains available as an
+    // incident-recovery action even during transport-stale / posture-
+    // demoted conditions.
     this.typedHaltOpen.set(true);
   }
 
@@ -496,6 +549,48 @@ export class CockpitShellComponent {
 
   intentLabel(value: string | null | undefined): string {
     return value ?? 'UNKNOWN';
+  }
+
+  /** Compose the title tooltip for an action button using the shared
+   *  copy map (ADR-0013 §4 — presentation copy lookup keyed on a
+   *  closed server-authored enum). The cockpit must never render the
+   *  raw reason code to the operator — that was the F-002 audit
+   *  finding.
+   *
+   *  Per ADR-0004 amendment D, only Resume and Flatten-and-pause are
+   *  gated by local transport-stale; durable Pause / Stop / Mark
+   *  poisoned must remain available during control-plane incidents so
+   *  the operator's fail-safe intent controls are not removed. */
+  actionButtonTooltip(
+    name: 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned',
+    fallbackLabel: string,
+  ): string {
+    const cap = this.status()?.operator_surface.actions?.[name] ?? null;
+    const transportGated = name === 'resume' || name === 'flatten_and_pause';
+    return actionTooltip({
+      enabled: cap?.enabled ?? false,
+      serverReasonCode: cap?.disabled_reason_code ?? null,
+      localTransportStale: transportGated && this.localTransportStale(),
+      busy: this.busyAction() !== null,
+      fallbackLabel,
+    });
+  }
+
+  /** ADR-0004 amendment D — only Resume + Flatten-and-pause are gated
+   *  by local transport-stale. Used by the action-button [disabled]
+   *  bindings. */
+  isLocalTransportGatedFor(
+    name: 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned',
+  ): boolean {
+    if (name !== 'resume' && name !== 'flatten_and_pause') return false;
+    return this.localTransportStale();
+  }
+
+  /** Template-callable view of the shared copy map (F-R5: the
+   *  expanded resume-reasons list renders operator language for every
+   *  code, not the raw token). */
+  disabledReasonCopy(code: string | null | undefined): string | null {
+    return disabledReasonCopy(code);
   }
 
   failingReadinessGates(): OperatorGate[] {

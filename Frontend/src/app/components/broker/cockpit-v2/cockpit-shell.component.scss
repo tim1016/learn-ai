@@ -280,7 +280,15 @@
   }
 }
 
-.visually-hidden {
+.visually-hidden,
+.action-help {
+  // .action-help paragraphs back the aria-describedby relationship
+  // on disabled action buttons (CR-CX-2). They MUST not render in
+  // the toolbar flex layout — disabled-tooltip copy is several
+  // sentences long and would push the overflow menu offscreen.
+  // Screen readers still announce them through the aria
+  // relationship while sighted users continue to read the title
+  // attribute on hover.
   position: absolute;
   width: 1px;
   height: 1px;

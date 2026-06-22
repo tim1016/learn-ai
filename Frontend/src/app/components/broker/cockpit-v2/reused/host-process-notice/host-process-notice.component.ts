@@ -17,8 +17,10 @@ const HEADING_BY_STATE: Record<HostProcessState, string> = {
 /**
  * Server-authored host-process notice (PRD #607 / Slice 8 / #615).
  *
- * Renders the cockpit-side surface that replaces the deleted
- * ``<app-broker-start-stop-card>`` — the host runner is operator-owned
+ * Renders the cockpit-side surface that replaced the legacy
+ * ``<app-broker-start-stop-card>`` (removed in the 2026-06-22 cockpit
+ * audit; the component had no live references and was already
+ * documented as superseded). The host runner is operator-owned
  * (ADR-0003 / ADR-0007) so the cockpit cannot start / stop it.  When
  * ``host_process.state !== 'RUNNING'`` the notice surfaces the
  * server-authored ``notice`` line verbatim plus (only when present) a

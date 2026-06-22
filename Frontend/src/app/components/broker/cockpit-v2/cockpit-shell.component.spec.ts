@@ -160,6 +160,57 @@ describe('CockpitShellComponent', () => {
     vi.useRealTimers();
   });
 
+  // ── ADR-0011 / ADR-0013 §1 — env chip honesty (P1-001) ──────────────
+
+  async function renderShellWithSafetyVerdict(
+    verdict: 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN',
+  ) {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        broker: { ...status.operator_surface.broker, safety_verdict: verdict },
+      },
+    });
+    return renderShell(stub);
+  }
+
+  it.each([
+    ['PAPER_ONLY', 'PAPER'] as const,
+    ['UNSAFE', 'UNSAFE'] as const,
+    ['UNKNOWN', 'UNKNOWN'] as const,
+  ])(
+    'env chip renders %s verdict as label "%s" (not synthesized from status truthiness)',
+    async (verdict, expectedLabel) => {
+      const fixture = await renderShellWithSafetyVerdict(verdict);
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const chip = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="env-chip"]',
+      );
+      expect(chip).toBeTruthy();
+      expect(chip?.textContent?.trim()).toBe(expectedLabel);
+      expect(chip?.getAttribute('data-value')).toBe(verdict);
+    },
+  );
+
+  it('env chip is absent before the first status response (no claim is honest)', async () => {
+    const stub = makeStub();
+    // Make the first /status fetch hang so status() stays null.
+    stub.getInstanceStatus = vi.fn().mockReturnValue(new Promise(() => undefined));
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const chip = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="env-chip"]',
+    );
+    expect(chip).toBeNull();
+  });
+
   it('renders five independent indicators on the identity strip', async () => {
     const fixture = await renderShell(makeStub());
     await fixture.whenStable();
@@ -176,7 +227,10 @@ describe('CockpitShellComponent', () => {
     }
   });
 
-  it('disables Resume with the guarded reason on the title attribute', async () => {
+  it('disables Resume and renders operator-language copy (not the raw reason code) on the title attribute', async () => {
+    // P1/P2 audit 2026-06-22 — was: title === 'BROKER_SAFETY_UNSAFE'
+    // (the operator saw the raw enum). Now: title === operator copy
+    // resolved through the shared disabled-reason-copy map.
     const fixture = await renderShell(makeStub());
     await fixture.whenStable();
     fixture.detectChanges();
@@ -185,7 +239,13 @@ describe('CockpitShellComponent', () => {
     ) as HTMLButtonElement | null;
     expect(btn).toBeTruthy();
     expect(btn?.disabled).toBe(true);
-    expect(btn?.getAttribute('title')).toBe('BROKER_SAFETY_UNSAFE');
+    const title = btn?.getAttribute('title') ?? '';
+    // The raw code must NOT be the title (it was, pre-fix).
+    expect(title).not.toBe('BROKER_SAFETY_UNSAFE');
+    // The title must be operator-language and mention the UNSAFE
+    // verdict + the paper-only restoration path.
+    expect(title).toContain('UNSAFE');
+    expect(title).toContain('paper-only');
   });
 
   it('renders runtime demotion reason codes prominently', async () => {
@@ -385,7 +445,13 @@ describe('CockpitShellComponent', () => {
   // into the button disable predicates AND the dispatch methods so the
   // operator never fires a mutation into a known-broken channel.
 
-  it('disables Resume / Pause / Stop / Flatten when control_plane is RETRYING', async () => {
+  // 2026-06-22 audit F-R2: ADR-0004 amendment D — only Resume and
+  // Flatten-and-pause are gated by control-plane/transport demotion.
+  // Durable Pause and Stop must remain available so the operator's
+  // fail-safe intent controls are not removed at the moment they are
+  // most needed.
+
+  it('disables Resume + Flatten when control_plane is RETRYING (ADR-0004 D asymmetry)', async () => {
     const fixture = await renderWithControlPlane(
       makeControlPlane({
         state: 'RETRYING',
@@ -398,24 +464,43 @@ describe('CockpitShellComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    for (const id of [
-      'action-resume',
-      'action-pause',
-      'action-flatten-and-pause',
-      'action-stop',
-    ]) {
+    for (const id of ['action-resume', 'action-flatten-and-pause']) {
       const btn = el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
       expect(btn, `button ${id} should exist`).toBeTruthy();
-      expect(btn?.disabled, `button ${id} should be disabled`).toBe(true);
-      expect(btn?.getAttribute('title')).toBe('TRANSPORT_STALE');
+      expect(btn?.disabled, `button ${id} should be disabled by transport gate`).toBe(true);
+      const title = btn?.getAttribute('title') ?? '';
+      expect(title).not.toBe('TRANSPORT_STALE');
+      expect(title.toLowerCase()).toContain('transport');
+      expect(title.toLowerCase()).toContain('connected');
     }
   });
 
-  it('dispatchPause refuses to fire when transport is stale and surfaces a mutation error', async () => {
+  it('leaves Pause + Stop enabled when control_plane is RETRYING (ADR-0004 D fail-safe)', async () => {
+    const fixture = await renderWithControlPlane(
+      makeControlPlane({
+        state: 'RETRYING',
+        attempt: 1,
+        notice: 'Daemon retrying.',
+        runbook_slug: 'daemon-retrying',
+      }),
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    for (const id of ['action-pause', 'action-stop']) {
+      const btn = el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+      expect(btn, `button ${id} should exist`).toBeTruthy();
+      expect(
+        btn?.disabled,
+        `button ${id} must NOT be disabled by transport gate (ADR-0004 D fail-safe)`,
+      ).toBe(false);
+    }
+  });
+
+  it('dispatchPause fires through transport-stale (durable Pause is fail-safe)', async () => {
     const stub = makeStub();
     const status = makeStatus();
-    // Pause is normally enabled; the transport-stale gate is the only
-    // thing that should refuse it.
     status.operator_surface.actions.pause.enabled = true;
     stub.getInstanceStatus = vi.fn().mockResolvedValue({
       ...status,
@@ -431,9 +516,9 @@ describe('CockpitShellComponent', () => {
 
     await fixture.componentInstance.dispatchPause();
 
-    // The mutation client must NOT have been invoked.
-    expect(stub.setInstanceDesiredState).not.toHaveBeenCalled();
-    // And the operator must see a transport-stale message.
-    expect(fixture.componentInstance.mutationError()).toContain('host daemon transport');
+    // ADR-0004 D — durable Pause MUST fire through. Removing the
+    // operator's fail-safe intent controls during a control-plane
+    // incident would be less safe.
+    expect(stub.setInstanceDesiredState).toHaveBeenCalledOnce();
   });
 });

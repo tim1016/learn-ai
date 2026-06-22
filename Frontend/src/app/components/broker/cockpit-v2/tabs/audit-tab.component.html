@@ -91,13 +91,13 @@
       class="poison-button"
       data-testid="audit-mark-poisoned-trigger"
       [disabled]="!mp.enabled || busyAction() !== null"
-      [attr.title]="mp.disabled_reason_code ?? 'Mark this run poisoned'"
+      [attr.title]="markPoisonedTooltip()"
       (click)="requestMarkPoisoned()"
     >
       Mark POISONED (type HALT)
     </button>
-    @if (!mp.enabled && mp.disabled_reason_code) {
-      <p class="disabled-reason">{{ mp.disabled_reason_code }}</p>
+    @if (markPoisonedDisabledLine(); as reason) {
+      <p class="disabled-reason" data-testid="audit-mark-poisoned-reason">{{ reason }}</p>
     }
   </section>
 </div>
