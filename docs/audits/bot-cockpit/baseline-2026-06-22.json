@@ -1,0 +1,121 @@
+{
+  "captured_at_iso": "2026-06-22T07:20:00-05:00",
+  "starting_commit": "77bf656371c0c1068cbe13be4c1ac5d4f49d55dd",
+  "starting_branch_from": "master",
+  "lint": {
+    "ruff": {
+      "command": "podman exec polygon-data-service ruff check /app/app/ /app/tests/",
+      "exit_code": 1,
+      "errors": 1,
+      "failures": [
+        "tests/scripts/test_regenerate_cross_engine_study.py:8 I001 Import block is un-sorted or un-formatted"
+      ]
+    },
+    "eslint": {
+      "command": "podman exec my-frontend npx eslint /app/src/ --max-warnings 0",
+      "exit_code": 1,
+      "warnings": 175,
+      "errors": 0,
+      "note": "175 baseline warnings under --max-warnings 0; counted as failures for gating. Most are no-explicit-any, no-non-null-assertion, no-unused-vars in *.spec.ts and testing/mocks. None in cockpit-v2."
+    },
+    "dotnet_format": {
+      "command": "podman exec my-backend dotnet format /src/Backend.csproj --verify-no-changes",
+      "exit_code": 0,
+      "errors": 0,
+      "note": "Ran on Backend.csproj only (sln not mounted into container). One warning about workspace load — not a formatting issue."
+    }
+  },
+  "tests": {
+    "pytest": {
+      "command": "podman exec polygon-data-service python -m pytest /app/tests --ignore=/app/tests/fixtures/test_golden_manifest.py --ignore=/app/tests/scripts/test_regenerate_cross_engine_study.py -k 'not slow'",
+      "exit_code": 1,
+      "failed": 33,
+      "passed": 5296,
+      "skipped": 63,
+      "deselected": 23,
+      "xpassed": 5,
+      "duration_seconds": 160.18,
+      "collection_errors_ignored": [
+        "tests/fixtures/test_golden_manifest.py (ModuleNotFoundError: jsonschema)",
+        "tests/scripts/test_regenerate_cross_engine_study.py (ModuleNotFoundError: scripts)"
+      ],
+      "failed_tests": [
+        "tests/engine/live/test_deployment_validation_deploy_artifacts.py::test_deployment_validation_spec_fixture_loads",
+        "tests/engine/live/test_deployment_validation_deploy_artifacts.py::test_deployment_validation_qc_shadow_copy_is_parseable",
+        "tests/integration/data_lake/test_schema_drift.py::test_schema_matches_expectation[DataLakeArtifacts]",
+        "tests/integration/data_lake/test_schema_drift.py::test_schema_matches_expectation[DataLakeRuns]",
+        "tests/integration/reconciliation/test_spy_vwap_reversion_qc.py::test_spy_vwap_reversion_decisions_match_quantconnect",
+        "tests/integration/reconciliation/test_spy_vwap_reversion_qc.py::test_fill_price_drift_within_documented_data_source_floor",
+        "tests/integration/test_engine_persistence_quantity_pnl.py::test_save_study_payload_includes_quantity_and_dollar_pnl",
+        "tests/integration/test_engine_persistence_quantity_pnl.py::test_save_study_payload_with_zero_commission",
+        "tests/integration/test_lean_engine_polygon_parity.py::test_lean_and_engine_agree_on_polygon_fixture",
+        "tests/lean_sidecar/parity_matrix/test_regenerate_manifest.py::test_regen_manifest_broker_block_pins_interactive_brokers",
+        "tests/lean_sidecar/test_hardening_profile.py::TestBuildCommandWithProfile::test_minimal_profile_yields_same_argv_as_empty_flags",
+        "tests/lean_sidecar/test_hardening_profile.py::TestBuildCommandWithProfile::test_with_tmpfs_profile_yields_same_argv_as_explicit_flags",
+        "tests/lean_sidecar/test_hardening_profile.py::TestBuildCommandWithProfile::test_profile_without_explicit_flags_argument",
+        "tests/lean_sidecar/test_hardening_profile.py::TestBuildCommandWithProfile::test_applehv_dotnet_fix_profile_places_env_after_tmpfs",
+        "tests/lean_sidecar/test_launcher_client.py::TestPostLaunch::test_success_round_trips_response",
+        "tests/lean_sidecar/test_launcher_client.py::TestPostLaunch::test_400_envelope_becomes_typed_exception",
+        "tests/lean_sidecar/test_launcher_client.py::TestPostLaunch::test_500_becomes_protocol_error",
+        "tests/lean_sidecar/test_launcher_client.py::TestPostLaunch::test_connection_failure_becomes_unreachable",
+        "tests/lean_sidecar/test_launcher_client.py::TestPostLaunch::test_bad_envelope_falls_back_to_unknown",
+        "tests/lean_sidecar/test_launcher_client.py::TestPostLaunch::test_token_attached_when_env_var_set",
+        "tests/lean_sidecar/test_launcher_service.py::TestWorkspacePollerIntegration::test_poller_fires_mid_run_returns_rejected",
+        "tests/lean_sidecar/test_launcher_service.py::TestWorkspacePollerIntegration::test_race_path_post_execute_backstop_still_catches",
+        "tests/lean_sidecar/test_launcher_service.py::TestWorkspacePollerIntegration::test_happy_path_poller_does_not_fire",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_contains_mandatory_security_flags",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_argv_contains_cidfile_flag_pointing_into_workspace",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_build_command_clears_stale_cidfile",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_accepts_allow_listed_hardening_tokens",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_argv_includes_userns_keep_id_on_rootless_podman",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_argv_omits_userns_keep_id_on_rootful_podman",
+        "tests/lean_sidecar/test_runner.py::TestBuildCommand::test_accepts_pinned_dotnet_env_pair",
+        "tests/lean_sidecar/test_runner.py::TestExecuteTimeoutKillsContainer::test_timeout_invokes_podman_stop_and_rm",
+        "tests/lean_sidecar/test_runner.py::TestExecuteTimeoutKillsContainer::test_timeout_handles_missing_cidfile_gracefully",
+        "tests/lean_sidecar/test_runner.py::TestKillReason::test_timeout_path_threads_wall_clock_reason"
+      ],
+      "summary": "All 33 baseline failures cluster in lean_sidecar/, engine/live deployment_validation fixtures, data_lake schema drift, qc reconciliation, engine persistence, and lean-polygon parity. NONE involve cockpit, operator_surface, operator_capability, mutation_attempt, broker_observation_consistency, or runtime_freshness. Any post-edit pytest failure outside this list is a regression introduced by this audit."
+    },
+    "xunit": {
+      "command": "cd Backend.Tests && dotnet test",
+      "status": "not_captured_at_baseline",
+      "note": "Backend.Tests requires dotnet on host. Will be captured via `podman exec my-backend dotnet test /src/...` against the test project before push. Tracked under audit-step 8 (project-scope test gate)."
+    },
+    "ng_test": {
+      "command": "podman exec my-frontend npx ng test --watch=false",
+      "status": "not_captured_at_baseline",
+      "note": "Frontend Vitest runner needs the my-frontend container. Will be captured before push under audit-step 8."
+    },
+    "playwright": {
+      "status": "not_captured_at_baseline",
+      "note": "Playwright requires a running cockpit + backend; specs are added/updated under audit-step 6 and verified before push."
+    }
+  },
+  "preflight": {
+    "starting_commit": "77bf656371c0c1068cbe13be4c1ac5d4f49d55dd",
+    "services_up": {
+      "my-frontend": true,
+      "my-backend": true,
+      "polygon-data-service": true,
+      "my-postgres": true,
+      "my-redis": true
+    },
+    "broker_safety": {
+      "final_verdict": "paper-only",
+      "configured_mode": "paper",
+      "port": 4002,
+      "port_class": "paper_port",
+      "connected_account": "DUM284968",
+      "connected_account_prefix": "DU",
+      "is_paper": true
+    },
+    "live_trading_env": {
+      "IBKR_LIVE_TRADING_OPT_IN": null,
+      "LIVE_TRADING": null
+    },
+    "instances_inventoried": [
+      {"id": "dep_val_smoke_001", "desired_state": "RUNNING", "process_state": "offline", "owned_positions_nonzero": false},
+      {"id": "dep_val_smoke_002", "desired_state": null, "process_state": null, "owned_positions_nonzero": false}
+    ]
+  }
+}
