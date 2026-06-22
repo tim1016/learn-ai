@@ -118,4 +118,48 @@ describe('WorkingPendingOrdersSectionComponent', () => {
     const el = render([row({ seq: 9, engine_overlay: null })]);
     expect(el.textContent ?? '').toContain('—');
   });
+
+  // Slice 7 (handoff gap #1): once the publisher's pending row is
+  // superseded by a broker fill / cancel row carrying the same
+  // ``order_ref``, the panel must hide the pending row so the
+  // operator sees broker-resolved state without a reload.
+  it('hides a pending row once a later row with the same order_ref arrives', () => {
+    const el = render([
+      row({
+        seq: 1,
+        symbol: 'SPY',
+        order_ref: 'learn-ai/sid/v1/intent-shared',
+        verdict: 'engine_only_pending',
+      }),
+      row({
+        seq: 2,
+        symbol: 'SPY',
+        order_ref: 'learn-ai/sid/v1/intent-shared',
+        verdict: 'expected',
+        reason_codes: ['cancellation'],
+      }),
+    ]);
+    expect(el.querySelector('[data-testid="working-pending-orders"]')).toBeNull();
+  });
+
+  it('keeps a pending row visible when no other row shares its order_ref', () => {
+    const el = render([
+      row({
+        seq: 1,
+        symbol: 'SPY',
+        order_ref: 'learn-ai/sid/v1/intent-still-pending',
+        verdict: 'engine_only_pending',
+      }),
+      row({
+        seq: 2,
+        symbol: 'AAPL',
+        order_ref: 'learn-ai/sid/v1/intent-unrelated',
+        verdict: 'expected',
+        reason_codes: ['cancellation'],
+      }),
+    ]);
+    const panel = el.querySelector('[data-testid="working-pending-orders"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.textContent ?? '').toContain('SPY');
+  });
 });

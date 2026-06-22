@@ -52,10 +52,12 @@ from app.schemas.broker_activity import (
     ReconciliationTimingPolicy,
     SizingProvenance,
 )
+from app.engine.live.intent_events import IntentEventType
 from app.services.broker_activity_reconciler import (
     EngineIntent,
     ReconciliationContext,
     UnauthorableEventError,
+    author_pending_row,
     author_row_from_event,
     match_identity,
     parse_order_ref,
@@ -87,6 +89,30 @@ RecoverySourceFactory = Callable[[], Awaitable[list[IbkrOrderEvent]]]
 # behind by this many rows we drop the connection rather than buffer
 # unboundedly. 256 covers a slow client + a fast bursty publisher.
 _SUBSCRIBER_QUEUE_SIZE = 256
+
+
+# Period of the pending-intent tick (gap #1 of the broker-activity handoff).
+# The publisher's main loop only reacts to broker events; without this
+# tick, an intent the engine has emitted but the broker hasn't yet
+# acknowledged is invisible in the cockpit. 2 s keeps the operator's
+# Working/Pending panel within roughly one heartbeat of the engine's
+# pending_intents while costing one sidecar+WAL stat per tick.
+_PENDING_INTENT_TICK_S = 2.0
+
+
+# IntentEventType values that mean "broker has acknowledged this intent."
+# Any other status (PENDING_INTENT, ACK_FAILED_UNCERTAIN,
+# SUBMIT_UNCERTAIN_HALTED, INTENT_NOT_ACCEPTED) means a row should be
+# authored as engine_only_pending so the operator can see the in-flight
+# state. SIZING_RESOLVED never reaches the ledger view as a status (the
+# fold preserves the prior status), so it's not on this list.
+_BROKER_ACKED_INTENT_STATUSES: frozenset[IntentEventType] = frozenset(
+    {
+        IntentEventType.SUBMITTED,
+        IntentEventType.SUBMITTED_RECOVERED,
+        IntentEventType.ADOPTED_BROKER_ORDER,
+    }
+)
 
 
 def _now_ms() -> int:
@@ -135,7 +161,16 @@ class BrokerActivityPublisher:
 
         self._subscribers: set[asyncio.Queue[BrokerActivityRow | None]] = set()
         self._seen_exec_ids: set[str] = set()
+        # Per-intent dedup for the pending-intent tick: once a pending row
+        # has been authored for a given intent_id, the tick suppresses
+        # further pending rows for it. Entries are pruned when the intent
+        # leaves the unacked state (broker acked, intent removed, or
+        # ledger fold no longer surfaces it) so a re-emergence of the
+        # same intent_id would re-author.
+        self._authored_pending_intent_ids: set[str] = set()
         self._task: asyncio.Task[None] | None = None
+        self._pending_tick_task: asyncio.Task[None] | None = None
+        self._pending_tick_period_s: float = _PENDING_INTENT_TICK_S
         self._stopped = asyncio.Event()
         # Slice 3 (ADR 0011 amendment) — flipped True for the duration
         # of ``sweep_reconnect_recovery``. While true, ``place_paper_order``
@@ -167,6 +202,16 @@ class BrokerActivityPublisher:
         self._task = asyncio.create_task(
             self._run(), name=f"broker-activity-publisher:{self._strategy_instance_id}"
         )
+        # Spawn the pending-intent tick alongside the event consumer.
+        # The event loop only fires on broker events; without a
+        # separate cadence, an intent the engine has emitted but the
+        # broker hasn't acknowledged is invisible until something
+        # happens on the broker side.
+        if self._pending_tick_task is None or self._pending_tick_task.done():
+            self._pending_tick_task = asyncio.create_task(
+                self._pending_intent_loop(),
+                name=f"broker-activity-pending-tick:{self._strategy_instance_id}",
+            )
 
     async def stop(self) -> None:
         """Cancel the background task and signal all subscribers to drain.
@@ -174,13 +219,15 @@ class BrokerActivityPublisher:
         Each subscriber's queue receives a ``None`` sentinel; subscribers
         loop on ``get()`` and treat ``None`` as end-of-stream."""
         self._stopped.set()
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        for task_attr in ("_task", "_pending_tick_task"):
+            task = getattr(self, task_attr)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                setattr(self, task_attr, None)
         for q in self._subscribers:
             try:
                 q.put_nowait(None)
@@ -251,6 +298,157 @@ class BrokerActivityPublisher:
                 },
             )
             raise
+
+    async def _pending_intent_loop(self) -> None:
+        """Periodic tick that surfaces engine intents not yet broker-acked.
+
+        Runs alongside ``_run`` so the cockpit's Working/Pending panel
+        reflects engine state even when no broker events are arriving. A
+        crash in one tick is logged and the loop continues — a single
+        bad fold should not silence the rest of the publisher.
+        """
+        try:
+            while not self._stopped.is_set():
+                try:
+                    self._pending_intent_tick()
+                except Exception:
+                    # Same discipline as ``_handle_event``: log with
+                    # context but keep the loop alive. The next tick may
+                    # succeed (transient sidecar IO race during engine
+                    # flush, etc.).
+                    logger.exception(
+                        "broker-activity pending-intent tick failed",
+                        extra={
+                            "strategy_instance_id": self._strategy_instance_id,
+                        },
+                    )
+                await asyncio.sleep(self._pending_tick_period_s)
+        except asyncio.CancelledError:
+            raise
+
+    def _pending_intent_tick(self) -> None:
+        """Author ``engine_only_pending`` rows for unacked intents.
+
+        Reads the intent WAL, folds it, and for every intent whose status
+        is not in ``_BROKER_ACKED_INTENT_STATUSES`` AND has a usable
+        ``order_spec`` AND hasn't already been authored, calls
+        ``author_pending_row`` and broadcasts.
+
+        Dedup is keyed on ``intent_id``; the in-memory set is pruned to
+        the currently-unacked set on every tick so an intent that
+        re-enters pending state (e.g. the engine restarted and the
+        fold sees its PENDING_INTENT again) would re-author.
+
+        Truthfulness contract: an intent whose ``order_spec`` is missing
+        a field the pending template requires (symbol / action /
+        quantity / order_type) is logged as a warning and skipped — the
+        publisher never authors a partially-rendered string. The intent
+        is NOT added to the dedup set, so the next tick will retry once
+        the order_spec is fully populated.
+        """
+        try:
+            events = self._intent_wal.read_tail()
+        except (IntentWalCorruptError, OSError):
+            # Same fall-back as ``_fold_intent_wal``: a corrupt WAL is
+            # logged, but doesn't take down the publisher.
+            logger.warning(
+                "intent WAL unreadable; pending-intent tick skipped",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "intent_wal_path": str(self._intent_wal.path),
+                },
+            )
+            return
+        if not events:
+            self._authored_pending_intent_ids.clear()
+            return
+        view = fold_intent_events(LedgerProjection(), events)
+
+        currently_pending: set[str] = set()
+        for intent_id, order_view in view.submitted_orders.items():
+            if order_view.status in _BROKER_ACKED_INTENT_STATUSES:
+                continue
+            if order_view.intent_kind.value != "STRATEGY":
+                # Operator-initiated flattens / recoveries surface
+                # through their own broker events; the pending-intent
+                # surface is for engine-emitted strategy orders.
+                continue
+            currently_pending.add(intent_id)
+            if intent_id in self._authored_pending_intent_ids:
+                continue
+            self._author_pending_row_for_view(intent_id, order_view)
+
+        # Prune dedup set: an intent no longer in the unacked set has
+        # either been broker-acked (the live event path will handle its
+        # fill / cancel row) or has disappeared from the WAL fold (a
+        # corruption recovery, etc.). Either way, the dedup entry is
+        # stale.
+        self._authored_pending_intent_ids &= currently_pending
+
+    def _author_pending_row_for_view(
+        self, intent_id: str, order_view
+    ) -> None:
+        """Author one ``engine_only_pending`` row from a folded view.
+
+        Splits out so the dedup bookkeeping above stays readable. The
+        broadcast path reuses ``_author_and_broadcast``'s tail (WAL
+        append + subscriber fan-out + cursor advance) by constructing
+        the row manually, allocating its seq, and going through the
+        same persistence helpers.
+        """
+        spec = order_view.order_spec or {}
+        symbol = spec.get("symbol")
+        action = spec.get("action")
+        quantity = spec.get("quantity")
+        order_type = spec.get("order_type")
+        if not (symbol and action and quantity is not None and order_type):
+            logger.warning(
+                "pending intent missing order_spec fields; skipping",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "intent_id": intent_id,
+                    "have": sorted(k for k, v in spec.items() if v is not None),
+                },
+            )
+            return
+
+        intent = EngineIntent(
+            intent_id=intent_id,
+            requested_qty=_safe_float(quantity),
+            requested_price=_safe_float(spec.get("limit_price")),
+        )
+        seq = self._wal.allocate_seq()
+        ctx = ReconciliationContext(
+            seq=seq,
+            ts_ms=_now_ms(),
+            bot_order_namespace=self._bot_order_namespace,
+            timing_policy=self._timing_policy,
+            previously_seen_exec_ids=frozenset(self._seen_exec_ids),
+            reconnect_recovery_active=self._reconnect_recovery_active,
+        )
+        try:
+            row = author_pending_row(
+                intent=intent,
+                symbol=symbol,
+                side=action,
+                quantity=float(quantity),
+                order_type=order_type,
+                ctx=ctx,
+            )
+        except (UnauthorableEventError, ValueError):
+            logger.exception(
+                "pending intent could not be authored; skipping",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "intent_id": intent_id,
+                },
+            )
+            return
+
+        self._wal.append_row(row)
+        self._update_envelope_cursor(row.seq)
+        self._broadcast(row)
+        self._authored_pending_intent_ids.add(intent_id)
 
     async def _handle_event(self, event: IbkrOrderEvent) -> None:
         """Author at most one row from one event; fan out to subscribers."""
