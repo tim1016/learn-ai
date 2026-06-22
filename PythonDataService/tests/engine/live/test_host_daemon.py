@@ -635,18 +635,20 @@ async def test_protected_route_rejects_prefix_of_token_vcr_0011(
     assert response.status_code == 401
 
 
-async def test_health_is_open_without_token(
+async def test_health_requires_token(
     daemon_context: tuple[RunnerProcessManager, Path],
 ) -> None:
-    # /health must stay unauthenticated so the data plane's connectivity probe
-    # works before any token is wired (ADR 0007).
+    # PRD #619-C followup (Codex P2): /health is now auth-gated so the
+    # connectivity monitor's AUTH_FAILED classification is reachable.
+    # Without a token: 401. The data plane probe holds the token via
+    # the artifacts bind mount.
     manager, _ = daemon_context
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/health")
 
-    assert response.status_code == 200
+    assert response.status_code == 401
 
 
 def test_importing_host_daemon_does_not_generate_token(tmp_path: Path) -> None:

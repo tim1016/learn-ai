@@ -366,11 +366,27 @@ export class CockpitShellComponent {
 
   // ── operator dispatch (operator_surface.actions) ──────────────────────
 
+  /** PRD #619-C4 — local fail-closed guard. Returns true when the click
+   *  must NOT proceed because the data plane reports the host daemon as
+   *  not CONNECTED. Both the button disable predicate (visual) and the
+   *  dispatch methods (defense) consult this, so a programmatic call
+   *  bypassing the button still no-ops. */
+  private _refuseOnStaleTransport(operationLabel: string): boolean {
+    if (!this.localTransportStale()) return false;
+    this.mutationError.set(
+      `${operationLabel} is paused: the host daemon transport is not currently connected. ` +
+        'Refresh the cockpit once the control plane recovers.',
+    );
+    return true;
+  }
+
   async dispatchResume(): Promise<void> {
+    if (this._refuseOnStaleTransport('Resume')) return;
     await this._setIntent('resume', 'Resume');
   }
 
   async dispatchPause(): Promise<void> {
+    if (this._refuseOnStaleTransport('Pause')) return;
     await this._setIntent('pause', 'Pause');
   }
 
@@ -379,6 +395,7 @@ export class CockpitShellComponent {
     // PRD #619-A §A6 — ``stop`` is required on ``OperatorSurfaceActions``;
     // no optional-chaining fallback needed.
     if (!surface?.actions.stop.enabled) return;
+    if (this._refuseOnStaleTransport('Stop')) return;
     const confirmed = window.confirm(
       'Stop instance?\n\n' +
         '• Durable intent becomes STOPPED.\n' +
@@ -395,6 +412,7 @@ export class CockpitShellComponent {
     const surface = this.status()?.operator_surface;
     const cap = surface?.actions.flatten_and_pause;
     if (!cap?.enabled) return;
+    if (this._refuseOnStaleTransport('Flatten and pause')) return;
     const id = this.selectedInstanceId();
     if (!id) return;
     this.busyAction.set('flatten_and_pause');
@@ -415,6 +433,7 @@ export class CockpitShellComponent {
 
   openTypedHalt(): void {
     if (!this.status()?.operator_surface.actions.mark_poisoned.enabled) return;
+    if (this._refuseOnStaleTransport('Mark poisoned')) return;
     this.typedHaltOpen.set(true);
   }
 

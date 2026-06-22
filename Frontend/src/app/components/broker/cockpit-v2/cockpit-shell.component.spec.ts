@@ -380,4 +380,60 @@ describe('CockpitShellComponent', () => {
 
     expect(fixture.componentInstance.localTransportStale()).toBe(false);
   });
+
+  // PRD #619-C4 follow-up (Codex P2) — wire the stale-transport signal
+  // into the button disable predicates AND the dispatch methods so the
+  // operator never fires a mutation into a known-broken channel.
+
+  it('disables Resume / Pause / Stop / Flatten when control_plane is RETRYING', async () => {
+    const fixture = await renderWithControlPlane(
+      makeControlPlane({
+        state: 'RETRYING',
+        attempt: 1,
+        notice: 'Daemon retrying.',
+        runbook_slug: 'daemon-retrying',
+      }),
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    for (const id of [
+      'action-resume',
+      'action-pause',
+      'action-flatten-and-pause',
+      'action-stop',
+    ]) {
+      const btn = el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+      expect(btn, `button ${id} should exist`).toBeTruthy();
+      expect(btn?.disabled, `button ${id} should be disabled`).toBe(true);
+      expect(btn?.getAttribute('title')).toBe('TRANSPORT_STALE');
+    }
+  });
+
+  it('dispatchPause refuses to fire when transport is stale and surfaces a mutation error', async () => {
+    const stub = makeStub();
+    const status = makeStatus();
+    // Pause is normally enabled; the transport-stale gate is the only
+    // thing that should refuse it.
+    status.operator_surface.actions.pause.enabled = true;
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        control_plane: makeControlPlane({ state: 'UNREACHABLE' }),
+      },
+    });
+
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    await fixture.componentInstance.dispatchPause();
+
+    // The mutation client must NOT have been invoked.
+    expect(stub.setInstanceDesiredState).not.toHaveBeenCalled();
+    // And the operator must see a transport-stale message.
+    expect(fixture.componentInstance.mutationError()).toContain('host daemon transport');
+  });
 });

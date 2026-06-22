@@ -70,4 +70,65 @@ describe('toOperationError', () => {
     expect(e.detail).toBe('boom');
     expect(e.status).toBeNull();
   });
+
+  // ── PRD #619-C5 — ambiguous-outcome 409 ─────────────────────────────────
+
+  it('surfaces the structured OUTCOME_UNKNOWN body as the outcome-unknown category', () => {
+    const err = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          outcome: 'UNKNOWN',
+          reason_code: 'OUTCOME_UNKNOWN',
+          error_category: 'read_timeout',
+          detail: 'response lost',
+          endpoint: 'start_run',
+          occurred_at_ms: 1_700_000_000_000,
+          runbook_hint: 'Refresh the cockpit to read live state before retrying.',
+        },
+      },
+    });
+
+    const e = toOperationError('start', err);
+
+    expect(e.status).toBe(409);
+    expect(e.category).toBe('outcome-unknown');
+    expect(e.title).toContain('outcome unknown');
+    expect(e.detail).toBe('response lost');
+    expect(e.remediation).toBe('Refresh the cockpit to read live state before retrying.');
+  });
+
+  it('falls back to a synthesised detail when the OUTCOME_UNKNOWN body omits detail', () => {
+    const err = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          outcome: 'UNKNOWN',
+          reason_code: 'OUTCOME_UNKNOWN',
+          error_category: 'write_timeout',
+          detail: null,
+          endpoint: 'deploy',
+          occurred_at_ms: 1_700_000_000_000,
+          runbook_hint: 'Refresh before retrying.',
+        },
+      },
+    });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.detail).toContain('write_timeout');
+    expect(e.remediation).toBe('Refresh before retrying.');
+  });
+
+  it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {
+    // A regular precondition 409 (e.g. dirty tree) still uses the canned
+    // remediation, NOT the new outcome-unknown branch.
+    const err = new HttpErrorResponse({ status: 409, error: { detail: 'dirty tree' } });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.category).toBe('precondition');
+    expect(e.detail).toBe('dirty tree');
+    expect(e.remediation).not.toContain('Refresh the cockpit');
+  });
 });
