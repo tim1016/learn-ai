@@ -95,12 +95,20 @@ from app.schemas.live_runs import (
     MutationOutcomeUnknownResponse,
     QcAuditCopyListing,
     ReadinessVector,
+    ReconcileMutationResponse,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
 from app.services.instance_context import InstanceContext, load_instance_context
-from app.services.mutation_attempt import MutationAttempt, MutationAttemptRepo
+from app.services.mutation_attempt import (
+    TERMINAL_STATES,
+    MutationAttempt,
+    MutationAttemptRepo,
+    ReconciliationEvidence,
+    reconcile_mutation_effect,
+    transition_attempt,
+)
 from app.services.operator_capability import evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -2103,6 +2111,167 @@ async def flatten_and_pause_instance(
             )
 
     return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
+
+
+@router.post(
+    "/{strategy_instance_id}/reconcile-mutation",
+    response_model=ReconcileMutationResponse,
+)
+async def reconcile_instance_mutation(
+    strategy_instance_id: str,
+) -> ReconcileMutationResponse:
+    """PRD #619-D3 — Reconcile the latest mutation_attempt for the instance.
+
+    Read-only inspection that joins:
+
+    - The latest persisted ``MutationAttempt`` (D1 repo).
+    - Current daemon process state + binding (live snapshot, observed
+      now — not the snapshot the original mutation acted on).
+    - Child ``engine_runtime.json`` ``command_loop.state`` if present.
+    - Durable ``desired_state`` sidecar.
+    - Broker view's owned-positions emptiness.
+
+    Calls the pure ``reconcile_mutation_effect`` classifier on the
+    assembled evidence, advances the attempt to the resulting
+    terminal state via ``transition_attempt``, persists, and returns
+    the outcome.
+
+    **The endpoint never replays the original mutation.** If the
+    operator wants to retry, the matrix surfaces the next allowed
+    action through ``operator_surface.actions``; that is a separate
+    UI step.
+
+    Returns 404 when no mutation has been persisted for the instance.
+    Returns 409 when the attempt is in a state that cannot be
+    Reconciled (``PREPARED`` / ``DISPATCHING`` — still in flight)
+    or when it is already terminal (the prior outcome is available
+    via the status projection's mutation evidence).
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    repo = MutationAttemptRepo(_mutation_attempt_root(root))
+    attempt = repo.latest_for(sid)
+    if attempt is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="no mutation_attempt to reconcile for this instance",
+        )
+    if attempt.dispatch_state in TERMINAL_STATES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "error": "mutation_attempt is already terminal",
+                "mutation_attempt_id": attempt.mutation_attempt_id,
+                "dispatch_state": attempt.dispatch_state,
+            },
+        )
+    if attempt.dispatch_state in {"PREPARED", "DISPATCHING"}:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "error": "mutation_attempt is still in flight; wait for "
+                "the response before reconciling",
+                "mutation_attempt_id": attempt.mutation_attempt_id,
+                "dispatch_state": attempt.dispatch_state,
+            },
+        )
+
+    evidence = await _assemble_reconciliation_evidence(
+        sid, root, daemon_url=settings.live_runner_daemon_url
+    )
+    outcome = reconcile_mutation_effect(attempt, evidence)
+    transitioned_at_ms = _now_ms()
+    advanced = transition_attempt(
+        attempt,
+        outcome,
+        transitioned_at_ms=transitioned_at_ms,
+        evidence=evidence.model_dump(),
+    )
+    repo.write(advanced)
+    return ReconcileMutationResponse(
+        mutation_attempt_id=advanced.mutation_attempt_id,
+        action=advanced.action,
+        outcome=outcome,
+        dispatch_state=advanced.dispatch_state,  # type: ignore[arg-type]
+        evidence=advanced.evidence or {},
+        reconciled_at_ms=transitioned_at_ms,
+    )
+
+
+async def _assemble_reconciliation_evidence(
+    sid: str, root: Path, *, daemon_url: str
+) -> ReconciliationEvidence:
+    """Read every evidence source the Reconcile classifier consumes.
+
+    Each read is fail-soft: missing daemon / runtime / desired-state
+    surfaces as ``None`` on the corresponding field rather than
+    raising.  ``daemon_reachable=False`` only when the typed daemon
+    fetch itself fails — distinct from "daemon reachable but reports
+    the instance as ``unreachable``".
+    """
+    observed_at_ms = _now_ms()
+    result, daemon = await host_daemon_client.fetch_instance_process(
+        daemon_url, sid
+    )
+    daemon_reachable = result.kind == "CONNECTED"
+    process_state = None
+    bound_run_id = None
+    if daemon is not None:
+        process, live_binding = _interpret_daemon_process(daemon, root)
+        process_state = process.state  # type: ignore[assignment]
+        if live_binding is not None:
+            bound_run_id = live_binding.run_id
+
+    desired_state = _read_desired_state_literal(root, sid)
+    engine_runtime_state = _read_engine_runtime_state(root, sid)
+    broker_owned_positions_empty = _read_owned_positions_empty(root, sid)
+
+    return ReconciliationEvidence(
+        daemon_reachable=daemon_reachable,
+        process_state=process_state,
+        bound_run_id=bound_run_id,
+        desired_state=desired_state,
+        engine_runtime_state=engine_runtime_state,
+        broker_owned_positions_empty=broker_owned_positions_empty,
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def _read_desired_state_literal(root: Path, sid: str) -> str | None:
+    """Return the durable desired_state as one of RUNNING / PAUSED /
+    STOPPED, or ``None`` when the sidecar is missing / unreadable.
+    """
+    view = _resolve_desired_state(root, sid)
+    state = getattr(view, "state", None)
+    if state in {"RUNNING", "PAUSED", "STOPPED"}:
+        return state
+    return None
+
+
+def _read_engine_runtime_state(root: Path, sid: str) -> str | None:
+    """Return the latest engine_runtime ``command_loop.state`` or
+    ``None`` when no runtime artifact is present / readable.
+    """
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    if not runs:
+        return None
+    run_dir = Path(runs[0]["run_dir"])
+    snapshot = read_engine_runtime_snapshot(run_dir / ENGINE_RUNTIME_FILENAME)
+    if snapshot is None:
+        return None
+    return snapshot.command_loop.state
+
+
+def _read_owned_positions_empty(root: Path, sid: str) -> bool | None:
+    """Return ``True`` iff broker view exists and every non-zero owned
+    position is empty; ``False`` when at least one is non-zero;
+    ``None`` when no broker view exists.
+    """
+    broker = _instance_broker(root, sid)
+    if broker is None:
+        return None
+    return not any(qty != 0 for qty in broker.owned_positions.values())
 
 
 @router.get("/{strategy_instance_id}/commands", response_model=CommandsTimeline)

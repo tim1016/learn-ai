@@ -389,6 +389,40 @@ class MutationOutcomeUnknownResponse(BaseModel):
     runbook_hint: str
 
 
+class ReconcileMutationResponse(BaseModel):
+    """PRD #619-D3 — typed response for the Reconcile action.
+
+    Reconcile is **read-only** — it never replays the mutation. The
+    response describes the *outcome* the pure classifier returned and
+    the *terminal dispatch_state* the persisted attempt has been
+    advanced to; the cockpit reads both and renders the operator
+    runbook copy per code (D5).
+
+    ``evidence`` mirrors the snapshot the classifier consumed; the
+    operator's audit trail wants to know which facts drove the
+    classification, separately from the outcome name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mutation_attempt_id: str
+    action: Literal["start", "stop", "flatten", "resume", "pause"]
+    outcome: Literal[
+        "EFFECT_CONFIRMED",
+        "EFFECT_NOT_OBSERVED",
+        "EVIDENCE_CONFLICT",
+        "NOT_PROVABLE",
+    ]
+    dispatch_state: Literal[
+        "EFFECT_CONFIRMED",
+        "EFFECT_NOT_OBSERVED",
+        "EVIDENCE_CONFLICT",
+        "NOT_PROVABLE",
+    ]
+    evidence: dict
+    reconciled_at_ms: int = Field(ge=0)
+
+
 class HostRunnerActionResponse(BaseModel):
     """Response for daemon start/stop actions.
 

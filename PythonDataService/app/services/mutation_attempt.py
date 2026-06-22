@@ -32,8 +32,14 @@ The router writes before each transition.  Illegal transitions raise
 ``InvalidMutationTransitionError`` rather than silently coerce — the
 422 path is documented and tested.
 
-``reconcile_mutation_effect`` lands alongside the Reconcile endpoint
-in 619-D3.
+``reconcile_mutation_effect`` (619-D3) is the **pure** evidence
+classifier: it takes a ``MutationAttempt`` and a typed
+``ReconciliationEvidence`` snapshot and returns one of the four
+``ReconciliationOutcome`` literals.  The router assembles the
+evidence (daemon process state, child engine_runtime, broker
+positions, durable desired_state) and then folds the outcome into
+the attempt via ``transition_attempt``.  Reconcile is **read-only**
+— it never replays the mutation.
 
 All timestamps are ``int64`` ms UTC per ``.claude/rules/numerical-
 rigor.md``.
@@ -247,3 +253,171 @@ class MutationAttemptRepo:
         return best
 
 
+# ---------------------------------------------------------------------------
+# PRD #619-D3 — Reconcile action.
+#
+# The Reconcile action joins evidence the data plane can already see
+# (daemon process state, child engine_runtime, broker positions, the
+# instance's durable desired_state) and classifies whether the
+# mutation's *intended effect* has landed.  It is **read-only**: it
+# never replays the mutation.  ``EFFECT_NOT_OBSERVED`` is not
+# automatic permission to retry — the operator must still decide.
+# ---------------------------------------------------------------------------
+
+
+ProcessStateLiteral = Literal[
+    "running", "stopping", "exited", "idle", "unreachable"
+]
+DesiredStateLiteral = Literal["RUNNING", "PAUSED", "STOPPED"]
+EngineRuntimeStateLiteral = Literal[
+    "IDLE", "RUNNING", "PAUSED", "DRAINING", "FAILED"
+]
+
+
+class ReconciliationEvidence(BaseModel):
+    """Typed snapshot the router hands to ``reconcile_mutation_effect``.
+
+    Every field is independently optional because each evidence source
+    can be unavailable for its own reason (daemon down, child not
+    bound, broker disconnected) — Reconcile must classify partial
+    snapshots conservatively rather than refuse them.
+
+    ``daemon_reachable`` is the gating signal: when ``False``, every
+    action classifies as ``NOT_PROVABLE`` regardless of the rest,
+    because the daemon owns process identity and a daemon outage
+    means the read is fundamentally stale.
+
+    The fields cover the evidence sources PRD #619 §3 names: daemon
+    process registry (``process_state``, ``bound_run_id``), child
+    ``engine_runtime.json`` (``engine_runtime_state``), durable
+    desired-state sidecar (``desired_state``), broker view
+    (``broker_owned_positions_empty``).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    daemon_reachable: bool
+    process_state: ProcessStateLiteral | None = None
+    bound_run_id: str | None = None
+    desired_state: DesiredStateLiteral | None = None
+    engine_runtime_state: EngineRuntimeStateLiteral | None = None
+    broker_owned_positions_empty: bool | None = None
+    observed_at_ms: int = Field(ge=0)
+
+
+ReconciliationOutcome = Literal[
+    "EFFECT_CONFIRMED",
+    "EFFECT_NOT_OBSERVED",
+    "EVIDENCE_CONFLICT",
+    "NOT_PROVABLE",
+]
+
+
+def reconcile_mutation_effect(
+    attempt: MutationAttempt, evidence: ReconciliationEvidence
+) -> ReconciliationOutcome:
+    """Classify whether ``attempt``'s intended effect is observable.
+
+    Pure: never touches disk.  The router writes the resulting
+    ``MutationAttempt`` (with the outcome folded in via
+    ``transition_attempt``) after this returns.
+
+    Classification rules dispatch on ``attempt.action``.  Each rule
+    set treats absent evidence as ``NOT_PROVABLE`` rather than
+    inferring a missing fact — the only positive evidence that
+    confirms an effect is direct observation of the intended state.
+    ``EVIDENCE_CONFLICT`` is reserved for genuine contradictions
+    (e.g. the durable desired state moved further than the mutation
+    asked for); a brief timing mismatch reads as
+    ``EFFECT_NOT_OBSERVED`` instead.
+    """
+    if not evidence.daemon_reachable:
+        return "NOT_PROVABLE"
+    if attempt.action == "stop":
+        return _reconcile_stop(evidence)
+    if attempt.action == "start":
+        return _reconcile_start(evidence)
+    if attempt.action == "resume":
+        return _reconcile_resume(evidence)
+    if attempt.action == "pause":
+        return _reconcile_pause(evidence)
+    if attempt.action == "flatten":
+        return _reconcile_flatten(evidence)
+    # The action set is closed by ``ActionName``; an unknown value
+    # only reaches here through a forward-incompatible record.
+    return "NOT_PROVABLE"
+
+
+def _reconcile_stop(evidence: ReconciliationEvidence) -> ReconciliationOutcome:
+    state = evidence.process_state
+    if state in {"exited", "idle"}:
+        return "EFFECT_CONFIRMED"
+    if state == "running":
+        return "EFFECT_NOT_OBSERVED"
+    if state == "stopping":
+        # In flight — not yet observable as effect; operator should
+        # check back rather than mark confirmed prematurely.
+        return "EFFECT_NOT_OBSERVED"
+    # ``unreachable`` or ``None`` — daemon answered but cannot
+    # describe the process; insufficient evidence.
+    return "NOT_PROVABLE"
+
+
+def _reconcile_start(evidence: ReconciliationEvidence) -> ReconciliationOutcome:
+    state = evidence.process_state
+    if state == "running":
+        if evidence.bound_run_id is None:
+            # Process reported running but the daemon has no binding —
+            # the two facts disagree about whether a run is actually
+            # owned by this instance.
+            return "EVIDENCE_CONFLICT"
+        return "EFFECT_CONFIRMED"
+    if state in {"exited", "idle", "stopping"}:
+        return "EFFECT_NOT_OBSERVED"
+    return "NOT_PROVABLE"
+
+
+def _reconcile_resume(evidence: ReconciliationEvidence) -> ReconciliationOutcome:
+    if evidence.desired_state is None:
+        return "NOT_PROVABLE"
+    if evidence.desired_state == "STOPPED":
+        # Resume's durable target is RUNNING; a STOPPED desired state
+        # means a later mutation has superseded this one with a
+        # stronger intent.  The reconcile result is "the effect we
+        # asked for did not land because something else replaced it."
+        return "EVIDENCE_CONFLICT"
+    if evidence.desired_state != "RUNNING":
+        return "EFFECT_NOT_OBSERVED"
+    # desired_state == RUNNING from here on.
+    if evidence.process_state != "running":
+        return "EFFECT_NOT_OBSERVED"
+    if evidence.engine_runtime_state is None:
+        # Durable + process say resumed but the child has not yet
+        # published a runtime snapshot — operator should refresh.
+        return "EFFECT_NOT_OBSERVED"
+    if evidence.engine_runtime_state == "RUNNING":
+        return "EFFECT_CONFIRMED"
+    return "EFFECT_NOT_OBSERVED"
+
+
+def _reconcile_pause(evidence: ReconciliationEvidence) -> ReconciliationOutcome:
+    if evidence.desired_state is None:
+        return "NOT_PROVABLE"
+    if evidence.desired_state == "PAUSED":
+        return "EFFECT_CONFIRMED"
+    if evidence.desired_state == "STOPPED":
+        # Stop is stronger than pause; another mutation moved the
+        # state past pause.
+        return "EVIDENCE_CONFLICT"
+    return "EFFECT_NOT_OBSERVED"
+
+
+def _reconcile_flatten(
+    evidence: ReconciliationEvidence,
+) -> ReconciliationOutcome:
+    empty = evidence.broker_owned_positions_empty
+    if empty is True:
+        return "EFFECT_CONFIRMED"
+    if empty is False:
+        return "EFFECT_NOT_OBSERVED"
+    return "NOT_PROVABLE"
