@@ -768,6 +768,92 @@ async def test_place_paper_order_refused_during_reconnect_recovery_sweep(
 
 
 @pytest.mark.asyncio
+async def test_executions_for_reconnect_recovery_leaves_order_type_none_when_trade_purged() -> None:
+    """Slice 3 truthfulness contract: when the Trade for a returned
+    ``Fill`` has been purged from ``ib.trades()``, the adapter leaves
+    ``order_type=None`` so the publisher's authoring path skips that
+    row instead of substituting a placeholder string. ADR 0014 §3
+    forbids placeholders; an unauthored row is honest, a placeholder
+    row is not.
+    """
+    from datetime import datetime, timezone
+
+    from app.broker.ibkr.orders import executions_for_reconnect_recovery
+
+    client = _client()
+    # ``ib.trades()`` returns empty — the Trade for this execution is gone.
+    client.ib.trades = MagicMock(return_value=[])
+    # ``reqExecutionsAsync`` returns a single Fill whose Execution has
+    # complete fields but no matching Trade.
+    fill = SimpleNamespace(
+        contract=SimpleNamespace(symbol="SPY", conId=12345),
+        execution=SimpleNamespace(
+            execId="exec-purged-1",
+            permId=999,
+            orderId=42,
+            clientId=7,
+            shares=100.0,
+            price=450.0,
+            cumQty=100.0,
+            side="BOT",
+            orderRef="learn-ai/sid/v1:intent-1",
+            time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+        ),
+        commissionReport=SimpleNamespace(commission=1.0),
+    )
+    client.ib.reqExecutionsAsync = AsyncMock(return_value=[fill])
+
+    events = await executions_for_reconnect_recovery(client)
+
+    assert len(events) == 1
+    assert events[0].symbol == "SPY"
+    assert events[0].exec_id == "exec-purged-1"
+    # The truthfulness contract: order_type stays None for the publisher
+    # to surface as unauthorable rather than mislabeling.
+    assert events[0].order_type is None
+
+
+@pytest.mark.asyncio
+async def test_executions_for_reconnect_recovery_recovers_order_type_from_trade() -> None:
+    """When the original Trade IS still cached in ``ib.trades()`` (the
+    common case during a same-session reconnect), the adapter populates
+    ``order_type`` from ``Trade.order.orderType``."""
+    from datetime import datetime, timezone
+
+    from app.broker.ibkr.orders import executions_for_reconnect_recovery
+
+    client = _client()
+    trade = SimpleNamespace(
+        contract=SimpleNamespace(symbol="SPY", conId=12345),
+        order=SimpleNamespace(orderId=42, permId=999, action="BUY", orderType="LMT"),
+        orderStatus=SimpleNamespace(status="Filled"),
+    )
+    client.ib.trades = MagicMock(return_value=[trade])
+    fill = SimpleNamespace(
+        contract=SimpleNamespace(symbol="SPY", conId=12345),
+        execution=SimpleNamespace(
+            execId="exec-cached-1",
+            permId=999,
+            orderId=42,
+            clientId=7,
+            shares=100.0,
+            price=450.0,
+            cumQty=100.0,
+            side="BOT",
+            orderRef="learn-ai/sid/v1:intent-1",
+            time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+        ),
+        commissionReport=SimpleNamespace(commission=1.0),
+    )
+    client.ib.reqExecutionsAsync = AsyncMock(return_value=[fill])
+
+    events = await executions_for_reconnect_recovery(client)
+
+    assert len(events) == 1
+    assert events[0].order_type == "LMT"
+
+
+@pytest.mark.asyncio
 async def test_place_paper_order_proceeds_when_no_sweep_active(
     monkeypatch,
 ) -> None:

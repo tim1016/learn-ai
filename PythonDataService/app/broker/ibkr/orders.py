@@ -766,11 +766,11 @@ async def executions_for_reconnect_recovery(
       Trade is still cached (the live API session keeps Trade objects
       for the session's open and recently-closed orders). When the
       Trade is absent (e.g. a fill on a long-since-completed order),
-      ``order_type`` defaults to ``"MKT"`` — the truthfulness contract
-      cannot be perfectly honoured for an execution whose original
-      order metadata is gone, but ``MKT`` is the IBKR default for
-      execution display and is what the operator sees on the Client
-      Portal Trades tab for the same row.
+      ``order_type`` is left as ``None`` — the publisher's authoring
+      path catches the resulting ``UnauthorableEventError`` and skips
+      that Fill with a structured log. The truthfulness contract
+      (ADR 0014 §3) forbids substituting a placeholder; an unauthored
+      row is honest, a placeholder row is not.
     * ``commission`` rides on ``Fill.commissionReport.commission`` once
       IBKR reports it (a beat after the fill); ``None`` otherwise.
 
@@ -862,10 +862,13 @@ def _fill_to_recovery_event(
 
     # Look up the original Trade to recover the order_type the operator
     # saw at submit time. Prefer permId (stable across reconnects) over
-    # orderId (per-client-session). When both miss, default to MKT —
-    # the IBKR Client Portal Trades tab labels every execution it can't
-    # cross-reference as a market execution, which is the same operator
-    # mental model we render.
+    # orderId (per-client-session). When both miss, leave ``order_type``
+    # as ``None`` — the truthfulness contract (ADR 0014 §3 / briefing)
+    # forbids substituting a placeholder ("MKT" or otherwise) for a
+    # field we cannot prove. The publisher's authoring path catches
+    # ``UnauthorableEventError`` on the missing ``order_type`` and
+    # skips this Fill with a structured log; an unauthored row is
+    # honest, a placeholder row is not.
     trade: object | None = None
     if perm_id_raw:
         trade = trades_by_perm_id.get(int(perm_id_raw))
@@ -875,8 +878,6 @@ def _fill_to_recovery_event(
         except (TypeError, ValueError):
             trade = None
     order_type = _event_order_type(trade) if trade is not None else None
-    if order_type is None:
-        order_type = "MKT"
 
     # Commission rides on the fill once IBKR reports it (a beat after
     # the execution). None until reported — never a fabricated zero so
