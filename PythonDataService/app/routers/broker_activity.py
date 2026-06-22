@@ -46,10 +46,8 @@ from app.schemas.broker_activity import (
     BrokerActivityPage,
     ReconciliationTimingPolicy,
 )
-from app.services.broker_activity_publisher import (
-    BrokerActivityPublisher,
-    get_publisher_registry,
-)
+from app.services.broker_activity_publisher import BrokerActivityPublisher
+from app.services.broker_activity_publisher_registry import get_publisher_registry
 
 
 class PublisherBootstrapError(Exception):

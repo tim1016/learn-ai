@@ -182,7 +182,9 @@ def _check_reconnect_recovery_halt() -> None:
     services layer at import time — the broker package is below
     ``services`` in the layer ordering.
     """
-    from app.services.broker_activity_publisher import get_publisher_registry
+    from app.services.broker_activity_publisher_registry import (
+        get_publisher_registry,
+    )
 
     if get_publisher_registry().any_recovery_active():
         raise OrderRefusedDuringReconnectRecoveryError(
