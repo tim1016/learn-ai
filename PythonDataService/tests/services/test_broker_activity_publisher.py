@@ -1389,6 +1389,113 @@ async def test_pending_intent_tick_broadcasts_to_subscribers(
     assert row.order_ref == f"{NS}:pending-broadcast"
 
 
+async def test_pending_intent_tick_skips_intent_not_accepted_status(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 on PR #651: ``INTENT_NOT_ACCEPTED`` is a terminal
+    proven-absent status — ``intent_ledger._UNRESOLVED_STATUSES``
+    excludes it because ``live_portfolio`` writes it after a
+    ``PROVABLY_ABSENT`` probe. The tick must NOT author a pending row
+    for it; no broker event will ever supersede such a row, leaving
+    the operator with a stale 'Awaiting broker ack' that lies."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="proven-absent-1",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    _append_intent_wal_event(
+        run_dir,
+        seq=2,
+        event_type="INTENT_NOT_ACCEPTED",
+        intent_id="proven-absent-1",
+    )
+    publisher.start()
+    try:
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher.stop()
+
+    assert rows == [], (
+        "expected no pending row for INTENT_NOT_ACCEPTED (terminal-absent); "
+        f"got: {[(r.verdict, r.template_key) for r in rows]}"
+    )
+
+
+async def test_pending_intent_dedup_seeded_from_wal_on_restart(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 on PR #651: when the publisher restarts mid-pending,
+    ``broker_activity.jsonl`` already contains an ``engine_only_pending``
+    row for the unacked intent. A fresh ``__init__`` must seed
+    ``_authored_pending_intent_ids`` from the WAL so the next tick does
+    NOT re-author / re-broadcast the same intent — the frontend dedupes
+    by ``seq`` and would otherwise show duplicate Working/Pending rows.
+    """
+    publisher_a, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="restart-1",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    publisher_a.start()
+    try:
+        await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+        )
+    finally:
+        await publisher_a.stop()
+
+    # Simulate the process restart: build a fresh publisher reading the
+    # same WAL. The intent is still in PENDING_INTENT status (no broker
+    # acknowledgement landed), so a naive tick would re-author another
+    # engine_only_pending row.
+    publisher_b = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=tmp_path / "artifacts",
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=lambda: _empty_source(),
+    )
+    publisher_b._pending_tick_period_s = 0.02
+    publisher_b.start()
+    try:
+        # Let several ticks fire; the seeded dedupe should suppress
+        # all of them.
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher_b.stop()
+
+    pending = [r for r in rows if r.verdict == Verdict.ENGINE_ONLY_PENDING]
+    assert len(pending) == 1, (
+        "expected exactly one engine_only_pending row across restart; "
+        f"got {len(pending)} — dedupe set not seeded from WAL"
+    )
+
+
+async def _empty_source() -> AsyncIterator[IbkrOrderEvent]:
+    if False:  # pragma: no cover
+        yield None  # type: ignore[misc]
+    await asyncio.sleep(3600)
+
+
 async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:
     """Regression: an unauthorable event must NOT advance the WAL seq
     (no row was authored, so no seq was consumed). The next good event

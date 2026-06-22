@@ -40,6 +40,7 @@ from pathlib import Path
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.intent_ledger import (
     LedgerProjection,
+    _UNRESOLVED_STATUSES,
     fold as fold_intent_events,
 )
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -52,7 +53,6 @@ from app.schemas.broker_activity import (
     ReconciliationTimingPolicy,
     SizingProvenance,
 )
-from app.engine.live.intent_events import IntentEventType
 from app.services.broker_activity_reconciler import (
     EngineIntent,
     ReconciliationContext,
@@ -98,21 +98,6 @@ _SUBSCRIBER_QUEUE_SIZE = 256
 # Working/Pending panel within roughly one heartbeat of the engine's
 # pending_intents while costing one sidecar+WAL stat per tick.
 _PENDING_INTENT_TICK_S = 2.0
-
-
-# IntentEventType values that mean "broker has acknowledged this intent."
-# Any other status (PENDING_INTENT, ACK_FAILED_UNCERTAIN,
-# SUBMIT_UNCERTAIN_HALTED, INTENT_NOT_ACCEPTED) means a row should be
-# authored as engine_only_pending so the operator can see the in-flight
-# state. SIZING_RESOLVED never reaches the ledger view as a status (the
-# fold preserves the prior status), so it's not on this list.
-_BROKER_ACKED_INTENT_STATUSES: frozenset[IntentEventType] = frozenset(
-    {
-        IntentEventType.SUBMITTED,
-        IntentEventType.SUBMITTED_RECOVERED,
-        IntentEventType.ADOPTED_BROKER_ORDER,
-    }
-)
 
 
 def _now_ms() -> int:
@@ -184,12 +169,29 @@ class BrokerActivityPublisher:
         # back-to-back reconnects; the second sweep waits for the first to
         # finish so the dedupe set is the merged truth, not a torn read.
         self._recovery_lock = asyncio.Lock()
-        # On cold start, seed the dedupe set from the WAL so we don't
+        # On cold start, seed both dedupe sets from the WAL so we don't
         # re-author a row IBKR redelivers right after the publisher
-        # restarts.
+        # restarts (``_seen_exec_ids``) AND so the pending-intent tick
+        # doesn't re-emit an ``engine_only_pending`` row for an intent
+        # that still has no broker resolution but already has a
+        # persisted pending row (``_authored_pending_intent_ids``).
+        #
+        # The pending-row seed is keyed by ``intent_id`` parsed from
+        # ``order_ref``; a later non-pending row with the same
+        # ``order_ref`` (the broker fill / cancel that supersedes the
+        # pending) drops the dedupe entry so the tick is free to
+        # re-author if the engine ever re-emits the intent.
+        latest_verdict_by_intent: dict[str, str] = {}
         for row in self._wal.read_all():
             if row.exec_id:
                 self._seen_exec_ids.add(row.exec_id)
+            parsed = parse_order_ref(row.order_ref)
+            if parsed is None:
+                continue
+            latest_verdict_by_intent[parsed[1]] = row.verdict
+        for intent_id, verdict in latest_verdict_by_intent.items():
+            if verdict == "engine_only_pending":
+                self._authored_pending_intent_ids.add(intent_id)
 
     # ── lifecycle ─────────────────────────────────────────────────
 
@@ -330,9 +332,16 @@ class BrokerActivityPublisher:
         """Author ``engine_only_pending`` rows for unacked intents.
 
         Reads the intent WAL, folds it, and for every intent whose status
-        is not in ``_BROKER_ACKED_INTENT_STATUSES`` AND has a usable
-        ``order_spec`` AND hasn't already been authored, calls
-        ``author_pending_row`` and broadcasts.
+        is in ``_UNRESOLVED_STATUSES`` (the canonical "still pending"
+        predicate from ``intent_ledger``) AND has a usable ``order_spec``
+        AND hasn't already been authored, calls ``author_pending_row`` and
+        broadcasts.
+
+        ``INTENT_NOT_ACCEPTED`` is treated as resolved-terminal (not
+        pending) because ``intent_ledger._UNRESOLVED_STATUSES`` excludes
+        it: ``live_portfolio`` writes it after a ``PROVABLY_ABSENT`` probe
+        before retrying, so authoring an "Awaiting broker ack" row for it
+        would be operator-misleading.
 
         Dedup is keyed on ``intent_id``; the in-memory set is pruned to
         the currently-unacked set on every tick so an intent that
@@ -366,7 +375,10 @@ class BrokerActivityPublisher:
 
         currently_pending: set[str] = set()
         for intent_id, order_view in view.submitted_orders.items():
-            if order_view.status in _BROKER_ACKED_INTENT_STATUSES:
+            if order_view.status not in _UNRESOLVED_STATUSES:
+                # Either broker-acked (SUBMITTED / SUBMITTED_RECOVERED /
+                # ADOPTED_BROKER_ORDER) or terminally-absent
+                # (INTENT_NOT_ACCEPTED). Neither is pending.
                 continue
             if order_view.intent_kind.value != "STRATEGY":
                 # Operator-initiated flattens / recoveries surface
