@@ -186,6 +186,57 @@ effective_posture =
 
 **Why this is the right amendment to ADR 0011 rather than a new ADR.** The original derivation conflated identity and capability into one fact; the runtime contracts that consume the verdict (start-blocking on `unknown`, halt-on-transition on degradation, guarded Resume) all reasoned about identity — the readonly clause was the implementation defect, not the design intent. Splitting capability out preserves every other clause of the ADR verbatim and makes the runtime contracts actually achievable.
 
+## Amendment 2026-06-22 (broker-activity slice 3) — IBKR reconnect-recovery protocol
+
+**Driver.** ADR 0014 §8 carved "reconnect-recovery sweep semantics" out of slice 1, deferring it to "ADR 0011 amendment landing with the slice 3 implementation." The slice 1 publisher pauses authoring while the broker is disconnected, but it has no mechanism to (a) backfill executions that happened during the drop or (b) prevent a new order from being submitted into a half-recovered connection while the backfill is still running. Both gaps are operator-visible: the cockpit's Activity tab silently misses fills (the WAL is the source of truth, so a missed fill is *missed forever*, not lazily filled later), and a new order placed during the recovery window races the sweep — the sweep's dedupe key is `exec_id`, and a freshly-submitted order's eventual fill can land *inside* the sweep's `reqExecutions` result, causing it to be authored as a recovery row instead of a normal fill.
+
+**Decision.** The IBKR reconnect-recovery protocol composes four contracts; none of them changes the original ADR's identity / capability / halt-on-transition rules.
+
+### A. Halt-on-disconnect — submission refused while reconnect-recovery is in flight
+
+`place_paper_order` consults the broker-activity publisher registry on the submit hot path. While any registered publisher is mid `sweep_reconnect_recovery`, the submit is refused with a typed `OrderRefusedDuringReconnectRecoveryError` (a `OrderRefusedError` subtype). The halt is process-wide because one shared IBKR connection serves every instance — any instance's active sweep halts every instance's submissions.
+
+The order of checks is intentional: the reconnect-recovery gate fires **before** `client.require_live()` because a sweep is *only* active after a successful reconnect (so the connection is up at the time we observe `any_recovery_active`); reordering would let a stale check pass and a new order race the replay.
+
+This is composition with — not replacement of — the four-layer `place_paper_order` enforcement and the connection-state gate. The original ADR's "non-consequence: four-layer enforcement unchanged" stays true; the recovery gate is a fifth layer that sits before them.
+
+### B. Sweep-on-reconnect — `IB.reqExecutionsAsync` adapted into the publisher's authoring rails
+
+The `AutoReconnectMonitor.recovery_callbacks` chain (used today for `LIVE_BAR_AGGREGATOR.resubscribe_all`) gains a second callback: `BrokerActivityPublisherRegistry.sweep_all_for_recovery`. Order matters — bar resubscribe runs first (restore market-data subscriptions so the engine sees prices again ASAP) then the broker-activity sweep (replay the day's executions to catch anything missed mid-drop).
+
+Each publisher's `sweep_reconnect_recovery`:
+
+1. Flips `_reconnect_recovery_active=True` so the registry's cross-instance `any_recovery_active` returns True. From this point until step 5 every `place_paper_order` is refused per contract A.
+2. Calls the publisher's `recovery_source_factory` — production wiring runs `IB.reqExecutionsAsync()` and adapts each `Fill` into an `IbkrOrderEvent` (the adapter is `orders.executions_for_reconnect_recovery`, which reads `Fill.contract.symbol`, `Fill.execution.shares / price / side`, and `Fill.commissionReport.commission`; it recovers `order_type` from the still-cached `ib.trades()` Trade when present, and leaves `order_type=None` when the Trade has been purged — the publisher's authoring path then catches the resulting `UnauthorableEventError` and skips that Fill rather than substituting a placeholder string).
+3. For each returned event, applies dedupe-by-`exec_id` against `_seen_exec_ids` (the same set the live event loop maintains), authors the row via the shared `_author_and_broadcast` path with `reconnect_recovery_active=True` set on the `ReconciliationContext` so `classify_verdict` promotes the verdict to `expected_with_caveat` and the `reconnect_recovery` template fires.
+4. Foreign exec_ids (no namespace match for this publisher's instance) are NOT swept here — they are noise from other instances on the shared paper account and would be authored as `UNMATCHED_EXECUTION` by every publisher if we did. The live event loop already handles foreign rows when they arrive on `stream_order_events` after the reconnect.
+5. Lifts `_reconnect_recovery_active` in a `finally` so a crashing factory never pins the submission halt.
+
+The sweep is idempotent under concurrent invocation via a per-publisher `asyncio.Lock` — a flapping connection that triggers back-to-back reconnects serialises the sweeps so the dedupe set converges.
+
+### C. Truthfulness contract preserved — every recovery row carries the four template-required fact keys
+
+The `reconnect_recovery` template (`broker_activity_templates.py`) requires `quantity`, `symbol`, `price`, and `order_type` on every row. The `executions_for_reconnect_recovery` adapter populates `symbol`, `quantity`, and `price` from the `Fill` directly, and recovers `order_type` from the `ib.trades()` cache cross-reference. When the cross-reference misses (Trade purged from the session cache), `order_type` is left as `None` — the publisher's authoring path catches the resulting `UnauthorableEventError` from `_require_order_type` and skips that Fill with a structured log. An unauthored row is honest; a placeholder row is not. The same skip path fires for any Fill missing `symbol` or `side` (degenerate Execution shape); each skipped Fill is surfaced via the publisher's per-event logger, never silently dropped.
+
+### D. Lag-policy interaction — excessive-lag captured during a reconnect renders as caveat, not unexpected
+
+The slice-1 reconciler's `classify_verdict` already short-circuits the excessive-lag branch when `reconnect_recovery_active=True`: an excessive-lag execution captured during the reconnect window emits the `reconnect_recovery` reason, not `TIMING_CAVEAT`, and the verdict is `expected_with_caveat` (not `unexpected`). The slice-3 wiring activates that path — the flag is set on the context for the duration of the sweep; the existing ladder does the rest.
+
+The original ADR's halt-on-transition contract (Decision §5) is unchanged: it triggers on identity changes (paper-only → unsafe / unknown), not on reconnect-recovery. A reconnect that lands on the *same* DU paper account fires this amendment's sweep but does NOT halt the run.
+
+### E. Composition with deploy-time publisher lifecycle
+
+The slice-3 work moves the publisher's start from the cockpit-first lazy bootstrap (which only fired on the operator's first hit on the Activity tab) to a deploy-time hook in `live_instances.start_run`. The lazy fallback (`_ensure_publisher`) is preserved as a recovery path for the case where deploy-time bootstrap saw a transient broker disconnect. The recovery sweep and the submission halt only protect *registered* publishers; an instance whose publisher has not yet started is not subject to halt — the cockpit-first race window narrows from "every operator session" to "the few seconds between a fresh start and the first deploy-time bootstrap." Acceptable: the engine's own intent_events.jsonl is the durable record of what was submitted, and the WAL fills in the gap when the publisher does start.
+
+**Composition rules unchanged from prior amendments:**
+
+- Identity vs. capability split (2026-06-21 amendment) is unaffected — the recovery sweep operates on `paper-only` identity runs (it has nothing to do with capability).
+- The four-layer `place_paper_order` enforcement is unchanged. The recovery halt is a fifth layer that fires *before* the four.
+- The halt-on-transition contract (Decision §5) is unchanged. A reconnect onto the same DU paper account is not an identity transition.
+- The guarded-Resume contract (Decision §6) is unchanged. Resume still consults identity, capability, and the existing guards; the recovery sweep finishes before any Resume is attempted because the cockpit's Recovering banner is up.
+
+**Why this is the right amendment to ADR 0011 rather than a new ADR.** ADR 0014 §8 explicitly deferred the reconnect-recovery semantics to this ADR; the protocol is structurally a sibling of the halt-on-transition contract (both are "the broker connection's behaviour drives runtime safety gates"); and the submission-halt mechanism in `place_paper_order` extends the four-layer enforcement that this ADR already references. A separate ADR would force every consumer to learn two safety contracts for one connection lifecycle.
+
 ## Consequences
 
 **Positive:**

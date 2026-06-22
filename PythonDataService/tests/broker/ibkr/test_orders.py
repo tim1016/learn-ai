@@ -736,3 +736,168 @@ async def test_stream_order_events_handles_fill_with_no_execution_object() -> No
     fill_event = next(e for e in out if e.event_type == "fill")
     assert fill_event.exec_id is None
     assert fill_event.client_id is None
+
+
+# ── Slice 3 / ADR 0011 amendment — reconnect-recovery halt gate ───────
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_refused_during_reconnect_recovery_sweep(
+    monkeypatch,
+) -> None:
+    """Slice 3: ``place_paper_order`` must refuse when any broker-activity
+    publisher is mid reconnect-recovery sweep — the broker is replaying
+    history and a new order would race the sweep's exec_id dedupe set.
+    The check fires BEFORE ``require_live``, so even a fully-healthy
+    connection is gated."""
+    from app.broker.ibkr.orders import OrderRefusedDuringReconnectRecoveryError
+    from app.services.broker_activity_publisher import get_publisher_registry
+
+    client = _client()
+    # Stub the registry so ``any_recovery_active`` returns True without
+    # standing up a real publisher.
+    registry = get_publisher_registry()
+    monkeypatch.setattr(registry, "any_recovery_active", lambda: True)
+
+    with pytest.raises(
+        OrderRefusedDuringReconnectRecoveryError,
+        match="reconnect-recovery sweep is in progress",
+    ):
+        await place_paper_order(client, _spec())
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_executions_for_reconnect_recovery_leaves_order_type_none_when_trade_purged() -> None:
+    """Slice 3 truthfulness contract: when the Trade for a returned
+    ``Fill`` has been purged from ``ib.trades()``, the adapter leaves
+    ``order_type=None`` so the publisher's authoring path skips that
+    row instead of substituting a placeholder string. ADR 0014 §3
+    forbids placeholders; an unauthored row is honest, a placeholder
+    row is not.
+    """
+    from datetime import datetime, timezone
+
+    from app.broker.ibkr.orders import executions_for_reconnect_recovery
+
+    client = _client()
+    # ``ib.trades()`` returns empty — the Trade for this execution is gone.
+    client.ib.trades = MagicMock(return_value=[])
+    # ``reqExecutionsAsync`` returns a single Fill whose Execution has
+    # complete fields but no matching Trade.
+    fill = SimpleNamespace(
+        contract=SimpleNamespace(symbol="SPY", conId=12345),
+        execution=SimpleNamespace(
+            execId="exec-purged-1",
+            permId=999,
+            orderId=42,
+            clientId=7,
+            shares=100.0,
+            price=450.0,
+            cumQty=100.0,
+            side="BOT",
+            orderRef="learn-ai/sid/v1:intent-1",
+            time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+        ),
+        commissionReport=SimpleNamespace(commission=1.0),
+    )
+    client.ib.reqExecutionsAsync = AsyncMock(return_value=[fill])
+
+    events = await executions_for_reconnect_recovery(client)
+
+    assert len(events) == 1
+    assert events[0].symbol == "SPY"
+    assert events[0].exec_id == "exec-purged-1"
+    # The truthfulness contract: order_type stays None for the publisher
+    # to surface as unauthorable rather than mislabeling.
+    assert events[0].order_type is None
+
+
+@pytest.mark.asyncio
+async def test_executions_for_reconnect_recovery_recovers_order_type_from_trade() -> None:
+    """When the original Trade IS still cached in ``ib.trades()`` (the
+    common case during a same-session reconnect), the adapter populates
+    ``order_type`` from ``Trade.order.orderType``."""
+    from datetime import datetime, timezone
+
+    from app.broker.ibkr.orders import executions_for_reconnect_recovery
+
+    client = _client()
+    trade = SimpleNamespace(
+        contract=SimpleNamespace(symbol="SPY", conId=12345),
+        order=SimpleNamespace(orderId=42, permId=999, action="BUY", orderType="LMT"),
+        orderStatus=SimpleNamespace(status="Filled"),
+    )
+    client.ib.trades = MagicMock(return_value=[trade])
+    fill = SimpleNamespace(
+        contract=SimpleNamespace(symbol="SPY", conId=12345),
+        execution=SimpleNamespace(
+            execId="exec-cached-1",
+            permId=999,
+            orderId=42,
+            clientId=7,
+            shares=100.0,
+            price=450.0,
+            cumQty=100.0,
+            side="BOT",
+            orderRef="learn-ai/sid/v1:intent-1",
+            time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+        ),
+        commissionReport=SimpleNamespace(commission=1.0),
+    )
+    client.ib.reqExecutionsAsync = AsyncMock(return_value=[fill])
+
+    events = await executions_for_reconnect_recovery(client)
+
+    assert len(events) == 1
+    assert events[0].order_type == "LMT"
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_proceeds_when_no_sweep_active(
+    monkeypatch,
+) -> None:
+    """Regression: the recovery-halt gate must default to allowing
+    submission. A bug in ``any_recovery_active`` that pinned True would
+    otherwise silently freeze every submission across every instance."""
+    from app.services.broker_activity_publisher import get_publisher_registry
+
+    client = _client()
+    registry = get_publisher_registry()
+    # Explicit stub to ensure no test ordering pollutes the gate.
+    monkeypatch.setattr(registry, "any_recovery_active", lambda: False)
+
+    ack = await place_paper_order(client, _spec())
+    assert ack.order_id == 42
+    client.ib.placeOrder.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_executions_for_reconnect_recovery_times_out_on_hang(monkeypatch) -> None:
+    """Slice 3 follow-up: a hung ``reqExecutionsAsync`` (half-open
+    Gateway after a reconnect) must time out into a ``BrokerError``
+    instead of awaiting forever.
+
+    Before the fix the sweep would pin the publisher's
+    ``_reconnect_recovery_active`` flag (held in a ``try/finally``
+    around the unbounded await) and every subsequent
+    ``place_paper_order`` would stay refused until process restart.
+    The ``BrokerError`` surfaces cleanly so the sweep's ``finally``
+    lifts the halt.
+    """
+    from app.broker.ibkr import orders as orders_mod
+    from app.broker.ibkr.client import BrokerError
+    from app.broker.ibkr.orders import executions_for_reconnect_recovery
+
+    monkeypatch.setattr(orders_mod, "_RECOVERY_EXECUTIONS_TIMEOUT_S", 0.01)
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[])
+
+    async def _hanging() -> list:
+        await asyncio.sleep(1.0)  # never completes within the timeout
+        return []
+
+    client.ib.reqExecutionsAsync = _hanging
+
+    with pytest.raises(BrokerError, match="timed out"):
+        await executions_for_reconnect_recovery(client)

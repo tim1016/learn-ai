@@ -581,6 +581,504 @@ async def test_slow_subscriber_receives_sentinel_when_dropped(
     assert drained[-1] is None, f"expected None sentinel at tail, got {drained[-1]!r}"
     # The subscriber should have been discarded from the registry.
     assert queue not in publisher._subscribers
+# ── Slice 3 — reconnect-recovery sweep ──────────────────────────────
+
+
+def _recovery_factory(events: list[IbkrOrderEvent]):
+    """Build a ``recovery_source_factory`` test double.
+
+    The factory returns a coroutine that resolves to ``events`` — the
+    same shape ``executions_for_reconnect_recovery`` produces in
+    production. Each invocation returns a fresh copy so the publisher's
+    iteration order is observable.
+    """
+
+    async def _fetch() -> list[IbkrOrderEvent]:
+        return list(events)
+
+    return _fetch
+
+
+def _build_publisher_with_recovery(
+    tmp_path: Path,
+    *,
+    live_events: list[IbkrOrderEvent] | None = None,
+    recovery_events: list[IbkrOrderEvent] | None = None,
+) -> tuple[BrokerActivityPublisher, Path, Path]:
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source(live_events or []),
+        recovery_source_factory=_recovery_factory(recovery_events or []),
+    )
+    return publisher, run_dir, artifacts
+
+
+async def test_reconnect_sweep_authors_missed_execs_as_caveats(
+    tmp_path: Path,
+) -> None:
+    """After a reconnect, the sweep authors any execution not yet in the
+    WAL with the ``reconnect_recovery`` template (verdict
+    ``expected_with_caveat``)."""
+    recovered = _fill_event(exec_id="recovered-1")
+    publisher, run_dir, _ = _build_publisher_with_recovery(
+        tmp_path, recovery_events=[recovered]
+    )
+    # No live events — purely test the sweep path.
+    count = await publisher.sweep_reconnect_recovery()
+    assert count == 1
+    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    rows = wal.read_all()
+    assert len(rows) == 1
+    assert rows[0].exec_id == "recovered-1"
+    assert rows[0].verdict == Verdict.EXPECTED_WITH_CAVEAT
+    assert rows[0].template_key == "reconnect_recovery"
+    # Truthfulness: the four template-required keys must render — the
+    # narrative carries the symbol + price + order_type.
+    assert "SPY" in rows[0].headline
+    assert "450" in rows[0].headline
+
+
+async def test_reconnect_sweep_dedupes_already_seen_execs(tmp_path: Path) -> None:
+    """An exec_id already in the WAL (from a row authored before the
+    drop) is not re-authored — the sweep's dedupe set is shared with
+    the live event loop."""
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    # Pre-populate the WAL — this row predates the disconnect.
+    pre = BrokerActivityRow(
+        seq=1,
+        ts_ms=1_700_000_000_000 - 1,
+        exec_id="seen-1",
+        perm_id=999,
+        order_ref=ORDER_REF,
+        symbol="SPY",
+        side="BUY",
+        quantity=100.0,
+        price=450.0,
+        order_type="MKT",
+        verdict=Verdict.EXPECTED,
+        template_key="normal_fill",
+        template_version=1,
+        headline="pre-existing",
+        narrative="pre-existing",
+    )
+    wal.allocate_seq()
+    wal.append_row(pre)
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_recovery_factory(
+            [
+                _fill_event(exec_id="seen-1"),  # IBKR redelivered this on resume
+                _fill_event(exec_id="missed-2"),  # genuinely missed during the drop
+            ]
+        ),
+    )
+
+    count = await publisher.sweep_reconnect_recovery()
+    assert count == 1  # only the genuinely-missed exec was authored
+    rows = wal.read_all()
+    assert len(rows) == 2
+    assert rows[0].exec_id == "seen-1"
+    assert rows[0].headline == "pre-existing"  # untouched
+    assert rows[1].exec_id == "missed-2"
+    assert rows[1].template_key == "reconnect_recovery"
+
+
+async def test_reconnect_sweep_skips_foreign_namespace(tmp_path: Path) -> None:
+    """Executions with no namespace match (foreign account activity) are
+    NOT authored by the recovery sweep — they are noise from other
+    instances on the shared paper account. The live event loop still
+    picks them up as foreign rows after reconnect."""
+    foreign = _fill_event(
+        order_ref="learn-ai/some-other-instance/v1:other-intent",
+        exec_id="foreign-recover-1",
+    )
+    publisher, run_dir, _ = _build_publisher_with_recovery(
+        tmp_path, recovery_events=[foreign]
+    )
+    count = await publisher.sweep_reconnect_recovery()
+    assert count == 0
+    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    assert wal.read_all() == []
+
+
+async def test_excessive_lag_during_reconnect_window_renders_as_caveat_not_unexpected(
+    tmp_path: Path,
+) -> None:
+    """An exec whose intent-to-exec lag exceeds ``excessive_lag_ms``
+    would normally classify as UNEXPECTED with a TIMING_CAVEAT reason
+    — but during a reconnect sweep, the reconciler's existing branch
+    promotes the row to EXPECTED_WITH_CAVEAT under the reconnect
+    template instead."""
+    # Seed an envelope where the engine recorded an old intent_created_ms
+    # so the lag from intent to exec is very large.
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    envelope = LiveStateEnvelope(
+        strategy_instance_id=SID,
+        run_id="run-recovery-lag",
+        bot_order_namespace=NS,
+        ib_client_id=42,
+        last_processed_bar_ms=1,
+        last_artifact_flush_ms=1,
+        submitted_orders={
+            INTENT_ID: {
+                "perm_id": 999,
+                "order_id": 42,
+                "status": "Submitted",
+                "symbol": "SPY",
+                "intent_created_ms": 1_700_000_000_000 - 60_000,  # 1 min before exec
+                "dispatched_ms": 1_700_000_000_000 - 59_000,
+                "acked_ms": 1_700_000_000_000 - 58_000,
+                "requested_qty": 100.0,
+            }
+        },
+    )
+    repo = LiveStateSidecarRepo(stable_live_state_path(artifacts, SID))
+    repo._path.parent.mkdir(parents=True, exist_ok=True)
+    repo.write(envelope)
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(
+            caveat_lag_ms=2_000,
+            excessive_lag_ms=10_000,
+        ),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_recovery_factory(
+            [_fill_event(exec_id="lag-recover-1")]
+        ),
+    )
+
+    count = await publisher.sweep_reconnect_recovery()
+    assert count == 1
+    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    rows = wal.read_all()
+    assert len(rows) == 1
+    # The reconnect_recovery reason superseded TIMING_CAVEAT.
+    assert rows[0].template_key == "reconnect_recovery"
+    assert rows[0].verdict == Verdict.EXPECTED_WITH_CAVEAT
+
+
+async def test_reconnect_sweep_sets_active_flag_during_sweep(
+    tmp_path: Path,
+) -> None:
+    """While the sweep is in flight, ``is_reconnect_recovery_active`` is
+    True so the registry surfaces it; the flag clears on completion (and
+    on a factory raise, via the finally clause)."""
+    seen_during_sweep: list[bool] = []
+
+    async def _observing_factory() -> list[IbkrOrderEvent]:
+        # Observe the flag inside the sweep — confirms it's set before
+        # rows are authored, not just after.
+        seen_during_sweep.append(publisher.is_reconnect_recovery_active)
+        return [_fill_event(exec_id="observe-1")]
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_observing_factory,
+    )
+    assert publisher.is_reconnect_recovery_active is False
+    await publisher.sweep_reconnect_recovery()
+    assert seen_during_sweep == [True]
+    assert publisher.is_reconnect_recovery_active is False
+
+
+async def test_reconnect_sweep_clears_flag_on_factory_raise(
+    tmp_path: Path,
+) -> None:
+    """A crashing factory must lift the submission halt — otherwise a
+    single bad sweep would pin the halt forever."""
+
+    async def _bad_factory() -> list[IbkrOrderEvent]:
+        raise RuntimeError("simulated reqExecutions failure")
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_bad_factory,
+    )
+    with pytest.raises(RuntimeError, match="simulated reqExecutions failure"):
+        await publisher.sweep_reconnect_recovery()
+    assert publisher.is_reconnect_recovery_active is False
+
+
+async def test_reconnect_sweep_no_op_without_factory(tmp_path: Path) -> None:
+    """A publisher built without a ``recovery_source_factory`` (legacy
+    callers / tests that don't exercise the sweep) returns 0 from
+    ``sweep_reconnect_recovery`` without touching the WAL."""
+    publisher, run_dir, _ = _build_publisher(tmp_path, [])
+    assert publisher._recovery_source_factory is None  # sanity
+    count = await publisher.sweep_reconnect_recovery()
+    assert count == 0
+    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    assert wal.read_all() == []
+
+
+async def test_registry_any_recovery_active_reflects_publisher_state(
+    tmp_path: Path,
+) -> None:
+    """The registry's ``any_recovery_active`` ORs the flag across every
+    registered publisher — the gate ``place_paper_order`` reads."""
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    registry = BrokerActivityPublisherRegistry()
+    assert registry.any_recovery_active() is False
+
+    # Build a publisher whose factory blocks on an event so we can
+    # observe the flag mid-sweep.
+    block = asyncio.Event()
+    release_observed = asyncio.Event()
+
+    async def _slow_factory() -> list[IbkrOrderEvent]:
+        release_observed.set()
+        await block.wait()
+        return []
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_slow_factory,
+    )
+    await registry.register(publisher, strategy_instance_id=SID)
+    try:
+        sweep_task = asyncio.create_task(publisher.sweep_reconnect_recovery())
+        await asyncio.wait_for(release_observed.wait(), timeout=0.5)
+        assert registry.any_recovery_active() is True
+        block.set()
+        await asyncio.wait_for(sweep_task, timeout=0.5)
+        assert registry.any_recovery_active() is False
+    finally:
+        await registry.unregister(SID)
+
+
+async def test_registry_sweep_all_isolates_per_publisher_failures(
+    tmp_path: Path,
+) -> None:
+    """A raising sweep on one publisher must not abort the chain for
+    others — the monitor's recovery flow shouldn't be hostage to one
+    instance's bad broker state."""
+    registry = BrokerActivityPublisherRegistry()
+    artifacts_a = tmp_path / "a" / "artifacts"
+    artifacts_b = tmp_path / "b" / "artifacts"
+    run_dir_a = tmp_path / "a" / "run-dir"
+    run_dir_b = tmp_path / "b" / "run-dir"
+
+    sid_a = "sid-multi-a"
+    ns_a = f"learn-ai/{sid_a}/v1"
+    env_a = LiveStateEnvelope(
+        strategy_instance_id=sid_a,
+        run_id="run-a",
+        bot_order_namespace=ns_a,
+        ib_client_id=1,
+        last_processed_bar_ms=1,
+        last_artifact_flush_ms=1,
+    )
+    LiveStateSidecarRepo(stable_live_state_path(artifacts_a, sid_a))._path.parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    LiveStateSidecarRepo(stable_live_state_path(artifacts_a, sid_a)).write(env_a)
+
+    sid_b = "sid-multi-b"
+    ns_b = f"learn-ai/{sid_b}/v1"
+    env_b = LiveStateEnvelope(
+        strategy_instance_id=sid_b,
+        run_id="run-b",
+        bot_order_namespace=ns_b,
+        ib_client_id=2,
+        last_processed_bar_ms=1,
+        last_artifact_flush_ms=1,
+    )
+    LiveStateSidecarRepo(stable_live_state_path(artifacts_b, sid_b))._path.parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    LiveStateSidecarRepo(stable_live_state_path(artifacts_b, sid_b)).write(env_b)
+
+    async def _crashing() -> list[IbkrOrderEvent]:
+        raise RuntimeError("publisher A's broker is upset")
+
+    async def _good() -> list[IbkrOrderEvent]:
+        return []
+
+    pub_a = BrokerActivityPublisher(
+        strategy_instance_id=sid_a,
+        bot_order_namespace=ns_a,
+        run_dir=run_dir_a,
+        artifacts_root=artifacts_a,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_crashing,
+    )
+    pub_b = BrokerActivityPublisher(
+        strategy_instance_id=sid_b,
+        bot_order_namespace=ns_b,
+        run_dir=run_dir_b,
+        artifacts_root=artifacts_b,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_good,
+    )
+    await registry.register(pub_a, strategy_instance_id=sid_a)
+    await registry.register(pub_b, strategy_instance_id=sid_b)
+    try:
+        results = await registry.sweep_all_for_recovery()
+        # A's exception was logged-and-isolated; B's sweep still ran.
+        assert results == {sid_a: 0, sid_b: 0}
+    finally:
+        await registry.stop_all()
+
+
+async def test_run_recovery_chain_halts_submissions_before_first_callback(
+    tmp_path: Path,
+) -> None:
+    """Slice 3 follow-up: the registry-wide halt must be active for the
+    *entire* recovery window — including any callback that runs before
+    the executions sweep. Without this, a slow bar resubscribe would
+    leave submissions enabled and a new order placed during that window
+    could be picked up by the subsequent sweep and mis-authored as a
+    ``reconnect_recovery`` row.
+
+    The test observes ``any_recovery_active`` from inside the first
+    callback: it must already be True when that callback's body runs,
+    not only after the sweep flips its per-publisher flag.
+    """
+    registry = BrokerActivityPublisherRegistry()
+    seen_halt_inside_first: list[bool] = []
+    seen_halt_inside_second: list[bool] = []
+
+    async def _first_callback() -> None:
+        seen_halt_inside_first.append(registry.any_recovery_active())
+
+    async def _second_callback() -> None:
+        seen_halt_inside_second.append(registry.any_recovery_active())
+
+    assert registry.any_recovery_active() is False
+    await registry.run_recovery_chain([_first_callback, _second_callback])
+    assert seen_halt_inside_first == [True]
+    assert seen_halt_inside_second == [True]
+    # Halt lifts after the chain completes.
+    assert registry.any_recovery_active() is False
+
+
+async def test_run_recovery_chain_clears_halt_on_callback_exception(
+    tmp_path: Path,
+) -> None:
+    """The halt must lift even when a callback raises — otherwise a
+    single bad callback would pin every instance's submissions until
+    process restart. The exception still propagates so the monitor can
+    log + retry."""
+    registry = BrokerActivityPublisherRegistry()
+
+    async def _good_callback() -> None:
+        return None
+
+    async def _bad_callback() -> None:
+        raise RuntimeError("simulated bar resubscribe failure")
+
+    with pytest.raises(RuntimeError, match="simulated bar resubscribe failure"):
+        await registry.run_recovery_chain([_good_callback, _bad_callback])
+    assert registry.any_recovery_active() is False
+
+
+async def test_run_recovery_chain_runs_callbacks_in_order(
+    tmp_path: Path,
+) -> None:
+    """The chain runs callbacks sequentially in the order provided so
+    callers can rely on bar-resubscribe-then-sweep ordering (or any
+    other dependency order they want)."""
+    registry = BrokerActivityPublisherRegistry()
+    order: list[str] = []
+
+    async def _first() -> None:
+        order.append("first")
+
+    async def _second() -> None:
+        order.append("second")
+
+    async def _third() -> None:
+        order.append("third")
+
+    await registry.run_recovery_chain([_first, _second, _third])
+    assert order == ["first", "second", "third"]
+
+
+async def test_executions_for_reconnect_recovery_times_out_on_hang(
+    tmp_path: Path,
+) -> None:
+    """Slice 3 follow-up: a hung ``reqExecutionsAsync`` (half-open
+    Gateway after reconnect) must surface as ``BrokerError`` so the
+    publisher's ``finally`` clears the submission halt. Without the
+    timeout the await would hang forever, pinning every instance's
+    ``place_paper_order`` until process restart.
+
+    Uses the publisher's ``recovery_source_factory`` hook to confirm the
+    halt is properly cleared after the timeout-as-BrokerError surfaces
+    — the same lifecycle the production wiring guarantees.
+    """
+    async def _hanging_factory() -> list[IbkrOrderEvent]:
+        # Simulate a hung reqExecutionsAsync that resolves after the
+        # production timeout. The publisher should not wait for this;
+        # the timeout (or whatever the factory raises) surfaces first.
+        raise TimeoutError("simulated reqExecutionsAsync hang")
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_hanging_factory,
+    )
+    with pytest.raises(TimeoutError, match="simulated reqExecutionsAsync hang"):
+        await publisher.sweep_reconnect_recovery()
+    # The submission halt must have cleared, so subsequent
+    # place_paper_order calls succeed instead of staying refused forever.
+    assert publisher.is_reconnect_recovery_active is False
+
+
+# ── End slice 3 sweep tests ─────────────────────────────────────────
 
 
 async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:

@@ -45,6 +45,21 @@ logger = logging.getLogger(__name__)
 # whole loop. Per .claude/rules/python.md: "Timeouts on all external calls."
 _QUALIFY_TIMEOUT_S = 10.0
 
+# Bound on the reconnect-recovery executions fetch. ``reqExecutionsAsync``
+# completes only when IBKR fires ``execDetailsEnd``; on a half-open or
+# silent-after-reconnect connection that callback never arrives and the
+# await would hang. The sweep is invoked from the
+# ``AutoReconnectMonitor`` recovery chain *and* holds the per-publisher
+# submission halt (``_reconnect_recovery_active``) for the duration of
+# the await — so an unbounded hang would leave every instance's
+# ``place_paper_order`` refused until process restart. 30s is generous:
+# a healthy Gateway returns the day's executions in well under a second;
+# anything longer signals a degraded connection that the sweep cannot
+# usefully complete on. On timeout we raise ``BrokerError`` so the
+# publisher's ``finally`` clears the halt and the next reconnect cycle
+# can retry the sweep cleanly.
+_RECOVERY_EXECUTIONS_TIMEOUT_S = 30.0
+
 
 # Process-level idempotency cache: maps client_order_id → previously-issued
 # IbkrOrderAck. Survives across requests within a single uvicorn worker;
@@ -91,6 +106,24 @@ class OrderRefusedError(BrokerError):
     """Order placement was refused by a safety check before reaching IBKR."""
 
 
+class OrderRefusedDuringReconnectRecoveryError(OrderRefusedError):
+    """Order refused because the broker-activity publisher is mid-sweep.
+
+    Slice 3 / ADR 0011 amendment. After a successful reconnect the
+    publisher runs ``sweep_reconnect_recovery`` to replay any executions
+    that happened while the connection was down. Submitting a new order
+    while that sweep is in flight would race the broker's execution
+    replay (the new ``placeOrder`` could be processed before the sweep
+    finishes draining the queue, so the sweep would see *its own* fresh
+    execution and author it as a recovery row).
+
+    The caller retries once the sweep clears (the cockpit's reconnect
+    banner stays up until then). The halt is per-process — one shared
+    IBKR connection serves every instance, so any instance's active
+    sweep halts every instance's submissions.
+    """
+
+
 class OrderNotFoundError(BrokerError):
     """Cancel or lookup targeted an order that IBKR doesn't know about."""
 
@@ -131,6 +164,33 @@ def _event_order_type(trade) -> str | None:
     a default that would mis-author the operator-facing row."""
     order_type = getattr(getattr(trade, "order", None), "orderType", None)
     return str(order_type) if order_type else None
+
+
+def _check_reconnect_recovery_halt() -> None:
+    """Refuse if any broker-activity publisher is mid reconnect-recovery sweep.
+
+    Slice 3 / ADR 0011 amendment. The publisher's sweep replays the
+    day's executions via ``IB.reqExecutionsAsync`` after a reconnect;
+    submitting a new order in that window would race the replay because
+    the publisher uses ``exec_id`` for dedupe, and the new order's
+    eventual fill could land *inside* the sweep's result set (depending
+    on how quickly IBKR processes the new order versus how long the
+    sweep takes), causing the sweep to author the just-placed order as
+    a recovery row.
+
+    The import is deferred so this module does not depend on the
+    services layer at import time — the broker package is below
+    ``services`` in the layer ordering.
+    """
+    from app.services.broker_activity_publisher import get_publisher_registry
+
+    if get_publisher_registry().any_recovery_active():
+        raise OrderRefusedDuringReconnectRecoveryError(
+            "Refusing to place order: broker-activity reconnect-recovery sweep "
+            "is in progress. The publisher is replaying executions captured "
+            "during the recent broker drop; retry once the sweep clears (the "
+            "cockpit's 'Recovering' banner lifts at that point)."
+        )
 
 
 def _enforce_paper_safety(client: IbkrClient, spec: IbkrOrderSpec) -> str:
@@ -290,7 +350,26 @@ async def place_paper_order(
     the synchronous ``permId`` is its only chance to capture the stable id
     that the next same-account relaunch needs to recognize the replayed
     recovery fill as bot-owned (see ``run._recovery_flatten``).
+
+    Slice 3 / ADR 0011 amendment — submission halt during reconnect
+    recovery. Before any of the paper-safety layers, the function refuses
+    with ``OrderRefusedDuringReconnectRecoveryError`` when ANY
+    broker-activity publisher is currently running
+    ``sweep_reconnect_recovery``. The broker connection is mid-replay of
+    the day's executions, so a new ``placeOrder`` would race the sweep
+    (the publisher would see *its own* fresh execution and author it as a
+    recovery row). The halt is per-process — one shared IBKR connection
+    serves every instance — and clears the moment every active sweep
+    finishes.
     """
+    # Slice 3 / ADR 0011 amendment — refuse new submissions while any
+    # publisher is mid reconnect-recovery sweep. The gate is before the
+    # connection check because a sweep is *only* active after a
+    # successful reconnect (so the connection is up at the time we
+    # observe ``any_recovery_active``); reordering would let a stale
+    # check pass and a new order race the replay.
+    _check_reconnect_recovery_halt()
+
     # Codex P1 on PR #563 — ``require_live`` refuses on TWS 1100 soft loss,
     # not just on hard close. The cockpit's "Broker reconnecting" banner
     # was cosmetic without this: ``require_connected`` ignored
@@ -674,6 +753,201 @@ def _fill_to_event(
         cumulative_filled=running_shares,
         remaining=running_remaining,
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
+        exec_time_ms=exec_time_ms,
+        fee=float(fee) if fee is not None else None,
+        ts_ms=_now_ms(),
+    )
+
+
+async def executions_for_reconnect_recovery(
+    client: IbkrClient,
+) -> list[IbkrOrderEvent]:
+    """Adapt the day's IBKR executions into ``IbkrOrderEvent``s for the
+    broker-activity publisher's reconnect-recovery sweep.
+
+    Calls ``IB.reqExecutionsAsync()`` to fetch every execution the
+    Gateway is willing to report for this client (typically the current
+    trading day). For each ``Fill``, builds an ``IbkrOrderEvent`` with
+    the four truthfulness-contract keys the ``reconnect_recovery``
+    template requires (``quantity``, ``symbol``, ``price``,
+    ``order_type``):
+
+    * ``symbol`` comes from ``Fill.contract.symbol`` directly.
+    * ``quantity`` and ``price`` come from ``Fill.execution.shares`` and
+      ``Fill.execution.price``.
+    * ``side`` is derived from ``Fill.execution.side`` (IBKR sends
+      "BOT" / "SLD" — translated to "BUY" / "SELL").
+    * ``order_type`` is recovered from ``ib.trades()`` when the original
+      Trade is still cached (the live API session keeps Trade objects
+      for the session's open and recently-closed orders). When the
+      Trade is absent (e.g. a fill on a long-since-completed order),
+      ``order_type`` is left as ``None`` — the publisher's authoring
+      path catches the resulting ``UnauthorableEventError`` and skips
+      that Fill with a structured log. The truthfulness contract
+      (ADR 0014 §3) forbids substituting a placeholder; an unauthored
+      row is honest, a placeholder row is not.
+    * ``commission`` rides on ``Fill.commissionReport.commission`` once
+      IBKR reports it (a beat after the fill); ``None`` otherwise.
+
+    Refuses (raises ``NotConnectedError`` from ``require_live``) if the
+    client is not currently connected — the caller (the
+    ``AutoReconnectMonitor`` post-reconnect chain) only invokes this
+    after a successful reconnect, so a still-disconnected client here
+    is a true error.
+    """
+    client.require_live()
+    account_id = client.connected_account
+    if account_id is None:
+        raise BrokerError("connected client has no account_id")
+
+    # Bounded fetch: a hung ``reqExecutionsAsync`` would pin the
+    # publisher's submission halt indefinitely (the sweep's ``finally``
+    # only runs when this await returns or raises). See
+    # ``_RECOVERY_EXECUTIONS_TIMEOUT_S`` for the rationale on 30s.
+    try:
+        fills = await asyncio.wait_for(
+            client.ib.reqExecutionsAsync(),
+            timeout=_RECOVERY_EXECUTIONS_TIMEOUT_S,
+        )
+    except TimeoutError as exc:
+        raise BrokerError(
+            f"IBKR reqExecutionsAsync timed out after "
+            f"{_RECOVERY_EXECUTIONS_TIMEOUT_S:.0f}s; the Gateway connection "
+            "may be half-open. Reconnect-recovery sweep aborted; the "
+            "publisher's submission halt has been cleared so the next "
+            "reconnect cycle can retry the sweep."
+        ) from exc
+
+    # Index existing trades by orderId / permId so we can recover the
+    # original order_type for each fill. Trade objects carry the Order
+    # for the session's open and recently-completed orders; a fill on a
+    # purged Trade falls through to the MKT default below.
+    trades_by_order_id: dict[int, object] = {}
+    trades_by_perm_id: dict[int, object] = {}
+    for trade in client.ib.trades():
+        try:
+            trades_by_order_id[int(trade.order.orderId)] = trade
+            if trade.order.permId:
+                trades_by_perm_id[int(trade.order.permId)] = trade
+        except (AttributeError, TypeError, ValueError):
+            continue
+
+    events: list[IbkrOrderEvent] = []
+    for fill in fills:
+        event = _fill_to_recovery_event(
+            fill,
+            account_id=account_id,
+            trades_by_order_id=trades_by_order_id,
+            trades_by_perm_id=trades_by_perm_id,
+        )
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def _fill_to_recovery_event(
+    fill,
+    *,
+    account_id: str,
+    trades_by_order_id: dict[int, object],
+    trades_by_perm_id: dict[int, object],
+) -> IbkrOrderEvent | None:
+    """Standalone Fill → IbkrOrderEvent adapter for the recovery sweep.
+
+    Distinct from ``_fill_to_event`` (which composes off an active Trade
+    object known to ib_async) because ``reqExecutionsAsync`` returns
+    free-standing ``Fill`` records whose Trade may have been purged from
+    the live cache. Returns ``None`` only when the Fill is too degenerate
+    to author truthfully — typically a missing ``Fill.execution`` (which
+    never happens on a real Fill but is defended against because the
+    sweep runs on every reconnect and one bad row would skip every
+    following row).
+    """
+    execution = getattr(fill, "execution", None)
+    contract = getattr(fill, "contract", None)
+    if execution is None or contract is None:
+        return None
+
+    exec_id = getattr(execution, "execId", None)
+    perm_id_raw = getattr(execution, "permId", None)
+    order_id_raw = getattr(execution, "orderId", None)
+    client_id_raw = getattr(execution, "clientId", None)
+    order_ref = getattr(execution, "orderRef", "") or None
+
+    symbol = getattr(contract, "symbol", None)
+    if not symbol:
+        return None
+
+    # IBKR sends "BOT" / "SLD" on the Execution; the row's side enum is
+    # "BUY" / "SELL". Anything else is non-equity-style and falls back
+    # to None (the reconciler treats absence as unauthorable, which is
+    # the right halt path for an unrecognised side).
+    raw_side = getattr(execution, "side", "")
+    side: str | None
+    if raw_side == "BOT":
+        side = "BUY"
+    elif raw_side == "SLD":
+        side = "SELL"
+    else:
+        side = None
+
+    # Look up the original Trade to recover the order_type the operator
+    # saw at submit time. Prefer permId (stable across reconnects) over
+    # orderId (per-client-session). When both miss, leave ``order_type``
+    # as ``None`` — the truthfulness contract (ADR 0014 §3 / briefing)
+    # forbids substituting a placeholder ("MKT" or otherwise) for a
+    # field we cannot prove. The publisher's authoring path catches
+    # ``UnauthorableEventError`` on the missing ``order_type`` and
+    # skips this Fill with a structured log; an unauthored row is
+    # honest, a placeholder row is not.
+    trade: object | None = None
+    if perm_id_raw:
+        trade = trades_by_perm_id.get(int(perm_id_raw))
+    if trade is None and order_id_raw is not None:
+        try:
+            trade = trades_by_order_id.get(int(order_id_raw))
+        except (TypeError, ValueError):
+            trade = None
+    order_type = _event_order_type(trade) if trade is not None else None
+
+    # Commission rides on the fill once IBKR reports it (a beat after
+    # the execution). None until reported — never a fabricated zero so
+    # downstream COMMISSION_MISSING vs COMMISSION_DRIFT stays
+    # distinguishable.
+    commission_obj = getattr(fill, "commissionReport", None)
+    fee = (
+        getattr(commission_obj, "commission", None)
+        if commission_obj is not None
+        else None
+    )
+
+    exec_time = getattr(execution, "time", None)
+    exec_time_ms = (
+        int(exec_time.timestamp() * 1000) if exec_time is not None else None
+    )
+
+    shares = float(getattr(execution, "shares", 0.0) or 0.0)
+    price = float(getattr(execution, "price", 0.0) or 0.0) or None
+    cumulative_filled = float(getattr(execution, "cumQty", 0.0) or 0.0) or shares
+
+    return IbkrOrderEvent(
+        account_id=account_id,
+        order_id=int(order_id_raw) if order_id_raw is not None else 0,
+        perm_id=int(perm_id_raw) if perm_id_raw else None,
+        con_id=int(getattr(contract, "conId", 0) or 0) or None,
+        event_type="fill",
+        status="Filled",
+        order_ref=order_ref,
+        symbol=str(symbol),
+        side=side,  # type: ignore[arg-type]
+        order_type=order_type,
+        exec_id=str(exec_id) if exec_id else None,
+        client_id=int(client_id_raw) if client_id_raw is not None else None,
+        fill_quantity=shares,
+        avg_fill_price=price,
+        cumulative_filled=cumulative_filled,
+        remaining=0.0,
+        last_fill_price=price,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
         ts_ms=_now_ms(),

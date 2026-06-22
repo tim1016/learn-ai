@@ -15,13 +15,25 @@ Authoring itself is pure (lives in ``broker_activity_reconciler``); this
 module holds the state — subscriber queues, dedupe cache, WAL handle, the
 background task. The ``BrokerActivityPublisherRegistry`` provides the
 data-plane-singleton lifecycle (one publisher per ``strategy_instance_id``).
+
+Slice 3 (ADR 0011 amendment): the publisher additionally exposes a
+``sweep_reconnect_recovery()`` method the auto-reconnect monitor calls on
+every successful reconnect. The sweep fetches the day's executions via the
+injected ``recovery_source_factory`` (production wiring runs
+``IB.reqExecutionsAsync``), dedupes against the publisher's running
+``_seen_exec_ids`` set, and authors any unseen execution with
+``ReconciliationContext.reconnect_recovery_active=True`` so the
+``reconnect_recovery`` template fires. While the sweep is active the
+registry surfaces ``any_recovery_active() == True`` and
+``place_paper_order`` refuses new submissions — the broker connection is
+busy replaying history and a new order would race the sweep.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -62,6 +74,15 @@ logger = logging.getLogger(__name__)
 # ``functools.partial(stream_order_events, client)``.
 EventSourceFactory = Callable[[], AsyncIterator[IbkrOrderEvent]]
 
+
+# Type alias for the per-publisher reconnect-recovery source. Production
+# wiring fetches IBKR executions via ``IB.reqExecutionsAsync`` and adapts
+# each ``Fill`` into an ``IbkrOrderEvent``; tests inject a synthetic
+# coroutine returning a fixed list. The factory is invoked once per
+# successful reconnect and its result is processed to completion before
+# the submission halt lifts.
+RecoverySourceFactory = Callable[[], Awaitable[list[IbkrOrderEvent]]]
+
 # Subscriber queue size. Each SSE client gets one; if a client falls
 # behind by this many rows we drop the connection rather than buffer
 # unboundedly. 256 covers a slow client + a fast bursty publisher.
@@ -92,11 +113,13 @@ class BrokerActivityPublisher:
         artifacts_root: Path,
         timing_policy: ReconciliationTimingPolicy,
         event_source_factory: EventSourceFactory,
+        recovery_source_factory: RecoverySourceFactory | None = None,
     ) -> None:
         self._strategy_instance_id = strategy_instance_id
         self._bot_order_namespace = bot_order_namespace
         self._timing_policy = timing_policy
         self._event_source_factory = event_source_factory
+        self._recovery_source_factory = recovery_source_factory
         self._wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id)
@@ -114,6 +137,18 @@ class BrokerActivityPublisher:
         self._seen_exec_ids: set[str] = set()
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
+        # Slice 3 (ADR 0011 amendment) — flipped True for the duration
+        # of ``sweep_reconnect_recovery``. While true, ``place_paper_order``
+        # refuses new submissions (the broker connection is replaying
+        # history and a new order would race the sweep) and every authored
+        # row carries ``reconnect_recovery_active=True`` so the
+        # ``reconnect_recovery`` template fires instead of e.g. a raw
+        # excessive-lag verdict on an exec the publisher missed mid-drop.
+        self._reconnect_recovery_active: bool = False
+        # Serialises concurrent sweeps — a flapping connection could trigger
+        # back-to-back reconnects; the second sweep waits for the first to
+        # finish so the dedupe set is the merged truth, not a torn read.
+        self._recovery_lock = asyncio.Lock()
         # On cold start, seed the dedupe set from the WAL so we don't
         # re-author a row IBKR redelivers right after the publisher
         # restarts.
@@ -255,7 +290,23 @@ class BrokerActivityPublisher:
                 return
 
         intent = self._build_engine_intent(intent_id) if intent_id else None
+        self._author_and_broadcast(event=event, intent=intent)
 
+    def _author_and_broadcast(
+        self,
+        *,
+        event: IbkrOrderEvent,
+        intent: EngineIntent | None,
+    ) -> BrokerActivityRow | None:
+        """Allocate a seq, author the row, append to WAL, broadcast.
+
+        Returns the authored row, or ``None`` when the event is
+        unauthorable (logged + skipped per the truthfulness contract).
+        Shared by the live event loop (``_handle_event``) and the
+        reconnect-recovery sweep — both walk identical authoring rails so
+        the only behavioural delta is the ``reconnect_recovery_active``
+        flag carried on the context.
+        """
         seq = self._wal.allocate_seq()
         ctx = ReconciliationContext(
             seq=seq,
@@ -263,7 +314,7 @@ class BrokerActivityPublisher:
             bot_order_namespace=self._bot_order_namespace,
             timing_policy=self._timing_policy,
             previously_seen_exec_ids=frozenset(self._seen_exec_ids),
-            reconnect_recovery_active=False,  # wired in slice 3
+            reconnect_recovery_active=self._reconnect_recovery_active,
         )
 
         try:
@@ -282,13 +333,14 @@ class BrokerActivityPublisher:
                     "exec_id": event.exec_id,
                 },
             )
-            return
+            return None
 
         self._wal.append_row(row)
         if row.exec_id:
             self._seen_exec_ids.add(row.exec_id)
         self._update_envelope_cursor(row.seq)
         self._broadcast(row)
+        return row
 
     # ── helpers (engine state + broadcast + envelope) ─────────────
 
@@ -439,6 +491,104 @@ class BrokerActivityPublisher:
                 extra={"strategy_instance_id": self._strategy_instance_id},
             )
 
+    # ── reconnect recovery (slice 3 / ADR 0011 amendment) ─────────────
+
+    @property
+    def is_reconnect_recovery_active(self) -> bool:
+        """True while ``sweep_reconnect_recovery`` is running.
+
+        The registry's ``any_recovery_active`` ORs this across every
+        publisher; ``place_paper_order`` consults the registry on the
+        submit hot path so a new order placed mid-sweep is refused
+        instead of racing the broker's execution replay.
+        """
+        return self._reconnect_recovery_active
+
+    async def sweep_reconnect_recovery(self) -> int:
+        """Fetch the day's executions, author rows for any unseen ones.
+
+        Wired into the ``AutoReconnectMonitor.recovery_callbacks`` chain
+        so it fires exactly once per successful reconnect. The lifecycle
+        contract:
+
+        1. Set ``_reconnect_recovery_active=True`` so the registry's
+           cross-instance ``any_recovery_active`` flips True. From here
+           until step 5, ``place_paper_order`` refuses new submissions
+           (the broker is replaying history and a new order would race).
+        2. Call the publisher's ``recovery_source_factory`` (the
+           production wiring runs ``IB.reqExecutionsAsync`` and adapts
+           each ``Fill`` into an ``IbkrOrderEvent``).
+        3. For each event whose ``exec_id`` is not in
+           ``_seen_exec_ids`` AND whose ``order_ref`` namespace matches
+           this instance, author a row via the shared
+           ``_author_and_broadcast`` path. The flag set in step 1 means
+           ``classify_verdict`` promotes the verdict to
+           ``expected_with_caveat`` and the ``reconnect_recovery``
+           template fires.
+        4. Foreign exec_ids (no namespace match) are NOT swept here —
+           they are noise from other instances on the shared account
+           and would be authored as ``UNMATCHED_EXECUTION`` by every
+           publisher on the account if we did. The live event loop
+           still picks them up as foreign rows when they arrive on
+           ``stream_order_events``.
+        5. Lift the flag in a ``finally`` so a crashing factory never
+           pins the submission halt.
+
+        Returns the count of newly-authored recovery rows (zero when no
+        factory is wired, the sweep was a no-op, or every returned
+        exec_id was already known).
+
+        Idempotent under concurrent invocation via ``_recovery_lock`` —
+        a flapping connection that triggers back-to-back reconnects
+        serialises the sweeps so the dedupe set converges.
+        """
+        if self._recovery_source_factory is None:
+            logger.debug(
+                "broker-activity publisher has no recovery_source_factory; "
+                "skipping reconnect sweep",
+                extra={"strategy_instance_id": self._strategy_instance_id},
+            )
+            return 0
+
+        async with self._recovery_lock:
+            self._reconnect_recovery_active = True
+            authored = 0
+            try:
+                events = await self._recovery_source_factory()
+                submitted = self._read_submitted_orders()
+                for event in events:
+                    if event.exec_id and event.exec_id in self._seen_exec_ids:
+                        # Already authored before the drop — IBKR
+                        # redelivered it but we have a row for it.
+                        continue
+                    intent_id = match_identity(
+                        event,
+                        submitted_orders=submitted,
+                        bot_order_namespace=self._bot_order_namespace,
+                    )
+                    if intent_id is None:
+                        # Foreign exec under a shared paper account.
+                        # The per-instance scope rule forbids authoring
+                        # other instances' executions during our sweep.
+                        # The live event loop already handles foreign
+                        # rows that arrive after reconnect.
+                        continue
+                    intent = self._build_engine_intent(intent_id)
+                    row = self._author_and_broadcast(event=event, intent=intent)
+                    if row is not None:
+                        authored += 1
+                logger.info(
+                    "broker-activity reconnect sweep complete: authored %d row(s)",
+                    authored,
+                    extra={
+                        "strategy_instance_id": self._strategy_instance_id,
+                        "authored_count": authored,
+                    },
+                )
+                return authored
+            finally:
+                self._reconnect_recovery_active = False
+
     def _broadcast(self, row: BrokerActivityRow) -> None:
         """Push the row to every subscriber. A full queue means the
         subscriber is too slow — drop one stale row to make room for the
@@ -508,6 +658,23 @@ class BrokerActivityPublisherRegistry:
     def __init__(self) -> None:
         self._by_instance: dict[str, BrokerActivityPublisher] = {}
         self._lock = asyncio.Lock()
+        # Slice 3 follow-up — process-wide reconnect-halt flag that
+        # covers the *entire* post-reconnect recovery window, not just
+        # the executions-sweep slice. The per-publisher
+        # ``_reconnect_recovery_active`` only flips inside
+        # ``sweep_reconnect_recovery`` (under that publisher's lock),
+        # so any recovery callback that runs before the sweep — notably
+        # the bar aggregator's ``resubscribe_all`` — would leave
+        # submissions enabled. Without this outer flag a slow bar
+        # resubscribe lets a new order land mid-recovery and the
+        # subsequent sweep authors it as a ``reconnect_recovery`` row,
+        # which is the race the slice is meant to prevent.
+        # ``run_recovery_chain`` sets this True before the first
+        # callback fires and clears it in ``finally`` after the last
+        # completes, so callback order on the
+        # ``AutoReconnectMonitor.recovery_callbacks`` chain no longer
+        # affects halt coverage.
+        self._reconnect_in_progress: bool = False
 
     async def register(
         self,
@@ -549,6 +716,93 @@ class BrokerActivityPublisherRegistry:
     def instances(self) -> tuple[str, ...]:
         return tuple(self._by_instance.keys())
 
+    # ── reconnect recovery (slice 3 / ADR 0011 amendment) ─────────────
+
+    def any_recovery_active(self) -> bool:
+        """True iff the process is mid reconnect-recovery.
+
+        ``place_paper_order`` consults this before forwarding the
+        submission to IBKR — a positive answer means the broker
+        connection is in the post-reconnect recovery window and a new
+        order would race either the bar resubscribe or the executions
+        sweep. Pure read, no locking required: callers only need
+        eventual consistency between "recovery started" and "next submit
+        attempt".
+
+        Two contributors are OR-ed:
+
+        - ``_reconnect_in_progress`` — set by ``run_recovery_chain`` for
+          the entire post-reconnect window (covers every callback in the
+          chain, including pre-sweep work like bar resubscribe).
+        - Any publisher's ``is_reconnect_recovery_active`` — set inside
+          ``sweep_reconnect_recovery`` so a sweep invoked outside the
+          chain (e.g. tests, manual triggers) still gates submissions.
+        """
+        if self._reconnect_in_progress:
+            return True
+        return any(p.is_reconnect_recovery_active for p in self._by_instance.values())
+
+    async def run_recovery_chain(
+        self,
+        callbacks: list[Callable[[], Awaitable[None]]],
+    ) -> None:
+        """Run every post-reconnect callback under a process-wide
+        submission halt.
+
+        Wraps the ``AutoReconnectMonitor.recovery_callbacks`` chain so
+        ``any_recovery_active()`` is True for the *entire* recovery
+        window, not just the executions-sweep slice. Without this, a
+        callback that runs before the sweep (e.g. the bar aggregator's
+        ``resubscribe_all``) would leave submissions enabled and a new
+        order placed during the resubscribe could be picked up by the
+        subsequent sweep and authored as a ``reconnect_recovery`` row.
+
+        Callback exceptions propagate after the halt is cleared — the
+        monitor decides whether to retry the chain. The ``finally``
+        guarantees the halt lifts even when a callback raises.
+        """
+        self._reconnect_in_progress = True
+        try:
+            for callback in callbacks:
+                await callback()
+        finally:
+            self._reconnect_in_progress = False
+
+    async def sweep_all_for_recovery(self) -> dict[str, int]:
+        """Run ``sweep_reconnect_recovery`` on every registered publisher.
+
+        Wired into the ``AutoReconnectMonitor.recovery_callbacks`` chain
+        by the FastAPI lifespan so every per-instance publisher gets a
+        chance to catch up on missed executions after a successful
+        reconnect. Sweeps run sequentially — a single shared IBKR
+        connection can only serve one ``reqExecutionsAsync`` at a time,
+        and parallel sweeps would only contend for the same wire.
+
+        Returns ``{strategy_instance_id: rows_authored}`` so the monitor
+        can log it. A publisher whose sweep raises is logged and skipped
+        — the monitor must NOT halt the recovery chain because one
+        instance's broker-activity sweep failed (the engine still got
+        its reconnect; downstream code that needs the missed rows can
+        backfill from the WAL once the publisher recovers on its next
+        sweep).
+        """
+        results: dict[str, int] = {}
+        # Snapshot the dict under the lock; the sweep itself does not
+        # need to hold the registry lock (the publishers own their own
+        # serialisation via ``_recovery_lock``).
+        async with self._lock:
+            snapshot = list(self._by_instance.items())
+        for sid, publisher in snapshot:
+            try:
+                results[sid] = await publisher.sweep_reconnect_recovery()
+            except Exception:
+                logger.exception(
+                    "broker-activity reconnect sweep raised; continuing",
+                    extra={"strategy_instance_id": sid},
+                )
+                results[sid] = 0
+        return results
+
 
 # Module-level singleton — one registry per data-plane process. Imported
 # by the lifecycle wiring in ``live_instances`` and by the SSE/REST
@@ -565,5 +819,6 @@ __all__ = [
     "BrokerActivityPublisher",
     "BrokerActivityPublisherRegistry",
     "EventSourceFactory",
+    "RecoverySourceFactory",
     "get_publisher_registry",
 ]

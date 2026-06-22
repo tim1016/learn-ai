@@ -138,9 +138,41 @@ async def lifespan(app: FastAPI):
         # observe the disconnected state and retry per the backoff policy.
         from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
+        # Slice 3 / ADR 0011 amendment — the broker-activity publisher
+        # registry's reconnect-recovery sweep rides the same chain as
+        # the bar aggregator's resubscribe-all. Order inside the wrapped
+        # chain: bar aggregator first (restore market-data subscriptions
+        # so the engine sees prices again ASAP), then the broker-activity
+        # sweep (replay the day's executions to catch anything missed
+        # mid-drop).
+        #
+        # Slice 3 follow-up — ``run_recovery_chain`` wraps the whole
+        # chain in a process-wide submission halt
+        # (``any_recovery_active()`` returns True for the entire
+        # window). The per-publisher sweep flag alone only covers the
+        # sweep slice, so a slow bar resubscribe used to leave
+        # ``place_paper_order`` enabled and a submission landing
+        # mid-resubscribe could be picked up by the subsequent sweep and
+        # mis-authored as a ``reconnect_recovery`` row — the wrapper
+        # closes that hole.
+        from app.services.broker_activity_publisher import (
+            get_publisher_registry as get_broker_activity_publisher_registry,
+        )
+
+        async def _sweep_broker_activity_after_reconnect() -> None:
+            await get_broker_activity_publisher_registry().sweep_all_for_recovery()
+
+        async def _run_post_reconnect_recovery_chain() -> None:
+            await get_broker_activity_publisher_registry().run_recovery_chain(
+                [
+                    LIVE_BAR_AGGREGATOR.resubscribe_all,
+                    _sweep_broker_activity_after_reconnect,
+                ]
+            )
+
         monitor = AutoReconnectMonitor(
             ibkr_client,
-            recovery_callbacks=[LIVE_BAR_AGGREGATOR.resubscribe_all],
+            recovery_callbacks=[_run_post_reconnect_recovery_chain],
         )
         monitor.start()
         set_monitor(monitor)
