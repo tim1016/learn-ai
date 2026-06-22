@@ -3,7 +3,7 @@
 **Audience:** operators monitoring a live-paper bot via the cockpit-v2 Activity tab.
 **Pairs with:** `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md` (decision), `docs/references/ibkr-reconciliation.md` (engineer-facing reference).
 
-The Activity tab shows one row per IBKR execution (or pending intent), authored server-side. The frontend renders verbatim — it does not derive verdicts, compose narratives, or compute lag chips. Every chip color and every word was decided by the backend when the row was written.
+The Activity tab shows one row per IBKR execution (and, once the pending-row gap below is closed, per unacked pending intent), authored server-side. The frontend renders verbatim — it does not derive verdicts, compose narratives, or compute lag chips. Every chip color and every word was decided by the backend when the row was written.
 
 ## What you see by default
 
@@ -14,7 +14,7 @@ Every row carries a single **verdict chip**. There are four values:
 | `expected` | Green | None. A normal fill within policy. |
 | `expected_with_caveat` | Amber | Read the narrative. No intervention required, but the row is telling you *why* it's not boringly normal (timing, partial fill, reconnect window, missing fee). |
 | `unexpected` | Red | Investigate. The headline + narrative names the divergence; the drill-down has the structured facts. |
-| `engine_only_pending` | Grey | Transient — the engine submitted an intent that the broker has not yet acked. Surfaced in the "Working / Pending Orders" panel, not the main activity table. |
+| `engine_only_pending` | Grey | Transient — the engine submitted an intent that the broker has not yet acked. Surfaced in the "Working / Pending Orders" panel, not the main activity table. **Known gap:** the current publisher does not yet author these rows (see "Where the data lives" below). |
 
 Forensic detail (price delta, lag in ms, sizing provenance) lives in the row's drill-down. It does *not* multiply the verdict — the row is `unexpected` or it isn't.
 
@@ -24,13 +24,13 @@ The Activity tab uses 12 templates registered in `app/services/broker_activity_t
 
 **`normal_fill`** — Filled in full at the broker price; commission reported. Informational, no action.
 
-**`pending_acknowledgement`** — Intent submitted, awaiting broker ack. Shows in the Working panel as `engine_only_pending`. If it stays pending more than a few seconds, check Diagnostics for an `ACK_FAILED_UNCERTAIN` incident (ADR 0008 §4).
+**`pending_acknowledgement`** — Intended for "intent submitted, awaiting broker ack" rows in the Working panel. **Not yet authored in production:** `BrokerActivityPublisher._handle_event` only authors rows in response to a broker event arriving from `stream_order_events` (fill / cancel / error / matching status transition); it does *not* walk `LiveStateEnvelope.pending_intents` or call `author_pending_row`. The template and `author_pending_row` helper exist (and have unit-test coverage) but are unreachable from the live path today. To inspect unacked intents right now, read `LiveStateEnvelope.pending_intents` directly from `live_state.json` on disk under the instance's artifacts directory — the Activity tab will not show them. If an intent stays pending more than a few seconds, also check Diagnostics for an `ACK_FAILED_UNCERTAIN` incident (ADR 0008 §4). Closing this gap (publisher-driven pending-row authoring + supersession when the matching broker event lands) is tracked as future work — see ADR 0014 §8.
 
 **`partial_fill`** — Filled some shares; remaining still working. Informational while the order is open. A terminal order with remaining > 0 produces a subsequent cancel/expire row.
 
 **`timing_caveat`** — Filled fine but intent-to-exec lag crossed the instance's `caveat_lag_ms` (default 2s). No other divergence. Raise the threshold or investigate broker latency if persistent.
 
-**`reconnect_recovery`** — Broker connection dropped; fill captured via `reqExecutions()` sweep on resume. The lag chip reflects observation, not exchange time. The durable mutation log has authoritative timing.
+**`reconnect_recovery`** — Intended for fills captured via a `reqExecutions()` sweep on broker resume; the lag chip would reflect observation time, not exchange time. **Not yet authored in production:** the publisher hard-codes `reconnect_recovery_active=False` (see `BrokerActivityPublisher._handle_event`); the reconnect sweep that flips this flag lands with slice 3 (ADR 0014 §8 — "Reconnect-recovery sweep semantics" deferred to ADR 0011 amendment). Until then, the publisher pauses authoring during disconnects and rows resume on reconnect with no `RECONNECT_RECOVERY` reason code; authoritative timing for the missing window lives in the durable mutation log.
 
 **`missing_commission`** — Fill arrived but IBKR has not yet reported the fee. Row's `commission` is `null`. The row will *not* be re-authored when the fee arrives — the durable mutation log carries the final fee.
 
@@ -67,9 +67,9 @@ For the verdicts that require action (`unexpected`) or attention (`expected_with
 ## Where the data lives
 
 - **Per-row durable record:** `<run_dir>/broker_activity.jsonl` — append-only WAL, sibling to `intent_events.jsonl` (ADR 0008 amendment 2026-06-22).
-- **Cold-start cursor:** `LiveStateEnvelope.last_broker_activity_wal_seq` — highest `seq` folded into resume state; the publisher uses it to replay missed rows after a restart.
-- **Live channel:** `/api/live-runs/{id}/broker-activity/stream` (SSE).
-- **Backfill:** `/api/live-runs/{id}/broker-activity` (paginated REST by `seq`).
+- **Cold-start cursor:** `LiveStateEnvelope.last_broker_activity_wal_seq` — highest `seq` the publisher has persisted into the WAL. Cockpit clients use this seq (or 0 on first connect) as `after_seq` on the REST backfill endpoint to catch up before switching to the SSE stream; the publisher itself only consults the WAL on cold start to seed its dedupe set against duplicate broker redeliveries.
+- **Live channel:** `/api/live-instances/{strategy_instance_id}/broker-activity/stream` (SSE).
+- **Backfill:** `/api/live-instances/{strategy_instance_id}/broker-activity` (paginated REST by `seq`).
 - **Row drill-down:** `engine_overlay` (intent_id, sizing provenance, lag breakdown by phase) + `divergence_facts` (price delta, qty delta, lag total). The headline is a summary; the drill-down has everything used to author it.
 
 ## How to disable or pause
