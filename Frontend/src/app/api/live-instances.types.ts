@@ -341,6 +341,33 @@ export interface OperatorSurfaceRuntimeFreshness {
   control_plane: OperatorSurfaceDomainFreshness;
 }
 
+/** Closed-kind union for the typed daemon transport outcome (PRD #619-C1).
+ *  Mirrors the backend ``DaemonResultKind``. */
+export type DaemonResultKind =
+  | 'CONNECTED'
+  | 'RETRYING'
+  | 'UNREACHABLE'
+  | 'AUTH_FAILED'
+  | 'PROTOCOL_ERROR'
+  | 'INCOMPATIBLE_CONTRACT';
+
+/** PRD #619-C3 — server-authored control-plane (host-daemon) connectivity
+ *  surface. Distinct from ``broker.connection`` and ``host_process`` —
+ *  three independent facts the operator reads separately.
+ *
+ *  ``state`` is the connectivity monitor's folded verdict (619-C2).
+ *  ``notice`` and ``runbook_slug`` are server-authored; the cockpit
+ *  renders them verbatim (no enum-to-string mapping). */
+export interface OperatorSurfaceControlPlane {
+  state: DaemonResultKind;
+  last_transition_ms: number | null;
+  last_success_ms: number | null;
+  attempt: number;
+  daemon_boot_id: string | null;
+  notice: string | null;
+  runbook_slug: string | null;
+}
+
 export interface OperatorSurface {
   /** Bump on breaking shape changes; additive fields do NOT bump the version. */
   schema_version: number;
@@ -360,6 +387,10 @@ export interface OperatorSurface {
   /** Child-authored runtime evidence composed by the backend. Null when
    * no child is currently bound to the instance. */
   runtime_freshness: OperatorSurfaceRuntimeFreshness | null;
+  /** PRD #619-C3 — host-daemon connectivity surface from the
+   *  connectivity monitor (619-C2). Null when the data plane was booted
+   *  without a daemon URL (the cockpit hides the card). */
+  control_plane: OperatorSurfaceControlPlane | null;
 }
 
 // PRD #616 — fleet account altitude DTO (server-authored).  Separates

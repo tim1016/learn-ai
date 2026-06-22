@@ -144,6 +144,25 @@
       }
     }
 
+    @if (controlPlaneBanner(); as banner) {
+      <aside
+        class="control-plane-banner"
+        [class.demoted]="banner.demoted"
+        role="status"
+        data-testid="control-plane-banner"
+      >
+        <strong>CONTROL PLANE · {{ banner.label }}</strong>
+        @if (banner.notice) {
+          <span class="control-plane-notice">{{ banner.notice }}</span>
+        }
+        @if (banner.attemptText) {
+          <span class="control-plane-attempt" data-testid="control-plane-attempt">
+            {{ banner.attemptText }}
+          </span>
+        }
+      </aside>
+    }
+
     <!-- Identity / control strip -->
     <section class="identity-strip" data-testid="identity-strip">
       <div class="identity">
