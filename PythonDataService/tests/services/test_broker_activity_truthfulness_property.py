@@ -59,7 +59,6 @@ from app.services.broker_activity_templates import (
     render_template,
 )
 
-
 NS = "learn-ai/sid-property/v1"
 INTENT_ID = "intent-prop"
 ORDER_REF = f"{NS}:{INTENT_ID}"
