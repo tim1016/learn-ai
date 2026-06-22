@@ -191,13 +191,6 @@ def is_run_poisoned(run_dir: Path) -> bool:
     return (run_dir / POISONED_FLAG_FILENAME).exists()
 
 
-from app.utils.timestamps import now_ms_utc as now_ms_utc  # noqa: E402
-
-# Re-exported for back-compat: ``cold_start_reconciler`` and tests import
-# ``now_ms_utc`` from this module. Canonical implementation lives in
-# ``app/utils/timestamps.py``.
-
-
 # ──────────────────────────── Detection functions ────────────────────
 
 

@@ -34,6 +34,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.research.runs.window import WindowSummary
+from app.utils.timestamps import now_ms_utc
 
 ENGINE_VERSION = "0.1.0"
 """Bumped on engine semantic change. See ``docs/references/run-ledger.md``."""
@@ -84,14 +85,6 @@ def _capture_git_commit() -> str:
         logger.debug("[RUNS] git rev-parse HEAD unavailable: %s", exc)
     _GIT_COMMIT_CACHE = "unknown"
     return _GIT_COMMIT_CACHE
-
-
-from app.utils.timestamps import now_ms_utc as now_ms_utc  # noqa: E402
-
-# Re-exported for back-compat: callers across ``app/research/`` import
-# ``now_ms_utc`` from this module. The canonical implementation lives in
-# ``app/utils/timestamps.py``; the ``import X as X`` form documents that
-# the re-export is intentional (PEP 484 explicit re-export).
 
 
 def _data_root_paths() -> list[Path]:

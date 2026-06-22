@@ -36,8 +36,8 @@ from zoneinfo import ZoneInfo
 from app.engine.strategy.spec import StrategySpec
 from app.research.runs import RunLedger, RunRequest, run_strategy_spec, save_run
 from app.research.runs.hashing import hash_payload
-from app.research.runs.ledger import now_ms_utc
 from app.research.runs.result import BacktestRunResult, EquityCurvePoint
+from app.utils.timestamps import now_ms_utc
 from app.research.walk_forward.result import (
     FoldResult,
     SplitPolicySpec,

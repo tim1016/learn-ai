@@ -314,10 +314,3 @@ def hash_staged_files(root: Path, paths: Iterable[Path]) -> tuple[StagedDataFile
             )
         )
     return tuple(out)
-
-
-from app.utils.timestamps import now_ms_utc as now_ms_utc  # noqa: E402
-
-# Re-exported for back-compat: ``tests/lean_sidecar/test_manifest.py``
-# imports ``now_ms_utc`` from this module. Canonical implementation
-# lives in ``app/utils/timestamps.py``.

@@ -33,7 +33,6 @@ from app.research.runs.hashing import hash_payload, make_data_snapshot_id
 from app.research.runs.ledger import (
     RunLedger,
     _capture_git_commit,
-    now_ms_utc,
     resolve_data_root_revision,
 )
 from app.research.runs.result import (
@@ -44,7 +43,7 @@ from app.research.runs.result import (
     RunTrade,
 )
 from app.research.runs.window import summarize_window
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 logger = logging.getLogger(__name__)
 
