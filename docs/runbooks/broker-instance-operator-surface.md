@@ -231,3 +231,53 @@ After merging PRs 4 – 12, walk the page top-to-bottom on a paper bot:
 8. Recent Incidents renders operator-language copy (not raw `Error 1100`)
 
 If any of those land wrong, the corresponding PR in the series is the place to look first.
+
+## PRD #619-D mutation uncertainty + recovery (2026-06-22)
+
+### Incident vocabulary
+
+This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The cockpit renders the codes verbatim; the runbook entry tells the operator what each code means and what to do about it.
+
+#### `OUTCOME_UNKNOWN` (PRD #619-C5, durable in 619-D1)
+
+**What it means.** A mutation request (Deploy / Start / Stop / Flatten / Resume / Pause) was sent to the host daemon, but the response did not arrive intact. The daemon may or may not have observed the request.
+
+**What to do.** Do not blindly retry. Click Reconcile on the instance. The cockpit will inspect daemon state, the child's `engine_runtime.json`, and broker positions, then advance the attempt to one of:
+
+- `EFFECT_CONFIRMED` — the intended effect is observable; the mutation did land.
+- `EFFECT_NOT_OBSERVED` — no evidence of the effect; the mutation likely did not land, but Reconcile is **not** permission to retry — read the next-action guidance below.
+- `EVIDENCE_CONFLICT` — facts contradict (e.g. process running but no daemon binding); investigate before acting.
+- `NOT_PROVABLE` — insufficient evidence (daemon unreachable); retry Reconcile after the daemon recovers.
+
+#### `MUTATION_UNRESOLVED_STOP` / `MUTATION_UNRESOLVED_FLATTEN` / `MUTATION_UNRESOLVED_RESUME` (PRD #619-D2)
+
+**What it means.** The previous mutation of the named action type is in an unresolved state (not yet `EFFECT_CONFIRMED`). The current action is blocked because retrying without confirmation could double-act on the same intent (re-stop a process that just stopped, re-flatten positions that were already closed, etc.).
+
+`MUTATION_UNRESOLVED_START` is reserved in the vocabulary but does not block any operator-surface action in v1 — Start mutations are gated at the router level (`start_run` / Redeploy).
+
+**What to do.** Click Reconcile. The matrix disengages when the prior attempt reaches `EFFECT_CONFIRMED`. If Reconcile classifies as `EFFECT_NOT_OBSERVED`, you must decide whether to re-issue the mutation; the system does **not** auto-retry, and the matrix stays engaged until the next action explicitly advances state.
+
+#### `EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE` (PRD #619-D3)
+
+These are Reconcile outcomes, not standalone reason codes. They appear on the Reconcile response and on the durable `MutationAttempt.dispatch_state`. The Reconcile button surfaces them; the cockpit's action-conflict matrix reads them.
+
+#### `ACCOUNTS_MATCH` / `ACCOUNTS_DIVERGE` / `CHILD_OBSERVATION_MISSING` / `DATA_PLANE_OBSERVATION_MISSING` / `DATA_PLANE_DISCONNECTED` / `CONFIGURED_MODES_DIVERGE` (PRD #619-D4)
+
+**Where shown.** Backend-authored on `OperatorSurface.broker_observation_consistency.reason_codes`. The cockpit renders the divergence card on `CONFLICTING` prominently — but the card never overwrites the child's authoritative posture on the broker hero.
+
+| Code | What it means | What to do |
+|---|---|---|
+| `ACCOUNTS_MATCH` | Both observations agree on the same account. Card colour-coded as informational. | Nothing — this is the healthy state. |
+| `ACCOUNTS_DIVERGE` | Child and data plane report different connected accounts. | Check the host runner's IBKR client config and the data plane's `IBKR_HOST` / `IBKR_PORT` settings. One is connected to the wrong account. |
+| `CHILD_OBSERVATION_MISSING` | The child has not yet published an `engine_runtime.json` for the bound instance. | Wait one to two seconds (steady-state publisher cadence is 1Hz). If it persists, the child may be paused / failed; check the host-process card. |
+| `DATA_PLANE_OBSERVATION_MISSING` | The data plane singleton is unavailable (broker disabled, lifespan tearing down) or reports an empty account string. | If `IBKR_BROKER_ENABLED=false` in the data plane, this is expected. Otherwise check the data plane broker singleton's connection state. |
+| `DATA_PLANE_DISCONNECTED` | The data plane singleton is configured but not currently connected to IBKR. | Restore the data plane's IBKR session before treating the divergence verdict as authoritative. |
+| `CONFIGURED_MODES_DIVERGE` | Child runs in `paper` mode but data plane is `live` (or vice versa). Comparison is suppressed (`NOT_COMPARABLE`) — comparing accounts would mislead. | Check the deployment's intended mode; one of the two layers is mis-configured. |
+
+#### `ORPHANED_CONTROL_PLANE` / `EXITED_UNMANAGED` (PRD #619-B, runbook updated 2026-06-22)
+
+**`ORPHANED_CONTROL_PLANE`.** A child process is running with a sidecar that names an older daemon `boot_id` than the live daemon's. The daemon refuses to issue new Start commands for the instance until the orphan is resolved.
+
+**`EXITED_UNMANAGED`.** A sidecar refers to a process the daemon cannot verify is alive (no live PID + sidecar is stale).
+
+**What to do.** For `ORPHANED_CONTROL_PLANE`: verify the prior process is no longer trading (broker positions, last bar timestamp), then delete the sidecar to allow a new Start. For `EXITED_UNMANAGED`: the prior process has died; delete the sidecar to re-deploy.
