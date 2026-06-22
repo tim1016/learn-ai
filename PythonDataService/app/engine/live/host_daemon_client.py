@@ -64,18 +64,52 @@ def _auth_headers() -> dict[str, str]:
 class HostDaemonError(Exception):
     """A daemon call that must surface its status to the caller.
 
-    Unlike the typed GETs (which fold every transport failure into a
-    ``DaemonResult``), a deploy/start/stop/flatten POST carries an outcome the
-    operator needs to see verbatim: the daemon's HTTP status and detail are
-    propagated so the data-plane endpoint can re-raise them (dirty-tree 409,
-    missing-input 400, git 503), and a connection failure maps to 503 "daemon
-    unreachable". The typed mutation classification (PRD #619-C5) replaces
-    this shape with ``DaemonResult`` for POSTs.
+    Carries the daemon's HTTP status and detail verbatim so the
+    data-plane endpoint can re-raise (dirty-tree 409, missing-input
+    400, git 503). An unambiguous connection failure (ConnectError /
+    ConnectTimeout / PoolTimeout — no bytes left the wire) maps to 503
+    "daemon unreachable".
+
+    For *ambiguous* transport failures (PRD #619-C5 — ReadTimeout /
+    WriteTimeout / RemoteProtocolError after the request was partly or
+    fully sent) the mutation paths raise :class:`HostDaemonOutcomeUnknownError`
+    instead; the data-plane endpoint surfaces it as a typed 409
+    response so the operator can refresh state before retrying.
     """
 
     def __init__(self, status_code: int, detail: str) -> None:
         super().__init__(detail)
         self.status_code = status_code
+        self.detail = detail
+
+
+class HostDaemonOutcomeUnknownError(Exception):
+    """A mutation POST whose transport outcome could not be proven
+    (PRD #619-C5).
+
+    Raised by the typed POST helpers when ``DaemonResult.kind ==
+    UNREACHABLE and DaemonResult.outcome_ambiguous is True`` —
+    i.e., a ``ReadTimeout`` / ``WriteTimeout`` / ``RemoteProtocolError``
+    after request bytes may have reached the daemon. The data-plane
+    endpoint surfaces this as a typed 409 with
+    ``reason_code='OUTCOME_UNKNOWN'`` so the operator refreshes state
+    before retrying (the mutation may or may not have executed). The
+    full durable mutation_attempt record + Reconcile action land in
+    619-D.
+
+    Distinct from :class:`HostDaemonError` so the four mutation
+    endpoints can branch with a typed ``except`` rather than inspect a
+    status code.
+    """
+
+    def __init__(
+        self,
+        *,
+        error_category: str,
+        detail: str | None,
+    ) -> None:
+        super().__init__(detail or error_category)
+        self.error_category = error_category
         self.detail = detail
 
 
@@ -87,51 +121,43 @@ class HostDaemonError(Exception):
 async def deploy(base_url: str, payload: dict) -> dict:
     """POST /deploy to the daemon and return the parsed body.
 
-    Raises :class:`HostDaemonError` on any non-2xx response (status + detail
-    propagated) or on connection failure (503).
+    Raises :class:`HostDaemonOutcomeUnknownError` when the transport
+    fails ambiguously (ReadTimeout / WriteTimeout / RemoteProtocolError
+    after bytes may have reached the daemon); the data-plane endpoint
+    surfaces this as a typed 409 + ``OUTCOME_UNKNOWN`` (PRD #619-C5).
+    Raises :class:`HostDaemonError` on any non-2xx response or
+    unambiguous connection failure (status + detail propagated, 503 for
+    pre-send connection failures, 502 for malformed JSON).
     """
-    url = f"{base_url.rstrip('/')}/deploy"
-    try:
-        async with httpx.AsyncClient(timeout=_DEPLOY_TIMEOUT) as client:
-            response = await client.post(url, json=payload, headers=_auth_headers())
-    except httpx.HTTPError as exc:
-        logger.warning("host daemon unreachable at %s: %s", url, exc)
-        raise HostDaemonError(503, f"host daemon unreachable: {exc}") from exc
-    if response.status_code >= 400:
-        raise HostDaemonError(response.status_code, _detail_of(response))
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise HostDaemonError(502, f"host daemon returned a non-JSON body: {exc}") from exc
+    return await _post_action(f"{base_url.rstrip('/')}/deploy", payload, timeout=_DEPLOY_TIMEOUT)
 
 
 async def start_run(base_url: str, run_id: str, payload: dict) -> dict:
     """POST /runs/{run_id}/start to the daemon and return the parsed body.
 
-    Mirrors :func:`deploy`: the daemon's auth, precondition, and unreachable
-    statuses are propagated via :class:`HostDaemonError` so the data-plane
-    endpoint can re-raise them verbatim. Browsers must never hold the daemon's
-    shared secret, so the UI routes Start through the data plane (which forwards
-    the token from the artifacts bind mount) rather than calling the daemon
-    directly (ADR 0007).
+    Mirrors :func:`deploy`: domain failures propagate via
+    :class:`HostDaemonError`, transport-ambiguous failures via
+    :class:`HostDaemonOutcomeUnknownError`. Browsers must never hold the
+    daemon's shared secret, so the UI routes Start through the data
+    plane (which forwards the token from the artifacts bind mount)
+    rather than calling the daemon directly (ADR 0007).
     """
     return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/start", payload)
 
 
 async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/stop to the daemon and return the parsed body.
-
-    Same forwarding contract as :func:`start_run`.
-    """
+    """POST /runs/{run_id}/stop. Same contract as :func:`start_run`."""
     return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
 
 
 async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/emergency-flatten to the daemon.
+    """POST /runs/{run_id}/emergency-flatten.
 
-    Same forwarding contract as :func:`start_run`, but with a longer timeout: the
-    daemon runs the one-shot flatten CLI synchronously, which round-trips to the
-    broker (connect, fetch positions, place liquidating orders, disconnect).
+    Same contract as :func:`start_run` but with a longer timeout — the
+    daemon round-trips to the broker synchronously. A read-timeout here
+    is far more likely than for the lighter mutations, and the
+    consequence (broker positions in an unknown post-mutation state) is
+    the highest-stakes ambiguous-outcome case 619-C5 surfaces.
     """
     return await _post_action(
         f"{base_url.rstrip('/')}/runs/{run_id}/emergency-flatten",
@@ -141,19 +167,61 @@ async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> di
 
 
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
-    """Shared body for the start/stop/flatten forwards (same contract as :func:`deploy`)."""
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload, headers=_auth_headers())
-    except httpx.HTTPError as exc:
-        logger.warning("host daemon unreachable at %s: %s", url, exc)
-        raise HostDaemonError(503, f"host daemon unreachable: {exc}") from exc
-    if response.status_code >= 400:
-        raise HostDaemonError(response.status_code, _detail_of(response))
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise HostDaemonError(502, f"host daemon returned a non-JSON body: {exc}") from exc
+    """Typed POST core for the four mutation forwards.
+
+    Internally uses :func:`_typed_post_json` to classify the transport
+    outcome. Maps the closed-kind ``DaemonResult`` into:
+
+    - ``CONNECTED`` → return the parsed body.
+    - ``UNREACHABLE`` with ``outcome_ambiguous=True`` →
+      :class:`HostDaemonOutcomeUnknownError` (PRD #619-C5; the
+      endpoint surfaces this as a typed 409 + ``OUTCOME_UNKNOWN``).
+    - ``UNREACHABLE`` with ``outcome_ambiguous=False`` →
+      :class:`HostDaemonError(503, ...)` (clean pre-send failure;
+      retry is safe).
+    - Any other outcome with a ``response_status >= 400`` (the daemon
+      spoke and authored its own status — auth, dirty-tree 409,
+      missing-input 400, 5xx) → :class:`HostDaemonError(<status>, ...)`,
+      propagating the daemon's status verbatim.
+    - Anything else (malformed JSON, non-dict payload, no response at
+      all) → :class:`HostDaemonError(502, ...)` (the daemon spoke but
+      in a way we can't consume).
+    """
+    result, body = await _typed_post_json(url, payload, timeout=timeout)
+    if result.kind == "CONNECTED" and body is not None:
+        return body
+
+    if result.kind == "UNREACHABLE":
+        if result.outcome_ambiguous:
+            raise HostDaemonOutcomeUnknownError(
+                error_category=result.error_category or "transport_error",
+                detail=result.detail,
+            )
+        raise HostDaemonError(
+            503, result.detail or "host daemon unreachable"
+        )
+
+    if result.response_status is not None and result.response_status >= 400:
+        raise HostDaemonError(
+            result.response_status,
+            result.detail or f"host daemon returned {result.response_status}",
+        )
+
+    raise HostDaemonError(
+        502, result.detail or "host daemon returned a non-JSON body"
+    )
+
+
+async def _typed_post_json(
+    url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT
+) -> tuple[DaemonResult, dict | None]:
+    """Typed POST. Mirrors :func:`_typed_get_json` over the shared
+    transport classifier so auth / 4xx / 5xx / malformed-body handling
+    is the same across the GET and POST paths."""
+    result, response = await _classify_http(
+        url, method="POST", payload=payload, timeout=timeout
+    )
+    return _parse_json_body(result, response)
 
 
 def _detail_of(response: httpx.Response) -> str:

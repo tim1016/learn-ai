@@ -347,6 +347,48 @@ class HostRunnerStopRequest(BaseModel):
     force: bool = False
 
 
+class MutationOutcomeUnknownResponse(BaseModel):
+    """Typed 409 body for single-shot mutations whose transport outcome
+    could not be proven (PRD #619-C5).
+
+    Surfaced by ``deploy_instance`` / ``start_run`` / ``stop_run`` /
+    ``emergency_flatten_instance`` when the typed daemon POST returns
+    ``DaemonResult.kind == "UNREACHABLE"`` with
+    ``outcome_ambiguous=True`` — i.e., the request was (partly or
+    fully) sent but the response was lost.  The mutation may or may not
+    have executed on the daemon side.
+
+    Distinct from 503 ``host daemon unreachable`` (clean pre-send
+    failure where retry is safe). 409 CONFLICT signals "eligibility is
+    indeterminate" — the operator must refresh state before retrying.
+
+    The durable ``mutation_attempt`` record + Reconcile action + the
+    action-conflict matrix in ``operator_surface.actions`` are 619-D's
+    job; C5 is the synchronous surfacing pass.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["UNKNOWN"] = "UNKNOWN"
+    reason_code: Literal["OUTCOME_UNKNOWN"] = "OUTCOME_UNKNOWN"
+    # Stable short code (``read_timeout`` / ``write_timeout`` /
+    # ``remote_protocol_error`` / ``network_error`` / ``transport_error``) —
+    # forwarded from the ``DaemonResult.error_category``.
+    error_category: str
+    # Safe-detail-capped daemon-side message if any (None when the
+    # underlying exception carried no message).
+    detail: str | None = None
+    # Canonical endpoint label so the cockpit can show the right copy
+    # ("deploy" / "start_run" / "stop_run" / "emergency_flatten").
+    endpoint: Literal["deploy", "start_run", "stop_run", "emergency_flatten"]
+    # ``int64 ms UTC`` of the failure.
+    occurred_at_ms: int = Field(ge=0)
+    # Operator-language one-liner, server-authored per endpoint, telling
+    # the operator what they need to do next (refresh state, do not
+    # blindly retry).
+    runbook_hint: str
+
+
 class HostRunnerActionResponse(BaseModel):
     """Response for daemon start/stop actions.
 
