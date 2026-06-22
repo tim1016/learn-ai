@@ -92,6 +92,7 @@ from app.schemas.live_runs import (
     LiveBinding,
     LiveInstanceStatus,
     LiveInstanceSummary,
+    MutationOutcomeUnknownResponse,
     QcAuditCopyListing,
     ReadinessVector,
     SetDesiredStateRequest,
@@ -888,6 +889,8 @@ async def deploy_instance(body: HostRunnerDeployRequest, response: Response) -> 
     settings = get_settings()
     try:
         result = await host_daemon_client.deploy(settings.live_runner_daemon_url, body.model_dump())
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("deploy", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -954,6 +957,8 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     settings = get_settings()
     try:
         result = await host_daemon_client.start_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("start_run", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     return _parse_action_response(result)
@@ -973,6 +978,8 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
     settings = get_settings()
     try:
         result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("stop_run", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     return _parse_action_response(result)
@@ -1462,6 +1469,59 @@ async def _load_instance_context_for_router(sid: str) -> InstanceContext:
             )
         ),
     )
+
+
+# PRD #619-C5 — single-shot mutation OUTCOME_UNKNOWN surfacing.
+
+_OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
+    "deploy": (
+        "A deploy request was sent to the host runner daemon but the response "
+        "was lost. The run may or may not have been created. Refresh the "
+        "instance list and re-run with the same content-addressed run_id "
+        "(deploy is idempotent on run_id) only after verifying the daemon's "
+        "actual state."
+    ),
+    "start_run": (
+        "A start request was sent to the host runner daemon but the response "
+        "was lost. The run may or may not be running. Refresh the cockpit "
+        "to read live state before deciding whether to retry."
+    ),
+    "stop_run": (
+        "A stop request was sent to the host runner daemon but the response "
+        "was lost. The run may or may not have stopped. Refresh the cockpit "
+        "to read live state before deciding whether to retry."
+    ),
+    "emergency_flatten": (
+        "An emergency-flatten request was sent to the host runner daemon "
+        "but the response was lost. Broker positions may be in an "
+        "intermediate state. Verify positions directly via the broker "
+        "before deciding whether to retry."
+    ),
+}
+
+
+def _raise_outcome_unknown(
+    endpoint: Literal["deploy", "start_run", "stop_run", "emergency_flatten"],
+    exc: host_daemon_client.HostDaemonOutcomeUnknownError,
+) -> None:
+    """Surface an ambiguous-outcome mutation failure as a typed 409 (PRD #619-C5).
+
+    The body is :class:`MutationOutcomeUnknownResponse`; the cockpit
+    renders the runbook hint verbatim and tells the operator to refresh
+    state before retrying. Distinct from 503 ``host daemon unreachable``,
+    which means the request was provably not sent.
+    """
+    body = MutationOutcomeUnknownResponse(
+        error_category=exc.error_category,
+        detail=exc.detail,
+        endpoint=endpoint,
+        occurred_at_ms=_now_ms(),
+        runbook_hint=_OUTCOME_UNKNOWN_RUNBOOK_HINTS[endpoint],
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=body.model_dump(mode="json"),
+    ) from exc
 
 
 def _broker_connection_state_from_readiness(
@@ -2116,6 +2176,8 @@ async def emergency_flatten_instance(
             run_id,
             {"account": body.account, "confirm": True},
         )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("emergency_flatten", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     return HostRunnerActionResponse.model_validate(body_json)

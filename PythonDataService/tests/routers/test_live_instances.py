@@ -1438,6 +1438,126 @@ async def test_start_run_invalid_daemon_payload_returns_502(
     assert response.status_code == 502
 
 
+# ---------------------------------------------------------------------------
+# PRD #619-C5 — single-shot mutation OUTCOME_UNKNOWN surfacing
+# ---------------------------------------------------------------------------
+
+
+def _outcome_unknown_exc(
+    *, category: str = "read_timeout", detail: str = "response lost"
+) -> host_daemon_client.HostDaemonOutcomeUnknownError:
+    return host_daemon_client.HostDaemonOutcomeUnknownError(
+        error_category=category, detail=detail
+    )
+
+
+def _assert_outcome_unknown_body(
+    body: dict, *, endpoint: str, category: str = "read_timeout"
+) -> None:
+    """Shared assertions for the 619-C5 typed 409 response body."""
+    assert body["outcome"] == "UNKNOWN"
+    assert body["reason_code"] == "OUTCOME_UNKNOWN"
+    assert body["error_category"] == category
+    assert body["endpoint"] == endpoint
+    assert isinstance(body["occurred_at_ms"], int)
+    assert body["occurred_at_ms"] > 0
+    assert isinstance(body["runbook_hint"], str)
+    assert body["runbook_hint"]  # non-empty
+
+
+async def test_deploy_outcome_unknown_returns_typed_409(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ReadTimeout-after-send during deploy must surface as 409 +
+    OUTCOME_UNKNOWN — the run may or may not have been created on the
+    daemon side."""
+    app, _ = app_with_root
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise _outcome_unknown_exc()
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 409
+    _assert_outcome_unknown_body(response.json()["detail"], endpoint="deploy")
+
+
+async def test_start_run_outcome_unknown_returns_typed_409(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise _outcome_unknown_exc(category="write_timeout")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-abc/start", json={})
+
+    assert response.status_code == 409
+    _assert_outcome_unknown_body(
+        response.json()["detail"], endpoint="start_run", category="write_timeout"
+    )
+
+
+async def test_stop_run_outcome_unknown_returns_typed_409(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_stop(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise _outcome_unknown_exc()
+
+    monkeypatch.setattr(host_daemon_client, "stop_run", fake_stop)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-abc/stop", json={})
+
+    assert response.status_code == 409
+    _assert_outcome_unknown_body(response.json()["detail"], endpoint="stop_run")
+
+
+async def test_emergency_flatten_outcome_unknown_returns_typed_409(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Emergency-flatten has a 130s timeout; an ambiguous outcome here
+    means broker positions may be in an intermediate state — the highest
+    stakes case for 619-C5."""
+    app, root = app_with_root
+    sid = "strategy-of-flatten"
+    _write_ledger(root, "run-flatten", sid, created_at_ms=1_700_000_000_000)
+
+    async def fake_flatten(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise _outcome_unknown_exc(category="remote_protocol_error")
+
+    monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", fake_flatten)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/{sid}/emergency-flatten",
+            json={"account": "DU123", "confirm": True},
+        )
+
+    assert response.status_code == 409
+    _assert_outcome_unknown_body(
+        response.json()["detail"],
+        endpoint="emergency_flatten",
+        category="remote_protocol_error",
+    )
+
+
+def test_outcome_unknown_reason_code_is_in_documented_vocabulary() -> None:
+    """The reason code must be present in the closed REASON_CODES set
+    so the Frontend's typed lookup ships the operator copy alongside C5."""
+    from app.services.operator_capability import REASON_CODES
+
+    assert "OUTCOME_UNKNOWN" in REASON_CODES
+
+
 async def test_start_run_rejects_unsafe_run_id_400(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
