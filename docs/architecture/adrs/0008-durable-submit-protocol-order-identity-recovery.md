@@ -73,6 +73,21 @@ At the activation point, flatten + cancel + archive old `live_state.json` for ev
 
 **Substrate-trigger guard (unchanged from ADR-0001):** a SQLite/Postgres write store enters only when a named ADR-0001 trigger fires (concurrent multi-consumer load, hot cross-run analytics, authenticated multi-operator audit). A per-order relational-shaped table is exactly that trigger and is explicitly **not** created here — the ledger stays a logical view.
 
+## Amendment 2026-06-22 — `broker_activity.jsonl` as a sibling WAL
+
+**Status:** Shipped alongside ADR 0014 (broker-authored operator view).
+
+The broker-activity reconciliation surface (ADR 0014) introduces a second append-only WAL inside the per-run directory: `broker_activity.jsonl`. It registers here as a sibling of `intent_events.jsonl` because it follows the identical durability contract — same atomic-append + fsync-before-return pattern, same per-run single-writer ownership, same trailing-unterminated-line tolerance, same per-run monotonic `seq` cursor folded by `LiveStateEnvelope.last_broker_activity_wal_seq`.
+
+The two WALs are **complementary, not overlapping**:
+
+- `intent_events.jsonl` is the **submit critical-section** state machine (§3 above): one record per `placeOrder` lifecycle transition (`PENDING_INTENT`, `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, …). Single-writer is the engine child. The fold is into `LiveStateEnvelope.submitted_orders`.
+- `broker_activity.jsonl` is the **operator-view reconciliation** stream: one record per IBKR execution-or-status event, joined to engine state via `order_ref`, authored into a `BrokerActivityRow` (verdict + template + facts). Single-writer is the data-plane publisher (ADR 0014 §4). The fold is into the SSE subscriber stream for the cockpit Activity tab.
+
+The two WALs do not write to each other's surfaces. The publisher reads `LiveStateEnvelope.submitted_orders` (the projected view of the intent WAL) to obtain engine-side overlay; it does not append to `intent_events.jsonl`. Conversely, the engine's submit-critical-section never writes to `broker_activity.jsonl`.
+
+**Non-amendments:** The ownership ladder (§1), the uncertain-ack semantics (§4), the cold-start protocol (§5), the uniform-ladder rule (§6), and the substrate-trigger guard are unchanged. `broker_activity.jsonl` introduces no new ownership semantics, no new identity vocabulary, and no new ACK semantics.
+
 ## References
 
 - `PythonDataService/app/engine/live/cold_start_reconciler.py` — resume protocol (7-step; broker stubs whose backing IBKR calls are a **blocking paper-receipt spike**, not an assumption — filled prior-run orders are absent from `reqOpenOrders`, and `orderRef` lives on `Order` not `Execution`; the Resolution-2 rule is *act only on namespace-matched orders*, independent of fetch primitive).

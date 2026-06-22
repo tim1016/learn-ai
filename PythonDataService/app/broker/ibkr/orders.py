@@ -99,6 +99,40 @@ def _now_ms() -> int:
     return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
+def _event_symbol(trade) -> str | None:
+    """Operator-facing symbol for the underlying contract. Sourced from
+    ``Trade.contract.symbol``; ``None`` only on a degenerate trade
+    without a contract (defensive — should not happen on a real ib_async
+    Trade)."""
+    contract = getattr(trade, "contract", None)
+    if contract is None:
+        return None
+    symbol = getattr(contract, "symbol", None)
+    return str(symbol) if symbol else None
+
+
+def _event_side(trade):
+    """Map ib_async ``Order.action`` ("BUY"/"SELL") onto the row's
+    side. ``None`` only if the action is missing or unrecognised — the
+    reconciler treats ``None`` as unauthorable rather than silently
+    defaulting to a side."""
+    action = getattr(getattr(trade, "order", None), "action", None)
+    if action == "BUY":
+        return "BUY"
+    if action == "SELL":
+        return "SELL"
+    return None
+
+
+def _event_order_type(trade) -> str | None:
+    """ib_async ``Order.orderType`` is the operator-facing type string
+    ("MKT", "LMT", "STP", …). Returns ``None`` if absent; the reconciler
+    treats absence as a publisher-halt condition rather than substituting
+    a default that would mis-author the operator-facing row."""
+    order_type = getattr(getattr(trade, "order", None), "orderType", None)
+    return str(order_type) if order_type else None
+
+
 def _enforce_paper_safety(client: IbkrClient, spec: IbkrOrderSpec) -> str:
     """Run the paper-mode safety checks. Returns the validated account id.
 
@@ -550,6 +584,9 @@ def _trade_to_status_event(
         event_type=_resolve_event_type(trade, is_fill=False),
         status=getattr(trade.orderStatus, "status", None),
         order_ref=order_ref,
+        symbol=_event_symbol(trade),
+        side=_event_side(trade),
+        order_type=_event_order_type(trade),
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
         ts_ms=_now_ms(),
@@ -627,6 +664,9 @@ def _fill_to_event(
         event_type="fill",
         status=getattr(trade.orderStatus, "status", None),
         order_ref=order_ref,
+        symbol=_event_symbol(trade),
+        side=_event_side(trade),
+        order_type=_event_order_type(trade),
         exec_id=str(exec_id) if exec_id else None,
         client_id=int(client_id_raw) if client_id_raw is not None else None,
         fill_quantity=float(getattr(exec_obj, "shares", 0.0) or 0.0),

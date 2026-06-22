@@ -729,6 +729,19 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
             kwargs["sizing"] = None
         else:
             kwargs["sizing"] = parse_sizing_policy(raw)
+    if "reconciliation_timing_policy" in payload:
+        # ADR 0014 §6 — round-trip through the Pydantic model so a
+        # malformed ledger fails fast at run start, not when the
+        # publisher tries to construct the policy.
+        from app.schemas.broker_activity import ReconciliationTimingPolicy
+
+        raw = payload["reconciliation_timing_policy"]
+        if raw is None:
+            kwargs["reconciliation_timing_policy"] = None
+        else:
+            kwargs["reconciliation_timing_policy"] = (
+                ReconciliationTimingPolicy.model_validate(raw).model_dump()
+            )
 
     return LiveConfig(**kwargs)
 

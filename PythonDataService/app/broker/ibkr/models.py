@@ -454,6 +454,16 @@ class IbkrOrderEvent(BaseModel):
     # error events without an associated trade.
     order_ref: str | None = None
 
+    # ADR 0014 — operator-facing fields the broker_activity reconciler
+    # consumes verbatim. Sourced from the underlying ``Trade.contract``
+    # (``symbol``) and ``Trade.order`` (``action`` → ``BUY``/``SELL``;
+    # ``orderType``). ``None`` only when the underlying ib_async object is
+    # degenerate (no contract, missing action) — defensive optionals so
+    # the model stays constructible from old fixtures.
+    symbol: str | None = None
+    side: Literal["BUY", "SELL"] | None = None
+    order_type: str | None = None
+
     # Fill payload (event_type == "fill")
     exec_id: str | None = None
     client_id: int | None = None

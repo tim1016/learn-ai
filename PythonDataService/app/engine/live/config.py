@@ -29,6 +29,12 @@ LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
         # Hashed into ``run_id`` like every other key here; engine
         # consumption is deferred to Slice 4 (ADR 0012 §"Scope").
         "action",
+        # ADR 0014 §6 — per-instance lag thresholds for the broker-activity
+        # reconciliation verdict ladder. Optional block; absence ⇒ engine
+        # uses ``ReconciliationTimingPolicy`` defaults. Hashed into
+        # ``run_id`` so a threshold change forces a redeploy (cross-run
+        # comparability of reconciliation verdicts is preserved).
+        "reconciliation_timing_policy",
     }
 )
 
@@ -72,4 +78,11 @@ class LiveConfig:
     # unverified => activation refused (ADR-0008 §1: "C is intentionally unset
     # until the paper-receipt gate verifies the actual echoed cap").
     durable_submit_verified_order_ref_cap: int | None = None
+
+    # ADR 0014 §6 — per-instance reconciliation lag thresholds. Stored as
+    # a dict (not a typed model) so this dataclass stays a plain LiveConfig
+    # and the publisher constructs ``ReconciliationTimingPolicy`` on demand.
+    # ``None`` ⇒ publisher uses the policy's built-in defaults
+    # (``caveat_lag_ms=2000``, ``excessive_lag_ms=10000``).
+    reconciliation_timing_policy: dict | None = None
 

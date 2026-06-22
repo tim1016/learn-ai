@@ -567,6 +567,46 @@ async def test_stream_order_events_round_trips_namespaced_order_ref() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_order_events_populates_symbol_side_order_type() -> None:
+    """ADR 0014 — the broker-activity reconciler treats these three
+    fields as authoritative for the operator-facing row. Verify they
+    round-trip from the underlying ib_async Trade/Order/Contract to
+    every event the publisher consumes (status + fill)."""
+    from itertools import chain, repeat
+
+    trade_v1 = _trade_namespace(order_id=42, status_str="Submitted")
+    trade_v1.order.orderType = "LMT"
+    trade_v2 = _trade_namespace(
+        order_id=42, status_str="Filled", filled=10, remaining=0
+    )
+    trade_v2.order.orderType = "LMT"
+    trade_v2.fills = [
+        SimpleNamespace(
+            execution=SimpleNamespace(
+                execId="exec-symside-1",
+                clientId=42,
+                shares=10.0,
+                price=500.5,
+            )
+        )
+    ]
+    snapshots = chain([[trade_v1]], repeat([trade_v2]))
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 3:
+            break
+
+    for event in out:
+        assert event.symbol == "SPY"
+        assert event.side == "BUY"
+        assert event.order_type == "LMT"
+
+
+@pytest.mark.asyncio
 async def test_stream_order_events_treats_empty_order_ref_as_none() -> None:
     """ib_async's ``Execution.orderRef`` defaults to ``''`` when the broker
     omits the echo. The event must surface ``None`` (absent) rather than
