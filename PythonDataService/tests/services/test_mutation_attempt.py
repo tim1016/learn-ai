@@ -34,6 +34,9 @@ from app.services.mutation_attempt import (
     InvalidMutationTransitionError,
     MutationAttempt,
     MutationAttemptRepo,
+    ReconciliationEvidence,
+    ReconciliationOutcome,
+    reconcile_mutation_effect,
     transition_attempt,
 )
 
@@ -296,5 +299,216 @@ def test_transition_returns_new_instance_without_mutating_source() -> None:
     assert attempt.dispatch_state == "PREPARED"
     assert attempt.last_transition_at_ms == 10
     assert result is not attempt
+
+
+# ---------------------------------------------------------------------------
+# Reconcile (PRD #619-D3) — pure evidence classification.
+#
+# Each action gets a focused suite covering the four-way outcome.
+# ``daemon_reachable=False`` short-circuits to ``NOT_PROVABLE`` for every
+# action — exercised once as a cross-action precondition.
+# ---------------------------------------------------------------------------
+
+
+def _evidence(**overrides: object) -> ReconciliationEvidence:
+    base: dict[str, object] = {
+        "daemon_reachable": True,
+        "observed_at_ms": 1_700_000_001_000,
+    }
+    base.update(overrides)
+    return ReconciliationEvidence(**base)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["start", "stop", "resume", "pause", "flatten"],
+)
+def test_daemon_unreachable_classifies_not_provable_for_every_action(
+    action: str,
+) -> None:
+    attempt = _attempt(action=action, state="OUTCOME_UNKNOWN")
+    evidence = _evidence(daemon_reachable=False)
+
+    assert reconcile_mutation_effect(attempt, evidence) == "NOT_PROVABLE"
+
+
+# --- stop ---
+
+
+@pytest.mark.parametrize(
+    ("process_state", "expected"),
+    [
+        ("exited", "EFFECT_CONFIRMED"),
+        ("idle", "EFFECT_CONFIRMED"),
+        ("running", "EFFECT_NOT_OBSERVED"),
+        ("stopping", "EFFECT_NOT_OBSERVED"),
+        ("unreachable", "NOT_PROVABLE"),
+        (None, "NOT_PROVABLE"),
+    ],
+)
+def test_reconcile_stop_classifies_by_process_state(
+    process_state: str | None, expected: ReconciliationOutcome
+) -> None:
+    attempt = _attempt(action="stop", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(process_state=process_state)
+
+    assert reconcile_mutation_effect(attempt, evidence) == expected
+
+
+# --- start ---
+
+
+def test_reconcile_start_confirmed_when_running_with_binding() -> None:
+    attempt = _attempt(action="start", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(process_state="running", bound_run_id="run-7")
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_CONFIRMED"
+
+
+def test_reconcile_start_conflict_when_running_without_binding() -> None:
+    # Process reports running but daemon has no run binding — the
+    # two facts disagree.
+    attempt = _attempt(action="start", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(process_state="running", bound_run_id=None)
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EVIDENCE_CONFLICT"
+
+
+@pytest.mark.parametrize("state", ["exited", "idle", "stopping"])
+def test_reconcile_start_not_observed_when_not_running(state: str) -> None:
+    attempt = _attempt(action="start", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(process_state=state)
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_NOT_OBSERVED"
+
+
+@pytest.mark.parametrize("state", ["unreachable", None])
+def test_reconcile_start_not_provable_without_process_state(
+    state: str | None,
+) -> None:
+    attempt = _attempt(action="start", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(process_state=state)
+
+    assert reconcile_mutation_effect(attempt, evidence) == "NOT_PROVABLE"
+
+
+# --- resume ---
+
+
+def test_reconcile_resume_confirmed_full_stack() -> None:
+    attempt = _attempt(action="resume", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(
+        desired_state="RUNNING",
+        process_state="running",
+        engine_runtime_state="RUNNING",
+    )
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_CONFIRMED"
+
+
+def test_reconcile_resume_conflict_when_stopped_supersedes() -> None:
+    attempt = _attempt(action="resume", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state="STOPPED")
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EVIDENCE_CONFLICT"
+
+
+def test_reconcile_resume_not_observed_when_paused_intent_kept() -> None:
+    attempt = _attempt(action="resume", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state="PAUSED")
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_NOT_OBSERVED"
+
+
+def test_reconcile_resume_not_observed_when_runtime_not_running() -> None:
+    attempt = _attempt(action="resume", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(
+        desired_state="RUNNING",
+        process_state="running",
+        engine_runtime_state="PAUSED",
+    )
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_NOT_OBSERVED"
+
+
+def test_reconcile_resume_not_observed_when_runtime_missing() -> None:
+    attempt = _attempt(action="resume", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(
+        desired_state="RUNNING",
+        process_state="running",
+        engine_runtime_state=None,
+    )
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_NOT_OBSERVED"
+
+
+def test_reconcile_resume_not_provable_without_desired_state() -> None:
+    attempt = _attempt(action="resume", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state=None)
+
+    assert reconcile_mutation_effect(attempt, evidence) == "NOT_PROVABLE"
+
+
+# --- pause ---
+
+
+def test_reconcile_pause_confirmed_when_paused() -> None:
+    attempt = _attempt(action="pause", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state="PAUSED")
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_CONFIRMED"
+
+
+def test_reconcile_pause_conflict_when_stopped_supersedes() -> None:
+    attempt = _attempt(action="pause", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state="STOPPED")
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EVIDENCE_CONFLICT"
+
+
+def test_reconcile_pause_not_observed_when_running() -> None:
+    attempt = _attempt(action="pause", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state="RUNNING")
+
+    assert reconcile_mutation_effect(attempt, evidence) == "EFFECT_NOT_OBSERVED"
+
+
+def test_reconcile_pause_not_provable_without_desired_state() -> None:
+    attempt = _attempt(action="pause", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(desired_state=None)
+
+    assert reconcile_mutation_effect(attempt, evidence) == "NOT_PROVABLE"
+
+
+# --- flatten ---
+
+
+@pytest.mark.parametrize(
+    ("positions_empty", "expected"),
+    [
+        (True, "EFFECT_CONFIRMED"),
+        (False, "EFFECT_NOT_OBSERVED"),
+        (None, "NOT_PROVABLE"),
+    ],
+)
+def test_reconcile_flatten_classifies_by_broker_positions(
+    positions_empty: bool | None, expected: ReconciliationOutcome
+) -> None:
+    attempt = _attempt(action="flatten", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(broker_owned_positions_empty=positions_empty)
+
+    assert reconcile_mutation_effect(attempt, evidence) == expected
+
+
+def test_reconcile_is_pure_and_does_not_mutate_attempt() -> None:
+    attempt = _attempt(action="stop", state="OUTCOME_UNKNOWN")
+    evidence = _evidence(process_state="exited")
+
+    outcome = reconcile_mutation_effect(attempt, evidence)
+
+    assert outcome == "EFFECT_CONFIRMED"
+    # The attempt is unchanged; the router is responsible for
+    # advancing the dispatch_state via ``transition_attempt``.
+    assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
 
 
