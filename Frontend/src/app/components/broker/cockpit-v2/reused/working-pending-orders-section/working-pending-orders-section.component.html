@@ -1,0 +1,36 @@
+@if (hasPending()) {
+  <section
+    class="working-pending"
+    data-testid="working-pending-orders"
+    aria-label="Working / Pending orders"
+  >
+    <header class="head">
+      <h3>WORKING / PENDING ORDERS</h3>
+      <span class="muted">{{ pendingRows().length }} pending</span>
+    </header>
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">INTENT TS</th>
+          <th scope="col">SYMBOL</th>
+          <th scope="col">SIDE</th>
+          <th scope="col" class="num">QUANTITY</th>
+          <th scope="col">INTENT ID</th>
+          <th scope="col">STATUS</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of pendingRows(); track trackRow($index, p)) {
+          <tr [attr.data-testid]="'working-pending-row-' + p.row.seq">
+            <td class="ts">{{ p.intentTs }}</td>
+            <td>{{ p.row.symbol }}</td>
+            <td>{{ p.row.side }}</td>
+            <td class="num">{{ fmtNumber(p.row.quantity, 0) }}</td>
+            <td class="mono">{{ p.intentId ?? '—' }}</td>
+            <td>{{ p.row.headline }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </section>
+}

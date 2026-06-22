@@ -1,33 +1,51 @@
-// PRD #617 — Activity tab.  One vertical scroll container; subsections
-// in fixed order: Latest signal, Trade chart, Trades table, Incidents,
-// Sizing audit.
+// Activity tab (ADR 0014 / PRD #617).
+//
+// The broker-activity surface is now the canonical execution view: rows
+// are authored by the backend publisher and rendered verbatim by
+// ``BrokerActivityTableComponent`` + ``WorkingPendingOrdersSectionComponent``.
+// The previous ``SizingAuditTableComponent`` is deleted — its provenance
+// now lives in the row drill-down's ``engine_overlay.sizing_provenance``
+// (per ADR 0014 §7).
+//
+// Latest signal + Trade chart + Incidents remain on this tab; they're
+// different domains (decision feed, price chart, operational health),
+// not execution-narrative surfaces.
 
 import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
+  Injector,
   computed,
+  effect,
+  inject,
   input,
+  runInInjectionContext,
+  signal,
+  untracked,
 } from '@angular/core';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 
 import { BotTradeChartCardComponent } from '../reused/bot-trade-chart-card/bot-trade-chart-card.component';
-import { BotTradesTableComponent } from '../reused/bot-trades-table/bot-trades-table.component';
+import { BrokerActivityTableComponent } from '../reused/broker-activity-table/broker-activity-table.component';
+import {
+  brokerActivityStream,
+  type BrokerActivityStream,
+} from '../reused/broker-activity-table/broker-activity-stream';
 import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-panel.component';
 import { LatestSignalStripComponent } from '../reused/latest-signal-strip/latest-signal-strip.component';
-import { SizingAuditTableComponent } from '../reused/sizing-audit-table/sizing-audit-table.component';
+import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-orders-section/working-pending-orders-section.component';
 
 @Component({
   selector: 'app-activity-tab',
-  standalone: true,
   imports: [
     CommonModule,
     BotTradeChartCardComponent,
-    BotTradesTableComponent,
+    BrokerActivityTableComponent,
     IncidentsPanelComponent,
     LatestSignalStripComponent,
-    SizingAuditTableComponent,
+    WorkingPendingOrdersSectionComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './activity-tab.component.html',
@@ -36,9 +54,42 @@ import { SizingAuditTableComponent } from '../reused/sizing-audit-table/sizing-a
 export class ActivityTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
 
+  private readonly injector = inject(Injector);
+
   readonly chartRunId = computed<string | null>(
     () => this.status().live_binding?.run_id ?? this.status().evidence_binding?.run_id ?? null,
   );
 
-  readonly sizingRows = computed(() => this.status().sizing?.per_trade_audit ?? []);
+  readonly strategyInstanceId = computed<string>(() => this.status().strategy_instance_id);
+
+  // The broker-activity stream is owned at the tab level so both the
+  // executed-trades table and the working/pending panel render from the
+  // same authored row sequence. We tear it down + re-bootstrap whenever
+  // the strategy_instance_id changes.
+  private readonly stream = signal<BrokerActivityStream | null>(null);
+
+  readonly activityRows = computed(() => this.stream()?.rows() ?? []);
+  readonly backfillLoading = computed(() => this.stream()?.backfillLoading() ?? true);
+  readonly backfillError = computed(() => this.stream()?.backfillError() ?? null);
+  readonly sseStatus = computed(() => this.stream()?.sseStatus() ?? 'connecting');
+  readonly sseError = computed(() => this.stream()?.sseError() ?? null);
+
+  constructor() {
+    // ``effect`` re-runs whenever a tracked dependency changes. The only
+    // dependency that should trigger a teardown + rebootstrap is the
+    // strategy_instance_id — reading ``stream()`` directly would track
+    // the same signal we then write to inside the effect, looping
+    // forever and rebuilding the SSE connection on every change. Wrap
+    // the read in ``untracked`` so the effect only re-fires when
+    // ``strategyInstanceId`` itself changes; ``onCleanup`` closes the
+    // previous stream on sid change and on host destroy.
+    effect((onCleanup) => {
+      const sid = this.strategyInstanceId();
+      const next = runInInjectionContext(this.injector, () =>
+        brokerActivityStream(sid),
+      );
+      untracked(() => this.stream.set(next));
+      onCleanup(() => next.close());
+    });
+  }
 }

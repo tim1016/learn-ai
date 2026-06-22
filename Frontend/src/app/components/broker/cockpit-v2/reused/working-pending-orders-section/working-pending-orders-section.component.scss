@@ -2,7 +2,7 @@
   display: block;
 }
 
-.audit-table-wrap {
+.working-pending {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -51,30 +51,18 @@
       border-bottom: 1px solid var(--border);
     }
 
-    td.num {
+    td.num,
+    th.num {
       font-family: var(--font-mono);
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
 
-    td.ts {
+    td.ts,
+    td.mono {
       font-family: var(--font-mono);
       white-space: nowrap;
       color: var(--text-muted);
     }
-
-    tr.skipped td {
-      color: var(--text-muted);
-    }
-  }
-
-  .badge {
-    display: inline-block;
-    padding: 0.05rem 0.3rem;
-    border: 1px solid var(--border-light);
-    border-radius: 2px;
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    color: var(--text-subtle);
   }
 }
