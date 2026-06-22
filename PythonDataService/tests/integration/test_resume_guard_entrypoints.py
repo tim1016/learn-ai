@@ -36,6 +36,7 @@ from app.services.operator_capability import evaluate_action
 from app.services.resume_guard_state import (
     resolve_guard_state,
 )
+from tests._fixtures.daemon_transport import as_typed_get
 from tests._fixtures.resume_guard_cases import GUARD_CASES, GuardCase
 
 # ---------------------------------------------------------------------------
@@ -144,8 +145,8 @@ def _build_app(tmp_path: Path, sid: str, case: GuardCase, monkeypatch) -> FastAP
 
     # Stub the daemon fetch: no live binding ever for the consistency
     # assertion (durable-only write path).
-    async def fake_fetch_instance_process(url: str, sid: str) -> dict:
-        return {"process": {"state": "idle"}, "instances": []}
+    async def fake_fetch_instance_process(url: str, sid: str):
+        return as_typed_get({"process": {"state": "idle"}, "instances": []})
 
     monkeypatch.setattr(
         li.host_daemon_client,

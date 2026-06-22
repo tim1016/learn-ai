@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -147,11 +148,48 @@ async def lifespan(app: FastAPI):
             "IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled. Live-runs router available."
         )
 
+    # ── PRD #619-C2 — daemon connectivity monitor ──────────────────
+    # The host live-runner daemon is independent of the IBKR broker:
+    # start the connectivity monitor regardless of broker_enabled, so
+    # operator-surface composers always have a typed connectivity state
+    # to read.
+    from app.engine.live.daemon_connectivity_monitor import (
+        DaemonConnectivityMonitor,
+    )
+    from app.engine.live.daemon_connectivity_monitor import (
+        set_monitor as set_daemon_monitor,
+    )
+    from app.engine.live.host_daemon_client import probe_daemon_health
+
+    daemon_monitor: DaemonConnectivityMonitor | None = None
+    daemon_url = (ibkr_settings.live_runner_daemon_url or "").strip()
+    if daemon_url:
+        def _now_ms() -> int:
+            return int(time.time() * 1000)
+
+        async def _probe():
+            return await probe_daemon_health(daemon_url)
+
+        daemon_monitor = DaemonConnectivityMonitor(probe=_probe, now_ms=_now_ms)
+        await daemon_monitor.start()
+        set_daemon_monitor(daemon_monitor)
+    else:
+        set_daemon_monitor(None)
+        logger.info(
+            "Host daemon URL not configured (live_runner_daemon_url is empty); "
+            "daemon connectivity monitor not started."
+        )
+
     try:
         yield
     finally:
-        # Stop the monitor BEFORE disconnecting so a tick-in-flight doesn't
-        # observe the close and immediately try to reconnect.
+        # Stop the daemon monitor first — its probe traffic stops cleanly
+        # before any other shutdown step can race it.
+        if daemon_monitor is not None:
+            await daemon_monitor.stop()
+            set_daemon_monitor(None)
+        # Stop the broker monitor BEFORE disconnecting so a tick-in-flight
+        # doesn't observe the close and immediately try to reconnect.
         if monitor is not None:
             await monitor.stop()
             set_monitor(None)
