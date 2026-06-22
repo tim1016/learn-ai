@@ -15,20 +15,22 @@
     />
   </section>
 
-  <section class="subsection" data-testid="activity-trades-table" aria-label="Trades table">
-    <h3>Trades</h3>
-    <app-bot-trades-table [runId]="chartRunId()" />
+  <section class="subsection" data-testid="activity-working-pending" aria-label="Working / Pending orders">
+    <app-working-pending-orders-section [rows]="activityRows()" />
+  </section>
+
+  <section class="subsection" data-testid="activity-broker-activity" aria-label="Broker activity">
+    <app-broker-activity-table
+      [rows]="activityRows()"
+      [backfillLoading]="backfillLoading()"
+      [backfillError]="backfillError()"
+      [sseStatus]="sseStatus()"
+      [sseError]="sseError()"
+    />
   </section>
 
   <section class="subsection" data-testid="activity-incidents" aria-label="Incidents">
     <h3>Incidents</h3>
     <app-incidents-panel [runId]="chartRunId()" />
   </section>
-
-  @if (sizingRows().length || status().sizing) {
-    <section class="subsection" data-testid="activity-sizing-audit" aria-label="Sizing audit">
-      <h3>Sizing audit</h3>
-      <app-sizing-audit-table [rows]="sizingRows()" />
-    </section>
-  }
 </div>

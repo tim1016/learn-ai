@@ -1,0 +1,116 @@
+<div class="row-detail" data-testid="broker-activity-row-detail">
+  <!--
+    Narrative is rendered verbatim. The frontend MUST NOT prepend
+    "Reason:" or any other prose — the backend template is the only
+    authority on operator-facing copy (ADR 0014 §1).
+  -->
+  <p class="narrative" data-testid="broker-activity-narrative">{{ row().narrative }}</p>
+
+  <div class="meta">
+    <span><strong>Template:</strong> {{ row().template_key }} v{{ row().template_version }}</span>
+    @if (row().exec_id; as id) {
+      <span><strong>Exec ID:</strong> {{ id }}</span>
+    }
+    @if (row().perm_id !== null) {
+      <span><strong>Perm ID:</strong> {{ row().perm_id }}</span>
+    }
+    @if (row().order_ref; as ref) {
+      <span><strong>Order ref:</strong> {{ ref }}</span>
+    }
+    <span><strong>Seq:</strong> {{ row().seq }}</span>
+  </div>
+
+  @if (reasonCodes().length > 0) {
+    <div class="reasons" data-testid="broker-activity-reason-codes">
+      <span class="label">Reason codes:</span>
+      @for (rc of reasonCodes(); track rc) {
+        <span class="reason-chip">{{ rc }}</span>
+      }
+    </div>
+  }
+
+  @if (hasEngineOverlay() && row().engine_overlay; as overlay) {
+    <section class="panel" data-testid="broker-activity-engine-overlay">
+      <h4>Engine overlay</h4>
+      <dl>
+        @if (overlay.intent_id; as id) {
+          <dt>Intent ID</dt><dd>{{ id }}</dd>
+        }
+        @if (overlay.mutation_attempt_id; as mid) {
+          <dt>Mutation attempt</dt><dd>{{ mid }}</dd>
+        }
+        @if (overlay.requested_qty !== null) {
+          <dt>Requested qty</dt><dd>{{ fmtNumber(overlay.requested_qty, 0) }}</dd>
+        }
+        @if (overlay.requested_price !== null) {
+          <dt>Requested price</dt><dd>{{ fmtCurrency(overlay.requested_price) }}</dd>
+        }
+      </dl>
+
+      @if (overlay.sizing_provenance; as sp) {
+        <div class="sub-panel" data-testid="broker-activity-sizing-provenance">
+          <h5>Sizing provenance</h5>
+          <dl>
+            @if (sp.policy; as p) { <dt>Policy</dt><dd>{{ p }}</dd> }
+            @if (sp.requested_qty !== null) {
+              <dt>Requested qty</dt><dd>{{ fmtNumber(sp.requested_qty, 0) }}</dd>
+            }
+            @if (sp.reference_price_decimal_str; as price) {
+              <dt>Reference price</dt><dd>{{ price }}</dd>
+            }
+            @if (sp.provenance; as prov) { <dt>Provenance</dt><dd>{{ prov }}</dd> }
+            @if (sp.surface; as surf) { <dt>Surface</dt><dd>{{ surf }}</dd> }
+            @if (sp.skip_reason; as sr) { <dt>Skip reason</dt><dd>{{ sr }}</dd> }
+          </dl>
+        </div>
+      }
+
+      <div class="sub-panel" data-testid="broker-activity-lag-breakdown">
+        <h5>Lag breakdown</h5>
+        <dl>
+          <dt>Intent → dispatch</dt>
+          <dd>{{ formatLagMs(overlay.lag_breakdown.intent_to_dispatch_ms) }}</dd>
+          <dt>Dispatch → ack</dt>
+          <dd>{{ formatLagMs(overlay.lag_breakdown.dispatch_to_ack_ms) }}</dd>
+          <dt>Ack → exec</dt>
+          <dd>{{ formatLagMs(overlay.lag_breakdown.ack_to_exec_ms) }}</dd>
+          <dt>Exec → observed</dt>
+          <dd>{{ formatLagMs(overlay.lag_breakdown.exec_to_observed_ms) }}</dd>
+          <dt class="total">Intent → exec (total)</dt>
+          <dd class="total">{{ formatLagMs(overlay.lag_breakdown.intent_to_exec_ms) }}</dd>
+        </dl>
+      </div>
+    </section>
+  }
+
+  @if (hasDivergenceFacts() && row().divergence_facts; as facts) {
+    <section class="panel" data-testid="broker-activity-divergence-facts">
+      <h4>Divergence facts</h4>
+      <dl>
+        @if (facts.price_delta !== null) {
+          <dt>Price delta</dt>
+          <dd>{{ fmtCurrency(facts.price_delta) }}</dd>
+        }
+        @if (facts.quantity_delta !== null) {
+          <dt>Quantity delta</dt>
+          <dd>{{ fmtNumber(facts.quantity_delta, 0) }}</dd>
+        }
+        @if (facts.lag_total_ms !== null) {
+          <dt>Lag total</dt>
+          <dd>{{ formatLagMs(facts.lag_total_ms) }}</dd>
+        }
+      </dl>
+      @if (windowContextEntries().length > 0) {
+        <div class="sub-panel" data-testid="broker-activity-window-context">
+          <h5>Window context</h5>
+          <dl>
+            @for (entry of windowContextEntries(); track entry.key) {
+              <dt>{{ entry.key }}</dt>
+              <dd>{{ entry.value }}</dd>
+            }
+          </dl>
+        </div>
+      }
+    </section>
+  }
+</div>
