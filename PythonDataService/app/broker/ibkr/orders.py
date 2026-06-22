@@ -541,6 +541,7 @@ def _trade_to_status_event(
     account_id: str,
 ) -> IbkrOrderEvent:
     """Translate the current Trade snapshot into a status-type event."""
+    order_ref = getattr(trade.order, "orderRef", "") or None
     return IbkrOrderEvent(
         account_id=account_id,
         order_id=int(trade.order.orderId),
@@ -548,6 +549,7 @@ def _trade_to_status_event(
         con_id=int(trade.contract.conId) if trade.contract else None,
         event_type=_resolve_event_type(trade, is_fill=False),
         status=getattr(trade.orderStatus, "status", None),
+        order_ref=order_ref,
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
         ts_ms=_now_ms(),
@@ -580,6 +582,15 @@ def _fill_to_event(
     exec_obj = getattr(fill, "execution", None)
     exec_id = getattr(exec_obj, "execId", None) if exec_obj is not None else None
     client_id_raw = getattr(exec_obj, "clientId", None) if exec_obj is not None else None
+    # ib_async populates ``Execution.orderRef`` from the broker's echo of the
+    # token we stamped on the outbound order (ADR 0008 / Phase 5A). Empty
+    # string is the library's "field absent" default — coerce to None so a
+    # missing echo stays distinguishable from a real, present orderRef
+    # downstream (the reconciliation publisher treats absence as foreign).
+    # Prefer the Execution's value (broker-authoritative on a fill) but fall
+    # back to the Order's value when the Execution omits it.
+    exec_order_ref = getattr(exec_obj, "orderRef", "") if exec_obj is not None else ""
+    order_ref = exec_order_ref or getattr(trade.order, "orderRef", "") or None
     # ib_async populates ``Execution.time`` as a tz-aware UTC datetime. Carry
     # it as ``int64 ms UTC`` so the § 7 outside-mutation floor can distinguish
     # a stale connect-time replay from a concurrent fill. ``ts_ms`` below stays
@@ -615,6 +626,7 @@ def _fill_to_event(
         con_id=int(trade.contract.conId) if trade.contract else None,
         event_type="fill",
         status=getattr(trade.orderStatus, "status", None),
+        order_ref=order_ref,
         exec_id=str(exec_id) if exec_id else None,
         client_id=int(client_id_raw) if client_id_raw is not None else None,
         fill_quantity=float(getattr(exec_obj, "shares", 0.0) or 0.0),
