@@ -823,7 +823,7 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     root = Path(settings.live_runs_root)
     by_instance = _scan_runs_by_instance(root)
 
-    daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_reachable = daemon is not None
     daemon_by_sid: dict[str, dict] = {}
     if daemon:
@@ -1140,7 +1140,7 @@ async def get_audit_copy_sizing_lookup(
                 detail="proposed_sizing must be a JSON object",
             )
         sizing_payload = parsed
-    body = await host_daemon_client.fetch_audit_copy_sizing_lookup(
+    _result, body = await host_daemon_client.fetch_audit_copy_sizing_lookup(
         settings.live_runner_daemon_url, audit_copy_path, sizing_payload
     )
     if body is None:
@@ -1167,7 +1167,7 @@ async def get_qc_audit_copies() -> QcAuditCopyListing:
     form's connectivity strip is what surfaces "daemon down", not this endpoint.
     """
     settings = get_settings()
-    listing = await host_daemon_client.fetch_qc_audit_copies(settings.live_runner_daemon_url)
+    _result, listing = await host_daemon_client.fetch_qc_audit_copies(settings.live_runner_daemon_url)
     if listing is None:
         return QcAuditCopyListing(scope_root="references/qc-shadow", entries=[])
     try:
@@ -1286,7 +1286,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     process, live_binding = _interpret_daemon_process(daemon, root)
 
     runs = _scan_runs_by_instance(root).get(sid, [])
@@ -1424,9 +1424,14 @@ async def _load_instance_context_for_router(sid: str) -> InstanceContext:
     root = Path(settings.live_runs_root)
 
     async def _fetch_daemon(_sid: str) -> dict | None:
-        return await host_daemon_client.fetch_instance_process(
+        # C2: typed read returns ``(DaemonResult, dict | None)``; the
+        # operator-surface ``control_plane`` section (C3) surfaces the
+        # typed kind via the connectivity monitor's accumulated state, so
+        # this per-call result is discarded here.
+        _result, daemon = await host_daemon_client.fetch_instance_process(
             settings.live_runner_daemon_url, _sid
         )
+        return daemon
 
     return await load_instance_context(
         sid,
@@ -1626,7 +1631,7 @@ async def get_chart_snapshot(
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid date") from None
 
-    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     runs = _scan_runs_by_instance(root).get(sid, [])
 
@@ -1842,7 +1847,7 @@ async def set_instance_desired_state(
     # write may have triggered a daemon-side response we should
     # reflect).  Using a fresh fetch keeps the actuation reasoning
     # against the latest binding.
-    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
     if live_binding is None or live_run_dir is None:
@@ -1964,7 +1969,7 @@ async def flatten_and_pause_instance(
         version=record.version,
     )
 
-    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
     if live_binding is None or live_run_dir is None:
@@ -2010,7 +2015,7 @@ async def get_instance_commands(strategy_instance_id: str) -> CommandsTimeline:
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     if live_binding is not None:
         run_dir = _visible_live_run_dir(root, live_binding)

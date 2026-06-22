@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
 from app.routers import live_instances
+from tests._fixtures.daemon_transport import as_typed_get
 
 
 def _write_ledger_with_action(
@@ -73,11 +74,11 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Fast
 def _set_daemon(
     monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None
 ) -> None:
-    async def fake_instances(_base_url: str) -> dict | None:
-        return instances
+    async def fake_instances(_base_url: str):
+        return as_typed_get(instances)
 
-    async def fake_process(_base_url: str, _sid: str) -> dict | None:
-        return process
+    async def fake_process(_base_url: str, _sid: str):
+        return as_typed_get(process)
 
     monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
