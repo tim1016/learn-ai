@@ -20,6 +20,8 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
+from app.engine.live.daemon_transport import DaemonResultKind
 from app.schemas.live_runs import (
     DesiredStateView,
     FocusAction,
@@ -36,6 +38,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceActionPlan,
     OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
+    OperatorSurfaceControlPlane,
     OperatorSurfaceCurrentRisk,
     OperatorSurfaceDailyOrderCap,
     OperatorSurfaceDomainFreshness,
@@ -490,6 +493,66 @@ def _project_runtime_freshness(
     )
 
 
+# Operator-language notices keyed by ``DaemonResultKind``. The table is
+# backend-authored; Angular renders the strings verbatim and MUST NOT
+# compose them from the enum.
+_CONTROL_PLANE_NOTICE_TABLE: dict[DaemonResultKind, tuple[str | None, str | None]] = {
+    "CONNECTED": (None, None),
+    "RETRYING": (
+        "Host daemon connectivity is degraded; the data plane is retrying. "
+        "Cockpit values may lag until the daemon responds.",
+        "daemon-retrying",
+    ),
+    "UNREACHABLE": (
+        "Host daemon is unreachable. Verify the launcher process is running "
+        "and that the daemon URL is correct.",
+        "daemon-unreachable",
+    ),
+    "AUTH_FAILED": (
+        "Host daemon rejected the data plane's credentials. Rotate or refresh "
+        "the daemon token and restart the data plane.",
+        "daemon-auth-failed",
+    ),
+    "PROTOCOL_ERROR": (
+        "Host daemon returned a malformed or error response. It may be "
+        "mid-restart — check the daemon logs.",
+        "daemon-protocol-error",
+    ),
+    "INCOMPATIBLE_CONTRACT": (
+        "Host daemon API is incompatible with this data-plane build. Rebuild "
+        "and redeploy the daemon to match the data-plane release.",
+        "daemon-incompatible-contract",
+    ),
+}
+
+
+def _project_control_plane(
+    state: DaemonConnectivityState | None,
+) -> OperatorSurfaceControlPlane | None:
+    """Project the connectivity monitor's folded state into the operator
+    surface.
+
+    ``None`` ↦ ``None`` (the data plane booted without a daemon URL — the
+    cockpit hides the control-plane card). When the monitor exists but
+    has not yet observed any probe, ``state.kind`` is ``RETRYING`` with
+    ``attempt=0`` — the operator surface shows that exactly.
+    """
+    if state is None:
+        return None
+    notice, runbook_slug = _CONTROL_PLANE_NOTICE_TABLE.get(
+        state.kind, (None, None)
+    )
+    return OperatorSurfaceControlPlane(
+        state=state.kind,
+        last_transition_ms=state.last_transition_ms,
+        last_success_ms=state.last_success_ms,
+        attempt=state.attempt,
+        daemon_boot_id=state.observed_daemon_boot_id,
+        notice=notice,
+        runbook_slug=runbook_slug,
+    )
+
+
 # ---------------------------------------------------------------------------
 # compose
 # ---------------------------------------------------------------------------
@@ -512,6 +575,7 @@ def compute_operator_surface(
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
     runtime_freshness: RuntimeFreshness | None = None,
+    control_plane_state: DaemonConnectivityState | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -550,4 +614,5 @@ def compute_operator_surface(
         trading_session=_project_trading_session(now_ms=now_ms),
         readiness_gates=project_readiness_gates(readiness),
         runtime_freshness=_project_runtime_freshness(runtime_freshness),
+        control_plane=_project_control_plane(control_plane_state),
     )

@@ -237,6 +237,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "configuration",
         "current_risk",
         "daily_order_cap",
+        "control_plane",
         "action_plan",
         "actions",
         "trading_session",
@@ -428,3 +429,125 @@ async def test_legacy_account_endpoint_still_returns_contamination_only(
     body = response.json()
     assert body["verdict"] in {"clean", "contaminated", "unknown"}
     assert "policy_blocks_starts" in body
+
+
+# ---------------------------------------------------------------------------
+# PRD #619-C3 — operator_surface.control_plane end-to-end
+# ---------------------------------------------------------------------------
+
+
+async def test_status_control_plane_is_null_when_no_monitor_installed(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In test mode the lifespan hasn't installed a connectivity monitor,
+    so ``get_monitor()`` returns ``None`` and the operator surface omits
+    the section (renders as ``null``). The cockpit hides the card."""
+
+    app, root = app_with_root
+    sid = "strategy-cp-null"
+    _write_ledger(root, "run-cp-null", sid, created_at_ms=1_700_000_000_000)
+    _set_daemon(monkeypatch, process={"state": "idle", "run_id": None})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["control_plane"] is None
+
+
+async def test_status_control_plane_reflects_monitor_state(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the lifespan installs a monitor, the operator surface carries
+    its current connectivity state — kind, attempt, last_*_ms, daemon
+    boot id, server-authored notice + runbook_slug — verbatim."""
+
+    from app.engine.live.daemon_connectivity_monitor import (
+        DaemonConnectivityState,
+        set_monitor,
+    )
+
+    app, root = app_with_root
+    sid = "strategy-cp-state"
+    _write_ledger(root, "run-cp-state", sid, created_at_ms=1_700_000_000_000)
+    _set_daemon(monkeypatch, process={"state": "idle", "run_id": None})
+
+    fake_state = DaemonConnectivityState(
+        kind="UNREACHABLE",
+        attempt=5,
+        last_transition_ms=1_700_000_000_500,
+        last_success_ms=1_699_999_999_000,
+        observed_daemon_boot_id="boot-deadbeef",
+        last_detail="connect refused",
+        last_error_category="connect_error",
+        next_probe_in_ms=5_000,
+    )
+
+    class _StubMonitor:
+        @property
+        def state(self):
+            return fake_state
+
+    set_monitor(_StubMonitor())
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/live-instances/{sid}/status")
+    finally:
+        set_monitor(None)
+
+    assert response.status_code == 200
+    cp = response.json()["operator_surface"]["control_plane"]
+    assert cp is not None
+    assert cp["state"] == "UNREACHABLE"
+    assert cp["attempt"] == 5
+    assert cp["last_transition_ms"] == 1_700_000_000_500
+    assert cp["last_success_ms"] == 1_699_999_999_000
+    assert cp["daemon_boot_id"] == "boot-deadbeef"
+    assert cp["notice"]  # backend-authored, non-empty
+    assert cp["runbook_slug"] == "daemon-unreachable"
+
+
+async def test_status_control_plane_connected_omits_notice(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A healthy CONNECTED state must NOT surface a notice or runbook —
+    the cockpit hides the incident card."""
+
+    from app.engine.live.daemon_connectivity_monitor import (
+        DaemonConnectivityState,
+        set_monitor,
+    )
+
+    app, root = app_with_root
+    sid = "strategy-cp-connected"
+    _write_ledger(root, "run-cp-connected", sid, created_at_ms=1_700_000_000_000)
+    _set_daemon(monkeypatch, process={"state": "idle", "run_id": None})
+
+    fake_state = DaemonConnectivityState(
+        kind="CONNECTED",
+        attempt=0,
+        last_transition_ms=1_700_000_000_000,
+        last_success_ms=1_700_000_000_000,
+        observed_daemon_boot_id="boot-A",
+    )
+
+    class _StubMonitor:
+        @property
+        def state(self):
+            return fake_state
+
+    set_monitor(_StubMonitor())
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/live-instances/{sid}/status")
+    finally:
+        set_monitor(None)
+
+    assert response.status_code == 200
+    cp = response.json()["operator_surface"]["control_plane"]
+    assert cp is not None
+    assert cp["state"] == "CONNECTED"
+    assert cp["notice"] is None
+    assert cp["runbook_slug"] is None
+    assert cp["daemon_boot_id"] == "boot-A"

@@ -11,6 +11,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.engine.live.daemon_transport import DaemonResultKind
+
 
 class RunState(StrEnum):
     """State of a live run's execution lifecycle."""
@@ -1192,6 +1194,57 @@ class OperatorSurfaceRuntimeFreshness(BaseModel):
     control_plane: OperatorSurfaceDomainFreshness
 
 
+class OperatorSurfaceControlPlane(BaseModel):
+    """Server-authored control-plane (host-daemon) connectivity surface
+    (PRD #619 §C).
+
+    The control plane is the data plane's typed HTTP transport to the
+    host live-runner daemon. This block surfaces the outcome of the most
+    recent daemon poll plus the context an operator needs to diagnose a
+    connectivity incident. It is intentionally distinct from
+    ``broker.connection`` (the daemon→broker session) and ``host_process``
+    (the host runner process the daemon supervises). Composing them
+    collapses three independent facts the operator must read separately.
+
+    Authority pattern matches the rest of ``OperatorSurface``: the
+    backend authors every field including the operator-language
+    ``notice`` and the ``runbook_slug``. Angular renders the strings
+    verbatim and MUST NOT compose them from the enum.
+
+    Fields:
+
+    - ``state`` is the ``DaemonResultKind`` produced by the connectivity
+      monitor (619-C2). Closed set: ``CONNECTED`` / ``RETRYING`` /
+      ``UNREACHABLE`` / ``AUTH_FAILED`` / ``PROTOCOL_ERROR`` /
+      ``INCOMPATIBLE_CONTRACT``.
+    - ``last_transition_ms`` — ``int64 ms UTC`` of the last ``state``
+      change, or ``None`` if the monitor has not yet observed a
+      transition.
+    - ``last_success_ms`` — ``int64 ms UTC`` of the most recent
+      ``CONNECTED`` probe, or ``None`` if no successful poll yet.
+    - ``attempt`` — retry-budget counter from the monitor: incremented
+      on each failure within the budget window, ``0`` on success, pinned
+      at the budget once exhausted.
+    - ``daemon_boot_id`` — daemon ``boot_id`` observed on the most
+      recent ``CONNECTED`` poll, ``None`` until the first successful
+      poll or when the daemon does not declare one.
+    - ``notice`` — operator-language prose authored server-side when
+      ``state != CONNECTED``. ``None`` when the channel is healthy.
+    - ``runbook_slug`` — stable short slug (e.g. ``"daemon-unreachable"``)
+      keyed in the operator runbook. ``None`` when no runbook applies.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: DaemonResultKind
+    last_transition_ms: int | None = Field(default=None, ge=0)
+    last_success_ms: int | None = Field(default=None, ge=0)
+    attempt: int = Field(default=0, ge=0)
+    daemon_boot_id: str | None = None
+    notice: str | None = None
+    runbook_slug: str | None = None
+
+
 class OperatorSurface(BaseModel):
     """Operator-facing projection of run state for the Terminal Cockpit
     (PRD #607 / Slice 1 / #608, extended by PRD #616).
@@ -1228,6 +1281,10 @@ class OperatorSurface(BaseModel):
     # ordering preserves the engine's gate order.
     readiness_gates: list[OperatorGate] = Field(default_factory=list)
     runtime_freshness: OperatorSurfaceRuntimeFreshness | None = None
+    # PRD #619-C3 — host-daemon connectivity surface. ``None`` when the
+    # data plane was booted without a daemon URL (live_runner_daemon_url
+    # empty); in that case the cockpit hides the control-plane card.
+    control_plane: OperatorSurfaceControlPlane | None = None
 
 
 class LiveInstanceStatus(BaseModel):
