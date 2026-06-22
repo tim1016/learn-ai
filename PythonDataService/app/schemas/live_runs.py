@@ -1321,6 +1321,41 @@ class OperatorSurfaceControlPlane(BaseModel):
     runbook_slug: str | None = None
 
 
+class BrokerObservationConsistency(BaseModel):
+    """PRD #619-D4 — server-authored divergence verdict for the operator.
+
+    The data plane and the live-engine child each observe the IBKR
+    broker connection independently.  ADR-0011 makes the *child*'s
+    observation authoritative for the bound instance; the singleton
+    is advisory.  When the two disagree, the operator must see the
+    divergence prominently — *without* the child's posture being
+    silently overwritten.
+
+    ``verdict`` rules (computed by
+    ``services.broker_observation_consistency.evaluate_broker_observation_consistency``):
+
+    - ``CONSISTENT`` — both report the same non-empty account.
+    - ``CONFLICTING`` — both report non-empty accounts that differ.
+    - ``UNKNOWN`` — one observation is missing or stale (no child
+      runtime yet, singleton disabled / disconnected, account
+      empty).
+    - ``NOT_COMPARABLE`` — the two are configured for different
+      modes (paper vs live) and the comparison is not apples-to-
+      apples; comparing accounts would mislead.
+
+    Carried as an optional field on ``OperatorSurface``.  ``None``
+    is the cockpit's signal to hide the card.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: Literal["CONSISTENT", "CONFLICTING", "UNKNOWN", "NOT_COMPARABLE"]
+    child_account: str | None = None
+    data_plane_account: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    compared_at_ms: int = Field(ge=0)
+
+
 class OperatorSurface(BaseModel):
     """Operator-facing projection of run state for the Terminal Cockpit
     (PRD #607 / Slice 1 / #608, extended by PRD #616).
@@ -1361,6 +1396,13 @@ class OperatorSurface(BaseModel):
     # data plane was booted without a daemon URL (live_runner_daemon_url
     # empty); in that case the cockpit hides the control-plane card.
     control_plane: OperatorSurfaceControlPlane | None = None
+    # PRD #619-D4 — broker observation divergence surface. ``None`` when
+    # the comparison is impossible (e.g. nothing-ever-deployed) so the
+    # cockpit hides the card; otherwise the four-way verdict tells the
+    # operator whether the child and the data plane agree about which
+    # broker account the instance is connected to. Never overwrites
+    # the child's authoritative posture on ``broker``.
+    broker_observation_consistency: BrokerObservationConsistency | None = None
 
 
 class LiveInstanceStatus(BaseModel):

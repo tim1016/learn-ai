@@ -391,6 +391,27 @@ export interface OperatorSurface {
    *  connectivity monitor (619-C2). Null when the data plane was booted
    *  without a daemon URL (the cockpit hides the card). */
   control_plane: OperatorSurfaceControlPlane | null;
+  /** PRD #619-D4 — divergence verdict between the child's broker
+   *  observation and the data-plane singleton's. Null when the
+   *  comparison is impossible (no live binding). Never overwrites the
+   *  child's authoritative posture on `broker`. */
+  broker_observation_consistency: BrokerObservationConsistency | null;
+}
+
+/** PRD #619-D4 — backend-authored divergence card.
+ *
+ * The child's observation (`engine_runtime.broker.connected_account`)
+ * and the data plane's singleton observation should match when the
+ * deployment is healthy. The four-way verdict surfaces the divergence
+ * prominently on CONFLICTING without ever overwriting the child's
+ * authoritative posture on `OperatorSurface.broker`.
+ */
+export interface BrokerObservationConsistency {
+  verdict: 'CONSISTENT' | 'CONFLICTING' | 'UNKNOWN' | 'NOT_COMPARABLE';
+  child_account: string | null;
+  data_plane_account: string | null;
+  reason_codes: string[];
+  compared_at_ms: number;
 }
 
 // PRD #616 — fleet account altitude DTO (server-authored).  Separates

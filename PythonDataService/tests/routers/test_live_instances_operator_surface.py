@@ -244,6 +244,8 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         # PRD #616 — additive operator-facing projections.
         "readiness_gates",
         "runtime_freshness",
+        # PRD #619-D4 — broker observation consistency surface.
+        "broker_observation_consistency",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
@@ -551,3 +553,53 @@ async def test_status_control_plane_connected_omits_notice(
     assert cp["notice"] is None
     assert cp["runbook_slug"] is None
     assert cp["daemon_boot_id"] == "boot-A"
+
+
+# ---------------------------------------------------------------------------
+# PRD #619-D4 — broker_observation_consistency
+# ---------------------------------------------------------------------------
+
+
+async def test_status_broker_observation_consistency_is_null_without_binding(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a live binding there is nothing to compare; the cockpit
+    hides the card."""
+
+    app, root = app_with_root
+    sid = "strategy-no-binding"
+    _write_ledger(root, "run-x", sid, created_at_ms=1_700_000_000_000)
+    _set_daemon(monkeypatch, process={"state": "idle", "run_id": None})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["broker_observation_consistency"] is None
+
+
+async def test_status_broker_observation_consistency_unknown_without_engine_runtime(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a live binding but no engine_runtime artifact yet, the verdict
+    reads UNKNOWN with CHILD_OBSERVATION_MISSING — the cockpit shows the
+    card so the operator knows the comparison is pending, not absent."""
+
+    app, root = app_with_root
+    sid = "strategy-runtime-missing"
+    _write_ledger(root, "run-rm", sid, created_at_ms=1_700_000_000_000)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-rm", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    consistency = response.json()["operator_surface"]["broker_observation_consistency"]
+    assert consistency is not None
+    assert consistency["verdict"] == "UNKNOWN"
+    assert "CHILD_OBSERVATION_MISSING" in consistency["reason_codes"]
+    assert consistency["compared_at_ms"] > 0

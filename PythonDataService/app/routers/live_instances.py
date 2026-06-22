@@ -66,6 +66,7 @@ from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.live_runs import (
     ActiveDateEntry,
     AuditCopySizingLookup,
+    BrokerObservationConsistency,
     ChartSnapshotResponse,
     ChartSnapshotRun,
     CommandsTimeline,
@@ -402,6 +403,43 @@ def _resolve_runtime_freshness(
         snapshot,
         now_ms=now_ms,
         session_state=nyse_session_state_at_ms(now_ms),
+    )
+
+
+def _resolve_broker_observation_consistency(
+    root: Path,
+    live_binding: LiveBinding | None,
+    *,
+    configured_mode: Literal["paper", "live"] | None,
+    now_ms: int,
+) -> BrokerObservationConsistency | None:
+    """Compute the divergence verdict for the current live binding.
+
+    Returns ``None`` when there is nothing to compare (no live
+    binding) so the cockpit hides the card.  Otherwise returns the
+    backend-authored verdict — including ``UNKNOWN`` when the child
+    runtime artifact is missing.  The data-plane snapshot is read at
+    the same instant as the freshness evaluator to keep both views
+    consistent within a single status response.
+    """
+    from app.broker.runtime_snapshot import snapshot_data_plane_broker
+    from app.services.broker_observation_consistency import (
+        evaluate_broker_observation_consistency,
+    )
+
+    if live_binding is None:
+        return None
+    child_block = None
+    run_dir = _visible_live_run_dir(root, live_binding)
+    if run_dir is not None:
+        snapshot = read_engine_runtime_snapshot(run_dir / ENGINE_RUNTIME_FILENAME)
+        if snapshot is not None:
+            child_block = snapshot.broker
+    return evaluate_broker_observation_consistency(
+        child=child_block,
+        data_plane=snapshot_data_plane_broker(),
+        child_configured_mode=configured_mode,
+        now_ms=now_ms,
     )
 
 
@@ -1362,6 +1400,12 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         now_ms=observed_at_ms,
     )
     latest_mutation = _resolve_latest_mutation(root, sid)
+    broker_observation_consistency = _resolve_broker_observation_consistency(
+        root,
+        live_binding,
+        configured_mode=configured_mode,
+        now_ms=observed_at_ms,
+    )
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1399,6 +1443,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             runtime_freshness=runtime_freshness,
             control_plane_state=control_plane_state,
             latest_mutation=latest_mutation,
+            broker_observation_consistency=broker_observation_consistency,
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,
