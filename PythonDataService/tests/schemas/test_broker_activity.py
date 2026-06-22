@@ -23,7 +23,6 @@ from app.schemas.broker_activity import (
     Verdict,
 )
 
-
 # ── Verdict / ReasonCode closed cardinality ────────────────────────────
 
 

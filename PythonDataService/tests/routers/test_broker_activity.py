@@ -37,7 +37,7 @@ SID = "sid-router-test"
 NS = f"learn-ai/{SID}/v1"
 
 
-def _row(seq: int, exec_id: str = None) -> BrokerActivityRow:
+def _row(seq: int, exec_id: str | None = None) -> BrokerActivityRow:
     return BrokerActivityRow(
         seq=seq,
         ts_ms=1_700_000_000_000 + seq,
@@ -125,11 +125,8 @@ def fresh_registry():
     snapshot = dict(registry._by_instance)
     registry._by_instance.clear()
     yield registry
-    # Restore for the next test (stop anything we left running).
-    for sid in list(registry._by_instance):
-        # Best-effort sync cleanup; the publishers we register in tests
-        # use the empty-source factory and stop quickly under cancel.
-        pass
+    # Best-effort sync cleanup; the publishers we register in tests use
+    # the empty-source factory and stop quickly under cancel.
     registry._by_instance.clear()
     registry._by_instance.update(snapshot)
 
@@ -217,17 +214,16 @@ async def test_sse_stream_emits_end_event_when_publisher_stops(
     transport = ASGITransport(app=app)
 
     async def _collect_stream():
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            async with client.stream(
-                "GET", f"/api/live-instances/{SID}/broker-activity/stream"
-            ) as resp:
-                assert resp.status_code == 200
-                text = ""
-                async for chunk in resp.aiter_text():
-                    text += chunk
-                    if "event: end" in text:
-                        return text
-                return text
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET", f"/api/live-instances/{SID}/broker-activity/stream"
+        ) as resp:
+            assert resp.status_code == 200
+            text = ""
+            async for chunk in resp.aiter_text():
+                text += chunk
+                if "event: end" in text:
+                    return text
+            return text
 
     collector = asyncio.create_task(_collect_stream())
     # Let the subscriber register, then stop the publisher so the SSE
@@ -257,19 +253,18 @@ async def test_sse_stream_backfills_from_since_seq_then_goes_live(
     transport = ASGITransport(app=app)
 
     async def _collect_stream():
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            async with client.stream(
-                "GET",
-                f"/api/live-instances/{SID}/broker-activity/stream",
-                params={"since_seq": 1},
-            ) as resp:
-                assert resp.status_code == 200
-                text = ""
-                async for chunk in resp.aiter_text():
-                    text += chunk
-                    if "event: end" in text:
-                        return text
-                return text
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"since_seq": 1},
+        ) as resp:
+            assert resp.status_code == 200
+            text = ""
+            async for chunk in resp.aiter_text():
+                text += chunk
+                if "event: end" in text:
+                    return text
+            return text
 
     collector = asyncio.create_task(_collect_stream())
     # Let the subscriber register and drain backfill.
@@ -322,19 +317,18 @@ async def test_sse_stream_dedupes_when_row_arrives_during_backfill(
     transport = ASGITransport(app=app)
 
     async def _collect_stream():
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            async with client.stream(
-                "GET",
-                f"/api/live-instances/{SID}/broker-activity/stream",
-                params={"since_seq": 0},
-            ) as resp:
-                assert resp.status_code == 200
-                text = ""
-                async for chunk in resp.aiter_text():
-                    text += chunk
-                    if "event: end" in text:
-                        return text
-                return text
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"since_seq": 0},
+        ) as resp:
+            assert resp.status_code == 200
+            text = ""
+            async for chunk in resp.aiter_text():
+                text += chunk
+                if "event: end" in text:
+                    return text
+            return text
 
     collector = asyncio.create_task(_collect_stream())
     await asyncio.sleep(0.05)

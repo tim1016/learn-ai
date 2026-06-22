@@ -32,6 +32,7 @@ busy replaying history and a new order would race the sweep.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
@@ -39,8 +40,10 @@ from pathlib import Path
 
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.intent_ledger import (
-    LedgerProjection,
     _UNRESOLVED_STATUSES,
+    LedgerProjection,
+)
+from app.engine.live.intent_ledger import (
     fold as fold_intent_events,
 )
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -225,18 +228,14 @@ class BrokerActivityPublisher:
             task = getattr(self, task_attr)
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
                 setattr(self, task_attr, None)
         for q in self._subscribers:
-            try:
+            # The subscriber is already behind — they'll see the
+            # cancellation when they next try to read.
+            with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(None)
-            except asyncio.QueueFull:
-                # The subscriber is already behind — they'll see the
-                # cancellation when they next try to read.
-                pass
 
     @property
     def is_running(self) -> bool:
@@ -828,17 +827,13 @@ class BrokerActivityPublisher:
                 # The subscriber was already going to lose rows — better
                 # to lose one and tell them so than to lose all future
                 # rows silently.
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
+                # Truly stuck (e.g. a second producer concurrently
+                # re-filled the queue). The consumer will time out at
+                # the transport layer.
+                with contextlib.suppress(asyncio.QueueFull):
                     q.put_nowait(None)
-                except asyncio.QueueFull:
-                    # Truly stuck (e.g. a second producer concurrently
-                    # re-filled the queue). The consumer will time out
-                    # at the transport layer.
-                    pass
                 dead.append(q)
         for q in dead:
             self._subscribers.discard(q)

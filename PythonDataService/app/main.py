@@ -136,8 +136,6 @@ async def lifespan(app: FastAPI):
             )
         # The monitor is started even when initial connect failed — it will
         # observe the disconnected state and retry per the backoff policy.
-        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
         # Slice 3 / ADR 0011 amendment — the broker-activity publisher
         # registry's reconnect-recovery sweep rides the same chain as
         # the bar aggregator's resubscribe-all. Order inside the wrapped
@@ -158,6 +156,7 @@ async def lifespan(app: FastAPI):
         from app.services.broker_activity_publisher_registry import (
             get_publisher_registry as get_broker_activity_publisher_registry,
         )
+        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
         async def _sweep_broker_activity_after_reconnect() -> None:
             await get_broker_activity_publisher_registry().sweep_all_for_recovery()
