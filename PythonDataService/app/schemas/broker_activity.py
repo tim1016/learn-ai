@@ -208,12 +208,17 @@ class BrokerActivityRow(BaseModel):
 
 
 class BrokerActivityPage(BaseModel):
-    """Paginated REST backfill response.
+    """Paginated REST response from the WAL ad-hoc query endpoint.
 
-    The SSE channel pushes live increments; this endpoint serves
-    cold-start backfill from the WAL. Pagination by ``seq`` (the
-    monotonic per-instance counter) avoids time-window edge cases
-    around the SSE/REST handoff.
+    The cockpit does NOT use this surface — it subscribes directly to
+    the SSE stream with a ``since_seq`` cursor and gets backfill + live
+    in one channel. This page exists for forensic / ad-hoc lookups
+    (operator tools, log inspection).
+
+    Pagination by ``seq`` (the monotonic per-instance counter) avoids
+    time-window edge cases. To fetch the next page, pass the returned
+    ``next_seq`` verbatim as the next ``after_seq`` — no off-by-one
+    arithmetic on the client.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -222,8 +227,9 @@ class BrokerActivityPage(BaseModel):
     next_seq: int | None = Field(
         default=None,
         description=(
-            "Lowest ``seq`` not yet returned. ``None`` when the page "
-            "drained the WAL — caller can resume from the SSE channel."
+            "Cursor for the next page: pass verbatim as ``after_seq`` "
+            "on the next call (equal to the highest ``seq`` returned). "
+            "``None`` when the page drained the WAL."
         ),
     )
 

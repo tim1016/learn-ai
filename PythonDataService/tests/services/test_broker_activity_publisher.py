@@ -428,6 +428,161 @@ async def test_registry_stop_all_drains_every_publisher(tmp_path: Path) -> None:
         assert not p.is_running
 
 
+async def test_fill_matches_via_intent_wal_when_sidecar_empty(
+    tmp_path: Path,
+) -> None:
+    """Regression for the normal durable-submit path: the engine writes
+    a ``SUBMITTED`` event to ``intent_events.jsonl`` synchronously
+    before ``placeOrder``, but the sidecar's ``submitted_orders`` map
+    only catches up on the next artifact flush. A fill that arrives in
+    between MUST still match its intent — otherwise every fresh fill
+    would be authored as ``unmatched_execution`` with no engine
+    overlay.
+    """
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.intent_wal import IntentWal
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    # Sidecar exists but submitted_orders is empty — the engine hasn't
+    # flushed yet.
+    _seed_envelope(artifacts, submitted_orders={})
+    # Intent WAL carries the SUBMITTED event for this intent.
+    wal = IntentWal(run_dir / "intent_events.jsonl")
+    wal.append(
+        event_type=IntentEventType.PENDING_INTENT,
+        intent_id=INTENT_ID,
+        bot_order_namespace=NS,
+        order_ref=ORDER_REF,
+    )
+    wal.append(
+        event_type=IntentEventType.SUBMITTED,
+        intent_id=INTENT_ID,
+        bot_order_namespace=NS,
+        order_ref=ORDER_REF,
+        order_id=42,
+        perm_id=999,
+    )
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([_fill_event()]),
+    )
+    publisher.start()
+    try:
+        rows = await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1
+        )
+        # The fill matched the WAL-folded intent — NOT unmatched.
+        assert rows[0].verdict == Verdict.EXPECTED
+        assert rows[0].template_key == "normal_fill"
+        assert rows[0].engine_overlay is not None
+        assert rows[0].engine_overlay.intent_id == INTENT_ID
+    finally:
+        await publisher.stop()
+
+
+async def test_event_for_foreign_namespace_is_silently_skipped(
+    tmp_path: Path,
+) -> None:
+    """When multiple strategy instances share an IBKR account, every
+    same-account trade is yielded by ``stream_order_events``. An event
+    with a parseable ``order_ref`` whose namespace belongs to ANOTHER
+    instance must be silently ignored — otherwise this instance's WAL
+    fills up with one ``unmatched_execution`` row per other instance
+    per fill.
+
+    Truly foreign events (no parseable ``order_ref`` — e.g. a manual
+    TWS click) still get authored as ``unmatched_execution``.
+    """
+    other_namespace_ref = "learn-ai/other-sid/v1:intent-x"
+    publisher, run_dir, _ = _build_publisher(
+        tmp_path,
+        [
+            # Other instance's fill — must be skipped.
+            _fill_event(
+                order_ref=other_namespace_ref,
+                exec_id="other-instance-exec",
+            ),
+            # Our fill — must be authored.
+            _fill_event(exec_id="our-exec"),
+        ],
+    )
+    publisher.start()
+    try:
+        rows = await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1
+        )
+        # Only our fill landed; the other namespace's event was dropped
+        # before authoring.
+        assert len(rows) == 1
+        assert rows[0].exec_id == "our-exec"
+    finally:
+        await publisher.stop()
+
+
+async def test_slow_subscriber_receives_sentinel_when_dropped(
+    tmp_path: Path,
+) -> None:
+    """A full subscriber queue must receive a ``None`` sentinel before
+    being discarded — otherwise the SSE handler is left blocked in
+    ``queue.get()`` forever and silently misses all future rows. The
+    sentinel lets the handler emit ``event: end`` and close the
+    connection so the client knows to reconnect.
+    """
+    publisher, _, _ = _build_publisher(tmp_path, [])
+    queue = publisher.subscribe()
+    # Fill the queue to capacity with dummy rows.
+    capacity = queue.maxsize
+    for i in range(capacity):
+        queue.put_nowait(
+            BrokerActivityRow(
+                seq=i + 1,
+                ts_ms=1_700_000_000_000 + i,
+                exec_id=f"prefill-{i}",
+                symbol="SPY",
+                side="BUY",
+                quantity=1.0,
+                order_type="MKT",
+                verdict=Verdict.EXPECTED,
+                template_key="normal_fill",
+                template_version=1,
+                headline="prefill",
+                narrative="prefill",
+            )
+        )
+    assert queue.full()
+    # Author one more row — _broadcast must dedupe to make room for the
+    # sentinel rather than silently dropping.
+    overflow_row = BrokerActivityRow(
+        seq=capacity + 1,
+        ts_ms=1_700_000_000_999,
+        exec_id="overflow",
+        symbol="SPY",
+        side="BUY",
+        quantity=1.0,
+        order_type="MKT",
+        verdict=Verdict.EXPECTED,
+        template_key="normal_fill",
+        template_version=1,
+        headline="overflow",
+        narrative="overflow",
+    )
+    publisher._broadcast(overflow_row)
+    # The queue should now hold the remaining stale rows AND a None
+    # sentinel at the tail.
+    drained: list[BrokerActivityRow | None] = []
+    while not queue.empty():
+        drained.append(queue.get_nowait())
+    assert drained[-1] is None, f"expected None sentinel at tail, got {drained[-1]!r}"
+    # The subscriber should have been discarded from the registry.
+    assert queue not in publisher._subscribers
+
+
 async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:
     """Regression: an unauthorable event must NOT advance the WAL seq
     (no row was authored, so no seq was consumed). The next good event

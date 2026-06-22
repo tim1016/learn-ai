@@ -3,12 +3,17 @@
 Two endpoints per strategy instance:
 
 - ``GET /api/live-instances/{strategy_instance_id}/broker-activity/stream``
-  — SSE channel pushing live ``BrokerActivityRow`` records as the
-  publisher authors them.
+  — SSE channel. Subscribes the cockpit FIRST (so live rows are buffered
+  while we drain WAL), then emits every WAL row with ``seq > since_seq``
+  as a backfill, then transitions seamlessly into live rows — deduping
+  any row that arrived in the WAL during the drain. This is the standard
+  cockpit flow; the client passes the highest ``seq`` it already has and
+  never misses a row across the REST/SSE handoff.
 - ``GET /api/live-instances/{strategy_instance_id}/broker-activity``
-  — REST paginated backfill from the WAL. Cold-start cockpit clients
-  call this first (passing the highest seq they have), then switch
-  to the SSE stream when the response's ``next_seq`` is ``None``.
+  — REST paginated query against the WAL. Kept as a forensic utility
+  for ad-hoc lookups (operator tools, log inspection); the cockpit
+  does NOT use this path — it subscribes directly to the SSE stream
+  with ``since_seq`` and gets backfill + live in one channel.
 
 The router is render-only: the publisher (``broker_activity_publisher``)
 authors every row server-side per the truthfulness contract.
@@ -143,7 +148,7 @@ async def _ensure_publisher(
 @router.get(
     "/{strategy_instance_id}/broker-activity",
     response_model=BrokerActivityPage,
-    summary="REST paginated backfill from broker_activity.jsonl",
+    summary="Ad-hoc paginated query against broker_activity.jsonl",
 )
 async def broker_activity_backfill(
     strategy_instance_id: Annotated[str, Path(min_length=1)],
@@ -152,9 +157,9 @@ async def broker_activity_backfill(
         Query(
             ge=0,
             description=(
-                "Return rows with ``seq > after_seq``. Cold-start "
-                "clients pass 0 to fetch all history; clients with a "
-                "partial cache pass the highest seq they hold."
+                "Return rows with ``seq > after_seq``. To paginate, pass "
+                "the previous response's ``next_seq`` verbatim — no "
+                "off-by-one arithmetic required."
             ),
         ),
     ] = 0,
@@ -163,17 +168,26 @@ async def broker_activity_backfill(
         Query(
             ge=1,
             le=500,
-            description="Max rows per page; client paginates by setting after_seq=next_seq-1 on the next call.",
+            description="Max rows per page; pass the returned ``next_seq`` as ``after_seq`` on the next call.",
         ),
     ] = 100,
 ) -> BrokerActivityPage:
+    """Forensic / ad-hoc paginated query against the WAL.
+
+    NOT the standard cockpit flow — cockpit clients subscribe directly
+    to ``/broker-activity/stream?since_seq=<N>`` which does its own WAL
+    backfill and seamlessly transitions to live without a handoff gap.
+    Use this endpoint for operator tools, log inspection, or any
+    out-of-band lookup.
+    """
     publisher = await _ensure_publisher(strategy_instance_id)
     rows = publisher.backfill(after_seq=after_seq, limit=limit)
-    # ``next_seq`` is None iff this page drained the WAL — caller can
-    # now switch to the SSE channel without missing anything.
+    # ``next_seq`` is the cursor the caller passes verbatim as the next
+    # ``after_seq``: the highest seq returned in this page. ``None``
+    # iff this page drained the WAL.
     last_persisted = publisher.last_persisted_seq()
     next_seq = (
-        rows[-1].seq + 1
+        rows[-1].seq
         if rows and rows[-1].seq < last_persisted
         else None
     )
@@ -182,24 +196,50 @@ async def broker_activity_backfill(
 
 @router.get(
     "/{strategy_instance_id}/broker-activity/stream",
-    summary="SSE stream of broker-activity rows",
+    summary="SSE stream of broker-activity rows (backfill + live)",
 )
 async def broker_activity_stream(
     strategy_instance_id: Annotated[str, Path(min_length=1)],
+    since_seq: Annotated[
+        int,
+        Query(
+            ge=0,
+            description=(
+                "Replay every WAL row with ``seq > since_seq`` as the "
+                "backfill, then transition to live without a gap. "
+                "Cold-start clients pass 0; reconnecting clients pass "
+                "the highest seq they have."
+            ),
+        ),
+    ] = 0,
 ) -> StreamingResponse:
     publisher = await _ensure_publisher(strategy_instance_id)
 
     async def event_source():
+        # Subscribe FIRST so any row authored during the WAL drain is
+        # buffered to this client's queue; the live-mode loop below
+        # then dedupes against ``last_emitted_seq`` so we never deliver
+        # the same seq twice across the backfill/live boundary.
         queue = publisher.subscribe()
         try:
+            # 1. WAL backfill — every row the client hasn't seen.
+            backlog = publisher.backfill(after_seq=since_seq)
+            last_emitted_seq = since_seq
+            for row in backlog:
+                yield f"event: row\ndata: {row.model_dump_json()}\n\n"
+                last_emitted_seq = row.seq
+            # 2. Live mode — drain the queue, skipping anything already
+            # covered by the backfill above (a row may have landed in
+            # both the WAL and the queue while we were draining).
             while True:
                 row = await queue.get()
                 if row is None:
-                    # Publisher stopped — close the SSE cleanly.
                     yield "event: end\ndata: {}\n\n"
                     return
-                payload = row.model_dump_json()
-                yield f"event: row\ndata: {payload}\n\n"
+                if row.seq <= last_emitted_seq:
+                    continue  # already delivered in the backfill
+                yield f"event: row\ndata: {row.model_dump_json()}\n\n"
+                last_emitted_seq = row.seq
         except asyncio.CancelledError:
             raise
         except Exception as exc:

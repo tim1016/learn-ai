@@ -26,6 +26,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.broker.ibkr.models import IbkrOrderEvent
+from app.engine.live.intent_ledger import (
+    LedgerProjection,
+    fold as fold_intent_events,
+)
+from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
@@ -41,6 +46,7 @@ from app.services.broker_activity_reconciler import (
     UnauthorableEventError,
     author_row_from_event,
     match_identity,
+    parse_order_ref,
 )
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
@@ -95,6 +101,14 @@ class BrokerActivityPublisher:
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id)
         )
+        # Intent WAL — the durable record of every submit-lifecycle event.
+        # We fold it into the submitted-orders projection so a fresh fill
+        # bearing this instance's own ``order_ref`` matches even when the
+        # sidecar's ``submitted_orders`` map is empty (the normal durable
+        # submit path writes the WAL but only updates the sidecar
+        # asynchronously via the engine's flush cycle).
+        self._intent_wal = IntentWal(run_dir / "intent_events.jsonl")
+        self._fold_cache: tuple[float, dict[str, dict]] | None = None
 
         self._subscribers: set[asyncio.Queue[BrokerActivityRow | None]] = set()
         self._seen_exec_ids: set[str] = set()
@@ -205,9 +219,21 @@ class BrokerActivityPublisher:
 
     async def _handle_event(self, event: IbkrOrderEvent) -> None:
         """Author at most one row from one event; fan out to subscribers."""
-        # Filter: only events bearing OUR namespace OR foreign events
-        # (no namespace match) get authored. Intermediate status events
-        # for OUR orders (Submitted, PreSubmitted) are skipped here.
+        # Filter: only events bearing OUR namespace OR truly foreign
+        # events (no parseable order_ref) get authored. An event with a
+        # parseable ``order_ref`` whose namespace belongs to a DIFFERENT
+        # strategy instance is silently ignored — when multiple
+        # instances share an IBKR account, ``stream_order_events`` yields
+        # every same-account trade, and authoring it here would write
+        # one ``unmatched_execution`` row per other instance per fill.
+        # Intermediate status events for OUR orders (Submitted,
+        # PreSubmitted) are skipped further down.
+        parsed_ref = parse_order_ref(event.order_ref)
+        if (
+            parsed_ref is not None
+            and parsed_ref[0] != self._bot_order_namespace
+        ):
+            return
         intent_id = match_identity(
             event,
             submitted_orders=self._read_submitted_orders(),
@@ -267,10 +293,92 @@ class BrokerActivityPublisher:
     # ── helpers (engine state + broadcast + envelope) ─────────────
 
     def _read_submitted_orders(self) -> dict[str, dict]:
+        """Return the union of (a) the sidecar's persisted ``submitted_orders``
+        snapshot and (b) the intent WAL folded over that snapshot.
+
+        The sidecar snapshot is the engine's last-flushed projection — it
+        lags behind the WAL because the engine writes the WAL synchronously
+        before ``placeOrder`` and only updates the sidecar later on its
+        flush cycle. A fresh fill on this instance's own ``order_ref``
+        therefore arrives while the sidecar's map is still empty; folding
+        the WAL closes that window so ``match_identity`` recognises the
+        intent and the row gets the engine overlay.
+
+        Reuses ``app.engine.live.intent_ledger.fold`` — the canonical
+        fold the rest of the system uses — so this view stays consistent
+        with the engine's own cold-start projection.
+
+        Caching: the fold is keyed on the WAL file's mtime. Each broker
+        event triggers one stat; we re-fold only when the WAL has grown.
+        """
         envelope = self._sidecar.read()
+        try:
+            wal_mtime = self._intent_wal.path.stat().st_mtime
+        except FileNotFoundError:
+            wal_mtime = 0.0
+        cache = self._fold_cache
+        if cache is not None and cache[0] == wal_mtime:
+            wal_view = cache[1]
+        else:
+            wal_view = self._fold_intent_wal()
+            self._fold_cache = (wal_mtime, wal_view)
         if envelope is None:
+            return dict(wal_view)
+        merged: dict[str, dict] = dict(envelope.submitted_orders)
+        for intent_id, entry in wal_view.items():
+            merged.setdefault(intent_id, entry)
+        return merged
+
+    def _fold_intent_wal(self) -> dict[str, dict]:
+        """Fold the intent WAL into a ``{intent_id: dict}`` projection.
+
+        Mirrors ``_read_submitted_orders``' shape — entries carry the
+        broker-echoed identifiers (``order_id``, ``perm_id``, ``status``)
+        plus the audit-only ``order_spec`` when present. Returns an empty
+        dict when the WAL is missing, empty, or corrupt (a corrupt WAL is
+        logged but does not crash the publisher; the sidecar snapshot
+        remains authoritative).
+
+        Always folds over an empty projection — the merge with the
+        sidecar's existing snapshot happens in ``_read_submitted_orders``.
+        We can't fold over ``projection_from_envelope(envelope)`` here
+        because the sidecar's ``submitted_orders`` schema is an opaque
+        ``dict[str, dict[str, Any]]`` that may carry IBKR status strings
+        (e.g. ``"Submitted"``) the ``IntentEventType`` enum doesn't know.
+        Since we only need key presence for ``match_identity``, an empty
+        starting projection plus a downstream dict merge is sufficient.
+        """
+        try:
+            events = self._intent_wal.read_tail()
+        except (IntentWalCorruptError, OSError):
+            logger.warning(
+                "intent WAL unreadable; falling back to sidecar snapshot only",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "intent_wal_path": str(self._intent_wal.path),
+                },
+            )
             return {}
-        return dict(envelope.submitted_orders)
+        if not events:
+            return {}
+        view = fold_intent_events(LedgerProjection(), events)
+        out: dict[str, dict] = {}
+        for intent_id, order_view in view.submitted_orders.items():
+            entry: dict[str, object] = {
+                "status": order_view.status.value,
+                "order_ref": order_view.order_ref,
+                "bot_order_namespace": order_view.bot_order_namespace,
+            }
+            if order_view.order_id is not None:
+                entry["order_id"] = order_view.order_id
+            if order_view.perm_id is not None:
+                entry["perm_id"] = order_view.perm_id
+            if order_view.order_spec is not None:
+                entry.update(
+                    {k: v for k, v in order_view.order_spec.items() if k not in entry}
+                )
+            out[intent_id] = entry
+        return out
 
     def _build_engine_intent(self, intent_id: str) -> EngineIntent | None:
         envelope = self._sidecar.read()
@@ -333,9 +441,11 @@ class BrokerActivityPublisher:
 
     def _broadcast(self, row: BrokerActivityRow) -> None:
         """Push the row to every subscriber. A full queue means the
-        subscriber is too slow — drop the row for that subscriber and
-        send them ``None`` so the SSE endpoint can close their
-        connection. Other subscribers are unaffected."""
+        subscriber is too slow — drop one stale row to make room for the
+        ``None`` sentinel so the SSE handler unblocks and closes the
+        connection (without the sentinel the handler stays blocked in
+        ``queue.get()`` forever and silently misses all future rows).
+        Other subscribers are unaffected."""
         dead: list[asyncio.Queue[BrokerActivityRow | None]] = []
         for q in self._subscribers:
             try:
@@ -345,6 +455,21 @@ class BrokerActivityPublisher:
                     "dropping slow broker-activity subscriber",
                     extra={"strategy_instance_id": self._strategy_instance_id},
                 )
+                # Make room for the sentinel by draining one stale row.
+                # The subscriber was already going to lose rows — better
+                # to lose one and tell them so than to lose all future
+                # rows silently.
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    q.put_nowait(None)
+                except asyncio.QueueFull:
+                    # Truly stuck (e.g. a second producer concurrently
+                    # re-filled the queue). The consumer will time out
+                    # at the transport layer.
+                    pass
                 dead.append(q)
         for q in dead:
             self._subscribers.discard(q)

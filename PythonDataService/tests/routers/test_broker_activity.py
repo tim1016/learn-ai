@@ -158,6 +158,9 @@ async def test_backfill_returns_seeded_rows(
 async def test_backfill_paginates_via_after_seq_and_limit(
     tmp_path: Path, fresh_registry
 ) -> None:
+    """``next_seq`` is the cursor the caller passes verbatim as the next
+    ``after_seq`` — equal to the highest seq returned in the page. No
+    off-by-one arithmetic on the client side."""
     publisher = _seed_publisher(
         tmp_path, [_row(1), _row(2), _row(3), _row(4), _row(5)]
     )
@@ -173,7 +176,17 @@ async def test_backfill_paginates_via_after_seq_and_limit(
         assert resp.status_code == 200
         payload = resp.json()
         assert [r["seq"] for r in payload["rows"]] == [1, 2]
-        assert payload["next_seq"] == 3  # caller can resume here
+        # next_seq = highest seq in the page (NOT seq + 1).
+        assert payload["next_seq"] == 2
+
+        # Pass next_seq verbatim as after_seq — no arithmetic.
+        resp = await client.get(
+            f"/api/live-instances/{SID}/broker-activity",
+            params={"after_seq": payload["next_seq"], "limit": 2},
+        )
+        payload = resp.json()
+        assert [r["seq"] for r in payload["rows"]] == [3, 4]
+        assert payload["next_seq"] == 4
 
     await publisher.stop()
 
@@ -225,3 +238,117 @@ async def test_sse_stream_emits_end_event_when_publisher_stops(
     await publisher.stop()
     text = await asyncio.wait_for(collector, timeout=2.0)
     assert "event: end" in text
+
+
+async def test_sse_stream_backfills_from_since_seq_then_goes_live(
+    tmp_path: Path, fresh_registry
+) -> None:
+    """Standard cockpit flow: SSE subscription with ``since_seq=<N>``
+    drains every WAL row with ``seq > N`` first (the backfill), then
+    transitions seamlessly into live rows. The transition is gap-free
+    because the queue is subscribed BEFORE the drain begins.
+
+    We stop the publisher after pushing the live row so the SSE handler
+    emits ``event: end`` and the ASGITransport flushes its buffer —
+    otherwise httpx may hold the stream open indefinitely.
+    """
+    publisher = _seed_publisher(tmp_path, [_row(1), _row(2), _row(3)])
+    await fresh_registry.register(publisher, strategy_instance_id=SID)
+
+    app = await _make_app()
+    transport = ASGITransport(app=app)
+
+    async def _collect_stream():
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            async with client.stream(
+                "GET",
+                f"/api/live-instances/{SID}/broker-activity/stream",
+                params={"since_seq": 1},
+            ) as resp:
+                assert resp.status_code == 200
+                text = ""
+                async for chunk in resp.aiter_text():
+                    text += chunk
+                    if "event: end" in text:
+                        return text
+                return text
+
+    collector = asyncio.create_task(_collect_stream())
+    # Let the subscriber register and drain backfill.
+    await asyncio.sleep(0.05)
+    # Push one live row via the publisher's broadcast surface.
+    live_row = _row(4, exec_id="live-after-backfill")
+    wal = BrokerActivityWal(
+        stable_broker_activity_wal_path(tmp_path / "run-dir")
+    )
+    wal.allocate_seq()
+    wal.append_row(live_row)
+    publisher._broadcast(live_row)
+    await asyncio.sleep(0.05)
+    # Stop the publisher so the SSE handler emits "event: end" and the
+    # collector loop terminates.
+    await publisher.stop()
+
+    text = await asyncio.wait_for(collector, timeout=2.0)
+    # Parse the row order out of the SSE text.
+    import re
+
+    seqs = [int(s) for s in re.findall(r'"seq":(\d+)', text)]
+    # Backfill drained rows 2 and 3 (since_seq=1 excludes seq=1), then
+    # live row 4 appeared. No duplicates.
+    assert seqs == [2, 3, 4], f"unexpected seq order in stream: {seqs}"
+
+
+async def test_sse_stream_dedupes_when_row_arrives_during_backfill(
+    tmp_path: Path, fresh_registry
+) -> None:
+    """If a broker row is appended to the WAL after the SSE subscriber
+    is registered but before the backfill drain reads it, the row
+    arrives via BOTH the WAL backfill AND the live queue. The handler
+    must emit it exactly once — the dedupe key is ``last_emitted_seq``.
+    """
+    publisher = _seed_publisher(tmp_path, [_row(1), _row(2)])
+    await fresh_registry.register(publisher, strategy_instance_id=SID)
+
+    # Wedge a row into both the WAL and the live queue: write to WAL
+    # first, then push the same row through ``_broadcast`` so a
+    # subscriber that registers before draining will see it twice.
+    racing_row = _row(3, exec_id="racing-row")
+    wal = BrokerActivityWal(
+        stable_broker_activity_wal_path(tmp_path / "run-dir")
+    )
+    wal.allocate_seq()
+    wal.append_row(racing_row)
+
+    app = await _make_app()
+    transport = ASGITransport(app=app)
+
+    async def _collect_stream():
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            async with client.stream(
+                "GET",
+                f"/api/live-instances/{SID}/broker-activity/stream",
+                params={"since_seq": 0},
+            ) as resp:
+                assert resp.status_code == 200
+                text = ""
+                async for chunk in resp.aiter_text():
+                    text += chunk
+                    if "event: end" in text:
+                        return text
+                return text
+
+    collector = asyncio.create_task(_collect_stream())
+    await asyncio.sleep(0.05)
+    # Now simulate the race: the same WAL row arrives via the queue too.
+    publisher._broadcast(racing_row)
+    await asyncio.sleep(0.05)
+    # Stop the publisher so the SSE handler emits "event: end".
+    await publisher.stop()
+
+    text = await asyncio.wait_for(collector, timeout=2.0)
+    import re
+
+    seqs = [int(s) for s in re.findall(r'"seq":(\d+)', text)]
+    # All three rows present, each exactly once (no duplicate seq=3).
+    assert seqs == [1, 2, 3], f"expected dedup, got {seqs}"
