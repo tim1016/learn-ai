@@ -185,24 +185,59 @@ operator_surface: {
    cockpit writes durable intent (Resume / Pause are always available
    and gate the next host start) and actuates on bound runs (when
    `actions.<verb>.effect === 'LIVE_ACTUATION'`).  It does NOT expose
-   Start / Stop / process-control affordances — the deleted
-   `<app-broker-start-stop-card>` is the cautionary tale.  When the
+   Start / Stop / process-control affordances — the legacy
+   `<app-broker-start-stop-card>` is the cautionary tale (PRD
+   #607 Slice 8 superseded it with `<app-host-process-notice>`;
+   the orphaned directory was deleted by the 2026-06-22 audit
+   P3-007 after the route-table / import-graph proof of
+   non-reference).  When the
    daemon is idle, the cockpit surfaces the server-authored
    `host_process.notice` and (only if server-authored) a copyable
    safe command.  REDEPLOY is a separate surface for creating a new
    run configuration; it is NOT a restart path.
 
-### Reason-code vocabulary (initial set)
+### Reason-code vocabulary (closed, updated 2026-06-22)
 
-`NO_LIVE_BINDING`, `SAFETY_BLOCK_HALT`, `RECONCILE_NOT_WIRED`,
-`NO_OWNED_POSITIONS`, `ALREADY_POISONED`.  Deliberately removed:
-`BUSY_VERB_IN_FLIGHT`, `ALREADY_RUNNING`, `NOT_RUNNING`.
+The full closed set, source of truth on the server:
 
-Adding a new code is a typed addition to the closed enum on both ends
-+ an entry in
-`Frontend/src/app/components/broker/broker-instances/action-reason-codes.ts`.
-Unknown codes fall back to rendering the raw token so a gap is
-visible rather than silent.
+- `PythonDataService/app/services/operator_capability.py` →
+  `REASON_CODES` — action-conflict-matrix codes
+  (`MUTATION_UNRESOLVED_START/STOP/FLATTEN/RESUME`), the durable
+  mutation transport code (`OUTCOME_UNKNOWN`), and the live-binding
+  / live-effect codes (`NO_LIVE_BINDING`, `NO_OWNED_POSITIONS`,
+  `ALREADY_POISONED`, `ALREADY_STOPPED`, `POSTURE_DEMOTED`).
+- `PythonDataService/app/services/resume_guard_state.py` →
+  `RESUME_REASON_CODES` — Resume / Pause / Stop intent-state codes
+  (`ALREADY_RUNNING`, `ALREADY_PAUSED`, `STOPPED_REQUIRES_REDEPLOY`,
+  `REDEPLOY_REQUIRED`), the broker safety identity gate
+  (`BROKER_SAFETY_UNSAFE`, `BROKER_SAFETY_UNKNOWN`), the
+  submission-capability gate
+  (`SUBMISSION_CAPABILITY_BLOCKED`, `SUBMISSION_CAPABILITY_UNKNOWN`),
+  the reconciliation-receipt gate (`RECONCILIATION_*`), and the
+  uncertain-intent gate
+  (`UNRESOLVED_UNCERTAIN_INTENT`, `UNCERTAIN_INTENT_STATE_UNKNOWN`).
+
+Deliberately removed (pre-PRD #616 vocabulary): `SAFETY_BLOCK_HALT`,
+`RECONCILE_NOT_WIRED`, `BUSY_VERB_IN_FLIGHT`, `NOT_RUNNING`.
+
+**Frontend copy map.** The cockpit's operator-language lookup lives
+at
+`Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.ts`
+(landed by the 2026-06-22 audit's P2-002 fix). Adding a new code is
+a typed addition to the closed Python enum + an entry in the
+TypeScript `OperatorReasonCode` union + an operator-language string
+in `OPERATOR_REASON_COPY`. The Vitest parity test
+`disabled-reason-copy.spec.ts` fails on any drift between the
+cockpit map and the Python source-of-truth set. Unknown codes are
+rendered as ``Unrecognized reason code: <code>`` so a gap is
+visibly diagnosable rather than silent — the operator can still
+read the raw token and search the runbook.
+
+Two Frontend-only codes live alongside the server set and are
+clearly prefixed `LOCAL_*` so they cannot pretend to be server
+authority: `LOCAL_TRANSPORT_STALE` (control-plane transport is not
+CONNECTED — the cockpit refuses local dispatch fail-closed) and
+`LOCAL_REQUEST_IN_FLIGHT` (a previous request is still pending).
 
 ### Open shortcomings carried forward
 
@@ -221,7 +256,7 @@ visible rather than silent.
 
 After merging PRs 4 – 12, walk the page top-to-bottom on a paper bot:
 
-1. PAPER pill visible in the sticky bar
+1. PAPER chip visible in the page utility row AND `SAFETY · PAPER_ONLY` indicator visible in the identity strip (both consume the same server-authored `operator_surface.broker.safety_verdict`; mismatch is structurally blocked by the 2026-06-22 audit's P1-001 fix)
 2. Bot identity + state pill + readiness pill visible
 3. Posture chip on Current Risk matches expected positions (Flat for a brand-new bot)
 4. Last Session shows thin stub on a clean prior exit, full card with `Re-deploy (fresh run_id)` on a dirty one

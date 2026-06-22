@@ -218,7 +218,7 @@ Before a paper deploy:
 - [ ] The Provenance card shows the audit-copy SHA verified against the on-disk audit copy. The QC Cloud backtest ID is operator-recorded — it is **not** automatically verified (Phase 7D closure of VCR-0014); do not treat it as a positive proof of QC approval.
 - [ ] Working tree is clean if the strategy requires it (`clean_tree_required = true` in the live config).
 - [ ] No existing `halt.flag` is present in the run dir.
-- [ ] The cockpit hero band reads `Paper trading mode — DU{last4}` (green). If it shows amber `Broker safety unknown` or red `Unsafe`, stop and resolve before deploying.
+- [ ] **The cockpit env chip in the page utility row reads `PAPER` AND the identity-strip `SAFETY` indicator reads `PAPER_ONLY`.** They are driven by the same server-authored `operator_surface.broker.safety_verdict` (ADR-0011 + ADR-0013 §1, locked in by P1-001 of the 2026-06-22 audit). If either one reads `UNSAFE` or `UNKNOWN`, stop and resolve before deploying — the verdict is fail-closed.
 
 ---
 
@@ -275,16 +275,24 @@ Phase 2 (VCR-0004) makes the deploy key the canonical module name. If the cockpi
 
 Expected behavior. Phase 4 (VCR-0008 closure) removed the runtime affordance because the durable-submit reconciler (Phases 5C/5D/5E) hasn't shipped. The banner explains the gap. If you need cold-start reconciliation, stop the runner cleanly and start it again — `ColdStartReconciler.verify()` (Phase 5B, #aae1cf2c) runs at every start.
 
-### 9.5 Cockpit hero is amber `Broker safety unknown`
+### 9.5 Cockpit `SAFETY` indicator reads `UNKNOWN` (page utility env chip also reads `UNKNOWN`)
 
 One or more gates of the broker safety verdict is not positively verifiable:
 
 - `configured_mode` — check `IBKR_MODE`.
-- `readonly_flag` — check `IBKR_READONLY`.
-- `port_class` — port is not in the known `PAPER_PORTS` set.
+- `readonly_flag` — check `IBKR_READONLY` (informational only since the ADR-0011 amendment / PRD #619-A — read separately from the identity verdict).
+- `port_class` — port is not in the known `PAPER_PORTS` set (`{7497, 4002}`).
 - `connected_account_prefix` — account string does not start with `DU`.
 
 The fail-closed derivation degrades to `unknown`; the runner refuses to start a new run (Phase 7A). Resolve the gate, then redeploy.
+
+The env chip and the identity-strip `SAFETY` indicator always agree (both project from `operator_surface.broker.safety_verdict` per ADR-0013 §1; pre-2026-06-22 audit, the env chip was driven by status truthiness and could disagree — that regression is now structurally blocked, see P1-001).
+
+### 9.6 Action button is disabled and the tooltip is a code I don't recognize
+
+If an action button (Resume, Pause, Flatten and pause, Stop, Mark POISONED) shows a tooltip starting with `Unrecognized reason code:` followed by a raw `SCREAMING_SNAKE_CASE` string, the server returned a reason code the cockpit does not have copy for yet. The raw code is preserved verbatim in the tooltip so it is visibly diagnosable (no silent generic-success copy — see P2-002 audit closure and `Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.ts`).
+
+Resolution: add the code to `OperatorReasonCode` in `disabled-reason-copy.ts` and an operator-language entry to `OPERATOR_REASON_COPY` in the same file. The parity test `disabled-reason-copy.spec.ts` fails on any drift between the cockpit map and the server's closed vocabulary (`REASON_CODES ∪ RESUME_REASON_CODES`).
 
 ### 9.6 Pre-existing failure: `halt.flag` from a prior run
 
