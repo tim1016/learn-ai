@@ -22,19 +22,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import IbkrPnLTick, _coerce_optional_float
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_PNL_DEBOUNCE_S = 1.0
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def _account_pnl_to_tick(pnl, account_id: str) -> IbkrPnLTick:
@@ -47,7 +43,7 @@ def _account_pnl_to_tick(pnl, account_id: str) -> IbkrPnLTick:
         realized_pnl=_coerce_optional_float(getattr(pnl, "realizedPnL", None)),
         market_value=None,
         position=None,
-        ts_ms=_now_ms(),
+        ts_ms=now_ms_utc(),
     )
 
 
@@ -65,7 +61,7 @@ def _position_pnl_to_tick(
         realized_pnl=_coerce_optional_float(getattr(pnl_single, "realizedPnL", None)),
         market_value=_coerce_optional_float(getattr(pnl_single, "value", None)),
         position=_coerce_optional_float(getattr(pnl_single, "position", None)),
-        ts_ms=_now_ms(),
+        ts_ms=now_ms_utc(),
     )
 
 

@@ -26,7 +26,6 @@ import hashlib
 import logging
 import os
 import subprocess
-import time
 from datetime import date as Date
 from datetime import timedelta
 from pathlib import Path
@@ -87,9 +86,12 @@ def _capture_git_commit() -> str:
     return _GIT_COMMIT_CACHE
 
 
-def now_ms_utc() -> int:
-    """Return current wall-clock time as ``int64 ms`` since Unix epoch UTC."""
-    return int(time.time() * 1000)
+from app.utils.timestamps import now_ms_utc as now_ms_utc  # noqa: E402
+
+# Re-exported for back-compat: callers across ``app/research/`` import
+# ``now_ms_utc`` from this module. The canonical implementation lives in
+# ``app/utils/timestamps.py``; the ``import X as X`` form documents that
+# the re-export is intentional (PEP 484 explicit re-export).
 
 
 def _data_root_paths() -> list[Path]:

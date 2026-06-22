@@ -18,7 +18,6 @@ Phase 2b (out of scope here) adds the SSE P&L streams in ``pnl.py``.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
 from app.broker.ibkr.client import IbkrClient, _is_paper_account
 from app.broker.ibkr.models import (
@@ -28,6 +27,7 @@ from app.broker.ibkr.models import (
     OptionRight,
     SecType,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +39,6 @@ logger = logging.getLogger(__name__)
 # Tags consumed below: TotalCashValue, NetLiquidation, BuyingPower,
 # InitMarginReq, MaintMarginReq, ExcessLiquidity, EquityWithLoanValue,
 # AvailableFunds, RealizedPnL, UnrealizedPnL.
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def _coerce_float_or_none(value: str | float | None) -> float | None:
@@ -110,7 +106,7 @@ async def fetch_account_summary(client: IbkrClient) -> IbkrAccountSummary:
         # day_pnl is not in reqAccountSummary; it arrives via reqPnL stream
         # (Phase 2b). Leave None here.
         day_pnl=None,
-        fetched_at_ms=_now_ms(),
+        fetched_at_ms=now_ms_utc(),
     )
 
 
@@ -187,7 +183,7 @@ async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
         raise RuntimeError("connected client has no account_id")
 
     raw = await client.ib.reqPositionsAsync()
-    fetched_at_ms = _now_ms()
+    fetched_at_ms = now_ms_utc()
 
     positions: list[IbkrPosition] = []
     for pos in raw:

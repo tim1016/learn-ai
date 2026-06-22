@@ -29,17 +29,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+
+from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     from app.broker.ibkr.client import IbkrClient
 
 logger = logging.getLogger(__name__)
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 class AutoReconnectMonitor:
@@ -108,9 +105,9 @@ class AutoReconnectMonitor:
         self._is_attempting: bool = False
         self._current_attempt: int = 0
         self._successful_reconnect_count: int = 0
-        self._last_transition_ms: int = _now_ms()
+        self._last_transition_ms: int = now_ms_utc()
         self._is_recovering: bool = False
-        self._last_probe_due_ms: int = _now_ms()
+        self._last_probe_due_ms: int = now_ms_utc()
         # Tracks last in-process subscription-recovery attempt so a repeatedly
         # failing resubscribe doesn't spam every poll cycle. ``0`` lets the
         # first stale observation fire immediately on detection.
@@ -249,7 +246,7 @@ class AutoReconnectMonitor:
         """
         if not getattr(self._client, "subscriptions_stale", False):
             return False
-        now_ms = _now_ms()
+        now_ms = now_ms_utc()
         interval_ms = int(self._subscription_recovery_interval_s * 1000)
         if now_ms - self._last_subscription_recovery_ms < interval_ms:
             return False
@@ -273,7 +270,7 @@ class AutoReconnectMonitor:
 
         Returns True when the probe failed and a reconnect loop was entered.
         """
-        now_ms = _now_ms()
+        now_ms = now_ms_utc()
         if now_ms - self._last_probe_due_ms < int(self._probe_interval_s * 1000):
             return False
         self._last_probe_due_ms = now_ms
@@ -399,25 +396,25 @@ class AutoReconnectMonitor:
     def _begin_attempt(self, attempt: int) -> None:
         self._is_attempting = True
         self._current_attempt = attempt
-        self._last_transition_ms = _now_ms()
+        self._last_transition_ms = now_ms_utc()
 
     def _end_attempt(self, *, success: bool) -> None:
         self._is_attempting = False
         if success:
             self._current_attempt = 0
             self._successful_reconnect_count += 1
-        self._last_transition_ms = _now_ms()
+        self._last_transition_ms = now_ms_utc()
 
     def _begin_recovery(self) -> None:
         self._is_attempting = False
         self._is_recovering = True
-        self._last_transition_ms = _now_ms()
+        self._last_transition_ms = now_ms_utc()
 
     def _end_recovery(self, *, success: bool) -> None:
         self._is_recovering = False
         if success:
             self._current_attempt = 0
-        self._last_transition_ms = _now_ms()
+        self._last_transition_ms = now_ms_utc()
 
 
 # ── module-level singleton ────────────────────────────────────────────

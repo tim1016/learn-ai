@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import enum
 import json
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -192,9 +191,11 @@ def is_run_poisoned(run_dir: Path) -> bool:
     return (run_dir / POISONED_FLAG_FILENAME).exists()
 
 
-def now_ms_utc() -> int:
-    """Stable ``int64 ms UTC`` clock helper exposed for halt-callers and tests."""
-    return int(time.time() * 1000)
+from app.utils.timestamps import now_ms_utc as now_ms_utc  # noqa: E402
+
+# Re-exported for back-compat: ``cold_start_reconciler`` and tests import
+# ``now_ms_utc`` from this module. Canonical implementation lives in
+# ``app/utils/timestamps.py``.
 
 
 # ──────────────────────────── Detection functions ────────────────────
