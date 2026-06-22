@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
     from app.engine.live.daemon_connectivity_monitor import (
         set_monitor as set_daemon_monitor,
     )
-    from app.engine.live.host_daemon_client import probe_daemon_health
+    from app.engine.live.host_daemon_client import fetch_health
 
     daemon_monitor: DaemonConnectivityMonitor | None = None
     daemon_url = (ibkr_settings.live_runner_daemon_url or "").strip()
@@ -168,7 +168,10 @@ async def lifespan(app: FastAPI):
             return int(time.time() * 1000)
 
         async def _probe():
-            return await probe_daemon_health(daemon_url)
+            # Monitor discards the full envelope — it only needs the typed
+            # result, which already carries ``observed_daemon_boot_id``.
+            result, _health = await fetch_health(daemon_url)
+            return result
 
         daemon_monitor = DaemonConnectivityMonitor(probe=_probe, now_ms=_now_ms)
         await daemon_monitor.start()

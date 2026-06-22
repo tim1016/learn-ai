@@ -23,7 +23,7 @@ import {
   signal,
   type Signal,
 } from '@angular/core';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import type {
@@ -66,6 +66,7 @@ const READINESS_LABEL: Record<string, string> = {
   standalone: true,
   imports: [
     CommonModule,
+    RouterLink,
     StatusRiskTabComponent,
     ActivityTabComponent,
     AuditTabComponent,
