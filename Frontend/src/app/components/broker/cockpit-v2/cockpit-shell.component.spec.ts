@@ -227,6 +227,17 @@ describe('CockpitShellComponent', () => {
     }
   });
 
+  it('exposes a Deploy new strategy link in the page utility row pointing at /broker/deploy', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const link = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="deploy-new-strategy"]',
+    ) as HTMLAnchorElement | null;
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute('href')).toBe('/broker/deploy');
+  });
+
   it('disables Resume and renders operator-language copy (not the raw reason code) on the title attribute', async () => {
     // P1/P2 audit 2026-06-22 — was: title === 'BROKER_SAFETY_UNSAFE'
     // (the operator saw the raw enum). Now: title === operator copy
