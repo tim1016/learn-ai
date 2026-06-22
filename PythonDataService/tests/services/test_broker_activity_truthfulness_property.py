@@ -56,6 +56,7 @@ from app.services.broker_activity_reconciler import (
 )
 from app.services.broker_activity_templates import (
     _REGISTRY,
+    current_version,
     render_template,
 )
 
@@ -351,21 +352,28 @@ _CORPUS: dict[
 # ── The property test ─────────────────────────────────────────────────
 
 
-def test_truthfulness_property_corpus_covers_every_registered_template() -> None:
-    """Every ``(template_key, template_version)`` registered in the
-    templates registry must be reachable from the corpus.
+def test_truthfulness_property_corpus_covers_every_current_template() -> None:
+    """Every template_key's ``current_version`` must be reachable from the
+    corpus. Historical versions in the registry are explicitly allowed to
+    be uncovered — ``select_template`` always picks the current version,
+    so an authored row can only target ``current_version(key)``. Older
+    versions stay registered for audit replay (see ``broker_activity_
+    templates`` lines 11-16) and are covered by replay fixtures, not by
+    this constructive corpus.
 
-    Fails closed when a template ships without a scenario, so the
-    property assertion below cannot silently skip newly-added templates.
+    Fails closed when a template_key's current version ships without a
+    scenario, so the property assertion below cannot silently skip
+    newly-added templates.
     """
-    missing = set(_REGISTRY.keys()) - set(_CORPUS.keys())
+    current_pairs = {(key, current_version(key)) for key, _ in _REGISTRY}
+    missing = current_pairs - set(_CORPUS.keys())
     extra = set(_CORPUS.keys()) - set(_REGISTRY.keys())
     assert not missing, (
-        f"templates in registry but not exercised by the truthfulness corpus: "
+        f"current-version templates not exercised by the truthfulness corpus: "
         f"{sorted(missing)} — add a scenario constructor to _CORPUS"
     )
     assert not extra, (
-        f"corpus references templates not in registry: {sorted(extra)} — "
+        f"corpus references (key, version) pairs not in registry: {sorted(extra)} — "
         f"the templates registry is the source of truth"
     )
 
