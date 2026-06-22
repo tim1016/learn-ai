@@ -1,5 +1,4 @@
 import {
-  DestroyRef,
   Injector,
   Signal,
   computed,
@@ -7,23 +6,29 @@ import {
   runInInjectionContext,
   signal,
 } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
 
 import { brokerSse, type SseStatus, type SseStream } from '../../../../../services/broker-sse';
 
-import type {
-  BrokerActivityPage,
-  BrokerActivityRow,
-} from './broker-activity.types';
+import type { BrokerActivityRow } from './broker-activity.types';
 
-const BACKFILL_PAGE_SIZE = 100;
 const SSE_MAX_BUFFER = 2_000;
 
 export interface BrokerActivityStream {
-  /** Merged backfill + live rows, deduped by ``seq``, ascending. */
+  /** Merged rows from the SSE channel, deduped by ``seq``, ascending. */
   rows: Signal<BrokerActivityRow[]>;
+  /**
+   * ``true`` until the SSE handshake transitions to ``open``. Operator-facing
+   * "Loading history…" surface — once the channel is open the backend's
+   * server-side backfill (rows with ``seq > since_seq``) flows in as the
+   * first batch of ``row`` events, so "open" is the honest moment we have
+   * something to show.
+   */
   backfillLoading: Signal<boolean>;
+  /**
+   * Kept on the public surface for binding stability (the table component
+   * has a separate error pane for backfill vs live errors). The SSE-only
+   * stream surfaces every error via ``sseError``; this is always ``null``.
+   */
   backfillError: Signal<string | null>;
   sseStatus: Signal<SseStatus>;
   sseError: Signal<string | null>;
@@ -31,32 +36,37 @@ export interface BrokerActivityStream {
 }
 
 /**
- * Hand-rolls the cold-start backfill + SSE handoff for the broker-activity
- * surface. Lives next to the table component but factored out so both
- * the executed-trades table and the working/pending panel can subscribe
- * to a single canonical row stream per ``strategy_instance_id``.
+ * Subscribes the broker-activity SSE channel for a single
+ * ``strategy_instance_id``. The backend (ADR 0014 amendment) backfills
+ * rows with ``seq > since_seq`` on the SSE channel itself before
+ * forwarding live publisher events, so the frontend doesn't need a
+ * separate REST paging loop — eliminating the gap window where a row
+ * authored between "last REST page returned ``next_seq=null``" and "SSE
+ * subscription registered" would be lost.
  *
- * Must be called from an injection context — uses ``DestroyRef`` and
- * ``Injector`` to wire the SSE close hook.
+ * Must be called from an injection context — ``brokerSse`` uses
+ * ``DestroyRef`` to close the underlying ``EventSource`` on host destroy.
+ *
+ * Reconnect: the browser auto-reconnects to the same URL
+ * (``since_seq=0``) so the backend replays the full backlog; the
+ * seq-keyed dedup map in ``rows()`` absorbs the overlap so no duplicate
+ * row surfaces to the UI. A cursor-aware close-and-reopen reconnect
+ * (driven by the highest seq seen) is left for a follow-up; today's
+ * naive reconnect is correct, just chattier than necessary.
  */
 export function brokerActivityStream(
   strategyInstanceId: string,
 ): BrokerActivityStream {
-  const http = inject(HttpClient);
   const injector = inject(Injector);
-  const destroyRef = inject(DestroyRef);
 
-  const backfillRows = signal<BrokerActivityRow[]>([]);
-  const backfillLoading = signal<boolean>(true);
-  const backfillError = signal<string | null>(null);
   const sseStream = signal<SseStream<BrokerActivityRow> | null>(null);
 
   const rows = computed<BrokerActivityRow[]>(() => {
-    const backfill = backfillRows();
     const live = sseStream()?.data() ?? [];
     const bySeq = new Map<number, BrokerActivityRow>();
-    for (const row of backfill) bySeq.set(row.seq, row);
-    for (const row of live) bySeq.set(row.seq, row); // SSE wins on overlap
+    // Later events with the same seq supersede earlier ones (publisher
+    // may re-author a row before the operator has acted on it).
+    for (const row of live) bySeq.set(row.seq, row);
     return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
   });
 
@@ -66,56 +76,28 @@ export function brokerActivityStream(
   const sseError = computed<string | null>(
     () => sseStream()?.lastError() ?? null,
   );
+  // The "loading history" hint stays true until the channel is open
+  // (at which point the server-side backfill is on its way).
+  const backfillLoading = computed<boolean>(() => sseStatus() !== 'open');
+  // No separate REST surface, so no separate REST error.
+  const backfillError = signal<string | null>(null);
 
-  let nextSeq: number | null = 0;
-  let closed = false;
-
-  const fetchPage = (afterSeq: number): Promise<BrokerActivityPage> =>
-    firstValueFrom(
-      http.get<BrokerActivityPage>(
-        `/api/live-instances/${encodeURIComponent(strategyInstanceId)}/broker-activity`,
-        { params: { after_seq: afterSeq, limit: BACKFILL_PAGE_SIZE } },
-      ),
-    );
-
-  // Cold-start cycle: drain REST backfill, then open SSE. Done in an
-  // async IIFE so callers see a synchronous return.
-  void (async () => {
-    try {
-      while (nextSeq !== null && !closed) {
-        const page = await fetchPage(nextSeq);
-        if (page.rows.length > 0) {
-          backfillRows.update((prev) => [...prev, ...page.rows]);
-        }
-        nextSeq = page.next_seq;
-      }
-      backfillLoading.set(false);
-      if (closed) return;
-      const stream = runInInjectionContext(injector, () =>
-        brokerSse<BrokerActivityRow>(
-          `/api/live-instances/${encodeURIComponent(strategyInstanceId)}/broker-activity/stream`,
-          'row',
-          { maxBuffer: SSE_MAX_BUFFER },
-        ),
-      );
-      sseStream.set(stream);
-    } catch (err) {
-      backfillError.set(err instanceof Error ? err.message : String(err));
-      backfillLoading.set(false);
-    }
-  })();
+  const url =
+    `/api/live-instances/${encodeURIComponent(strategyInstanceId)}` +
+    `/broker-activity/stream?since_seq=0`;
+  const stream = runInInjectionContext(injector, () =>
+    brokerSse<BrokerActivityRow>(url, 'row', { maxBuffer: SSE_MAX_BUFFER }),
+  );
+  sseStream.set(stream);
 
   const close = (): void => {
-    closed = true;
     sseStream()?.close();
     sseStream.set(null);
   };
 
-  destroyRef.onDestroy(close);
-
   return {
     rows,
-    backfillLoading: backfillLoading.asReadonly(),
+    backfillLoading,
     backfillError: backfillError.asReadonly(),
     sseStatus,
     sseError,

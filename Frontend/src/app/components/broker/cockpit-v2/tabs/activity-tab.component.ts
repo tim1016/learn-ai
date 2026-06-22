@@ -22,6 +22,7 @@ import {
   input,
   runInInjectionContext,
   signal,
+  untracked,
 } from '@angular/core';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
@@ -74,12 +75,21 @@ export class ActivityTabComponent {
   readonly sseError = computed(() => this.stream()?.sseError() ?? null);
 
   constructor() {
-    effect(() => {
+    // ``effect`` re-runs whenever a tracked dependency changes. The only
+    // dependency that should trigger a teardown + rebootstrap is the
+    // strategy_instance_id — reading ``stream()`` directly would track
+    // the same signal we then write to inside the effect, looping
+    // forever and rebuilding the SSE connection on every change. Wrap
+    // the read in ``untracked`` so the effect only re-fires when
+    // ``strategyInstanceId`` itself changes; ``onCleanup`` closes the
+    // previous stream on sid change and on host destroy.
+    effect((onCleanup) => {
       const sid = this.strategyInstanceId();
-      const prev = this.stream();
-      if (prev !== null) prev.close();
-      const next = runInInjectionContext(this.injector, () => brokerActivityStream(sid));
-      this.stream.set(next);
+      const next = runInInjectionContext(this.injector, () =>
+        brokerActivityStream(sid),
+      );
+      untracked(() => this.stream.set(next));
+      onCleanup(() => next.close());
     });
   }
 }

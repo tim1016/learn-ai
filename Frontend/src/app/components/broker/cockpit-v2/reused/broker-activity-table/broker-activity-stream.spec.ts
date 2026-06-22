@@ -1,14 +1,14 @@
-import { Injector, runInInjectionContext } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
 import {
-  HttpTestingController,
-  provideHttpClientTesting,
-} from '@angular/common/http/testing';
-import { provideHttpClient } from '@angular/common/http';
+  Injector,
+  effect,
+  runInInjectionContext,
+  signal,
+} from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { brokerActivityStream } from './broker-activity-stream';
-import type { BrokerActivityPage, BrokerActivityRow } from './broker-activity.types';
+import type { BrokerActivityRow } from './broker-activity.types';
 
 // Tracked instances so a test can grab the most recent EventSource and
 // fire named events at it. Matches the broker-orders.spec stub pattern.
@@ -78,109 +78,132 @@ function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
 
 function setup(strategyInstanceId: string) {
   TestBed.resetTestingModule();
-  TestBed.configureTestingModule({
-    providers: [provideHttpClient(), provideHttpClientTesting()],
-  });
+  TestBed.configureTestingModule({ providers: [] });
   const injector = TestBed.inject(Injector);
-  const http = TestBed.inject(HttpTestingController);
   const stream = runInInjectionContext(injector, () =>
     brokerActivityStream(strategyInstanceId),
   );
-  return { stream, http, injector };
+  return { stream, injector };
 }
 
 afterEach(() => TestBed.resetTestingModule());
 
 describe('brokerActivityStream', () => {
-  it('cold-starts with a REST backfill paginated by after_seq', async () => {
-    const { stream, http } = setup('sid-1');
+  it('opens the SSE channel with since_seq=0 on cold start (no REST paging)', () => {
+    setup('sid-1');
 
-    const req = http.expectOne(
-      '/api/live-instances/sid-1/broker-activity?after_seq=0&limit=100',
-    );
-    expect(req.request.method).toBe('GET');
-    const page: BrokerActivityPage = {
-      rows: [row({ seq: 1 }), row({ seq: 2 })],
-      next_seq: null,
-    };
-    req.flush(page);
-
-    // Microtask drain so the next-step setup runs (no SSE expected since we returned null next_seq).
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(stream.rows().map((r) => r.seq)).toEqual([1, 2]);
-    expect(stream.backfillLoading()).toBe(false);
-
-    // SSE opens once backfill drains.
+    // Exactly one EventSource, opened with since_seq=0 — backend backfills
+    // on the same channel, so no REST paging precedes it.
     expect(eventSources.length).toBe(1);
     expect(eventSources[0].url).toBe(
-      '/api/live-instances/sid-1/broker-activity/stream',
+      '/api/live-instances/sid-1/broker-activity/stream?since_seq=0',
     );
   });
 
-  it('pages REST until next_seq is null, then switches to SSE', async () => {
-    const { stream, http } = setup('sid-2');
+  it('renders backfill rows received on the SSE channel in seq order', () => {
+    const { stream } = setup('sid-2');
 
-    const r1 = http.expectOne(
-      '/api/live-instances/sid-2/broker-activity?after_seq=0&limit=100',
-    );
-    r1.flush({ rows: [row({ seq: 1 })], next_seq: 2 } satisfies BrokerActivityPage);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const r2 = http.expectOne(
-      '/api/live-instances/sid-2/broker-activity?after_seq=2&limit=100',
-    );
-    r2.flush({ rows: [row({ seq: 3 })], next_seq: null } satisfies BrokerActivityPage);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(stream.rows().map((r) => r.seq)).toEqual([1, 3]);
-    expect(eventSources.length).toBe(1);
-  });
-
-  it('merges SSE rows on top of the backfill, deduping by seq (SSE wins)', async () => {
-    const { stream, http } = setup('sid-3');
-
-    const r1 = http.expectOne(
-      '/api/live-instances/sid-3/broker-activity?after_seq=0&limit=100',
-    );
-    r1.flush({
-      rows: [row({ seq: 5, symbol: 'OLD' })],
-      next_seq: null,
-    } satisfies BrokerActivityPage);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(eventSources.length).toBe(1);
     const source = eventSources[0];
+    // Simulate the backend's server-side backfill: rows arrive on the
+    // ``row`` event before any live publisher event.
+    source.dispatch('row', JSON.stringify(row({ seq: 1, symbol: 'AAA' })));
+    source.dispatch('row', JSON.stringify(row({ seq: 2, symbol: 'BBB' })));
 
-    // Live update that re-asserts seq=5 (publisher might have re-authored)
-    // and adds a new seq=6.
+    expect(stream.rows().map((r) => ({ seq: r.seq, symbol: r.symbol }))).toEqual([
+      { seq: 1, symbol: 'AAA' },
+      { seq: 2, symbol: 'BBB' },
+    ]);
+  });
+
+  it('dedups overlapping seq across backfill + live (later event wins)', () => {
+    const { stream } = setup('sid-3');
+
+    const source = eventSources[0];
+    // Backfill row (server replay) then a live re-author of the same seq
+    // — the backend dedups by seq <= last_emitted on its side, but the
+    // frontend's dedup map is the canonical guarantee from the operator's
+    // point of view.
+    source.dispatch('row', JSON.stringify(row({ seq: 5, symbol: 'OLD' })));
     source.dispatch('row', JSON.stringify(row({ seq: 5, symbol: 'NEW' })));
     source.dispatch('row', JSON.stringify(row({ seq: 6, symbol: 'AAPL' })));
 
-    const seqs = stream.rows().map((r) => ({ seq: r.seq, symbol: r.symbol }));
-    expect(seqs).toEqual([
-      { seq: 5, symbol: 'NEW' }, // SSE wins on overlap
+    expect(stream.rows().map((r) => ({ seq: r.seq, symbol: r.symbol }))).toEqual([
+      { seq: 5, symbol: 'NEW' },
       { seq: 6, symbol: 'AAPL' },
     ]);
   });
 
-  it('records a backfill error when the REST call fails', async () => {
-    const { stream, http } = setup('sid-err');
+  it('surfaces SSE error payloads via sseError', () => {
+    const { stream } = setup('sid-err');
 
-    const req = http.expectOne(
-      '/api/live-instances/sid-err/broker-activity?after_seq=0&limit=100',
-    );
-    req.flush('boom', { status: 500, statusText: 'Server error' });
-    await Promise.resolve();
-    await Promise.resolve();
+    const source = eventSources[0];
+    source.dispatch('error', JSON.stringify({ error: 'publisher unavailable' }));
+
+    expect(stream.sseError()).toBe('publisher unavailable');
+  });
+
+  it('reports backfillLoading=true until the SSE channel transitions to open', () => {
+    const { stream } = setup('sid-loading');
+
+    // Before any ``open`` event the helper reports ``connecting``, so the
+    // operator-facing "Loading history…" surface should be true.
+    expect(stream.backfillLoading()).toBe(true);
+
+    const source = eventSources[0];
+    source.dispatch('open');
 
     expect(stream.backfillLoading()).toBe(false);
-    expect(stream.backfillError()).not.toBeNull();
-    // SSE is not opened when backfill fails.
-    expect(eventSources.length).toBe(0);
+  });
+
+  it('closes the underlying EventSource on close()', () => {
+    const { stream } = setup('sid-close');
+
+    const source = eventSources[0];
+    expect(source.closed).toBe(false);
+
+    stream.close();
+
+    expect(source.closed).toBe(true);
+  });
+
+  // Regression for the activity-tab effect feedback-loop bug: the effect
+  // that owns the stream MUST only depend on ``strategy_instance_id`` (the
+  // input), never on the stream signal it writes to. Reading the stream
+  // signal inside the effect — to close the previous one — re-runs the
+  // effect on every write, closing and reopening the SSE connection on
+  // each turn. The shape below mirrors the fixed effect: read the sid,
+  // write the stream signal via ``runInInjectionContext`` + the factory,
+  // tear down on cleanup.
+  it('does not feedback-loop: one stream per strategy_instance_id change', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [] });
+    const injector = TestBed.inject(Injector);
+
+    const sid = signal('sid-once');
+    const streamSignal = signal<ReturnType<typeof brokerActivityStream> | null>(
+      null,
+    );
+
+    runInInjectionContext(injector, () => {
+      effect((onCleanup) => {
+        const current = sid();
+        const next = runInInjectionContext(injector, () =>
+          brokerActivityStream(current),
+        );
+        streamSignal.set(next);
+        onCleanup(() => next.close());
+      });
+    });
+
+    // Let the initial effect run.
+    TestBed.flushEffects();
+    // Read the stream signal (simulates a template binding) — this must
+    // NOT cause the effect to re-fire.
+    void streamSignal();
+    TestBed.flushEffects();
+    void streamSignal();
+    TestBed.flushEffects();
+
+    expect(eventSources.length).toBe(1);
   });
 });
