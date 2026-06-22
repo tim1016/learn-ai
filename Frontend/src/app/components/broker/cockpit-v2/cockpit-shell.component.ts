@@ -175,6 +175,45 @@ export class CockpitShellComponent {
     return !!(s && s.last_exit && s.last_exit.halt_trigger);
   });
 
+  /** PRD #619-C4 — host-daemon control-plane banner.
+   *
+   *  Returns ``null`` when the control plane is healthy (CONNECTED) or
+   *  the section is absent (data plane booted without a daemon URL —
+   *  the cockpit hides the card). Otherwise returns a backend-authored
+   *  payload the template renders verbatim.
+   *
+   *  - ``RETRYING`` → amber ATTENTION banner with attempt count.
+   *  - everything else terminal (UNREACHABLE / AUTH_FAILED /
+   *    PROTOCOL_ERROR / INCOMPATIBLE_CONTRACT) → red LAST-KNOWN banner.
+   */
+  readonly controlPlaneBanner = computed(() => {
+    const cp = this.status()?.operator_surface.control_plane ?? null;
+    if (cp === null || cp.state === 'CONNECTED') return null;
+    const demoted = cp.state !== 'RETRYING';
+    const label = demoted ? 'LAST-KNOWN' : 'ATTENTION';
+    const attemptText = cp.state === 'RETRYING' && cp.attempt > 0
+      ? `retrying · attempt ${cp.attempt}`
+      : null;
+    return {
+      state: cp.state,
+      label,
+      demoted,
+      notice: cp.notice,
+      runbookSlug: cp.runbook_slug,
+      attemptText,
+    };
+  });
+
+  /** True when local transport state suggests the operator should not
+   *  dispatch new mutations (control plane is not CONNECTED). Server
+   *  gates remain authoritative if a request reaches the backend; this
+   *  signal is for short-circuiting click handlers locally so the
+   *  operator doesn't fire commands into a known-broken channel. */
+  readonly localTransportStale = computed(() => {
+    const cp = this.status()?.operator_surface.control_plane ?? null;
+    return cp !== null && cp.state !== 'CONNECTED';
+  });
+
   constructor() {
     // PRD #619-A §A5 — explicit lifecycle. Every timer, every DOM
     // listener, and the recursive poll scheduler are registered with

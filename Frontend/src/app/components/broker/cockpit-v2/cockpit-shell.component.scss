@@ -179,6 +179,43 @@
   }
 }
 
+// PRD #619-C4 — host-daemon control-plane banner.  Same visual
+// language as the runtime-freshness banner so the operator reads them
+// as one cluster (both communicate "the evidence under this card is
+// not fresh"), but distinct enough that they don't pile into a single
+// undifferentiated block when both fire.
+.control-plane-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid rgba(243, 201, 105, 0.4);
+  background: rgba(243, 201, 105, 0.08);
+  color: #f3c969;
+  font-size: var(--fs-sm, 0.85rem);
+
+  &.demoted {
+    border-bottom-color: rgba(255, 110, 110, 0.45);
+    background: rgba(255, 110, 110, 0.14);
+    color: #ff8e8e;
+  }
+
+  .control-plane-notice {
+    flex: 1;
+    font-size: var(--fs-xs, 0.75rem);
+    opacity: 0.9;
+  }
+
+  .control-plane-attempt {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+    font-size: var(--fs-xs, 0.7rem);
+    padding: 0.1rem 0.4rem;
+    border: 1px solid currentColor;
+    border-radius: 0.25rem;
+    opacity: 0.85;
+  }
+}
+
 .outer-tabs {
   display: flex;
   gap: 0.25rem;

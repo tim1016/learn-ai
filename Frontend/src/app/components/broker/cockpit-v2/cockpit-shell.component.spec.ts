@@ -11,7 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CockpitShellComponent } from './cockpit-shell.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import type { OperatorSurfaceRuntimeFreshness } from '../../../api/live-instances.types';
+import type {
+  OperatorSurfaceControlPlane,
+  OperatorSurfaceRuntimeFreshness,
+} from '../../../api/live-instances.types';
 
 function makeStatus() {
   return {
@@ -93,6 +96,7 @@ function makeStatus() {
       },
       readiness_gates: [],
       runtime_freshness: null,
+      control_plane: null,
     },
     fetched_at_ms: 0,
   };
@@ -241,5 +245,139 @@ describe('CockpitShellComponent', () => {
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('[data-testid="audit-mark-poisoned-trigger"]')).toBeNull();
+  });
+
+  // ── PRD #619-C4 — control-plane banner & local-transport-stale signal ──
+
+  function makeControlPlane(
+    overrides: Partial<OperatorSurfaceControlPlane> = {},
+  ): OperatorSurfaceControlPlane {
+    return {
+      state: 'CONNECTED',
+      last_transition_ms: 0,
+      last_success_ms: 0,
+      attempt: 0,
+      daemon_boot_id: 'boot-A',
+      notice: null,
+      runbook_slug: null,
+      ...overrides,
+    };
+  }
+
+  async function renderWithControlPlane(
+    cp: OperatorSurfaceControlPlane | null,
+  ) {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: { ...status.operator_surface, control_plane: cp },
+    });
+    return renderShell(stub);
+  }
+
+  it('hides the control-plane banner when the section is absent', async () => {
+    const fixture = await renderWithControlPlane(null);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const banner = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="control-plane-banner"]',
+    );
+    expect(banner).toBeNull();
+  });
+
+  it('hides the control-plane banner when the state is CONNECTED', async () => {
+    const fixture = await renderWithControlPlane(makeControlPlane());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const banner = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="control-plane-banner"]',
+    );
+    expect(banner).toBeNull();
+  });
+
+  it('renders a RETRYING banner with attempt count and server-authored notice', async () => {
+    const fixture = await renderWithControlPlane(
+      makeControlPlane({
+        state: 'RETRYING',
+        attempt: 3,
+        notice: 'Host daemon connectivity is degraded; retrying.',
+        runbook_slug: 'daemon-retrying',
+      }),
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const banner = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="control-plane-banner"]',
+    );
+    expect(banner).toBeTruthy();
+    expect(banner?.textContent).toContain('ATTENTION');
+    expect(banner?.textContent).toContain('Host daemon connectivity is degraded');
+    const attempt = banner?.querySelector('[data-testid="control-plane-attempt"]');
+    expect(attempt?.textContent).toContain('attempt 3');
+    expect(banner?.classList.contains('demoted')).toBe(false);
+  });
+
+  it.each([
+    ['UNREACHABLE'] as const,
+    ['AUTH_FAILED'] as const,
+    ['PROTOCOL_ERROR'] as const,
+    ['INCOMPATIBLE_CONTRACT'] as const,
+  ])(
+    'renders a LAST-KNOWN demoted banner for %s',
+    async (state) => {
+      const fixture = await renderWithControlPlane(
+        makeControlPlane({
+          state,
+          notice: 'server-authored notice',
+          runbook_slug: 'daemon-' + state.toLowerCase(),
+        }),
+      );
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const banner = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="control-plane-banner"]',
+      );
+      expect(banner).toBeTruthy();
+      expect(banner?.textContent).toContain('LAST-KNOWN');
+      expect(banner?.textContent).toContain('server-authored notice');
+      expect(banner?.classList.contains('demoted')).toBe(true);
+      // Terminal kinds do NOT show an attempt count.
+      expect(
+        banner?.querySelector('[data-testid="control-plane-attempt"]'),
+      ).toBeNull();
+    },
+  );
+
+  it('localTransportStale is false on CONNECTED', async () => {
+    const fixture = await renderWithControlPlane(makeControlPlane());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.localTransportStale()).toBe(false);
+  });
+
+  it.each([
+    ['RETRYING'] as const,
+    ['UNREACHABLE'] as const,
+    ['AUTH_FAILED'] as const,
+  ])('localTransportStale is true on %s', async (state) => {
+    const fixture = await renderWithControlPlane(makeControlPlane({ state }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.localTransportStale()).toBe(true);
+  });
+
+  it('localTransportStale is false when the control_plane section is absent', async () => {
+    const fixture = await renderWithControlPlane(null);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.localTransportStale()).toBe(false);
   });
 });
