@@ -23,10 +23,8 @@ from app.schemas.broker_activity import (
     ReconciliationTimingPolicy,
     Verdict,
 )
-from app.services.broker_activity_publisher import (
-    BrokerActivityPublisher,
-    get_publisher_registry,
-)
+from app.services.broker_activity_publisher import BrokerActivityPublisher
+from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
     stable_broker_activity_wal_path,

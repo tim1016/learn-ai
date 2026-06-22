@@ -751,7 +751,9 @@ async def test_place_paper_order_refused_during_reconnect_recovery_sweep(
     The check fires BEFORE ``require_live``, so even a fully-healthy
     connection is gated."""
     from app.broker.ibkr.orders import OrderRefusedDuringReconnectRecoveryError
-    from app.services.broker_activity_publisher import get_publisher_registry
+    from app.services.broker_activity_publisher_registry import (
+        get_publisher_registry,
+    )
 
     client = _client()
     # Stub the registry so ``any_recovery_active`` returns True without
@@ -860,7 +862,9 @@ async def test_place_paper_order_proceeds_when_no_sweep_active(
     """Regression: the recovery-halt gate must default to allowing
     submission. A bug in ``any_recovery_active`` that pinned True would
     otherwise silently freeze every submission across every instance."""
-    from app.services.broker_activity_publisher import get_publisher_registry
+    from app.services.broker_activity_publisher_registry import (
+        get_publisher_registry,
+    )
 
     client = _client()
     registry = get_publisher_registry()

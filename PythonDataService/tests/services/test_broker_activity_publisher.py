@@ -34,8 +34,8 @@ from app.schemas.broker_activity import (
     ReconciliationTimingPolicy,
     Verdict,
 )
-from app.services.broker_activity_publisher import (
-    BrokerActivityPublisher,
+from app.services.broker_activity_publisher import BrokerActivityPublisher
+from app.services.broker_activity_publisher_registry import (
     BrokerActivityPublisherRegistry,
 )
 from app.services.broker_activity_wal import (
@@ -1079,6 +1079,421 @@ async def test_executions_for_reconnect_recovery_times_out_on_hang(
 
 
 # ── End slice 3 sweep tests ─────────────────────────────────────────
+
+
+# ── pending-intent tick (slice 7 / handoff gap #1) ─────────────────
+
+
+def _append_intent_wal_event(
+    run_dir: Path,
+    *,
+    seq: int,
+    event_type: str,
+    intent_id: str,
+    order_spec: dict | None = None,
+) -> None:
+    """Append one IntentEvent line directly to the WAL.
+
+    Bypasses ``IntentWal.append`` (which would manage seq itself) so
+    tests can craft the exact WAL shape they want — including bare
+    PENDING_INTENT events with no following SUBMITTED.
+    """
+    from app.engine.live.intent_events import IntentEvent
+
+    event = IntentEvent(
+        seq=seq,
+        event_type=event_type,  # type: ignore[arg-type]
+        intent_id=intent_id,
+        bot_order_namespace=NS,
+        order_ref=f"{NS}:{intent_id}",
+        order_spec=order_spec,
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    wal_path = run_dir / "intent_events.jsonl"
+    with wal_path.open("a", encoding="utf-8") as fh:
+        fh.write(event.model_dump_json() + "\n")
+
+
+def _pending_publisher(tmp_path: Path) -> tuple[BrokerActivityPublisher, Path]:
+    """Build a publisher whose event source never yields, so only the
+    pending-intent tick can author rows."""
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts, submitted_orders={})
+
+    async def _silent() -> AsyncIterator[IbkrOrderEvent]:
+        await asyncio.sleep(3600)
+        if False:  # pragma: no cover
+            yield None  # type: ignore[misc]
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=lambda: _silent(),
+    )
+    # Tick fast so tests don't sleep for the production 2 s cadence.
+    publisher._pending_tick_period_s = 0.02
+    return publisher, run_dir
+
+
+async def test_pending_intent_tick_authors_engine_only_pending_row(
+    tmp_path: Path,
+) -> None:
+    """A PENDING_INTENT in the WAL with a usable order_spec produces an
+    ``engine_only_pending`` row on the publisher's periodic tick — even
+    when no broker events ever arrive."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="pending-1",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 100,
+            "order_type": "MKT",
+        },
+    )
+    publisher.start()
+    try:
+        rows = await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+        )
+    finally:
+        await publisher.stop()
+
+    assert len(rows) == 1
+    assert rows[0].verdict == Verdict.ENGINE_ONLY_PENDING
+    assert rows[0].template_key == "pending_acknowledgement"
+    assert rows[0].symbol == "SPY"
+    assert rows[0].side == "BUY"
+    assert rows[0].quantity == 100.0
+    assert rows[0].order_ref == f"{NS}:pending-1"
+
+
+async def test_pending_intent_tick_does_not_duplicate_on_repeat(
+    tmp_path: Path,
+) -> None:
+    """The tick fires periodically; an unchanged pending intent must
+    produce exactly one row, not one per tick."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="pending-dedup",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    publisher.start()
+    try:
+        await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+        )
+        # Let several more ticks fire — dedup must hold across them.
+        await asyncio.sleep(0.2)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher.stop()
+
+    pending = [r for r in rows if r.verdict == Verdict.ENGINE_ONLY_PENDING]
+    assert len(pending) == 1
+
+
+async def test_pending_intent_tick_skips_broker_acked_intent(
+    tmp_path: Path,
+) -> None:
+    """An intent whose WAL already has SUBMITTED is no longer pending —
+    the tick must NOT author a pending row for it (the broker event
+    path will produce the fill/cancel row when one arrives)."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="acked-1",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    _append_intent_wal_event(
+        run_dir,
+        seq=2,
+        event_type="SUBMITTED",
+        intent_id="acked-1",
+    )
+    publisher.start()
+    try:
+        # Tick at least twice, then confirm the WAL stays empty.
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher.stop()
+
+    assert rows == [], (
+        "expected no broker-activity row for a broker-acked intent; the live "
+        "event path will produce the fill/cancel row when it arrives. "
+        f"Got: {[r.verdict for r in rows]}"
+    )
+
+
+async def test_pending_intent_tick_skips_missing_order_spec(
+    tmp_path: Path,
+) -> None:
+    """A PENDING_INTENT lacking the order_spec fields the template
+    requires is logged + skipped — never authored as a partially-
+    rendered row (truthfulness contract)."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="incomplete-1",
+        order_spec={"symbol": "SPY"},  # missing action / quantity / order_type
+    )
+    publisher.start()
+    try:
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher.stop()
+
+    assert rows == []
+
+
+async def test_pending_intent_tick_re_authors_after_dedup_pruned(
+    tmp_path: Path,
+) -> None:
+    """If an intent disappears from the unacked set and later re-appears
+    (e.g. a corruption-recovery rebuilds the WAL), the publisher must
+    re-author — the dedup set is pruned to the currently-unacked set
+    on every tick.
+    """
+    publisher, run_dir = _pending_publisher(tmp_path)
+    intent_id = "pending-re"
+    spec = {
+        "symbol": "SPY",
+        "action": "SELL",
+        "quantity": 2,
+        "order_type": "MKT",
+    }
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id=intent_id,
+        order_spec=spec,
+    )
+    publisher.start()
+    try:
+        await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+        )
+        # Simulate the intent moving to SUBMITTED (broker acked) — dedup
+        # set prunes, no new pending row authored.
+        _append_intent_wal_event(
+            run_dir,
+            seq=2,
+            event_type="SUBMITTED",
+            intent_id=intent_id,
+        )
+        await asyncio.sleep(0.15)
+        rows_after_ack = BrokerActivityWal(
+            stable_broker_activity_wal_path(run_dir)
+        ).read_all()
+        # Still only one pending row (the dedup pruning is internal,
+        # not observable on the WAL — but no new pending row appeared).
+        pending = [r for r in rows_after_ack if r.verdict == Verdict.ENGINE_ONLY_PENDING]
+        assert len(pending) == 1
+    finally:
+        await publisher.stop()
+
+
+async def test_pending_intent_tick_skips_non_strategy_intent_kind(
+    tmp_path: Path,
+) -> None:
+    """Operator-initiated intents (RECOVERY_FLATTEN, EMERGENCY_FLATTEN, …)
+    surface through their own UI paths; the pending-intent surface is
+    for engine-emitted strategy orders."""
+    from app.engine.live.intent_events import IntentEvent
+
+    publisher, run_dir = _pending_publisher(tmp_path)
+    event = IntentEvent(
+        seq=1,
+        event_type="PENDING_INTENT",  # type: ignore[arg-type]
+        intent_id="op-flatten-1",
+        bot_order_namespace=NS,
+        order_ref=f"{NS}:op-flatten-1",
+        intent_kind="EMERGENCY_FLATTEN",  # type: ignore[arg-type]
+        order_spec={
+            "symbol": "SPY",
+            "action": "SELL",
+            "quantity": 10,
+            "order_type": "MKT",
+        },
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "intent_events.jsonl").write_text(
+        event.model_dump_json() + "\n", encoding="utf-8"
+    )
+
+    publisher.start()
+    try:
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher.stop()
+
+    assert rows == []
+
+
+async def test_pending_intent_tick_broadcasts_to_subscribers(
+    tmp_path: Path,
+) -> None:
+    """The pending row reaches SSE subscribers like any other row —
+    the cockpit's Working/Pending panel sees it without a reload."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="pending-broadcast",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    queue = publisher.subscribe()
+    publisher.start()
+    try:
+        row = await asyncio.wait_for(queue.get(), timeout=1.0)
+    finally:
+        publisher.unsubscribe(queue)
+        await publisher.stop()
+
+    assert row is not None
+    assert row.verdict == Verdict.ENGINE_ONLY_PENDING
+    assert row.order_ref == f"{NS}:pending-broadcast"
+
+
+async def test_pending_intent_tick_skips_intent_not_accepted_status(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 on PR #651: ``INTENT_NOT_ACCEPTED`` is a terminal
+    proven-absent status — ``intent_ledger._UNRESOLVED_STATUSES``
+    excludes it because ``live_portfolio`` writes it after a
+    ``PROVABLY_ABSENT`` probe. The tick must NOT author a pending row
+    for it; no broker event will ever supersede such a row, leaving
+    the operator with a stale 'Awaiting broker ack' that lies."""
+    publisher, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="proven-absent-1",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    _append_intent_wal_event(
+        run_dir,
+        seq=2,
+        event_type="INTENT_NOT_ACCEPTED",
+        intent_id="proven-absent-1",
+    )
+    publisher.start()
+    try:
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher.stop()
+
+    assert rows == [], (
+        "expected no pending row for INTENT_NOT_ACCEPTED (terminal-absent); "
+        f"got: {[(r.verdict, r.template_key) for r in rows]}"
+    )
+
+
+async def test_pending_intent_dedup_seeded_from_wal_on_restart(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 on PR #651: when the publisher restarts mid-pending,
+    ``broker_activity.jsonl`` already contains an ``engine_only_pending``
+    row for the unacked intent. A fresh ``__init__`` must seed
+    ``_authored_pending_intent_ids`` from the WAL so the next tick does
+    NOT re-author / re-broadcast the same intent — the frontend dedupes
+    by ``seq`` and would otherwise show duplicate Working/Pending rows.
+    """
+    publisher_a, run_dir = _pending_publisher(tmp_path)
+    _append_intent_wal_event(
+        run_dir,
+        seq=1,
+        event_type="PENDING_INTENT",
+        intent_id="restart-1",
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "MKT",
+        },
+    )
+    publisher_a.start()
+    try:
+        await _wait_for_rows(
+            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+        )
+    finally:
+        await publisher_a.stop()
+
+    # Simulate the process restart: build a fresh publisher reading the
+    # same WAL. The intent is still in PENDING_INTENT status (no broker
+    # acknowledgement landed), so a naive tick would re-author another
+    # engine_only_pending row.
+    publisher_b = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=tmp_path / "artifacts",
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=lambda: _empty_source(),
+    )
+    publisher_b._pending_tick_period_s = 0.02
+    publisher_b.start()
+    try:
+        # Let several ticks fire; the seeded dedupe should suppress
+        # all of them.
+        await asyncio.sleep(0.15)
+        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+    finally:
+        await publisher_b.stop()
+
+    pending = [r for r in rows if r.verdict == Verdict.ENGINE_ONLY_PENDING]
+    assert len(pending) == 1, (
+        "expected exactly one engine_only_pending row across restart; "
+        f"got {len(pending)} — dedupe set not seeded from WAL"
+    )
+
+
+async def _empty_source() -> AsyncIterator[IbkrOrderEvent]:
+    if False:  # pragma: no cover
+        yield None  # type: ignore[misc]
+    await asyncio.sleep(3600)
 
 
 async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:

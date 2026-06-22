@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI):
         # mid-resubscribe could be picked up by the subsequent sweep and
         # mis-authored as a ``reconnect_recovery`` row — the wrapper
         # closes that hole.
-        from app.services.broker_activity_publisher import (
+        from app.services.broker_activity_publisher_registry import (
             get_publisher_registry as get_broker_activity_publisher_registry,
         )
 
@@ -230,7 +230,9 @@ async def lifespan(app: FastAPI):
         # down the broker connection so each publisher's WAL append +
         # subscriber drain completes cleanly. Safe to call even when no
         # publishers were registered (registry stop_all is a no-op).
-        from app.services.broker_activity_publisher import get_publisher_registry
+        from app.services.broker_activity_publisher_registry import (
+            get_publisher_registry,
+        )
 
         await get_publisher_registry().stop_all()
         # Stop the broker monitor BEFORE disconnecting so a tick-in-flight

@@ -30,16 +30,29 @@ interface PendingDisplay {
 export class WorkingPendingOrdersSectionComponent {
   readonly rows = input.required<BrokerActivityRow[]>();
 
-  readonly pendingRows = computed<PendingDisplay[]>(() =>
-    this.rows()
+  readonly pendingRows = computed<PendingDisplay[]>(() => {
+    // Slice 7 (handoff gap #1) — when the publisher authors a pending
+    // row, the eventual broker fill/cancel row arrives as a separate
+    // seq with the same ``order_ref``. Suppress the pending row once
+    // any later row supersedes it so the Working/Pending panel reacts
+    // to broker activity without operator action.
+    const all = this.rows();
+    const supersededOrderRefs = new Set<string>();
+    for (const r of all) {
+      if (r.verdict !== 'engine_only_pending' && r.order_ref) {
+        supersededOrderRefs.add(r.order_ref);
+      }
+    }
+    return all
       .filter((r) => r.verdict === 'engine_only_pending')
+      .filter((r) => !(r.order_ref && supersededOrderRefs.has(r.order_ref)))
       .map((r) => ({
         row: r,
         intentTs: fmtTimestampNy(r.ts_ms),
         intentId: r.engine_overlay?.intent_id ?? null,
       }))
-      .sort((a, b) => b.row.ts_ms - a.row.ts_ms),
-  );
+      .sort((a, b) => b.row.ts_ms - a.row.ts_ms);
+  });
 
   readonly hasPending = computed<boolean>(() => this.pendingRows().length > 0);
 
