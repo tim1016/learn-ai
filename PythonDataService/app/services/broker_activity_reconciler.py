@@ -456,7 +456,14 @@ def author_row_from_event(
         order_ref=event.order_ref,
         symbol=facts["symbol"],
         side=facts["side"],
-        quantity=event.fill_quantity or 0.0,
+        # Use the same quantity the template renders (``_facts_quantity``)
+        # so the row's stored ``quantity`` matches its own narrative. For
+        # fills this is ``event.fill_quantity``; for cancels / rejects
+        # (where the broker reports ``fill_quantity=0``) it falls back to
+        # the engine's requested qty, matching the "Cancelled buy of N"
+        # headline. The truthfulness contract requires the row alone to
+        # reproduce its rendered text — quantity is part of that.
+        quantity=facts["quantity"],
         price=event.last_fill_price,
         commission=event.fee,
         net_amount=_compute_net_amount(event),
