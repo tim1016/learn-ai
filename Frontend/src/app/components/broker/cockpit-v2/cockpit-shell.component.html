@@ -228,8 +228,12 @@
           type="button"
           class="action-button resume"
           data-testid="action-resume"
-          [disabled]="!resume.enabled || busyAction() !== null"
-          [attr.title]="resume.disabled_reason_code ?? 'Resume'"
+          [disabled]="!resume.enabled || busyAction() !== null || localTransportStale()"
+          [attr.title]="
+            localTransportStale()
+              ? 'TRANSPORT_STALE'
+              : (resume.disabled_reason_code ?? 'Resume')
+          "
           (click)="dispatchResume()"
         >
           Resume
@@ -238,8 +242,12 @@
           type="button"
           class="action-button pause"
           data-testid="action-pause"
-          [disabled]="!pause.enabled || busyAction() !== null"
-          [attr.title]="pause.disabled_reason_code ?? 'Pause'"
+          [disabled]="!pause.enabled || busyAction() !== null || localTransportStale()"
+          [attr.title]="
+            localTransportStale()
+              ? 'TRANSPORT_STALE'
+              : (pause.disabled_reason_code ?? 'Pause')
+          "
           (click)="dispatchPause()"
         >
           Pause
@@ -248,8 +256,12 @@
           type="button"
           class="action-button flatten-and-pause"
           data-testid="action-flatten-and-pause"
-          [disabled]="!flatten.enabled || busyAction() !== null"
-          [attr.title]="flatten.disabled_reason_code ?? 'Flatten and pause'"
+          [disabled]="!flatten.enabled || busyAction() !== null || localTransportStale()"
+          [attr.title]="
+            localTransportStale()
+              ? 'TRANSPORT_STALE'
+              : (flatten.disabled_reason_code ?? 'Flatten and pause')
+          "
           (click)="dispatchFlattenAndPause()"
         >
           Flatten and pause
@@ -262,8 +274,12 @@
               type="button"
               class="overflow-button stop"
               data-testid="action-stop"
-              [disabled]="!stop.enabled || busyAction() !== null"
-              [attr.title]="stop.disabled_reason_code ?? 'Stop instance'"
+              [disabled]="!stop.enabled || busyAction() !== null || localTransportStale()"
+              [attr.title]="
+                localTransportStale()
+                  ? 'TRANSPORT_STALE'
+                  : (stop.disabled_reason_code ?? 'Stop instance')
+              "
               (click)="dispatchStop()"
             >
               Stop instance…

@@ -149,11 +149,17 @@ def client_for(tmp_path: Path, fake_token: str):
     async def _factory(mgr: RunnerProcessManager) -> AsyncIterator[httpx.AsyncClient]:
         app = create_app(manager=mgr, allowed_origins=["http://localhost"])
         transport = ASGITransport(app=app)
+        auth_headers = {"X-Live-Runner-Token": fake_token}
         async with httpx.AsyncClient(
-            transport=transport, base_url="http://daemon", timeout=5.0
+            transport=transport,
+            base_url="http://daemon",
+            timeout=5.0,
+            headers=auth_headers,
         ) as ac:
             # Trigger lifespan startup.
-            async with httpx.AsyncClient(transport=transport, base_url="http://daemon") as warmup:
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://daemon", headers=auth_headers
+            ) as warmup:
                 await warmup.get("/health")
             yield ac
 
@@ -169,7 +175,10 @@ async def test_health_exposes_daemon_boot_id_and_lease_state(
 
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=transport, base_url="http://daemon", timeout=5.0
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
     ) as ac:
         response = await ac.get("/health")
         assert response.status_code == 200
@@ -195,7 +204,10 @@ async def test_lifespan_classifies_orphan_candidates_on_boot(
     app = create_app(manager=mgr, allowed_origins=["http://localhost"])
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=transport, base_url="http://daemon", timeout=5.0
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
     ) as ac:
         response = await ac.get("/health")
 
@@ -217,7 +229,10 @@ async def test_lifespan_starts_lease_writer_and_writes_daemon_lease(
     app = create_app(manager=mgr, allowed_origins=["http://localhost"])
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=transport, base_url="http://daemon", timeout=5.0
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
     ) as ac:
         await ac.get("/health")
 
@@ -243,7 +258,10 @@ async def test_lifespan_flushes_draining_lease_on_shutdown(
     app = create_app(manager=mgr, allowed_origins=["http://localhost"])
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=transport, base_url="http://daemon", timeout=5.0
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
     ) as ac:
         await ac.get("/health")
 

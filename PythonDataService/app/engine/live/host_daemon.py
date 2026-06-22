@@ -919,11 +919,16 @@ def create_app(
 ) -> FastAPI:
     """Create the host-daemon FastAPI app.
 
-    ``auth_token`` is the shared secret every protected route requires in the
+    ``auth_token`` is the shared secret every route requires in the
     ``X-Live-Runner-Token`` header. When ``None`` it is resolved (or generated)
-    via :func:`ensure_daemon_token` so there is no unauthenticated mode — auth is
-    mandatory regardless of bind interface (ADR 0007). ``/health`` stays open so
-    the data plane's connectivity probe works without a token.
+    via :func:`ensure_daemon_token` so there is no unauthenticated mode — auth
+    is mandatory regardless of bind interface (ADR 0007). PRD #619-C followup
+    (Codex review P2): ``/health`` is now auth-gated alongside every other
+    route. The data plane probe holds the token via the artifacts bind mount
+    and forwards it; this is the only way for the connectivity monitor to
+    surface ``AUTH_FAILED`` for a stale/missing/rotated token. External
+    process-supervisor healthchecks (systemd / launchd / podman) must send the
+    token too.
     """
     process_manager = manager if manager is not None else _manager_from_env()
     token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
@@ -1004,7 +1009,7 @@ def create_app(
 
     auth = [Depends(_verify_token)]
 
-    @app.get("/health", response_model=HostRunnerHealth)
+    @app.get("/health", response_model=HostRunnerHealth, dependencies=auth)
     async def health() -> HostRunnerHealth:
         return process_manager.health()
 
