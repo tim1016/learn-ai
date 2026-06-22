@@ -41,6 +41,7 @@ if TYPE_CHECKING:
         InstanceProcessView,
         LiveBinding,
     )
+    from app.services.mutation_attempt import MutationAttempt
     from app.services.runtime_freshness import RuntimeFreshness
 
 
@@ -96,6 +97,12 @@ class InstanceContext:
     owned_positions_empty: bool
     guard_state: ResumeGuardState
     runtime_freshness: RuntimeFreshness | None
+    # PRD #619-D action-conflict matrix. ``None`` when no mutation has
+    # been persisted for the instance or when the storage layer is
+    # absent. Mutation endpoints pass this into ``evaluate_action`` so
+    # the pre-write gate honours the matrix the same way the status
+    # projection's ``operator_surface.actions`` does.
+    latest_mutation: MutationAttempt | None
 
 
 async def load_instance_context(
@@ -117,6 +124,7 @@ async def load_instance_context(
         [LiveBinding | None, list[dict], int], RuntimeFreshness | None
     ]
     | None = None,
+    resolve_latest_mutation_for: Callable[[str], MutationAttempt | None] | None = None,
 ) -> InstanceContext:
     """Compose a single ``InstanceContext`` from explicit dependencies.
 
@@ -145,6 +153,11 @@ async def load_instance_context(
         if resolve_runtime_freshness_for is not None
         else None
     )
+    latest_mutation = (
+        resolve_latest_mutation_for(strategy_instance_id)
+        if resolve_latest_mutation_for is not None
+        else None
+    )
     daemon_boot_id = None  # PRD #619-B fills this in.
     return InstanceContext(
         strategy_instance_id=strategy_instance_id,
@@ -160,4 +173,5 @@ async def load_instance_context(
         owned_positions_empty=owned_positions_empty,
         guard_state=guard_state,
         runtime_freshness=runtime_freshness,
+        latest_mutation=latest_mutation,
     )

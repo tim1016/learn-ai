@@ -50,6 +50,7 @@ from app.schemas.live_runs import (
     ReadinessVector,
     RedeployAction,
 )
+from app.services.mutation_attempt import MutationAttempt
 from app.services.operator_capability import evaluate_all_actions
 from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
 from app.services.runtime_freshness import (
@@ -576,6 +577,7 @@ def compute_operator_surface(
     guard_state: ResumeGuardState | None = None,
     runtime_freshness: RuntimeFreshness | None = None,
     control_plane_state: DaemonConnectivityState | None = None,
+    latest_mutation: MutationAttempt | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -610,6 +612,7 @@ def compute_operator_surface(
             desired_state=desired_state,
             guard_state=resolved_guards,
             runtime_freshness=runtime_freshness,
+            latest_mutation=latest_mutation,
         ),
         trading_session=_project_trading_session(now_ms=now_ms),
         readiness_gates=project_readiness_gates(readiness),
