@@ -173,3 +173,70 @@ The capability evaluator layers four intent-state rules above the artifact guard
 
 These rules apply at the capability projection only; the artifact guards apply to the mutation endpoint and the CLI as well. The structural separation keeps the "the CLI does not consult the desired-state pair" rule honest — the CLI sets durable intent; the intent-state-pair rules are cockpit-affordance presentation rules.
 
+
+---
+
+## Amendment 2026-06-22 — PRD #619-D mutation uncertainty + recovery
+
+Status: shipping with PRs #637 (D1), #638 (D2), #639 (D3), #640 (D4) and this PR (D5). Scope is the mutation-uncertainty + recovery layer named in PRD #619 §6 619-D and rejects ADR-0008 changes — order-submit identity remains 0008's concern, not this one.
+
+### B1. Durable `mutation_attempt` record (D1)
+
+Every operator mutation (`start` / `stop` / `flatten` / `resume` / `pause`) writes a durable `MutationAttempt` artifact **before** the HTTP request leaves the data plane. The record lives at `<artifacts>/mutation_attempts/<attempt_id>.json` (flat layout per instance until volume requires an index), atomic via the canonical `atomic_write_pydantic_artifact` writer.
+
+State machine (enforced by `transition_attempt`):
+
+```
+PREPARED → DISPATCHING → { RESPONSE_CONFIRMED | OUTCOME_UNKNOWN }
+                                      ↓
+       { EFFECT_CONFIRMED | EFFECT_NOT_OBSERVED | NOT_PROVABLE | EVIDENCE_CONFLICT }
+```
+
+`OUTCOME_UNKNOWN` is the conservative default: if the HTTP client cannot prove the request was not transmitted, the attempt classifies as `OUTCOME_UNKNOWN`, never as `RESPONSE_CONFIRMED`-with-some-status (PRD #619-C5 surfacing path; this amendment makes the record durable).
+
+`mutation_attempt_id` is **audit-only** in D — the daemon does not yet enforce it as an idempotency key. Persisting it now means the C5 synchronous surfacing pass can be promoted to durable without a storage migration.
+
+### B2. Action-conflict matrix (D2)
+
+`operator_surface.actions` is now authored against the latest persisted `MutationAttempt` for the instance. The matrix engages whenever `dispatch_state != EFFECT_CONFIRMED` — including the three non-confirmed terminals (`EFFECT_NOT_OBSERVED`, `NOT_PROVABLE`, `EVIDENCE_CONFLICT`) which mean "we couldn't prove the prior mutation landed."
+
+| Prior unresolved | Blocks | Reason code |
+|---|---|---|
+| Stop | Resume, Stop | `MUTATION_UNRESOLVED_STOP` |
+| Flatten | Flatten | `MUTATION_UNRESOLVED_FLATTEN` |
+| Resume | Resume | `MUTATION_UNRESOLVED_RESUME` |
+
+`MUTATION_UNRESOLVED_START` is reserved in the closed vocabulary for the router-level `start_run` / Redeploy gate (own follow-up); it does not block any `evaluate_action` surface in v1.
+
+Pause is **never** in the matrix — pause is goal-idempotent (always safe to stop new entries). Mark-poisoned is **never** in the matrix — it is incident recovery and must remain available when posture is degraded.
+
+The matrix and POSTURE_DEMOTED guard ride **alongside** existing blockers (e.g. `NO_LIVE_BINDING`) — the operator sees every applicable reason code in `disabled_reasons[]`, never just one. Reason-code priority is unchanged (existing intent-state-pair codes sort first; matrix codes sort last alongside legacy live-binding codes).
+
+### B3. Effect-based Reconcile action (D3)
+
+`POST /api/live-instances/{sid}/reconcile-mutation` is the read-only effect inspector. **It never replays the original mutation.** The classifier `reconcile_mutation_effect(attempt, evidence)` is pure; it returns one of `EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE` based on the action type and the assembled evidence (daemon process state, child `engine_runtime.json`, durable desired-state, broker owned-positions).
+
+Per-action classification rules are encoded in `_reconcile_stop` / `_reconcile_start` / `_reconcile_resume` / `_reconcile_pause` / `_reconcile_flatten` and tested cell-by-cell. `daemon_reachable=False` short-circuits every action to `NOT_PROVABLE` — the daemon owns process identity, so a daemon outage means the read is fundamentally stale.
+
+Reconcile boundaries:
+
+- **404** when no `MutationAttempt` has been persisted for the instance.
+- **409** when the attempt is `PREPARED` / `DISPATCHING` (in flight) or already terminal (one-shot per attempt; re-classification of stale terminals is a separate ADR).
+- **200** + typed `ReconcileMutationResponse` otherwise. The router advances the attempt to the resulting terminal via `transition_attempt`, persists, and returns.
+
+`EFFECT_NOT_OBSERVED` is **not** automatic permission to retry the mutation. The operator surface still gates the next action through the matrix until the prior attempt reaches `EFFECT_CONFIRMED` (the only matrix-disengaging state).
+
+### B4. `broker_observation_consistency` divergence surface (D4)
+
+`OperatorSurface.broker_observation_consistency` carries a backend-authored verdict comparing the child's broker observation (from `engine_runtime.broker.connected_account`) against the data plane's singleton snapshot (from `snapshot_data_plane_broker`). Four-way verdict: `CONSISTENT` / `CONFLICTING` / `UNKNOWN` / `NOT_COMPARABLE`. Mode mismatch (paper vs live) outranks account mismatch → `NOT_COMPARABLE`.
+
+The cockpit renders the divergence card prominently on `CONFLICTING` but **never** overwrites the child's authoritative posture on `OperatorSurface.broker` — ADR-0011 makes the child observation authoritative for the bound instance; this amendment preserves that invariant.
+
+### B5. Out of scope
+
+This amendment intentionally does NOT:
+
+- Touch ADR-0008 (`SUBMIT_UNCERTAIN_HALT`). The mutation-attempt contract sits at a different altitude — it governs control-plane mutations of operator intent, not broker-submit identity.
+- Re-open the `--force` CLI bypass (Amendment A4 still holds).
+- Add automatic mutation retry. Reconcile is read-only; the operator (or a future supervised retry primitive) decides whether to re-issue.
+- Add daemon-enforced `mutation_attempt_id` idempotency. That is a future PRD; today the id is audit-only.
