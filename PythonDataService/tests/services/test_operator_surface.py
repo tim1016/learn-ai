@@ -664,6 +664,108 @@ def test_reason_code_vocabulary_lists_documented_codes() -> None:
     assert documented.issubset(REASON_CODES)
 
 
+# ---------------------------------------------------------------------------
+# control_plane — PRD #619-C3
+# ---------------------------------------------------------------------------
+
+
+def _conn_state(
+    kind: str,
+    *,
+    attempt: int = 0,
+    last_transition_ms: int = _NOW_MS,
+    last_success_ms: int | None = _NOW_MS,
+    daemon_boot_id: str | None = "boot-A",
+):
+    from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
+
+    return DaemonConnectivityState(
+        kind=kind,
+        attempt=attempt,
+        last_transition_ms=last_transition_ms,
+        last_success_ms=last_success_ms,
+        observed_daemon_boot_id=daemon_boot_id,
+    )
+
+
+def test_control_plane_none_when_no_monitor_installed() -> None:
+    surface = _surface()
+
+    assert surface.control_plane is None
+
+
+def test_control_plane_connected_has_no_notice_or_runbook() -> None:
+    surface = _surface(control_plane_state=_conn_state("CONNECTED"))
+
+    assert surface.control_plane is not None
+    assert surface.control_plane.state == "CONNECTED"
+    assert surface.control_plane.notice is None
+    assert surface.control_plane.runbook_slug is None
+    assert surface.control_plane.daemon_boot_id == "boot-A"
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_runbook"),
+    [
+        ("RETRYING", "daemon-retrying"),
+        ("UNREACHABLE", "daemon-unreachable"),
+        ("AUTH_FAILED", "daemon-auth-failed"),
+        ("PROTOCOL_ERROR", "daemon-protocol-error"),
+        ("INCOMPATIBLE_CONTRACT", "daemon-incompatible-contract"),
+    ],
+)
+def test_control_plane_unhealthy_kinds_carry_notice_and_runbook(
+    kind: str, expected_runbook: str
+) -> None:
+    surface = _surface(control_plane_state=_conn_state(kind, attempt=2))
+
+    assert surface.control_plane is not None
+    assert surface.control_plane.state == kind
+    assert surface.control_plane.notice is not None
+    assert isinstance(surface.control_plane.notice, str)
+    assert surface.control_plane.runbook_slug == expected_runbook
+
+
+def test_control_plane_forwards_monitor_observability_fields() -> None:
+    state = _conn_state(
+        "RETRYING",
+        attempt=3,
+        last_transition_ms=_NOW_MS + 500,
+        last_success_ms=_NOW_MS - 1_000,
+        daemon_boot_id="boot-deadbeef",
+    )
+
+    surface = _surface(control_plane_state=state)
+
+    cp = surface.control_plane
+    assert cp is not None
+    assert cp.attempt == 3
+    assert cp.last_transition_ms == _NOW_MS + 500
+    assert cp.last_success_ms == _NOW_MS - 1_000
+    assert cp.daemon_boot_id == "boot-deadbeef"
+
+
+def test_control_plane_carries_initial_no_success_state() -> None:
+    # Monitor freshly started, no probe yet: kind=RETRYING, attempt=0,
+    # last_success_ms=None.
+    state = _conn_state(
+        "RETRYING",
+        attempt=0,
+        last_transition_ms=_NOW_MS,
+        last_success_ms=None,
+        daemon_boot_id=None,
+    )
+
+    surface = _surface(control_plane_state=state)
+
+    cp = surface.control_plane
+    assert cp is not None
+    assert cp.state == "RETRYING"
+    assert cp.last_success_ms is None
+    assert cp.daemon_boot_id is None
+    assert cp.notice is not None  # retrying-class notice still authored
+
+
 def test_evaluator_only_emits_codes_in_the_documented_vocabulary() -> None:
     emitted: set[str] = set()
     for action in ("resume", "pause", "stop", "flatten_and_pause", "mark_poisoned"):

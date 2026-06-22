@@ -28,6 +28,9 @@ from app.broker.ibkr.config import get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
+from app.engine.live.daemon_connectivity_monitor import (
+    get_monitor as get_daemon_connectivity_monitor,
+)
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
@@ -1304,6 +1307,11 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     sizing = _sizing(root, live_binding, runs, sid)
     action_plan = _resolve_action_plan(root, live_binding, runs)
     poisoned = bool(last_exit and last_exit.halt_trigger is not None)
+    # PRD #619-C3 — daemon connectivity monitor state (619-C2) surfaces
+    # via operator_surface.control_plane. ``None`` when the lifespan has
+    # not installed a monitor (test mode, no daemon URL configured).
+    _daemon_monitor = get_daemon_connectivity_monitor()
+    control_plane_state = _daemon_monitor.state if _daemon_monitor is not None else None
     guard_state = _resolve_resume_guard_state_for(root, live_binding, runs)
     observed_at_ms = _now_ms()
     runtime_freshness = _resolve_runtime_freshness(
@@ -1346,6 +1354,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             desired_state=desired,
             guard_state=guard_state,
             runtime_freshness=runtime_freshness,
+            control_plane_state=control_plane_state,
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,
