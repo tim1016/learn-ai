@@ -294,7 +294,7 @@ If an action button (Resume, Pause, Flatten and pause, Stop, Mark POISONED) show
 
 Resolution: add the code to `OperatorReasonCode` in `disabled-reason-copy.ts` and an operator-language entry to `OPERATOR_REASON_COPY` in the same file. The parity test `disabled-reason-copy.spec.ts` fails on any drift between the cockpit map and the server's closed vocabulary (`REASON_CODES ∪ RESUME_REASON_CODES`).
 
-### 9.6 Pre-existing failure: `halt.flag` from a prior run
+### 9.7 Pre-existing failure: `halt.flag` from a prior run
 
 Phase 6D (VCR-P3-P/Q closure) re-runs the `halt.flag` pre-flight check at every start, not only at deploy. If a prior run wrote a halt, the runner refuses to start. Inspect the halt cause and decide whether to clear (`rm halt.flag`) or redeploy. Never silently clear a halt for a SUBMIT_UNCERTAIN / cold-start divergence cause — those bear forensic evidence.
 

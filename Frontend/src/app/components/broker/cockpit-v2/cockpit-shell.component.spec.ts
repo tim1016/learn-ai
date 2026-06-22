@@ -445,7 +445,13 @@ describe('CockpitShellComponent', () => {
   // into the button disable predicates AND the dispatch methods so the
   // operator never fires a mutation into a known-broken channel.
 
-  it('disables Resume / Pause / Stop / Flatten when control_plane is RETRYING', async () => {
+  // 2026-06-22 audit F-R2: ADR-0004 amendment D — only Resume and
+  // Flatten-and-pause are gated by control-plane/transport demotion.
+  // Durable Pause and Stop must remain available so the operator's
+  // fail-safe intent controls are not removed at the moment they are
+  // most needed.
+
+  it('disables Resume + Flatten when control_plane is RETRYING (ADR-0004 D asymmetry)', async () => {
     const fixture = await renderWithControlPlane(
       makeControlPlane({
         state: 'RETRYING',
@@ -458,18 +464,10 @@ describe('CockpitShellComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    for (const id of [
-      'action-resume',
-      'action-pause',
-      'action-flatten-and-pause',
-      'action-stop',
-    ]) {
+    for (const id of ['action-resume', 'action-flatten-and-pause']) {
       const btn = el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
       expect(btn, `button ${id} should exist`).toBeTruthy();
-      expect(btn?.disabled, `button ${id} should be disabled`).toBe(true);
-      // P2 audit 2026-06-22 — tooltip is operator-language copy
-      // routed through the shared disabled-reason-copy map; the raw
-      // ``TRANSPORT_STALE`` code never reaches the operator.
+      expect(btn?.disabled, `button ${id} should be disabled by transport gate`).toBe(true);
       const title = btn?.getAttribute('title') ?? '';
       expect(title).not.toBe('TRANSPORT_STALE');
       expect(title.toLowerCase()).toContain('transport');
@@ -477,11 +475,32 @@ describe('CockpitShellComponent', () => {
     }
   });
 
-  it('dispatchPause refuses to fire when transport is stale and surfaces a mutation error', async () => {
+  it('leaves Pause + Stop enabled when control_plane is RETRYING (ADR-0004 D fail-safe)', async () => {
+    const fixture = await renderWithControlPlane(
+      makeControlPlane({
+        state: 'RETRYING',
+        attempt: 1,
+        notice: 'Daemon retrying.',
+        runbook_slug: 'daemon-retrying',
+      }),
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    for (const id of ['action-pause', 'action-stop']) {
+      const btn = el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+      expect(btn, `button ${id} should exist`).toBeTruthy();
+      expect(
+        btn?.disabled,
+        `button ${id} must NOT be disabled by transport gate (ADR-0004 D fail-safe)`,
+      ).toBe(false);
+    }
+  });
+
+  it('dispatchPause fires through transport-stale (durable Pause is fail-safe)', async () => {
     const stub = makeStub();
     const status = makeStatus();
-    // Pause is normally enabled; the transport-stale gate is the only
-    // thing that should refuse it.
     status.operator_surface.actions.pause.enabled = true;
     stub.getInstanceStatus = vi.fn().mockResolvedValue({
       ...status,
@@ -497,9 +516,9 @@ describe('CockpitShellComponent', () => {
 
     await fixture.componentInstance.dispatchPause();
 
-    // The mutation client must NOT have been invoked.
-    expect(stub.setInstanceDesiredState).not.toHaveBeenCalled();
-    // And the operator must see a transport-stale message.
-    expect(fixture.componentInstance.mutationError()).toContain('host daemon transport');
+    // ADR-0004 D — durable Pause MUST fire through. Removing the
+    // operator's fail-safe intent controls during a control-plane
+    // incident would be less safe.
+    expect(stub.setInstanceDesiredState).toHaveBeenCalledOnce();
   });
 });

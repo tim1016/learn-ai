@@ -65,18 +65,24 @@ export type OperatorReasonCode =
 export type LocalReasonCode = 'LOCAL_TRANSPORT_STALE' | 'LOCAL_REQUEST_IN_FLIGHT';
 
 const OPERATOR_REASON_COPY: Record<OperatorReasonCode, string> = {
-  // Action-conflict matrix
+  // Action-conflict matrix. The cockpit does not ship a Reconcile
+  // button yet (the visible ``RECONCILE · NOT WIRED`` hazard banner
+  // is the honest statement of that gap); the recovery procedure is
+  // documented in
+  // ``docs/runbooks/broker-instance-operator-surface.md`` → PRD
+  // #619-D vocabulary section and runs through
+  // ``POST /api/live-instances/{id}/reconcile-mutation`` manually.
   MUTATION_UNRESOLVED_START:
-    "A prior Start attempt hasn't been proven to complete. Use Reconcile on the Audit tab before retrying.",
+    "A prior Start attempt hasn't been proven to complete. Reconcile via POST /api/live-instances/{id}/reconcile-mutation before retrying (see broker-instance-operator-surface runbook).",
   MUTATION_UNRESOLVED_STOP:
-    "A prior Stop attempt hasn't been proven to complete. Use Reconcile on the Audit tab before retrying.",
+    "A prior Stop attempt hasn't been proven to complete. Reconcile via POST /api/live-instances/{id}/reconcile-mutation before retrying (see broker-instance-operator-surface runbook).",
   MUTATION_UNRESOLVED_FLATTEN:
-    "A prior Flatten-and-pause attempt hasn't been proven to complete. Use Reconcile on the Audit tab before retrying.",
+    "A prior Flatten-and-pause attempt hasn't been proven to complete. Reconcile via POST /api/live-instances/{id}/reconcile-mutation before retrying (see broker-instance-operator-surface runbook).",
   MUTATION_UNRESOLVED_RESUME:
-    "A prior Resume attempt hasn't been proven to complete. Use Reconcile on the Audit tab before retrying.",
+    "A prior Resume attempt hasn't been proven to complete. Reconcile via POST /api/live-instances/{id}/reconcile-mutation before retrying (see broker-instance-operator-surface runbook).",
   // Mutation transport
   OUTCOME_UNKNOWN:
-    'The mutation transport returned an ambiguous outcome. Use Reconcile on the Audit tab to classify the prior attempt.',
+    'The mutation transport returned an ambiguous outcome. Reconcile the prior attempt via POST /api/live-instances/{id}/reconcile-mutation to classify it (see broker-instance-operator-surface runbook).',
   // Live-binding / live-effect gates
   NO_LIVE_BINDING:
     'No live binding — the host runner is not bound to this instance. Start a runner first.',

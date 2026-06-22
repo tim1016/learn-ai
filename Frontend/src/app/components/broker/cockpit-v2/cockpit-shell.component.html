@@ -242,36 +242,78 @@
         @let pause = s.operator_surface.actions.pause;
         @let stop = s.operator_surface.actions.stop;
         @let flatten = s.operator_surface.actions.flatten_and_pause;
+        <!--
+          Per ADR-0004 amendment D, only Resume and Flatten-and-pause
+          are gated by ``localTransportStale()``; durable Pause / Stop /
+          Mark-poisoned remain available during control-plane incidents
+          so the operator's fail-safe intent controls are not removed
+          alongside the unsafe ones.
+
+          Each button carries ``data-disabled-reason-code`` with the raw
+          server code so the audit trail keeps the closed enum while
+          the operator sees the copy-mapped string in ``title``.  A
+          sibling ``<p class="action-help">`` mirrors the tooltip text
+          for keyboard-focus users (disabled buttons do not receive
+          focus reliably, so a focusable surrogate is the accessibility
+          surface — F-R3 of the 2026-06-22 audit review).
+        -->
         <button
           type="button"
           class="action-button resume"
           data-testid="action-resume"
-          [disabled]="!resume.enabled || busyAction() !== null || localTransportStale()"
+          [disabled]="!resume.enabled || busyAction() !== null || isLocalTransportGatedFor('resume')"
+          [attr.aria-describedby]="'action-resume-help'"
+          [attr.data-disabled-reason-code]="resume.disabled_reason_code"
           [attr.title]="actionButtonTooltip('resume', 'Resume')"
           (click)="dispatchResume()"
         >
           Resume
         </button>
+        <p
+          id="action-resume-help"
+          class="action-help"
+          data-testid="action-resume-help"
+          tabindex="-1"
+          aria-live="polite"
+        >{{ actionButtonTooltip('resume', 'Resume') }}</p>
         <button
           type="button"
           class="action-button pause"
           data-testid="action-pause"
-          [disabled]="!pause.enabled || busyAction() !== null || localTransportStale()"
+          [disabled]="!pause.enabled || busyAction() !== null"
+          [attr.aria-describedby]="'action-pause-help'"
+          [attr.data-disabled-reason-code]="pause.disabled_reason_code"
           [attr.title]="actionButtonTooltip('pause', 'Pause')"
           (click)="dispatchPause()"
         >
           Pause
         </button>
+        <p
+          id="action-pause-help"
+          class="action-help"
+          data-testid="action-pause-help"
+          tabindex="-1"
+          aria-live="polite"
+        >{{ actionButtonTooltip('pause', 'Pause') }}</p>
         <button
           type="button"
           class="action-button flatten-and-pause"
           data-testid="action-flatten-and-pause"
-          [disabled]="!flatten.enabled || busyAction() !== null || localTransportStale()"
+          [disabled]="!flatten.enabled || busyAction() !== null || isLocalTransportGatedFor('flatten_and_pause')"
+          [attr.aria-describedby]="'action-flatten-help'"
+          [attr.data-disabled-reason-code]="flatten.disabled_reason_code"
           [attr.title]="actionButtonTooltip('flatten_and_pause', 'Flatten and pause')"
           (click)="dispatchFlattenAndPause()"
         >
           Flatten and pause
         </button>
+        <p
+          id="action-flatten-help"
+          class="action-help"
+          data-testid="action-flatten-help"
+          tabindex="-1"
+          aria-live="polite"
+        >{{ actionButtonTooltip('flatten_and_pause', 'Flatten and pause') }}</p>
         <!-- Stop lives in the overflow menu, never inline. -->
         @if (stop) {
           <details class="overflow-menu" data-testid="overflow-menu">
@@ -280,21 +322,37 @@
               type="button"
               class="overflow-button stop"
               data-testid="action-stop"
-              [disabled]="!stop.enabled || busyAction() !== null || localTransportStale()"
+              [disabled]="!stop.enabled || busyAction() !== null"
+              [attr.aria-describedby]="'action-stop-help'"
+              [attr.data-disabled-reason-code]="stop.disabled_reason_code"
               [attr.title]="actionButtonTooltip('stop', 'Stop instance')"
               (click)="dispatchStop()"
             >
               Stop instance…
             </button>
+            <p
+              id="action-stop-help"
+              class="action-help"
+              data-testid="action-stop-help"
+              tabindex="-1"
+              aria-live="polite"
+            >{{ actionButtonTooltip('stop', 'Stop instance') }}</p>
           </details>
         }
       </div>
     </section>
 
     @if (resume.disabled_reasons.length > 1) {
+      <!-- F-R5: render operator-language copy for every reason in the
+           full priority-ordered list, with the raw code preserved on
+           ``data-reason-code`` for diagnostics + Playwright. -->
       <div class="resume-reasons-expanded" data-testid="resume-disabled-reasons">
         @for (code of resume.disabled_reasons; track code) {
-          <span class="reason">{{ code }}</span>
+          <span
+            class="reason"
+            [attr.data-reason-code]="code"
+            [attr.title]="code"
+          >{{ disabledReasonCopy(code) }}</span>
         }
       </div>
     }

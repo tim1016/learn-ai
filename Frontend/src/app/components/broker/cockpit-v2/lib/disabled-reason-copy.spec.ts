@@ -1,13 +1,19 @@
-// Parity test for the operator-language copy map against the
-// server-authored closed reason-code vocabulary.
+// Cross-stack parity test for the operator-language copy map.
 //
 // The Python source of truth lives in:
 //   PythonDataService/app/services/operator_capability.py → REASON_CODES
 //   PythonDataService/app/services/resume_guard_state.py → RESUME_REASON_CODES
 //
-// This spec pins the union here so that adding a new code on the
-// server fails this Vitest immediately — no silent gap where the
-// cockpit renders the raw enum.
+// The Python-side regenerator script writes two byte-identical JSON
+// snapshots (one in PythonDataService/, one here). The pytest
+// `test_operator_reason_codes_snapshot.py` asserts the Python-tree
+// copy matches the live `REASON_CODES` set; this Vitest asserts the
+// Frontend-tree copy matches `ALL_OPERATOR_REASON_CODES`. Together
+// they form a real cross-stack contract — adding a code on the
+// server fails one of the two tests. The 2026-06-22 cockpit audit
+// review F-R4 closure required this design (the earlier parity test
+// compared two manually-maintained TS lists and would not have
+// caught a Python-side addition).
 
 import { describe, expect, it } from 'vitest';
 
@@ -16,48 +22,38 @@ import {
   ALL_LOCAL_REASON_CODES,
   actionTooltip,
   disabledReasonCopy,
-  type OperatorReasonCode,
 } from './disabled-reason-copy';
+// Direct JSON import — resolveJsonModule + the snapshot file
+// committed alongside this spec gives Vitest a typed handle on the
+// cross-stack snapshot without filesystem APIs.
+import snapshotJson from './operator-reason-codes.snapshot.json';
 
-const EXPECTED_OPERATOR_REASON_CODES: ReadonlySet<OperatorReasonCode> = new Set<OperatorReasonCode>([
-  // operator_capability.py REASON_CODES (action-conflict matrix + live-binding + transport)
-  'MUTATION_UNRESOLVED_START',
-  'MUTATION_UNRESOLVED_STOP',
-  'MUTATION_UNRESOLVED_FLATTEN',
-  'MUTATION_UNRESOLVED_RESUME',
-  'OUTCOME_UNKNOWN',
-  'NO_LIVE_BINDING',
-  'NO_OWNED_POSITIONS',
-  'ALREADY_POISONED',
-  'ALREADY_STOPPED',
-  'POSTURE_DEMOTED',
-  // resume_guard_state.py RESUME_REASON_CODES
-  'BROKER_SAFETY_UNSAFE',
-  'BROKER_SAFETY_UNKNOWN',
-  'SUBMISSION_CAPABILITY_BLOCKED',
-  'SUBMISSION_CAPABILITY_UNKNOWN',
-  'RECONCILIATION_FAILED',
-  'RECONCILIATION_STALE',
-  'RECONCILIATION_NOT_AVAILABLE',
-  'RECONCILIATION_UNKNOWN',
-  'UNRESOLVED_UNCERTAIN_INTENT',
-  'UNCERTAIN_INTENT_STATE_UNKNOWN',
-  'ALREADY_RUNNING',
-  'ALREADY_PAUSED',
-  'STOPPED_REQUIRES_REDEPLOY',
-  'REDEPLOY_REQUIRED',
-]);
+interface ReasonCodesSnapshot {
+  readonly $comment: string;
+  readonly generated_by: string;
+  readonly source_files: readonly string[];
+  readonly codes: readonly string[];
+}
 
-describe('disabled-reason-copy parity with server closed vocabulary', () => {
-  it('covers every code in the expected vocabulary, and no extras', () => {
-    const actual = new Set(ALL_OPERATOR_REASON_CODES);
-    const expected = new Set(EXPECTED_OPERATOR_REASON_CODES);
+const snapshot = snapshotJson as ReasonCodesSnapshot;
+
+describe('disabled-reason-copy parity with server closed vocabulary (cross-stack)', () => {
+  it('loads the committed snapshot file', () => {
+    expect(snapshot.codes.length).toBeGreaterThan(0);
+    expect(snapshot.generated_by).toContain('regenerate_operator_reason_codes_snapshot');
+    expect(snapshot.source_files.some((s) => s.includes('operator_capability.py'))).toBe(true);
+    expect(snapshot.source_files.some((s) => s.includes('resume_guard_state.py'))).toBe(true);
+  });
+
+  it('frontend copy map matches the snapshot exactly (no missing, no extra codes)', () => {
+    const actual = new Set<string>(ALL_OPERATOR_REASON_CODES);
+    const expected = new Set<string>(snapshot.codes);
 
     const missing = [...expected].filter((c) => !actual.has(c));
     const extra = [...actual].filter((c) => !expected.has(c));
 
-    expect(missing).toEqual([]);
-    expect(extra).toEqual([]);
+    expect(missing, 'codes the snapshot has but the frontend map is missing').toEqual([]);
+    expect(extra, 'codes the frontend map has but the snapshot does not').toEqual([]);
   });
 
   it('every operator code maps to non-trivial operator-language copy', () => {

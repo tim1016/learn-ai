@@ -1,0 +1,34 @@
+{
+  "$comment": "Snapshot of the closed reason-code vocabulary on the server side (REASON_CODES ∪ RESUME_REASON_CODES). Two test surfaces lock against this file: pytest PythonDataService/tests/services/test_operator_reason_codes_snapshot.py compares the live Python frozenset against this snapshot; Vitest disabled-reason-copy.spec.ts compares this snapshot against ALL_OPERATOR_REASON_CODES. Adding a code on the server requires (a) updating REASON_CODES / RESUME_REASON_CODES, (b) re-running PythonDataService/scripts/regenerate_operator_reason_codes_snapshot.py, (c) updating disabled-reason-copy.ts to add the OperatorReasonCode entry + the OPERATOR_REASON_COPY string. Any missing step fails one of the two parity tests.",
+  "generated_by": "PythonDataService/scripts/regenerate_operator_reason_codes_snapshot.py",
+  "source_files": [
+    "PythonDataService/app/services/operator_capability.py (REASON_CODES)",
+    "PythonDataService/app/services/resume_guard_state.py (RESUME_REASON_CODES)"
+  ],
+  "codes": [
+    "ALREADY_PAUSED",
+    "ALREADY_POISONED",
+    "ALREADY_RUNNING",
+    "ALREADY_STOPPED",
+    "BROKER_SAFETY_UNKNOWN",
+    "BROKER_SAFETY_UNSAFE",
+    "MUTATION_UNRESOLVED_FLATTEN",
+    "MUTATION_UNRESOLVED_RESUME",
+    "MUTATION_UNRESOLVED_START",
+    "MUTATION_UNRESOLVED_STOP",
+    "NO_LIVE_BINDING",
+    "NO_OWNED_POSITIONS",
+    "OUTCOME_UNKNOWN",
+    "POSTURE_DEMOTED",
+    "RECONCILIATION_FAILED",
+    "RECONCILIATION_NOT_AVAILABLE",
+    "RECONCILIATION_STALE",
+    "RECONCILIATION_UNKNOWN",
+    "REDEPLOY_REQUIRED",
+    "STOPPED_REQUIRES_REDEPLOY",
+    "SUBMISSION_CAPABILITY_BLOCKED",
+    "SUBMISSION_CAPABILITY_UNKNOWN",
+    "UNCERTAIN_INTENT_STATE_UNKNOWN",
+    "UNRESOLVED_UNCERTAIN_INTENT"
+  ]
+}

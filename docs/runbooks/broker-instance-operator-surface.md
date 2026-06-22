@@ -269,15 +269,33 @@ If any of those land wrong, the corresponding PR in the series is the place to l
 
 ## PRD #619-D mutation uncertainty + recovery (2026-06-22)
 
+### Reconcile procedure (no cockpit button yet)
+
+**There is no Reconcile button in the cockpit-v2 UI today** — the visible `RECONCILE · NOT WIRED` hazard banner is the honest statement of that gap. The 2026-06-22 audit found the cockpit's earlier tooltip copy directed operators to "Use Reconcile on the Audit tab," which would have sent them looking for a control that does not exist. The corrected tooltip points to this runbook section.
+
+The reconcile endpoint is server-authored (`POST /api/live-instances/{strategy_instance_id}/reconcile-mutation`, defined in `PythonDataService/app/routers/live_instances.py`); the cockpit just hasn't wired a button. Until it does, the operator procedure is:
+
+```bash
+# Inspect the most recent mutation_attempt for the instance
+curl -s http://localhost:8000/api/live-instances/<id>/status | jq '.operator_surface.actions'
+
+# Call the Reconcile endpoint to classify the prior attempt
+curl -s -X POST http://localhost:8000/api/live-instances/<id>/reconcile-mutation | jq
+```
+
+The response carries the `MutationAttempt.dispatch_state` advanced to one of the four terminals below (`EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE`). When the attempt becomes `EFFECT_CONFIRMED`, the action-conflict matrix disengages and the cockpit's Resume / Stop / Flatten button re-enables on the next status poll.
+
+Wiring this into the cockpit UI is a follow-up. The action-conflict-matrix tooltips were corrected in this audit; the button itself is the deferred work.
+
 ### Incident vocabulary
 
-This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The cockpit renders the codes verbatim; the runbook entry tells the operator what each code means and what to do about it.
+This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The cockpit renders operator-language strings via the shared `disabled-reason-copy.ts` map (2026-06-22 audit P2-002); the runbook entry below carries the deep procedural detail.
 
 #### `OUTCOME_UNKNOWN` (PRD #619-C5, durable in 619-D1)
 
 **What it means.** A mutation request (Deploy / Start / Stop / Flatten / Resume / Pause) was sent to the host daemon, but the response did not arrive intact. The daemon may or may not have observed the request.
 
-**What to do.** Do not blindly retry. Click Reconcile on the instance. The cockpit will inspect daemon state, the child's `engine_runtime.json`, and broker positions, then advance the attempt to one of:
+**What to do.** Do not blindly retry. Reconcile the attempt (see "Reconcile procedure" above). The endpoint inspects daemon state, the child's `engine_runtime.json`, and broker positions, then advances the attempt to one of:
 
 - `EFFECT_CONFIRMED` — the intended effect is observable; the mutation did land.
 - `EFFECT_NOT_OBSERVED` — no evidence of the effect; the mutation likely did not land, but Reconcile is **not** permission to retry — read the next-action guidance below.
@@ -290,7 +308,7 @@ This section pins the operator-facing copy for every new reason / state code int
 
 `MUTATION_UNRESOLVED_START` is reserved in the vocabulary but does not block any operator-surface action in v1 — Start mutations are gated at the router level (`start_run` / Redeploy).
 
-**What to do.** Click Reconcile. The matrix disengages when the prior attempt reaches `EFFECT_CONFIRMED`. If Reconcile classifies as `EFFECT_NOT_OBSERVED`, you must decide whether to re-issue the mutation; the system does **not** auto-retry, and the matrix stays engaged until the next action explicitly advances state.
+**What to do.** Reconcile the attempt (see "Reconcile procedure" above). The matrix disengages when the prior attempt reaches `EFFECT_CONFIRMED`. If Reconcile classifies as `EFFECT_NOT_OBSERVED`, you must decide whether to re-issue the mutation; the system does **not** auto-retry, and the matrix stays engaged until the next action explicitly advances state.
 
 #### `EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE` (PRD #619-D3)
 
