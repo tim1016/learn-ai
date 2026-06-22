@@ -13,6 +13,8 @@ arithmetic happens inside pandas_market_calendars' tz-aware Timestamps.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pandas as pd
 import pandas_market_calendars as mcal
 
@@ -24,6 +26,31 @@ class NoSessionError(LookupError):
 _LOOKBACK_DAYS = 14
 _CALENDAR_NAME = "NYSE"
 _CALENDAR = mcal.get_calendar(_CALENDAR_NAME)
+
+NyseSessionState = Literal["RTH_OPEN", "CLOSED"]
+
+
+def nyse_session_state_at_ms(now_ms: int) -> NyseSessionState:
+    """Return whether ``now_ms`` falls inside the NYSE regular session.
+
+    The lookup honors exchange holidays and early closes through
+    ``pandas_market_calendars``.  ``HALTED`` is intentionally not
+    synthesized here: a calendar can prove open/closed, but an
+    exchange or symbol halt requires a separate live market-status
+    observation.
+    """
+    if now_ms < 0:
+        raise ValueError("now_ms must be non-negative int64 ms UTC")
+    now_utc = pd.Timestamp(now_ms, unit="ms", tz="UTC")
+    ny_day = now_utc.tz_convert("America/New_York").date()
+    schedule = _CALENDAR.schedule(start_date=ny_day, end_date=ny_day)
+    if schedule.empty:
+        return "CLOSED"
+    market_open = schedule["market_open"].iloc[0]
+    market_close = schedule["market_close"].iloc[0]
+    if market_open <= now_utc < market_close:
+        return "RTH_OPEN"
+    return "CLOSED"
 
 
 def previous_completed_nyse_session_close_ms(session_start_ms: int) -> int:

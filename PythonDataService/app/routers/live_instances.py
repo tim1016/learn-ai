@@ -29,6 +29,10 @@ from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.engine.live.engine_runtime import (
+    ENGINE_RUNTIME_FILENAME,
+    read_engine_runtime_snapshot,
+)
 from app.engine.live.fleet import (
     compute_fleet_account_summary,
     compute_fleet_contamination,
@@ -37,6 +41,7 @@ from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
+from app.engine.live.nyse_calendar import nyse_session_state_at_ms
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
@@ -97,6 +102,11 @@ from app.services.resume_guard_state import (
     ResumeGuardState,
     empty_guard_state,
     resolve_guard_state_from_paths,
+)
+from app.services.runtime_freshness import (
+    RuntimeFreshness,
+    evaluate_runtime_freshness,
+    unavailable_runtime_freshness,
 )
 
 # The instance command channel is reserved for one-shot operations; PAUSE/
@@ -321,6 +331,39 @@ def _resolve_evidence_run_dir(root: Path, live_binding: LiveBinding | None, runs
     if runs:
         return Path(runs[0]["run_dir"])
     return None
+
+
+def _resolve_runtime_freshness(
+    root: Path,
+    live_binding: LiveBinding | None,
+    *,
+    now_ms: int,
+) -> RuntimeFreshness | None:
+    """Resolve child-authored runtime evidence for the current live binding.
+
+    Runtime freshness is meaningful only for a bound child. Missing,
+    malformed, or forward-incompatible artifacts fail closed and are
+    surfaced explicitly rather than falling back to process-registry
+    liveness.
+    """
+    if live_binding is None:
+        return None
+    run_dir = _visible_live_run_dir(root, live_binding)
+    if run_dir is None:
+        return unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
+    path = run_dir / ENGINE_RUNTIME_FILENAME
+    if not path.is_file():
+        return unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
+    snapshot = read_engine_runtime_snapshot(path)
+    if snapshot is None:
+        return unavailable_runtime_freshness(
+            "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE"
+        )
+    return evaluate_runtime_freshness(
+        snapshot,
+        now_ms=now_ms,
+        session_state=nyse_session_state_at_ms(now_ms),
+    )
 
 
 def _start_defaults(
@@ -1262,6 +1305,12 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     action_plan = _resolve_action_plan(root, live_binding, runs)
     poisoned = bool(last_exit and last_exit.halt_trigger is not None)
     guard_state = _resolve_resume_guard_state_for(root, live_binding, runs)
+    observed_at_ms = _now_ms()
+    runtime_freshness = _resolve_runtime_freshness(
+        root,
+        live_binding,
+        now_ms=observed_at_ms,
+    )
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1296,9 +1345,10 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             poisoned=poisoned,
             desired_state=desired,
             guard_state=guard_state,
-            now_ms=_now_ms(),
+            runtime_freshness=runtime_freshness,
+            now_ms=observed_at_ms,
         ),
-        fetched_at_ms=_now_ms(),
+        fetched_at_ms=observed_at_ms,
     )
 
 
@@ -1389,6 +1439,13 @@ async def _load_instance_context_for_router(sid: str) -> InstanceContext:
         instance_broker=lambda _sid: _instance_broker(root, _sid),
         resolve_guard_state_for=lambda live_binding, runs: _resolve_resume_guard_state_for(
             root, live_binding, runs
+        ),
+        resolve_runtime_freshness_for=lambda live_binding, _runs, observed_at_ms: (
+            _resolve_runtime_freshness(
+                root,
+                live_binding,
+                now_ms=observed_at_ms,
+            )
         ),
     )
 
@@ -1754,6 +1811,7 @@ async def set_instance_desired_state(
         owned_positions_empty=ctx.owned_positions_empty,
         desired_state=ctx.desired_state,
         guard_state=ctx.guard_state,
+        runtime_freshness=ctx.runtime_freshness,
     )
     if not gate.enabled:
         raise HTTPException(
@@ -1868,6 +1926,7 @@ async def flatten_and_pause_instance(
         process=ctx.process,
         live_binding=ctx.live_binding,
         owned_positions_empty=ctx.owned_positions_empty,
+        runtime_freshness=ctx.runtime_freshness,
     )
     if not gate.enabled:
         raise HTTPException(
@@ -1999,6 +2058,7 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
             process=ctx.process,
             live_binding=ctx.live_binding,
             poisoned=ctx.poisoned,
+            runtime_freshness=ctx.runtime_freshness,
         )
         if not capability.enabled:
             raise HTTPException(

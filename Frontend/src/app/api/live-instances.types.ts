@@ -319,6 +319,28 @@ export interface OperatorGate {
   suggested_action_unavailable_reason: string | null;
 }
 
+export type RuntimeFreshnessState =
+  | 'FRESH'
+  | 'STALE'
+  | 'NOT_APPLICABLE'
+  | 'UNKNOWN'
+  | 'DEGRADED';
+
+export interface OperatorSurfaceDomainFreshness {
+  state: RuntimeFreshnessState;
+  age_ms: number | null;
+  stale_reason_codes: string[];
+}
+
+export interface OperatorSurfaceRuntimeFreshness {
+  posture_demoted: boolean;
+  stale_reason_codes: string[];
+  command_loop: OperatorSurfaceDomainFreshness;
+  broker: OperatorSurfaceDomainFreshness;
+  bar_loop: OperatorSurfaceDomainFreshness;
+  control_plane: OperatorSurfaceDomainFreshness;
+}
+
 export interface OperatorSurface {
   /** Bump on breaking shape changes; additive fields do NOT bump the version. */
   schema_version: number;
@@ -335,6 +357,9 @@ export interface OperatorSurface {
    *  server-authored remediation metadata.  Empty list when no readiness
    *  vector is available.  Order preserves the engine's gate order. */
   readiness_gates: OperatorGate[];
+  /** Child-authored runtime evidence composed by the backend. Null when
+   * no child is currently bound to the instance. */
+  runtime_freshness: OperatorSurfaceRuntimeFreshness | null;
 }
 
 // PRD #616 — fleet account altitude DTO (server-authored).  Separates

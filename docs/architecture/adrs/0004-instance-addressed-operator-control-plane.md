@@ -151,13 +151,21 @@ On startup the daemon calls `classify_runtime_candidates_on_boot(live_runs_root,
 
 ### D. Backend freshness composition (PRD §B7)
 
-The data plane composes a `RuntimeFreshness` from the per-run `engine_runtime.json` plus the daemon lease + this daemon's `boot_id`. Posture demotes to last-known + actions disable when:
+The data plane composes a `RuntimeFreshness` from the per-run `engine_runtime.json` plus the daemon lease + this daemon's `boot_id`. Posture demotes to last-known when:
 
 - `command_loop` heartbeat stale > 3 s, OR
 - `broker` probe stale > 25 s (or missing), OR
 - `control_plane` lease stale OR `observed_daemon_boot_id != expected_daemon_boot_id`.
 
 `bar_loop` staleness alone does not demote posture (a closed market is not a posture event) — it is rendered as informational. Thresholds are server config with validated defaults, not Angular constants.
+
+Action policy is asymmetric by safety effect:
+
+- Resume and Flatten-and-pause disable while posture is demoted because they require current runtime evidence.
+- Durable Pause and Stop remain available because removing the operator's fail-safe intent controls during a control-plane/runtime incident would be less safe.
+- Mark-poisoned remains available as an incident-recovery action.
+
+The mutation endpoints evaluate the same backend-authored freshness gate as the status projection. Angular only renders the resulting capabilities and reason codes.
 
 ### Wire artifacts pinned by this amendment
 

@@ -23,6 +23,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
+from app.engine.live.engine_runtime import (
+    BarLoopBlock,
+    BrokerBlock,
+    CommandLoopBlock,
+    ControlPlaneBlock,
+    EngineRuntimeSnapshot,
+    write_engine_runtime_snapshot,
+)
 from app.routers import live_instances
 
 
@@ -233,6 +241,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "trading_session",
         # PRD #616 — additive operator-facing projections.
         "readiness_gates",
+        "runtime_freshness",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
@@ -270,6 +279,83 @@ async def test_running_instance_status_carries_every_operator_surface_block(
             assert cap["disabled_reasons"]
     # readiness_gates projection is always present (even empty).
     assert isinstance(surface["readiness_gates"], list)
+    assert surface["runtime_freshness"]["posture_demoted"] is True
+    assert surface["runtime_freshness"]["stale_reason_codes"] == [
+        "ENGINE_RUNTIME_MISSING"
+    ]
+    for name in ("resume", "flatten_and_pause"):
+        assert surface["actions"][name]["enabled"] is False
+        assert surface["actions"][name]["disabled_reason_code"] == "POSTURE_DEMOTED"
+    for name in ("pause", "stop"):
+        assert surface["actions"][name]["enabled"] is True
+
+
+async def test_running_instance_fresh_runtime_keeps_actions_current(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    now_ms = 1_772_463_600_000  # 2026-03-02 10:00:00 America/New_York
+    _write_ledger(root, "run-runtime", "spy_ema_paper", 100)
+    write_engine_runtime_snapshot(
+        root / "run-runtime",
+        EngineRuntimeSnapshot(
+            strategy_instance_id="spy_ema_paper",
+            run_id="run-runtime",
+            pid=123,
+            process_start_identity="child-1",
+            expected_daemon_boot_id="boot-1",
+            snapshot_seq=1,
+            written_at_ms=now_ms,
+            command_loop=CommandLoopBlock(
+                heartbeat_at_ms=now_ms,
+                state="PAUSED",
+            ),
+            broker=BrokerBlock(
+                identity="PAPER_VERIFIED",
+                submission_capability="PAPER_ORDERS_ENABLED",
+                effective_posture="PAPER_EXECUTION",
+                connection_state="connected",
+                connection_epoch=1,
+                connected_account="DU123",
+                port_class="paper_port",
+                observation_at_ms=now_ms,
+                probe_completed_at_ms=now_ms,
+                reconnect_attempt=0,
+            ),
+            bar_loop=BarLoopBlock(
+                heartbeat_at_ms=now_ms,
+                latest_source_bar_ms=now_ms,
+                expected_interval_ms=60_000,
+            ),
+            control_plane=ControlPlaneBlock(
+                lease_observed_at_ms=now_ms,
+                observed_daemon_boot_id="boot-1",
+            ),
+        ),
+    )
+    _set_daemon(
+        monkeypatch,
+        process={
+            "state": "running",
+            "run_id": "run-runtime",
+            "pid": 123,
+            "started_at_ms": now_ms,
+        },
+    )
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/live-instances/spy_ema_paper/status"
+        )
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["runtime_freshness"]["posture_demoted"] is False
+    assert surface["runtime_freshness"]["stale_reason_codes"] == []
+    assert surface["runtime_freshness"]["bar_loop"]["state"] == "FRESH"
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
     as_of_ms: 0,
   },
   readiness_gates: [],
+  runtime_freshness: null,
 };
 
 // ---------------------------------------------------------------------------

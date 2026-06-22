@@ -14,6 +14,7 @@ import pytest
 
 from app.engine.live.nyse_calendar import (
     NoSessionError,
+    nyse_session_state_at_ms,
     previous_completed_nyse_session_close_ms,
 )
 
@@ -61,3 +62,29 @@ def test_session_start_ms_before_any_lookback_session_raises() -> None:
     # ending at session_start_ms, raise.
     with pytest.raises(NoSessionError):
         previous_completed_nyse_session_close_ms(0)
+
+
+@pytest.mark.parametrize(
+    "at_ms,expected",
+    [
+        (_ms(2026, 5, 18, 10, 0), "RTH_OPEN"),
+        (_ms(2026, 5, 18, 9, 29), "CLOSED"),
+        (_ms(2026, 5, 18, 16, 0), "CLOSED"),
+        # Memorial Day.
+        (_ms(2026, 5, 25, 10, 0), "CLOSED"),
+        # Saturday.
+        (_ms(2026, 5, 16, 10, 0), "CLOSED"),
+        # Black Friday early close at 13:00 ET.
+        (_ms(2026, 11, 27, 12, 59), "RTH_OPEN"),
+        (_ms(2026, 11, 27, 13, 0), "CLOSED"),
+    ],
+)
+def test_nyse_session_state_honors_calendar(
+    at_ms: int, expected: str
+) -> None:
+    assert nyse_session_state_at_ms(at_ms) == expected
+
+
+def test_nyse_session_state_rejects_negative_timestamp() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        nyse_session_state_at_ms(-1)

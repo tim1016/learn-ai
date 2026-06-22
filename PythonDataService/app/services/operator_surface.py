@@ -38,8 +38,10 @@ from app.schemas.live_runs import (
     OperatorSurfaceConfiguration,
     OperatorSurfaceCurrentRisk,
     OperatorSurfaceDailyOrderCap,
+    OperatorSurfaceDomainFreshness,
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
+    OperatorSurfaceRuntimeFreshness,
     OperatorSurfaceTradingSession,
     ReadinessGate,
     ReadinessVector,
@@ -47,6 +49,11 @@ from app.schemas.live_runs import (
 )
 from app.services.operator_capability import evaluate_all_actions
 from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
+from app.services.runtime_freshness import (
+    DomainFreshness,
+    RuntimeFreshness,
+    runtime_freshness_reason_codes,
+)
 
 # Server-side canonical input for the broker connection layer.  The
 # router collapses the readiness ``broker_connection`` gate plus (when
@@ -458,6 +465,31 @@ def project_readiness_gates(readiness: ReadinessVector | None) -> list[OperatorG
     return out
 
 
+def _project_domain_freshness(
+    domain: DomainFreshness,
+) -> OperatorSurfaceDomainFreshness:
+    return OperatorSurfaceDomainFreshness(
+        state=domain.state,
+        age_ms=domain.age_ms,
+        stale_reason_codes=domain.stale_reason_codes,
+    )
+
+
+def _project_runtime_freshness(
+    freshness: RuntimeFreshness | None,
+) -> OperatorSurfaceRuntimeFreshness | None:
+    if freshness is None:
+        return None
+    return OperatorSurfaceRuntimeFreshness(
+        posture_demoted=freshness.posture_demoted,
+        stale_reason_codes=runtime_freshness_reason_codes(freshness),
+        command_loop=_project_domain_freshness(freshness.command_loop),
+        broker=_project_domain_freshness(freshness.broker),
+        bar_loop=_project_domain_freshness(freshness.bar_loop),
+        control_plane=_project_domain_freshness(freshness.control_plane),
+    )
+
+
 # ---------------------------------------------------------------------------
 # compose
 # ---------------------------------------------------------------------------
@@ -479,6 +511,7 @@ def compute_operator_surface(
     poisoned: bool = False,
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
+    runtime_freshness: RuntimeFreshness | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -512,7 +545,9 @@ def compute_operator_surface(
             owned_positions_empty=owned_positions_empty,
             desired_state=desired_state,
             guard_state=resolved_guards,
+            runtime_freshness=runtime_freshness,
         ),
         trading_session=_project_trading_session(now_ms=now_ms),
         readiness_gates=project_readiness_gates(readiness),
+        runtime_freshness=_project_runtime_freshness(runtime_freshness),
     )

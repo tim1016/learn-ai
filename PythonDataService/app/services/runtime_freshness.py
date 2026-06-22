@@ -38,6 +38,8 @@ from app.engine.live.engine_runtime import EngineRuntimeSnapshot
 # Reason codes the operator surface renders. Closed vocabulary — any
 # new code lands here and the Frontend lookup table.
 RuntimeFreshnessReasonCode = Literal[
+    "ENGINE_RUNTIME_MISSING",
+    "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE",
     "COMMAND_LOOP_STALE",
     "BROKER_PROBE_STALE",
     "BROKER_PROBE_MISSING",
@@ -101,6 +103,44 @@ class RuntimeFreshness:
     bar_loop: DomainFreshness
     control_plane: DomainFreshness
     posture_demoted: bool
+
+
+def unavailable_runtime_freshness(
+    reason_code: Literal[
+        "ENGINE_RUNTIME_MISSING",
+        "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE",
+    ],
+) -> RuntimeFreshness:
+    """Fail-closed freshness when a live run has no readable runtime artifact."""
+    def _unavailable_domain() -> DomainFreshness:
+        return DomainFreshness(
+            state="UNKNOWN",
+            age_ms=None,
+            stale_reason_codes=[reason_code],
+        )
+
+    return RuntimeFreshness(
+        command_loop=_unavailable_domain(),
+        broker=_unavailable_domain(),
+        bar_loop=_unavailable_domain(),
+        control_plane=_unavailable_domain(),
+        posture_demoted=True,
+    )
+
+
+def runtime_freshness_reason_codes(freshness: RuntimeFreshness) -> list[str]:
+    """Return stable, de-duplicated reason codes in domain order."""
+    codes: list[str] = []
+    for domain in (
+        freshness.command_loop,
+        freshness.broker,
+        freshness.bar_loop,
+        freshness.control_plane,
+    ):
+        for code in domain.stale_reason_codes:
+            if code not in codes:
+                codes.append(code)
+    return codes
 
 
 # ---------------------------------------------------------------------------

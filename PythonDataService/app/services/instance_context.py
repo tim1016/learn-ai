@@ -41,6 +41,7 @@ if TYPE_CHECKING:
         InstanceProcessView,
         LiveBinding,
     )
+    from app.services.runtime_freshness import RuntimeFreshness
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class InstanceContext:
     broker: InstanceBrokerView | None
     owned_positions_empty: bool
     guard_state: ResumeGuardState
+    runtime_freshness: RuntimeFreshness | None
 
 
 async def load_instance_context(
@@ -111,6 +113,10 @@ async def load_instance_context(
     resolve_guard_state_for: Callable[
         [LiveBinding | None, list[dict]], ResumeGuardState
     ],
+    resolve_runtime_freshness_for: Callable[
+        [LiveBinding | None, list[dict], int], RuntimeFreshness | None
+    ]
+    | None = None,
 ) -> InstanceContext:
     """Compose a single ``InstanceContext`` from explicit dependencies.
 
@@ -134,6 +140,11 @@ async def load_instance_context(
     )
     poisoned = bool(last_exit and last_exit.halt_trigger is not None)
     guard_state = resolve_guard_state_for(live_binding, runs)
+    runtime_freshness = (
+        resolve_runtime_freshness_for(live_binding, runs, observation_at_ms)
+        if resolve_runtime_freshness_for is not None
+        else None
+    )
     daemon_boot_id = None  # PRD #619-B fills this in.
     return InstanceContext(
         strategy_instance_id=strategy_instance_id,
@@ -148,4 +159,5 @@ async def load_instance_context(
         broker=broker,
         owned_positions_empty=owned_positions_empty,
         guard_state=guard_state,
+        runtime_freshness=runtime_freshness,
     )
