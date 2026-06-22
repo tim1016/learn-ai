@@ -32,14 +32,12 @@ the wire.
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.artifact_io import read_pydantic_artifact
+from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
 
 ENGINE_RUNTIME_FILENAME = "engine_runtime.json"
 
@@ -199,20 +197,12 @@ def write_engine_runtime_snapshot(
 ) -> None:
     """Write the snapshot to ``<run_dir>/engine_runtime.json`` atomically.
 
-    Atomic via ``open + write + flush + fsync`` on a sibling ``.tmp``
-    path followed by ``rename`` onto the canonical name. A partial read
-    by the backend cannot observe a torn file.
+    Delegates the ``tmp + fsync + replace`` pattern to the canonical
+    ``atomic_write_pydantic_artifact`` helper so the on-disk byte
+    shape stays in lockstep with every other Pydantic artifact in the
+    live-run / control-plane wire surface.
     """
-    run_dir.mkdir(parents=True, exist_ok=True)
-    path = run_dir / ENGINE_RUNTIME_FILENAME
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    payload = snapshot.model_dump(mode="json")
-    data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    tmp.replace(path)
+    atomic_write_pydantic_artifact(run_dir / ENGINE_RUNTIME_FILENAME, snapshot)
 
 
 def read_engine_runtime_snapshot(path: Path) -> EngineRuntimeSnapshot | None:
