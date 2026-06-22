@@ -227,7 +227,10 @@ describe('CockpitShellComponent', () => {
     }
   });
 
-  it('disables Resume with the guarded reason on the title attribute', async () => {
+  it('disables Resume and renders operator-language copy (not the raw reason code) on the title attribute', async () => {
+    // P1/P2 audit 2026-06-22 — was: title === 'BROKER_SAFETY_UNSAFE'
+    // (the operator saw the raw enum). Now: title === operator copy
+    // resolved through the shared disabled-reason-copy map.
     const fixture = await renderShell(makeStub());
     await fixture.whenStable();
     fixture.detectChanges();
@@ -236,7 +239,13 @@ describe('CockpitShellComponent', () => {
     ) as HTMLButtonElement | null;
     expect(btn).toBeTruthy();
     expect(btn?.disabled).toBe(true);
-    expect(btn?.getAttribute('title')).toBe('BROKER_SAFETY_UNSAFE');
+    const title = btn?.getAttribute('title') ?? '';
+    // The raw code must NOT be the title (it was, pre-fix).
+    expect(title).not.toBe('BROKER_SAFETY_UNSAFE');
+    // The title must be operator-language and mention the UNSAFE
+    // verdict + the paper-only restoration path.
+    expect(title).toContain('UNSAFE');
+    expect(title).toContain('paper-only');
   });
 
   it('renders runtime demotion reason codes prominently', async () => {
@@ -458,7 +467,13 @@ describe('CockpitShellComponent', () => {
       const btn = el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
       expect(btn, `button ${id} should exist`).toBeTruthy();
       expect(btn?.disabled, `button ${id} should be disabled`).toBe(true);
-      expect(btn?.getAttribute('title')).toBe('TRANSPORT_STALE');
+      // P2 audit 2026-06-22 — tooltip is operator-language copy
+      // routed through the shared disabled-reason-copy map; the raw
+      // ``TRANSPORT_STALE`` code never reaches the operator.
+      const title = btn?.getAttribute('title') ?? '';
+      expect(title).not.toBe('TRANSPORT_STALE');
+      expect(title.toLowerCase()).toContain('transport');
+      expect(title.toLowerCase()).toContain('connected');
     }
   });
 

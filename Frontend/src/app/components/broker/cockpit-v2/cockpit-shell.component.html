@@ -247,11 +247,7 @@
           class="action-button resume"
           data-testid="action-resume"
           [disabled]="!resume.enabled || busyAction() !== null || localTransportStale()"
-          [attr.title]="
-            localTransportStale()
-              ? 'TRANSPORT_STALE'
-              : (resume.disabled_reason_code ?? 'Resume')
-          "
+          [attr.title]="actionButtonTooltip('resume', 'Resume')"
           (click)="dispatchResume()"
         >
           Resume
@@ -261,11 +257,7 @@
           class="action-button pause"
           data-testid="action-pause"
           [disabled]="!pause.enabled || busyAction() !== null || localTransportStale()"
-          [attr.title]="
-            localTransportStale()
-              ? 'TRANSPORT_STALE'
-              : (pause.disabled_reason_code ?? 'Pause')
-          "
+          [attr.title]="actionButtonTooltip('pause', 'Pause')"
           (click)="dispatchPause()"
         >
           Pause
@@ -275,11 +267,7 @@
           class="action-button flatten-and-pause"
           data-testid="action-flatten-and-pause"
           [disabled]="!flatten.enabled || busyAction() !== null || localTransportStale()"
-          [attr.title]="
-            localTransportStale()
-              ? 'TRANSPORT_STALE'
-              : (flatten.disabled_reason_code ?? 'Flatten and pause')
-          "
+          [attr.title]="actionButtonTooltip('flatten_and_pause', 'Flatten and pause')"
           (click)="dispatchFlattenAndPause()"
         >
           Flatten and pause
@@ -293,11 +281,7 @@
               class="overflow-button stop"
               data-testid="action-stop"
               [disabled]="!stop.enabled || busyAction() !== null || localTransportStale()"
-              [attr.title]="
-                localTransportStale()
-                  ? 'TRANSPORT_STALE'
-                  : (stop.disabled_reason_code ?? 'Stop instance')
-              "
+              [attr.title]="actionButtonTooltip('stop', 'Stop instance')"
               (click)="dispatchStop()"
             >
               Stop instance…

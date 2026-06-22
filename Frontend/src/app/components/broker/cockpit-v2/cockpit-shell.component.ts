@@ -36,6 +36,7 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 
 import { projectAccountAttention } from './lib/account-summary-attention';
 import { ClockSync } from './lib/clock-sync';
+import { actionTooltip } from './lib/disabled-reason-copy';
 import {
   DEFAULT_INSTANCE_TAB_STATE,
   type InnerTab,
@@ -532,6 +533,25 @@ export class CockpitShellComponent {
 
   intentLabel(value: string | null | undefined): string {
     return value ?? 'UNKNOWN';
+  }
+
+  /** Compose the title tooltip for an action button using the shared
+   *  copy map (ADR-0013 §4 — presentation copy lookup keyed on a
+   *  closed server-authored enum). The cockpit must never render the
+   *  raw reason code to the operator — that was the F-002 audit
+   *  finding. */
+  actionButtonTooltip(
+    name: 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned',
+    fallbackLabel: string,
+  ): string {
+    const cap = this.status()?.operator_surface.actions?.[name] ?? null;
+    return actionTooltip({
+      enabled: cap?.enabled ?? false,
+      serverReasonCode: cap?.disabled_reason_code ?? null,
+      localTransportStale: this.localTransportStale(),
+      busy: this.busyAction() !== null,
+      fallbackLabel,
+    });
   }
 
   failingReadinessGates(): OperatorGate[] {
