@@ -31,7 +31,6 @@ import pytest
 
 from app.services.operator_capability import REASON_CODES
 
-
 SNAPSHOT_PATH = (
     Path(__file__).resolve().parents[2]
     / "app"
@@ -39,8 +38,27 @@ SNAPSHOT_PATH = (
     / "operator_reason_codes.snapshot.json"
 )
 
+# The Frontend-tree copy is committed alongside ``disabled-reason-copy.ts``.
+# In CI's host workdir (and on the dev host) both files are visible; in
+# the polygon-data-service container only the Python copy is mounted.
+# The cross-snapshot byte-equality test below skips when the Frontend
+# copy is not visible (container-local) and runs (with assertion) when
+# both are reachable (CI host, developer host).
+FRONTEND_SNAPSHOT_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "Frontend"
+    / "src"
+    / "app"
+    / "components"
+    / "broker"
+    / "cockpit-v2"
+    / "lib"
+    / "operator-reason-codes.snapshot.json"
+)
+
 
 def test_snapshot_file_exists() -> None:
+    """The committed Python-tree snapshot file must exist."""
     assert SNAPSHOT_PATH.exists(), (
         f"snapshot not found at {SNAPSHOT_PATH} — regenerate via "
         "PythonDataService/scripts/regenerate_operator_reason_codes_snapshot.py"
@@ -92,4 +110,37 @@ def test_snapshot_has_required_keys(required_key: str) -> None:
     assert required_key in snapshot, (
         f"snapshot missing required key '{required_key}' — regenerate via "
         "`python -m scripts.regenerate_operator_reason_codes_snapshot`."
+    )
+
+
+def test_frontend_and_python_snapshots_are_byte_identical() -> None:
+    """Drift gap closure (CX-1).
+
+    The original design wrote two snapshots and let each side anchor to
+    its own copy. That admits a partial-regeneration drift: if a
+    developer regenerates only one half (or hand-edits one to pass a
+    failing test), both Vitest and pytest stay green but the cockpit is
+    missing copy for a server-emitted code.
+
+    This test asserts the two committed snapshot files are byte-
+    identical. The regenerate script writes them identically; this test
+    catches any subsequent hand-edit or partial regen.
+
+    Skipped inside the polygon-data-service container because the
+    Frontend tree is not mounted there. Active in CI host context and
+    on the developer host where the full repo checkout is present.
+    """
+    if not FRONTEND_SNAPSHOT_PATH.exists():
+        pytest.skip(
+            f"Frontend snapshot not visible at {FRONTEND_SNAPSHOT_PATH} — "
+            "this test runs in CI host / developer host contexts where the "
+            "full repo checkout is available."
+        )
+    py_bytes = SNAPSHOT_PATH.read_bytes()
+    fe_bytes = FRONTEND_SNAPSHOT_PATH.read_bytes()
+    assert py_bytes == fe_bytes, (
+        "Python snapshot and Frontend snapshot have drifted. Regenerate "
+        "both via `python -m scripts.regenerate_operator_reason_codes_snapshot` "
+        "to restore byte-equality (the writer is deterministic and writes "
+        "both files identically)."
     )

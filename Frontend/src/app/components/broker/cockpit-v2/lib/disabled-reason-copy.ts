@@ -136,10 +136,13 @@ const LOCAL_REASON_COPY: Record<LocalReasonCode, string> = {
  *  diagnosable per run-prompt §9.4 (no silent generic-success copy). */
 export function disabledReasonCopy(code: string | null | undefined): string | null {
   if (code === null || code === undefined || code === '') return null;
-  if (code in OPERATOR_REASON_COPY) {
+  // Own-property checks (not the `in` operator) so we don't match
+  // prototype-chain keys like ``toString`` or ``constructor`` and
+  // skip the unknown-code fallback for non-reason strings.
+  if (Object.prototype.hasOwnProperty.call(OPERATOR_REASON_COPY, code)) {
     return OPERATOR_REASON_COPY[code as OperatorReasonCode];
   }
-  if (code in LOCAL_REASON_COPY) {
+  if (Object.prototype.hasOwnProperty.call(LOCAL_REASON_COPY, code)) {
     return LOCAL_REASON_COPY[code as LocalReasonCode];
   }
   // Unknown / server-introduced code we don't have copy for yet. Keep

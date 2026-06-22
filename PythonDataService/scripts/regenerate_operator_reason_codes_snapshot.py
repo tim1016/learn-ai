@@ -41,11 +41,14 @@ JSON output (sorted code array, deterministic key order).
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Final
 
 from app.services.operator_capability import REASON_CODES
+
+logger = logging.getLogger(__name__)
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 
@@ -102,6 +105,13 @@ def build_snapshot() -> dict[str, object]:
 
 
 def _write(path: Path, snapshot: dict[str, object]) -> None:
+    """Atomically write ``snapshot`` as pretty-printed JSON to ``path``.
+
+    Ensures parent directories exist, preserves the dict's insertion
+    order (so the ``$comment`` / ``generated_by`` / ``source_files`` /
+    ``codes`` keys appear in the order the snapshot writer chose), and
+    appends a trailing newline so the file is git-clean.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(snapshot, indent=2, sort_keys=False) + "\n"
     path.write_text(text, encoding="utf-8")
@@ -116,9 +126,11 @@ def write_snapshots() -> tuple[Path, Path]:
 
 
 def main() -> int:
+    """CLI entry point — regenerate both snapshot copies."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     py_path, fe_path = write_snapshots()
-    print(f"wrote {py_path}")
-    print(f"wrote {fe_path}")
+    logger.info("wrote snapshot", extra={"path": str(py_path)})
+    logger.info("wrote snapshot", extra={"path": str(fe_path)})
     return 0
 
 

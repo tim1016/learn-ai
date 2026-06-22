@@ -57,7 +57,7 @@ Update the existing cockpit-shell spec that asserted `title === 'BROKER_SAFETY_U
 
 ## Regression coverage
 
-- `disabled-reason-copy.spec.ts` — 12 tests including the closed-vocabulary parity.
+- `disabled-reason-copy.spec.ts` — 12 tests at this finding's first commit, including the closed-vocabulary parity. Later expanded by R-001-F4 (snapshot-load assertion) and the CR-6 prototype-chain regression batch; see the spec's current `describe`/`it` count for the live total.
 - `cockpit-shell.component.spec.ts` — updated assertions on resume tooltip and transport-stale tooltip (now operator language).
 
 ## Status

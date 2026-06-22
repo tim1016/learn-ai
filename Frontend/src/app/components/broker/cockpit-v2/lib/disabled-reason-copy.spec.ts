@@ -102,6 +102,24 @@ describe('disabledReasonCopy', () => {
     // immediately catchable.
     expect(copy).toContain('SOMETHING_NEW_THE_SERVER_ADDED');
   });
+
+  it.each([
+    ['toString'],
+    ['constructor'],
+    ['hasOwnProperty'],
+    ['__proto__'],
+    ['valueOf'],
+  ])(
+    'falls back to the unknown-code path for prototype-chain key %s (CR-6)',
+    (key) => {
+      // The `in` operator would match these on Object.prototype and
+      // skip the fallback. Own-property checks must not.
+      const copy = disabledReasonCopy(key);
+      expect(copy).toBeTruthy();
+      expect(copy).toContain(key);
+      expect(copy?.toLowerCase()).toContain('unrecognized');
+    },
+  );
 });
 
 describe('actionTooltip composition', () => {

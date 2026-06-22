@@ -52,8 +52,9 @@ Below: only the **pinned** cells in the spec suite. Where a cell is "pinned by t
 | CONNECTED → no banner, dispatches allowed | "hides the control-plane banner when the state is CONNECTED" |
 | RETRYING → ATTENTION banner with attempt count | "renders a RETRYING banner with attempt count and server-authored notice" |
 | UNREACHABLE / AUTH_FAILED / PROTOCOL_ERROR / INCOMPATIBLE_CONTRACT → LAST-KNOWN demoted banner | "renders a LAST-KNOWN demoted banner for %s" parametrized over the four states |
-| Demoted → action buttons refuse local dispatch with operator-language copy | "transport-stale tooltip is operator-language, not raw 'TRANSPORT_STALE' code" (updated by P2-002) |
-| Demoted → `dispatchPause` no-ops with mutation error | "dispatchPause refuses to fire when transport is stale and surfaces a mutation error" |
+| Demoted → Resume + Flatten-and-pause refuse local dispatch with operator-language copy (ADR-0004 D asymmetry — they require trustworthy live actuation) | "disables Resume + Flatten when control_plane is RETRYING (ADR-0004 D asymmetry)" |
+| Demoted → durable Pause + Stop + Mark-poisoned remain available (ADR-0004 D fail-safe — removing the operator's intent controls during a control-plane incident would be less safe) | "leaves Pause + Stop enabled when control_plane is RETRYING (ADR-0004 D fail-safe)" |
+| Demoted → durable Pause dispatch fires through; server re-evaluates eligibility before the durable write | "dispatchPause fires through transport-stale (durable Pause is fail-safe)" |
 
 ### Runtime freshness × stale reason codes (PRD #619-B7)
 

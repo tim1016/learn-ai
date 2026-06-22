@@ -112,7 +112,7 @@ You do not stop for ambiguity. When you have to pick between defensible options:
 
 The IBKR account plugged in is paper-only; nothing is at stake monetarily. Preflight is a misconfiguration-detection sanity check, not a money-risk gate.
 
-1. `curl http://localhost:8000/health` and the broker safety-verdict endpoint. Assert verdict ∈ {`PAPER_ONLY`, `UNSAFE`}. If `LIVE` or `SAFE_LIVE`: abort the run (write `docs/audits/bot-cockpit/run-aborted-2026-06-22.md` with reason, write `RUN-SUMMARY-2026-06-22.md` with `STATUS: ABORTED`, exit cleanly).
+1. `curl http://localhost:8000/health` and the broker safety-verdict endpoint. The current closed enum is {`PAPER_ONLY`, `UNSAFE`, `UNKNOWN`}; the audit may proceed only on `PAPER_ONLY`. If the verdict is `UNSAFE` or `UNKNOWN`, or returns any other value: abort the run (write `docs/audits/bot-cockpit/run-aborted-2026-06-22.md` with reason, write `RUN-SUMMARY-2026-06-22.md` with `STATUS: ABORTED`, exit cleanly). Fail-closed: an unknown verdict aborts.
 2. Inspect env for `IBKR_LIVE_TRADING_OPT_IN=true` / `LIVE_TRADING=1` / equivalent. If any are set: abort.
 3. `podman compose ps` — confirm all 5 services (`my-frontend`, `my-backend`, `polygon-data-service`, `my-postgres`, `my-redis`) are `Up`. If not, attempt `./restart.sh` once; if still not all `Up` after 5 min, abort. Backend listens on **port 5050** (not 5000), frontend on 4200, python on 8000, postgres on 5432, redis on 6379.
 4. List existing broker instances; record their IDs. Any instance with `live_binding_present=true` against a non-paper account: abort.
