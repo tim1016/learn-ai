@@ -48,7 +48,6 @@ from app.lean_sidecar.manifest import (
     StagedDataManifest,
     WindowMs,
     hash_staged_files,
-    now_ms_utc,
     sha256_file,
     sha256_text,
     write_manifest,
@@ -83,6 +82,7 @@ from app.services.lean_sidecar_persistence import (
     build_persist_payload,
     persist_via_dotnet,
 )
+from app.utils.timestamps import now_ms_utc
 
 # Phase 5b — selector for which trusted-sample source the orchestrator
 # stages when the caller does not provide their own ``algorithm_source``.

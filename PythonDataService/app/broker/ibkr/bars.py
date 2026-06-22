@@ -34,6 +34,7 @@ from typing import Literal
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
 from app.broker.ibkr.models import IbkrMinuteBar
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,6 @@ class LiveBarCounters:
 
     skipped_duplicate: int = 0
     applied_correction: int = 0
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def _to_utc_ms(value: datetime | int | float) -> int:
@@ -134,7 +131,7 @@ class _MinuteAccumulator:
             low=self.low,
             close=self.close,
             volume=self.volume,
-            fetched_at_ms=_now_ms(),
+            fetched_at_ms=now_ms_utc(),
         )
 
 
@@ -329,7 +326,7 @@ async def stream_raw_5s_bars(
                 low=contribution.low,
                 close=contribution.close,
                 volume=contribution.volume,
-                fetched_at_ms=_now_ms(),
+                fetched_at_ms=now_ms_utc(),
             )
     finally:
         try:

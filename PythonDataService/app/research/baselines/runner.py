@@ -58,9 +58,9 @@ from app.research.runs import (
     run_strategy_spec,
     save_run,
 )
-from app.research.runs.ledger import now_ms_utc
 from app.research.runs.result import RunMetrics
 from app.research.runs.storage import RunNotFoundError, load_run
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 

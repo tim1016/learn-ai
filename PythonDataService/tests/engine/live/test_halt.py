@@ -17,10 +17,10 @@ from app.engine.live.halt import (
     PoisonedHaltReason,
     PoisonedHaltTrigger,
     is_run_poisoned,
-    now_ms_utc,
     read_poisoned_flag,
     write_poisoned_flag,
 )
+from app.utils.timestamps import now_ms_utc
 
 # ──────────────────────────── PoisonedHaltReason ─────────────────────
 

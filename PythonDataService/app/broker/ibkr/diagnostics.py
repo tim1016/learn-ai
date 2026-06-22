@@ -20,7 +20,6 @@ import asyncio
 import contextlib
 import logging
 import socket
-from datetime import UTC, datetime
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import (
@@ -32,15 +31,12 @@ from app.broker.ibkr.client import (
 )
 from app.broker.ibkr.config import LIVE_PORTS, PAPER_PORTS, get_settings
 from app.broker.ibkr.models import DiagnosticCheck, DiagnosticReportActive
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 
 TCP_PROBE_TIMEOUT_S = 2.0
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def _check_settings_mode() -> DiagnosticCheck:
@@ -400,7 +396,7 @@ async def run_diagnostics() -> DiagnosticReportActive:
     return DiagnosticReportActive(
         overall_status=_aggregate_status(checks),  # type: ignore[arg-type]
         checks=checks,
-        fetched_at_ms=_now_ms(),
+        fetched_at_ms=now_ms_utc(),
     )
 
 

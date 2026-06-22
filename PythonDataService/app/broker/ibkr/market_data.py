@@ -46,16 +46,13 @@ from app.broker.ibkr.models import (
     _coerce_optional_float,
     _coerce_quote,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 
 GENERIC_TICK_LIST = "100,101,106"  # bid/ask sizes + historical IV
 DEFAULT_DEBOUNCE_S = 0.25
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def _coerce_size(value) -> int | None:
@@ -160,7 +157,7 @@ def _ticker_to_quote(
                 symbol,
                 extra={"action": "naive_ticker_time"},
             )
-        ts_ms = _now_ms()
+        ts_ms = now_ms_utc()
 
     return IbkrOptionQuote(
         symbol=symbol,
@@ -265,7 +262,7 @@ async def stream_option_chain(
                 expiry_ms=expiry_ms,
                 underlying_price=underlying_price,
                 quotes=quotes,
-                as_of_ms=_now_ms(),
+                as_of_ms=now_ms_utc(),
             )
     finally:
         # Cancel every subscription so we don't leak market-data lines.

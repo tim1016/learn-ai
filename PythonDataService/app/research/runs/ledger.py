@@ -26,7 +26,6 @@ import hashlib
 import logging
 import os
 import subprocess
-import time
 from datetime import date as Date
 from datetime import timedelta
 from pathlib import Path
@@ -35,6 +34,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.research.runs.window import WindowSummary
+from app.utils.timestamps import now_ms_utc
 
 ENGINE_VERSION = "0.1.0"
 """Bumped on engine semantic change. See ``docs/references/run-ledger.md``."""
@@ -85,11 +85,6 @@ def _capture_git_commit() -> str:
         logger.debug("[RUNS] git rev-parse HEAD unavailable: %s", exc)
     _GIT_COMMIT_CACHE = "unknown"
     return _GIT_COMMIT_CACHE
-
-
-def now_ms_utc() -> int:
-    """Return current wall-clock time as ``int64 ms`` since Unix epoch UTC."""
-    return int(time.time() * 1000)
 
 
 def _data_root_paths() -> list[Path]:

@@ -25,12 +25,12 @@ from app.lean_sidecar.manifest import (
     StagedDataManifest,
     WindowMs,
     hash_staged_files,
-    now_ms_utc,
     sha256_bytes,
     sha256_file,
     sha256_text,
     write_manifest,
 )
+from app.utils.timestamps import now_ms_utc
 
 
 def _default_data_policy() -> DataPolicy:

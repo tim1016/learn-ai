@@ -17,7 +17,7 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -314,12 +314,3 @@ def hash_staged_files(root: Path, paths: Iterable[Path]) -> tuple[StagedDataFile
             )
         )
     return tuple(out)
-
-
-def now_ms_utc() -> int:
-    """Return current wall-clock as int64 ms UTC.
-
-    The only sanctioned way to produce a fresh ms timestamp inside the
-    sidecar. Per the rule file, ``datetime.utcnow`` is banned.
-    """
-    return int(datetime.now(UTC).timestamp() * 1000)

@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
 from app.broker.ibkr.contracts import expiry_ms_to_yyyymmdd
@@ -33,6 +32,7 @@ from app.broker.ibkr.models import (
     IbkrOrderSpec,
     OrderEventType,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +126,6 @@ class OrderRefusedDuringReconnectRecoveryError(OrderRefusedError):
 
 class OrderNotFoundError(BrokerError):
     """Cancel or lookup targeted an order that IBKR doesn't know about."""
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def _event_symbol(trade) -> str | None:
@@ -497,7 +493,7 @@ async def _place_and_build_ack(
         order_type=spec.order_type,
         limit_price=spec.limit_price,
         status=order_status,
-        placed_at_ms=_now_ms(),
+        placed_at_ms=now_ms_utc(),
     )
 
 
@@ -537,7 +533,7 @@ def _trade_to_open_order(
             if getattr(status_obj, "avgFillPrice", 0.0)
             else None
         ),
-        fetched_at_ms=_now_ms(),
+        fetched_at_ms=now_ms_utc(),
     )
 
 
@@ -668,7 +664,7 @@ def _trade_to_status_event(
         order_type=_event_order_type(trade),
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
-        ts_ms=_now_ms(),
+        ts_ms=now_ms_utc(),
     )
 
 
@@ -755,7 +751,7 @@ def _fill_to_event(
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
-        ts_ms=_now_ms(),
+        ts_ms=now_ms_utc(),
     )
 
 
@@ -950,7 +946,7 @@ def _fill_to_recovery_event(
         last_fill_price=price,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
-        ts_ms=_now_ms(),
+        ts_ms=now_ms_utc(),
     )
 
 

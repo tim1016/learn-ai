@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import enum
 import json
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -190,11 +189,6 @@ def read_poisoned_flag(run_dir: Path) -> PoisonedHaltReason | None:
 def is_run_poisoned(run_dir: Path) -> bool:
     """Cheap presence check — used by callers that don't need the reason payload."""
     return (run_dir / POISONED_FLAG_FILENAME).exists()
-
-
-def now_ms_utc() -> int:
-    """Stable ``int64 ms UTC`` clock helper exposed for halt-callers and tests."""
-    return int(time.time() * 1000)
 
 
 # ──────────────────────────── Detection functions ────────────────────

@@ -57,7 +57,6 @@ from app.engine.live.halt import (
     PoisonedHaltTrigger,
     check_lost_fill,
     check_outside_mutation,
-    now_ms_utc,
     write_poisoned_flag,
 )
 from app.engine.live.live_context import LiveContext
@@ -76,6 +75,7 @@ from app.engine.live.runtime_producer import (
     build_control_plane_block_from_lease,
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 

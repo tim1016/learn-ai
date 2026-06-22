@@ -32,7 +32,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.contracts import (
@@ -50,16 +49,13 @@ from app.broker.ibkr.models import (
     IbkrSurfaceSnapshot,
     OptionRight,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_DEBOUNCE_S = 0.25
 DEFAULT_MAX_LINES = 100
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 async def stream_option_surface(
@@ -189,7 +185,7 @@ async def stream_option_surface(
                 underlying_price=underlying_price,
                 expiries=expiry_groups,
                 line_count=projected,
-                as_of_ms=_now_ms(),
+                as_of_ms=now_ms_utc(),
             )
     finally:
         # Cancel every subscription so we don't leak market-data lines.

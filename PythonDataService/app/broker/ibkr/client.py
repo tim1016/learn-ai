@@ -22,18 +22,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.ibkr.keepalive import apply_tcp_keepalive
 from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 # TWS/IB connectivity error codes that the ``errorEvent`` handler reacts to.
@@ -261,7 +257,7 @@ class IbkrClient:
         # (``build_broker_health``) maxes it against the monitor's transition
         # timestamp so the wire-level ``last_transition_ms`` is the most
         # recent of either side.
-        self._last_event_ms: int = _now_ms()
+        self._last_event_ms: int = now_ms_utc()
         # Operator-intended connection state. The AutoReconnectMonitor only
         # acts on observed drops when this is True; ``POST /disconnect`` sets
         # it False so the operator's "off" sticks, and a startup with
@@ -279,7 +275,7 @@ class IbkrClient:
         )
         payload = {
             "event_type": event_type,
-            "ts_ms_utc": _now_ms(),
+            "ts_ms_utc": now_ms_utc(),
             "mode": self._settings.mode,
             "host": self._settings.host,
             "port": self._settings.port,
@@ -336,7 +332,7 @@ class IbkrClient:
             return
         if errorCode in _DATA_FARM_DEGRADED_CODES:
             if not self._data_farm_degraded:
-                self._last_event_ms = _now_ms()
+                self._last_event_ms = now_ms_utc()
             self._data_farm_degraded = True
             logger.warning(
                 "IBKR data farm degraded",
@@ -349,7 +345,7 @@ class IbkrClient:
             return
         if errorCode in _DATA_FARM_OK_CODES:
             if self._data_farm_degraded:
-                self._last_event_ms = _now_ms()
+                self._last_event_ms = now_ms_utc()
             self._data_farm_degraded = False
             logger.info(
                 "IBKR data farm restored",
@@ -367,7 +363,7 @@ class IbkrClient:
             if not was_lost:
                 # State transition (healthy → soft_lost) — stamp at the
                 # mutation site so ``health()`` stays a pure read.
-                self._last_event_ms = _now_ms()
+                self._last_event_ms = now_ms_utc()
             logger.warning(
                 "IBKR connectivity lost",
                 extra={
@@ -380,7 +376,7 @@ class IbkrClient:
         if errorCode in _CONNECTIVITY_RESTORED_CODES:
             if self._connection_lost:
                 # Transition (soft_lost → healthy) — same rationale as above.
-                self._last_event_ms = _now_ms()
+                self._last_event_ms = now_ms_utc()
             self._connection_lost = False
             if errorCode in _SUBSCRIPTIONS_STALE_CODES:
                 self._subscriptions_stale = True
@@ -496,7 +492,7 @@ class IbkrClient:
         self._data_farm_degraded = False
         # State transition (anything → connected) — stamp at the mutation
         # site so ``health()`` stays a pure read.
-        self._last_event_ms = _now_ms()
+        self._last_event_ms = now_ms_utc()
         logger.info(
             "[STEP 3/3] IBKR connected: account=%s is_paper=%s server_version=%s",
             account_id,
@@ -515,7 +511,7 @@ class IbkrClient:
             self._ib.disconnect()
         self._connected_account = None
         if was_connected:
-            self._last_event_ms = _now_ms()
+            self._last_event_ms = now_ms_utc()
 
     async def probe(self, *, timeout_s: float = 4.0) -> None:
         """Bounded app-level liveness probe.
@@ -535,13 +531,13 @@ class IbkrClient:
                 "BROKER_PROBE_FAILED", probe_error=self._last_probe_error
             )
             raise
-        self._last_probe_ms = _now_ms()
+        self._last_probe_ms = now_ms_utc()
         self._last_probe_error = None
         self._record_broker_event("BROKER_PROBE_OK", probe_ts_ms=self._last_probe_ms)
 
     def mark_recovery_succeeded(self) -> None:
         self._subscriptions_stale = False
-        self._last_recovery_ms = _now_ms()
+        self._last_recovery_ms = now_ms_utc()
         self._recovery_error = None
         self._record_broker_event(
             "BROKER_RECOVERY_OK", recovery_ts_ms=self._last_recovery_ms
@@ -549,7 +545,7 @@ class IbkrClient:
 
     def mark_recovery_failed(self, exc: Exception) -> None:
         self._recovery_error = f"{type(exc).__name__}: {exc}"
-        self._last_event_ms = _now_ms()
+        self._last_event_ms = now_ms_utc()
         self._record_broker_event(
             "BROKER_RECOVERY_FAILED", recovery_error=self._recovery_error
         )
@@ -640,7 +636,7 @@ class IbkrClient:
             account_id=self._connected_account,
             is_paper=(_is_paper_account(self._connected_account) if self._connected_account else None),
             server_version=sv,
-            fetched_at_ms=_now_ms(),
+            fetched_at_ms=now_ms_utc(),
             connection_state=self.connection_state,
             connection_lost=self._connection_lost,
             connectivity_lost_count=self._connectivity_lost_count,

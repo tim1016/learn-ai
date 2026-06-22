@@ -218,10 +218,10 @@ def _write_poisoned_flag(
     from app.engine.live.halt import (
         PoisonedHaltReason,
         PoisonedHaltTrigger,
-        now_ms_utc,
         write_poisoned_flag,
     )
     from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError
+    from app.utils.timestamps import now_ms_utc
 
     last_clean_bar_close_ms = 0
     try:

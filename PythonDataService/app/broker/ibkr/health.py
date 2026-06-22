@@ -18,7 +18,6 @@ endpoints in ``routers.broker``.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from app.broker.ibkr.config import get_settings
@@ -27,14 +26,11 @@ from app.broker.ibkr.models import (
     BrokerSafetyVerdict,
     IbkrConnectionHealth,
 )
+from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     from app.broker.ibkr.auto_reconnect_monitor import AutoReconnectMonitor
     from app.broker.ibkr.client import IbkrClient
-
-
-def _now_ms() -> int:
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 def build_broker_health(
@@ -93,7 +89,7 @@ def synthetic_disconnected_health(
     the model is a one-line edit there, not three.
     """
     s = get_settings()
-    now_ms = _now_ms()
+    now_ms = now_ms_utc()
     return IbkrConnectionHealth(
         mode=s.mode,
         host=s.host,
