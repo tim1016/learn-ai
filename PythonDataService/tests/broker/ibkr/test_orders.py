@@ -870,3 +870,34 @@ async def test_place_paper_order_proceeds_when_no_sweep_active(
     ack = await place_paper_order(client, _spec())
     assert ack.order_id == 42
     client.ib.placeOrder.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_executions_for_reconnect_recovery_times_out_on_hang(monkeypatch) -> None:
+    """Slice 3 follow-up: a hung ``reqExecutionsAsync`` (half-open
+    Gateway after a reconnect) must time out into a ``BrokerError``
+    instead of awaiting forever.
+
+    Before the fix the sweep would pin the publisher's
+    ``_reconnect_recovery_active`` flag (held in a ``try/finally``
+    around the unbounded await) and every subsequent
+    ``place_paper_order`` would stay refused until process restart.
+    The ``BrokerError`` surfaces cleanly so the sweep's ``finally``
+    lifts the halt.
+    """
+    from app.broker.ibkr import orders as orders_mod
+    from app.broker.ibkr.client import BrokerError
+    from app.broker.ibkr.orders import executions_for_reconnect_recovery
+
+    monkeypatch.setattr(orders_mod, "_RECOVERY_EXECUTIONS_TIMEOUT_S", 0.01)
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[])
+
+    async def _hanging() -> list:
+        await asyncio.sleep(1.0)  # never completes within the timeout
+        return []
+
+    client.ib.reqExecutionsAsync = _hanging
+
+    with pytest.raises(BrokerError, match="timed out"):
+        await executions_for_reconnect_recovery(client)

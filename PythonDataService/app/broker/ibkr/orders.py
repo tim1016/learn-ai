@@ -45,6 +45,21 @@ logger = logging.getLogger(__name__)
 # whole loop. Per .claude/rules/python.md: "Timeouts on all external calls."
 _QUALIFY_TIMEOUT_S = 10.0
 
+# Bound on the reconnect-recovery executions fetch. ``reqExecutionsAsync``
+# completes only when IBKR fires ``execDetailsEnd``; on a half-open or
+# silent-after-reconnect connection that callback never arrives and the
+# await would hang. The sweep is invoked from the
+# ``AutoReconnectMonitor`` recovery chain *and* holds the per-publisher
+# submission halt (``_reconnect_recovery_active``) for the duration of
+# the await — so an unbounded hang would leave every instance's
+# ``place_paper_order`` refused until process restart. 30s is generous:
+# a healthy Gateway returns the day's executions in well under a second;
+# anything longer signals a degraded connection that the sweep cannot
+# usefully complete on. On timeout we raise ``BrokerError`` so the
+# publisher's ``finally`` clears the halt and the next reconnect cycle
+# can retry the sweep cleanly.
+_RECOVERY_EXECUTIONS_TIMEOUT_S = 30.0
+
 
 # Process-level idempotency cache: maps client_order_id → previously-issued
 # IbkrOrderAck. Survives across requests within a single uvicorn worker;
@@ -785,7 +800,23 @@ async def executions_for_reconnect_recovery(
     if account_id is None:
         raise BrokerError("connected client has no account_id")
 
-    fills = await client.ib.reqExecutionsAsync()
+    # Bounded fetch: a hung ``reqExecutionsAsync`` would pin the
+    # publisher's submission halt indefinitely (the sweep's ``finally``
+    # only runs when this await returns or raises). See
+    # ``_RECOVERY_EXECUTIONS_TIMEOUT_S`` for the rationale on 30s.
+    try:
+        fills = await asyncio.wait_for(
+            client.ib.reqExecutionsAsync(),
+            timeout=_RECOVERY_EXECUTIONS_TIMEOUT_S,
+        )
+    except TimeoutError as exc:
+        raise BrokerError(
+            f"IBKR reqExecutionsAsync timed out after "
+            f"{_RECOVERY_EXECUTIONS_TIMEOUT_S:.0f}s; the Gateway connection "
+            "may be half-open. Reconnect-recovery sweep aborted; the "
+            "publisher's submission halt has been cleared so the next "
+            "reconnect cycle can retry the sweep."
+        ) from exc
 
     # Index existing trades by orderId / permId so we can recover the
     # original order_type for each fill. Trade objects carry the Order

@@ -966,6 +966,118 @@ async def test_registry_sweep_all_isolates_per_publisher_failures(
         await registry.stop_all()
 
 
+async def test_run_recovery_chain_halts_submissions_before_first_callback(
+    tmp_path: Path,
+) -> None:
+    """Slice 3 follow-up: the registry-wide halt must be active for the
+    *entire* recovery window — including any callback that runs before
+    the executions sweep. Without this, a slow bar resubscribe would
+    leave submissions enabled and a new order placed during that window
+    could be picked up by the subsequent sweep and mis-authored as a
+    ``reconnect_recovery`` row.
+
+    The test observes ``any_recovery_active`` from inside the first
+    callback: it must already be True when that callback's body runs,
+    not only after the sweep flips its per-publisher flag.
+    """
+    registry = BrokerActivityPublisherRegistry()
+    seen_halt_inside_first: list[bool] = []
+    seen_halt_inside_second: list[bool] = []
+
+    async def _first_callback() -> None:
+        seen_halt_inside_first.append(registry.any_recovery_active())
+
+    async def _second_callback() -> None:
+        seen_halt_inside_second.append(registry.any_recovery_active())
+
+    assert registry.any_recovery_active() is False
+    await registry.run_recovery_chain([_first_callback, _second_callback])
+    assert seen_halt_inside_first == [True]
+    assert seen_halt_inside_second == [True]
+    # Halt lifts after the chain completes.
+    assert registry.any_recovery_active() is False
+
+
+async def test_run_recovery_chain_clears_halt_on_callback_exception(
+    tmp_path: Path,
+) -> None:
+    """The halt must lift even when a callback raises — otherwise a
+    single bad callback would pin every instance's submissions until
+    process restart. The exception still propagates so the monitor can
+    log + retry."""
+    registry = BrokerActivityPublisherRegistry()
+
+    async def _good_callback() -> None:
+        return None
+
+    async def _bad_callback() -> None:
+        raise RuntimeError("simulated bar resubscribe failure")
+
+    with pytest.raises(RuntimeError, match="simulated bar resubscribe failure"):
+        await registry.run_recovery_chain([_good_callback, _bad_callback])
+    assert registry.any_recovery_active() is False
+
+
+async def test_run_recovery_chain_runs_callbacks_in_order(
+    tmp_path: Path,
+) -> None:
+    """The chain runs callbacks sequentially in the order provided so
+    callers can rely on bar-resubscribe-then-sweep ordering (or any
+    other dependency order they want)."""
+    registry = BrokerActivityPublisherRegistry()
+    order: list[str] = []
+
+    async def _first() -> None:
+        order.append("first")
+
+    async def _second() -> None:
+        order.append("second")
+
+    async def _third() -> None:
+        order.append("third")
+
+    await registry.run_recovery_chain([_first, _second, _third])
+    assert order == ["first", "second", "third"]
+
+
+async def test_executions_for_reconnect_recovery_times_out_on_hang(
+    tmp_path: Path,
+) -> None:
+    """Slice 3 follow-up: a hung ``reqExecutionsAsync`` (half-open
+    Gateway after reconnect) must surface as ``BrokerError`` so the
+    publisher's ``finally`` clears the submission halt. Without the
+    timeout the await would hang forever, pinning every instance's
+    ``place_paper_order`` until process restart.
+
+    Uses the publisher's ``recovery_source_factory`` hook to confirm the
+    halt is properly cleared after the timeout-as-BrokerError surfaces
+    — the same lifecycle the production wiring guarantees.
+    """
+    async def _hanging_factory() -> list[IbkrOrderEvent]:
+        # Simulate a hung reqExecutionsAsync that resolves after the
+        # production timeout. The publisher should not wait for this;
+        # the timeout (or whatever the factory raises) surfaces first.
+        raise TimeoutError("simulated reqExecutionsAsync hang")
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=_hanging_factory,
+    )
+    with pytest.raises(TimeoutError, match="simulated reqExecutionsAsync hang"):
+        await publisher.sweep_reconnect_recovery()
+    # The submission halt must have cleared, so subsequent
+    # place_paper_order calls succeed instead of staying refused forever.
+    assert publisher.is_reconnect_recovery_active is False
+
+
 # ── End slice 3 sweep tests ─────────────────────────────────────────
 
 

@@ -658,6 +658,23 @@ class BrokerActivityPublisherRegistry:
     def __init__(self) -> None:
         self._by_instance: dict[str, BrokerActivityPublisher] = {}
         self._lock = asyncio.Lock()
+        # Slice 3 follow-up — process-wide reconnect-halt flag that
+        # covers the *entire* post-reconnect recovery window, not just
+        # the executions-sweep slice. The per-publisher
+        # ``_reconnect_recovery_active`` only flips inside
+        # ``sweep_reconnect_recovery`` (under that publisher's lock),
+        # so any recovery callback that runs before the sweep — notably
+        # the bar aggregator's ``resubscribe_all`` — would leave
+        # submissions enabled. Without this outer flag a slow bar
+        # resubscribe lets a new order land mid-recovery and the
+        # subsequent sweep authors it as a ``reconnect_recovery`` row,
+        # which is the race the slice is meant to prevent.
+        # ``run_recovery_chain`` sets this True before the first
+        # callback fires and clears it in ``finally`` after the last
+        # completes, so callback order on the
+        # ``AutoReconnectMonitor.recovery_callbacks`` chain no longer
+        # affects halt coverage.
+        self._reconnect_in_progress: bool = False
 
     async def register(
         self,
@@ -702,16 +719,54 @@ class BrokerActivityPublisherRegistry:
     # ── reconnect recovery (slice 3 / ADR 0011 amendment) ─────────────
 
     def any_recovery_active(self) -> bool:
-        """True iff any registered publisher is mid-sweep.
+        """True iff the process is mid reconnect-recovery.
 
         ``place_paper_order`` consults this before forwarding the
-        submission to IBKR — a positive answer means at least one
-        instance's broker connection is replaying executions and a new
-        order would race the sweep. Pure read, no locking required:
-        callers only need eventual consistency between "sweep started"
-        and "next submit attempt".
+        submission to IBKR — a positive answer means the broker
+        connection is in the post-reconnect recovery window and a new
+        order would race either the bar resubscribe or the executions
+        sweep. Pure read, no locking required: callers only need
+        eventual consistency between "recovery started" and "next submit
+        attempt".
+
+        Two contributors are OR-ed:
+
+        - ``_reconnect_in_progress`` — set by ``run_recovery_chain`` for
+          the entire post-reconnect window (covers every callback in the
+          chain, including pre-sweep work like bar resubscribe).
+        - Any publisher's ``is_reconnect_recovery_active`` — set inside
+          ``sweep_reconnect_recovery`` so a sweep invoked outside the
+          chain (e.g. tests, manual triggers) still gates submissions.
         """
+        if self._reconnect_in_progress:
+            return True
         return any(p.is_reconnect_recovery_active for p in self._by_instance.values())
+
+    async def run_recovery_chain(
+        self,
+        callbacks: list[Callable[[], Awaitable[None]]],
+    ) -> None:
+        """Run every post-reconnect callback under a process-wide
+        submission halt.
+
+        Wraps the ``AutoReconnectMonitor.recovery_callbacks`` chain so
+        ``any_recovery_active()`` is True for the *entire* recovery
+        window, not just the executions-sweep slice. Without this, a
+        callback that runs before the sweep (e.g. the bar aggregator's
+        ``resubscribe_all``) would leave submissions enabled and a new
+        order placed during the resubscribe could be picked up by the
+        subsequent sweep and authored as a ``reconnect_recovery`` row.
+
+        Callback exceptions propagate after the halt is cleared — the
+        monitor decides whether to retry the chain. The ``finally``
+        guarantees the halt lifts even when a callback raises.
+        """
+        self._reconnect_in_progress = True
+        try:
+            for callback in callbacks:
+                await callback()
+        finally:
+            self._reconnect_in_progress = False
 
     async def sweep_all_for_recovery(self) -> dict[str, int]:
         """Run ``sweep_reconnect_recovery`` on every registered publisher.
