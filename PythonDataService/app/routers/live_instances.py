@@ -100,6 +100,7 @@ from app.schemas.live_runs import (
     SizingAuditRow,
 )
 from app.services.instance_context import InstanceContext, load_instance_context
+from app.services.mutation_attempt import MutationAttempt, MutationAttemptRepo
 from app.services.operator_capability import evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -335,6 +336,32 @@ def _resolve_evidence_run_dir(root: Path, live_binding: LiveBinding | None, runs
     if runs:
         return Path(runs[0]["run_dir"])
     return None
+
+
+def _mutation_attempt_root(live_runs_root: Path) -> Path:
+    """Artifact root for durable ``mutation_attempt`` records.
+
+    Sibling to ``live_runs/`` and ``live_state/`` under the artifacts
+    parent — same layout as the rest of 619's per-instance evidence.
+    """
+    return live_runs_root.parent / "mutation_attempts"
+
+
+def _resolve_latest_mutation(
+    live_runs_root: Path, strategy_instance_id: str
+) -> MutationAttempt | None:
+    """Read the most recent ``MutationAttempt`` for the instance.
+
+    Returns ``None`` when no attempts have been persisted (typical for
+    a freshly-deployed instance) or when the storage root is absent.
+    Malformed and forward-incompatible artifacts are also surfaced as
+    ``None`` per ``MutationAttemptRepo.latest_for`` semantics — the
+    action-conflict matrix treats absence and corruption identically:
+    no prior unresolved mutation to consider.
+    """
+    return MutationAttemptRepo(_mutation_attempt_root(live_runs_root)).latest_for(
+        strategy_instance_id
+    )
 
 
 def _resolve_runtime_freshness(
@@ -1326,6 +1353,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         live_binding,
         now_ms=observed_at_ms,
     )
+    latest_mutation = _resolve_latest_mutation(root, sid)
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1362,6 +1390,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             guard_state=guard_state,
             runtime_freshness=runtime_freshness,
             control_plane_state=control_plane_state,
+            latest_mutation=latest_mutation,
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,
@@ -1468,6 +1497,7 @@ async def _load_instance_context_for_router(sid: str) -> InstanceContext:
                 now_ms=observed_at_ms,
             )
         ),
+        resolve_latest_mutation_for=lambda _sid: _resolve_latest_mutation(root, _sid),
     )
 
 
@@ -1886,6 +1916,7 @@ async def set_instance_desired_state(
         desired_state=ctx.desired_state,
         guard_state=ctx.guard_state,
         runtime_freshness=ctx.runtime_freshness,
+        latest_mutation=ctx.latest_mutation,
     )
     if not gate.enabled:
         raise HTTPException(
@@ -2001,6 +2032,7 @@ async def flatten_and_pause_instance(
         live_binding=ctx.live_binding,
         owned_positions_empty=ctx.owned_positions_empty,
         runtime_freshness=ctx.runtime_freshness,
+        latest_mutation=ctx.latest_mutation,
     )
     if not gate.enabled:
         raise HTTPException(
@@ -2133,6 +2165,7 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
             live_binding=ctx.live_binding,
             poisoned=ctx.poisoned,
             runtime_freshness=ctx.runtime_freshness,
+            latest_mutation=ctx.latest_mutation,
         )
         if not capability.enabled:
             raise HTTPException(

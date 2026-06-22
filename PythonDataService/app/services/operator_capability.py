@@ -55,6 +55,7 @@ from app.schemas.live_runs import (
     LiveBinding,
     OperatorSurfaceActions,
 )
+from app.services.mutation_attempt import MutationAttempt
 from app.services.resume_guard_state import (
     RESUME_REASON_CODES,
     ResumeGuardState,
@@ -64,6 +65,28 @@ from app.services.resume_guard_state import (
 from app.services.runtime_freshness import RuntimeFreshness
 
 ActionName = Literal["resume", "pause", "stop", "flatten_and_pause", "mark_poisoned"]
+
+
+# PRD #619-D action-conflict matrix.  Reads as: "if the latest
+# mutation attempt for this instance was an unresolved ``prior``, then
+# evaluating any action in ``blocked_actions`` adds ``reason_code``
+# to the disabled-reasons list."  Priors not listed below (Pause,
+# Start, Mark-poisoned) never block any action that ``evaluate_action``
+# governs — Pause is goal-idempotent, Start blocks other Start /
+# Redeploy at the routing layer (619-D2 router-level enforcement is
+# left to a follow-up), Mark-poisoned is incident recovery.
+#
+# An attempt is "resolved" iff its ``dispatch_state`` is
+# ``EFFECT_CONFIRMED``.  Every other state — including the three
+# non-confirmed terminals (EFFECT_NOT_OBSERVED, NOT_PROVABLE,
+# EVIDENCE_CONFLICT) — means we cannot prove the prior mutation
+# completed and the matrix stays engaged until Reconcile (619-D3)
+# advances the attempt to EFFECT_CONFIRMED.
+_MUTATION_CONFLICT_MATRIX: dict[str, tuple[frozenset[ActionName], str]] = {
+    "stop": (frozenset({"resume", "stop"}), "MUTATION_UNRESOLVED_STOP"),
+    "flatten": (frozenset({"flatten_and_pause"}), "MUTATION_UNRESOLVED_FLATTEN"),
+    "resume": (frozenset({"resume"}), "MUTATION_UNRESOLVED_RESUME"),
+}
 
 
 # Closed reason-code vocabulary.  The ADR-0010 intent-state-pair
@@ -90,10 +113,39 @@ REASON_CODES: frozenset[str] = (
             # durable disabled_reasons[] surfacing lands in 619-D once
             # the mutation_attempt record is persisted.
             "OUTCOME_UNKNOWN",
+            # PRD #619-D action-conflict matrix.  Each code names the
+            # *prior* unresolved mutation whose presence is blocking
+            # this action; the cockpit operator-runbook entries (D5)
+            # cover the per-code next-step copy.  Reconcile (D3) is
+            # the resolution path.
+            "MUTATION_UNRESOLVED_START",
+            "MUTATION_UNRESOLVED_STOP",
+            "MUTATION_UNRESOLVED_FLATTEN",
+            "MUTATION_UNRESOLVED_RESUME",
         }
     )
     | RESUME_REASON_CODES
 )
+
+
+def _mutation_conflict_reason(
+    action: ActionName, latest_mutation: MutationAttempt | None
+) -> str | None:
+    """Return the matrix reason code blocking ``action``, or ``None``.
+
+    ``EFFECT_CONFIRMED`` is the only state that disengages the matrix;
+    every other ``dispatch_state`` (including the three non-confirmed
+    terminals) leaves the prior mutation unresolved for matrix purposes.
+    """
+    if latest_mutation is None or latest_mutation.dispatch_state == "EFFECT_CONFIRMED":
+        return None
+    cell = _MUTATION_CONFLICT_MATRIX.get(latest_mutation.action)
+    if cell is None:
+        return None
+    blocked_actions, reason_code = cell
+    if action not in blocked_actions:
+        return None
+    return reason_code
 
 
 def _effect(
@@ -157,6 +209,7 @@ def evaluate_action(
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
     runtime_freshness: RuntimeFreshness | None = None,
+    latest_mutation: MutationAttempt | None = None,
 ) -> ActionCapability:
     """Pure evaluator for a single action.
 
@@ -168,18 +221,38 @@ def evaluate_action(
     once-per-request by the caller (PRD #616).  When ``None`` the
     evaluator falls back to ``empty_guard_state()`` — the
     "nothing-ever-deployed" stance that permits Resume/Pause.
+
+    ``latest_mutation`` is the most recent ``MutationAttempt`` for the
+    instance (619-D1's repo).  When present and unresolved it engages
+    the 619-D action-conflict matrix — the reason code is appended
+    to the disabled-reasons list alongside any other blockers.
     """
 
     effect = _effect(process=process, live_binding=live_binding)
     guards = guard_state if guard_state is not None else empty_guard_state()
     intent = _effective_intent(desired_state)
+    mutation_conflict = _mutation_conflict_reason(action, latest_mutation)
+
+    def _finish(branch_effect: Literal["LIVE_ACTUATION", "DURABLE_ONLY"], reasons: list[str]) -> ActionCapability:
+        """Close the evaluation by folding any matrix conflict in.
+
+        ``mutation_conflict`` rides alongside whatever the branch
+        accumulated — the cockpit sees both blockers (e.g.
+        ``NO_LIVE_BINDING`` *and* ``MUTATION_UNRESOLVED_FLATTEN``)
+        instead of one masking the other.
+        """
+        if mutation_conflict is not None:
+            reasons.append(mutation_conflict)
+        if reasons:
+            return _disabled(branch_effect, reasons)
+        return _enabled(branch_effect)
 
     if (
         runtime_freshness is not None
         and runtime_freshness.posture_demoted
         and action in {"resume", "flatten_and_pause"}
     ):
-        return _disabled(effect, ["POSTURE_DEMOTED"])
+        return _finish(effect, ["POSTURE_DEMOTED"])
 
     if action == "resume":
         reasons: list[str] = []
@@ -195,9 +268,7 @@ def evaluate_action(
         # Artifact guards (broker safety verdict, reconciliation,
         # uncertain-intent WAL) — full priority-ordered list.
         reasons.extend(guards.reason_codes)
-        if reasons:
-            return _disabled(effect, reasons)
-        return _enabled(effect)
+        return _finish(effect, reasons)
 
     if action == "pause":
         # Pause does not consult artifact guards — pausing is always
@@ -210,9 +281,7 @@ def evaluate_action(
             reasons.append("STOPPED_REQUIRES_REDEPLOY")
         if poisoned:
             reasons.append("REDEPLOY_REQUIRED")
-        if reasons:
-            return _disabled(effect, reasons)
-        return _enabled(effect)
+        return _finish(effect, reasons)
 
     if action == "stop":
         # Stop is the safe verb — no artifact guards apply.  Refuse
@@ -223,23 +292,23 @@ def evaluate_action(
             reasons.append("ALREADY_STOPPED")
         if poisoned:
             reasons.append("REDEPLOY_REQUIRED")
-        if reasons:
-            return _disabled(effect, reasons)
-        return _enabled(effect)
+        return _finish(effect, reasons)
 
     if action == "flatten_and_pause":
+        reasons = []
         if live_binding is None:
-            return _disabled("LIVE_ACTUATION", ["NO_LIVE_BINDING"])
-        if owned_positions_empty:
-            return _disabled("LIVE_ACTUATION", ["NO_OWNED_POSITIONS"])
-        return _enabled("LIVE_ACTUATION")
+            reasons.append("NO_LIVE_BINDING")
+        elif owned_positions_empty:
+            reasons.append("NO_OWNED_POSITIONS")
+        return _finish("LIVE_ACTUATION", reasons)
 
     # mark_poisoned
+    reasons = []
     if live_binding is None:
-        return _disabled("LIVE_ACTUATION", ["NO_LIVE_BINDING"])
-    if poisoned:
-        return _disabled("LIVE_ACTUATION", ["ALREADY_POISONED"])
-    return _enabled("LIVE_ACTUATION")
+        reasons.append("NO_LIVE_BINDING")
+    elif poisoned:
+        reasons.append("ALREADY_POISONED")
+    return _finish("LIVE_ACTUATION", reasons)
 
 
 def evaluate_all_actions(
@@ -251,57 +320,23 @@ def evaluate_all_actions(
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
     runtime_freshness: RuntimeFreshness | None = None,
+    latest_mutation: MutationAttempt | None = None,
 ) -> OperatorSurfaceActions:
     """Convenience wrapper used by the status projection."""
+    common = {
+        "process": process,
+        "live_binding": live_binding,
+        "poisoned": poisoned,
+        "owned_positions_empty": owned_positions_empty,
+        "desired_state": desired_state,
+        "guard_state": guard_state,
+        "runtime_freshness": runtime_freshness,
+        "latest_mutation": latest_mutation,
+    }
     return OperatorSurfaceActions(
-        resume=evaluate_action(
-            "resume",
-            process=process,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            owned_positions_empty=owned_positions_empty,
-            desired_state=desired_state,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-        ),
-        pause=evaluate_action(
-            "pause",
-            process=process,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            owned_positions_empty=owned_positions_empty,
-            desired_state=desired_state,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-        ),
-        stop=evaluate_action(
-            "stop",
-            process=process,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            owned_positions_empty=owned_positions_empty,
-            desired_state=desired_state,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-        ),
-        flatten_and_pause=evaluate_action(
-            "flatten_and_pause",
-            process=process,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            owned_positions_empty=owned_positions_empty,
-            desired_state=desired_state,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-        ),
-        mark_poisoned=evaluate_action(
-            "mark_poisoned",
-            process=process,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            owned_positions_empty=owned_positions_empty,
-            desired_state=desired_state,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-        ),
+        resume=evaluate_action("resume", **common),
+        pause=evaluate_action("pause", **common),
+        stop=evaluate_action("stop", **common),
+        flatten_and_pause=evaluate_action("flatten_and_pause", **common),
+        mark_poisoned=evaluate_action("mark_poisoned", **common),
     )

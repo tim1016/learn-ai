@@ -640,13 +640,16 @@ def test_reason_code_vocabulary_excludes_removed_codes() -> None:
 
 def test_reason_code_vocabulary_lists_documented_codes() -> None:
     # PRD #616 — the closed vocabulary is the union of the legacy
-    # live-binding codes plus every ResumeGuardState code.
+    # live-binding codes plus every ResumeGuardState code; PRD #619-C5
+    # added OUTCOME_UNKNOWN and #619-D added the four
+    # MUTATION_UNRESOLVED_* matrix codes.
     documented = {
         "NO_LIVE_BINDING",
         "NO_OWNED_POSITIONS",
         "ALREADY_POISONED",
         "ALREADY_STOPPED",
         "POSTURE_DEMOTED",
+        "OUTCOME_UNKNOWN",
         # ResumeGuardState (PRD #616) closed vocabulary.
         "BROKER_SAFETY_UNSAFE",
         "BROKER_SAFETY_UNKNOWN",
@@ -660,6 +663,11 @@ def test_reason_code_vocabulary_lists_documented_codes() -> None:
         "ALREADY_PAUSED",
         "STOPPED_REQUIRES_REDEPLOY",
         "REDEPLOY_REQUIRED",
+        # PRD #619-D action-conflict matrix codes.
+        "MUTATION_UNRESOLVED_START",
+        "MUTATION_UNRESOLVED_STOP",
+        "MUTATION_UNRESOLVED_FLATTEN",
+        "MUTATION_UNRESOLVED_RESUME",
     }
     assert documented.issubset(REASON_CODES)
 
