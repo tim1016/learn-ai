@@ -67,10 +67,28 @@ describe('WorkingPendingOrdersSectionComponent', () => {
   });
 
   it('renders only engine_only_pending rows (filter is layout, not derivation)', () => {
+    // Each row needs a distinct ``order_ref`` so slice-7's supersede
+    // filter doesn't hide the SPY/TSLA pending rows when an unrelated
+    // ``expected`` row (AAPL here) shares the default order_ref.
     const el = render([
-      row({ seq: 1, symbol: 'SPY', verdict: 'engine_only_pending' }),
-      row({ seq: 2, symbol: 'AAPL', verdict: 'expected' }),
-      row({ seq: 3, symbol: 'TSLA', verdict: 'engine_only_pending' }),
+      row({
+        seq: 1,
+        symbol: 'SPY',
+        verdict: 'engine_only_pending',
+        order_ref: 'learn-ai/sid/v1/intent-spy',
+      }),
+      row({
+        seq: 2,
+        symbol: 'AAPL',
+        verdict: 'expected',
+        order_ref: 'learn-ai/sid/v1/intent-aapl',
+      }),
+      row({
+        seq: 3,
+        symbol: 'TSLA',
+        verdict: 'engine_only_pending',
+        order_ref: 'learn-ai/sid/v1/intent-tsla',
+      }),
     ]);
     const panel = el.querySelector('[data-testid="working-pending-orders"]');
     expect(panel).not.toBeNull();

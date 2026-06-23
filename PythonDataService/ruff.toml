@@ -35,7 +35,16 @@ ignore = [
 ]
 
 [lint.isort]
-known-first-party = ["app"]
+# ``scripts`` is listed explicitly so ruff's isort gives the same answer
+# in every environment. Ruff's auto-detection treats a directory as
+# first-party iff it sees that directory in the source root — but the
+# repo has two ``scripts/`` dirs (at repo root and at ``PythonDataService/``)
+# and the source root differs by caller (CI runs from ``PythonDataService/``;
+# the data-plane container runs from ``/app/`` which has no ``scripts/``).
+# Without this entry, the same file lints clean in the container and
+# fails I001 on CI (or vice-versa) depending on the cwd. Explicit
+# beats auto-detected.
+known-first-party = ["app", "scripts"]
 
 [format]
 quote-style = "double"

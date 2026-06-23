@@ -39,8 +39,10 @@ from pathlib import Path
 
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.intent_ledger import (
-    LedgerProjection,
     _UNRESOLVED_STATUSES,
+    LedgerProjection,
+)
+from app.engine.live.intent_ledger import (
     fold as fold_intent_events,
 )
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -228,7 +230,13 @@ class BrokerActivityPublisher:
                 try:
                     await task
                 except asyncio.CancelledError:
-                    pass
+                    logger.debug(
+                        "publisher task cancelled during stop",
+                        extra={
+                            "strategy_instance_id": self._strategy_instance_id,
+                            "task_attr": task_attr,
+                        },
+                    )
                 setattr(self, task_attr, None)
         for q in self._subscribers:
             try:
@@ -236,7 +244,10 @@ class BrokerActivityPublisher:
             except asyncio.QueueFull:
                 # The subscriber is already behind — they'll see the
                 # cancellation when they next try to read.
-                pass
+                logger.debug(
+                    "subscriber queue full during stop; end sentinel not enqueued",
+                    extra={"strategy_instance_id": self._strategy_instance_id},
+                )
 
     @property
     def is_running(self) -> bool:
@@ -831,14 +842,20 @@ class BrokerActivityPublisher:
                 try:
                     q.get_nowait()
                 except asyncio.QueueEmpty:
-                    pass
+                    logger.debug(
+                        "slow subscriber queue already empty during drain",
+                        extra={"strategy_instance_id": self._strategy_instance_id},
+                    )
                 try:
                     q.put_nowait(None)
                 except asyncio.QueueFull:
                     # Truly stuck (e.g. a second producer concurrently
                     # re-filled the queue). The consumer will time out
                     # at the transport layer.
-                    pass
+                    logger.debug(
+                        "slow subscriber queue still full; closing subscriber",
+                        extra={"strategy_instance_id": self._strategy_instance_id},
+                    )
                 dead.append(q)
         for q in dead:
             self._subscribers.discard(q)

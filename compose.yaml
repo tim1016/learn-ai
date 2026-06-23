@@ -66,6 +66,11 @@ services:
       # picks up `asyncio_mode = auto` without rebuilding the image after
       # local config tweaks. Baked into the image too — see Dockerfile.
       - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
+      # Ruff config — keep the in-container linter in lockstep with CI
+      # (which runs ``ruff check app/ tests/`` from PythonDataService/).
+      # Without this, ``podman exec ... ruff check`` silently runs with
+      # the default ruleset and misses every SIM/UP/I issue CI flags.
+      - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
       # Golden-fixture manifest — read at runtime by GET /api/golden-fixtures.
       # Mounted so manifest edits are visible without rebuild; baked into the
       # image too (see Dockerfile) so prod images don't depend on the mount.

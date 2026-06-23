@@ -49,7 +49,6 @@ from app.services.broker_activity_templates import (
     render_template,
 )
 
-
 NS = "learn-ai/sid-a/v1"
 INTENT_ID = "intent-x"
 ORDER_REF = f"{NS}:{INTENT_ID}"
@@ -447,7 +446,7 @@ def test_author_cancellation_yields_expected_cancellation_row() -> None:
     assert row.template_key == "cancellation"
     # quantity in the narrative comes from intent.requested_qty (100),
     # not from the broker-reported fill_quantity (0).
-    assert "Cancelled buy of 100 SPY" == row.headline
+    assert row.headline == "Cancelled buy of 100 SPY"
 
 
 def test_author_halts_when_event_missing_symbol_or_side() -> None:
@@ -503,7 +502,7 @@ def test_author_pending_row_renders_pending_template() -> None:
     assert row.perm_id is None
     assert row.exec_ts_ms is None
     assert row.order_ref == f"{NS}:{INTENT_ID}"
-    assert "Pending buy of 100 SPY" == row.headline
+    assert row.headline == "Pending buy of 100 SPY"
     assert row.reason_codes == (ReasonCode.PENDING_ACKNOWLEDGEMENT,)
 
 

@@ -8,6 +8,7 @@ flips one layer to a bad value and asserts ``OrderRefusedError`` before
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -778,7 +779,7 @@ async def test_executions_for_reconnect_recovery_leaves_order_type_none_when_tra
     forbids placeholders; an unauthored row is honest, a placeholder
     row is not.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.broker.ibkr.orders import executions_for_reconnect_recovery
 
@@ -799,7 +800,7 @@ async def test_executions_for_reconnect_recovery_leaves_order_type_none_when_tra
             cumQty=100.0,
             side="BOT",
             orderRef="learn-ai/sid/v1:intent-1",
-            time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+            time=datetime(2026, 6, 22, 14, 30, tzinfo=UTC),
         ),
         commissionReport=SimpleNamespace(commission=1.0),
     )
@@ -820,7 +821,7 @@ async def test_executions_for_reconnect_recovery_recovers_order_type_from_trade(
     """When the original Trade IS still cached in ``ib.trades()`` (the
     common case during a same-session reconnect), the adapter populates
     ``order_type`` from ``Trade.order.orderType``."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.broker.ibkr.orders import executions_for_reconnect_recovery
 
@@ -843,7 +844,7 @@ async def test_executions_for_reconnect_recovery_recovers_order_type_from_trade(
             cumQty=100.0,
             side="BOT",
             orderRef="learn-ai/sid/v1:intent-1",
-            time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+            time=datetime(2026, 6, 22, 14, 30, tzinfo=UTC),
         ),
         commissionReport=SimpleNamespace(commission=1.0),
     )
