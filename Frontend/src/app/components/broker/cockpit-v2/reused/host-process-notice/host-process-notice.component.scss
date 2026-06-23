@@ -83,7 +83,7 @@
     .start {
       align-self: flex-start;
       background: var(--accent);
-      color: var(--bg-surface);
+      color: var(--text-on-accent);
       border: 1px solid var(--accent);
       border-radius: 2px;
       padding: 0.4rem 0.75rem;
@@ -93,11 +93,17 @@
       letter-spacing: 0.04em;
       cursor: pointer;
 
+      &:hover:not(:disabled) {
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
+      }
+
       &:disabled {
-        background: transparent;
-        color: var(--text-subtle);
-        border-color: var(--border-light);
+        background: var(--bg-elevated);
+        color: var(--text-secondary);
+        border-color: var(--border-strong);
         cursor: not-allowed;
+        opacity: 0.85;
       }
     }
 
