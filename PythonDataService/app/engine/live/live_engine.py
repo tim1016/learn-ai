@@ -338,6 +338,42 @@ class LiveRunResult:
     pending_orders: int = 0
 
 
+def _emit_drop_events_for_pending(
+    portfolio: LivePortfolio,
+    drop_reason: str,
+    ts_ms: int,
+) -> None:
+    """PR 3 / operator-notice — emit INTENT_DROPPED_BEFORE_SUBMIT for each pending order.
+
+    Called BEFORE pending_orders are cleared from memory. The fsync inside
+    ``IntentWal.append`` guarantees the drop event is on disk before the
+    in-memory pending orders are erased, satisfying the ``append → fsync →
+    clear`` invariant.
+
+    No-op when the portfolio has no WAL wired (replay tests, shadow paths).
+    Intents without a minted ``intent_id`` (orders that bypassed set_holdings)
+    are skipped — they have no WAL identity and can't carry a meaningful drop
+    record.
+    """
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.order_identity import build_order_ref
+
+    if portfolio.intent_wal is None or not portfolio.bot_order_namespace:
+        return
+    for order in portfolio.pending_orders:
+        intent_id = portfolio._intent_by_order_id.get(order.order_id)
+        if intent_id is None:
+            continue  # no WAL identity minted — nothing to record
+        portfolio.intent_wal.append(
+            event_type=IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+            intent_id=intent_id,
+            bot_order_namespace=portfolio.bot_order_namespace,
+            order_ref=build_order_ref(portfolio.bot_order_namespace, intent_id),
+            drop_reason=drop_reason,  # type: ignore[arg-type]
+            ts_ms=ts_ms,
+        )
+
+
 class LiveEngine:
     """Async runtime for Strategy subclasses against a broker boundary."""
 
@@ -479,6 +515,13 @@ class LiveEngine:
         self._artifacts_root = artifacts_root
         self._hydrate_policy = hydrate_policy
         self._session_start_ms = session_start_ms
+        # PR 3 / operator-notice — canonical engine-start timestamp used as the
+        # legacy_sizing_only_cutoff_ms fold boundary. Falls back to wall-clock
+        # when the caller doesn't supply session_start_ms (live tests, replays).
+        self._engine_started_at_ms: int = (
+            session_start_ms if session_start_ms is not None
+            else time.time_ns() // 1_000_000
+        )
         self._code_sha = code_sha
         self._strategy_spec_sha = strategy_spec_sha
         self._live_state_writer = live_state_writer
@@ -581,6 +624,18 @@ class LiveEngine:
         self._strategy_decision_columns = tuple(
             c for c in decision_columns if c not in CORE_DECISION_COLUMNS
         )
+
+    @property
+    def engine_started_at_ms(self) -> int:
+        """PR 3 / operator-notice — engine-start wall-clock as int64 ms UTC.
+
+        Used as the legacy_sizing_only_cutoff_ms fold boundary: SIZING_RESOLVED
+        events before this timestamp are pre-engine-start orphans that can never
+        have a following terminal event; the publisher uses them to emit
+        activity.dropped_paused_intent notices without triggering for normal
+        intents that simply haven't resolved yet.
+        """
+        return self._engine_started_at_ms
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -1079,6 +1134,18 @@ class LiveEngine:
                 # but nothing new reaches the broker. RESUME flips the
                 # flag and the next bar's queue gets submitted normally.
                 if self._paused or self._submissions_blocked:
+                    # PR 3 / operator-notice — emit before clear so the
+                    # append → fsync → clear ordering is satisfied.
+                    _drop_reason = (
+                        "control_plane_lease_lost"
+                        if self._submissions_blocked
+                        else "operator_paused"
+                    )
+                    _emit_drop_events_for_pending(
+                        portfolio,
+                        drop_reason=_drop_reason,
+                        ts_ms=int(minute_bar.end_time.timestamp() * 1000),
+                    )
                     portfolio.pending_orders.clear()
                 # Predictive cap check: refuse to submit the pending batch if
                 # it would push the day's total past ``max_orders_per_day``,
@@ -1098,6 +1165,13 @@ class LiveEngine:
                     and pending_count > 0
                     and orders_submitted_today + pending_count > self._max_orders_per_day
                 ):
+                    # PR 3 / operator-notice — emit before clear so the
+                    # append → fsync → clear ordering is satisfied.
+                    _emit_drop_events_for_pending(
+                        portfolio,
+                        drop_reason="max_orders_per_day",
+                        ts_ms=int(minute_bar.end_time.timestamp() * 1000),
+                    )
                     portfolio.pending_orders.clear()
                     raise MaxOrdersPerDayExceeded(
                         f"would push total to {orders_submitted_today + pending_count} on "
@@ -2301,6 +2375,12 @@ class LiveEngine:
         await self._publish_broker_block(verdict_value)
         if verdict_value is None or verdict_value == "paper-only":
             return
+        # PR 3 / operator-notice — emit before clear (append → fsync → clear).
+        _emit_drop_events_for_pending(
+            portfolio,
+            drop_reason="broker_safety_halt",
+            ts_ms=now_ms_utc(),
+        )
         portfolio.pending_orders.clear()
         if self._output_dir is not None:
             try:
