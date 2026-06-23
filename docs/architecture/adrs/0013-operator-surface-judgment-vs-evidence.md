@@ -112,3 +112,34 @@ A bypass at any entry point (the deleted `--force` flag) invalidates the structu
 - `docs/architecture/adrs/0005-engine-authored-readiness-two-altitude-broker-ownership.md` § Amendment 2026-06-20 — the projection layer's authority over the engine sidecar.
 - `docs/architecture/adrs/0010-operator-action-contract-flatten-pause-stop.md` § Amendment 2026-06-20 — the canonical-render-site rule, the five canonical actions.
 - `docs/architecture/adrs/0011-broker-safety-verdict-fail-closed-reactive-halt-on-transition.md` — the reactive `BrokerSafetyVerdict.final_verdict` consumed by `_project_broker`.
+
+## Amendment 2026-06-22 — `trader_guidance` presentation projection
+
+**Context:** The 2026-06-22 trader-language design (`docs/design/bot-cockpit-trader-language-2026-06-22.md`) found that the current cockpit gives each independent fact — PROCESS, INTENT, READINESS, BROKER, SAFETY, PRIOR RUN, SESSION — equal visual weight, leaving traders without a primary message and without a single recommended next step. The design proposes a backend-authored `trader_guidance` projection on `operator_surface` that selects one prioritized situation, one recommended remediation, and a deduplicated list of additional attention groups.
+
+This amendment permits that addition under the constraints below. It does **not** loosen §1 (the verbatim rule), §3 (the Playwright meta-rule), or any other authority in this ADR. The synthetic-master-status regression mode that motivated this ADR remains prohibited.
+
+**Permitted addition.** `operator_surface.trader_guidance: TraderGuidance` — a presentation classification with:
+
+- `situation_code` — closed enum, exactly the 17 values listed in the design's "Add a trader-guidance projection" section;
+- `headline`, `explanation`, `risk_headline`, `risk_explanation` — operator-language copy, server-authored;
+- `primary_remediation` — a closed discriminated union whose every kind references an existing server-authored capability (`invoke_capability`), an existing remediation descriptor (`focus_action`, `focus_view`, `redeploy`, `open_runbook`), an already-authorized control endpoint (`start_bot_process` against ADR 0006 `POST /runs/{run_id}/start`), an operator command sourced from trusted deployment configuration (`copy_host_command`), a structured broker-direct workflow (`broker_manual_risk_reduction`), or `none`;
+- `additional_attention_groups` — a closed `AttentionGroup[]` list with the deduplication rules documented in the design's "Attention-group counting rule" section.
+
+**Required constraints. Any one violation removes the permission.**
+
+1. **`trader_guidance` is presentation, not a safety verdict.** It never gates a mutation. The five canonical actions (ADR 0010) and the broker safety verdict (ADR 0011) remain authoritative for action eligibility. `trader_guidance.primary_remediation` references an action whose enablement is determined by the existing capability and gate resolvers; the field never re-asks the question.
+2. **`trader_guidance` never enables or disables an action.** Disabled-action reason codes continue to flow from `operator_capability`. The `start_bot_process` and `copy_host_command` remediation kinds reference the existing authenticated start endpoint (ADR 0006) and the trusted-configuration command string, respectively; neither bypasses any gate. The start endpoint must re-evaluate the same `host_process.start_capability` before launch.
+3. **`trader_guidance` never replaces or mutates the independent facts.** `host_process`, `runtime_freshness`, `broker`, `prior_run`, `trading_session`, `readiness`, `actions`, and the configuration projections remain rendered, asserted, and authoritative on their canonical channels. §3's Playwright meta-rule continues to require each independent fact assertion in every cockpit scenario test; a spec that asserts only `trader_guidance.situation_code` and omits the underlying facts is rejected at code review.
+4. **The `situation_code` enum is closed and changes are gated.** Adding or splitting a value requires (a) a compatibility review against this ADR, (b) a decision-table row in the design doc, (c) a fixture and backend projection test, (d) a trader-visible copy review. The implementation does not test the full Cartesian product; it table-tests every winning situation, every adjacent priority collision, the named hazardous collisions in the design document, and the preservation of all independent source facts.
+5. **The field name is `trader_guidance`.** Not `state`, `bot_status`, `master_status`, or any synonym. The naming is structural: it identifies the field as presentation guidance, separate from the verdicts it composes.
+6. **Angular renders verbatim.** Headlines, explanations, instruction strings, and command strings are server-authored. Angular maps `situation_code` and `primary_remediation.kind` to component selection only — it does not assemble copy, interpolate commands, or compose remediation from independent facts.
+
+**Inclusion-test outcome (this ADR §5).** `trader_guidance` passes test 1 (the cockpit makes operational decisions from it — visual priority, attention routing, recommended next step) and test 2 (the `situation_code` enum and `primary_remediation` kinds are closed classifications). It does not violate test 3: the underlying decisions, trades, incidents, and audit rows continue to flow on their evidence channels. `trader_guidance` is a derived classification over closed verdicts, not a new evidence stream and not a parallel verdict.
+
+**Frontend-allowed derivations (§4).** Unchanged. Angular may still map `situation_code` to a layout component and `primary_remediation.kind` to a button-or-link choice — these are closed-enum lookups, the same shape as the existing `incident_category` → display-string mapping permitted by §4.
+
+**References:**
+- `docs/design/bot-cockpit-trader-language-2026-06-22.md` — the design that motivates this addition. "Add a trader-guidance projection" defines the schema. "Guidance priority" defines the 13-step ranking. "Named hazardous collisions" defines the adversarial test set. "Exposure with no live binding" defines the `broker_manual_risk_reduction` remediation kind.
+- `docs/architecture/adrs/0006-deploy-control-plane-host-daemon-init-ledger.md` — the authenticated `POST /runs/{run_id}/start` path that `primary_remediation.start_bot_process` references.
+- `docs/architecture/adrs/0007-host-daemon-shared-secret-auth.md` — the `X-Live-Runner-Token` auth boundary that makes the start path safe for the cockpit to invoke through the data-plane proxy.
