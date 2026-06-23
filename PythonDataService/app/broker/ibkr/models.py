@@ -519,6 +519,14 @@ class IbkrOpenOrder(BaseModel):
     cumulative_filled: float = 0.0
     remaining: float = 0.0
     avg_fill_price: float | None = None
+    # ADR 0008 / Phase 5A — broker-echoed deterministic
+    # ``{bot_order_namespace}:{intent_id}`` token. Set whenever the
+    # underlying ``Trade.order.orderRef`` is non-empty; ``None`` for orders
+    # we never stamped (placed by a different client, manual TWS click, or
+    # by this client before Phase 5A shipped). The cold-start reconciliation
+    # orchestrator joins this back to the WAL to prove ownership without
+    # trusting per-client ``order_id`` alone.
+    order_ref: str | None = None
     fetched_at_ms: int
 
 

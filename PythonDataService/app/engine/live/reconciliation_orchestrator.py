@@ -128,7 +128,6 @@ async def reconcile(
             now_ms=now_ms,
             base_receipt=in_progress,
         )
-    assert envelope is not None  # narrowed by sidecar_corrupt branch above
 
     # Step 2: fold WAL.
     wal = IntentWal(run_dir / "intent_events.jsonl")
@@ -138,11 +137,23 @@ async def reconcile(
         return _poison_and_record(
             run_dir=run_dir,
             reason="wal_corrupt",
-            envelope_last_bar_ms=envelope.last_processed_bar_ms,
+            envelope_last_bar_ms=envelope.last_processed_bar_ms if envelope else None,
             now_ms=now_ms,
             base_receipt=in_progress,
         )
-    ledger_view = fold(projection_from_envelope(envelope), wal_events)
+
+    # Fresh deployment: no prior envelope means the bot has placed nothing
+    # and the projection is empty. Fold with an empty projection so the
+    # classifier sees an empty known set; anything the broker reports under
+    # our namespace must be a brand-new owned orphan (which adoption
+    # handles) and anything else is outside mutation (which the classifier
+    # already turns into Poison).
+    if envelope is None:
+        from app.engine.live.intent_ledger import LedgerProjection
+
+        ledger_view = fold(LedgerProjection(), wal_events)
+    else:
+        ledger_view = fold(projection_from_envelope(envelope), wal_events)
 
     # Step 4: prior-run unresolved tail. Corruption here is informational —
     # treat as empty so a single broken prior-run WAL doesn't gate this boot.
@@ -169,13 +180,14 @@ async def reconcile(
 
     # Step 6: broker probe. ANY exception is a Poison — we cannot
     # distinguish a clean cold start from one with hidden divergence.
+    last_bar_ms = envelope.last_processed_bar_ms if envelope else None
     try:
         broker_snapshot = await broker_probe()
     except Exception as exc:
         return _poison_and_record(
             run_dir=run_dir,
             reason=f"broker_probe_failed: {exc}",
-            envelope_last_bar_ms=envelope.last_processed_bar_ms,
+            envelope_last_bar_ms=last_bar_ms,
             now_ms=now_ms,
             base_receipt=in_progress,
         )
@@ -196,7 +208,7 @@ async def reconcile(
         return _poison_and_record(
             run_dir=run_dir,
             reason=verdict.reason,
-            envelope_last_bar_ms=envelope.last_processed_bar_ms,
+            envelope_last_bar_ms=last_bar_ms,
             now_ms=now_ms,
             base_receipt=in_progress,
         )
@@ -204,13 +216,21 @@ async def reconcile(
     # Step 9: adopt branch — append ADOPTED_BROKER_ORDER for each orphan
     # BEFORE writing the receipt, so on-disk evidence orders correctly
     # (receipt.sidecar_wal_seq reflects the post-adoption WAL state).
+    # ``allowed_namespaces`` is a single-element set in PR 1 (no /v2 dual
+    # read yet); pick that one for stamping. The classifier already
+    # guarantees every orphan's namespace is in this set.
     adopted_intent_ids: tuple[str, ...] = ()
     if isinstance(verdict, Adopt):
+        adoption_namespace = (
+            envelope.bot_order_namespace
+            if envelope is not None
+            else next(iter(allowed_namespaces))
+        )
         for orphan in verdict.orphans:
             wal.append(
                 event_type=IntentEventType.ADOPTED_BROKER_ORDER,
                 intent_id=orphan.intent_id,
-                bot_order_namespace=envelope.bot_order_namespace,
+                bot_order_namespace=adoption_namespace,
                 order_ref=orphan.order_ref,
                 order_id=orphan.order_id,
                 perm_id=orphan.perm_id,
