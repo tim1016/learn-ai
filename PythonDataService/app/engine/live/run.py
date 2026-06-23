@@ -102,6 +102,7 @@ def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
         disconnect_broker,
         request_engine_exit,
         aggregator=None,
+        executor=None,
     ):
         from app.engine.live.child_watchdog import ChildWatchdog
 
@@ -115,6 +116,7 @@ def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
             request_engine_exit=request_engine_exit,
             now_ms=lambda: int(time.time() * 1000),
             aggregator=aggregator,
+            executor=executor,
         )
 
     return _factory

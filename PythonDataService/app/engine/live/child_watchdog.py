@@ -140,6 +140,7 @@ class ChildWatchdog:
         lease_loss_grace_ms: int = DEFAULT_LEASE_LOSS_GRACE_MS,
         sleep_fn: Callable[[float], Awaitable[None]] | None = None,
         incident_writer: Callable[..., None] | None = None,
+        executor: object | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._run_dir = run_dir
@@ -157,6 +158,10 @@ class ChildWatchdog:
         self._lease_loss_grace_ms = lease_loss_grace_ms
         self._sleep = sleep_fn or asyncio.sleep
         self._incident_writer = incident_writer or write_lease_lost_incident
+        # When provided, _handle_lease_lost delegates to this executor instead
+        # of the legacy 5-callback sequence.  The executor is responsible for
+        # writing the typed OperatorIncident to the IncidentStore.
+        self._executor = executor
 
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -341,10 +346,12 @@ class ChildWatchdog:
     ) -> None:
         """The PRD-defined 5-step ordered shutdown.
 
-        Order is the contract; tests assert it. Each step is bounded
-        and side-effecting — the watchdog itself never raises out of
-        this method (the engine must exit cleanly even if a step
-        fails).
+        When an ``executor`` (``WatchdogHaltExecutor``) is wired in (production
+        path), delegates the entire sequence to it so typed ``OperatorIncident``
+        records are written with per-step timeouts.  When no executor is
+        provided (legacy / test path), falls back to the original 5-callback
+        sequence.  The watchdog itself never raises out of this method — the
+        engine must exit cleanly even if a step fails.
         """
         self._state = "LEASE_LOST_HANDLING"
         logger.warning(
@@ -354,6 +361,18 @@ class ChildWatchdog:
             self._expected_daemon_boot_id,
             lease_written_at_ms,
         )
+
+        if self._executor is not None:
+            # Production path: delegate to WatchdogHaltExecutor.
+            try:
+                await self._executor.execute(reason)  # type: ignore[union-attr]
+            except Exception:
+                logger.exception("[WATCHDOG] executor.execute failed; state may be inconsistent")
+            self._state = "EXITED"
+            return
+
+        # Legacy path: the original 5-callback sequence (backward compat for tests
+        # that don't wire an executor).
 
         # Step 1 — block submissions IMMEDIATELY.
         try:
