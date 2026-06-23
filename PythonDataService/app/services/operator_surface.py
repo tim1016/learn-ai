@@ -20,6 +20,8 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.schemas.live_runs import (
@@ -141,13 +143,23 @@ def _project_host_start_capability(
         return HostProcessStartCapability(enabled=False, disabled_reason_code=reason)
 
     assert start_run_id is not None and start_defaults is not None  # narrowed above
-    request = HostRunnerStartRequest(
-        readonly=start_defaults.readonly,
-        hydrate_policy=start_defaults.hydrate_policy,
-        strategy=start_defaults.strategy,
-        max_orders_per_day=start_defaults.max_orders_per_day,
-        ibkr_host=start_defaults.ibkr_host,
-    )
+    # Fail closed if the saved start settings cannot build a valid request
+    # body (strategy pattern, max_orders_per_day range, ibkr_host length).
+    # Otherwise a constraint violation would raise ValidationError and 500
+    # the operator-surface projection — same outcome the operator sees from
+    # the "settings incomplete" branch above, so route it the same way.
+    try:
+        request = HostRunnerStartRequest(
+            readonly=start_defaults.readonly,
+            hydrate_policy=start_defaults.hydrate_policy,
+            strategy=start_defaults.strategy,
+            max_orders_per_day=start_defaults.max_orders_per_day,
+            ibkr_host=start_defaults.ibkr_host,
+        )
+    except ValidationError:
+        return HostProcessStartCapability(
+            enabled=False, disabled_reason_code="START_SETTINGS_INCOMPLETE"
+        )
     return HostProcessStartCapability(enabled=True, run_id=start_run_id, request=request)
 
 

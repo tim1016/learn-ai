@@ -289,6 +289,25 @@ def test_host_process_start_capability_disabled_for_incomplete_settings(
     assert cap.request is None
 
 
+def test_host_process_start_capability_disabled_when_request_validation_fails() -> None:
+    # Saved start settings whose ``strategy`` is non-empty but violates the
+    # ``HostRunnerStartRequest.strategy`` pattern (``^[a-z][a-z0-9_]{0,63}$``)
+    # would otherwise raise ValidationError mid-projection and 500 the
+    # operator surface. Fail-closed: route to the same "settings incomplete"
+    # disabled state the function emits for empty/missing settings.
+    bad_defaults = InstanceStartDefaults(strategy="INVALID-STRATEGY")
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=_START_RUN,
+        start_defaults=bad_defaults,
+    )
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "START_SETTINGS_INCOMPLETE"
+    assert cap.run_id is None
+    assert cap.request is None
+
+
 # ---------------------------------------------------------------------------
 # prior_run
 # ---------------------------------------------------------------------------
