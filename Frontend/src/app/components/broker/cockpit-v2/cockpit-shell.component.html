@@ -150,24 +150,9 @@
   }
 
   @if (status(); as s) {
-    @if (s.operator_surface.runtime_freshness; as runtime) {
-      @if (runtime.stale_reason_codes.length) {
-        <aside
-          class="runtime-freshness-banner"
-          [class.demoted]="runtime.posture_demoted"
-          role="status"
-          data-testid="runtime-freshness-banner"
-        >
-          <strong>
-            RUNTIME · {{ runtime.posture_demoted ? 'LAST-KNOWN' : 'ATTENTION' }}
-          </strong>
-          <span class="runtime-reasons">
-            @for (code of runtime.stale_reason_codes; track code) {
-              <span class="runtime-reason">{{ code }}</span>
-            }
-          </span>
-        </aside>
-      }
+    @let runtime = s.operator_surface.runtime_freshness;
+    @if (runtime) {
+      <app-runtime-banner [freshness]="runtime" />
     }
 
     @if (controlPlaneBanner(); as banner) {

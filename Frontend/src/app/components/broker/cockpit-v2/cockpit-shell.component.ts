@@ -50,6 +50,7 @@ import { AuditTabComponent } from './tabs/audit-tab.component';
 import { ConfigurationTabComponent } from './tabs/configuration-tab.component';
 import { StatusRiskTabComponent } from './tabs/status-risk-tab.component';
 import { HostProcessNoticeComponent } from './reused/host-process-notice/host-process-notice.component';
+import { RuntimeBannerComponent } from './runtime-banner/runtime-banner.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 
 const POLL_INTERVAL_MS = 4_000;
@@ -74,6 +75,7 @@ const READINESS_LABEL: Record<string, string> = {
     ConfigurationTabComponent,
     TypedHaltConfirmComponent,
     HostProcessNoticeComponent,
+    RuntimeBannerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './cockpit-shell.component.html',

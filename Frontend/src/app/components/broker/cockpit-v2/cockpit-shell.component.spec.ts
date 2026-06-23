@@ -276,13 +276,25 @@ describe('CockpitShellComponent', () => {
     expect(title).toContain('paper-only');
   });
 
-  it('renders runtime demotion reason codes prominently', async () => {
+  it('renders runtime demotion via OperatorNotice headline (never raw reason codes)', async () => {
+    // F-002 / #657 regression guard: the banner must render operator-authored
+    // copy from the headline notice, not raw stale_reason_codes strings.
     const stub = makeStub();
     const status = makeStatus();
     const runtimeFreshness: OperatorSurfaceRuntimeFreshness = {
       posture_demoted: true,
       stale_reason_codes: ['COMMAND_LOOP_STALE', 'CONTROL_PLANE_LEASE_STALE'],
-      headline: null,
+      headline: {
+        code: 'runtime.command_loop_unresponsive',
+        tier: 'warning',
+        title: 'Command loop unresponsive',
+        message: 'The engine has not emitted a command loop heartbeat recently.',
+        source_codes: ['COMMAND_LOOP_STALE'],
+        facts: {},
+        action: { kind: 'wait', label: null, target: null },
+        runbook_slug: null,
+        occurred_at_ms: null,
+      },
       stale_reasons: [],
       command_loop: {
         state: 'STALE',
@@ -310,12 +322,12 @@ describe('CockpitShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const banner = (fixture.nativeElement as HTMLElement).querySelector(
-      '[data-testid="runtime-freshness-banner"]',
-    );
-    expect(banner?.textContent).toContain('LAST-KNOWN');
-    expect(banner?.textContent).toContain('COMMAND_LOOP_STALE');
-    expect(banner?.textContent).toContain('CONTROL_PLANE_LEASE_STALE');
+    const el = fixture.nativeElement as HTMLElement;
+    // The banner renders the headline's operator-language title.
+    expect(el.textContent).toContain('Command loop unresponsive');
+    // Raw enum codes must NOT appear as visible copy (fixes #657).
+    expect(el.textContent).not.toContain('COMMAND_LOOP_STALE');
+    expect(el.textContent).not.toContain('CONTROL_PLANE_LEASE_STALE');
   });
 
   it('renders the Stop button only inside the overflow menu (canonical render-site rule)', async () => {

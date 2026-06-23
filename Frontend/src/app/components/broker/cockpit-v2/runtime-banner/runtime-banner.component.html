@@ -1,0 +1,15 @@
+@if (headline()) {
+  <div class="runtime-banner" data-testid="runtime-banner">
+    <app-operator-notice [notice]="headline()!" />
+    @if (additionalReasons().length > 0) {
+      <details class="runtime-banner__more">
+        <summary>{{ additionalReasons().length }} more reason(s)</summary>
+        <div class="runtime-banner__more-list">
+          @for (reason of additionalReasons(); track reason.code) {
+            <app-operator-notice [notice]="reason" />
+          }
+        </div>
+      </details>
+    }
+  </div>
+}
