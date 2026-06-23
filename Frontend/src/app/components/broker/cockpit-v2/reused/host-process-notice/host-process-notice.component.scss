@@ -63,4 +63,44 @@
       cursor: pointer;
     }
   }
+
+  .start-block {
+    margin-top: 0.625rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+
+    .start {
+      align-self: flex-start;
+      background: var(--accent);
+      color: var(--bg-surface);
+      border: 1px solid var(--accent);
+      border-radius: 2px;
+      padding: 0.4rem 0.75rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+
+      &:disabled {
+        background: transparent;
+        color: var(--text-subtle);
+        border-color: var(--border-light);
+        cursor: not-allowed;
+      }
+    }
+
+    .start-disabled-reason {
+      margin: 0;
+      color: var(--text-subtle);
+      font-size: 0.72rem;
+    }
+
+    .start-error {
+      margin: 0;
+      color: var(--warn);
+      font-size: 0.72rem;
+    }
+  }
 }

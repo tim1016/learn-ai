@@ -24,5 +24,25 @@
         </button>
       </div>
     }
+    @let cap = startCapability();
+    <div class="start-block" data-testid="host-process-start-block">
+      <button
+        type="button"
+        class="start"
+        data-testid="host-process-start-button"
+        [disabled]="!cap.enabled || startInFlight()"
+        (click)="startBotProcess()"
+      >
+        {{ startInFlight() ? 'Starting…' : 'Start bot process' }}
+      </button>
+      @if (startDisabledMessage(); as msg) {
+        <p class="start-disabled-reason" data-testid="host-process-start-disabled-reason">
+          {{ msg }}
+        </p>
+      }
+      @if (startError(); as err) {
+        <p class="start-error" data-testid="host-process-start-error">{{ err }}</p>
+      }
+    </div>
   </section>
 }
