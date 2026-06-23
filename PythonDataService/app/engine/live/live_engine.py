@@ -374,6 +374,56 @@ def _emit_drop_events_for_pending(
         )
 
 
+# ---------------------------------------------------------------------------
+# Watchdog flatten helper — extracted for testability
+# ---------------------------------------------------------------------------
+
+
+class _WatchdogEngineRef(Protocol):
+    """Minimal engine surface the watchdog adapter's flatten_now needs."""
+
+    _flatten_now_requested: bool
+
+    def _has_open_positions(self) -> bool: ...
+
+
+async def _watchdog_flatten_now(engine_ref: _WatchdogEngineRef) -> str:
+    """Implement flatten_now for the watchdog's _ControllerAdapter.
+
+    Sets the engine's ``_flatten_now_requested`` flag and polls (100ms
+    cadence) until the bar loop clears it.  The executor wraps this
+    coroutine in ``asyncio.wait_for``; when the timeout expires the
+    executor cancels the coroutine and records ``"timed_out"`` itself.
+
+    Returns a ``FlattenOutcome`` literal:
+    - ``not_needed``  — portfolio has no open positions.
+    - ``completed``   — bar loop cleared the flag AND positions are zero.
+    - ``failed``      — flag cleared but positions remain (partial fill).
+    """
+    if not engine_ref._has_open_positions():
+        logger.info("[WATCHDOG] flatten_now: no open positions — not_needed")
+        return "not_needed"
+
+    engine_ref._flatten_now_requested = True
+    logger.info(
+        "[WATCHDOG] flatten_now: set _flatten_now_requested; "
+        "polling for bar-loop confirmation (100ms cadence)"
+    )
+
+    while engine_ref._flatten_now_requested:
+        await asyncio.sleep(0.1)
+
+    if engine_ref._has_open_positions():
+        logger.critical(
+            "[WATCHDOG] flatten_now: bar loop cleared flag but "
+            "positions remain — possible partial fill or rejection"
+        )
+        return "failed"
+
+    logger.info("[WATCHDOG] flatten_now: positions confirmed zero — completed")
+    return "completed"
+
+
 class LiveEngine:
     """Async runtime for Strategy subclasses against a broker boundary."""
 
@@ -587,6 +637,10 @@ class LiveEngine:
         # Holds the watchdog instance for the duration of ``run()``; set
         # in the startup block, awaited in the outer finally.
         self._watchdog: object | None = None
+        # Weak reference to the LivePortfolio created in ``run()``.  Set
+        # just before the child watchdog starts so the watchdog adapter
+        # can read live position state.  Cleared in the finally block.
+        self._run_portfolio: object | None = None
         # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
         self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
         # Phase 3 / VCR-0006 — reconnect re-validation. Each bar iteration
@@ -865,6 +919,9 @@ class LiveEngine:
             and self._runtime_aggregator is not None
             and shutdown_event is not None
         ):
+            # Expose portfolio to the watchdog adapter before the watchdog
+            # starts so flatten_now can read live position state.
+            self._run_portfolio = portfolio
             self._watchdog = await self._start_child_watchdog(shutdown_event)
 
         # Operator command-channel poll task. Spawned only when a
@@ -1258,6 +1315,7 @@ class LiveEngine:
                 except Exception:
                     logger.exception("child watchdog stop failed")
                 self._watchdog = None
+            self._run_portfolio = None
             # Stop the command-channel poller before any other cleanup
             # so a late-arriving operator command doesn't race with
             # shutdown writes.
@@ -2072,6 +2130,22 @@ class LiveEngine:
             ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
             return flat_acks
 
+    # ──────────────────── Watchdog position helpers ──────────────────
+
+    def _has_open_positions(self) -> bool:
+        """Return True if the current run's portfolio has any non-zero position.
+
+        Reads ``_run_portfolio`` which is set just before the child watchdog
+        starts and cleared in the run() finally block.  Returns False when
+        called outside of an active run (portfolio not set).
+        """
+        from app.engine.live.live_portfolio import LivePortfolio
+
+        portfolio = self._run_portfolio
+        if not isinstance(portfolio, LivePortfolio):
+            return False
+        return any(pos.quantity != 0 for pos in portfolio.positions.values())
+
     # ──────────────────── § 7 fatal-halt helpers ─────────────────────
 
     def _drain_raw_real_broker_events(self) -> list[IbkrOrderEvent]:
@@ -2643,6 +2717,8 @@ class LiveEngine:
             )
             from app.operator.incidents.store import IncidentStore
 
+            _engine_ref = self
+
             class _ControllerAdapter:
                 """Adapts the engine's sync/async callbacks to the
                 WatchdogShutdownController protocol."""
@@ -2654,30 +2730,8 @@ class LiveEngine:
                     _persist_paused(reason)
 
                 async def flatten_now(self, reason: str) -> str:
-                    """Attempt graceful flatten; return FlattenOutcome literal."""
-                    try:
-                        from app.engine.live.watchdog_controller import FlattenOutcome as _FO  # noqa: F401
-                        # The engine's flatten path sets flatten_now_requested
-                        # and the bar loop picks it up — but in a watchdog halt
-                        # the bar loop is still running. We use the engine's
-                        # internal _flatten helper if it's accessible, otherwise
-                        # we use the requested-flag approach and report not_needed
-                        # to let the sequence continue; the bar loop's next tick
-                        # will send the order. For correctness during the halt
-                        # window we call _flatten directly when possible.
-                        # Implementation note: the engine's bar loop is still
-                        # running during the watchdog halt; setting
-                        # flatten_now_requested lets the NEXT bar-loop tick
-                        # flatten. But the watchdog is racing the bar loop. The
-                        # production flatten path during a watchdog halt is via
-                        # FLATTEN_NOW command (operator-initiated) — the watchdog
-                        # halt does not have access to bar-loop timing. For PR 2
-                        # we report not_needed here to avoid racing the bar loop;
-                        # a follow-up PR may add direct flatten primitives.
-                        return "not_needed"
-                    except Exception as exc:
-                        logger.exception("watchdog flatten_now failed: %s", exc)
-                        return "failed"
+                    """Delegate to the module-level ``_watchdog_flatten_now``."""
+                    return await _watchdog_flatten_now(_engine_ref)
 
                 async def disconnect_broker(self) -> str:
                     return await _disconnect_broker() or "completed"

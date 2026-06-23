@@ -11,6 +11,12 @@ Coverage:
     incident records exception in evidence.
   - Incident evidence contains per-step latency.
   - Ordering: step 1 < step 2 < step 3 < step 4 < step 5.
+
+  _watchdog_flatten_now (engine adapter logic):
+  - Returns "not_needed" when engine has no open positions (flag never set).
+  - Returns "completed" when bar loop clears the flag and positions are zero.
+  - Returns "timed_out" when bar loop never clears the flag (via executor timeout).
+  - Returns "failed" when flag clears but positions remain (partial fill).
 """
 
 from __future__ import annotations
@@ -393,3 +399,91 @@ async def test_persist_paused_failure_does_not_skip_flatten(tmp_path: Path) -> N
     assert "flatten_now" in labels
     assert "disconnect_broker" in labels
     assert "request_engine_exit" in labels
+
+
+# ---------------------------------------------------------------------------
+# _watchdog_flatten_now — engine adapter logic
+# ---------------------------------------------------------------------------
+
+
+class _FakeEngineRef:
+    """Minimal stand-in for ``LiveEngine`` used by ``_watchdog_flatten_now``."""
+
+    def __init__(self, *, has_positions: bool = False) -> None:
+        self._flatten_now_requested: bool = False
+        self._has_positions = has_positions
+        # Track whether the flag was ever set by the coroutine.
+        self.flag_was_set = False
+
+    def _has_open_positions(self) -> bool:
+        return self._has_positions
+
+
+@pytest.mark.asyncio
+async def test_flatten_now_returns_not_needed_when_no_positions() -> None:
+    """When the engine has no open positions the flag must NOT be set."""
+    from app.engine.live.live_engine import _watchdog_flatten_now
+
+    engine = _FakeEngineRef(has_positions=False)
+    result = await _watchdog_flatten_now(engine)
+
+    assert result == "not_needed"
+    assert not engine._flatten_now_requested, "flag must remain False for a no-op"
+
+
+@pytest.mark.asyncio
+async def test_flatten_now_returns_completed_when_positions_close_in_time() -> None:
+    """Bar loop clears the flag after ~50ms and positions become zero → completed."""
+    from app.engine.live.live_engine import _watchdog_flatten_now
+
+    engine = _FakeEngineRef(has_positions=True)
+
+    async def _simulate_bar_loop() -> None:
+        """Emulate the bar loop: wait briefly, clear flag, mark positions gone."""
+        await asyncio.sleep(0.05)
+        engine._flatten_now_requested = False
+        engine._has_positions = False
+
+    bar_loop_task = asyncio.create_task(_simulate_bar_loop())
+    result = await _watchdog_flatten_now(engine)
+    await bar_loop_task
+
+    assert result == "completed"
+
+
+@pytest.mark.asyncio
+async def test_flatten_now_returns_failed_when_positions_remain_after_flatten() -> None:
+    """Bar loop clears the flag but positions are still non-zero (partial fill)."""
+    from app.engine.live.live_engine import _watchdog_flatten_now
+
+    engine = _FakeEngineRef(has_positions=True)
+
+    async def _simulate_partial_fill() -> None:
+        await asyncio.sleep(0.05)
+        # Clear the flag but leave positions open (partial fill scenario).
+        engine._flatten_now_requested = False
+        # _has_positions stays True
+
+    bar_loop_task = asyncio.create_task(_simulate_partial_fill())
+    result = await _watchdog_flatten_now(engine)
+    await bar_loop_task
+
+    assert result == "failed"
+
+
+@pytest.mark.asyncio
+async def test_flatten_now_returns_timed_out_when_bar_loop_does_not_clear_flag() -> None:
+    """The executor wraps flatten_now in wait_for; when the flag never clears
+    the coroutine is cancelled and the executor records 'timed_out'."""
+    from app.engine.live.live_engine import _watchdog_flatten_now
+
+    engine = _FakeEngineRef(has_positions=True)
+
+    # Use a tiny timeout via asyncio.wait_for, mirroring the executor's path.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_watchdog_flatten_now(engine), timeout=0.15)
+
+    # The flag was set before the timeout fired.
+    assert engine._flatten_now_requested, (
+        "flag must be set even when the coroutine is cancelled by timeout"
+    )
