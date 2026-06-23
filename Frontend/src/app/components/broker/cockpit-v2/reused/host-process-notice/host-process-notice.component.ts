@@ -5,6 +5,7 @@ import type {
   HostProcessStartDisabledReasonCode,
   HostProcessState,
   OperatorSurfaceHostProcess,
+  PriorRunClassification,
 } from '../../../../../api/live-instances.types';
 import { LiveRunsService } from '../../../../../services/live-runs.service';
 
@@ -20,6 +21,21 @@ const HEADING_BY_STATE: Record<HostProcessState, string> = {
 /** Trader-facing copy for each closed `HostProcessStartDisabledReasonCode`.
  *  Per ADR 0013 §4, Angular maps closed server-authored enums to display
  *  strings; the server is authoritative for the enum value. */
+/** Phase-0 review-first hint when the previous run halted for safety or
+ *  ended with an unexpected error. Surfaced ABOVE the Start affordance
+ *  so the trader sees the incident before re-launching. Phase 1 moves
+ *  this into the full `trader_guidance.primary_remediation = focus_view`
+ *  per ADR 0013 amendment 2026-06-22; until then, the host-process
+ *  notice carries it. The advisory does NOT disable Start — Start
+ *  enablement is independently governed by `start_capability` (design
+ *  "Guidance ranking does not disable Start"). */
+const REVIEW_FIRST_COPY: Partial<Record<PriorRunClassification, string>> = {
+  HALT_TRIGGERED:
+    'Previous run halted for safety. Review the incident in Warnings & interruptions before starting again.',
+  EXITED_WITH_ERROR:
+    'Previous run ended with an error. Review Warnings & interruptions before starting again.',
+};
+
 const START_DISABLED_COPY: Record<HostProcessStartDisabledReasonCode, string> = {
   ALREADY_RUNNING: 'The bot is already running.',
   STOPPING: 'The bot is shutting down. Wait for it to finish before starting again.',
@@ -70,8 +86,18 @@ export class HostProcessNoticeComponent {
    * sourced from the existing ``desired_state.state`` field — the
    * cockpit surfaces what the host runner will do on its next start. */
   readonly desiredIntent = input<string | null>(null);
+  /** Closed-enum `prior_run.classification` from the operator surface.
+   *  Drives the Phase-0 review-first advisory for HALT_TRIGGERED /
+   *  EXITED_WITH_ERROR. Pass `null` when no prior-run signal is
+   *  available; the advisory then stays hidden. */
+  readonly priorRunClassification = input<PriorRunClassification | null>(null);
 
   readonly visible = computed<boolean>(() => this.hostProcess().state !== 'RUNNING');
+
+  readonly reviewFirstMessage = computed<string | null>(() => {
+    const cls = this.priorRunClassification();
+    return cls ? (REVIEW_FIRST_COPY[cls] ?? null) : null;
+  });
 
   readonly heading = computed<string>(() => HEADING_BY_STATE[this.hostProcess().state]);
 

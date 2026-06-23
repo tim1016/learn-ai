@@ -379,16 +379,14 @@
       </aside>
     }
 
-    <!-- Host-process notice — server-authored copy -->
-    @if (s.operator_surface.host_process.notice) {
-      <aside class="host-process-notice" role="status" data-testid="host-process-notice">
-        <strong>HOST · {{ s.operator_surface.host_process.state }}</strong>
-        <span class="msg">{{ s.operator_surface.host_process.notice }}</span>
-        @if (s.operator_surface.host_process.copyable_command) {
-          <code class="copyable">{{ s.operator_surface.host_process.copyable_command }}</code>
-        }
-      </aside>
-    }
+    <!-- Host-process notice — server-authored copy + Start bot process
+         affordance + Phase-0 review-first advisory for HALT_TRIGGERED /
+         EXITED_WITH_ERROR. -->
+    <app-host-process-notice
+      [hostProcess]="s.operator_surface.host_process"
+      [priorRunClassification]="s.operator_surface.prior_run.classification"
+    />
+
 
     <!-- Inner view tabs -->
     <nav

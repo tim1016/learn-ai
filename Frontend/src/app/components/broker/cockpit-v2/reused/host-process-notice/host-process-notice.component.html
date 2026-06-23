@@ -11,6 +11,11 @@
         Desired intent: <strong>{{ desiredIntent() }}</strong>
       </p>
     }
+    @if (reviewFirstMessage(); as msg) {
+      <p class="review-first" role="alert" data-testid="host-process-review-first">
+        {{ msg }}
+      </p>
+    }
     @if (copyableCommand(); as cmd) {
       <div class="command-block" data-testid="host-process-copyable-command">
         <pre><code>{{ cmd }}</code></pre>

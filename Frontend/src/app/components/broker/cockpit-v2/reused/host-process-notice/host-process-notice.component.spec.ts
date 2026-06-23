@@ -50,6 +50,7 @@ interface RenderResult {
 function render(opts: {
   hostProcess: OperatorSurfaceHostProcess;
   desiredIntent?: string | null;
+  priorRunClassification?: 'CLEAN' | 'HALT_TRIGGERED' | 'EXITED_WITH_ERROR' | 'UNKNOWN' | null;
   startResponse?: HostRunnerActionResponse | Promise<HostRunnerActionResponse>;
   startError?: unknown;
 }): RenderResult {
@@ -77,6 +78,7 @@ function render(opts: {
   const fixture = TestBed.createComponent(HostProcessNoticeComponent);
   fixture.componentRef.setInput('hostProcess', opts.hostProcess);
   fixture.componentRef.setInput('desiredIntent', opts.desiredIntent ?? null);
+  fixture.componentRef.setInput('priorRunClassification', opts.priorRunClassification ?? null);
   fixture.detectChanges();
   return { el: fixture.nativeElement as HTMLElement, service: { startHostRunner } };
 }
@@ -219,6 +221,51 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
     btn?.click();
     await Promise.resolve();
     expect(service.startHostRunner).not.toHaveBeenCalled();
+  });
+});
+
+describe('HostProcessNoticeComponent — prior-run review-first advisory', () => {
+  it('shows the HALT_TRIGGERED review advisory when prior_run.classification = HALT_TRIGGERED', () => {
+    const { el } = render({
+      hostProcess: host({ start_capability: ENABLED_CAP }),
+      priorRunClassification: 'HALT_TRIGGERED',
+    });
+    const advisory = el.querySelector('[data-testid="host-process-review-first"]');
+    expect(advisory).not.toBeNull();
+    expect(advisory?.textContent ?? '').toContain('halted for safety');
+    expect(advisory?.textContent ?? '').toContain('Warnings & interruptions');
+  });
+
+  it('shows the EXITED_WITH_ERROR review advisory when prior_run.classification = EXITED_WITH_ERROR', () => {
+    const { el } = render({
+      hostProcess: host({ start_capability: ENABLED_CAP }),
+      priorRunClassification: 'EXITED_WITH_ERROR',
+    });
+    const advisory = el.querySelector('[data-testid="host-process-review-first"]');
+    expect(advisory).not.toBeNull();
+    expect(advisory?.textContent ?? '').toContain('ended with an error');
+  });
+
+  it.each(['CLEAN', 'UNKNOWN', null] as const)(
+    'hides the review advisory when classification = %s',
+    (cls) => {
+      const { el } = render({
+        hostProcess: host({ start_capability: ENABLED_CAP }),
+        priorRunClassification: cls,
+      });
+      expect(el.querySelector('[data-testid="host-process-review-first"]')).toBeNull();
+    },
+  );
+
+  it('keeps Start enabled when prior_run = HALT_TRIGGERED — the advisory does not gate Start', () => {
+    // Design: "Guidance ranking does not disable Start. Any actual Start
+    // prohibition must come from host_process.start_capability."
+    const { el } = render({
+      hostProcess: host({ start_capability: ENABLED_CAP }),
+      priorRunClassification: 'HALT_TRIGGERED',
+    });
+    const btn = el.querySelector<HTMLButtonElement>('[data-testid="host-process-start-button"]');
+    expect(btn?.disabled).toBe(false);
   });
 });
 

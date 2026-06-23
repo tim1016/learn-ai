@@ -29,6 +29,16 @@
     font-size: 0.75rem;
   }
 
+  .review-first {
+    margin: 0.5rem 0 0;
+    padding: 0.45rem 0.625rem;
+    background: rgba(243, 201, 105, 0.12);
+    border-left: 3px solid var(--warn);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-weight: 500;
+  }
+
   .command-block {
     display: flex;
     align-items: stretch;
