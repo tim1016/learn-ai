@@ -1548,6 +1548,13 @@ class OperatorSurface(BaseModel):
     # renders the banner from ``state``; raw receipt fields are intentionally
     # not surfaced — operators read the projection, not the receipt.
     reconciliation: OperatorSurfaceReconciliation | None = None
+    # PR 2 — post-halt watchdog incident headline. ``None`` when no
+    # unresolved uncertain-outcome watchdog incident exists for the run.
+    # When set, the cockpit should surface this notice to the operator
+    # until reconciliation completes and the incident is cleared.
+    # PR 5/6 will wire the full incident UI; PR 2 plumbs the schema
+    # only so cmd_start can surface the blocking condition.
+    incident_headline: OperatorNotice | None = None
 
 
 class LiveInstanceStatus(BaseModel):
