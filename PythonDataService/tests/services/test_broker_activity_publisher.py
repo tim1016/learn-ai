@@ -1526,3 +1526,141 @@ async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:
         assert rows[0].seq == 1
     finally:
         await publisher.stop()
+
+
+# ── TaskGroup supervisor lifecycle tests ────────────────────────────
+
+
+async def test_child_task_cannot_outlive_supervisor(tmp_path: Path) -> None:
+    """If the supervisor is cancelled via stop(), both children stop."""
+    publisher, _, _ = _build_publisher(tmp_path, [])
+    publisher.start()
+    assert publisher.is_running
+    # Give the event loop a tick so _run_supervisor can create the children.
+    await asyncio.sleep(0)
+    children = publisher._snapshot_children_for_tests()
+    assert len(children) == 2
+    await publisher.stop()
+    assert not publisher.is_running
+    for child in children:
+        assert child.done() or child.cancelled()
+
+
+async def test_consumer_exception_cancels_pending_loop(tmp_path: Path) -> None:
+    """If the event consumer raises an unhandled exception, the TaskGroup
+    cancels the pending loop — siblings cannot outlive the crashed child."""
+
+    async def _exploding_gen() -> AsyncIterator[IbkrOrderEvent]:
+        # Yield nothing; raise immediately.
+        raise RuntimeError("consumer exploded")
+        if False:  # pragma: no cover
+            yield None  # type: ignore[misc]
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=lambda: _exploding_gen(),
+    )
+    publisher._pending_tick_period_s = 0.01
+    publisher.start()
+    # Give the supervisor a moment to process the exception and exit.
+    deadline = asyncio.get_event_loop().time() + 1.0
+    while publisher.is_running and asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    assert not publisher.is_running, "supervisor should have stopped after child crash"
+    # Both children should be done.
+    await asyncio.sleep(0)
+    for child in publisher._child_tasks:
+        assert child.done()
+
+
+async def test_pending_loop_exception_cancels_consumer(tmp_path: Path) -> None:
+    """If the pending loop raises beyond its internal try/except (e.g. an
+    unhandled error in asyncio.sleep itself), the TaskGroup cancels the
+    consumer — the mirror case of the previous test."""
+
+    # We patch _pending_intent_loop to raise immediately.
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+
+    async def _blocking_gen() -> AsyncIterator[IbkrOrderEvent]:
+        await asyncio.sleep(3600)
+        if False:  # pragma: no cover
+            yield None  # type: ignore[misc]
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=lambda: _blocking_gen(),
+    )
+
+    # Replace the pending loop with one that immediately raises.
+    async def _exploding_loop() -> None:
+        raise RuntimeError("pending loop exploded")
+
+    publisher._pending_intent_loop = _exploding_loop  # type: ignore[method-assign]
+    publisher.start()
+
+    deadline = asyncio.get_event_loop().time() + 1.0
+    while publisher.is_running and asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    assert not publisher.is_running, "supervisor should stop when pending loop crashes"
+
+
+async def test_stop_is_idempotent(tmp_path: Path) -> None:
+    """stop() called twice must not raise."""
+    publisher, _, _ = _build_publisher(tmp_path, [])
+    publisher.start()
+    await publisher.stop()
+    # Second stop should be a no-op.
+    await publisher.stop()
+    assert not publisher.is_running
+
+
+async def test_supervisor_logs_critical_on_unhandled_child_exception(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When a child raises an unhandled exception the supervisor must log
+    CRITICAL with the exception detail before exiting."""
+    import logging
+
+    async def _crashing_gen() -> AsyncIterator[IbkrOrderEvent]:
+        raise RuntimeError("injected crash for log test")
+        if False:  # pragma: no cover
+            yield None  # type: ignore[misc]
+
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=lambda: _crashing_gen(),
+    )
+    with caplog.at_level(logging.CRITICAL, logger="app.services.broker_activity_publisher"):
+        publisher.start()
+        deadline = asyncio.get_event_loop().time() + 1.0
+        while publisher.is_running and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+
+    critical_records = [
+        r for r in caplog.records if r.levelno == logging.CRITICAL
+    ]
+    assert critical_records, "expected at least one CRITICAL log from supervisor"
+    assert any(
+        "supervisor exiting" in r.message for r in critical_records
+    ), f"expected 'supervisor exiting' in CRITICAL log; got {[r.message for r in critical_records]}"

@@ -155,9 +155,11 @@ class BrokerActivityPublisher:
         # ledger fold no longer surfaces it) so a re-emergence of the
         # same intent_id would re-author.
         self._authored_pending_intent_ids: set[str] = set()
-        self._task: asyncio.Task[None] | None = None
-        self._pending_tick_task: asyncio.Task[None] | None = None
+        self._supervisor_task: asyncio.Task[None] | None = None
         self._pending_tick_period_s: float = _PENDING_INTENT_TICK_S
+        # Test-only: the supervisor stores child task references here so
+        # tests can observe them via ``_snapshot_children_for_tests``.
+        self._child_tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
         # Slice 3 (ADR 0011 amendment) — flipped True for the duration
         # of ``sweep_reconnect_recovery``. While true, ``place_paper_order``
@@ -198,46 +200,34 @@ class BrokerActivityPublisher:
     # ── lifecycle ─────────────────────────────────────────────────
 
     def start(self) -> None:
-        """Spawn the background consumer task. Idempotent — calling
-        twice has no effect (the second call is a no-op)."""
-        if self._task is not None and not self._task.done():
+        """Spawn the supervisor task. Idempotent — calling twice has no
+        effect when the supervisor is still alive."""
+        if self._supervisor_task is not None and not self._supervisor_task.done():
             return
         self._stopped.clear()
-        self._task = asyncio.create_task(
-            self._run(), name=f"broker-activity-publisher:{self._strategy_instance_id}"
+        self._child_tasks = []
+        self._supervisor_task = asyncio.create_task(
+            self._run_supervisor(),
+            name=f"broker-activity-supervisor:{self._strategy_instance_id}",
         )
-        # Spawn the pending-intent tick alongside the event consumer.
-        # The event loop only fires on broker events; without a
-        # separate cadence, an intent the engine has emitted but the
-        # broker hasn't acknowledged is invisible until something
-        # happens on the broker side.
-        if self._pending_tick_task is None or self._pending_tick_task.done():
-            self._pending_tick_task = asyncio.create_task(
-                self._pending_intent_loop(),
-                name=f"broker-activity-pending-tick:{self._strategy_instance_id}",
-            )
 
     async def stop(self) -> None:
-        """Cancel the background task and signal all subscribers to drain.
+        """Cancel the supervisor (which cancels all children) and signal
+        all subscribers to drain.
 
         Each subscriber's queue receives a ``None`` sentinel; subscribers
         loop on ``get()`` and treat ``None`` as end-of-stream."""
         self._stopped.set()
-        for task_attr in ("_task", "_pending_tick_task"):
-            task = getattr(self, task_attr)
-            if task is not None:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    logger.debug(
-                        "publisher task cancelled during stop",
-                        extra={
-                            "strategy_instance_id": self._strategy_instance_id,
-                            "task_attr": task_attr,
-                        },
-                    )
-                setattr(self, task_attr, None)
+        if self._supervisor_task is not None:
+            self._supervisor_task.cancel()
+            try:
+                await asyncio.wait_for(self._supervisor_task, timeout=5.0)
+            except (asyncio.CancelledError, TimeoutError):
+                logger.debug(
+                    "publisher supervisor cancelled during stop",
+                    extra={"strategy_instance_id": self._strategy_instance_id},
+                )
+            self._supervisor_task = None
         for q in self._subscribers:
             try:
                 q.put_nowait(None)
@@ -251,7 +241,9 @@ class BrokerActivityPublisher:
 
     @property
     def is_running(self) -> bool:
-        return self._task is not None and not self._task.done()
+        return (
+            self._supervisor_task is not None and not self._supervisor_task.done()
+        )
 
     # ── subscriber pub-sub ────────────────────────────────────────
 
@@ -288,9 +280,53 @@ class BrokerActivityPublisher:
     def last_persisted_seq(self) -> int:
         return self._wal.last_seq()
 
+    # ── test helper ───────────────────────────────────────────────
+
+    def _snapshot_children_for_tests(self) -> list[asyncio.Task[None]]:
+        """Return the current list of child tasks spawned by the supervisor.
+
+        Test-only helper — production code must not call this. The list
+        is populated by ``_run_supervisor`` before ``TaskGroup.__aexit__``
+        blocks, so callers must snapshot *after* ``start()`` and give the
+        event loop a tick to allow the supervisor to create the children.
+        """
+        return list(self._child_tasks)
+
     # ── background loop ──────────────────────────────────────────
 
-    async def _run(self) -> None:
+    async def _run_supervisor(self) -> None:
+        """Single owning supervisor that runs both children under a TaskGroup.
+
+        The TaskGroup's structured-concurrency guarantee ensures:
+        - If either child raises, the other is cancelled automatically.
+        - ``stop()`` cancels only this task; cancellation cascades to
+          children via the TaskGroup's internal bookkeeping.
+        - A child crash that escapes to this level is caught as an
+          ``ExceptionGroup``, logged as CRITICAL, and the supervisor
+          exits (causing ``is_running`` to flip False so health checks
+          notice).
+        """
+        try:
+            async with asyncio.TaskGroup() as tg:
+                consumer = tg.create_task(
+                    self._run_event_consumer(),
+                    name=f"broker-activity-publisher:{self._strategy_instance_id}",
+                )
+                pending = tg.create_task(
+                    self._pending_intent_loop(),
+                    name=f"broker-activity-pending-tick:{self._strategy_instance_id}",
+                )
+                self._child_tasks = [consumer, pending]
+        except* Exception as eg:
+            logger.critical(
+                "broker-activity supervisor exiting due to unhandled child exception(s)",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "exceptions": [str(exc) for exc in eg.exceptions],
+                },
+            )
+
+    async def _run_event_consumer(self) -> None:
         """Drive the event source until cancelled or the source ends."""
         try:
             async for event in self._event_source_factory():
@@ -315,9 +351,10 @@ class BrokerActivityPublisher:
     async def _pending_intent_loop(self) -> None:
         """Periodic tick that surfaces engine intents not yet broker-acked.
 
-        Runs alongside ``_run`` so the cockpit's Working/Pending panel
-        reflects engine state even when no broker events are arriving. A
-        crash in one tick is logged and the loop continues — a single
+        Runs as a sibling child task inside the supervisor's TaskGroup
+        alongside ``_run_event_consumer`` so the cockpit's Working/Pending
+        panel reflects engine state even when no broker events are arriving.
+        A crash in one tick is logged and the loop continues — a single
         bad fold should not silence the rest of the publisher.
         """
         try:
