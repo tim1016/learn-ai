@@ -35,7 +35,7 @@ const DISABLED_CAP_INCOMPLETE: HostProcessStartCapability = {
 function host(overrides: Partial<OperatorSurfaceHostProcess> = {}): OperatorSurfaceHostProcess {
   return {
     state: 'IDLE',
-    notice: 'Host runner is reachable but no subprocess is attached to this instance.',
+    notice: 'The host is reachable but this bot has no active process. Start it to resume trading.',
     copyable_command: null,
     start_capability: DISABLED_CAP_INCOMPLETE,
     ...overrides,

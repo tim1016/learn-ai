@@ -89,14 +89,17 @@ _DAEMON_STATE_TO_HOST_PROCESS_STATE: dict[str, str] = {
 }
 
 _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
-    "STOPPING": "Host process is shutting down.",
-    "EXITED": "Host process has exited. Restart it from the host runner to resume actuation.",
-    "IDLE": ("Host runner is reachable but no subprocess is attached to this instance. Start it from the host runner."),
+    "STOPPING": "The bot is shutting down.",
+    "EXITED": "The previous bot process ended. Start this bot's process to resume trading.",
+    "IDLE": "The host is reachable but this bot has no active process. Start it to resume trading.",
     "WAITING_FOR_HOST": (
-        "Intent is RUNNING, but no host subprocess is attached to this "
-        "instance. Start it outside the app to actuate trading."
+        "Trading was requested, but this bot's process has not started yet. "
+        "Start it to begin trading."
     ),
-    "UNREACHABLE": ("Host runner daemon is not reachable. The cockpit cannot confirm any subprocess state from here."),
+    "UNREACHABLE": (
+        "The bot service is offline. The cockpit cannot confirm any "
+        "process state until it is reachable."
+    ),
 }
 
 

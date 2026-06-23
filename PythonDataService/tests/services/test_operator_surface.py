@@ -81,7 +81,7 @@ def test_host_process_idle_plus_desired_running_becomes_waiting_for_host() -> No
     surface = _surface(process=_IDLE_PROC, desired_state=_desired("RUNNING"))
     assert surface.host_process.state == "WAITING_FOR_HOST"
     assert surface.host_process.notice is not None
-    assert "Intent is RUNNING" in surface.host_process.notice
+    assert "Trading was requested" in surface.host_process.notice
 
 
 def test_host_process_idle_without_desired_running_stays_idle() -> None:
