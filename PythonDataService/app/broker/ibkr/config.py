@@ -153,6 +153,13 @@ class IbkrSettings(BaseSettings):
     # ADR 0013 amendment 2026-06-22).
     live_runner_host_start_command: str = ""
 
+    # ADR-0008 §5 / PR 1 — TTL for cold-start reconciliation receipts. After
+    # this many ms past the receipt's ``last_reconcile_ms`` (when set), the
+    # operator-surface projection treats a passed receipt as ``STALE``. 24 h
+    # default is long enough to span a normal trading day + overnight; the
+    # cockpit's STALE banner asks the operator to re-reconcile.
+    reconciliation_receipt_ttl_ms: int = 24 * 3600 * 1000
+
     # Fleet policy gate (ADR 0005, #399). When True, account-level contamination
     # (a position no managed instance created) blocks starts across the account.
     # Default False — contamination is surfaced as a DEGRADED banner but does not

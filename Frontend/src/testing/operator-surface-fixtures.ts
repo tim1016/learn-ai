@@ -83,6 +83,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
   runtime_freshness: null,
   control_plane: null,
   broker_observation_consistency: null,
+  reconciliation: { state: 'NOT_AVAILABLE', failure_reason: null, adopted_intent_ids: [], last_reconcile_ms: null },
 };
 
 // ---------------------------------------------------------------------------

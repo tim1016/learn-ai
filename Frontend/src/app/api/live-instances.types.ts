@@ -428,6 +428,32 @@ export interface OperatorSurface {
    *  comparison is impossible (no live binding). Never overwrites the
    *  child's authoritative posture on `broker`. */
   broker_observation_consistency: BrokerObservationConsistency | null;
+  /** ADR-0008 §5 / PR 1 — cold-start reconciliation projection. Null
+   *  when the comparison is impossible (no live binding); otherwise the
+   *  cockpit reads `state` directly to render the hazard banner. The
+   *  cockpit does NOT derive its own state from raw receipt fields. */
+  reconciliation: OperatorSurfaceReconciliation | null;
+}
+
+/** ADR-0008 §5 / PR 1 — operator-facing cold-start reconciliation state
+ *  composed by the backend from the on-disk receipt + current freshness
+ *  inputs (WAL seq, run/namespace identity, broker event clock, TTL). */
+export type ReconciliationState =
+  | 'NOT_AVAILABLE'
+  | 'IN_PROGRESS'
+  | 'CLEAN'
+  | 'ADOPTED'
+  | 'STALE'
+  | 'FAILED';
+
+export interface OperatorSurfaceReconciliation {
+  state: ReconciliationState;
+  /** Populated only when `state === 'FAILED'`. */
+  failure_reason: string | null;
+  /** Populated only when `state === 'ADOPTED'` (or `STALE` after an
+   *  adopted receipt) — the intent_ids the orchestrator recovered. */
+  adopted_intent_ids: string[];
+  last_reconcile_ms: number | null;
 }
 
 /** PRD #619-D4 — backend-authored divergence card.
