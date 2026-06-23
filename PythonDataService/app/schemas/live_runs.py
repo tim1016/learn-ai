@@ -1245,6 +1245,7 @@ class ReconciliationReceipt(BaseModel):
     failure_reason: str | None = None
 
 
+
 class OperatorSurfaceHostProcess(BaseModel):
     """Server-authored host-process surface (ADR-0003 / ADR-0006 / ADR-0007).
 

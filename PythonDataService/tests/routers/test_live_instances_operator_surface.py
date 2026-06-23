@@ -247,6 +247,8 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "runtime_freshness",
         # PRD #619-D4 — broker observation consistency surface.
         "broker_observation_consistency",
+        # ADR-0008 §5 / Reconciliation PR 1 — cold-start receipt projection.
+        "reconciliation",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
