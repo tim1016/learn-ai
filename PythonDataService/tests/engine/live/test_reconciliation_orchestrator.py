@@ -315,6 +315,43 @@ async def test_receipt_round_trips_through_disk(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_redeploy_receipt_uses_current_run_id_over_stale_envelope(
+    tmp_path: Path,
+) -> None:
+    """On redeploy of the same strategy_instance_id the per-instance sidecar
+    still carries the prior run's identity until the new engine flushes for
+    the first time. The orchestrator must stamp the receipt with the
+    caller-provided ``current_*`` values, not the stale envelope, or the
+    cockpit projection would compare a fresh receipt against the new live
+    binding and mark it STALE."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo = _make_envelope(run_dir)  # envelope.run_id == RUN_ID
+
+    new_run_id = f"{RUN_ID}-after-redeploy"
+    new_namespace = f"{NS}-v2"
+    new_sid = "spy-ema-paper-v2"
+
+    result = await reconcile(
+        run_dir=run_dir,
+        sidecar=repo,
+        broker_probe=_empty_broker(),
+        allowed_namespaces=ALLOWED,
+        now_ms=_clock(),
+        current_run_id=new_run_id,
+        current_strategy_instance_id=new_sid,
+        current_namespace=new_namespace,
+    )
+
+    assert isinstance(result.verdict, Continue)
+    assert result.receipt.status == "passed"
+    # The receipt carries the *new* run's identity, not the envelope's.
+    assert result.receipt.run_id == new_run_id
+    assert result.receipt.strategy_instance_id == new_sid
+    assert result.receipt.namespace == new_namespace
+
+
+@pytest.mark.asyncio
 async def test_existing_poisoned_flag_does_not_block_receipt(tmp_path: Path) -> None:
     """A prior boot may have already stamped poisoned.flag; the orchestrator
     must still land its failed receipt for the cockpit to read."""

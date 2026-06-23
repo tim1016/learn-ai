@@ -73,6 +73,9 @@ async def reconcile(
     allowed_namespaces: frozenset[str],
     now_ms: Callable[[], int],
     prior_run_dir: Path | None = None,
+    current_run_id: str | None = None,
+    current_strategy_instance_id: str | None = None,
+    current_namespace: str | None = None,
 ) -> ReconciliationResult:
     """Run the cold-start reconciliation procedure and persist a receipt.
 
@@ -102,11 +105,28 @@ async def reconcile(
     except LiveStateSidecarCorruptError:
         sidecar_corrupt = True
 
-    run_id = envelope.run_id if envelope is not None else _read_run_id_from_dir(run_dir)
-    strategy_instance_id = (
-        envelope.strategy_instance_id if envelope is not None else ""
+    # Identity for the receipt comes from the caller (the new run's ledger)
+    # when provided. The stable per-instance sidecar can still hold the prior
+    # run's ``run_id``/``namespace`` until the new engine flushes for the
+    # first time; stamping a fresh receipt with that stale envelope identity
+    # would let the cockpit projection mark a freshly-passed receipt STALE
+    # and would also write a receipt that names a different run than the one
+    # we are actually starting.
+    run_id = (
+        current_run_id
+        if current_run_id
+        else (envelope.run_id if envelope is not None else _read_run_id_from_dir(run_dir))
     )
-    namespace = envelope.bot_order_namespace if envelope is not None else ""
+    strategy_instance_id = (
+        current_strategy_instance_id
+        if current_strategy_instance_id
+        else (envelope.strategy_instance_id if envelope is not None else "")
+    )
+    namespace = (
+        current_namespace
+        if current_namespace
+        else (envelope.bot_order_namespace if envelope is not None else "")
+    )
 
     # Step 10 (durability): write the in-progress sentinel first so a crash
     # between here and the verdict write cannot leave the previous run's

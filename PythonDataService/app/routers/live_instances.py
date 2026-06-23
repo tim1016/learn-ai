@@ -1703,11 +1703,14 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             current_wal_seq=current_wal_seq,
             current_run_id=current_run_id,
             current_namespace=current_namespace,
-            latest_broker_event_ms=(
-                broker_observation_consistency.compared_at_ms
-                if broker_observation_consistency is not None
-                else None
-            ),
+            # ``broker_observation_consistency.compared_at_ms`` is the time
+            # of THIS status comparison, not the timestamp of the latest
+            # broker event. Using it would flip a fresh CLEAN/ADOPTED receipt
+            # to STALE on every poll. Until a real per-instance "latest
+            # broker activity ts" source is plumbed, leave the broker-event
+            # staleness signal unset — WAL-seq, run_id/namespace, mutation,
+            # and TTL still drive STALE correctly.
+            latest_broker_event_ms=None,
             latest_mutation_ms=(
                 latest_mutation.last_transition_at_ms
                 if latest_mutation is not None

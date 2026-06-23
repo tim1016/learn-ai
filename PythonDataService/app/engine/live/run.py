@@ -1713,6 +1713,13 @@ def cmd_start(args: argparse.Namespace) -> int:
                         allowed_namespaces=frozenset({_bot_order_namespace}),
                         now_ms=now_ms,
                         prior_run_dir=_prior_run_dir,
+                        # The per-instance sidecar may still carry the prior
+                        # run's identity until the new engine flushes — pass
+                        # the *new* run's ledger identity so the receipt is
+                        # stamped against the run we're actually starting.
+                        current_run_id=ledger.run_id,
+                        current_strategy_instance_id=strategy_instance_id,
+                        current_namespace=_bot_order_namespace,
                     )
                 except Exception as exc:
                     # Receipt-write failure is fatal per the contract
@@ -1762,10 +1769,16 @@ def cmd_start(args: argparse.Namespace) -> int:
                     return 1
                 if isinstance(_verdict, Adopt) and _verdict.pause:
                     # Ambiguous exposure: an adopted order is still active
-                    # at the broker. Pre-engine PAUSE persistence lets the
-                    # engine see desired_state=PAUSED on its first read
-                    # and refuse new entries until the operator resolves.
+                    # at the broker. Persist durable PAUSED so a restart
+                    # remains paused, AND flip the engine's in-memory
+                    # ``_paused`` flag — the engine seeds its constructor
+                    # ``start_paused`` from the pre-reconcile desired_state
+                    # snapshot and does not re-read the file before bar 1.
+                    # Without the in-memory flip an adopted active order
+                    # could be followed by a new submission on the next bar
+                    # instead of being held for operator resolution.
                     _write_desired_state("PAUSED", reason="reconcile_ambiguous_exposure")
+                    engine._paused = True
 
             try:
                 # PRD #619-B B3 — start the runtime publisher just
