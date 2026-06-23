@@ -60,6 +60,7 @@ from app.routers.live_runs import (
     _read_sidecar,
     _resolve_desired_state,
     _validate_path_segment,
+    _validate_run_id,
     build_command_timeline,
 )
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
@@ -1049,12 +1050,13 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
     through — only the daemon is the gate for those.
     """
     root = Path(settings.live_runs_root)
-    # Re-validate + confine the segment locally. The caller has already
-    # validated, but tracking analysers (CodeQL) do not trace through call
-    # boundaries; making the helper self-safe avoids a per-call taint flag.
+    # Re-validate + confine via the regex-pinned helper. ``_validate_run_id``
+    # combines ``_validate_path_segment``, a strict run_id regex, and
+    # ``_confine`` — the exact pattern documented in ``live_runs.py`` to
+    # break the CodeQL py/path-injection taint chain (which does not trace
+    # through ``_validate_path_segment`` + ``_confine`` alone).
     try:
-        safe_run_id = _validate_path_segment(run_id, field="run_id")
-        run_dir = _confine(root, safe_run_id)
+        run_dir = _validate_run_id(run_id, root)
     except ValueError:
         return  # the caller's own validation will already have surfaced this
     if not run_dir.is_dir():
