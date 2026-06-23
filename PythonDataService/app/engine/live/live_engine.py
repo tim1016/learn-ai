@@ -779,13 +779,25 @@ class LiveEngine:
             await self._broker.start_event_stream()
             started_event_stream = True
 
-        # PRD #619-B B3 — engine_runtime aggregator startup hooks. The
-        # publisher (owned by the caller) starts emitting as soon as
-        # all four blocks land. We seed command_loop + control_plane
-        # immediately; bar_loop and broker land on their first
-        # natural producer tick.
+        # PRD #619-B B3 — engine_runtime aggregator startup hooks. All
+        # four blocks are seeded here so the publisher's first snapshot
+        # writes immediately. The earlier shape (seed only command_loop
+        # + control_plane, let broker + bar_loop land on the first bar)
+        # left ``engine_runtime.json`` absent through every pre-market
+        # deploy, which the freshness evaluator can't distinguish from
+        # a crashed engine — it always marked posture_demoted=True and
+        # blocked Resume with POSTURE_DEMOTED. The session-aware
+        # bar-loop evaluator already handles "no bar yet" cleanly
+        # (CLOSED → NOT_APPLICABLE), so the seed just unblocks the
+        # first-snapshot gate without weakening any safety signal.
+        # ``_probe_and_publish_broker_block`` runs the same probe +
+        # publish the ``broker_probe_task`` (spawned below) refreshes
+        # every 10s; this call is its first iteration, made explicit so
+        # the broker block is non-None before ``engine.run()`` proceeds.
         await self._publish_command_loop_block()
         await self._publish_initial_control_plane_block()
+        await self._probe_and_publish_broker_block()
+        await self._publish_initial_bar_loop_block()
 
         # PRD #619-B B5 follow-up — child watchdog. The factory builds
         # a configured ``ChildWatchdog`` from the engine's four side-
@@ -809,6 +821,24 @@ class LiveEngine:
             if shutdown_event is None:
                 shutdown_event = asyncio.Event()
             command_poll_task = asyncio.create_task(self._command_poll_loop(shutdown_event))
+
+        # PRD #619-B §B — broker-probe heartbeat as its own task so its
+        # 10s cadence is decoupled from the 1Hz command-poll loop and
+        # from the bar-driven verdict-halt publish. Without this, the
+        # broker block's ``probe_completed_at_ms`` would stagnate past
+        # the 25s freshness threshold pre-market (when the bar loop
+        # isn't firing) and the freshness evaluator would re-demote
+        # posture seconds after a fresh start. Spawn is gated on the
+        # runtime aggregator being wired so replay tests and synthetic
+        # engines don't probe IBKR for no observable effect.
+        broker_probe_task: asyncio.Task | None = None
+        if self._runtime_aggregator is not None:
+            if shutdown_event is None:
+                shutdown_event = asyncio.Event()
+            broker_probe_task = asyncio.create_task(
+                self._broker_probe_loop(shutdown_event),
+                name="broker_probe_loop",
+            )
 
         source_iter = source.__aiter__()
         last_bar: TradeBar | None = None
@@ -1161,6 +1191,10 @@ class LiveEngine:
                 command_poll_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await command_poll_task
+            if broker_probe_task is not None:
+                broker_probe_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await broker_probe_task
             # Reconciliation PR 2 — drain any in-flight runtime reconcile
             # task so we don't tear down the engine while the orchestrator
             # is mid-receipt-write. The task is bounded by the broker
@@ -1537,7 +1571,9 @@ class LiveEngine:
         while not shutdown_event.is_set():
             # PRD #619-B B3 — command-loop heartbeat on every poll tick.
             # This is the 1Hz cadence the backend freshness evaluator
-            # uses to detect command-loop hangs.
+            # uses to detect command-loop hangs. The broker-probe
+            # cadence is owned by ``broker_probe_task`` so the two
+            # heartbeats don't share a fate.
             await self._publish_command_loop_block()
             try:
                 pending = self._command_channel.read_pending()
@@ -2380,6 +2416,100 @@ class LiveEngine:
         path = artifacts_root if isinstance(artifacts_root, Path) else None
         await self._runtime_aggregator.update_control_plane(
             build_control_plane_block_from_lease(path, now_ms=int(time.time() * 1000))
+        )
+
+    async def _probe_and_publish_broker_block(self) -> None:
+        """Refresh ``_last_probe_ms`` then republish the broker block.
+
+        Called from two sites:
+
+        - The engine's startup hooks (in ``run()``), where this is the
+          seed call that populates ``probe_completed_at_ms`` and the
+          identity axis before the runtime publisher's first snapshot
+          attempt. ``IbkrClient.connect()`` does not set
+          ``_last_probe_ms`` — only an explicit ``probe()`` does — so
+          without this call the first snapshot would carry
+          ``probe_completed_at_ms=None`` (UNKNOWN ⇒ posture_demoted).
+        - The ``_broker_probe_loop`` task, every 10s (PRD §B), so the
+          block stays inside the 25s freshness threshold while the bar
+          loop is idle (pre-market, halted symbol, etc.).
+
+        Persisting ``verdict_snapshot.json`` here matters even pre-bar:
+        the Resume guard reads that file via
+        ``read_broker_safety_verdict``, treats absence as UNKNOWN, and
+        ``resolve_guard_state`` then blocks Resume on
+        ``BROKER_SAFETY_UNKNOWN``. The earlier bar-driven write left
+        the file absent through every pre-market window, so Resume
+        wouldn't enable on a truly fresh deploy even with the broker
+        block populated.
+
+        Does NOT run the verdict-transition halt — that check stays
+        bar-driven so its observable cadence is unchanged.
+
+        No-ops when ``runtime_aggregator`` is unset: runs that
+        intentionally skip the runtime publisher (replay tests,
+        synthetic engines) don't pay for a real IBKR probe.
+        """
+        if self._runtime_aggregator is None:
+            return
+        if self._client is not None:
+            try:
+                await self._client.probe()
+            except Exception:
+                logger.exception("broker probe failed")
+        verdict_value: object = None
+        if self._verdict_provider is not None:
+            try:
+                verdict_value = self._verdict_provider()
+            except Exception:
+                logger.exception("verdict_provider failed")
+        if self._output_dir is not None:
+            self._write_verdict_snapshot(verdict_value)
+        await self._publish_broker_block(verdict_value=verdict_value)
+
+    async def _broker_probe_loop(self, shutdown_event: asyncio.Event) -> None:
+        """PRD #619-B §B — refresh the broker block every 10s.
+
+        Wait-first: the startup seed call in ``run()`` is the t=0
+        publish, so this loop waits ``BROKER_PROBE_INTERVAL_S`` before
+        each probe. ``wait_for`` on the shutdown event gives a clean
+        exit without sleeping out the full quantum.
+        """
+        BROKER_PROBE_INTERVAL_S = 10.0
+        while True:
+            try:
+                await asyncio.wait_for(
+                    shutdown_event.wait(), timeout=BROKER_PROBE_INTERVAL_S
+                )
+            except TimeoutError:
+                # Timeout is the canonical signal that the interval
+                # elapsed without a shutdown — the next iteration's
+                # probe IS what this handler is for.
+                await self._probe_and_publish_broker_block()
+            else:
+                return  # shutdown_event was set during the wait
+
+    async def _publish_initial_bar_loop_block(self) -> None:
+        """PRD #619-B B3 — seed the bar-loop block at startup.
+
+        ``latest_source_bar_ms=None`` advertises "no market-data
+        observation yet"; the freshness evaluator already treats
+        ``None`` distinctly (no ``BAR_LOOP_LATEST_BAR_STALE`` reason
+        is emitted in that case) and pre-market the session-aware
+        overlay clamps the bar-loop state to ``NOT_APPLICABLE``
+        regardless of heartbeat. The seed exists purely to unblock
+        the aggregator's coherent-snapshot gate; once the real bar
+        stream produces its first bar, ``_publish_bar_loop_block``
+        overwrites this with the real ``latest_source_bar_ms``.
+        """
+        if self._runtime_aggregator is None:
+            return
+        await self._runtime_aggregator.update_bar_loop(
+            build_bar_loop_block(
+                heartbeat_at_ms=int(time.time() * 1000),
+                latest_source_bar_ms=None,
+                expected_interval_ms=None,
+            )
         )
 
     async def _start_child_watchdog(self, shutdown_event: asyncio.Event) -> object:
