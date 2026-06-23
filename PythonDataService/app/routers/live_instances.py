@@ -444,6 +444,22 @@ def _resolve_broker_observation_consistency(
     )
 
 
+def _resolve_start_run_id(
+    root: Path, live_binding: LiveBinding | None, runs: list[dict]
+) -> str | None:
+    """Run_id the per-instance Start affordance will POST against.
+
+    The cockpit's Start button targets ``POST /runs/{run_id}/start``. The
+    canonical run is the bound run if present, else the latest evidence
+    run — the same resolution ``_start_defaults`` uses to seed the form
+    body. Returns ``None`` when the instance has no run on disk yet
+    (nothing-deployed); the projection then disables Start with
+    ``START_SETTINGS_INCOMPLETE``.
+    """
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    return run_dir.name if run_dir is not None else None
+
+
 def _start_defaults(
     root: Path, live_binding: LiveBinding | None, runs: list[dict], *, readonly_default: bool
 ) -> InstanceStartDefaults | None:
@@ -1540,6 +1556,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             latest_mutation=latest_mutation,
             broker_observation_consistency=broker_observation_consistency,
             host_start_command=settings.live_runner_host_start_command,
+            start_run_id=_resolve_start_run_id(root, live_binding, runs),
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,

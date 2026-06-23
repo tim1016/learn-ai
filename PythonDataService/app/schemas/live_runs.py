@@ -1165,6 +1165,39 @@ class OperatorSurfacePriorRun(BaseModel):
     classification: PriorRunClassification
 
 
+HostProcessStartDisabledReasonCode = Literal[
+    "ALREADY_RUNNING",
+    "STOPPING",
+    "HOST_SERVICE_OFFLINE",
+    "STOPPED_REQUIRES_REDEPLOY",
+    "START_SETTINGS_INCOMPLETE",
+]
+
+
+class HostProcessStartCapability(BaseModel):
+    """Server-authored per-instance Start-bot-process affordance
+    (ADR-0006 §1 / ADR-0007 / ADR 0013 amendment 2026-06-22).
+
+    Drives the cockpit's "Start bot process" button. The data-plane proxy
+    re-runs the same enable check before forwarding the POST to the
+    authenticated daemon endpoint, so a stale ``enabled=True`` cannot
+    bypass the gate. When enabled, ``run_id`` and ``request`` together
+    carry the exact POST the cockpit will fire — Angular never composes
+    the body (design "Architectural permission for Start bot process").
+    """
+
+    enabled: bool
+    # The run to start (``POST /runs/{run_id}/start``). Populated only
+    # when ``enabled`` is True; the data-plane proxy re-verifies before
+    # forwarding to the daemon.
+    run_id: str | None = None
+    # Server-authored request body. Built from ``InstanceStartDefaults`` /
+    # the bound run's ledger; absent (``None``) when ``enabled`` is False.
+    request: HostRunnerStartRequest | None = None
+    # Closed reason code; present iff ``enabled`` is False.
+    disabled_reason_code: HostProcessStartDisabledReasonCode | None = None
+
+
 class OperatorSurfaceHostProcess(BaseModel):
     """Server-authored host-process surface (ADR-0003 / ADR-0006 / ADR-0007).
 
@@ -1172,10 +1205,11 @@ class OperatorSurfaceHostProcess(BaseModel):
     command to start it when it is UNREACHABLE.  The host-managed per-bot
     *subprocesses* are different — the cockpit launches them through the
     authenticated ``POST /runs/{run_id}/start`` path defined by ADR-0006
-    and secured by ADR-0007.  This block exists so the cockpit can render
-    an honest "bot is not running" notice and, for UNREACHABLE only, a
-    copyable host-service start command, without Angular ever constructing
-    the command itself.
+    and secured by ADR-0007 (surfaced as ``start_capability``).  This
+    block exists so the cockpit can render an honest "bot is not running"
+    notice, a per-instance Start affordance, and (for UNREACHABLE only) a
+    copyable host-service start command — without Angular ever
+    constructing the command or the start request itself.
     """
 
     state: HostProcessState
@@ -1187,11 +1221,14 @@ class OperatorSurfaceHostProcess(BaseModel):
     # configuration supplies a non-empty value
     # (``IbkrSettings.live_runner_host_start_command``). Other states do
     # not get a daemon-start command because starting the daemon does not
-    # restart an exited per-bot subprocess — those use the per-instance
-    # Start affordance. Angular renders verbatim and MUST NOT construct,
-    # interpolate, or transform this string. ADR 0013 amendment
-    # 2026-06-22; design doc "Deployment-model decision".
+    # restart an exited per-bot subprocess — those use ``start_capability``.
+    # Angular renders verbatim and MUST NOT construct, interpolate, or
+    # transform this string. ADR 0013 amendment 2026-06-22; design doc
+    # "Deployment-model decision".
     copyable_command: str | None = None
+    # Per-instance Start-bot-process button. Always present so the cockpit
+    # can render a disabled state with a server-authored reason.
+    start_capability: HostProcessStartCapability
 
 
 class InvokeCapabilityAction(BaseModel):

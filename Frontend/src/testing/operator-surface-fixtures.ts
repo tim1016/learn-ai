@@ -39,7 +39,17 @@ const _capability = (
  */
 export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
   schema_version: 1,
-  host_process: { state: 'IDLE', notice: null, copyable_command: null },
+  host_process: {
+    state: 'IDLE',
+    notice: null,
+    copyable_command: null,
+    start_capability: {
+      enabled: false,
+      run_id: null,
+      request: null,
+      disabled_reason_code: 'START_SETTINGS_INCOMPLETE',
+    },
+  },
   prior_run: { classification: 'UNKNOWN' },
   broker: { safety_verdict: 'UNKNOWN', connection: 'UNKNOWN' },
   configuration: { verdict: 'UNKNOWN', reason_codes: [] },

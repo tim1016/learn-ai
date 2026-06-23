@@ -13,6 +13,12 @@ function host(overrides: Partial<OperatorSurfaceHostProcess> = {}): OperatorSurf
     state: 'IDLE',
     notice: 'Host runner is reachable but no subprocess is attached to this instance.',
     copyable_command: null,
+    start_capability: {
+      enabled: false,
+      run_id: null,
+      request: null,
+      disabled_reason_code: 'START_SETTINGS_INCOMPLETE',
+    },
     ...overrides,
   };
 }

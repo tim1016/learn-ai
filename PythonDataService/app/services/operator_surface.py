@@ -26,6 +26,9 @@ from app.schemas.live_runs import (
     BrokerObservationConsistency,
     DesiredStateView,
     FocusAction,
+    HostProcessStartCapability,
+    HostProcessStartDisabledReasonCode,
+    HostRunnerStartRequest,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
@@ -97,9 +100,60 @@ _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
 }
 
 
+_START_CAPABLE_STATES = frozenset({"IDLE", "WAITING_FOR_HOST", "EXITED"})
+
+
+def _project_host_start_capability(
+    state: str,
+    desired_state: DesiredStateView | None,
+    start_run_id: str | None,
+    start_defaults: InstanceStartDefaults | None,
+    poisoned: bool,
+) -> HostProcessStartCapability:
+    """Project the per-instance Start-bot-process affordance.
+
+    The data-plane proxy MUST re-evaluate the same enable rule before
+    forwarding the POST to the daemon — this projection is the cockpit's
+    presentation hint, not the gate. Reason codes are closed; the priority
+    order below is exhaustive for the 5 host-process states.
+    """
+
+    reason: HostProcessStartDisabledReasonCode | None = None
+    # Permanent-retirement gates outrank every per-state guard.
+    if poisoned or (desired_state is not None and desired_state.state == "STOPPED"):
+        reason = "STOPPED_REQUIRES_REDEPLOY"
+    elif state == "RUNNING":
+        reason = "ALREADY_RUNNING"
+    elif state == "STOPPING":
+        reason = "STOPPING"
+    elif state == "UNREACHABLE":
+        reason = "HOST_SERVICE_OFFLINE"
+    elif state not in _START_CAPABLE_STATES:
+        # Defensive: any future state we don't classify is off by default.
+        reason = "START_SETTINGS_INCOMPLETE"
+    elif not start_run_id or start_defaults is None or not start_defaults.strategy:
+        reason = "START_SETTINGS_INCOMPLETE"
+
+    if reason is not None:
+        return HostProcessStartCapability(enabled=False, disabled_reason_code=reason)
+
+    assert start_run_id is not None and start_defaults is not None  # narrowed above
+    request = HostRunnerStartRequest(
+        readonly=start_defaults.readonly,
+        hydrate_policy=start_defaults.hydrate_policy,
+        strategy=start_defaults.strategy,
+        max_orders_per_day=start_defaults.max_orders_per_day,
+        ibkr_host=start_defaults.ibkr_host,
+    )
+    return HostProcessStartCapability(enabled=True, run_id=start_run_id, request=request)
+
+
 def _project_host_process(
     process: InstanceProcessView,
     desired_state: DesiredStateView | None,
+    start_run_id: str | None = None,
+    start_defaults: InstanceStartDefaults | None = None,
+    poisoned: bool = False,
     host_start_command: str | None = None,
 ) -> OperatorSurfaceHostProcess:
     state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
@@ -110,16 +164,23 @@ def _project_host_process(
     notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)
     # ``copyable_command`` is authored ONLY for UNREACHABLE, and only when
     # trusted deployment configuration supplies a non-empty command. The
-    # EXITED / IDLE / WAITING_FOR_HOST cases need a per-instance Start
-    # action, NOT the daemon-start script (it would restart the host
-    # service unnecessarily and not the exited subprocess). ADR 0013
-    # amendment 2026-06-22; design doc "Deployment-model decision".
+    # EXITED / IDLE / WAITING_FOR_HOST cases use ``start_capability``
+    # below — restarting the host daemon does NOT restart an exited
+    # per-bot subprocess.
     copyable_command = (
         host_start_command
         if state == "UNREACHABLE" and host_start_command
         else None
     )
-    return OperatorSurfaceHostProcess(state=state, notice=notice, copyable_command=copyable_command)
+    start_capability = _project_host_start_capability(
+        state, desired_state, start_run_id, start_defaults, poisoned
+    )
+    return OperatorSurfaceHostProcess(
+        state=state,
+        notice=notice,
+        copyable_command=copyable_command,
+        start_capability=start_capability,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +651,7 @@ def compute_operator_surface(
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
     host_start_command: str | None = None,
+    start_run_id: str | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -609,7 +671,14 @@ def compute_operator_surface(
     resolved_guards = guard_state if guard_state is not None else empty_guard_state()
 
     return OperatorSurface(
-        host_process=_project_host_process(process, desired_state, host_start_command),
+        host_process=_project_host_process(
+            process,
+            desired_state,
+            start_run_id=start_run_id,
+            start_defaults=start_defaults,
+            poisoned=poisoned,
+            host_start_command=host_start_command,
+        ),
         prior_run=_project_prior_run(last_exit),
         broker=_project_broker(safety_verdict_final, broker_connection_state),
         configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),

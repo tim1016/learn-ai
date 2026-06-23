@@ -53,7 +53,17 @@ function makeStatus() {
     lineage: null,
     operator_surface: {
       schema_version: 1,
-      host_process: { state: 'RUNNING', notice: null, copyable_command: null },
+      host_process: {
+        state: 'RUNNING',
+        notice: null,
+        copyable_command: null,
+        start_capability: {
+          enabled: false,
+          run_id: null,
+          request: null,
+          disabled_reason_code: 'ALREADY_RUNNING',
+        },
+      },
       prior_run: { classification: 'UNKNOWN' },
       broker: { safety_verdict: 'UNSAFE', connection: 'DISCONNECTED' },
       configuration: { verdict: 'READY', reason_codes: [] },
