@@ -229,7 +229,7 @@ def _build_notice(rule: _Rule, active_codes: set[str], facts: dict[str, int | No
         title=rule.title,
         message=rule.message,
         source_codes=matched_sources,
-        facts={k: v for k, v in facts.items() if v is not None},
+        forensic_facts={k: v for k, v in facts.items() if v is not None},
         action=rule.action,
         runbook_slug=rule.runbook_slug,
         occurred_at_ms=now_ms,
@@ -243,8 +243,15 @@ def compose_runtime_freshness_notices(
 ) -> tuple[OperatorNotice | None, list[OperatorNotice]]:
     """Compose runtime-freshness notices for the operator surface.
 
-    Returns ``(headline, reasons)``. ``headline`` may be ``None`` when the
-    only active rule is banner-suppressed (e.g. market closed).
+    Returns ``(headline, additional_reasons)``.
+
+    ``headline`` is the highest-priority non-suppressed notice, or ``None``
+    when the only active rule is banner-suppressed (e.g. market closed).
+
+    ``additional_reasons`` contains every matched notice *except* the exact
+    headline object (identity-based, not code-based), so two rules that happen
+    to emit the same code for different reasons both surface in
+    ``additional_reasons``; only the one elevated to headline is excluded.
     """
     if freshness is None:
         return None, []
@@ -268,4 +275,6 @@ def compose_runtime_freshness_notices(
 
     reasons = [_build_notice(rule, active_codes, ages, now_ms) for rule in matched]
     headline = next((n for rule, n in zip(matched, reasons, strict=False) if not rule.suppress_banner), None)
-    return headline, reasons
+    # additional_reasons: every notice except the exact headline object (identity check).
+    additional_reasons = [n for n in reasons if n is not headline]
+    return headline, additional_reasons

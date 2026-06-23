@@ -11,7 +11,7 @@ function withHeadline(): OperatorSurfaceRuntimeFreshness {
     message:
       'The most recent bar is older than the freshness window. New trading decisions are held until fresh data arrives.',
     source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
-    facts: { bar_loop_age_ms: 99_000 },
+    forensic_facts: { bar_loop_age_ms: 99_000 },
     action: { kind: 'wait' as const, label: null, target: null },
     runbook_slug: 'runtime-freshness',
     occurred_at_ms: null,
@@ -26,7 +26,8 @@ function withHeadline(): OperatorSurfaceRuntimeFreshness {
     bar_loop: stale,
     control_plane: fresh,
     headline: notice,
-    stale_reasons: [notice],
+    // Backend pre-filters: the headline is excluded from additional_reasons.
+    additional_reasons: [],
   };
 }
 
@@ -40,7 +41,7 @@ function freshFreshness(): OperatorSurfaceRuntimeFreshness {
     bar_loop: fresh,
     control_plane: fresh,
     headline: null,
-    stale_reasons: [],
+    additional_reasons: [],
   };
 }
 
@@ -69,16 +70,16 @@ describe('RuntimeBannerComponent', () => {
     expect(container.textContent).not.toContain('BAR_LOOP_LATEST_BAR_STALE');
   });
 
-  it('renders when only stale_reasons are present (no headline, e.g. session closed)', async () => {
+  it('renders nothing when only additional_reasons are present (no headline, e.g. session closed)', async () => {
     const f = freshFreshness();
-    f.stale_reasons = [
+    f.additional_reasons = [
       {
         code: 'runtime.market_closed',
         tier: 'info',
         title: 'Market closed',
         message: 'The bot is idle until the regular trading session opens.',
         source_codes: ['BAR_LOOP_SESSION_CLOSED'],
-        facts: {},
+        forensic_facts: {},
         action: { kind: 'none', label: null, target: null },
         runbook_slug: null,
         occurred_at_ms: null,

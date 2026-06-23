@@ -10,7 +10,7 @@ function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
     title: 'Market data is stale',
     message: 'No fresh bar has arrived for 92 seconds.',
     source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
-    facts: { age_ms: 92_000 },
+    forensic_facts: { age_ms: 92_000 },
     action: { kind: 'wait', label: null, target: null },
     runbook_slug: 'runtime-freshness',
     occurred_at_ms: null,
@@ -84,12 +84,12 @@ describe('OperatorNoticeComponent', () => {
     expect(root?.classList.contains('tier-critical')).toBe(true);
   });
 
-  it('exposes facts via an expandable details element', async () => {
+  it('exposes forensic facts via an expandable details element', async () => {
     await render(OperatorNoticeComponent, {
-      inputs: { notice: makeNotice({ facts: { bar_loop_age_ms: 99_000, feed: 'polygon' } }) },
+      inputs: { notice: makeNotice({ forensic_facts: { bar_loop_age_ms: 99_000, feed: 'polygon' } }) },
     });
 
-    const details = screen.getByTestId('operator-notice-facts');
+    const details = screen.getByTestId('operator-notice-forensic-facts');
     expect(details.textContent).toContain('bar_loop_age_ms');
     expect(details.textContent).toContain('99000');
     expect(details.textContent).toContain('polygon');

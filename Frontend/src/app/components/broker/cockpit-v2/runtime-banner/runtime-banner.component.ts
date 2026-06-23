@@ -19,11 +19,7 @@ export class RuntimeBannerComponent {
     () => this.freshness()?.headline ?? null,
   );
 
-  readonly additionalReasons = computed<OperatorNotice[]>(() => {
-    const f = this.freshness();
-    if (!f || !f.headline) {
-      return [];
-    }
-    return f.stale_reasons.filter((r) => r.code !== f.headline?.code);
-  });
+  readonly additionalReasons = computed<OperatorNotice[]>(
+    () => this.freshness()?.additional_reasons ?? [],
+  );
 }

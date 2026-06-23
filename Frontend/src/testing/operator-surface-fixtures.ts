@@ -299,7 +299,7 @@ export const STALE_BAR_LOOP_NOTICE: OperatorNotice = {
   message:
     'The most recent bar is older than the freshness window. New trading decisions are held until fresh data arrives.',
   source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
-  facts: { bar_loop_age_ms: 90_000 },
+  forensic_facts: { bar_loop_age_ms: 90_000 },
   action: { kind: 'wait', label: null, target: null },
   runbook_slug: 'runtime-freshness',
   occurred_at_ms: 1_700_000_090_000,
@@ -309,8 +309,6 @@ export const STALE_BAR_LOOP_NOTICE: OperatorNotice = {
 export const RUNTIME_FRESHNESS_BAR_LOOP_STALE: OperatorSurfaceRuntimeFreshness = {
   posture_demoted: true,
   stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
-  headline: STALE_BAR_LOOP_NOTICE,
-  stale_reasons: [STALE_BAR_LOOP_NOTICE],
   command_loop: { state: 'FRESH', age_ms: 5_000, stale_reason_codes: [] },
   broker: { state: 'FRESH', age_ms: 8_000, stale_reason_codes: [] },
   bar_loop: {
@@ -319,4 +317,7 @@ export const RUNTIME_FRESHNESS_BAR_LOOP_STALE: OperatorSurfaceRuntimeFreshness =
     stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
   },
   control_plane: { state: 'FRESH', age_ms: 3_000, stale_reason_codes: [] },
+  headline: STALE_BAR_LOOP_NOTICE,
+  // Backend pre-filters: the headline is excluded from additional_reasons.
+  additional_reasons: [],
 };

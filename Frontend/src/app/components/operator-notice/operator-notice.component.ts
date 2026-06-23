@@ -30,8 +30,8 @@ export class OperatorNoticeComponent {
     return action.kind === 'external_manual_check' && !!action.label;
   });
 
-  readonly factEntries = computed(() =>
-    Object.entries(this.notice().facts ?? {}).map(([key, value]) => ({
+  readonly forensicFactEntries = computed(() =>
+    Object.entries(this.notice().forensic_facts ?? {}).map(([key, value]) => ({
       key,
       value: value === null ? 'null' : String(value),
     })),

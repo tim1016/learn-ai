@@ -1,13 +1,13 @@
-"""Regression test for #657 — runtime_freshness.headline + stale_reasons wired.
+"""Regression test for #657 — runtime_freshness.headline + additional_reasons wired.
 
 Verifies that ``OperatorSurfaceRuntimeFreshness`` surfaces ``headline``
-and ``stale_reasons`` populated by ``compose_runtime_freshness_notices``
+and ``additional_reasons`` populated by ``compose_runtime_freshness_notices``
 when the engine-runtime snapshot is missing (ENGINE_RUNTIME_MISSING code
 active).
 
 Wire path under test:
     _project_runtime_freshness  →  compose_runtime_freshness_notices
-    →  OperatorSurfaceRuntimeFreshness.{headline, stale_reasons}
+    →  OperatorSurfaceRuntimeFreshness.{headline, additional_reasons}
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, process: dict | None = None)
 
 
 # ---------------------------------------------------------------------------
-# Regression: #657 — headline + stale_reasons populated when runtime stale
+# Regression: #657 — headline + additional_reasons populated when runtime stale
 # ---------------------------------------------------------------------------
 
 
@@ -77,11 +77,11 @@ async def test_runtime_freshness_notice_headline_present_when_engine_runtime_mis
 ) -> None:
     """When there is no engine-runtime snapshot, ENGINE_RUNTIME_MISSING is
     active and the composer must produce a non-None ``headline`` notice
-    with ``code == "runtime.engine_runtime_incompatible"`` plus a
-    matching ``stale_reasons`` list.
+    with ``code == "runtime.engine_runtime_incompatible"`` and an empty
+    ``additional_reasons`` list (single matched rule became the headline).
 
     Before the Task-5 wiring this test fails with:
-        AssertionError: headline is None / stale_reasons is []
+        AssertionError: headline is None / additional_reasons is []
     """
     app, root = app_with_root
     _write_ledger(root, "run-notice-1", "spy_ema_paper", 100)
@@ -100,7 +100,7 @@ async def test_runtime_freshness_notice_headline_present_when_engine_runtime_mis
 
     # Shape: new fields must exist.
     assert "headline" in rf, "headline field missing from runtime_freshness"
-    assert "stale_reasons" in rf, "stale_reasons field missing from runtime_freshness"
+    assert "additional_reasons" in rf, "additional_reasons field missing from runtime_freshness"
 
     # With no engine-runtime snapshot, ENGINE_RUNTIME_MISSING is active.
     assert "ENGINE_RUNTIME_MISSING" in rf["stale_reason_codes"]
@@ -114,19 +114,18 @@ async def test_runtime_freshness_notice_headline_present_when_engine_runtime_mis
     assert isinstance(headline["message"], str) and headline["message"]
     assert "ENGINE_RUNTIME_MISSING" in headline["source_codes"]
 
-    # stale_reasons must contain at least the headline notice.
-    stale_reasons = rf["stale_reasons"]
-    assert isinstance(stale_reasons, list)
-    assert len(stale_reasons) >= 1
-    reason_codes = [r["code"] for r in stale_reasons]
-    assert "runtime.engine_runtime_incompatible" in reason_codes
+    # additional_reasons must be a list; the single matched rule became the
+    # headline, so there are no additional reasons in this scenario.
+    additional_reasons = rf["additional_reasons"]
+    assert isinstance(additional_reasons, list)
+    assert additional_reasons == []
 
 
 async def test_runtime_freshness_notice_headline_none_when_runtime_fresh(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When the engine runtime is fully fresh, ``headline`` must be ``None``
-    and ``stale_reasons`` must be an empty list."""
+    and ``additional_reasons`` must be an empty list."""
     from app.engine.live.engine_runtime import (
         BarLoopBlock,
         BrokerBlock,
@@ -192,7 +191,7 @@ async def test_runtime_freshness_notice_headline_none_when_runtime_fresh(
 
     assert rf["stale_reason_codes"] == []
     assert rf["headline"] is None
-    assert rf["stale_reasons"] == []
+    assert rf["additional_reasons"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +211,11 @@ def _stale(code: str, age_ms: int = 99_000) -> DomainFreshness:
 
 def test_runtime_freshness_projection_session_closed_suppresses_headline_only():
     """When BAR_LOOP_SESSION_CLOSED is the only stale reason, headline must
-    be None (suppressed), but stale_reasons must still include the
+    be None (suppressed), but additional_reasons must still include the
     runtime.market_closed notice.
 
     This test validates that suppress_banner works: the headline is excluded
-    from the surface while the stale_reasons list still captures the info
+    from the surface while the additional_reasons list still captures the info
     tier notice for operator awareness.
     """
     runtime = RuntimeFreshness(
@@ -231,6 +230,6 @@ def test_runtime_freshness_projection_session_closed_suppresses_headline_only():
 
     assert surface is not None
     assert surface.headline is None
-    assert len(surface.stale_reasons) == 1
-    assert surface.stale_reasons[0].code == "runtime.market_closed"
-    assert surface.stale_reasons[0].tier == "info"
+    assert len(surface.additional_reasons) == 1
+    assert surface.additional_reasons[0].code == "runtime.market_closed"
+    assert surface.additional_reasons[0].tier == "info"

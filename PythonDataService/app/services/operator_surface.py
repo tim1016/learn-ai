@@ -573,16 +573,16 @@ def _project_runtime_freshness(
 ) -> OperatorSurfaceRuntimeFreshness | None:
     if freshness is None:
         return None
-    headline, stale_reasons = compose_runtime_freshness_notices(freshness)
+    headline, additional_reasons = compose_runtime_freshness_notices(freshness)
     return OperatorSurfaceRuntimeFreshness(
         posture_demoted=freshness.posture_demoted,
         stale_reason_codes=runtime_freshness_reason_codes(freshness),
-        headline=headline,
-        stale_reasons=stale_reasons,
         command_loop=_project_domain_freshness(freshness.command_loop),
         broker=_project_domain_freshness(freshness.broker),
         bar_loop=_project_domain_freshness(freshness.bar_loop),
         control_plane=_project_domain_freshness(freshness.control_plane),
+        headline=headline,
+        additional_reasons=additional_reasons,
     )
 
 

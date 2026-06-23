@@ -114,11 +114,13 @@ def test_command_loop_stale_is_critical():
 
 def test_broker_probe_missing_outranks_probe_stale_when_both_present():
     runtime = _runtime_with(broker=["BROKER_PROBE_MISSING", "BROKER_PROBE_STALE"])
-    headline, reasons = compose_runtime_freshness_notices(runtime)
+    headline, additional_reasons = compose_runtime_freshness_notices(runtime)
     assert headline is not None
     assert headline.code == "runtime.broker_probe_missing"
-    codes_in_reasons = {n.code for n in reasons}
-    assert {"runtime.broker_probe_missing", "runtime.broker_probe_stale"} <= codes_in_reasons
+    # broker_probe_missing is the headline and must NOT appear in additional_reasons.
+    # broker_probe_stale must appear in additional_reasons (it is a distinct rule).
+    codes_in_additional = {n.code for n in additional_reasons}
+    assert codes_in_additional == {"runtime.broker_probe_stale"}
 
 
 def test_session_halted_emits_info_level_notice():
@@ -129,11 +131,11 @@ def test_session_halted_emits_info_level_notice():
     assert headline.tier == "info"
 
 
-def test_facts_include_age_ms_when_available():
+def test_forensic_facts_include_age_ms_when_available():
     runtime = _runtime_with(bar_loop=["BAR_LOOP_LATEST_BAR_STALE"])
     headline, _ = compose_runtime_freshness_notices(runtime)
     assert headline is not None
-    assert headline.facts.get("bar_loop_age_ms") == 99_000
+    assert headline.forensic_facts.get("bar_loop_age_ms") == 99_000
 
 
 def test_occurred_at_ms_is_set_when_now_ms_provided():
@@ -156,10 +158,13 @@ def test_reasons_preserve_priority_order_descending():
         broker=["BROKER_PROBE_STALE"],
         control_plane=["CONTROL_PLANE_LEASE_STALE"],
     )
-    _, reasons = compose_runtime_freshness_notices(runtime)
-    codes = [n.code for n in reasons]
+    headline, additional_reasons = compose_runtime_freshness_notices(runtime)
+    # headline = control_plane_lease_stale (priority 95, the winner).
+    assert headline is not None
+    assert headline.code == "runtime.control_plane_lease_stale"
+    # additional_reasons must NOT include the headline; order is still priority-descending.
+    codes = [n.code for n in additional_reasons]
     assert codes == [
-        "runtime.control_plane_lease_stale",
         "runtime.broker_probe_stale",
         "runtime.market_data_stale",
     ]

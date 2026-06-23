@@ -37,11 +37,11 @@
     </p>
   }
 
-  @if (factEntries().length > 0) {
-    <details class="operator-notice__details" data-testid="operator-notice-facts">
-      <summary>Details</summary>
+  @if (forensicFactEntries().length > 0) {
+    <details class="operator-notice__details" data-testid="operator-notice-forensic-facts">
+      <summary>Forensic detail</summary>
       <dl>
-        @for (entry of factEntries(); track entry.key) {
+        @for (entry of forensicFactEntries(); track entry.key) {
           <dt>{{ entry.key }}</dt>
           <dd>{{ entry.value }}</dd>
         }

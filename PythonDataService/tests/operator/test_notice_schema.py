@@ -125,16 +125,16 @@ def test_notice_rejects_unknown_code():
         )
 
 
-def test_notice_facts_accept_scalar_values_only():
+def test_notice_forensic_facts_accept_scalar_values_only():
     notice = OperatorNotice(
         code="runtime.market_data_stale",
         tier="warning",
         title="Market data is stale",
         message="No fresh bar has arrived for 92 seconds.",
-        facts={"age_ms": 92_000, "expected_window_ms": 30_000, "feed": "polygon"},
+        forensic_facts={"age_ms": 92_000, "expected_window_ms": 30_000, "feed": "polygon"},
         action=_baseline_action(),
     )
-    assert notice.facts["age_ms"] == 92_000
+    assert notice.forensic_facts["age_ms"] == 92_000
 
 
 def test_incident_records_started_and_unresolved_by_default():

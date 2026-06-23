@@ -1367,12 +1367,12 @@ class OperatorSurfaceRuntimeFreshness(BaseModel):
 
     posture_demoted: bool
     stale_reason_codes: list[RuntimeFreshnessReasonCode] = Field(default_factory=list)
-    headline: OperatorNotice | None = None
-    stale_reasons: list[OperatorNotice] = Field(default_factory=list)
     command_loop: OperatorSurfaceDomainFreshness
     broker: OperatorSurfaceDomainFreshness
     bar_loop: OperatorSurfaceDomainFreshness
     control_plane: OperatorSurfaceDomainFreshness
+    headline: OperatorNotice | None = None
+    additional_reasons: list[OperatorNotice] = Field(default_factory=list)
 
 
 class OperatorSurfaceControlPlane(BaseModel):

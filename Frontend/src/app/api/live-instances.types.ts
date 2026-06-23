@@ -413,7 +413,7 @@ export interface OperatorNotice {
   title: string;
   message: string;
   source_codes: string[];
-  facts: Record<string, string | number | boolean | null>;
+  forensic_facts: Record<string, string | number | boolean | null>;
   action: OperatorNoticeAction;
   runbook_slug: string | null;
   occurred_at_ms: number | null;
@@ -438,16 +438,17 @@ export interface OperatorSurfaceDomainFreshness {
 export interface OperatorSurfaceRuntimeFreshness {
   posture_demoted: boolean;
   stale_reason_codes: string[];
-  /** Backend-authored top-priority notice for the banner; null when all
-   *  active rules are banner-suppressed (e.g. market closed). */
-  headline: OperatorNotice | null;
-  /** Full ordered list of active runtime-freshness notices. Empty when
-   *  all domains are fresh. Cockpit renders these in the detail panel. */
-  stale_reasons: OperatorNotice[];
   command_loop: OperatorSurfaceDomainFreshness;
   broker: OperatorSurfaceDomainFreshness;
   bar_loop: OperatorSurfaceDomainFreshness;
   control_plane: OperatorSurfaceDomainFreshness;
+  /** Backend-authored top-priority notice for the banner; null when all
+   *  active rules are banner-suppressed (e.g. market closed). */
+  headline: OperatorNotice | null;
+  /** Active runtime-freshness notices excluding the headline (backend
+   *  pre-filtered). Empty when all domains are fresh or only the headline
+   *  matched. Cockpit renders these in the detail panel without deduplication. */
+  additional_reasons: OperatorNotice[];
 }
 
 /** Closed-kind union for the typed daemon transport outcome (PRD #619-C1).

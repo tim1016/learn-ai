@@ -92,7 +92,7 @@ class OperatorNotice(BaseModel):
     title: str
     message: str
     source_codes: list[str] = Field(default_factory=list)
-    facts: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    forensic_facts: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     action: OperatorNoticeAction
     runbook_slug: str | None = None
     occurred_at_ms: int | None = None
@@ -101,7 +101,7 @@ class OperatorNotice(BaseModel):
 **Invariants**:
 
 - `title` and `message` are finished English. The frontend never interpolates copy.
-- `facts` is typed-but-generic; cockpit renders it in an expandable details panel using key/value formatting.
+- `forensic_facts` is typed-but-generic; cockpit renders it in a "Forensic detail" expandable panel (engineer-targeted, not pre-formatted display copy).
 - `source_codes` references operational enum strings for forensics; never displayed as primary copy.
 - `code` is namespaced (`runtime.*`, `watchdog.*`, `activity.*`, `reconciliation.*`); PR 1 declares every planned slot so frontend type generation is stable across PRs 1–6.
 - `runbook_slug`, when set, must reference a file that ships in the same PR. No aspirational links.
@@ -196,7 +196,7 @@ PRs 2–6 each reuse the contract from PR 1; PR 1 declares all `OperatorNoticeCo
 
 1. Tighten `OperatorSurfaceRuntimeFreshness`:
    - `stale_reason_codes` typing moves from `list[str]` to `list[RuntimeFreshnessReasonCode]`.
-   - Add `stale_reasons: list[OperatorNotice]` and `headline: OperatorNotice | None`.
+   - Add `additional_reasons: list[OperatorNotice]` (backend pre-filtered; excludes the headline) and `headline: OperatorNotice | None`.
    - Existing consumers continue to read `stale_reason_codes` (forensics-grade).
 
 2. Implement runtime-freshness rule composer:
@@ -210,8 +210,8 @@ PRs 2–6 each reuse the contract from PR 1; PR 1 declares all `OperatorNoticeCo
    - Note: live-instance status flows Python → Frontend directly via FastAPI REST (`/api/live-instances/{id}/status`). The .NET Backend is NOT in this data path; no GraphQL DTO changes required.
 
 4. Frontend pipeline:
-   - New `OperatorNoticeComponent` renders `title`, `message`, `action`, optional `runbook_slug`, optional facts panel. Standalone, OnPush, no copy composition.
-   - `RuntimeBanner` consumes `headline` + `stale_reasons` and renders via `OperatorNoticeComponent`. The raw `stale_reason_codes` field is hidden from the trader (kept available for forensic-debug UI only).
+   - New `OperatorNoticeComponent` renders `title`, `message`, `action`, optional `runbook_slug`, optional forensic-facts panel. Standalone, OnPush, no copy composition.
+   - `RuntimeBanner` consumes `headline` + `additional_reasons` and renders via `OperatorNoticeComponent`. The raw `stale_reason_codes` field is hidden from the trader (kept available for forensic-debug UI only). No client-side deduplication required — the backend pre-filters.
    - `operator-notice-code.ts` mirrors `OperatorNoticeCode` literal; snapshot test in Python guards drift.
 
 ### 6.2 Runtime freshness rules table
@@ -240,7 +240,7 @@ Final reason-code list will be sourced verbatim from the existing `RuntimeFreshn
 - `runtime.command_loop_unresponsive` — title "Bot is not responding to commands" — "Pause, Resume, Stop, or Flatten may not take effect until the bot recovers. If this persists, stop the bot from the host runner and verify positions at IBKR." — action `external_manual_check` ("Check positions in IBKR", target `ibkr_positions`).
 - `runtime.market_closed` — title "Market closed" — "The bot is idle until the regular trading session opens. No trading decision is being made." — action `none`. Suppressed from banner; rendered on the session card.
 
-Numeric facts (`age_ms`, `expected_window_ms`, `latest_source_bar_ms`) populate `facts`; cockpit shows them in the details panel.
+Numeric forensic facts (`age_ms`, `expected_window_ms`, `latest_source_bar_ms`) populate `forensic_facts`; cockpit surfaces them in a "Forensic detail" panel for engineers.
 
 ### 6.4 File layout (PR 1)
 
@@ -254,7 +254,7 @@ PythonDataService/app/operator/notices/__init__.py
 PythonDataService/app/operator/notices/schema.py             # OperatorNotice, Action, Tier, Code, Incident
 PythonDataService/app/operator/notices/runtime_freshness.py  # rules table + composer
 
-PythonDataService/app/schemas/live_runs.py                   # MOD: tighten code typing, add headline + stale_reasons
+PythonDataService/app/schemas/live_runs.py                   # MOD: tighten code typing, add headline + additional_reasons
 PythonDataService/app/routers/live_instances.py              # MOD: call composer when building runtime_freshness
 
 PythonDataService/tests/operator/__init__.py
@@ -263,12 +263,12 @@ PythonDataService/tests/operator/test_notice_schema.py
 PythonDataService/tests/operator/test_runtime_freshness_rules.py
 PythonDataService/tests/operator/test_notice_codes_snapshot.py
 
-Backend/.../OperatorSurface*.cs                              # MOD: expose headline + stale_reasons
+Backend/.../OperatorSurface*.cs                              # MOD: expose headline + additional_reasons
 Backend.Tests/.../OperatorSurfaceTests.cs                    # MOD: round-trip notice JSON
 
 Frontend/src/.../operator-notice/operator-notice.component.ts/.html/.scss
 Frontend/src/.../operator-notice/operator-notice.component.spec.ts
-Frontend/src/.../runtime-banner/...                          # MOD: render headline; details panel for stale_reasons
+Frontend/src/.../runtime-banner/...                          # MOD: render headline; details panel for additional_reasons
 Frontend/src/.../models/operator-notice-code.ts              # MOD: literal mirrors backend
 ```
 
@@ -382,7 +382,7 @@ If sweep finds a fill absent from engine-known executions: emit `reconciliation.
 - ADR number: `0015`. Confirmed against `docs/architecture/adrs/`.
 - PRD location: `docs/architecture/operator-notice-prd.md`.
 - Operator-notice composer module: new `PythonDataService/app/operator/notices/` (not under `research/`).
-- Schema field on `OperatorSurfaceRuntimeFreshness` keeps `stale_reason_codes` for forensics; `headline` + `stale_reasons` are the trader-facing additions.
+- Schema field on `OperatorSurfaceRuntimeFreshness` keeps `stale_reason_codes` for forensics; `headline` + `additional_reasons` are the trader-facing additions (backend pre-filters the headline from `additional_reasons`).
 - Incident persistence: per-run, `artifacts/live_runs/<run_id>/operator_incidents/<incident_id>.json`.
 - Runbook scope for PR 1: `docs/runbooks/runtime-freshness.md` only. Control-plane and broker-activity runbooks ship with PRs 2 and 5.
 - Legacy WAL cutoff: `engine_started_at_ms` captured at process start, no calendar date.
@@ -396,7 +396,7 @@ Confirmed against `master @ 90016ec5`:
 
 | Concern | Current location | PR 1 change |
 |---|---|---|
-| `OperatorSurfaceRuntimeFreshness` schema | `PythonDataService/app/schemas/live_runs.py:1364` | Add `headline`, `stale_reasons`; tighten `stale_reason_codes` typing |
+| `OperatorSurfaceRuntimeFreshness` schema | `PythonDataService/app/schemas/live_runs.py:1364` | Add `headline`, `additional_reasons`; tighten `stale_reason_codes` typing |
 | Runtime freshness composer | `PythonDataService/app/routers/live_instances.py` | Calls new `app/operator/notices/runtime_freshness.py`; no business logic in router |
 | `RuntimeFreshnessReasonCode` | Currently typed as raw `str` at line 1361 / 1368 | Promote to `Literal` in `app/operator/notices/schema.py`; the schema imports it |
 | `IntentEventType` | `PythonDataService/app/engine/live/intent_ledger.py` | No change in PR 1; consumed by PR 3 |

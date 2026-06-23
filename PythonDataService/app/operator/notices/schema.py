@@ -85,6 +85,8 @@ class OperatorNotice(BaseModel):
 
     The cockpit renders ``title``, ``message``, and ``action`` verbatim.
     ``source_codes`` is for forensics only.
+    ``forensic_facts`` carries raw numeric diagnostics (e.g. ``age_ms``)
+    for the engineer-targeted "Forensic detail" panel; never pre-formatted copy.
     """
 
     code: OperatorNoticeCode
@@ -92,7 +94,7 @@ class OperatorNotice(BaseModel):
     title: str
     message: str
     source_codes: list[str] = Field(default_factory=list)
-    facts: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    forensic_facts: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     action: OperatorNoticeAction
     runbook_slug: str | None = None
     occurred_at_ms: int | None = None

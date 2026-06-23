@@ -32,7 +32,7 @@ of truth for:
 - `OperatorNoticeAction.kind = Literal["none", "wait", "open_runbook",
   "focus_cockpit_action", "external_manual_check", "redeploy"]`
 - `OperatorNotice` — `code`, `tier`, `title`, `message`, `source_codes`,
-  `facts`, `action`, `runbook_slug`, `occurred_at_ms`.
+  `forensic_facts`, `action`, `runbook_slug`, `occurred_at_ms`.
 - `OperatorIncident` — `incident_id`, `category`, `notice`,
   `started_at_ms`, `resolved_at_ms`, `evidence`.
 
