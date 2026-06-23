@@ -35,22 +35,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.live.engine_runtime import EngineRuntimeSnapshot
 
-# Reason codes the operator surface renders. Closed vocabulary — any
-# new code lands here and the Frontend lookup table.
-RuntimeFreshnessReasonCode = Literal[
-    "ENGINE_RUNTIME_MISSING",
-    "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE",
-    "COMMAND_LOOP_STALE",
-    "BROKER_PROBE_STALE",
-    "BROKER_PROBE_MISSING",
-    "BAR_LOOP_HEARTBEAT_STALE",
-    "BAR_LOOP_LATEST_BAR_STALE",
-    "BAR_LOOP_SESSION_CLOSED",
-    "BAR_LOOP_SESSION_HALTED",
-    "CONTROL_PLANE_LEASE_STALE",
-    "CONTROL_PLANE_BOOT_ID_MISMATCH",
-]
-
 DomainFreshnessState = Literal[
     "FRESH",
     "STALE",
