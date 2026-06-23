@@ -44,6 +44,14 @@ COPY ./app ./app
 # test errors out at collection.
 COPY ./pytest.ini ./pytest.ini
 
+# Ruff config — ad-hoc ``podman exec polygon-data-service ruff check
+# app/ tests/`` must run under the same ruleset as CI. Without this file
+# in the container, ruff falls back to its default ruleset (only
+# pyflakes), silently passing on errors that CI flags (SIM/UP/I) and
+# leaving local devs surprised when CI fails on Yoda conditions, import
+# ordering, or contextlib.suppress idioms that local runs allowed.
+COPY ./ruff.toml ./ruff.toml
+
 # Golden-fixture manifest — read at runtime by ``GET /api/golden-fixtures``
 # (see app/routers/golden_fixtures.py). Lives under tests/ for historical
 # reasons (the fixtures themselves are test inputs) but the catalog endpoint

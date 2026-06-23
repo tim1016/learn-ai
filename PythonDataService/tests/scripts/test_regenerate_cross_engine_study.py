@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 
 import pytest
-
 from scripts.regenerate_cross_engine_study import (
     _parse_args,
     _resolve_target_cells,
