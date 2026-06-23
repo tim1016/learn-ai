@@ -6,7 +6,9 @@ import {
   signal,
 } from '@angular/core';
 
+import type { BrokerActivityHealth } from '../../../../../api/live-instances.types';
 import { fmtCurrency, fmtNumber, fmtTimestampNy } from '../../../format';
+import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 
 import { BrokerActivityRowDetailComponent } from '../broker-activity-row-detail/broker-activity-row-detail.component';
 import type {
@@ -43,7 +45,7 @@ interface GroupedRows {
 @Component({
   selector: 'app-broker-activity-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BrokerActivityRowDetailComponent],
+  imports: [BrokerActivityRowDetailComponent, OperatorNoticeComponent],
   templateUrl: './broker-activity-table.component.html',
   styleUrl: './broker-activity-table.component.scss',
 })
@@ -53,6 +55,10 @@ export class BrokerActivityTableComponent {
   readonly backfillError = input<string | null>(null);
   readonly sseStatus = input<string>('connecting');
   readonly sseError = input<string | null>(null);
+  /** PR 5 — typed broker-activity health from the 4s status poll.
+   *  When present, replaces the implicit ``backfillLoading`` spinner with
+   *  the server-authored health verdict. Null before the first poll response. */
+  readonly activityHealth = input<BrokerActivityHealth | null>(null);
 
   /** Executed-trade rows (everything except ``engine_only_pending``). */
   readonly executedRows = computed<BrokerActivityRow[]>(() =>

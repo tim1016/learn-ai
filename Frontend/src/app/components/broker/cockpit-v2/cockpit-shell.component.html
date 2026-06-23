@@ -151,8 +151,11 @@
 
   @if (status(); as s) {
     @let runtime = s.operator_surface.runtime_freshness;
-    @if (runtime) {
-      <app-runtime-banner [freshness]="runtime" />
+    @if (runtime || s.operator_surface.incident_headline) {
+      <app-runtime-banner
+        [freshness]="runtime"
+        [incidentHeadline]="s.operator_surface.incident_headline ?? null"
+      />
     }
 
     @if (controlPlaneBanner(); as banner) {

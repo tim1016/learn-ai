@@ -197,10 +197,18 @@ class BrokerActivityPublisher:
         # ``order_ref`` (the broker fill / cancel that supersedes the
         # pending) drops the dedupe entry so the tick is free to
         # re-author if the engine ever re-emits the intent.
+        # PR 5 — most-recent row's wall-clock ms for the health surface.
+        # Seeded on cold-start from the WAL so the health composer
+        # doesn't report ``degraded`` for a publisher that was just
+        # restarted after a gap; the WAL already has rows.
+        self._latest_row_ms: int | None = None
         latest_verdict_by_intent: dict[str, str] = {}
         for row in self._wal.read_all():
             if row.exec_id:
                 self._seen_exec_ids.add(row.exec_id)
+            # Track the most recent row's ts_ms across the backlog.
+            if self._latest_row_ms is None or row.ts_ms > self._latest_row_ms:
+                self._latest_row_ms = row.ts_ms
             parsed = parse_order_ref(row.order_ref)
             if parsed is None:
                 continue
@@ -256,6 +264,16 @@ class BrokerActivityPublisher:
         return (
             self._supervisor_task is not None and not self._supervisor_task.done()
         )
+
+    @property
+    def latest_row_ms(self) -> int | None:
+        """Wall-clock ms of the most recent row authored by this publisher.
+
+        ``None`` when no rows have been authored yet (cold-start with an
+        empty WAL).  Updated by ``_persist_and_broadcast`` on every new
+        row so the health surface can detect a stalled feed.
+        """
+        return self._latest_row_ms
 
     # ── subscriber pub-sub ────────────────────────────────────────
 
@@ -647,6 +665,10 @@ class BrokerActivityPublisher:
         self._wal.append_row(row)
         if row.exec_id:
             self._seen_exec_ids.add(row.exec_id)
+        # PR 5 — update the health-surface cursor so the composer can
+        # detect stalled feeds without scanning the WAL.
+        if self._latest_row_ms is None or row.ts_ms > self._latest_row_ms:
+            self._latest_row_ms = row.ts_ms
         self._update_envelope_cursor(row.seq)
         self._broadcast(row)
 

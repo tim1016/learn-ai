@@ -1,8 +1,24 @@
 <section class="broker-activity" data-testid="broker-activity-table" aria-label="Broker activity">
+  @let health = activityHealth();
   <header class="head">
     <h3>BROKER ACTIVITY</h3>
     <span class="muted">
-      @if (backfillLoading()) {
+      @if (health) {
+        @switch (health.state) {
+          @case ('starting') {
+            Starting…
+          }
+          @case ('unavailable') {
+            Feed unavailable
+          }
+          @case ('degraded') {
+            {{ executedRows().length }} row(s) · stream {{ sseStatus() }} · feed degraded
+          }
+          @default {
+            {{ executedRows().length }} row(s) · stream {{ sseStatus() }}
+          }
+        }
+      } @else if (backfillLoading()) {
         Loading history…
       } @else {
         {{ executedRows().length }} row(s) · stream {{ sseStatus() }}
@@ -21,84 +37,103 @@
     </div>
   }
 
-  @if (!backfillLoading() && !hasRows()) {
-    <p class="empty" data-testid="broker-activity-empty">
-      No broker activity yet for this instance.
-    </p>
-  }
+  @if (health && health.state !== 'ready' && health.state !== 'degraded' && health.headline) {
+    <!-- starting / unavailable — show the typed notice, suppress the table -->
+    <div class="health-notice" [attr.data-health-state]="health.state" data-testid="broker-activity-health-notice">
+      <app-operator-notice [notice]="health.headline" />
+    </div>
+  } @else {
+    @if (health && health.state === 'degraded' && health.headline) {
+      <!-- degraded — show the warning notice AND still render the table -->
+      <div class="health-notice" data-health-state="degraded" data-testid="broker-activity-health-notice">
+        <app-operator-notice [notice]="health.headline" />
+      </div>
+    }
 
-  @if (hasRows()) {
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">DATE / TIME</th>
-          <th scope="col">SYMBOL</th>
-          <th scope="col">SIDE</th>
-          <th scope="col" class="num">QTY</th>
-          <th scope="col" class="num">PRICE</th>
-          <th scope="col" class="num">TOTAL</th>
-          <th scope="col" class="num">COMM</th>
-          <th scope="col" class="num">NET</th>
-          <th scope="col">ORDER TYPE</th>
-          <th scope="col">VERDICT</th>
-          <th scope="col" class="num">LAG</th>
-        </tr>
-      </thead>
-      @for (group of groupedRows(); track trackGroup($index, group)) {
-        <tbody class="group" [attr.data-group-key]="group.key">
-          <tr class="group-header">
-            <td colspan="11">{{ group.label }}</td>
+    @if (!health && !backfillLoading() && !hasRows()) {
+      <p class="empty" data-testid="broker-activity-empty">
+        No broker activity yet for this instance.
+      </p>
+    }
+    @if (health && health.state === 'ready' && !hasRows()) {
+      <p class="empty" data-testid="broker-activity-empty">
+        No broker activity yet for this instance.
+      </p>
+    }
+
+    @if (hasRows()) {
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">DATE / TIME</th>
+            <th scope="col">SYMBOL</th>
+            <th scope="col">SIDE</th>
+            <th scope="col" class="num">QTY</th>
+            <th scope="col" class="num">PRICE</th>
+            <th scope="col" class="num">TOTAL</th>
+            <th scope="col" class="num">COMM</th>
+            <th scope="col" class="num">NET</th>
+            <th scope="col">ORDER TYPE</th>
+            <th scope="col">VERDICT</th>
+            <th scope="col" class="num">LAG</th>
           </tr>
-          @for (row of group.rows; track trackRow($index, row)) {
-            <tr
-              class="data-row"
-              [class.expanded]="isExpanded(row.seq)"
-              [attr.data-testid]="'broker-activity-row-' + row.seq"
-              [attr.aria-expanded]="isExpanded(row.seq)"
-              (click)="toggleRow(row.seq)"
-              (keydown.enter)="toggleRow(row.seq)"
-              tabindex="0"
-            >
-              <td class="ts">{{ fmtTimestampNy(row.exec_ts_ms ?? row.ts_ms) }}</td>
-              <td>{{ row.symbol }}</td>
-              <td>{{ row.side }}</td>
-              <td class="num">{{ fmtNumber(row.quantity, 0) }}</td>
-              <td class="num">{{ fmtCurrency(row.price) }}</td>
-              <td class="num">
-                @if (row.price !== null) {
-                  {{ fmtCurrency(row.price * row.quantity) }}
-                } @else {
-                  —
-                }
-              </td>
-              <td class="num">{{ fmtCurrency(row.commission) }}</td>
-              <td class="num">{{ fmtCurrency(row.net_amount) }}</td>
-              <td>{{ row.order_type }}</td>
-              <td>
-                <span
-                  class="chip"
-                  [class]="verdictClass(row.verdict)"
-                  [attr.data-verdict]="row.verdict"
-                >
-                  {{ verdictLabel(row.verdict) }}
-                </span>
-              </td>
-              <td class="num">
-                <span class="chip lag-chip">
-                  {{ formatLag(row.engine_overlay?.lag_breakdown?.intent_to_exec_ms ?? null) }}
-                </span>
-              </td>
+        </thead>
+        @for (group of groupedRows(); track trackGroup($index, group)) {
+          <tbody class="group" [attr.data-group-key]="group.key">
+            <tr class="group-header">
+              <td colspan="11">{{ group.label }}</td>
             </tr>
-            @if (isExpanded(row.seq)) {
-              <tr class="drawer-row" [attr.data-testid]="'broker-activity-drawer-' + row.seq">
-                <td colspan="11">
-                  <app-broker-activity-row-detail [row]="row" />
+            @for (row of group.rows; track trackRow($index, row)) {
+              <tr
+                class="data-row"
+                [class.expanded]="isExpanded(row.seq)"
+                [attr.data-testid]="'broker-activity-row-' + row.seq"
+                [attr.aria-expanded]="isExpanded(row.seq)"
+                (click)="toggleRow(row.seq)"
+                (keydown.enter)="toggleRow(row.seq)"
+                tabindex="0"
+              >
+                <td class="ts">{{ fmtTimestampNy(row.exec_ts_ms ?? row.ts_ms) }}</td>
+                <td>{{ row.symbol }}</td>
+                <td>{{ row.side }}</td>
+                <td class="num">{{ fmtNumber(row.quantity, 0) }}</td>
+                <td class="num">{{ fmtCurrency(row.price) }}</td>
+                <td class="num">
+                  @if (row.price !== null) {
+                    {{ fmtCurrency(row.price * row.quantity) }}
+                  } @else {
+                    —
+                  }
+                </td>
+                <td class="num">{{ fmtCurrency(row.commission) }}</td>
+                <td class="num">{{ fmtCurrency(row.net_amount) }}</td>
+                <td>{{ row.order_type }}</td>
+                <td>
+                  <span
+                    class="chip"
+                    [class]="verdictClass(row.verdict)"
+                    [attr.data-verdict]="row.verdict"
+                  >
+                    {{ verdictLabel(row.verdict) }}
+                  </span>
+                </td>
+                <td class="num">
+                  <span class="chip lag-chip">
+                    {{ formatLag(row.engine_overlay?.lag_breakdown?.intent_to_exec_ms ?? null) }}
+                  </span>
                 </td>
               </tr>
+              @if (isExpanded(row.seq)) {
+                <tr class="drawer-row" [attr.data-testid]="'broker-activity-drawer-' + row.seq">
+                  <td colspan="11">
+                    <app-broker-activity-row-detail [row]="row" />
+                  </td>
+                </tr>
+              }
             }
-          }
-        </tbody>
-      }
-    </table>
+          </tbody>
+        }
+      </table>
+    }
   }
 </section>

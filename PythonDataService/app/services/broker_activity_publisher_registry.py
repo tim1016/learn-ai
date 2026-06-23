@@ -12,10 +12,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 
 logger = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
 class BrokerActivityPublisherRegistry:
@@ -29,6 +34,13 @@ class BrokerActivityPublisherRegistry:
 
     def __init__(self) -> None:
         self._by_instance: dict[str, BrokerActivityPublisher] = {}
+        # PR 5 — wall-clock ms when each instance was first registered.
+        # Used by ``compose_broker_activity_health`` to classify the
+        # ``starting`` vs ``unavailable`` states.  Preserved across
+        # re-register calls (a superseding publisher for the same
+        # instance keeps the original registration timestamp so the
+        # health surface doesn't reset the clock).
+        self._registered_at_by_instance: dict[str, int] = {}
         self._lock = asyncio.Lock()
         # Slice 3 follow-up — process-wide reconnect-halt flag that
         # covers the *entire* post-reconnect recovery window, not just
@@ -63,15 +75,26 @@ class BrokerActivityPublisherRegistry:
             if existing is not None and existing is not publisher:
                 await existing.stop()
             self._by_instance[strategy_instance_id] = publisher
+            # Record the first-registration timestamp; preserve it when
+            # a superseding publisher replaces the prior one so the health
+            # surface doesn't reset the starting-timeout clock.
+            if strategy_instance_id not in self._registered_at_by_instance:
+                self._registered_at_by_instance[strategy_instance_id] = _now_ms()
         publisher.start()
         return publisher
 
     def get(self, strategy_instance_id: str) -> BrokerActivityPublisher | None:
         return self._by_instance.get(strategy_instance_id)
 
+    def registered_at_ms(self, strategy_instance_id: str) -> int | None:
+        """Return the wall-clock ms when the publisher for ``strategy_instance_id``
+        was first registered, or ``None`` if it has never been registered."""
+        return self._registered_at_by_instance.get(strategy_instance_id)
+
     async def unregister(self, strategy_instance_id: str) -> None:
         async with self._lock:
             publisher = self._by_instance.pop(strategy_instance_id, None)
+            self._registered_at_by_instance.pop(strategy_instance_id, None)
         if publisher is not None:
             await publisher.stop()
 
