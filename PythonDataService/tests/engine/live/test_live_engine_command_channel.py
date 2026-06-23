@@ -210,13 +210,19 @@ async def test_corrupt_command_halts_engine(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconcile_returns_accepted_noop(tmp_path: Path) -> None:
-    """VCR-0002 / Phase 4 — runtime ``RECONCILE`` is not wired. The bar loop's
-    dispatcher must ack with the structured ``accepted_noop`` shape from the
-    PRD so the cockpit and CLI both stop treating a backend no-op as a
-    successful reconcile. ADR 0008's durable-submit / cold-start reconciler
-    will be promoted to a real "reconcile on next restart" affordance in
-    Phase 5B."""
+async def test_reconcile_returns_accepted_when_runtime_prereqs_missing(
+    tmp_path: Path,
+) -> None:
+    """Reconciliation PR 2 — runtime ``RECONCILE`` is now wired, but a replay /
+    FakeBroker engine lacks the real prereqs (``client`` is None, no
+    ``artifacts_root`` / ``strategy_instance_id``). The dispatcher must still
+    return the ``accepted`` envelope (request_id + accepted_at_ms) so the
+    cockpit can render IN_PROGRESS; the async task then ack-completes with
+    ``verdict="error"`` because the runtime reconcile path requires a real
+    broker. The dedicated runtime-reconcile test file exercises the
+    Continue / Adopt / Poison / already_running branches under a fake
+    broker that simulates the orchestrator call sites.
+    """
     commands_dir = tmp_path / "commands"
     channel = CommandChannel(commands_dir)
     channel.write_from_operator(CommandVerb.RECONCILE)
@@ -238,6 +244,7 @@ async def test_reconcile_returns_accepted_noop(tmp_path: Path) -> None:
     assert ack_files, "RECONCILE pending file must be acked to the .ack.json sidecar"
     payload = _json.loads(ack_files[0].read_text(encoding="utf-8"))
     outcome = payload["outcome"]
-    assert outcome["result"] == "accepted_noop"
-    assert outcome["reason"] == "runtime_reconcile_not_wired"
-    assert "restart_required" in outcome["manual_action"]
+    # The async task overwrote the initial accepted ack with completion.
+    assert outcome["status"] == "completed"
+    assert outcome["verdict"] == "error"
+    assert "strategy_instance_id" in outcome["detail"]

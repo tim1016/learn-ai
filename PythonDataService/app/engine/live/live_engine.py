@@ -66,6 +66,7 @@ from app.engine.live.live_portfolio import (
     LiveBrokerEventStreamError,
     LivePortfolio,
 )
+from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_live_readiness
 from app.engine.live.readiness_sidecar import write_readiness
 from app.engine.live.runtime_producer import (
@@ -494,6 +495,19 @@ class LiveEngine:
         # invokes ``_flatten`` without terminating the process. The flag is
         # cleared after the flatten lands so a subsequent enqueue rearms it.
         self._flatten_now_requested = False
+        # Reconciliation PR 2 / runtime RECONCILE wiring.
+        # ``_submit_lock`` serialises the engine's submit critical sections
+        # (bar-loop submit, _flatten liquidations) with the async reconcile
+        # task. The reconcile task must wait for any in-flight submit to
+        # land before probing the broker; otherwise the snapshot is racy.
+        # ``_inhibit_submits`` is set the moment RECONCILE is acked so new
+        # submits skip without placing orders, even if the bar loop reaches
+        # the submit site while the reconcile task is still waiting on the
+        # lock. ``_reconcile_task`` tracks the running task so a concurrent
+        # RECONCILE returns ``already_running`` instead of starting a second.
+        self._submit_lock = asyncio.Lock()
+        self._inhibit_submits = False
+        self._reconcile_task: asyncio.Task | None = None
         # VCR-0018-F / Phase 6C — engine-level force-flat enforcement.
         # Mirrors the local ``last_force_flat_date == minute_bar.time.date()``
         # check, surfaced as instance state so ``_submit_pending_with_meta``
@@ -1147,6 +1161,15 @@ class LiveEngine:
                 command_poll_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await command_poll_task
+            # Reconciliation PR 2 — drain any in-flight runtime reconcile
+            # task so we don't tear down the engine while the orchestrator
+            # is mid-receipt-write. The task is bounded by the broker
+            # probe + classifier + a single ack file write; cancellation is
+            # the fallback if a poison verdict already triggered shutdown.
+            if self._reconcile_task is not None and not self._reconcile_task.done():
+                self._reconcile_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._reconcile_task
             # NEW: indicator-state checkpoint at graceful shutdown.
             if last_bar is not None:
                 try:
@@ -1425,6 +1448,25 @@ class LiveEngine:
         come back, which is correct for the dry run (executions stay
         empty; the strategy's own _in_position / trade_log evolves on
         its internal countdown).
+
+        Reconciliation PR 2: the broker call(s) happen under
+        ``self._submit_lock`` and skip entirely when
+        ``self._inhibit_submits`` is set (a RECONCILE has been acked and
+        the reconcile task either holds the lock or is about to). The
+        skip path drains pending orders to keep portfolio state honest
+        and logs the suppression so the operator can correlate the
+        decision row with the reconcile receipt.
+        """
+        async with self._submit_lock:
+            return await self._submit_pending_with_meta_locked(portfolio)
+
+    async def _submit_pending_with_meta_locked(self, portfolio: LivePortfolio):
+        """Internal submit path that assumes ``self._submit_lock`` is held.
+
+        Split from ``_submit_pending_with_meta`` so callers that already
+        hold the lock (``_flatten``'s cancel→liquidate→submit critical
+        section) don't re-enter ``asyncio.Lock`` — which is non-reentrant
+        and would deadlock the bar loop.
         """
         pending_snapshot = list(portfolio.pending_orders)
         if self._readonly:
@@ -1443,6 +1485,19 @@ class LiveEngine:
                     "[FORCE_FLAT_DROP] strategy=%s symbol=%s qty=%s tag=%s — order "
                     "dropped at engine boundary because force-flat is active for "
                     "this session",
+                    self._strategy_key,
+                    order.symbol,
+                    order.quantity,
+                    order.tag,
+                )
+            portfolio.pending_orders.clear()
+            return []
+        if self._inhibit_submits and pending_snapshot:
+            for order in pending_snapshot:
+                logger.warning(
+                    "[RECONCILE_INHIBIT] strategy=%s symbol=%s qty=%s tag=%s — "
+                    "order dropped at engine boundary because a runtime "
+                    "RECONCILE is in progress",
                     self._strategy_key,
                     order.symbol,
                     order.quantity,
@@ -1557,25 +1612,226 @@ class LiveEngine:
                 shutdown_event.set()
                 return {"status": "success", "effect": effect}
             if cmd.verb is CommandVerb.RECONCILE:
-                # VCR-0002 / VCR-0008 / Phase 4 — runtime RECONCILE is not
-                # wired. ADR 0008's durable-submit / cold-start reconciler is
-                # implemented but not in the production order flow. Until
-                # Phase 5B promotes this to a real durable "reconcile on next
-                # restart" affordance, this verb is honestly a no-op:
-                # operators must manually verify broker state after restart.
+                # Reconciliation PR 2 — runtime RECONCILE is now wired.
                 #
-                # The verb stays as a backend-compat surface (CLI / panic /
-                # older runners) but the cockpit no longer renders a button
-                # that promises a runtime refresh.
+                # Design (from the original user spec):
+                #   - RECONCILE creates a request ID and immediately inhibits
+                #     new submits.
+                #   - A dedicated async control task acquires the same lock
+                #     used by submit/flatten operations.
+                #   - It refreshes broker state, runs the same orchestrator,
+                #     and writes the receipt.
+                #   - Clean: release the submit barrier.
+                #   - Adoption with active exposure: remain paused.
+                #   - Poison: write poison evidence and halt/pause fail-closed.
+                #
+                # The dispatcher returns "accepted" + a request_id immediately
+                # so the cockpit can render IN_PROGRESS without waiting on the
+                # broker probe; the async reconcile task overwrites the ack
+                # with status="completed" + verdict=... when it lands via
+                # ``CommandChannel.ack_completion``.
+                #
+                # Concurrent RECONCILE returns ``already_running`` so the
+                # cockpit + operator-surface see exactly one in-flight task
+                # at a time (the receipt's ``in_progress`` sentinel reflects
+                # the original task; a second probe would corrupt the
+                # ordering).
+                if self._reconcile_task is not None and not self._reconcile_task.done():
+                    return {
+                        "status": "already_running",
+                        "reason": "another_reconcile_is_in_flight",
+                    }
+                request_id = mint_intent_id()
+                accepted_at_ms = now_ms_utc()
+                # Inhibit BEFORE spawning the task so a bar loop reaching the
+                # submit site between this ack and the task acquiring the
+                # lock still sees the barrier.
+                self._inhibit_submits = True
+                self._reconcile_task = asyncio.create_task(
+                    self._run_runtime_reconcile(cmd, shutdown_event, request_id)
+                )
                 return {
-                    "result": "accepted_noop",
-                    "reason": "runtime_reconcile_not_wired",
-                    "manual_action": "restart_required_no_broker_refresh_occurred",
+                    "status": "accepted",
+                    "request_id": request_id,
+                    "accepted_at_ms": accepted_at_ms,
                 }
             return {"status": "error", "effect": f"unknown_verb_{cmd.verb.value}"}
         except Exception as exc:
             logger.exception("command dispatch failed for verb=%s", cmd.verb.value)
             return {"status": "error", "effect": f"dispatch_exception: {exc!r}"}
+
+    async def _build_runtime_broker_snapshot(self) -> object:
+        """Build a fresh ``BrokerSnapshot`` for runtime reconciliation.
+
+        Split into a method so tests can inject a fake snapshot without
+        wiring a full IBKR client. Production callers (real engine + real
+        broker) execute the same ``list_open_orders`` +
+        ``executions_for_reconnect_recovery`` sync that ``run.py`` does
+        before the cold-start orchestrator.
+        """
+        from app.broker.ibkr.orders import (
+            executions_for_reconnect_recovery,
+            list_open_orders,
+        )
+        from app.engine.live.run import _build_broker_snapshot_from_ibkr
+
+        if self._client is None:
+            raise RuntimeError(
+                "runtime reconcile requires a real IbkrClient to probe the broker"
+            )
+        open_orders = await list_open_orders(self._client)
+        executions = await executions_for_reconnect_recovery(self._client)
+        return _build_broker_snapshot_from_ibkr(open_orders, executions)
+
+    async def _run_runtime_reconcile(
+        self,
+        cmd: Command,
+        shutdown_event: asyncio.Event,
+        request_id: str,
+    ) -> None:
+        """Async control task for runtime RECONCILE.
+
+        Acquires ``self._submit_lock`` (waiting for any in-flight submit or
+        flatten), builds a fresh ``BrokerSnapshot`` from the broker, runs
+        the cold-start orchestrator, and writes the completion outcome to
+        the command ack file via ``ack_completion``. The verdict drives the
+        engine's post-condition:
+
+        - Continue → release the submit barrier (``_inhibit_submits = False``).
+        - Adopt without active exposure → release the barrier; ledger now
+          contains the adopted orders.
+        - Adopt with active exposure → leave the barrier set + persist
+          ``desired_state = PAUSED`` + flip ``self._paused`` so the next
+          bar refuses to re-enter even when the operator resumes the
+          submit pipeline.
+        - Poison → leave the barrier set + set ``shutdown_event`` (the
+          orchestrator already wrote ``poisoned.flag`` + a failed receipt).
+
+        Any unexpected exception (broker.list_open_orders raised, the
+        orchestrator blew up before writing its receipt) is logged and
+        translated into a ``status="completed", verdict="error"`` ack +
+        leaves the barrier set fail-closed. The next bar won't submit;
+        the operator must investigate.
+        """
+        verdict_payload: dict = {"status": "completed", "request_id": request_id}
+        try:
+            from app.engine.live import reconciliation_orchestrator
+            from app.engine.live.live_state_sidecar import (
+                LiveStateSidecarRepo,
+                stable_live_state_path,
+            )
+            from app.engine.live.reconciliation_classifier import (
+                Adopt,
+                Continue,
+                Poison,
+            )
+
+            if (
+                self._output_dir is None
+                or self._artifacts_root is None
+                or not self._strategy_instance_id
+            ):
+                # Replay / test paths without a real broker can't reconcile.
+                # Surface this honestly rather than pretending the verb did
+                # anything; leave the barrier set so the operator notices.
+                verdict_payload.update(
+                    {
+                        "verdict": "error",
+                        "detail": (
+                            "runtime reconcile requires output_dir + artifacts_root + "
+                            "strategy_instance_id; one or more were missing"
+                        ),
+                    }
+                )
+                return
+
+            bot_order_namespace = f"learn-ai/{self._strategy_instance_id}/v1"
+            sidecar_repo = LiveStateSidecarRepo(
+                stable_live_state_path(self._artifacts_root, self._strategy_instance_id)
+            )
+
+            async with self._submit_lock:
+                # Refresh broker caches under the lock so the snapshot is
+                # consistent with what just-completed submits landed.
+                broker_snapshot = await self._build_runtime_broker_snapshot()
+
+                async def _probe():
+                    return broker_snapshot
+
+                result = await reconciliation_orchestrator.reconcile(
+                    run_dir=self._output_dir,
+                    sidecar=sidecar_repo,
+                    broker_probe=_probe,
+                    allowed_namespaces=frozenset({bot_order_namespace}),
+                    now_ms=now_ms_utc,
+                    current_run_id=self._run_id,
+                    current_strategy_instance_id=self._strategy_instance_id,
+                    current_namespace=bot_order_namespace,
+                )
+                verdict = result.verdict
+                if isinstance(verdict, Continue):
+                    self._inhibit_submits = False
+                    verdict_payload.update({"verdict": "clean"})
+                elif isinstance(verdict, Adopt) and not verdict.pause:
+                    self._inhibit_submits = False
+                    verdict_payload.update(
+                        {
+                            "verdict": "adopted",
+                            "adopted_intent_ids": [
+                                o.intent_id for o in verdict.orphans
+                            ],
+                        }
+                    )
+                elif isinstance(verdict, Adopt) and verdict.pause:
+                    # Ambiguous exposure: keep the barrier set AND mark the
+                    # engine paused so the operator must explicitly resume
+                    # before any new submission lands.
+                    self._paused = True
+                    self._persist_desired_state(
+                        DesiredState.PAUSED,
+                        "runtime_reconcile:ambiguous_exposure",
+                    )
+                    verdict_payload.update(
+                        {
+                            "verdict": "adopted_paused",
+                            "adopted_intent_ids": [
+                                o.intent_id for o in verdict.orphans
+                            ],
+                        }
+                    )
+                elif isinstance(verdict, Poison):
+                    # Orchestrator already wrote poisoned.flag + failed
+                    # receipt; halt the engine fail-closed.
+                    shutdown_event.set()
+                    verdict_payload.update(
+                        {"verdict": "poison", "reason": verdict.reason}
+                    )
+                else:
+                    verdict_payload.update(
+                        {
+                            "verdict": "error",
+                            "detail": f"unrecognised verdict type: {type(verdict).__name__}",
+                        }
+                    )
+        except Exception as exc:
+            logger.exception(
+                "runtime reconcile task failed for request_id=%s", request_id
+            )
+            verdict_payload.update({"verdict": "error", "detail": repr(exc)})
+        finally:
+            # Always overwrite the ack with the completion outcome so the
+            # cockpit sees the transition out of IN_PROGRESS — even on the
+            # error path. ``ack_completion`` is best-effort: a write
+            # failure here cannot fix a broken disk, and the next /status
+            # poll will re-derive state from the receipt.
+            if self._command_channel is not None:
+                try:
+                    self._command_channel.ack_completion(cmd, outcome=verdict_payload)
+                except Exception:
+                    logger.exception(
+                        "ack_completion failed for runtime reconcile request_id=%s",
+                        request_id,
+                    )
 
     def _persist_desired_state(self, state: DesiredState, reason: str) -> None:
         """Best-effort durable write of operator intent (PRD-A §16.4
@@ -1648,57 +1904,63 @@ class LiveEngine:
 
         Returns the list of submitted order acks so the caller can
         record their IDs in ``submitted_order_ids``.
+
+        Reconciliation PR 2: the whole cancel→liquidate→submit critical
+        section runs under ``self._submit_lock`` so a runtime RECONCILE
+        cannot probe the broker mid-flatten. The lock is non-reentrant,
+        so the internal submit uses ``_submit_pending_with_meta_locked``.
         """
-        portfolio.pending_orders.clear()
-        # Phase 5C / VCR-0002 — managed cancel-confirm timeout. PRD §5C step
-        # 4-5: every managed cancel/flatten path follows cancel → wait for
-        # confirms → fetch positions → liquidate. A hung broker that can't
-        # confirm cancels must NOT proceed to liquidation; the engine
-        # writes halt.flag (CANCEL_CONFIRM_TIMEOUT_HALT) and raises so the
-        # operator can reconcile. The emergency-flatten force path has its
-        # own audit-event carve-out at the CLI layer.
-        try:
-            cancelled = await asyncio.wait_for(
-                self._broker.cancel_open_orders(),
-                timeout=self._cancel_confirm_timeout_s,
-            )
-        except TimeoutError as exc:
-            if self._output_dir is not None:
-                try:
-                    self._output_dir.mkdir(parents=True, exist_ok=True)
-                    (self._output_dir / "halt.flag").write_text(
-                        f"CANCEL_CONFIRM_TIMEOUT_HALT "
-                        f"timeout_s={self._cancel_confirm_timeout_s} "
-                        f"path=_flatten bar_time={bar_time}\n",
-                        encoding="utf-8",
-                    )
-                except OSError:
-                    logger.exception(
-                        "halt.flag write failed for cancel-confirm timeout"
-                    )
-            raise CancelConfirmTimeoutHaltError(
-                timeout_s=self._cancel_confirm_timeout_s
-            ) from exc
-        except Exception:
-            # Other broker exceptions (network blip, transient) — preserve
-            # the prior tolerant behavior so the operator-issued flatten
-            # still acts. PRD §5C is silent on this branch; the timeout
-            # path is the load-bearing safety.
-            logger.exception("broker.cancel_open_orders failed during shutdown_flatten")
-            cancelled = []
-        if cancelled:
-            ctx.log(f"[SHUTDOWN] {bar_time}: cancelled {len(cancelled)} open broker order(s) {cancelled!r}")
-        liquidations = 0
-        for sym, pos in list(portfolio.positions.items()):
-            if pos.quantity == 0:
-                continue
-            portfolio.liquidate(sym, bar_time)
-            liquidations += 1
-        if liquidations == 0:
-            return []
-        flat_acks = await self._submit_pending_with_meta(portfolio)
-        ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
-        return flat_acks
+        async with self._submit_lock:
+            portfolio.pending_orders.clear()
+            # Phase 5C / VCR-0002 — managed cancel-confirm timeout. PRD §5C step
+            # 4-5: every managed cancel/flatten path follows cancel → wait for
+            # confirms → fetch positions → liquidate. A hung broker that can't
+            # confirm cancels must NOT proceed to liquidation; the engine
+            # writes halt.flag (CANCEL_CONFIRM_TIMEOUT_HALT) and raises so the
+            # operator can reconcile. The emergency-flatten force path has its
+            # own audit-event carve-out at the CLI layer.
+            try:
+                cancelled = await asyncio.wait_for(
+                    self._broker.cancel_open_orders(),
+                    timeout=self._cancel_confirm_timeout_s,
+                )
+            except TimeoutError as exc:
+                if self._output_dir is not None:
+                    try:
+                        self._output_dir.mkdir(parents=True, exist_ok=True)
+                        (self._output_dir / "halt.flag").write_text(
+                            f"CANCEL_CONFIRM_TIMEOUT_HALT "
+                            f"timeout_s={self._cancel_confirm_timeout_s} "
+                            f"path=_flatten bar_time={bar_time}\n",
+                            encoding="utf-8",
+                        )
+                    except OSError:
+                        logger.exception(
+                            "halt.flag write failed for cancel-confirm timeout"
+                        )
+                raise CancelConfirmTimeoutHaltError(
+                    timeout_s=self._cancel_confirm_timeout_s
+                ) from exc
+            except Exception:
+                # Other broker exceptions (network blip, transient) — preserve
+                # the prior tolerant behavior so the operator-issued flatten
+                # still acts. PRD §5C is silent on this branch; the timeout
+                # path is the load-bearing safety.
+                logger.exception("broker.cancel_open_orders failed during shutdown_flatten")
+                cancelled = []
+            if cancelled:
+                ctx.log(f"[SHUTDOWN] {bar_time}: cancelled {len(cancelled)} open broker order(s) {cancelled!r}")
+            liquidations = 0
+            for sym, pos in list(portfolio.positions.items()):
+                if pos.quantity == 0:
+                    continue
+                portfolio.liquidate(sym, bar_time)
+                liquidations += 1
+            if liquidations == 0:
+                return []
+            flat_acks = await self._submit_pending_with_meta_locked(portfolio)
+            ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
+            return flat_acks
 
     # ──────────────────── § 7 fatal-halt helpers ─────────────────────
 
