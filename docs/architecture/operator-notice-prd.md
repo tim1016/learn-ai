@@ -200,14 +200,14 @@ PRs 2–6 each reuse the contract from PR 1; PR 1 declares all `OperatorNoticeCo
    - Existing consumers continue to read `stale_reason_codes` (forensics-grade).
 
 2. Implement runtime-freshness rule composer:
-   - Static rules table mapping `frozenset[RuntimeFreshnessReasonCode]` (mode `exact` or `subset`) → `OperatorNoticeCode` with priority.
+   - Static rules table mapping `frozenset[RuntimeFreshnessReasonCode]` (all-of / subset semantics) → `OperatorNoticeCode` with priority.
    - Composer collects active codes, evaluates rules, emits notices, picks the highest-priority notice as `headline`.
    - `BAR_LOOP_SESSION_CLOSED` is `suppress_banner=True` — recorded in evidence, not rendered in the freshness banner. Cockpit shows it in the trading-session status card as `info`.
 
 3. Backend pipeline:
    - New module `app/operator/notices/` owns schema + runtime-freshness rules + composer.
-   - `app/routers/live_instances.py` calls the composer when building the operator-surface response; no business logic lives in the router. (No `app/research/...` involvement — that path was a mis-call in the planning conversation.)
-   - GraphQL DTOs in `Backend/` expose `headline` and `stale_reasons` alongside the existing `stale_reason_codes` field. Snake-case JSON deserialization rules already established (see `.claude/rules/dotnet.md`).
+   - `app/routers/live_instances.py` calls the composer indirectly (via `app/services/operator_surface.py:_project_runtime_freshness`); no business logic lives in the router.
+   - Note: live-instance status flows Python → Frontend directly via FastAPI REST (`/api/live-instances/{id}/status`). The .NET Backend is NOT in this data path; no GraphQL DTO changes required.
 
 4. Frontend pipeline:
    - New `OperatorNoticeComponent` renders `title`, `message`, `action`, optional `runbook_slug`, optional facts panel. Standalone, OnPush, no copy composition.
@@ -216,19 +216,21 @@ PRs 2–6 each reuse the contract from PR 1; PR 1 declares all `OperatorNoticeCo
 
 ### 6.2 Runtime freshness rules table
 
-| Priority | Source codes | Mode | Notice code | Tier |
-|---|---|---|---|---|
-| 100 | `CONTROL_PLANE_BOOT_ID_MISMATCH` | subset | `runtime.control_plane_boot_id_mismatch` | critical |
-| 95 | `CONTROL_PLANE_LEASE_STALE` | subset | `runtime.control_plane_lease_stale` | critical |
-| 90 | `COMMAND_LOOP_STALE` | subset | `runtime.command_loop_unresponsive` | critical |
-| 85 | `ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE` | subset | `runtime.engine_runtime_incompatible` | critical |
-| 80 | `BROKER_PROBE_MISSING` | subset | `runtime.broker_probe_missing` | warning |
-| 75 | `BROKER_PROBE_STALE` | subset | `runtime.broker_probe_stale` | warning |
-| 70 | `{BAR_LOOP_HEARTBEAT_STALE, BAR_LOOP_LATEST_BAR_STALE}` | exact | `runtime.market_data_feed_stalled` | warning |
-| 60 | `BAR_LOOP_LATEST_BAR_STALE` | subset | `runtime.market_data_stale` | warning |
-| 50 | `BAR_LOOP_HEARTBEAT_STALE` | subset | `runtime.market_data_stale` | warning |
-| 20 | `BAR_LOOP_SESSION_HALTED` | subset | `runtime.market_session_halted` | info |
-| 10 | `BAR_LOOP_SESSION_CLOSED` | subset (suppress_banner) | `runtime.market_closed` | info |
+All rules use all-of semantics: a rule fires when ALL listed source codes are active and not yet consumed by a higher-priority rule.
+
+| Priority | Source codes | Notice code | Tier |
+|---|---|---|---|
+| 100 | `CONTROL_PLANE_BOOT_ID_MISMATCH` | `runtime.control_plane_boot_id_mismatch` | critical |
+| 95 | `CONTROL_PLANE_LEASE_STALE` | `runtime.control_plane_lease_stale` | critical |
+| 90 | `COMMAND_LOOP_STALE` | `runtime.command_loop_unresponsive` | critical |
+| 85 | `ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE` | `runtime.engine_runtime_incompatible` | critical |
+| 80 | `BROKER_PROBE_MISSING` | `runtime.broker_probe_missing` | warning |
+| 75 | `BROKER_PROBE_STALE` | `runtime.broker_probe_stale` | warning |
+| 70 | `{BAR_LOOP_HEARTBEAT_STALE, BAR_LOOP_LATEST_BAR_STALE}` | `runtime.market_data_feed_stalled` | warning |
+| 60 | `BAR_LOOP_LATEST_BAR_STALE` | `runtime.market_data_stale` | warning |
+| 50 | `BAR_LOOP_HEARTBEAT_STALE` | `runtime.market_data_stale` | warning |
+| 20 | `BAR_LOOP_SESSION_HALTED` | `runtime.market_session_halted` | info |
+| 10 | `BAR_LOOP_SESSION_CLOSED` | `runtime.market_closed` (suppress_banner) | info |
 
 Final reason-code list will be sourced verbatim from the existing `RuntimeFreshnessReasonCode` definition; the exhaustiveness test enforces coverage.
 
@@ -366,8 +368,6 @@ If sweep finds a fill absent from engine-known executions: emit `reconciliation.
 - **Backend↔frontend code drift.** Mitigated by the `OperatorNoticeCode` snapshot test plus the mirrored TypeScript literal. CI must run the Python snapshot before the Frontend type compile.
 - **Incident write failure during watchdog halt.** If the per-run directory is unwritable mid-halt, the incident is lost. Mitigation: log a structured `CRITICAL` with full incident payload as last-resort persistence; document in the runbook.
 - **Cross-client visibility (PR 6) latency.** A 60 s sweep means trader sees executions late. Mitigation: lower cadence later with API-budget evidence; emit `activity.publisher_degraded` so the trader knows rows are delayed.
-- **GraphQL field additions.** `OperatorSurface` is consumed by external cockpit polling; the field additions are non-breaking, but Hot Chocolate v15 stripping rules require explicit `[GraphQLName]` on every new resolver — see `.claude/rules/dotnet.md`.
-
 ## 14. Out of scope (this initiative)
 
 - Trader-configurable tier thresholds.
@@ -401,6 +401,7 @@ Confirmed against `master @ 90016ec5`:
 | `RuntimeFreshnessReasonCode` | Currently typed as raw `str` at line 1361 / 1368 | Promote to `Literal` in `app/operator/notices/schema.py`; the schema imports it |
 | `IntentEventType` | `PythonDataService/app/engine/live/intent_ledger.py` | No change in PR 1; consumed by PR 3 |
 | Existing runbook neighbours | `docs/runbooks/broker-instance-operator-surface.md`, others | PR 1 adds `runtime-freshness.md`; PR 5 reuses the broker-instance one |
+| Live-instance status data flow | Python → Frontend direct REST (no .NET Backend) | PR 1 documents the gap; no DTOs to add |
 
 ## Appendix B — Notice code reservation (PR 1 declares, later PRs implement)
 

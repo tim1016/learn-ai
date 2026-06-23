@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from app.operator.notices.runtime_freshness import (
+    _RUNTIME_FRESHNESS_RULES,
     compose_runtime_freshness_notices,
-    runtime_freshness_rules_for_tests,
 )
 from app.operator.notices.schema import RuntimeFreshnessReasonCode
 from app.services.runtime_freshness import (
@@ -53,9 +53,8 @@ def _runtime_with(*, bar_loop: list[str] | None = None,
 
 @pytest.mark.parametrize("code", get_literal_args(RuntimeFreshnessReasonCode))
 def test_every_reason_code_has_a_rule(code: str) -> None:
-    rules = runtime_freshness_rules_for_tests()
     covered: set[str] = set()
-    for rule in rules:
+    for rule in _RUNTIME_FRESHNESS_RULES:
         covered.update(rule.source_codes)
     assert code in covered, f"reason code {code} is not covered by any rule"
 
@@ -164,3 +163,27 @@ def test_reasons_preserve_priority_order_descending():
         "runtime.broker_probe_stale",
         "runtime.market_data_stale",
     ]
+
+
+def test_feed_stalled_fires_even_when_other_domain_is_also_stale():
+    """Regression for thermo M1: previously ``mode='exact'`` compared against the
+    GLOBAL active code set, so a co-occurring stale code in any other domain
+    silently knocked out the combined feed_stalled rule and the trader saw two
+    redundant ``runtime.market_data_stale`` notices instead of one combined
+    ``runtime.market_data_feed_stalled``.
+    """
+    runtime = _runtime_with(
+        bar_loop=["BAR_LOOP_HEARTBEAT_STALE", "BAR_LOOP_LATEST_BAR_STALE"],
+        broker=["BROKER_PROBE_STALE"],  # the co-occurring stale code
+    )
+    headline, reasons = compose_runtime_freshness_notices(runtime)
+
+    # Headline must be the higher-tier broker probe stale, because broker stale
+    # ranks above market data stale in the rules table. But the bar-loop
+    # combined notice MUST also appear in reasons exactly once — NOT as two
+    # separate runtime.market_data_stale entries.
+    assert headline is not None
+    market_data_codes = [n.code for n in reasons if n.code.startswith("runtime.market_data")]
+    assert market_data_codes == ["runtime.market_data_feed_stalled"], (
+        f"expected single feed_stalled notice; got {market_data_codes}"
+    )
