@@ -393,14 +393,16 @@ export type OperatorNoticeCode =
   | 'reconciliation.required_after_uncertain_flatten'
   | 'reconciliation.discovered_execution_not_in_engine_state';
 
+export type OperatorNoticeActionKind =
+  | 'none'
+  | 'wait'
+  | 'open_runbook'
+  | 'focus_cockpit_action'
+  | 'external_manual_check'
+  | 'redeploy';
+
 export interface OperatorNoticeAction {
-  kind:
-    | 'none'
-    | 'wait'
-    | 'open_runbook'
-    | 'focus_cockpit_action'
-    | 'external_manual_check'
-    | 'redeploy';
+  kind: OperatorNoticeActionKind;
   label: string | null;
   target: string | null;
 }

@@ -5,6 +5,7 @@ export type {
   OperatorIncident,
   OperatorNotice,
   OperatorNoticeAction,
+  OperatorNoticeActionKind,
   OperatorNoticeCode,
   OperatorNoticeTier,
 } from '../api/live-instances.types';

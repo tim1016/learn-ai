@@ -282,6 +282,8 @@ describe('CockpitShellComponent', () => {
     const runtimeFreshness: OperatorSurfaceRuntimeFreshness = {
       posture_demoted: true,
       stale_reason_codes: ['COMMAND_LOOP_STALE', 'CONTROL_PLANE_LEASE_STALE'],
+      headline: null,
+      stale_reasons: [],
       command_loop: {
         state: 'STALE',
         age_ms: 4_000,
