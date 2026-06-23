@@ -66,7 +66,11 @@ INCIDENT_FILENAME = "control_plane_lease_lost.json"
 INCIDENT_SCHEMA_VERSION = 1
 
 LeaseLossReason = Literal["LEASE_EXPIRED", "BOOT_ID_CHANGED"]
-WatchdogState = Literal["HEALTHY", "LEASE_LOST_HANDLING", "EXITED"]
+WatchdogState = Literal["HEALTHY", "SUSPECTED_LOSS", "LEASE_LOST_HANDLING", "EXITED"]
+
+# Grace period before a single flapping observation triggers the full halt.
+# If the lease recovers within this window the watchdog returns to HEALTHY.
+DEFAULT_LEASE_LOSS_GRACE_MS: int = 5_000
 
 
 def write_lease_lost_incident(
@@ -133,6 +137,7 @@ class ChildWatchdog:
         lease_threshold_ms: int = DEFAULT_LEASE_THRESHOLD_MS,
         evidence_flush_grace_ms: int = DEFAULT_EVIDENCE_FLUSH_GRACE_MS,
         exit_deadline_ms: int = DEFAULT_EXIT_DEADLINE_MS,
+        lease_loss_grace_ms: int = DEFAULT_LEASE_LOSS_GRACE_MS,
         sleep_fn: Callable[[float], Awaitable[None]] | None = None,
         incident_writer: Callable[..., None] | None = None,
     ) -> None:
@@ -149,12 +154,18 @@ class ChildWatchdog:
         self._lease_threshold_ms = lease_threshold_ms
         self._evidence_flush_grace_ms = evidence_flush_grace_ms
         self._exit_deadline_ms = exit_deadline_ms
+        self._lease_loss_grace_ms = lease_loss_grace_ms
         self._sleep = sleep_fn or asyncio.sleep
         self._incident_writer = incident_writer or write_lease_lost_incident
 
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._state: WatchdogState = "HEALTHY"
+        # Grace-window tracking: when did we first observe the loss?
+        self._suspected_loss_at_ms: int | None = None
+        self._suspected_loss_reason: LeaseLossReason | None = None
+        self._suspected_observed_daemon_boot_id: str | None = None
+        self._suspected_lease_written_at_ms: int | None = None
 
     @property
     def state(self) -> WatchdogState:
@@ -201,30 +212,106 @@ class ChildWatchdog:
 
         Exposed publicly so tests can drive the watchdog one step at a
         time without spinning the cadence task.
+
+        State machine:
+          HEALTHY          → SUSPECTED_LOSS on first bad observation.
+          SUSPECTED_LOSS   → HEALTHY if lease recovers within grace window.
+          SUSPECTED_LOSS   → LEASE_LOST_HANDLING if grace elapses with loss sustained.
+          LEASE_LOST_HANDLING / EXITED → no-op (handler runs at most once).
         """
-        if self._state != "HEALTHY":
+        if self._state not in ("HEALTHY", "SUSPECTED_LOSS"):
             return
         lease = read_daemon_lease(self._artifacts_root)
         now = self._now_ms()
         await self._update_control_plane_block(lease, now)
-        if lease is None or (now - lease.written_at_ms) > self._lease_threshold_ms:
-            await self._handle_lease_lost(
-                reason="LEASE_EXPIRED",
-                observed_at_ms=now,
-                observed_daemon_boot_id=lease.boot_id if lease is not None else None,
-                lease_written_at_ms=lease.written_at_ms if lease is not None else None,
+
+        loss_reason = self._detect_loss(lease, now)
+
+        if loss_reason is None:
+            # Lease is fresh and boot_id matches (or not configured).
+            if self._state == "SUSPECTED_LOSS":
+                logger.info(
+                    "[WATCHDOG] suspected loss resolved; returning to HEALTHY "
+                    "(grace_remaining_ms=%s)",
+                    max(
+                        0,
+                        self._lease_loss_grace_ms
+                        - (now - (self._suspected_loss_at_ms or now)),
+                    ),
+                )
+                self._state = "HEALTHY"
+                self._suspected_loss_at_ms = None
+                self._suspected_loss_reason = None
+                self._suspected_observed_daemon_boot_id = None
+                self._suspected_lease_written_at_ms = None
+            return
+
+        # A loss was observed.
+        if self._state == "HEALTHY":
+            if self._lease_loss_grace_ms <= 0:
+                # No grace window: trigger halt immediately.
+                await self._handle_lease_lost(
+                    reason=loss_reason[0],
+                    observed_at_ms=now,
+                    observed_daemon_boot_id=loss_reason[1],
+                    lease_written_at_ms=loss_reason[2],
+                )
+                return
+            # Enter grace window.
+            self._state = "SUSPECTED_LOSS"
+            self._suspected_loss_at_ms = now
+            self._suspected_loss_reason = loss_reason[0]
+            self._suspected_observed_daemon_boot_id = loss_reason[1]
+            self._suspected_lease_written_at_ms = loss_reason[2]
+            logger.warning(
+                "[WATCHDOG] entering SUSPECTED_LOSS grace window reason=%s grace_ms=%s",
+                loss_reason[0],
+                self._lease_loss_grace_ms,
             )
             return
+
+        # SUSPECTED_LOSS — check if grace has elapsed.
+        assert self._suspected_loss_at_ms is not None
+        if (now - self._suspected_loss_at_ms) < self._lease_loss_grace_ms:
+            # Still within grace window.
+            logger.warning(
+                "[WATCHDOG] SUSPECTED_LOSS sustained; elapsed_ms=%s grace_ms=%s",
+                now - self._suspected_loss_at_ms,
+                self._lease_loss_grace_ms,
+            )
+            return
+
+        # Grace elapsed with sustained loss → trigger halt.
+        await self._handle_lease_lost(
+            reason=self._suspected_loss_reason,  # type: ignore[arg-type]
+            observed_at_ms=now,
+            observed_daemon_boot_id=self._suspected_observed_daemon_boot_id,
+            lease_written_at_ms=self._suspected_lease_written_at_ms,
+        )
+
+    def _detect_loss(
+        self,
+        lease: object,
+        now: int,
+    ) -> tuple[LeaseLossReason, str | None, int | None] | None:
+        """Return ``(reason, observed_boot_id, lease_written_at_ms)`` if the lease
+        is lost, or ``None`` if it is healthy."""
+        if lease is None or (now - lease.written_at_ms) > self._lease_threshold_ms:  # type: ignore[union-attr]
+            return (
+                "LEASE_EXPIRED",
+                getattr(lease, "boot_id", None),
+                getattr(lease, "written_at_ms", None),
+            )
         if (
             self._expected_daemon_boot_id is not None
-            and lease.boot_id != self._expected_daemon_boot_id
+            and lease.boot_id != self._expected_daemon_boot_id  # type: ignore[union-attr]
         ):
-            await self._handle_lease_lost(
-                reason="BOOT_ID_CHANGED",
-                observed_at_ms=now,
-                observed_daemon_boot_id=lease.boot_id,
-                lease_written_at_ms=lease.written_at_ms,
+            return (
+                "BOOT_ID_CHANGED",
+                lease.boot_id,  # type: ignore[union-attr]
+                lease.written_at_ms,  # type: ignore[union-attr]
             )
+        return None
 
     async def _update_control_plane_block(
         self, lease: object, now_ms: int

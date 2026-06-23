@@ -89,6 +89,7 @@ def _make_watchdog(
     poll_cadence_ms: int = 10,
     lease_threshold_ms: int = DEFAULT_LEASE_THRESHOLD_MS,
     evidence_flush_grace_ms: int = 0,  # 0 = instant for tests
+    lease_loss_grace_ms: int = 0,  # 0 = bypass grace window for existing halt tests
     recorder: _OrderingRecorder | None = None,
     incident_writer: Callable[..., None] | None = None,
 ) -> ChildWatchdog:
@@ -139,6 +140,7 @@ def _make_watchdog(
         poll_cadence_ms=poll_cadence_ms,
         lease_threshold_ms=lease_threshold_ms,
         evidence_flush_grace_ms=evidence_flush_grace_ms,
+        lease_loss_grace_ms=lease_loss_grace_ms,
         incident_writer=_wrapped_incident_writer,
     )
 
@@ -336,6 +338,7 @@ async def test_step1_failure_does_not_block_steps_2_3_4_5(tmp_path: Path) -> Non
         request_engine_exit=lambda: rec.record("request_engine_exit"),
         now_ms=now,
         evidence_flush_grace_ms=0,
+        lease_loss_grace_ms=0,
         incident_writer=lambda **kw: rec.record(f"write_incident:{kw['reason']}"),
     )
 
@@ -394,6 +397,7 @@ async def test_handler_writes_incident_file_to_run_dir(tmp_path: Path) -> None:
         request_engine_exit=lambda: rec.record("request_engine_exit"),
         now_ms=now,
         evidence_flush_grace_ms=0,
+        lease_loss_grace_ms=0,
     )
 
     await watchdog.poll_once()
