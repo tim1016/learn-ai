@@ -20,6 +20,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
 from app.routers import live_instances
+from app.services.operator_surface import _project_runtime_freshness
+from app.services.runtime_freshness import DomainFreshness, RuntimeFreshness
 from tests._fixtures.daemon_transport import as_typed_get
 
 
@@ -191,3 +193,44 @@ async def test_runtime_freshness_notice_headline_none_when_runtime_fresh(
     assert rf["stale_reason_codes"] == []
     assert rf["headline"] is None
     assert rf["stale_reasons"] == []
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _project_runtime_freshness — suppress_banner logic
+# ---------------------------------------------------------------------------
+
+
+def _fresh() -> DomainFreshness:
+    """Helper: create a fresh DomainFreshness with no stale codes."""
+    return DomainFreshness(state="FRESH", age_ms=0, stale_reason_codes=[])
+
+
+def _stale(code: str, age_ms: int = 99_000) -> DomainFreshness:
+    """Helper: create a stale DomainFreshness with the given code and age."""
+    return DomainFreshness(state="STALE", age_ms=age_ms, stale_reason_codes=[code])
+
+
+def test_runtime_freshness_projection_session_closed_suppresses_headline_only():
+    """When BAR_LOOP_SESSION_CLOSED is the only stale reason, headline must
+    be None (suppressed), but stale_reasons must still include the
+    runtime.market_closed notice.
+
+    This test validates that suppress_banner works: the headline is excluded
+    from the surface while the stale_reasons list still captures the info
+    tier notice for operator awareness.
+    """
+    runtime = RuntimeFreshness(
+        posture_demoted=False,
+        command_loop=_fresh(),
+        broker=_fresh(),
+        bar_loop=_stale("BAR_LOOP_SESSION_CLOSED", age_ms=0),
+        control_plane=_fresh(),
+    )
+
+    surface = _project_runtime_freshness(runtime)
+
+    assert surface is not None
+    assert surface.headline is None
+    assert len(surface.stale_reasons) == 1
+    assert surface.stale_reasons[0].code == "runtime.market_closed"
+    assert surface.stale_reasons[0].tier == "info"
