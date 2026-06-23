@@ -1198,6 +1198,53 @@ class HostProcessStartCapability(BaseModel):
     disabled_reason_code: HostProcessStartDisabledReasonCode | None = None
 
 
+# ---------------------------------------------------------------------------
+# Reconciliation receipt (ADR-0008 §5 / PR 1 cold-start orchestrator).
+# ---------------------------------------------------------------------------
+
+ReceiptStatus = Literal["in_progress", "passed", "failed"]
+"""Lifecycle status of a reconciliation receipt.
+
+``in_progress`` is written first (so a crash mid-reconcile leaves an honest
+sentinel rather than a stale ``passed`` receipt from the previous boot);
+``passed`` / ``failed`` overwrite it with the verdict via atomic replace.
+"""
+
+ReceiptOutcome = Literal["clean", "adopted"]
+"""Meaningful only when ``status == passed``.
+
+``clean`` = the broker snapshot matched the projection (Continue).
+``adopted`` = one or more owned orphans were folded in via
+``ADOPTED_BROKER_ORDER`` (Adopt).
+"""
+
+
+class ReconciliationReceipt(BaseModel):
+    """Durable evidence of a single cold-start reconciliation attempt.
+
+    Written once per run by ``reconciliation_orchestrator.reconcile`` (PR 1
+    of the cold-start gate) to ``<run_dir>/reconciliation_receipt.json``.
+    The cockpit reads it to project ``operator_surface.reconciliation``;
+    Resume gates consult it to decide whether evidence is fresh.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    status: ReceiptStatus
+    outcome: ReceiptOutcome | None = None
+    run_id: str
+    strategy_instance_id: str
+    namespace: str
+    started_at_ms: int = Field(gt=0)
+    completed_at_ms: int | None = Field(default=None, ge=0)
+    last_reconcile_ms: int | None = Field(default=None, ge=0)
+    sidecar_wal_seq: int = Field(default=0, ge=0)
+    broker_observed_at_ms: int | None = Field(default=None, ge=0)
+    adopted_intent_ids: tuple[str, ...] = ()
+    failure_reason: str | None = None
+
+
 class OperatorSurfaceHostProcess(BaseModel):
     """Server-authored host-process surface (ADR-0003 / ADR-0006 / ADR-0007).
 
