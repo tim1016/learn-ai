@@ -15,7 +15,9 @@ import type {
   GateSuggestedAction,
   LiveInstanceSummary,
   OperatorGate,
+  OperatorNotice,
   OperatorSurface,
+  OperatorSurfaceRuntimeFreshness,
 } from '../app/api/live-instances.types';
 
 const _capability = (
@@ -283,4 +285,38 @@ export const LIVE_INSTANCE_SUMMARY_BLOCKED: LiveInstanceSummary = {
   desired_state: 'PAUSED',
   readiness_verdict: 'BLOCKED',
   readiness_as_of_ms: 1_700_000_000_000,
+};
+
+// ---------------------------------------------------------------------------
+// PR 1 — OperatorNotice / OperatorSurfaceRuntimeFreshness fixtures
+// ---------------------------------------------------------------------------
+
+/** A single runtime.market_data_stale notice for the bar_loop domain. */
+export const STALE_BAR_LOOP_NOTICE: OperatorNotice = {
+  code: 'runtime.market_data_stale',
+  tier: 'warning',
+  title: 'Market data is stale',
+  message:
+    'The most recent bar is older than the freshness window. New trading decisions are held until fresh data arrives.',
+  source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
+  facts: { bar_loop_age_ms: 90_000 },
+  action: { kind: 'wait', label: null, target: null },
+  runbook_slug: 'runtime-freshness',
+  occurred_at_ms: 1_700_000_090_000,
+};
+
+/** OperatorSurfaceRuntimeFreshness with a stale bar_loop and headline notice. */
+export const RUNTIME_FRESHNESS_BAR_LOOP_STALE: OperatorSurfaceRuntimeFreshness = {
+  posture_demoted: true,
+  stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
+  headline: STALE_BAR_LOOP_NOTICE,
+  stale_reasons: [STALE_BAR_LOOP_NOTICE],
+  command_loop: { state: 'FRESH', age_ms: 5_000, stale_reason_codes: [] },
+  broker: { state: 'FRESH', age_ms: 8_000, stale_reason_codes: [] },
+  bar_loop: {
+    state: 'STALE',
+    age_ms: 90_000,
+    stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
+  },
+  control_plane: { state: 'FRESH', age_ms: 3_000, stale_reason_codes: [] },
 };

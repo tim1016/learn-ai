@@ -358,6 +358,75 @@ export type RuntimeFreshnessState =
   | 'UNKNOWN'
   | 'DEGRADED';
 
+// PRD operator-notice PR 1 — OperatorNotice types mirroring
+// PythonDataService/app/operator/notices/schema.py.
+// OperatorNoticeCode MUST stay byte-identical to the Python Literal and
+// PythonDataService/app/operator/notices/snapshot.json (enforced by CI).
+
+export type OperatorNoticeTier = 'info' | 'warning' | 'critical';
+
+export type OperatorNoticeCode =
+  // PR 1 — runtime freshness (implemented in this PR).
+  | 'runtime.market_closed'
+  | 'runtime.market_session_halted'
+  | 'runtime.market_data_stale'
+  | 'runtime.market_data_feed_stalled'
+  | 'runtime.broker_probe_stale'
+  | 'runtime.broker_probe_missing'
+  | 'runtime.command_loop_unresponsive'
+  | 'runtime.engine_runtime_incompatible'
+  | 'runtime.control_plane_lease_stale'
+  | 'runtime.control_plane_boot_id_mismatch'
+  // PR 2 — watchdog two-phase halt (reserved).
+  | 'watchdog.flatten_completed'
+  | 'watchdog.flatten_not_needed'
+  | 'watchdog.flatten_timed_out'
+  | 'watchdog.flatten_failed'
+  | 'watchdog.broker_disconnected_before_flatten'
+  // PR 5 — activity health (reserved).
+  | 'activity.publisher_starting'
+  | 'activity.publisher_not_running'
+  | 'activity.publisher_degraded'
+  | 'activity.source_blind_to_bot_orders'
+  | 'activity.dropped_paused_intent'
+  // PR 6 — reconciliation (reserved).
+  | 'reconciliation.required_after_uncertain_flatten'
+  | 'reconciliation.discovered_execution_not_in_engine_state';
+
+export interface OperatorNoticeAction {
+  kind:
+    | 'none'
+    | 'wait'
+    | 'open_runbook'
+    | 'focus_cockpit_action'
+    | 'external_manual_check'
+    | 'redeploy';
+  label: string | null;
+  target: string | null;
+}
+
+export interface OperatorNotice {
+  code: OperatorNoticeCode;
+  tier: OperatorNoticeTier;
+  title: string;
+  message: string;
+  source_codes: string[];
+  facts: Record<string, string | number | boolean | null>;
+  action: OperatorNoticeAction;
+  runbook_slug: string | null;
+  occurred_at_ms: number | null;
+}
+
+export interface OperatorIncident {
+  schema_version: number;
+  incident_id: string;
+  category: 'watchdog' | 'activity' | 'reconciliation';
+  notice: OperatorNotice;
+  started_at_ms: number;
+  resolved_at_ms: number | null;
+  evidence: Record<string, unknown>;
+}
+
 export interface OperatorSurfaceDomainFreshness {
   state: RuntimeFreshnessState;
   age_ms: number | null;
@@ -367,6 +436,12 @@ export interface OperatorSurfaceDomainFreshness {
 export interface OperatorSurfaceRuntimeFreshness {
   posture_demoted: boolean;
   stale_reason_codes: string[];
+  /** Backend-authored top-priority notice for the banner; null when all
+   *  active rules are banner-suppressed (e.g. market closed). */
+  headline: OperatorNotice | null;
+  /** Full ordered list of active runtime-freshness notices. Empty when
+   *  all domains are fresh. Cockpit renders these in the detail panel. */
+  stale_reasons: OperatorNotice[];
   command_loop: OperatorSurfaceDomainFreshness;
   broker: OperatorSurfaceDomainFreshness;
   bar_loop: OperatorSurfaceDomainFreshness;
