@@ -1028,6 +1028,84 @@ async def preview_action_plan(plan: ActionPlan) -> ActionPlanPreviewResponse:
     return ActionPlanPreviewResponse(warnings=parity_diagnostics(plan))
 
 
+_START_DAEMON_STATE_REASON: dict[str, str] = {
+    "running": "ALREADY_RUNNING",
+    "stopping": "STOPPING",
+}
+
+
+async def _assert_start_allowed(run_id: str, settings) -> None:
+    """Re-evaluate the start gates before forwarding /runs/{run_id}/start.
+
+    ADR 0013 amendment 2026-06-22 + design "Architectural permission for
+    Start bot process": the cockpit's ``host_process.start_capability``
+    is a status-time projection (polled every 4s). The data plane must
+    re-check the gates that block enablement before forwarding so a
+    stale ``enabled=true`` cannot bypass a STOPPED / poisoned / RUNNING
+    transition that happened between the trader's last poll and click.
+
+    Mirrors the projection's ``HostProcessStartDisabledReasonCode`` enum.
+    Legacy runs without a ledger / strategy_instance_id are passed
+    through — only the daemon is the gate for those.
+    """
+    root = Path(settings.live_runs_root)
+    run_dir = root / run_id
+    if not run_dir.is_dir():
+        return  # daemon will return 404; not our gate
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, json.JSONDecodeError):
+        return  # corrupt ledger surfaces from the daemon, not here
+    sid = str(ledger.get("strategy_instance_id") or "")
+    if not sid:
+        return  # legacy ledger has no per-instance gates
+
+    if (run_dir / "poisoned.flag").exists():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "STOPPED_REQUIRES_REDEPLOY",
+                "message": "This run is permanently retired. Redeploy the bot to trade again.",
+            },
+        )
+    desired = _resolve_desired_state(root, sid)
+    if desired.state == "STOPPED":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "STOPPED_REQUIRES_REDEPLOY",
+                "message": "This run is permanently stopped. Redeploy the bot to trade again.",
+            },
+        )
+
+    _result, daemon = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url, sid
+    )
+    if daemon is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "HOST_SERVICE_OFFLINE",
+                "message": "The bot service is offline. Start it on the host machine first.",
+            },
+        )
+    daemon_state = str(daemon.get("state") or "idle")
+    reason = _START_DAEMON_STATE_REASON.get(daemon_state)
+    if reason is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": reason,
+                "message": (
+                    "The bot is already running."
+                    if reason == "ALREADY_RUNNING"
+                    else "The bot is shutting down. Wait for it to finish before starting again."
+                ),
+            },
+        )
+    # idle / exited / unrecognised -> proceed; daemon performs its own start gates.
+
+
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
 async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActionResponse:
     """Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
@@ -1038,6 +1116,13 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     plane reads the token from the artifacts bind mount and forwards it. The
     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
     missing run -> 404, subprocess/daemon unreachable -> 503.
+
+    Before forwarding, the data plane re-evaluates the same start gates the
+    cockpit's ``host_process.start_capability`` projection used (ADR 0013
+    amendment 2026-06-22): poisoned-flag, durable ``STOPPED``, daemon
+    ``running`` / ``stopping``, host service unreachable. A stale
+    ``enabled=true`` projection cannot bypass them — see
+    ``_assert_start_allowed``.
 
     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
     a successful start the broker-activity publisher is registered for
@@ -1052,6 +1137,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     settings = get_settings()
+    await _assert_start_allowed(run_id, settings)
     try:
         result = await host_daemon_client.start_run(settings.live_runner_daemon_url, run_id, body.model_dump())
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:

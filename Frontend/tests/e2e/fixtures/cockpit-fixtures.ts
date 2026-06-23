@@ -98,6 +98,20 @@ export function buildScenarioStatus(opts: CockpitScenarioOptions) {
         state: processState === 'running' ? 'RUNNING' : processState === 'idle' ? (intent === 'RUNNING' ? 'WAITING_FOR_HOST' : 'IDLE') : processState.toUpperCase(),
         notice: processState === 'running' ? null : 'Host process is not running.',
         copyable_command: null,
+        // ADR 0013 amendment 2026-06-22 — start_capability is a required
+        // field on OperatorSurfaceHostProcess. e2e default mirrors the
+        // "no live binding" disabled case; per-scenario overrides may
+        // flip this when testing the Start affordance.
+        start_capability: {
+          enabled: false,
+          run_id: null,
+          request: null,
+          disabled_reason_code: opts.poisoned
+            ? 'STOPPED_REQUIRES_REDEPLOY'
+            : processState === 'running'
+              ? 'ALREADY_RUNNING'
+              : 'START_SETTINGS_INCOMPLETE',
+        },
       },
       prior_run: { classification: opts.poisoned ? 'HALT_TRIGGERED' : 'UNKNOWN' },
       broker: { safety_verdict: brokerSafety, connection: brokerConnection },
