@@ -1539,6 +1539,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             control_plane_state=control_plane_state,
             latest_mutation=latest_mutation,
             broker_observation_consistency=broker_observation_consistency,
+            host_start_command=settings.live_runner_host_start_command,
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,

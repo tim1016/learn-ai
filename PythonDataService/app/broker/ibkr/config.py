@@ -141,6 +141,18 @@ class IbkrSettings(BaseSettings):
     # LEAN_LAUNCHER_URL); the daemon defaults to port 8765.
     live_runner_daemon_url: str = "http://host.containers.internal:8765"
 
+    # Environment-specific operator command that starts the host service when
+    # it is UNREACHABLE. Sourced from trusted server configuration and rendered
+    # verbatim in the cockpit as a copyable remedy. Set per deployment topology:
+    # local macOS/Linux dev uses "./start-live-daemon.sh --background"; a
+    # Windows service deployment uses its approved service-start command;
+    # externally supervised or remote-host deployments leave this empty and
+    # surface a runbook remediation instead. Empty string means "no safe
+    # command can be authored" — the projection emits None and the cockpit
+    # falls back to a runbook (slice 1 of bot-cockpit-trader-language design;
+    # ADR 0013 amendment 2026-06-22).
+    live_runner_host_start_command: str = ""
+
     # Fleet policy gate (ADR 0005, #399). When True, account-level contamination
     # (a position no managed instance created) blocks starts across the account.
     # Default False — contamination is surfaced as a DEGRADED banner but does not

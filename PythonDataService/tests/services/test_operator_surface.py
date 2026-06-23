@@ -102,6 +102,68 @@ def test_host_process_running_ignores_desired_state_override() -> None:
 
 
 # ---------------------------------------------------------------------------
+# host_process — copyable_command (ADR 0013 amendment 2026-06-22)
+# ---------------------------------------------------------------------------
+
+
+_HOST_CMD = "./start-live-daemon.sh --background"
+
+
+def test_host_process_unreachable_with_configured_command_emits_it() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="unreachable"),
+        host_start_command=_HOST_CMD,
+    )
+    assert surface.host_process.state == "UNREACHABLE"
+    assert surface.host_process.copyable_command == _HOST_CMD
+
+
+def test_host_process_unreachable_without_configured_command_stays_none() -> None:
+    # Empty string -> no safe command can be authored -> emit None and
+    # let the cockpit fall back to a runbook remediation.
+    surface = _surface(
+        process=InstanceProcessView(state="unreachable"),
+        host_start_command="",
+    )
+    assert surface.host_process.state == "UNREACHABLE"
+    assert surface.host_process.copyable_command is None
+
+
+def test_host_process_unreachable_with_none_command_stays_none() -> None:
+    # Default (no setting passed) also produces None.
+    surface = _surface(process=InstanceProcessView(state="unreachable"))
+    assert surface.host_process.state == "UNREACHABLE"
+    assert surface.host_process.copyable_command is None
+
+
+@pytest.mark.parametrize(
+    "daemon_state",
+    ["running", "stopping", "exited", "idle"],
+)
+def test_host_process_non_unreachable_never_emits_daemon_command(daemon_state: str) -> None:
+    # The daemon-start command must not leak outside UNREACHABLE — for
+    # EXITED / IDLE / WAITING_FOR_HOST, restarting the host service does
+    # not restart the per-bot subprocess and would mislead the trader.
+    surface = _surface(
+        process=InstanceProcessView(state=daemon_state),
+        host_start_command=_HOST_CMD,
+    )
+    assert surface.host_process.state != "UNREACHABLE"
+    assert surface.host_process.copyable_command is None
+
+
+def test_host_process_waiting_for_host_never_emits_daemon_command() -> None:
+    # IDLE + durable RUNNING -> WAITING_FOR_HOST; same rule applies.
+    surface = _surface(
+        process=_IDLE_PROC,
+        desired_state=_desired("RUNNING"),
+        host_start_command=_HOST_CMD,
+    )
+    assert surface.host_process.state == "WAITING_FOR_HOST"
+    assert surface.host_process.copyable_command is None
+
+
+# ---------------------------------------------------------------------------
 # prior_run
 # ---------------------------------------------------------------------------
 

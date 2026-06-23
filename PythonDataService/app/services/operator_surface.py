@@ -100,17 +100,26 @@ _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
 def _project_host_process(
     process: InstanceProcessView,
     desired_state: DesiredStateView | None,
+    host_start_command: str | None = None,
 ) -> OperatorSurfaceHostProcess:
     state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
     # WAITING_FOR_HOST: daemon reachable + no tracked subprocess + the
-    # operator has set durable intent to RUNNING.  Distinct from STARTING
-    # (the cockpit cannot start anything; ADR-0003 / ADR-0007).
+    # operator has set durable intent to RUNNING.
     if state == "IDLE" and desired_state is not None and desired_state.state == "RUNNING":
         state = "WAITING_FOR_HOST"
     notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)
-    # ``copyable_command`` stays ``None`` until the server can author a
-    # safe one per instance context (#608 host-process authority).
-    return OperatorSurfaceHostProcess(state=state, notice=notice, copyable_command=None)
+    # ``copyable_command`` is authored ONLY for UNREACHABLE, and only when
+    # trusted deployment configuration supplies a non-empty command. The
+    # EXITED / IDLE / WAITING_FOR_HOST cases need a per-instance Start
+    # action, NOT the daemon-start script (it would restart the host
+    # service unnecessarily and not the exited subprocess). ADR 0013
+    # amendment 2026-06-22; design doc "Deployment-model decision".
+    copyable_command = (
+        host_start_command
+        if state == "UNREACHABLE" and host_start_command
+        else None
+    )
+    return OperatorSurfaceHostProcess(state=state, notice=notice, copyable_command=copyable_command)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +589,7 @@ def compute_operator_surface(
     control_plane_state: DaemonConnectivityState | None = None,
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
+    host_start_command: str | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -599,7 +609,7 @@ def compute_operator_surface(
     resolved_guards = guard_state if guard_state is not None else empty_guard_state()
 
     return OperatorSurface(
-        host_process=_project_host_process(process, desired_state),
+        host_process=_project_host_process(process, desired_state, host_start_command),
         prior_run=_project_prior_run(last_exit),
         broker=_project_broker(safety_verdict_final, broker_connection_state),
         configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),
