@@ -24,7 +24,7 @@ class LiveStateSidecarCorruptError(RuntimeError):
     """Raised by ``LiveStateSidecarRepo.read`` when the on-disk bytes
     are unparseable JSON or fail envelope validation.
 
-    Routes to ColdStartReconciler as a hard ``Poisoned`` outcome:
+    Routes to the cold-start orchestrator as a hard ``Poison`` outcome:
     a corrupt sidecar cannot be safely resumed and the bot must not
     submit new orders until the operator inspects the file.
     """

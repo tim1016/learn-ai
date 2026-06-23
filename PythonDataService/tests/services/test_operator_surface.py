@@ -1000,3 +1000,179 @@ def test_evaluator_only_emits_codes_in_the_documented_vocabulary() -> None:
                             emitted.add(cap.disabled_reason_code)
                         emitted.update(cap.disabled_reasons)
     assert emitted.issubset(REASON_CODES), f"orphan codes emitted: {emitted - REASON_CODES}"
+
+
+# ---------------------------------------------------------------------------
+# Cold-start reconciliation projection (ADR-0008 §5 / PR 1)
+# ---------------------------------------------------------------------------
+
+
+def _make_receipt(
+    *,
+    status: str,
+    outcome: str | None = None,
+    failure_reason: str | None = None,
+    sidecar_wal_seq: int = 0,
+    broker_observed_at_ms: int | None = 1000,
+    last_reconcile_ms: int | None = 1000,
+    run_id: str = "run-1",
+    namespace: str = "learn-ai/sid/v1",
+    adopted_intent_ids: tuple[str, ...] = (),
+):
+    from app.schemas.live_runs import ReconciliationReceipt
+
+    return ReconciliationReceipt(
+        status=status,  # type: ignore[arg-type]
+        outcome=outcome,  # type: ignore[arg-type]
+        run_id=run_id,
+        strategy_instance_id="sid",
+        namespace=namespace,
+        started_at_ms=999,
+        completed_at_ms=last_reconcile_ms,
+        last_reconcile_ms=last_reconcile_ms,
+        sidecar_wal_seq=sidecar_wal_seq,
+        broker_observed_at_ms=broker_observed_at_ms,
+        adopted_intent_ids=adopted_intent_ids,
+        failure_reason=failure_reason,
+    )
+
+
+def _project(receipt=None, **kwargs):
+    from app.services.operator_surface import _project_reconciliation
+
+    defaults: dict = {
+        "current_wal_seq": None,
+        "current_run_id": None,
+        "current_namespace": None,
+        "latest_broker_event_ms": None,
+        "latest_mutation_ms": None,
+        "ttl_ms": None,
+        "now_ms": 2000,
+    }
+    defaults.update(kwargs)
+    return _project_reconciliation(receipt, **defaults)
+
+
+def test_project_reconciliation_missing_receipt_is_not_available() -> None:
+    proj = _project(None)
+    assert proj.state == "NOT_AVAILABLE"
+
+
+def test_project_reconciliation_in_progress() -> None:
+    proj = _project(_make_receipt(status="in_progress"))
+    assert proj.state == "IN_PROGRESS"
+
+
+def test_project_reconciliation_failed_carries_reason() -> None:
+    proj = _project(
+        _make_receipt(status="failed", failure_reason="broker_probe_failed")
+    )
+    assert proj.state == "FAILED"
+    assert proj.failure_reason == "broker_probe_failed"
+
+
+def test_project_reconciliation_passed_clean() -> None:
+    proj = _project(_make_receipt(status="passed", outcome="clean"))
+    assert proj.state == "CLEAN"
+
+
+def test_project_reconciliation_passed_adopted_surfaces_intent_ids() -> None:
+    proj = _project(
+        _make_receipt(
+            status="passed", outcome="adopted", adopted_intent_ids=("iid-1",)
+        )
+    )
+    assert proj.state == "ADOPTED"
+    assert proj.adopted_intent_ids == ("iid-1",)
+
+
+def test_project_reconciliation_stale_when_wal_advances() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", sidecar_wal_seq=5),
+        current_wal_seq=6,
+    )
+    assert proj.state == "STALE"
+
+
+def test_project_reconciliation_stale_when_run_id_changes() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", run_id="run-old"),
+        current_run_id="run-new",
+    )
+    assert proj.state == "STALE"
+
+
+def test_project_reconciliation_stale_when_namespace_changes() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", namespace="learn-ai/sid/v1"),
+        current_namespace="learn-ai/sid/v2",
+    )
+    assert proj.state == "STALE"
+
+
+def test_project_reconciliation_stale_when_broker_event_after_observed() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", broker_observed_at_ms=1000),
+        latest_broker_event_ms=2000,
+    )
+    assert proj.state == "STALE"
+
+
+def test_project_reconciliation_stale_when_mutation_after_observed() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", broker_observed_at_ms=1000),
+        latest_mutation_ms=2000,
+    )
+    assert proj.state == "STALE"
+
+
+def test_project_reconciliation_stale_when_ttl_exceeded() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", last_reconcile_ms=1000),
+        ttl_ms=500,
+        now_ms=2000,
+    )
+    assert proj.state == "STALE"
+
+
+def test_project_reconciliation_fresh_passes_within_ttl() -> None:
+    proj = _project(
+        _make_receipt(status="passed", outcome="clean", last_reconcile_ms=1900),
+        ttl_ms=500,
+        now_ms=2000,
+    )
+    assert proj.state == "CLEAN"
+
+
+def test_project_reconciliation_matching_inputs_keep_clean() -> None:
+    """All freshness inputs aligned with the receipt → CLEAN remains CLEAN."""
+    proj = _project(
+        _make_receipt(
+            status="passed",
+            outcome="clean",
+            sidecar_wal_seq=10,
+            run_id="run-1",
+            namespace="learn-ai/sid/v1",
+            broker_observed_at_ms=1500,
+            last_reconcile_ms=1500,
+        ),
+        current_wal_seq=10,
+        current_run_id="run-1",
+        current_namespace="learn-ai/sid/v1",
+        latest_broker_event_ms=1500,
+        latest_mutation_ms=1500,
+        ttl_ms=10_000,
+        now_ms=2000,
+    )
+    assert proj.state == "CLEAN"
+
+
+def test_compute_operator_surface_default_reconciliation_is_not_available() -> None:
+    """The aggregate compose function defaults to NOT_AVAILABLE when no
+    receipt + freshness inputs are passed (callsite-additive contract)."""
+    surface = compute_operator_surface(
+        process=_PROC,
+        now_ms=_NOW_MS,
+    )
+    assert surface.reconciliation is not None
+    assert surface.reconciliation.state == "NOT_AVAILABLE"

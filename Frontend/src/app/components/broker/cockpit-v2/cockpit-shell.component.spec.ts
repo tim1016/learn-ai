@@ -107,6 +107,13 @@ function makeStatus() {
       readiness_gates: [],
       runtime_freshness: null,
       control_plane: null,
+      broker_observation_consistency: null,
+      reconciliation: {
+        state: 'NOT_AVAILABLE',
+        failure_reason: null,
+        adopted_intent_ids: [],
+        last_reconcile_ms: null,
+      },
     },
     fetched_at_ms: 0,
   };
@@ -541,5 +548,90 @@ describe('CockpitShellComponent', () => {
     // operator's fail-safe intent controls during a control-plane
     // incident would be less safe.
     expect(stub.setInstanceDesiredState).toHaveBeenCalledOnce();
+  });
+
+  // ── ADR-0008 §5 cold-start reconciliation banner ────────────────────
+
+  async function renderShellWithReconciliation(
+    recon: {
+      state: 'NOT_AVAILABLE' | 'IN_PROGRESS' | 'CLEAN' | 'ADOPTED' | 'STALE' | 'FAILED';
+      failure_reason?: string | null;
+      adopted_intent_ids?: string[];
+      last_reconcile_ms?: number | null;
+    },
+  ) {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        reconciliation: {
+          failure_reason: null,
+          adopted_intent_ids: [],
+          last_reconcile_ms: null,
+          ...recon,
+        },
+      },
+    });
+    return renderShell(stub);
+  }
+
+  it('renders NO banner when reconciliation state is CLEAN', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'CLEAN' });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid^="reconciliation-banner-"]')).toBeNull();
+  });
+
+  it('renders the ADOPTED banner with the recovered-order count', async () => {
+    const fixture = await renderShellWithReconciliation({
+      state: 'ADOPTED',
+      adopted_intent_ids: ['iid-1', 'iid-2'],
+    });
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector('[data-testid="reconciliation-banner-adopted"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('RECONCILE · ADOPTED');
+    expect(banner?.textContent).toContain('recovered 2 adopted broker orders');
+  });
+
+  it('renders the STALE banner when evidence is out of date', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'STALE' });
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector('[data-testid="reconciliation-banner-stale"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('RECONCILE · STALE');
+  });
+
+  it('renders the NOT_AVAILABLE banner when no receipt has landed', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'NOT_AVAILABLE' });
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector(
+      '[data-testid="reconciliation-banner-not-available"]',
+    );
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('RECONCILE · NOT AVAILABLE');
+  });
+
+  it('renders the FAILED banner with the failure reason', async () => {
+    const fixture = await renderShellWithReconciliation({
+      state: 'FAILED',
+      failure_reason: 'broker_probe_failed',
+    });
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector('[data-testid="reconciliation-banner-failed"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.getAttribute('role')).toBe('alert');
+    expect(banner?.textContent).toContain('broker_probe_failed');
+  });
+
+  it('renders the IN_PROGRESS banner while reconciliation is running', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'IN_PROGRESS' });
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector(
+      '[data-testid="reconciliation-banner-in-progress"]',
+    );
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('RECONCILE · IN PROGRESS');
   });
 });

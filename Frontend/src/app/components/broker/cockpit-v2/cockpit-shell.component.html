@@ -373,18 +373,78 @@
       </div>
     }
 
-    <!-- ADR-0008 hazard line lives outside the inner tabs — load-bearing -->
-    @if (s.live_binding) {
-      <aside
-        class="adr-hazard-line"
-        role="status"
-        data-testid="adr-0008-not-wired-banner"
-        title="Runtime reconcile is not wired yet. After a crash / restart or any suspected broker drift, stop the bot, verify the broker positions match the cockpit, and only then restart."
-      >
-        <span class="bar" aria-hidden="true">▌</span>
-        <span class="key">RECONCILE · NOT WIRED</span>
-        <span class="meta">stop &amp; verify after any crash, restart, or suspected drift</span>
-      </aside>
+    <!-- ADR-0008 §5 reconciliation banner — server-authored projection.
+         CLEAN renders nothing; every other state surfaces a banner with
+         operator-language copy. The banner is read-only in PR 1; the
+         runtime "Reconcile now" verb lands in PR 2. -->
+    @if (s.live_binding && s.operator_surface.reconciliation; as recon) {
+      @switch (recon.state) {
+        @case ('ADOPTED') {
+          <aside
+            class="adr-hazard-line"
+            role="status"
+            data-testid="reconciliation-banner-adopted"
+            data-reconciliation-state="ADOPTED"
+            title="The cold-start reconciler recovered orders the broker reported but our records did not have. They are now folded into the ledger."
+          >
+            <span class="bar" aria-hidden="true">▌</span>
+            <span class="key">RECONCILE · ADOPTED</span>
+            <span class="meta">recovered {{ recon.adopted_intent_ids.length }} adopted broker order{{ recon.adopted_intent_ids.length === 1 ? '' : 's' }}</span>
+          </aside>
+        }
+        @case ('STALE') {
+          <aside
+            class="adr-hazard-line"
+            role="status"
+            data-testid="reconciliation-banner-stale"
+            data-reconciliation-state="STALE"
+            title="Reconciliation evidence is out of date. New activity has occurred since the last cold-start check; re-reconcile before trusting the cockpit's position view."
+          >
+            <span class="bar" aria-hidden="true">▌</span>
+            <span class="key">RECONCILE · STALE</span>
+            <span class="meta">reconciliation evidence is out of date</span>
+          </aside>
+        }
+        @case ('NOT_AVAILABLE') {
+          <aside
+            class="adr-hazard-line"
+            role="status"
+            data-testid="reconciliation-banner-not-available"
+            data-reconciliation-state="NOT_AVAILABLE"
+            title="No cold-start reconciliation receipt has landed for this run yet. After a crash / restart or any suspected broker drift, stop the bot, verify the broker positions match the cockpit, and only then restart."
+          >
+            <span class="bar" aria-hidden="true">▌</span>
+            <span class="key">RECONCILE · NOT AVAILABLE</span>
+            <span class="meta">no reconciliation evidence yet</span>
+          </aside>
+        }
+        @case ('FAILED') {
+          <aside
+            class="adr-hazard-line"
+            role="alert"
+            data-testid="reconciliation-banner-failed"
+            data-reconciliation-state="FAILED"
+            [attr.title]="recon.failure_reason ?? 'Cold-start reconciliation failed. The bot will not submit new orders until the operator inspects the situation and reconciles the account.'"
+          >
+            <span class="bar" aria-hidden="true">▌</span>
+            <span class="key">RECONCILE · FAILED</span>
+            <span class="meta">{{ recon.failure_reason ?? 'reconciliation failed' }}</span>
+          </aside>
+        }
+        @case ('IN_PROGRESS') {
+          <aside
+            class="adr-hazard-line"
+            role="status"
+            data-testid="reconciliation-banner-in-progress"
+            data-reconciliation-state="IN_PROGRESS"
+            title="Cold-start reconciliation is running. The bot will not enter its bar loop until a verdict lands."
+          >
+            <span class="bar" aria-hidden="true">▌</span>
+            <span class="key">RECONCILE · IN PROGRESS</span>
+            <span class="meta">reconciling…</span>
+          </aside>
+        }
+      }
     }
 
     <!-- Host-process notice — server-authored copy + Start bot process

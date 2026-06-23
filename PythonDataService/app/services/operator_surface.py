@@ -50,10 +50,12 @@ from app.schemas.live_runs import (
     OperatorSurfaceDomainFreshness,
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
+    OperatorSurfaceReconciliation,
     OperatorSurfaceRuntimeFreshness,
     OperatorSurfaceTradingSession,
     ReadinessGate,
     ReadinessVector,
+    ReconciliationReceipt,
     RedeployAction,
 )
 from app.services.mutation_attempt import MutationAttempt
@@ -641,6 +643,100 @@ def _project_control_plane(
 
 
 # ---------------------------------------------------------------------------
+# cold-start reconciliation (ADR-0008 §5 / PR 1)
+# ---------------------------------------------------------------------------
+
+
+def _project_reconciliation(
+    receipt: ReconciliationReceipt | None,
+    *,
+    current_wal_seq: int | None,
+    current_run_id: str | None,
+    current_namespace: str | None,
+    latest_broker_event_ms: int | None,
+    latest_mutation_ms: int | None,
+    ttl_ms: int | None,
+    now_ms: int,
+) -> OperatorSurfaceReconciliation:
+    """Compose the cockpit-facing reconciliation state from the receipt +
+    freshness inputs (ADR-0008 §5 / PR 1).
+
+    Decision order (first match wins):
+      * receipt missing                                 → NOT_AVAILABLE
+      * receipt.status == in_progress                   → IN_PROGRESS
+      * receipt.status == failed                        → FAILED + reason
+      * receipt.status == passed AND any of the
+        following — WAL advanced past receipt.sidecar_wal_seq,
+        run_id changed, namespace changed, broker event or
+        operator mutation after broker_observed_at_ms, or
+        ``ttl_ms`` exceeded — → STALE
+      * receipt.status == passed otherwise              → CLEAN | ADOPTED
+        (per receipt.outcome; ``adopted_intent_ids`` surfaced)
+    """
+    if receipt is None:
+        return OperatorSurfaceReconciliation(state="NOT_AVAILABLE")
+    if receipt.status == "in_progress":
+        return OperatorSurfaceReconciliation(
+            state="IN_PROGRESS", last_reconcile_ms=receipt.last_reconcile_ms
+        )
+    if receipt.status == "failed":
+        return OperatorSurfaceReconciliation(
+            state="FAILED",
+            failure_reason=receipt.failure_reason,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    # status == "passed" from here on. Apply staleness rules.
+    if current_wal_seq is not None and current_wal_seq > receipt.sidecar_wal_seq:
+        return OperatorSurfaceReconciliation(
+            state="STALE",
+            adopted_intent_ids=receipt.adopted_intent_ids,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    if current_run_id is not None and current_run_id != receipt.run_id:
+        return OperatorSurfaceReconciliation(
+            state="STALE",
+            adopted_intent_ids=receipt.adopted_intent_ids,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    if current_namespace is not None and current_namespace != receipt.namespace:
+        return OperatorSurfaceReconciliation(
+            state="STALE",
+            adopted_intent_ids=receipt.adopted_intent_ids,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    observed = receipt.broker_observed_at_ms
+    if observed is not None and latest_broker_event_ms is not None and latest_broker_event_ms > observed:
+        return OperatorSurfaceReconciliation(
+            state="STALE",
+            adopted_intent_ids=receipt.adopted_intent_ids,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    if observed is not None and latest_mutation_ms is not None and latest_mutation_ms > observed:
+        return OperatorSurfaceReconciliation(
+            state="STALE",
+            adopted_intent_ids=receipt.adopted_intent_ids,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    if (
+        ttl_ms is not None
+        and receipt.last_reconcile_ms is not None
+        and (now_ms - receipt.last_reconcile_ms) > ttl_ms
+    ):
+        return OperatorSurfaceReconciliation(
+            state="STALE",
+            adopted_intent_ids=receipt.adopted_intent_ids,
+            last_reconcile_ms=receipt.last_reconcile_ms,
+        )
+    # Fresh passed receipt — distinguish clean vs adopted.
+    state = "ADOPTED" if receipt.outcome == "adopted" else "CLEAN"
+    return OperatorSurfaceReconciliation(
+        state=state,
+        adopted_intent_ids=receipt.adopted_intent_ids,
+        last_reconcile_ms=receipt.last_reconcile_ms,
+    )
+
+
+# ---------------------------------------------------------------------------
 # compose
 # ---------------------------------------------------------------------------
 
@@ -667,6 +763,17 @@ def compute_operator_surface(
     broker_observation_consistency: BrokerObservationConsistency | None = None,
     host_start_command: str | None = None,
     start_run_id: str | None = None,
+    # ADR-0008 §5 / PR 1 — cold-start reconciliation projection inputs.
+    # All optional: when no live binding is resolved, the router passes
+    # ``reconciliation_receipt=None`` and the projection turns into
+    # ``NOT_AVAILABLE`` (the only legitimate "we have nothing" state).
+    reconciliation_receipt: ReconciliationReceipt | None = None,
+    current_wal_seq: int | None = None,
+    current_run_id: str | None = None,
+    current_namespace: str | None = None,
+    latest_broker_event_ms: int | None = None,
+    latest_mutation_ms: int | None = None,
+    reconciliation_ttl_ms: int | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -715,4 +822,14 @@ def compute_operator_surface(
         runtime_freshness=_project_runtime_freshness(runtime_freshness),
         control_plane=_project_control_plane(control_plane_state),
         broker_observation_consistency=broker_observation_consistency,
+        reconciliation=_project_reconciliation(
+            reconciliation_receipt,
+            current_wal_seq=current_wal_seq,
+            current_run_id=current_run_id,
+            current_namespace=current_namespace,
+            latest_broker_event_ms=latest_broker_event_ms,
+            latest_mutation_ms=latest_mutation_ms,
+            ttl_ms=reconciliation_ttl_ms,
+            now_ms=now_ms,
+        ),
     )

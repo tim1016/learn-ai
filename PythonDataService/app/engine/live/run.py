@@ -888,6 +888,97 @@ def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
     return {int(perm_id) for perm_id in envelope.known_perm_ids}
 
 
+def _build_broker_snapshot_from_ibkr(
+    open_orders: list, executions: list
+) -> object:
+    """Map ``IbkrOpenOrder`` + ``IbkrOrderEvent`` into the classifier's pure
+    ``BrokerSnapshot`` shape (ADR-0008 §5).
+
+    Pure transform — no broker calls. The caller has already synchronized the
+    broker caches via ``list_open_orders`` + ``executions_for_reconnect_recovery``
+    so the empty-cache-defeats-reconciliation gate (Acceptance Gate #2) is
+    satisfied.
+
+    Quantity convention on executions: IBKR's ``Fill.execution.side`` is
+    ``"BOT"`` / ``"SLD"``. We carry the **signed** quantity (positive for buys,
+    negative for sells) so the classifier's sign-aware comparisons read
+    correctly.
+    """
+    from app.engine.live.reconciliation_classifier import (
+        BrokerExecutionView,
+        BrokerOrderView,
+        BrokerSnapshot,
+    )
+
+    order_views = tuple(
+        BrokerOrderView(
+            order_ref=getattr(o, "order_ref", None),
+            perm_id=getattr(o, "perm_id", None),
+            order_id=getattr(o, "order_id", None),
+            status=getattr(o, "status", None),
+            symbol=getattr(o, "symbol", None),
+            remaining=float(getattr(o, "remaining", 0.0) or 0.0),
+            filled=float(getattr(o, "cumulative_filled", 0.0) or 0.0),
+        )
+        for o in open_orders
+    )
+    exec_views = tuple(
+        BrokerExecutionView(
+            order_ref=getattr(e, "order_ref", None),
+            perm_id=getattr(e, "perm_id", None),
+            exec_id=getattr(e, "exec_id", None),
+            symbol=getattr(e, "symbol", None),
+            quantity=(
+                float(getattr(e, "fill_quantity", 0.0) or 0.0)
+                * (-1.0 if getattr(e, "side", None) == "SELL" else 1.0)
+            ),
+        )
+        for e in executions
+        if getattr(e, "event_type", None) == "fill"
+    )
+    return BrokerSnapshot(open_orders=order_views, executions=exec_views)
+
+
+def _resolve_prior_run_dir(
+    *, current_run_dir: Path, strategy_instance_id: str, current_created_ms: int
+) -> Path | None:
+    """Find the most-recent prior run dir for the same ``strategy_instance_id``.
+
+    Scans siblings under ``current_run_dir.parent`` (the run root) for
+    ``run_ledger.json`` files whose ``strategy_instance_id`` matches and whose
+    ``created_at_ms`` strictly precedes ``current_created_ms``. Returns the
+    newest such dir, or ``None`` when no eligible prior run exists.
+
+    Silently tolerates unreadable / malformed sibling ledgers — a corrupt
+    sibling cannot block this run's reconciliation; the classifier already
+    treats absent prior-run evidence as empty.
+    """
+    parent = current_run_dir.parent
+    if not parent.exists():
+        return None
+    best: tuple[int, Path] | None = None
+    for sibling in parent.iterdir():
+        if not sibling.is_dir() or sibling == current_run_dir:
+            continue
+        ledger_path = sibling / "run_ledger.json"
+        if not ledger_path.exists():
+            continue
+        try:
+            payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("strategy_instance_id") != strategy_instance_id:
+            continue
+        created_ms = payload.get("created_at_ms")
+        if not isinstance(created_ms, int) or created_ms >= current_created_ms:
+            continue
+        if best is None or created_ms > best[0]:
+            best = (created_ms, sibling)
+    return best[1] if best is not None else None
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Run the live engine end-to-end against an existing run directory.
 
@@ -1540,6 +1631,154 @@ def cmd_start(args: argparse.Namespace) -> int:
                     ),
                 )
                 return 1
+
+            # ADR-0008 §5 / cold-start reconciliation gate (PR 1). Wired
+            # AFTER the unusual-position check and BEFORE engine.run() so
+            # the engine never enters its bar loop without a durable
+            # ``reconciliation_receipt.json``. Only runs when an IBKR
+            # client is present (production path); replay / FakeBroker
+            # tests pass client=None and the engine has no submit side
+            # effects to reconcile.
+            if client is not None and live_state_writer is not None:
+                from app.broker.ibkr.client import BrokerError
+                from app.broker.ibkr.orders import (
+                    executions_for_reconnect_recovery,
+                    list_open_orders,
+                )
+                from app.engine.live.live_state_sidecar import (
+                    LiveStateSidecarRepo,
+                    stable_live_state_path,
+                )
+                from app.engine.live.reconciliation_classifier import (
+                    Adopt,
+                    Poison,
+                )
+                from app.engine.live.reconciliation_orchestrator import reconcile
+
+                _live_state_path = stable_live_state_path(_artifacts_root, strategy_instance_id)
+                _sidecar_repo = LiveStateSidecarRepo(_live_state_path)
+                _bot_order_namespace = (
+                    live_state_seed.bot_order_namespace
+                    if live_state_seed is not None
+                    else f"learn-ai/{strategy_instance_id}/v1"
+                )
+
+                # Step 2 (per spec): synchronize broker caches before
+                # building the snapshot. An empty cache cannot satisfy
+                # reconciliation (Acceptance Gate #2) — these calls
+                # populate ib_async's open-orders + executions caches.
+                try:
+                    _open_orders = await list_open_orders(client)
+                    _executions = await executions_for_reconnect_recovery(client)
+                except BrokerError as exc:
+                    logger.exception(
+                        "IBKR broker cache sync failed before reconciliation",
+                        extra={"step": "reconcile-sync"},
+                    )
+                    print(
+                        f"[START] could not sync broker caches for reconciliation: {exc}",
+                        file=sys.stderr,
+                    )
+                    write_run_status(
+                        args.run_dir,
+                        _entry_sidecar.model_copy(
+                            update={
+                                "ended_at_ms": now_ms(),
+                                "last_update_ms": now_ms(),
+                                "exit_code": 3,
+                                "exit_reason": ExitReason.exception,
+                            }
+                        ),
+                    )
+                    return 3
+
+                _broker_snapshot = _build_broker_snapshot_from_ibkr(
+                    _open_orders, _executions
+                )
+
+                _prior_run_dir = _resolve_prior_run_dir(
+                    current_run_dir=args.run_dir,
+                    strategy_instance_id=strategy_instance_id,
+                    current_created_ms=ledger.created_at_ms,
+                )
+
+                async def _probe():
+                    return _broker_snapshot
+
+                try:
+                    _reconcile_result = await reconcile(
+                        run_dir=args.run_dir,
+                        sidecar=_sidecar_repo,
+                        broker_probe=_probe,
+                        allowed_namespaces=frozenset({_bot_order_namespace}),
+                        now_ms=now_ms,
+                        prior_run_dir=_prior_run_dir,
+                        # The per-instance sidecar may still carry the prior
+                        # run's identity until the new engine flushes — pass
+                        # the *new* run's ledger identity so the receipt is
+                        # stamped against the run we're actually starting.
+                        current_run_id=ledger.run_id,
+                        current_strategy_instance_id=strategy_instance_id,
+                        current_namespace=_bot_order_namespace,
+                    )
+                except Exception as exc:
+                    # Receipt-write failure is fatal per the contract
+                    # "no submit without a durable receipt." Surface it as
+                    # exit 3 (runtime broker/IO) and refuse to enter
+                    # engine.run.
+                    logger.exception(
+                        "Reconciliation receipt write failed; refusing startup",
+                        extra={"step": "reconcile"},
+                    )
+                    print(
+                        f"[START] reconciliation receipt write failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    write_run_status(
+                        args.run_dir,
+                        _entry_sidecar.model_copy(
+                            update={
+                                "ended_at_ms": now_ms(),
+                                "last_update_ms": now_ms(),
+                                "exit_code": 3,
+                                "exit_reason": ExitReason.exception,
+                            }
+                        ),
+                    )
+                    return 3
+
+                _verdict = _reconcile_result.verdict
+                if isinstance(_verdict, Poison):
+                    # poisoned.flag has already been stamped by the
+                    # orchestrator; refuse startup with the fatal-halt exit.
+                    print(
+                        f"[START] HALT cold_start_divergence: {_verdict.reason}",
+                        file=sys.stderr,
+                    )
+                    write_run_status(
+                        args.run_dir,
+                        _entry_sidecar.model_copy(
+                            update={
+                                "ended_at_ms": now_ms(),
+                                "last_update_ms": now_ms(),
+                                "exit_code": 1,
+                                "exit_reason": ExitReason.fatal_halt,
+                            }
+                        ),
+                    )
+                    return 1
+                if isinstance(_verdict, Adopt) and _verdict.pause:
+                    # Ambiguous exposure: an adopted order is still active
+                    # at the broker. Persist durable PAUSED so a restart
+                    # remains paused, AND flip the engine's in-memory
+                    # ``_paused`` flag — the engine seeds its constructor
+                    # ``start_paused`` from the pre-reconcile desired_state
+                    # snapshot and does not re-read the file before bar 1.
+                    # Without the in-memory flip an adopted active order
+                    # could be followed by a new submission on the next bar
+                    # instead of being held for operator resolution.
+                    _write_desired_state("PAUSED", reason="reconcile_ambiguous_exposure")
+                    engine._paused = True
 
             try:
                 # PRD #619-B B3 — start the runtime publisher just

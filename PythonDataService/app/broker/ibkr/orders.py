@@ -535,6 +535,11 @@ def _trade_to_open_order(
             if getattr(status_obj, "avgFillPrice", 0.0)
             else None
         ),
+        # ADR 0008 / Phase 5A — coerce the library's empty-string default to
+        # None so a missing echo stays distinguishable from a present orderRef
+        # downstream (the cold-start reconciliation orchestrator treats
+        # absence as "not ours via ref").
+        order_ref=(getattr(order, "orderRef", "") or None),
         fetched_at_ms=now_ms_utc(),
     )
 

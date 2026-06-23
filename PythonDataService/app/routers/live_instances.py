@@ -357,6 +357,47 @@ def _mutation_attempt_root(live_runs_root: Path) -> Path:
     return live_runs_root.parent / "mutation_attempts"
 
 
+def _resolve_reconciliation_inputs(
+    root: Path, live_binding: LiveBinding | None
+):
+    """Read the cold-start reconciliation receipt + current freshness inputs
+    for the operator-surface projection (ADR-0008 §5 / PR 1).
+
+    Returns ``(receipt, current_wal_seq, current_run_id, current_namespace)``.
+    Every element is ``None`` when the input is unresolvable — e.g. no live
+    binding, the run dir is missing, the WAL is empty / corrupt, or the
+    receipt is absent. The projection turns absences into ``NOT_AVAILABLE``
+    rather than raising.
+    """
+    from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
+    from app.services.resume_guard_state import read_full_reconciliation_receipt
+
+    if live_binding is None or live_binding.run_dir is None:
+        return None, None, None, None
+    run_dir = Path(live_binding.run_dir)
+    if not run_dir.is_absolute():
+        run_dir = root / run_dir
+    if not run_dir.exists():
+        return None, None, None, None
+    receipt = read_full_reconciliation_receipt(run_dir)
+    current_run_id = live_binding.run_id
+    current_namespace: str | None = None
+    current_wal_seq: int | None = None
+    wal_path = run_dir / "intent_events.jsonl"
+    if wal_path.exists():
+        try:
+            events = IntentWal(wal_path).read_tail()
+            if events:
+                current_wal_seq = events[-1].seq
+                current_namespace = events[-1].bot_order_namespace
+        except IntentWalCorruptError:
+            # A corrupt WAL is surfaced elsewhere; for the reconciliation
+            # projection we treat it as "no current seq" so a stale-flag
+            # comparison falls through to the other rules.
+            current_wal_seq = None
+    return receipt, current_wal_seq, current_run_id, current_namespace
+
+
 def _resolve_latest_mutation(
     live_runs_root: Path, strategy_instance_id: str
 ) -> MutationAttempt | None:
@@ -1611,6 +1652,12 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         configured_mode=configured_mode,
         now_ms=observed_at_ms,
     )
+    (
+        reconciliation_receipt,
+        current_wal_seq,
+        current_run_id,
+        current_namespace,
+    ) = _resolve_reconciliation_inputs(root, live_binding)
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1651,6 +1698,26 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             broker_observation_consistency=broker_observation_consistency,
             host_start_command=settings.live_runner_host_start_command,
             start_run_id=_resolve_start_run_id(root, live_binding, runs),
+            reconciliation_receipt=reconciliation_receipt,
+            current_wal_seq=current_wal_seq,
+            current_run_id=current_run_id,
+            current_namespace=current_namespace,
+            # ``broker_observation_consistency.compared_at_ms`` is the time
+            # of THIS status comparison, not the timestamp of the latest
+            # broker event. Using it would flip a fresh CLEAN/ADOPTED receipt
+            # to STALE on every poll. Until a real per-instance "latest
+            # broker activity ts" source is plumbed, leave the broker-event
+            # staleness signal unset — WAL-seq, run_id/namespace, mutation,
+            # and TTL still drive STALE correctly.
+            latest_broker_event_ms=None,
+            latest_mutation_ms=(
+                latest_mutation.last_transition_at_ms
+                if latest_mutation is not None
+                else None
+            ),
+            reconciliation_ttl_ms=getattr(
+                settings, "reconciliation_receipt_ttl_ms", None
+            ),
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,

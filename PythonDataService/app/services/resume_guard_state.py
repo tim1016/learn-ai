@@ -272,6 +272,34 @@ def read_broker_safety_verdict(verdict_snapshot_path: Path) -> BrokerSafetyArtif
     return BrokerSafetyArtifact(state="UNKNOWN", verdict=None)
 
 
+def read_full_reconciliation_receipt(run_dir: Path | None):
+    """Return the full ``ReconciliationReceipt`` model when readable.
+
+    Distinct from ``read_reconciliation_receipt`` (which classifies a
+    receipt against ``relevant_after_ms`` and returns a small
+    ``ReconciliationArtifact`` for the Resume guard). The operator-surface
+    projection needs the full receipt to compose its ``state`` token (the
+    Resume guard's three-state ``PASSED/FAILED/STALE`` collapses
+    ``ADOPTED``/``CLEAN`` and drops ``IN_PROGRESS``/``adopted_intent_ids``).
+
+    Returns ``None`` when the receipt is absent OR unreadable — the
+    projection turns absence into ``NOT_AVAILABLE`` rather than raising.
+    """
+    from app.engine.live.reconciliation_receipt import RECEIPT_FILENAME
+    from app.schemas.live_runs import ReconciliationReceipt
+
+    if run_dir is None:
+        return None
+    receipt_path = run_dir / RECEIPT_FILENAME
+    if not receipt_path.exists():
+        return None
+    try:
+        raw = receipt_path.read_text(encoding="utf-8")
+        return ReconciliationReceipt.model_validate_json(raw)
+    except (OSError, ValueError):
+        return None
+
+
 def read_reconciliation_receipt(
     run_dir: Path | None,
     *,
