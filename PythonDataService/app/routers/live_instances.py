@@ -1049,7 +1049,14 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
     through — only the daemon is the gate for those.
     """
     root = Path(settings.live_runs_root)
-    run_dir = root / run_id
+    # Re-validate + confine the segment locally. The caller has already
+    # validated, but tracking analysers (CodeQL) do not trace through call
+    # boundaries; making the helper self-safe avoids a per-call taint flag.
+    try:
+        safe_run_id = _validate_path_segment(run_id, field="run_id")
+        run_dir = _confine(root, safe_run_id)
+    except ValueError:
+        return  # the caller's own validation will already have surfaced this
     if not run_dir.is_dir():
         return  # daemon will return 404; not our gate
     try:
