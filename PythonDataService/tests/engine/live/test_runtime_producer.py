@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.data.trade_bar import TradeBar
 from app.engine.live.control_plane import DaemonLease, write_daemon_lease
 from app.engine.live.engine_runtime import (
@@ -458,9 +459,7 @@ class _StubIbkrClient:
         self.probe_calls += 1
         self._last_probe_ms = self._now_ms()
 
-    def health(self) -> "IbkrConnectionHealth":  # noqa: F821 — forward ref, real import below
-        from app.broker.ibkr.models import IbkrConnectionHealth
-
+    def health(self) -> IbkrConnectionHealth:
         return IbkrConnectionHealth(
             mode="paper",
             host="127.0.0.1",
