@@ -32,7 +32,6 @@ busy replaying history and a new order would race the sweep.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
@@ -228,14 +227,27 @@ class BrokerActivityPublisher:
             task = getattr(self, task_attr)
             if task is not None:
                 task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
+                try:
                     await task
+                except asyncio.CancelledError:
+                    logger.debug(
+                        "publisher task cancelled during stop",
+                        extra={
+                            "strategy_instance_id": self._strategy_instance_id,
+                            "task_attr": task_attr,
+                        },
+                    )
                 setattr(self, task_attr, None)
         for q in self._subscribers:
-            # The subscriber is already behind — they'll see the
-            # cancellation when they next try to read.
-            with contextlib.suppress(asyncio.QueueFull):
+            try:
                 q.put_nowait(None)
+            except asyncio.QueueFull:
+                # The subscriber is already behind — they'll see the
+                # cancellation when they next try to read.
+                logger.debug(
+                    "subscriber queue full during stop; end sentinel not enqueued",
+                    extra={"strategy_instance_id": self._strategy_instance_id},
+                )
 
     @property
     def is_running(self) -> bool:
@@ -827,13 +839,23 @@ class BrokerActivityPublisher:
                 # The subscriber was already going to lose rows — better
                 # to lose one and tell them so than to lose all future
                 # rows silently.
-                with contextlib.suppress(asyncio.QueueEmpty):
+                try:
                     q.get_nowait()
-                # Truly stuck (e.g. a second producer concurrently
-                # re-filled the queue). The consumer will time out at
-                # the transport layer.
-                with contextlib.suppress(asyncio.QueueFull):
+                except asyncio.QueueEmpty:
+                    logger.debug(
+                        "slow subscriber queue already empty during drain",
+                        extra={"strategy_instance_id": self._strategy_instance_id},
+                    )
+                try:
                     q.put_nowait(None)
+                except asyncio.QueueFull:
+                    # Truly stuck (e.g. a second producer concurrently
+                    # re-filled the queue). The consumer will time out
+                    # at the transport layer.
+                    logger.debug(
+                        "slow subscriber queue still full; closing subscriber",
+                        extra={"strategy_instance_id": self._strategy_instance_id},
+                    )
                 dead.append(q)
         for q in dead:
             self._subscribers.discard(q)
