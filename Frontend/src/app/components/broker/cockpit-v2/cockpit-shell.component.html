@@ -403,6 +403,20 @@
             <span class="bar" aria-hidden="true">▌</span>
             <span class="key">RECONCILE · STALE</span>
             <span class="meta">reconciliation evidence is out of date</span>
+            <button
+              type="button"
+              class="reconcile-now-button"
+              data-testid="cockpit-reconcile-now-button"
+              [disabled]="busyAction() === 'reconcile_now'"
+              (click)="dispatchReconcileNow()"
+            >{{ busyAction() === 'reconcile_now' ? 'Reconciling…' : 'Reconcile now' }}</button>
+            @if (reconcileError()) {
+              <span
+                class="reconcile-now-error"
+                data-testid="cockpit-reconcile-now-error"
+                role="alert"
+              >{{ reconcileError() }}</span>
+            }
           </aside>
         }
         @case ('NOT_AVAILABLE') {
@@ -416,6 +430,20 @@
             <span class="bar" aria-hidden="true">▌</span>
             <span class="key">RECONCILE · NOT AVAILABLE</span>
             <span class="meta">no reconciliation evidence yet</span>
+            <button
+              type="button"
+              class="reconcile-now-button"
+              data-testid="cockpit-reconcile-now-button"
+              [disabled]="busyAction() === 'reconcile_now'"
+              (click)="dispatchReconcileNow()"
+            >{{ busyAction() === 'reconcile_now' ? 'Reconciling…' : 'Reconcile now' }}</button>
+            @if (reconcileError()) {
+              <span
+                class="reconcile-now-error"
+                data-testid="cockpit-reconcile-now-error"
+                role="alert"
+              >{{ reconcileError() }}</span>
+            }
           </aside>
         }
         @case ('FAILED') {

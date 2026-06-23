@@ -186,6 +186,43 @@ class CommandChannel:
             with contextlib.suppress(FileNotFoundError):
                 pending.unlink()
 
+    def ack_completion(
+        self, command: Command, *, outcome: dict[str, Any] | None = None
+    ) -> None:
+        """Overwrite an existing ack file with the final completion outcome.
+
+        Reconciliation PR 2 / runtime RECONCILE. The dispatcher writes a
+        first ack synchronously with ``status="accepted"`` + ``request_id``
+        so the cockpit can render IN_PROGRESS without waiting on the slow
+        async path (broker probe + classifier). When the reconcile task
+        finishes, the engine calls this method to atomically replace the
+        ack with the final ``status="completed"`` + ``verdict=...`` outcome.
+
+        Same atomic-rename mechanic as ``ack``: the cockpit polling the
+        ack file sees either the original accepted outcome or the final
+        completed outcome, never a torn write.
+        """
+        ack_final = self._dir / f"command.{command.seq}.{command.verb.value}.ack.json"
+        acked = AckedCommand(
+            seq=command.seq,
+            verb=command.verb,
+            payload=command.payload,
+            outcome=outcome or {},
+        )
+        ack_tmp = ack_final.with_suffix(".json.tmp")
+        payload_bytes = acked.model_dump_json().encode("utf-8")
+        with _dir_lock(self._dir):
+            with open(ack_tmp, "wb") as fh:
+                fh.write(payload_bytes)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.replace(ack_tmp, ack_final)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    ack_tmp.unlink()
+                raise
+
 
 @contextlib.contextmanager
 def _dir_lock(commands_dir: Path) -> Iterator[None]:

@@ -19,6 +19,7 @@ import type {
   LiveRunSummary,
   LogLine,
   QcAuditCopyListing,
+  ReconcileAckResponse,
   SizingPolicy,
   SpecStrategyFixture,
 } from '../api/live-runs.types';
@@ -200,6 +201,29 @@ export class LiveRunsService {
       this.http.post<CommandWriteResponse>(
         `${this.instancesBase}/${encodeURIComponent(instanceId)}/commands`,
         request,
+      ),
+    );
+  }
+
+  /**
+   * Reconciliation PR 2 — runtime "Reconcile now" verb. Enqueues a
+   * RECONCILE command on the instance's bound run; the engine flips the
+   * submit barrier synchronously and spawns the async control task that
+   * runs the orchestrator. The cockpit polls
+   * ``operator_surface.reconciliation`` to observe IN_PROGRESS →
+   * CLEAN/ADOPTED/FAILED transitions; this method just confirms the
+   * request was queued.
+   *
+   * 409 NO_LIVE_BINDING when no bot process is running for the
+   * instance — runtime reconciliation requires a live engine. The
+   * cockpit should only enable this button when ``reconciliation.state``
+   * is STALE or NOT_AVAILABLE for an instance with a live binding.
+   */
+  reconcileInstance(instanceId: string): Promise<ReconcileAckResponse> {
+    return firstValueFrom(
+      this.http.post<ReconcileAckResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/reconcile`,
+        {},
       ),
     );
   }

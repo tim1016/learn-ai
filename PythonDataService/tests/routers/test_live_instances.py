@@ -2007,3 +2007,78 @@ def test_today_ny_uses_america_new_york_not_utc(monkeypatch: pytest.MonkeyPatch)
     # this instant — otherwise the test isn't actually exercising the
     # bug it covers.
     assert live_instances._today_ny() != fixed_utc_instant.date()
+
+
+# ── reconciliation PR 2 — runtime reconcile endpoint ────────────────────
+
+
+async def test_reconcile_endpoint_enqueues_command_when_bound(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Daemon reports a live binding + bound run_dir exists on disk →
+    POST /reconcile returns 200 with a request_id + accepted_at_ms and
+    a pending RECONCILE command file appears under the run's commands dir.
+    """
+    app, root = app_with_root
+    _write_ledger(root, "run-reconcile", "spy_ema_paper", 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-reconcile", "pid": 9},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/reconcile")
+
+    assert response.status_code == 200
+    body = response.json()
+    # The request_id is a 22-char base64url token (mint_intent_id).
+    assert isinstance(body["request_id"], str) and len(body["request_id"]) == 22
+    assert isinstance(body["accepted_at_ms"], int) and body["accepted_at_ms"] > 0
+
+    queued = list(
+        (root / "run-reconcile" / "commands").glob(
+            "command.*.RECONCILE.pending.json"
+        )
+    )
+    assert len(queued) == 1, "RECONCILE command must be persisted to the bound run"
+
+
+async def test_reconcile_endpoint_returns_409_when_no_live_binding(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No live binding → 409 NO_LIVE_BINDING.
+
+    Runtime reconciliation requires a live engine to acquire the submit
+    lock and probe the broker. A durable-only enqueue would never be
+    acted on, so surface the gap honestly rather than pretend.
+    """
+    app, _root = app_with_root
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/reconcile")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "NO_LIVE_BINDING"
+    assert "live engine" in detail["message"]
+
+
+async def test_reconcile_endpoint_returns_404_when_run_dir_missing(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Daemon reports a live binding whose run_dir is not visible under
+    this service's root → 404. A command written here would not be seen
+    by the engine polling its real dir.
+    """
+    app, _root = app_with_root
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-ghost", "pid": 5},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/reconcile")
+
+    assert response.status_code == 404
+    assert "not visible" in response.json()["detail"]

@@ -45,6 +45,7 @@ from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.nyse_calendar import nyse_session_state_at_ms
+from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
@@ -97,6 +98,7 @@ from app.schemas.live_runs import (
     MutationOutcomeUnknownResponse,
     QcAuditCopyListing,
     ReadinessVector,
+    ReconcileAckResponse,
     ReconcileMutationResponse,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
@@ -2430,6 +2432,80 @@ async def flatten_and_pause_instance(
             )
 
     return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
+
+
+@router.post(
+    "/{strategy_instance_id}/reconcile",
+    response_model=ReconcileAckResponse,
+)
+async def reconcile_instance(strategy_instance_id: str) -> ReconcileAckResponse:
+    """Enqueue a RECONCILE command for the instance's live binding.
+
+    Reconciliation PR 2 (runtime async). The data plane resolves the live
+    binding through the daemon, writes a RECONCILE command into the run's
+    ``commands/`` directory, and returns the ack envelope so the cockpit
+    can render IN_PROGRESS while the engine's async control task probes
+    the broker, runs the orchestrator, and overwrites the command ack
+    with its verdict (Continue / Adopt / Adopt+Pause / Poison).
+
+    The cockpit then polls ``operator_surface.reconciliation`` to observe
+    IN_PROGRESS → CLEAN / ADOPTED / FAILED transitions. The receipt
+    projection is the source of truth for state changes; this envelope
+    just confirms the request was queued.
+
+    Failure modes:
+
+    - 409 NO_LIVE_BINDING when no bot process is running for the
+      instance. Runtime reconciliation requires a live engine to acquire
+      the submit lock and probe the broker — a durable-only enqueue
+      would never be acted on.
+    - 404 when the daemon reports a live binding but the bound run dir
+      is not visible under this service's live_runs_root (root mismatch
+      / missing artifacts).
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    _result, daemon = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url, sid
+    )
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    if live_binding is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "NO_LIVE_BINDING",
+                "message": (
+                    "No bot process is running for this instance — "
+                    "reconciliation requires a live engine."
+                ),
+            },
+        )
+    live_run_dir = _visible_live_run_dir(root, live_binding)
+    if live_run_dir is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Bound run {live_binding.run_id} is not visible under this "
+                "service's live_runs_root; cannot enqueue a runtime reconcile."
+            ),
+        )
+
+    try:
+        CommandChannel(live_run_dir / "commands").write_from_operator(
+            CommandVerb.RECONCILE
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"failed to enqueue RECONCILE command: {exc}",
+        ) from exc
+
+    return ReconcileAckResponse(
+        request_id=mint_intent_id(),
+        accepted_at_ms=_now_ms(),
+    )
 
 
 @router.post(
