@@ -19,7 +19,7 @@ const CLICKABLE_KINDS: readonly OperatorNoticeActionKind[] = [
 export class OperatorNoticeComponent {
   readonly notice = input.required<OperatorNotice>();
 
-  readonly tierClass = computed(() => `tier-${this.notice().tier}`);
+  readonly tier = computed(() => this.notice().tier);
 
   readonly hasClickableAction = computed(() =>
     CLICKABLE_KINDS.includes(this.notice().action.kind),

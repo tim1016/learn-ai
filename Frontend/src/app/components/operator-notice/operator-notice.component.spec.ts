@@ -75,11 +75,12 @@ describe('OperatorNoticeComponent', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('applies a tier-aware CSS class to the root', async () => {
+  it('applies a tier-aware CSS class to the root and preserves the base class', async () => {
     const { container } = await render(OperatorNoticeComponent, {
       inputs: { notice: makeNotice({ tier: 'critical' }) },
     });
     const root = container.querySelector('[data-testid="operator-notice"]');
+    expect(root?.classList.contains('operator-notice')).toBe(true);
     expect(root?.classList.contains('tier-critical')).toBe(true);
   });
 

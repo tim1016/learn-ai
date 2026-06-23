@@ -1,7 +1,9 @@
 <section
   data-testid="operator-notice"
   class="operator-notice"
-  [class]="tierClass()"
+  [class.tier-info]="tier() === 'info'"
+  [class.tier-warning]="tier() === 'warning'"
+  [class.tier-critical]="tier() === 'critical'"
   role="status"
   [attr.aria-live]="notice().tier === 'critical' ? 'assertive' : 'polite'"
 >
