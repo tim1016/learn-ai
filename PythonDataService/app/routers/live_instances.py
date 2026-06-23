@@ -60,7 +60,6 @@ from app.routers.live_runs import (
     _read_sidecar,
     _resolve_desired_state,
     _validate_path_segment,
-    _validate_run_id,
     build_command_timeline,
 )
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
@@ -1050,24 +1049,24 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
     through — only the daemon is the gate for those.
     """
     root = Path(settings.live_runs_root)
-    # Re-validate + confine via the regex-pinned helper. ``_validate_run_id``
-    # combines ``_validate_path_segment``, a strict run_id regex, and
-    # ``_confine`` — the exact pattern documented in ``live_runs.py`` to
-    # break the CodeQL py/path-injection taint chain (which does not trace
-    # through ``_validate_path_segment`` + ``_confine`` alone).
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        return  # the caller's own validation will already have surfaced this
-    if not run_dir.is_dir():
-        return  # daemon will return 404; not our gate
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, json.JSONDecodeError):
-        return  # corrupt ledger surfaces from the daemon, not here
-    sid = str(ledger.get("strategy_instance_id") or "")
-    if not sid:
-        return  # legacy ledger has no per-instance gates
+    # Resolve (sid, run_dir) through a disk scan rather than ``root / run_id``.
+    # ``_scan_runs_by_instance`` iterates ``root.iterdir()`` so every returned
+    # ``run_dir`` is a path produced by the filesystem walk, never a join of
+    # user-controlled input — this is what CodeQL traces as "untainted" (the
+    # ``_validate_run_id`` sanitizer alone does not bridge the function-call
+    # boundary in py/path-injection).
+    sid: str | None = None
+    run_dir: Path | None = None
+    for candidate_sid, runs in _scan_runs_by_instance(root).items():
+        for run in runs:
+            if run["run_id"] == run_id:
+                sid = candidate_sid
+                run_dir = Path(run["run_dir"])
+                break
+        if run_dir is not None:
+            break
+    if sid is None or run_dir is None:
+        return  # unknown run_id — daemon will 404; not our gate
 
     if (run_dir / "poisoned.flag").exists():
         raise HTTPException(
