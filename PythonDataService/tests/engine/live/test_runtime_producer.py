@@ -288,10 +288,13 @@ async def test_engine_publishes_bar_loop_block_per_bar(tmp_path: Path) -> None:
     bars = [_bar(m) for m in range(5)]
     await engine.run(_NoopStrategy(), _iter_bars(bars))
 
-    # One bar_loop update per bar consumed by the loop.
-    assert len(agg.bar_loop_updates) == 5
-    # latest_source_bar_ms reflects each bar's end_time.
-    assert agg.bar_loop_updates[0].latest_source_bar_ms == int(
+    # One startup seed (no bar yet, latest_source_bar_ms=None) plus one
+    # per bar consumed by the loop. The seed exists so the runtime
+    # publisher can emit a coherent snapshot before the first bar.
+    assert len(agg.bar_loop_updates) == 6
+    assert agg.bar_loop_updates[0].latest_source_bar_ms is None
+    # The first bar-driven update (index 1) reflects bar[0]'s end_time.
+    assert agg.bar_loop_updates[1].latest_source_bar_ms == int(
         bars[0].end_time.timestamp() * 1000
     )
     assert agg.bar_loop_updates[-1].latest_source_bar_ms == int(
@@ -334,12 +337,15 @@ async def test_engine_publishes_broker_block_on_every_verdict_check(
     )
     await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(3)]))
 
-    assert len(agg.broker_updates) == 3
-    block = agg.broker_updates[0]
-    # ADR-0011 amendment composition holds end-to-end.
-    assert block.identity == "PAPER_VERIFIED"
-    assert block.submission_capability == "PAPER_ORDERS_ENABLED"
-    assert block.effective_posture == "PAPER_EXECUTION"
+    # One startup seed + one per bar's verdict-halt check.
+    assert len(agg.broker_updates) == 4
+    # The startup seed derives the verdict via the same provider, so
+    # ADR-0011 amendment composition holds end-to-end from the very
+    # first published block (not only after the first bar).
+    seed_block = agg.broker_updates[0]
+    assert seed_block.identity == "PAPER_VERIFIED"
+    assert seed_block.submission_capability == "PAPER_ORDERS_ENABLED"
+    assert seed_block.effective_posture == "PAPER_EXECUTION"
 
 
 @pytest.mark.asyncio
@@ -418,3 +424,147 @@ async def test_engine_with_no_aggregator_is_a_noop(tmp_path: Path) -> None:
 
     # Must run without raising — every producer hook is None-guarded.
     await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(2)]))
+
+
+class _StubIbkrSettings:
+    """Minimum surface ``_publish_broker_block`` reads off
+    ``client.settings``: ``port`` (used by ``classify_port``) plus
+    ``mode`` (read by ``_validate_paper_client`` on engine.run entry)."""
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self.mode = "paper"
+
+
+class _StubIbkrClient:
+    """Minimum IbkrClient surface for the regression test.
+
+    Only the two methods the broker producer touches are implemented:
+    ``probe()`` (sets ``_last_probe_ms``; ``_publish_initial_broker_block``
+    is what calls this) and ``health()`` (returns a connected
+    ``IbkrConnectionHealth`` carrying that probe timestamp through to
+    the broker block's ``probe_completed_at_ms``).
+    """
+
+    def __init__(self, *, now_ms_fn) -> None:
+        self.settings = _StubIbkrSettings(port=4002)  # paper port
+        self.connected_account = "DU123"  # _validate_paper_client gate
+        self._last_probe_ms: int | None = None
+        self.probe_calls = 0
+        self._now_ms = now_ms_fn
+
+    async def probe(self, *, timeout_s: float = 4.0) -> None:
+        self.probe_calls += 1
+        self._last_probe_ms = self._now_ms()
+
+    def health(self):
+        from app.broker.ibkr.models import IbkrConnectionHealth
+
+        return IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=12,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            server_version=178,
+            fetched_at_ms=self._now_ms(),
+            connection_state="connected",
+            last_transition_ms=self._now_ms(),
+            last_probe_ms=self._last_probe_ms,
+        )
+
+
+@pytest.mark.asyncio
+async def test_engine_first_runtime_snapshot_coheres_without_bars(
+    tmp_path: Path,
+) -> None:
+    """Regression: pre-market deploys must NOT be marked POSTURE_DEMOTED.
+
+    Before this fix the engine seeded only ``command_loop`` and
+    ``control_plane`` at startup; ``broker`` and ``bar_loop`` only landed
+    inside the bar loop. The aggregator returns ``None`` from
+    ``snapshot()`` until all four blocks have been populated, so no
+    ``engine_runtime.json`` was ever written before the first minute
+    bar arrived from IBKR — which pre-market is hours away. The
+    cockpit then read ``ENGINE_RUNTIME_MISSING`` and blocked Resume
+    with ``POSTURE_DEMOTED``, conflating a healthy waiting-for-market
+    engine with a crashed one.
+
+    This test pins the fix: after ``run()`` completes — even with zero
+    bars — the engine's aggregator emits a coherent snapshot, and the
+    freshness evaluator on that snapshot (with the session calendar
+    reporting CLOSED, as it would pre-market) returns
+    ``posture_demoted=False``.
+    """
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.engine_runtime_publisher import EngineRuntimeAggregator
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from app.services.runtime_freshness import evaluate_runtime_freshness
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    snapshot_ms = 1_700_000_000_000
+    client = _StubIbkrClient(now_ms_fn=lambda: snapshot_ms)
+
+    aggregator = EngineRuntimeAggregator(
+        strategy_instance_id="sid-fresh",
+        run_id="run-fresh",
+        pid=1,
+        process_start_identity="child-fresh",
+        expected_daemon_boot_id=None,
+    )
+    engine = LiveEngine(
+        client,  # type: ignore[arg-type]  # stub matches only the methods used
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        run_mode="live_paper",
+        readonly=False,
+        verdict_provider=lambda: "paper-only",
+        runtime_aggregator=aggregator,
+    )
+
+    # Zero bars — pre-market state. The bar loop exits immediately on
+    # the source-exhausted branch; only the startup hooks run.
+    await engine.run(_NoopStrategy(), _iter_bars([]))
+
+    # The startup hook must have actually probed the client; without the
+    # probe call, ``_last_probe_ms`` stays None and the broker block's
+    # ``probe_completed_at_ms`` would be None — which is exactly the
+    # BROKER_PROBE_MISSING regression this fix prevents.
+    assert client.probe_calls >= 1
+
+    # The aggregator must have a coherent snapshot to hand the publisher.
+    snapshot = await aggregator.snapshot(
+        snapshot_seq=0, written_at_ms=snapshot_ms
+    )
+    assert snapshot is not None, (
+        "fresh-run snapshot is None; the startup hooks did not populate "
+        "all four blocks and the publisher will refuse to write "
+        "engine_runtime.json"
+    )
+    assert snapshot.broker.probe_completed_at_ms == snapshot_ms
+
+    # The freshness evaluator with session_state=CLOSED (pre-market or
+    # after-hours) must NOT demote posture: bar_loop becomes
+    # NOT_APPLICABLE from the calendar, and the other three blocks were
+    # freshly seeded above.
+    freshness = evaluate_runtime_freshness(
+        snapshot, now_ms=snapshot_ms, session_state="CLOSED"
+    )
+    assert freshness.posture_demoted is False, (
+        f"fresh-run still demotes posture; reasons={freshness}"
+    )
+    assert freshness.bar_loop.state == "NOT_APPLICABLE"

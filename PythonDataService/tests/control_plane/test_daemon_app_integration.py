@@ -124,6 +124,28 @@ def test_build_child_env_sets_daemon_boot_id_env(tmp_path: Path) -> None:
     assert "PYTHONPATH" in env
 
 
+def test_build_child_env_propagates_ibkr_live_runs_root(tmp_path: Path) -> None:
+    """Regression test: ``IbkrConfig.live_runs_root`` defaults to the
+    container bind-mount path ``/app/artifacts/live_runs``. When the
+    daemon spawns the engine on the host that default points at a
+    directory that doesn't exist (or, on macOS, exists as a read-only
+    system mount), so every ``IbkrClient._record_broker_event`` write
+    fails with ENOENT/EROFS. The daemon already knows the resolved
+    host path on ``self.live_runs_root``; this test pins that it is
+    propagated into the child via the ``IBKR_LIVE_RUNS_ROOT`` env var
+    so the IbkrConfig settings load picks it up.
+    """
+    mgr = _make_manager(tmp_path)
+    request = HostRunnerStartRequest(
+        run_id="run-1",
+        ibkr_host="127.0.0.1",
+    )
+
+    env = mgr._build_child_env(request)
+
+    assert env["IBKR_LIVE_RUNS_ROOT"] == str(mgr.live_runs_root)
+
+
 # ---------------------------------------------------------------------------
 # create_app lifespan — orphan classification + lease writer
 # ---------------------------------------------------------------------------

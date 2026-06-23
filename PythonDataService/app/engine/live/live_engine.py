@@ -779,13 +779,21 @@ class LiveEngine:
             await self._broker.start_event_stream()
             started_event_stream = True
 
-        # PRD #619-B B3 — engine_runtime aggregator startup hooks. The
-        # publisher (owned by the caller) starts emitting as soon as
-        # all four blocks land. We seed command_loop + control_plane
-        # immediately; bar_loop and broker land on their first
-        # natural producer tick.
+        # PRD #619-B B3 — engine_runtime aggregator startup hooks. All
+        # four blocks are seeded here so the publisher's first snapshot
+        # writes immediately. The earlier shape (seed only command_loop
+        # + control_plane, let broker + bar_loop land on the first bar)
+        # left ``engine_runtime.json`` absent through every pre-market
+        # deploy, which the freshness evaluator can't distinguish from
+        # a crashed engine — it always marked posture_demoted=True and
+        # blocked Resume with POSTURE_DEMOTED. The session-aware
+        # bar-loop evaluator already handles "no bar yet" cleanly
+        # (CLOSED → NOT_APPLICABLE), so the seed just unblocks the
+        # first-snapshot gate without weakening any safety signal.
         await self._publish_command_loop_block()
         await self._publish_initial_control_plane_block()
+        await self._publish_initial_broker_block()
+        await self._publish_initial_bar_loop_block()
 
         # PRD #619-B B5 follow-up — child watchdog. The factory builds
         # a configured ``ChildWatchdog`` from the engine's four side-
@@ -1534,11 +1542,27 @@ class LiveEngine:
         boot-time gate, not a mid-run primitive.
         """
         assert self._command_channel is not None
+        # PRD #619-B B3 — broker probe + block publish on a 10s cadence
+        # (PRD §B documented values: probe cadence 10s, fresh ≤25s). The
+        # bar-driven verdict-halt check publishes the broker block on
+        # every bar, but pre-market it does not fire at all; without
+        # this beat the broker block's ``probe_completed_at_ms`` would
+        # stagnate past 25s and the freshness evaluator would mark the
+        # broker UNKNOWN, re-demoting posture seconds after a fresh
+        # start. The startup hook already ran the first probe; this
+        # countdown fires the next one ~10s into the poll loop and
+        # every 10s thereafter.
+        BROKER_PROBE_TICKS = 10
+        broker_probe_countdown = BROKER_PROBE_TICKS
         while not shutdown_event.is_set():
             # PRD #619-B B3 — command-loop heartbeat on every poll tick.
             # This is the 1Hz cadence the backend freshness evaluator
             # uses to detect command-loop hangs.
             await self._publish_command_loop_block()
+            broker_probe_countdown -= 1
+            if broker_probe_countdown <= 0:
+                broker_probe_countdown = BROKER_PROBE_TICKS
+                await self._probe_and_publish_broker_block()
             try:
                 pending = self._command_channel.read_pending()
             except CommandChannelCorruptError:
@@ -2380,6 +2404,99 @@ class LiveEngine:
         path = artifacts_root if isinstance(artifacts_root, Path) else None
         await self._runtime_aggregator.update_control_plane(
             build_control_plane_block_from_lease(path, now_ms=int(time.time() * 1000))
+        )
+
+    async def _publish_initial_broker_block(self) -> None:
+        """PRD #619-B B3 — seed the broker block at startup.
+
+        Two things have to happen for the first snapshot to be useful:
+
+        1. ``IbkrClient._last_probe_ms`` must be non-None — the
+           freshness evaluator reads it via ``probe_completed_at_ms``
+           and treats ``None`` as ``BROKER_PROBE_MISSING`` (state
+           UNKNOWN ⇒ ``posture_demoted=True``). ``connect()`` does not
+           set ``_last_probe_ms``; only an explicit ``probe()`` does.
+        2. A current verdict via ``_verdict_provider`` so ``identity``
+           lands on the real PAPER_VERIFIED / LIVE_DETECTED axis
+           instead of ``UNKNOWN``.
+
+        The periodic refresh that follows (see ``_command_poll_loop``)
+        runs at the PRD §B 10s probe cadence so the 25s broker-probe-
+        stale threshold never trips while the bar loop is idle.
+        """
+        if self._client is not None:
+            try:
+                await self._client.probe()
+            except Exception:
+                logger.exception(
+                    "initial broker probe failed; first runtime snapshot "
+                    "will carry probe_completed_at_ms=None (the command-"
+                    "poll loop's periodic probe is the recovery path)"
+                )
+        initial_verdict: object = None
+        if self._verdict_provider is not None:
+            try:
+                initial_verdict = self._verdict_provider()
+            except Exception:
+                logger.exception(
+                    "initial verdict derivation failed; broker block will "
+                    "carry identity=UNKNOWN until the bar-driven verdict "
+                    "check produces one"
+                )
+        await self._publish_broker_block(verdict_value=initial_verdict)
+
+    async def _probe_and_publish_broker_block(self) -> None:
+        """Refresh ``_last_probe_ms`` then republish the broker block.
+
+        The single call site is ``_command_poll_loop`` (cadence
+        described inline there). Splitting it out keeps the poll-loop
+        body readable and makes the side-effect testable without
+        driving the whole poll loop.
+
+        Note: this path deliberately does NOT run the verdict
+        transition halt — that check stays bar-driven so its
+        observable cadence remains the same as before this PR. The
+        broker-block publish is the only behaviour added here.
+        """
+        if self._client is not None:
+            try:
+                await self._client.probe()
+            except Exception:
+                logger.exception(
+                    "broker probe failed in command-poll loop; "
+                    "broker block may transition to UNKNOWN"
+                )
+        verdict_value: object = None
+        if self._verdict_provider is not None:
+            try:
+                verdict_value = self._verdict_provider()
+            except Exception:
+                logger.exception(
+                    "verdict_provider failed in command-poll loop"
+                )
+        await self._publish_broker_block(verdict_value=verdict_value)
+
+    async def _publish_initial_bar_loop_block(self) -> None:
+        """PRD #619-B B3 — seed the bar-loop block at startup.
+
+        ``latest_source_bar_ms=None`` advertises "no market-data
+        observation yet"; the freshness evaluator already treats
+        ``None`` distinctly (no ``BAR_LOOP_LATEST_BAR_STALE`` reason
+        is emitted in that case) and pre-market the session-aware
+        overlay clamps the bar-loop state to ``NOT_APPLICABLE``
+        regardless of heartbeat. The seed exists purely to unblock
+        the aggregator's coherent-snapshot gate; once the real bar
+        stream produces its first bar, ``_publish_bar_loop_block``
+        overwrites this with the real ``latest_source_bar_ms``.
+        """
+        if self._runtime_aggregator is None:
+            return
+        await self._runtime_aggregator.update_bar_loop(
+            build_bar_loop_block(
+                heartbeat_at_ms=int(time.time() * 1000),
+                latest_source_bar_ms=None,
+                expected_interval_ms=None,
+            )
         )
 
     async def _start_child_watchdog(self, shutdown_event: asyncio.Event) -> object:

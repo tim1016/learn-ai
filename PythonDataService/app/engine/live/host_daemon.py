@@ -873,6 +873,12 @@ class RunnerProcessManager:
         # child captures it as ``expected_daemon_boot_id`` and the
         # watchdog can detect daemon restart.
         env["LIVE_RUNNER_DAEMON_BOOT_ID"] = self.boot_id
+        # ``IbkrConfig.live_runs_root`` defaults to the *container*
+        # bind-mount path (``/app/artifacts/live_runs``) — the daemon
+        # spawns the engine on the host, so without this override the
+        # child resolves ``IbkrClient._record_broker_event``'s sink to
+        # ``/app/...`` and every IBKR lifecycle event logs ENOENT.
+        env["IBKR_LIVE_RUNS_ROOT"] = str(self.live_runs_root)
         return env
 
     def _validate_run_dir(self, run_id: str) -> Path:
