@@ -175,6 +175,18 @@ export interface LiveRunStatus {
   fetched_at_ms: number;
 }
 
+/**
+ * Reconciliation PR 2 — ack envelope returned by
+ * ``POST /api/live-instances/{sid}/reconcile``. ``request_id`` is opaque
+ * (a uuid4-derived 22-char base64url token); the cockpit polls
+ * ``operator_surface.reconciliation`` to observe IN_PROGRESS →
+ * CLEAN/ADOPTED/FAILED transitions, not this envelope.
+ */
+export interface ReconcileAckResponse {
+  request_id: string;
+  accepted_at_ms: number;
+}
+
 export interface LogLine {
   ts_ms: number | null;
   raw_text: string;

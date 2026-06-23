@@ -634,4 +634,90 @@ describe('CockpitShellComponent', () => {
     expect(banner).not.toBeNull();
     expect(banner?.textContent).toContain('RECONCILE · IN PROGRESS');
   });
+
+  // ── reconciliation PR 2 — "Reconcile now" button ──────────────────────
+
+  it('renders Reconcile-now button when reconciliation state is STALE', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'STALE' });
+    const el = fixture.nativeElement as HTMLElement;
+    const btn = el.querySelector(
+      '[data-testid="cockpit-reconcile-now-button"]',
+    ) as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.disabled).toBe(false);
+    expect(btn?.textContent?.trim()).toBe('Reconcile now');
+  });
+
+  it('renders Reconcile-now button when reconciliation state is NOT_AVAILABLE', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'NOT_AVAILABLE' });
+    const el = fixture.nativeElement as HTMLElement;
+    const btn = el.querySelector(
+      '[data-testid="cockpit-reconcile-now-button"]',
+    ) as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.disabled).toBe(false);
+  });
+
+  it('hides Reconcile-now button when reconciliation state is CLEAN', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'CLEAN' });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="cockpit-reconcile-now-button"]'),
+    ).toBeNull();
+  });
+
+  it('hides Reconcile-now button when reconciliation state is FAILED', async () => {
+    const fixture = await renderShellWithReconciliation({
+      state: 'FAILED',
+      failure_reason: 'broker_probe_failed',
+    });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="cockpit-reconcile-now-button"]'),
+    ).toBeNull();
+  });
+
+  it('hides Reconcile-now button when reconciliation state is IN_PROGRESS', async () => {
+    const fixture = await renderShellWithReconciliation({ state: 'IN_PROGRESS' });
+    const el = fixture.nativeElement as HTMLElement;
+    // The IN_PROGRESS banner renders without the button — the verb is
+    // already in flight, so a second click would race.
+    expect(
+      el.querySelector('[data-testid="cockpit-reconcile-now-button"]'),
+    ).toBeNull();
+  });
+
+  it('click invokes LiveRunsService.reconcileInstance with the sid', async () => {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        reconciliation: {
+          state: 'STALE',
+          failure_reason: null,
+          adopted_intent_ids: [],
+          last_reconcile_ms: null,
+        },
+      },
+    });
+    const reconcileSpy = vi.fn().mockResolvedValue({
+      request_id: 'aaaaaaaaaaaaaaaaaaaaaa',
+      accepted_at_ms: 1,
+    });
+    (stub as unknown as { reconcileInstance: typeof reconcileSpy }).reconcileInstance =
+      reconcileSpy;
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const btn = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="cockpit-reconcile-now-button"]',
+    ) as HTMLButtonElement;
+    btn.click();
+    await fixture.whenStable();
+
+    expect(reconcileSpy).toHaveBeenCalledWith('sid-x');
+  });
 });

@@ -110,6 +110,12 @@ export class CockpitShellComponent {
   );
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
+  // Reconciliation PR 2 — inline error displayed next to the
+  // "Reconcile now" button. Distinct from the shared ``mutationError``
+  // banner so a reconcile failure stays visually anchored to the
+  // affordance the operator clicked, rather than wandering to the
+  // page-level error region.
+  readonly reconcileError = signal<string | null>(null);
 
   // Per-instance tab state keyed by strategy_instance_id.
   private _tabStateMap = new Map<string, InstanceTabState>();
@@ -480,6 +486,30 @@ export class CockpitShellComponent {
       await this._refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this._humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  /**
+   * Reconciliation PR 2 — runtime "Reconcile now" verb. Enqueues a
+   * RECONCILE command on the instance's bound run. The button is only
+   * surfaced when ``operator_surface.reconciliation.state`` is STALE or
+   * NOT_AVAILABLE (a live binding exists but reconciliation evidence is
+   * out of date or absent). The engine's async control task probes the
+   * broker and the next /status poll surfaces IN_PROGRESS → CLEAN /
+   * ADOPTED / FAILED transitions.
+   */
+  async dispatchReconcileNow(): Promise<void> {
+    const id = this.selectedInstanceId();
+    if (!id) return;
+    this.busyAction.set('reconcile_now');
+    this.reconcileError.set(null);
+    try {
+      await this._live.reconcileInstance(id);
+      await this._refreshStatus(id);
+    } catch (err) {
+      this.reconcileError.set(this._humanError(err));
     } finally {
       this.busyAction.set(null);
     }
