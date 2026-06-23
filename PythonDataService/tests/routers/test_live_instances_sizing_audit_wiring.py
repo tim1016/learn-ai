@@ -33,6 +33,7 @@ def _stub_settings(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
     stub = SimpleNamespace(
         live_runs_root=str(root / "live_runs"),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,

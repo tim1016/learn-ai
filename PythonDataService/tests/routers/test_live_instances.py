@@ -57,6 +57,7 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         # Mirror the real default env (IBKR_MODE=paper, IBKR_READONLY=false) so
         # start_defaults resolves to place-orders; dedicated tests override.
@@ -1792,6 +1793,7 @@ async def test_start_defaults_readonly_false_in_paper_mode(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,
@@ -1816,6 +1818,7 @@ async def test_start_defaults_readonly_true_in_live_mode(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="live",
         readonly=False,
@@ -1841,6 +1844,7 @@ async def test_start_defaults_honors_ibkr_readonly_in_paper_mode(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=True,
@@ -1866,6 +1870,7 @@ async def test_start_defaults_fail_closed_when_mode_missing(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         readonly=False,  # even with orders allowed, an absent mode stays shadow
     )
