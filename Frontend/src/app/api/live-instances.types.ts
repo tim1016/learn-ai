@@ -2,6 +2,7 @@
 // The console's subject is the strategy instance; the current run is evidence.
 import type {
   GovernedBy,
+  HostRunnerStartRequest,
   HydratePolicy,
   SizingPolicy,
   SizingPreset,
@@ -207,13 +208,44 @@ export interface ActionCapability {
   disabled_reasons: string[];
 }
 
+export type HostProcessStartDisabledReasonCode =
+  | 'ALREADY_RUNNING'
+  | 'STOPPING'
+  | 'HOST_SERVICE_OFFLINE'
+  | 'STOPPED_REQUIRES_REDEPLOY'
+  | 'START_SETTINGS_INCOMPLETE';
+
+/** Server-authored per-instance Start-bot-process affordance
+ *  (ADR-0006 §1 / ADR-0007 / ADR 0013 amendment 2026-06-22).
+ *
+ *  Drives the cockpit's "Start bot process" button. The data-plane proxy
+ *  re-runs the same enable check before forwarding to the daemon, so a
+ *  stale ``enabled: true`` cannot bypass the gate. When enabled,
+ *  ``run_id`` and ``request`` together carry the exact POST the cockpit
+ *  will fire — Angular MUST NOT compose the body. */
+export interface HostProcessStartCapability {
+  enabled: boolean;
+  /** Target of ``POST /runs/{run_id}/start``. Populated only when
+   *  ``enabled`` is true. */
+  run_id: string | null;
+  /** Server-authored request body. Absent when ``enabled`` is false. */
+  request: HostRunnerStartRequest | null;
+  /** Closed reason code; present iff ``enabled`` is false. */
+  disabled_reason_code: HostProcessStartDisabledReasonCode | null;
+}
+
 export interface OperatorSurfaceHostProcess {
   state: HostProcessState;
   /** Operator-language line authored server-side when state != RUNNING.  ``null`` when running. */
   notice: string | null;
-  /** Exact host command the operator can paste, ONLY when the server can author it safely.
-   *  Angular renders verbatim and MUST NOT construct, interpolate, or transform this string. */
+  /** Exact host command the operator can paste, ONLY for UNREACHABLE
+   *  when trusted deployment configuration supplies a non-empty value.
+   *  Angular renders verbatim and MUST NOT construct, interpolate, or
+   *  transform this string. */
   copyable_command: string | null;
+  /** Per-instance Start-bot-process button. Always present so the
+   *  cockpit can render a disabled state with a server-authored reason. */
+  start_capability: HostProcessStartCapability;
 }
 
 export interface OperatorSurfacePriorRun {

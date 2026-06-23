@@ -1,9 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 
 import type {
+  HostProcessStartDisabledReasonCode,
   HostProcessState,
   OperatorSurfaceHostProcess,
+  PriorRunClassification,
 } from '../../../../../api/live-instances.types';
+import { LiveRunsService } from '../../../../../services/live-runs.service';
 
 const HEADING_BY_STATE: Record<HostProcessState, string> = {
   RUNNING: '',
@@ -14,22 +18,59 @@ const HEADING_BY_STATE: Record<HostProcessState, string> = {
   UNREACHABLE: 'HOST RUNNER UNREACHABLE',
 };
 
+/** Trader-facing copy for each closed `HostProcessStartDisabledReasonCode`.
+ *  Per ADR 0013 §4, Angular maps closed server-authored enums to display
+ *  strings; the server is authoritative for the enum value. */
+/** Phase-0 review-first hint when the previous run halted for safety or
+ *  ended with an unexpected error. Surfaced ABOVE the Start affordance
+ *  so the trader sees the incident before re-launching. Phase 1 moves
+ *  this into the full `trader_guidance.primary_remediation = focus_view`
+ *  per ADR 0013 amendment 2026-06-22; until then, the host-process
+ *  notice carries it. The advisory does NOT disable Start — Start
+ *  enablement is independently governed by `start_capability` (design
+ *  "Guidance ranking does not disable Start"). */
+const REVIEW_FIRST_COPY: Partial<Record<PriorRunClassification, string>> = {
+  HALT_TRIGGERED:
+    'Previous run halted for safety. Review the incident in Warnings & interruptions before starting again.',
+  EXITED_WITH_ERROR:
+    'Previous run ended with an error. Review Warnings & interruptions before starting again.',
+};
+
+const START_DISABLED_COPY: Record<HostProcessStartDisabledReasonCode, string> = {
+  ALREADY_RUNNING: 'The bot is already running.',
+  STOPPING: 'The bot is shutting down. Wait for it to finish before starting again.',
+  HOST_SERVICE_OFFLINE:
+    'The bot service is offline. Start it on the host machine first, then try again.',
+  STOPPED_REQUIRES_REDEPLOY:
+    'This run is permanently stopped. Redeploy the bot to trade again.',
+  START_SETTINGS_INCOMPLETE:
+    "This bot's saved start settings are incomplete. Review Configuration and redeploy.",
+};
+
 /**
- * Server-authored host-process notice (PRD #607 / Slice 8 / #615).
+ * Server-authored host-process notice (PRD #607 / Slice 8 / #615;
+ * Phase 0 trader-language redesign 2026-06-22).
  *
  * Renders the cockpit-side surface that replaced the legacy
  * ``<app-broker-start-stop-card>`` (removed in the 2026-06-22 cockpit
  * audit; the component had no live references and was already
- * documented as superseded). The host runner is operator-owned
- * (ADR-0003 / ADR-0007) so the cockpit cannot start / stop it.  When
- * ``host_process.state !== 'RUNNING'`` the notice surfaces the
- * server-authored ``notice`` line verbatim plus (only when present) a
- * server-authored ``copyable_command`` block.
+ * documented as superseded). When ``host_process.state !== 'RUNNING'``
+ * the notice surfaces:
+ *   - the server-authored ``notice`` line verbatim;
+ *   - (only when present) a server-authored ``copyable_command`` block
+ *     — currently emitted by the projection only for UNREACHABLE, when
+ *     trusted deployment configuration supplies the host-service start
+ *     command (ADR 0013 amendment 2026-06-22);
+ *   - the per-instance Start bot process button, driven by the
+ *     server-authored ``start_capability`` (ADR-0006 §1 / ADR-0007).
  *
  * Angular MUST NOT construct, interpolate, transform, or assemble any
- * command — it renders the string verbatim or omits the row entirely.
- * No REDEPLOY link and no "restart" affordance live here; REDEPLOY is
- * a separate surface for creating a new run configuration.
+ * command string or start-request body — those are rendered verbatim
+ * from the server. Disabled-button copy is the only Angular-owned
+ * mapping (closed-enum lookup, permitted by ADR 0013 §4).
+ *
+ * No REDEPLOY link lives here; REDEPLOY is a separate surface for
+ * creating a new run configuration.
  */
 @Component({
   selector: 'app-host-process-notice',
@@ -38,13 +79,25 @@ const HEADING_BY_STATE: Record<HostProcessState, string> = {
   styleUrl: './host-process-notice.component.scss',
 })
 export class HostProcessNoticeComponent {
+  private readonly liveRuns = inject(LiveRunsService);
+
   readonly hostProcess = input.required<OperatorSurfaceHostProcess>();
   /** Server-authored desired-state label (RUNNING / PAUSED / STOPPED)
    * sourced from the existing ``desired_state.state`` field — the
    * cockpit surfaces what the host runner will do on its next start. */
   readonly desiredIntent = input<string | null>(null);
+  /** Closed-enum `prior_run.classification` from the operator surface.
+   *  Drives the Phase-0 review-first advisory for HALT_TRIGGERED /
+   *  EXITED_WITH_ERROR. Pass `null` when no prior-run signal is
+   *  available; the advisory then stays hidden. */
+  readonly priorRunClassification = input<PriorRunClassification | null>(null);
 
   readonly visible = computed<boolean>(() => this.hostProcess().state !== 'RUNNING');
+
+  readonly reviewFirstMessage = computed<string | null>(() => {
+    const cls = this.priorRunClassification();
+    return cls ? (REVIEW_FIRST_COPY[cls] ?? null) : null;
+  });
 
   readonly heading = computed<string>(() => HEADING_BY_STATE[this.hostProcess().state]);
 
@@ -54,10 +107,48 @@ export class HostProcessNoticeComponent {
     () => this.hostProcess().copyable_command,
   );
 
+  readonly startCapability = computed(() => this.hostProcess().start_capability);
+
+  readonly startDisabledMessage = computed<string | null>(() => {
+    const code = this.startCapability().disabled_reason_code;
+    return code ? START_DISABLED_COPY[code] : null;
+  });
+
+  readonly startInFlight = signal(false);
+  readonly startError = signal<string | null>(null);
+
   copyCommand(): void {
     const cmd = this.copyableCommand();
     if (cmd && typeof navigator !== 'undefined' && navigator.clipboard) {
       void navigator.clipboard.writeText(cmd);
     }
+  }
+
+  async startBotProcess(): Promise<void> {
+    const cap = this.startCapability();
+    if (!cap.enabled || !cap.run_id || !cap.request || this.startInFlight()) {
+      return;
+    }
+    this.startInFlight.set(true);
+    this.startError.set(null);
+    try {
+      await this.liveRuns.startHostRunner(cap.run_id, cap.request);
+      // The next poll surfaces the new RUNNING state; no manual refresh.
+    } catch (err: unknown) {
+      this.startError.set(this._formatStartError(err));
+    } finally {
+      this.startInFlight.set(false);
+    }
+  }
+
+  private _formatStartError(err: unknown): string {
+    if (err instanceof HttpErrorResponse) {
+      const detail = (err.error as { detail?: string } | null)?.detail;
+      return detail || err.message || 'Failed to start bot process.';
+    }
+    if (err instanceof Error) {
+      return err.message;
+    }
+    return 'Failed to start bot process.';
   }
 }

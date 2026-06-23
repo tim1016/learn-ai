@@ -81,7 +81,7 @@ def test_host_process_idle_plus_desired_running_becomes_waiting_for_host() -> No
     surface = _surface(process=_IDLE_PROC, desired_state=_desired("RUNNING"))
     assert surface.host_process.state == "WAITING_FOR_HOST"
     assert surface.host_process.notice is not None
-    assert "Intent is RUNNING" in surface.host_process.notice
+    assert "Trading was requested" in surface.host_process.notice
 
 
 def test_host_process_idle_without_desired_running_stays_idle() -> None:
@@ -99,6 +99,213 @@ def test_host_process_running_ignores_desired_state_override() -> None:
     # upgrades IDLE -> WAITING_FOR_HOST, never overrides RUNNING.
     surface = _surface(process=_PROC, desired_state=_desired("PAUSED"))
     assert surface.host_process.state == "RUNNING"
+
+
+# ---------------------------------------------------------------------------
+# host_process — copyable_command (ADR 0013 amendment 2026-06-22)
+# ---------------------------------------------------------------------------
+
+
+_HOST_CMD = "./start-live-daemon.sh --background"
+
+
+def test_host_process_unreachable_with_configured_command_emits_it() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="unreachable"),
+        host_start_command=_HOST_CMD,
+    )
+    assert surface.host_process.state == "UNREACHABLE"
+    assert surface.host_process.copyable_command == _HOST_CMD
+
+
+def test_host_process_unreachable_without_configured_command_stays_none() -> None:
+    # Empty string -> no safe command can be authored -> emit None and
+    # let the cockpit fall back to a runbook remediation.
+    surface = _surface(
+        process=InstanceProcessView(state="unreachable"),
+        host_start_command="",
+    )
+    assert surface.host_process.state == "UNREACHABLE"
+    assert surface.host_process.copyable_command is None
+
+
+def test_host_process_unreachable_with_none_command_stays_none() -> None:
+    # Default (no setting passed) also produces None.
+    surface = _surface(process=InstanceProcessView(state="unreachable"))
+    assert surface.host_process.state == "UNREACHABLE"
+    assert surface.host_process.copyable_command is None
+
+
+@pytest.mark.parametrize(
+    "daemon_state",
+    ["running", "stopping", "exited", "idle"],
+)
+def test_host_process_non_unreachable_never_emits_daemon_command(daemon_state: str) -> None:
+    # The daemon-start command must not leak outside UNREACHABLE — for
+    # EXITED / IDLE / WAITING_FOR_HOST, restarting the host service does
+    # not restart the per-bot subprocess and would mislead the trader.
+    surface = _surface(
+        process=InstanceProcessView(state=daemon_state),
+        host_start_command=_HOST_CMD,
+    )
+    assert surface.host_process.state != "UNREACHABLE"
+    assert surface.host_process.copyable_command is None
+
+
+def test_host_process_waiting_for_host_never_emits_daemon_command() -> None:
+    # IDLE + durable RUNNING -> WAITING_FOR_HOST; same rule applies.
+    surface = _surface(
+        process=_IDLE_PROC,
+        desired_state=_desired("RUNNING"),
+        host_start_command=_HOST_CMD,
+    )
+    assert surface.host_process.state == "WAITING_FOR_HOST"
+    assert surface.host_process.copyable_command is None
+
+
+# ---------------------------------------------------------------------------
+# host_process — start_capability (ADR 0013 amendment 2026-06-22, slice 3)
+# ---------------------------------------------------------------------------
+
+
+_START_RUN = "run-evidence-x"
+
+
+def _defaults(strategy: str = "spy_ema_crossover") -> InstanceStartDefaults:
+    return InstanceStartDefaults(strategy=strategy, readonly=True, max_orders_per_day=50)
+
+
+@pytest.mark.parametrize(
+    ("daemon_state", "want_state"),
+    [
+        ("idle", "IDLE"),
+        ("exited", "EXITED"),
+    ],
+)
+def test_host_process_start_capability_enabled_for_startable_states(
+    daemon_state: str, want_state: str
+) -> None:
+    surface = _surface(
+        process=InstanceProcessView(state=daemon_state),
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+    assert surface.host_process.state == want_state
+    cap = surface.host_process.start_capability
+    assert cap.enabled is True
+    assert cap.run_id == _START_RUN
+    assert cap.disabled_reason_code is None
+    assert cap.request is not None
+    assert cap.request.strategy == "spy_ema_crossover"
+    assert cap.request.readonly is True
+    assert cap.request.max_orders_per_day == 50
+
+
+def test_host_process_start_capability_enabled_for_waiting_for_host() -> None:
+    surface = _surface(
+        process=_IDLE_PROC,
+        desired_state=_desired("RUNNING"),
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+    assert surface.host_process.state == "WAITING_FOR_HOST"
+    assert surface.host_process.start_capability.enabled is True
+    assert surface.host_process.start_capability.run_id == _START_RUN
+
+
+@pytest.mark.parametrize(
+    ("daemon_state", "want_state", "want_reason"),
+    [
+        ("running", "RUNNING", "ALREADY_RUNNING"),
+        ("stopping", "STOPPING", "STOPPING"),
+        ("unreachable", "UNREACHABLE", "HOST_SERVICE_OFFLINE"),
+    ],
+)
+def test_host_process_start_capability_disabled_per_state(
+    daemon_state: str, want_state: str, want_reason: str
+) -> None:
+    # Even with valid start inputs, these states block Start.
+    surface = _surface(
+        process=InstanceProcessView(state=daemon_state),
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+    assert surface.host_process.state == want_state
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == want_reason
+    assert cap.run_id is None
+    assert cap.request is None
+
+
+def test_host_process_start_capability_intent_stopped_overrides_state() -> None:
+    # Permanent retirement via durable STOPPED outranks every per-state
+    # guard, even for a process state that would otherwise be startable.
+    surface = _surface(
+        process=InstanceProcessView(state="exited"),
+        desired_state=_desired("STOPPED"),
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+    assert surface.host_process.state == "EXITED"
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
+
+
+def test_host_process_start_capability_poisoned_overrides_state() -> None:
+    surface = _surface(
+        process=_IDLE_PROC,
+        poisoned=True,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
+
+
+@pytest.mark.parametrize(
+    ("start_run_id", "start_defaults"),
+    [
+        (None, _defaults()),
+        (_START_RUN, None),
+        (_START_RUN, InstanceStartDefaults(strategy="")),
+    ],
+    ids=["no-run-id", "no-defaults", "empty-strategy"],
+)
+def test_host_process_start_capability_disabled_for_incomplete_settings(
+    start_run_id: str | None, start_defaults: InstanceStartDefaults | None
+) -> None:
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=start_run_id,
+        start_defaults=start_defaults,
+    )
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "START_SETTINGS_INCOMPLETE"
+    assert cap.run_id is None
+    assert cap.request is None
+
+
+def test_host_process_start_capability_disabled_when_request_validation_fails() -> None:
+    # Saved start settings whose ``strategy`` is non-empty but violates the
+    # ``HostRunnerStartRequest.strategy`` pattern (``^[a-z][a-z0-9_]{0,63}$``)
+    # would otherwise raise ValidationError mid-projection and 500 the
+    # operator surface. Fail-closed: route to the same "settings incomplete"
+    # disabled state the function emits for empty/missing settings.
+    bad_defaults = InstanceStartDefaults(strategy="INVALID-STRATEGY")
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=_START_RUN,
+        start_defaults=bad_defaults,
+    )
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "START_SETTINGS_INCOMPLETE"
+    assert cap.run_id is None
+    assert cap.request is None
 
 
 # ---------------------------------------------------------------------------

@@ -1165,27 +1165,70 @@ class OperatorSurfacePriorRun(BaseModel):
     classification: PriorRunClassification
 
 
-class OperatorSurfaceHostProcess(BaseModel):
-    """Server-authored host-process surface (ADR-0003 / ADR-0007).
+HostProcessStartDisabledReasonCode = Literal[
+    "ALREADY_RUNNING",
+    "STOPPING",
+    "HOST_SERVICE_OFFLINE",
+    "STOPPED_REQUIRES_REDEPLOY",
+    "START_SETTINGS_INCOMPLETE",
+]
 
-    The host runner is operator-owned: the cockpit writes durable intent
-    via the desired-state knob but it does NOT expose Start/Stop or any
-    programmatic process-control affordance.  This block exists so the
-    cockpit can render an honest "host process is idle" notice and (only
-    when the server can safely author one) a copyable command, without
-    Angular ever constructing the command itself.
+
+class HostProcessStartCapability(BaseModel):
+    """Server-authored per-instance Start-bot-process affordance
+    (ADR-0006 §1 / ADR-0007 / ADR 0013 amendment 2026-06-22).
+
+    Drives the cockpit's "Start bot process" button. The data-plane proxy
+    re-runs the same enable check before forwarding the POST to the
+    authenticated daemon endpoint, so a stale ``enabled=True`` cannot
+    bypass the gate. When enabled, ``run_id`` and ``request`` together
+    carry the exact POST the cockpit will fire — Angular never composes
+    the body (design "Architectural permission for Start bot process").
+    """
+
+    enabled: bool
+    # The run to start (``POST /runs/{run_id}/start``). Populated only
+    # when ``enabled`` is True; the data-plane proxy re-verifies before
+    # forwarding to the daemon.
+    run_id: str | None = None
+    # Server-authored request body. Built from ``InstanceStartDefaults`` /
+    # the bound run's ledger; absent (``None``) when ``enabled`` is False.
+    request: HostRunnerStartRequest | None = None
+    # Closed reason code; present iff ``enabled`` is False.
+    disabled_reason_code: HostProcessStartDisabledReasonCode | None = None
+
+
+class OperatorSurfaceHostProcess(BaseModel):
+    """Server-authored host-process surface (ADR-0003 / ADR-0006 / ADR-0007).
+
+    The host *service* is operator-owned: the trader runs a deployment
+    command to start it when it is UNREACHABLE.  The host-managed per-bot
+    *subprocesses* are different — the cockpit launches them through the
+    authenticated ``POST /runs/{run_id}/start`` path defined by ADR-0006
+    and secured by ADR-0007 (surfaced as ``start_capability``).  This
+    block exists so the cockpit can render an honest "bot is not running"
+    notice, a per-instance Start affordance, and (for UNREACHABLE only) a
+    copyable host-service start command — without Angular ever
+    constructing the command or the start request itself.
     """
 
     state: HostProcessState
     # Operator-language line authored server-side when ``state != RUNNING``.
     # ``None`` when no notice is appropriate (typically when running).
     notice: str | None = None
-    # Exact host command the operator can paste, ONLY when the server can
-    # author it safely. Angular renders verbatim and MUST NOT construct,
-    # interpolate, or transform this string. First iteration keeps this
-    # ``None`` everywhere; a future revision teaches the server to author
-    # safe commands when context allows.
+    # Exact host command the operator can paste. Authored ONLY for
+    # ``state == UNREACHABLE`` and only when trusted deployment
+    # configuration supplies a non-empty value
+    # (``IbkrSettings.live_runner_host_start_command``). Other states do
+    # not get a daemon-start command because starting the daemon does not
+    # restart an exited per-bot subprocess — those use ``start_capability``.
+    # Angular renders verbatim and MUST NOT construct, interpolate, or
+    # transform this string. ADR 0013 amendment 2026-06-22; design doc
+    # "Deployment-model decision".
     copyable_command: str | None = None
+    # Per-instance Start-bot-process button. Always present so the cockpit
+    # can render a disabled state with a server-authored reason.
+    start_capability: HostProcessStartCapability
 
 
 class InvokeCapabilityAction(BaseModel):

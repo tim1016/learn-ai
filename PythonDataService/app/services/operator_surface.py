@@ -20,12 +20,17 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.schemas.live_runs import (
     BrokerObservationConsistency,
     DesiredStateView,
     FocusAction,
+    HostProcessStartCapability,
+    HostProcessStartDisabledReasonCode,
+    HostRunnerStartRequest,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
@@ -86,31 +91,111 @@ _DAEMON_STATE_TO_HOST_PROCESS_STATE: dict[str, str] = {
 }
 
 _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
-    "STOPPING": "Host process is shutting down.",
-    "EXITED": "Host process has exited. Restart it from the host runner to resume actuation.",
-    "IDLE": ("Host runner is reachable but no subprocess is attached to this instance. Start it from the host runner."),
+    "STOPPING": "The bot is shutting down.",
+    "EXITED": "The previous bot process ended. Start this bot's process to resume trading.",
+    "IDLE": "The host is reachable but this bot has no active process. Start it to resume trading.",
     "WAITING_FOR_HOST": (
-        "Intent is RUNNING, but no host subprocess is attached to this "
-        "instance. Start it outside the app to actuate trading."
+        "Trading was requested, but this bot's process has not started yet. "
+        "Start it to begin trading."
     ),
-    "UNREACHABLE": ("Host runner daemon is not reachable. The cockpit cannot confirm any subprocess state from here."),
+    "UNREACHABLE": (
+        "The bot service is offline. The cockpit cannot confirm any "
+        "process state until it is reachable."
+    ),
 }
+
+
+_START_CAPABLE_STATES = frozenset({"IDLE", "WAITING_FOR_HOST", "EXITED"})
+
+
+def _project_host_start_capability(
+    state: str,
+    desired_state: DesiredStateView | None,
+    start_run_id: str | None,
+    start_defaults: InstanceStartDefaults | None,
+    poisoned: bool,
+) -> HostProcessStartCapability:
+    """Project the per-instance Start-bot-process affordance.
+
+    The data-plane proxy MUST re-evaluate the same enable rule before
+    forwarding the POST to the daemon — this projection is the cockpit's
+    presentation hint, not the gate. Reason codes are closed; the priority
+    order below is exhaustive for the 5 host-process states.
+    """
+
+    reason: HostProcessStartDisabledReasonCode | None = None
+    # Permanent-retirement gates outrank every per-state guard.
+    if poisoned or (desired_state is not None and desired_state.state == "STOPPED"):
+        reason = "STOPPED_REQUIRES_REDEPLOY"
+    elif state == "RUNNING":
+        reason = "ALREADY_RUNNING"
+    elif state == "STOPPING":
+        reason = "STOPPING"
+    elif state == "UNREACHABLE":
+        reason = "HOST_SERVICE_OFFLINE"
+    elif state not in _START_CAPABLE_STATES:
+        # Defensive: any future state we don't classify is off by default.
+        reason = "START_SETTINGS_INCOMPLETE"
+    elif not start_run_id or start_defaults is None or not start_defaults.strategy:
+        reason = "START_SETTINGS_INCOMPLETE"
+
+    if reason is not None:
+        return HostProcessStartCapability(enabled=False, disabled_reason_code=reason)
+
+    assert start_run_id is not None and start_defaults is not None  # narrowed above
+    # Fail closed if the saved start settings cannot build a valid request
+    # body (strategy pattern, max_orders_per_day range, ibkr_host length).
+    # Otherwise a constraint violation would raise ValidationError and 500
+    # the operator-surface projection — same outcome the operator sees from
+    # the "settings incomplete" branch above, so route it the same way.
+    try:
+        request = HostRunnerStartRequest(
+            readonly=start_defaults.readonly,
+            hydrate_policy=start_defaults.hydrate_policy,
+            strategy=start_defaults.strategy,
+            max_orders_per_day=start_defaults.max_orders_per_day,
+            ibkr_host=start_defaults.ibkr_host,
+        )
+    except ValidationError:
+        return HostProcessStartCapability(
+            enabled=False, disabled_reason_code="START_SETTINGS_INCOMPLETE"
+        )
+    return HostProcessStartCapability(enabled=True, run_id=start_run_id, request=request)
 
 
 def _project_host_process(
     process: InstanceProcessView,
     desired_state: DesiredStateView | None,
+    start_run_id: str | None = None,
+    start_defaults: InstanceStartDefaults | None = None,
+    poisoned: bool = False,
+    host_start_command: str | None = None,
 ) -> OperatorSurfaceHostProcess:
     state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
     # WAITING_FOR_HOST: daemon reachable + no tracked subprocess + the
-    # operator has set durable intent to RUNNING.  Distinct from STARTING
-    # (the cockpit cannot start anything; ADR-0003 / ADR-0007).
+    # operator has set durable intent to RUNNING.
     if state == "IDLE" and desired_state is not None and desired_state.state == "RUNNING":
         state = "WAITING_FOR_HOST"
     notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)
-    # ``copyable_command`` stays ``None`` until the server can author a
-    # safe one per instance context (#608 host-process authority).
-    return OperatorSurfaceHostProcess(state=state, notice=notice, copyable_command=None)
+    # ``copyable_command`` is authored ONLY for UNREACHABLE, and only when
+    # trusted deployment configuration supplies a non-empty command. The
+    # EXITED / IDLE / WAITING_FOR_HOST cases use ``start_capability``
+    # below — restarting the host daemon does NOT restart an exited
+    # per-bot subprocess.
+    copyable_command = (
+        host_start_command
+        if state == "UNREACHABLE" and host_start_command
+        else None
+    )
+    start_capability = _project_host_start_capability(
+        state, desired_state, start_run_id, start_defaults, poisoned
+    )
+    return OperatorSurfaceHostProcess(
+        state=state,
+        notice=notice,
+        copyable_command=copyable_command,
+        start_capability=start_capability,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +665,8 @@ def compute_operator_surface(
     control_plane_state: DaemonConnectivityState | None = None,
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
+    host_start_command: str | None = None,
+    start_run_id: str | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -599,7 +686,14 @@ def compute_operator_surface(
     resolved_guards = guard_state if guard_state is not None else empty_guard_state()
 
     return OperatorSurface(
-        host_process=_project_host_process(process, desired_state),
+        host_process=_project_host_process(
+            process,
+            desired_state,
+            start_run_id=start_run_id,
+            start_defaults=start_defaults,
+            poisoned=poisoned,
+            host_start_command=host_start_command,
+        ),
         prior_run=_project_prior_run(last_exit),
         broker=_project_broker(safety_verdict_final, broker_connection_state),
         configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),

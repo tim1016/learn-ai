@@ -38,7 +38,7 @@ describe('operator_surface wire contract', () => {
     // intent it stays IDLE.  The fixture captures the unbound (idle)
     // case.  PRD #616 left this enum unchanged.
     expect(STOPPED.operator_surface.host_process.state).toBe('IDLE');
-    expect(STOPPED.operator_surface.host_process.notice).toMatch(/host runner/i);
+    expect(STOPPED.operator_surface.host_process.notice).toMatch(/no active process/i);
     // flatten-and-pause requires a binding -> disabled with reason code.
     expect(STOPPED.operator_surface.actions.flatten_and_pause.enabled).toBe(false);
     expect(STOPPED.operator_surface.actions.flatten_and_pause.disabled_reason_code).toBe(

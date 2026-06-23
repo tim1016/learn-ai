@@ -57,6 +57,7 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         # Mirror the real default env (IBKR_MODE=paper, IBKR_READONLY=false) so
         # start_defaults resolves to place-orders; dedicated tests override.
@@ -1468,6 +1469,101 @@ async def test_start_run_forwards_and_returns_action(
     assert seen["payload"]["hydrate_policy"] == "optional"
 
 
+async def test_start_run_rejects_when_poisoned(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0013 amendment 2026-06-22: a stale ``start_capability.enabled=true``
+    must not bypass the poisoned-flag gate. The data plane re-evaluates."""
+    app, root = app_with_root
+    _write_ledger(root, "run-poisoned", "spy_ema_paper", 100)
+    (root / "run-poisoned" / "poisoned.flag").write_text('{"trigger":"x"}', encoding="utf-8")
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-poisoned/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "STOPPED_REQUIRES_REDEPLOY"
+    assert called is False  # daemon never reached
+
+
+async def test_start_run_rejects_when_desired_state_is_stopped(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-perma", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Write durable STOPPED via the public API so the on-disk shape matches prod.
+        await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "stop", "updated_by": "op"},
+        )
+        response = await client.post("/api/live-instances/runs/run-perma/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "STOPPED_REQUIRES_REDEPLOY"
+
+
+async def test_start_run_rejects_when_daemon_already_running(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live", "pid": 7})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-live/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ALREADY_RUNNING"
+
+
+async def test_start_run_rejects_when_host_service_unreachable(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-x", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process=None)  # daemon unreachable
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-x/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "HOST_SERVICE_OFFLINE"
+
+
+async def test_start_run_proceeds_when_idle_and_not_poisoned(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate must not block a legitimately startable bot — IDLE, no
+    durable STOPPED, no poison, daemon reachable -> proceed to the daemon."""
+    app, root = app_with_root
+    _write_ledger(root, "run-fresh", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def fake_start(_base_url: str, run_id: str, _payload: dict) -> dict:
+        return {"accepted": True, "process": _running_process(run_id)}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-fresh/start", json={})
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+
+
 async def test_stop_run_forwards_and_returns_action(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1792,6 +1888,7 @@ async def test_start_defaults_readonly_false_in_paper_mode(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,
@@ -1816,6 +1913,7 @@ async def test_start_defaults_readonly_true_in_live_mode(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="live",
         readonly=False,
@@ -1841,6 +1939,7 @@ async def test_start_defaults_honors_ibkr_readonly_in_paper_mode(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=True,
@@ -1866,6 +1965,7 @@ async def test_start_defaults_fail_closed_when_mode_missing(
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
         fleet_dirty_blocks_starts=False,
         readonly=False,  # even with orders allowed, an absent mode stays shadow
     )

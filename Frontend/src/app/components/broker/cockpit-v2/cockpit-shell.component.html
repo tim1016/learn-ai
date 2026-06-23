@@ -350,10 +350,18 @@
       </div>
     </section>
 
-    @if (resume.disabled_reasons.length > 1) {
+    @if (resume.disabled_reasons.length > 1 && s.operator_surface.host_process.state === 'RUNNING') {
       <!-- F-R5: render operator-language copy for every reason in the
            full priority-ordered list, with the raw code preserved on
-           ``data-reason-code`` for diagnostics + Playwright. -->
+           ``data-reason-code`` for diagnostics + Playwright.
+
+           Phase 0 trader-language: hidden while host_process.state !=
+           RUNNING. There is nothing to Resume until the bot process is
+           running, so surfacing Resume-disabled reasons stacks visible
+           weight against the primary "start the bot" message. The
+           reasons stay reachable via the Resume button's tooltip.
+           Phase 1 trader_guidance will model these as
+           additional_attention_groups beside the primary remediation. -->
       <div class="resume-reasons-expanded" data-testid="resume-disabled-reasons">
         @for (code of resume.disabled_reasons; track code) {
           <span
@@ -379,16 +387,14 @@
       </aside>
     }
 
-    <!-- Host-process notice — server-authored copy -->
-    @if (s.operator_surface.host_process.notice) {
-      <aside class="host-process-notice" role="status" data-testid="host-process-notice">
-        <strong>HOST · {{ s.operator_surface.host_process.state }}</strong>
-        <span class="msg">{{ s.operator_surface.host_process.notice }}</span>
-        @if (s.operator_surface.host_process.copyable_command) {
-          <code class="copyable">{{ s.operator_surface.host_process.copyable_command }}</code>
-        }
-      </aside>
-    }
+    <!-- Host-process notice — server-authored copy + Start bot process
+         affordance + Phase-0 review-first advisory for HALT_TRIGGERED /
+         EXITED_WITH_ERROR. -->
+    <app-host-process-notice
+      [hostProcess]="s.operator_surface.host_process"
+      [priorRunClassification]="s.operator_surface.prior_run.classification"
+    />
+
 
     <!-- Inner view tabs -->
     <nav
