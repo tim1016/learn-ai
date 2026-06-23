@@ -274,17 +274,51 @@ Frontend/src/.../models/operator-notice-code.ts              # MOD: literal mirr
 
 The Backend/Frontend paths will be resolved against the actual file layout when implementation starts; the GraphQL surface change is non-breaking-additive.
 
-## 7. Watchdog two-phase halt (PR 2 — sketch for ADR-0015 completeness)
+## 7. Watchdog two-phase halt (PR 2 — implemented)
 
-Timeouts (config-backed, defaults explicit):
+Timeouts (pinned, not config-backed — see `watchdog_controller.py`):
 
 ```
-lease_loss_grace_ms    = 5_000
-flatten_timeout_ms     = 20_000
-disconnect_timeout_ms  = 3_000
+lease_loss_grace_ms    = 5_000  (DEFAULT_LEASE_LOSS_GRACE_MS in child_watchdog.py)
+flatten_timeout_ms     = 20_000 (FLATTEN_TIMEOUT_MS in watchdog_controller.py)
+disconnect_timeout_ms  = 3_000  (DISCONNECT_TIMEOUT_MS in watchdog_controller.py)
 ```
 
-Lease loss requires persistence through `lease_loss_grace_ms` (`HEALTHY → SUSPECTED_LOSS → LEASE_LOST_HANDLING → EXITED`); a single bad observation that resolves emits `info`-tier debug telemetry only.
+### Implementation paths (PR 2)
+
+**State machine** (`app/engine/live/child_watchdog.py`):
+- `WatchdogState = Literal["HEALTHY", "SUSPECTED_LOSS", "LEASE_LOST_HANDLING", "EXITED"]`
+- `DEFAULT_LEASE_LOSS_GRACE_MS = 5_000`; zero-grace path for tests (`lease_loss_grace_ms=0`).
+- `poll_once()` drives the state machine; `_detect_loss()` classifies LEASE_EXPIRED vs. BOOT_ID_CHANGED.
+- Recovery within grace: log info + return to HEALTHY (no incident written).
+
+**Executor** (`app/engine/live/watchdog_controller.py`):
+- `WatchdogShutdownController` — Protocol with 5 async methods.
+- `WatchdogHaltExecutor.execute(reason)` — orchestrates the 5 steps; never raises; returns final `OperatorIncident`.
+- `ChildWatchdog.__init__` accepts optional `executor` kwarg; when present, `_handle_lease_lost` delegates to `executor.execute(reason)` instead of the legacy 5-callback path.
+
+**Incident store** (`app/operator/incidents/store.py`):
+- `IncidentStore(run_dir)` — per-run store under `<run_dir>/operator_incidents/`.
+- `append(incident)` — tmp + fsync + os.replace + parent-dir fsync; per-path advisory lock.
+- `resolve(incident_id, resolved_at_ms)` — read-modify-write under the same lock.
+- `list_unresolved()` — returns incidents where `resolved_at_ms is None`.
+
+**Notice builders** (`app/operator/incidents/watchdog_notices.py`):
+- Five terminal outcome builders + `watchdog_incident()` scaffold.
+- `flatten_completed` / `flatten_not_needed` → info; no gate blocking.
+- `flatten_timed_out` / `flatten_failed` / `broker_disconnected_before_flatten` → critical; gate blocking.
+
+**Post-halt gate** (`app/engine/live/post_halt_gate.py`):
+- `check_post_halt_gate(run_dir, *, now_ms) -> OperatorIncident | None`
+- Blocks on: `category="watchdog"`, `resolved_at_ms is None`, `notice.code` in the three uncertain codes.
+- Returns a new incident with `notice.code = "reconciliation.required_after_uncertain_flatten"`.
+
+**cmd_start wiring** (`app/engine/live/run.py`):
+- Gate is checked immediately after the cold-start reconciliation gate and before `engine.run()`.
+- On block: exits 1 (fatal_halt), writes terminal run_status.
+
+**Schema extension** (`app/schemas/live_runs.py`):
+- `OperatorSurface.incident_headline: OperatorNotice | None` — carries the blocking notice to the frontend. PR 5/6 will wire the cockpit UI; PR 2 plumbs the schema.
 
 Controller — single async protocol (no thread boundary; same asyncio loop as engine):
 
@@ -297,7 +331,7 @@ class WatchdogShutdownController(Protocol):
     async def request_engine_exit(self) -> None: ...
 ```
 
-Partial-failure rule: fail closed and continue the sequence. No step propagates exceptions to the engine task. Every terminal outcome writes an `OperatorIncident` under `artifacts/live_runs/<run_id>/operator_incidents/`.
+Partial-failure rule: fail closed and continue the sequence. No step propagates exceptions to the engine task. Every terminal outcome writes an `OperatorIncident` under `<run_dir>/operator_incidents/`.
 
 Post-halt restart: any unresolved incident with `category="watchdog"` and `notice.code in {"watchdog.flatten_timed_out", "watchdog.flatten_failed", "watchdog.broker_disconnected_before_flatten"}` forces `reconciliation.required_after_uncertain_flatten` on next start. The bot refuses to trade until reconciliation clears the incident. (This ties to the existing reconciliation work merged in 90016ec5 / 334e8485 / d88f8b37.)
 
