@@ -2434,9 +2434,24 @@ class LiveEngine:
           block stays inside the 25s freshness threshold while the bar
           loop is idle (pre-market, halted symbol, etc.).
 
+        Persisting ``verdict_snapshot.json`` here matters even pre-bar:
+        the Resume guard reads that file via
+        ``read_broker_safety_verdict``, treats absence as UNKNOWN, and
+        ``resolve_guard_state`` then blocks Resume on
+        ``BROKER_SAFETY_UNKNOWN``. The earlier bar-driven write left
+        the file absent through every pre-market window, so Resume
+        wouldn't enable on a truly fresh deploy even with the broker
+        block populated.
+
         Does NOT run the verdict-transition halt — that check stays
         bar-driven so its observable cadence is unchanged.
+
+        No-ops when ``runtime_aggregator`` is unset: runs that
+        intentionally skip the runtime publisher (replay tests,
+        synthetic engines) don't pay for a real IBKR probe.
         """
+        if self._runtime_aggregator is None:
+            return
         if self._client is not None:
             try:
                 await self._client.probe()
@@ -2448,6 +2463,8 @@ class LiveEngine:
                 verdict_value = self._verdict_provider()
             except Exception:
                 logger.exception("verdict_provider failed")
+        if self._output_dir is not None:
+            self._write_verdict_snapshot(verdict_value)
         await self._publish_broker_block(verdict_value=verdict_value)
 
     async def _broker_probe_loop(self, shutdown_event: asyncio.Event) -> None:
@@ -2455,8 +2472,8 @@ class LiveEngine:
 
         Wait-first: the startup seed call in ``run()`` is the t=0
         publish, so this loop waits ``BROKER_PROBE_INTERVAL_S`` before
-        its first iteration. ``wait_for`` on the shutdown event gives a
-        clean exit without sleeping out the full quantum.
+        each probe. ``wait_for`` on the shutdown event gives a clean
+        exit without sleeping out the full quantum.
         """
         BROKER_PROBE_INTERVAL_S = 10.0
         while True:
@@ -2464,10 +2481,13 @@ class LiveEngine:
                 await asyncio.wait_for(
                     shutdown_event.wait(), timeout=BROKER_PROBE_INTERVAL_S
                 )
-                return  # shutdown_event was set during the wait
             except TimeoutError:
-                pass
-            await self._probe_and_publish_broker_block()
+                # Timeout is the canonical signal that the interval
+                # elapsed without a shutdown — the next iteration's
+                # probe IS what this handler is for.
+                await self._probe_and_publish_broker_block()
+            else:
+                return  # shutdown_event was set during the wait
 
     async def _publish_initial_bar_loop_block(self) -> None:
         """PRD #619-B B3 — seed the bar-loop block at startup.

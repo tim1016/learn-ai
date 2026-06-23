@@ -18,7 +18,8 @@ Two layers:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -440,13 +441,13 @@ class _StubIbkrClient:
     """Minimum IbkrClient surface for the regression test.
 
     Only the two methods the broker producer touches are implemented:
-    ``probe()`` (sets ``_last_probe_ms``; ``_publish_initial_broker_block``
+    ``probe()`` (sets ``_last_probe_ms``; ``_probe_and_publish_broker_block``
     is what calls this) and ``health()`` (returns a connected
     ``IbkrConnectionHealth`` carrying that probe timestamp through to
     the broker block's ``probe_completed_at_ms``).
     """
 
-    def __init__(self, *, now_ms_fn) -> None:
+    def __init__(self, *, now_ms_fn: Callable[[], int]) -> None:
         self.settings = _StubIbkrSettings(port=4002)  # paper port
         self.connected_account = "DU123"  # _validate_paper_client gate
         self._last_probe_ms: int | None = None
@@ -457,7 +458,7 @@ class _StubIbkrClient:
         self.probe_calls += 1
         self._last_probe_ms = self._now_ms()
 
-    def health(self):
+    def health(self) -> "IbkrConnectionHealth":  # noqa: F821 — forward ref, real import below
         from app.broker.ibkr.models import IbkrConnectionHealth
 
         return IbkrConnectionHealth(
@@ -514,8 +515,14 @@ async def test_engine_first_runtime_snapshot_coheres_without_bars(
         def on_bar(self, bar: TradeBar) -> None:
             return None
 
-    snapshot_ms = 1_700_000_000_000
-    client = _StubIbkrClient(now_ms_fn=lambda: snapshot_ms)
+    # The engine publishes block heartbeats with real wall-clock
+    # ``time.time()``. Use the same clock for both the stub's probe
+    # timestamp and the freshness evaluation so heartbeat ages are
+    # non-negative — otherwise ``posture_demoted=False`` can pass by
+    # accident for blocks that would actually be stale under a real
+    # ``now_ms``.
+    now_ms = int(time.time() * 1000)
+    client = _StubIbkrClient(now_ms_fn=lambda: now_ms)
 
     aggregator = EngineRuntimeAggregator(
         strategy_instance_id="sid-fresh",
@@ -546,23 +553,37 @@ async def test_engine_first_runtime_snapshot_coheres_without_bars(
     # BROKER_PROBE_MISSING regression this fix prevents.
     assert client.probe_calls >= 1
 
+    # The startup hook must also persist ``verdict_snapshot.json``. The
+    # Resume guard reads that file via ``read_broker_safety_verdict``
+    # and treats absence as identity=UNKNOWN, which routes to
+    # BROKER_SAFETY_UNKNOWN and blocks Resume — a regression that an
+    # earlier version of this fix only addressed in the runtime
+    # aggregator path, leaving Resume still blocked on truly fresh
+    # deploys.
+    verdict_snapshot_path = tmp_path / "verdict_snapshot.json"
+    assert verdict_snapshot_path.is_file(), (
+        "verdict_snapshot.json was not written by the startup hook; "
+        "Resume would remain blocked on BROKER_SAFETY_UNKNOWN until "
+        "the first bar reaches _check_verdict_transition_halt"
+    )
+
     # The aggregator must have a coherent snapshot to hand the publisher.
     snapshot = await aggregator.snapshot(
-        snapshot_seq=0, written_at_ms=snapshot_ms
+        snapshot_seq=0, written_at_ms=now_ms
     )
     assert snapshot is not None, (
         "fresh-run snapshot is None; the startup hooks did not populate "
         "all four blocks and the publisher will refuse to write "
         "engine_runtime.json"
     )
-    assert snapshot.broker.probe_completed_at_ms == snapshot_ms
+    assert snapshot.broker.probe_completed_at_ms == now_ms
 
     # The freshness evaluator with session_state=CLOSED (pre-market or
     # after-hours) must NOT demote posture: bar_loop becomes
     # NOT_APPLICABLE from the calendar, and the other three blocks were
     # freshly seeded above.
     freshness = evaluate_runtime_freshness(
-        snapshot, now_ms=snapshot_ms, session_state="CLOSED"
+        snapshot, now_ms=now_ms, session_state="CLOSED"
     )
     assert freshness.posture_demoted is False, (
         f"fresh-run still demotes posture; reasons={freshness}"
