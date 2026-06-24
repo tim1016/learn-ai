@@ -18,12 +18,13 @@ in-flight double-submit window to resolve), never dropped.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
+from app.engine.live.intent_events import DropReason, IntentEvent, IntentEventType, IntentKind
 
 # Reuse the canonical parent-dir fsync (single source of truth — same helper
 # the live-state sidecar uses for crash-durable renames). Append-mode WALs
@@ -68,6 +69,8 @@ class IntentWal:
         exec_id: str | None = None,
         order_spec: dict[str, Any] | None = None,
         ts_ms: int | None = None,
+        # PR 3 / operator-notice — populated only on INTENT_DROPPED_BEFORE_SUBMIT.
+        drop_reason: DropReason | None = None,
         # ADR 0009 § 11 — sizing-decision payload, populated only on
         # SIZING_RESOLVED events.
         policy_kind: str | None = None,
@@ -82,6 +85,11 @@ class IntentWal:
         returning**. The caller may call ``placeOrder`` only after this returns.
         """
         seq = self._allocate_seq()
+        # Reviewer finding 2: capture process wall-clock at append time so the
+        # fold can compare legacy_sizing_only_cutoff_ms (engine_started_at_ms,
+        # process wall-clock) to a field in the same time domain. ts_ms carries
+        # bar/strategy time and can precede process start in delayed feeds.
+        appended_at_ms = time.time_ns() // 1_000_000
         event = IntentEvent(
             seq=seq,
             event_type=event_type,
@@ -94,7 +102,9 @@ class IntentWal:
             perm_id=perm_id,
             exec_id=exec_id,
             order_spec=order_spec,
+            drop_reason=drop_reason,
             ts_ms=ts_ms,
+            appended_at_ms=appended_at_ms,
             policy_kind=policy_kind,
             policy_value=policy_value,
             intended_qty=intended_qty,

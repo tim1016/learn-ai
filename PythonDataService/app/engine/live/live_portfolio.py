@@ -739,6 +739,35 @@ class LivePortfolio:
         if self.verdict_provider is not None:
             verdict_value = self.verdict_provider()  # type: ignore[operator]
             if verdict_value is not None and verdict_value != "paper-only":
+                # PR 3 / operator-notice — emit drop events before raising so
+                # the append → fsync → clear ordering is satisfied. Uses
+                # now_ms_utc() because this method doesn't receive a bar
+                # timestamp; the drops are provenance-only.
+                if self.intent_wal is not None and self.bot_order_namespace:
+                    from app.engine.live.intent_events import IntentEventType
+                    from app.engine.live.order_identity import build_order_ref
+                    from app.utils.timestamps import now_ms_utc
+
+                    _ts = now_ms_utc()
+                    for _order in self.pending_orders:
+                        _iid = self._intent_by_order_id.get(_order.order_id)
+                        if _iid is None:
+                            continue
+                        self.intent_wal.append(
+                            event_type=IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+                            intent_id=_iid,
+                            bot_order_namespace=self.bot_order_namespace,
+                            order_ref=build_order_ref(self.bot_order_namespace, _iid),
+                            drop_reason="broker_safety_halt",
+                            ts_ms=_ts,
+                        )
+                # Reviewer finding 1: clear in-memory queue AFTER the WAL fsyncs
+                # and BEFORE raising, so queue state matches WAL state. If a
+                # caller catches the error and the verdict later passes, the same
+                # orders will NOT be re-submitted (WAL already records them as
+                # dropped). Preserves append → fsync → clear ordering invariant.
+                self.pending_orders.clear()
+                self._intent_by_order_id.clear()
                 raise BrokerSafetyVerdictBlockError(
                     verdict=str(verdict_value),
                     detail=(

@@ -72,6 +72,14 @@ class SubmittedOrderView:
     exec_ids: tuple[str, ...] = ()
     sizing_resolution: SizingResolution | None = None
     order_spec: Mapping[str, object] | None = None
+    # PR 3 / operator-notice — fold-side legacy classification. Set to
+    # ``"legacy_sizing_only_dropped"`` for SIZING_RESOLVED sentinel views whose
+    # ``ts_ms`` is before the engine-start cutoff (meaning the engine that
+    # produced the SIZING_RESOLVED WAL event is gone; no terminal event will
+    # ever follow it in this session). The publisher reads this to emit
+    # activity.dropped_paused_intent without triggering for in-flight intents.
+    # ``None`` when not classified (the common case: all pre-PR-3 callers).
+    classification: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,12 +103,25 @@ class LedgerView:
     unresolved_intent_ids: frozenset[str]
 
 
-def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> LedgerView:
+def fold(
+    projection: LedgerProjection,
+    wal_events: Sequence[IntentEvent],
+    *,
+    legacy_sizing_only_cutoff_ms: int | None = None,
+) -> LedgerView:
     """Fold ``wal_events`` over ``projection`` into a ``LedgerView``.
 
     Pure: mutates nothing it is given. Events with ``seq <=
     projection.last_intent_wal_seq`` are already folded and skipped, so applying
     the same tail twice is idempotent.
+
+    ``legacy_sizing_only_cutoff_ms`` — PR 3 / operator-notice. When provided,
+    any SIZING_RESOLVED sentinel that has no prior view (no PENDING_INTENT has
+    landed yet) AND whose ``ts_ms < cutoff`` is stamped with
+    ``classification="legacy_sizing_only_dropped"``. The publisher uses this to
+    dedupe orphaned sizing records from before the engine-start boundary.
+    Existing callers that omit this parameter observe no change in behaviour
+    (``classification=None`` on every view, as before PR 3).
     """
     orders: dict[str, SubmittedOrderView] = dict(projection.submitted_orders)
     known_perm_ids: set[int] = set(projection.known_perm_ids)
@@ -140,8 +161,34 @@ def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> Led
                 )
             else:
                 # Edge case: SIZING_RESOLVED before PENDING_INTENT (e.g. test
-                # fixture). Synthesize a sentinel view; the real
-                # PENDING_INTENT/SUBMITTED follow-up will overwrite status.
+                # fixture or a paused-drop scenario). Synthesize a sentinel
+                # view; the real PENDING_INTENT/SUBMITTED follow-up will
+                # overwrite status.
+                #
+                # PR 3 / operator-notice — when a cutoff is provided and the
+                # event is before the cutoff, stamp ``classification`` so the
+                # publisher can dedupe orphaned sizing records from before the
+                # engine-start boundary (these will never receive a terminal
+                # event in this session). Post-cutoff or no-cutoff → None.
+                #
+                # Reviewer finding 2: compare appended_at_ms (process wall-clock
+                # at WAL write time) NOT ts_ms (strategy bar timestamp). For
+                # SIZING_RESOLVED events, ts_ms is the bar close time from
+                # set_holdings(..., time). In delayed live feeds or historical
+                # runs a current-run bar can have a close time BEFORE the engine
+                # process start, causing ts_ms < cutoff even for in-flight
+                # current-run intents. appended_at_ms is always in the same
+                # time domain as legacy_sizing_only_cutoff_ms (engine_started_at_ms).
+                # Backward-compat: events on disk before this field existed have
+                # appended_at_ms=None; treat as pre-cutoff (safe default — the
+                # publisher will classify and dedupe them as legacy orphans, which
+                # is exactly what they are: events from a prior engine process).
+                legacy_classification: str | None = None
+                if legacy_sizing_only_cutoff_ms is not None and (
+                    event.appended_at_ms is None
+                    or event.appended_at_ms < legacy_sizing_only_cutoff_ms
+                ):
+                    legacy_classification = "legacy_sizing_only_dropped"
                 orders[event.intent_id] = SubmittedOrderView(
                     intent_id=event.intent_id,
                     bot_order_namespace=event.bot_order_namespace,
@@ -149,6 +196,7 @@ def fold(projection: LedgerProjection, wal_events: Sequence[IntentEvent]) -> Led
                     status=IntentEventType.PENDING_INTENT,
                     intent_kind=event.intent_kind,
                     sizing_resolution=sizing_resolution,
+                    classification=legacy_classification,
                 )
             last_seq = event.seq
             continue

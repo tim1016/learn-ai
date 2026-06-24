@@ -17,9 +17,20 @@ must **never** branch on them (ADR-0008 §1).
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# PR 3 / operator-notice — typed reason carried on INTENT_DROPPED_BEFORE_SUBMIT.
+# Kept as a module-level type alias so callers can annotate without importing
+# the full event model.
+DropReason = Literal[
+    "operator_paused",
+    "control_plane_lease_lost",
+    "submissions_blocked",
+    "max_orders_per_day",
+    "broker_safety_halt",
+]
 
 
 class IntentEventType(StrEnum):
@@ -30,6 +41,13 @@ class IntentEventType(StrEnum):
     made for a given intent before the broker call. It is appended **before**
     ``SUBMITTED`` / ``ACK_FAILED_UNCERTAIN`` and is **never** considered an
     unresolved submit state — the fold treats it as informational.
+
+    ``INTENT_DROPPED_BEFORE_SUBMIT`` (PR 3 / operator-notice) records that a
+    pending intent was evicted from memory by a submission gate (operator
+    pause, lease-lost block, max-orders cap, or broker-safety halt) BEFORE
+    it ever reached ``PENDING_INTENT``. This makes silent drops auditable via
+    the existing WAL fold path. The event carries a typed ``drop_reason`` so
+    the publisher can classify the cause without string-matching.
     """
 
     PENDING_INTENT = "PENDING_INTENT"
@@ -44,6 +62,9 @@ class IntentEventType(StrEnum):
     # the Sizing card's per-trade audit list can render the rule, intended
     # qty, reference price, and sizing_provenance at resolve time.
     SIZING_RESOLVED = "SIZING_RESOLVED"
+    # PR 3 / operator-notice — drop audit record. Emitted by the bar loop at
+    # each submission gate that discards intents silently today.
+    INTENT_DROPPED_BEFORE_SUBMIT = "INTENT_DROPPED_BEFORE_SUBMIT"
 
 
 class IntentKind(StrEnum):
@@ -101,6 +122,12 @@ class IntentEvent(BaseModel):
     sized_via: str | None = None
     symbol: str | None = None
 
+    # PR 3 / operator-notice — populated ONLY on INTENT_DROPPED_BEFORE_SUBMIT.
+    # The model validator below enforces the biconditional:
+    #   event_type == INTENT_DROPPED_BEFORE_SUBMIT  <=>  drop_reason is not None
+    # All other event types must have drop_reason = None.
+    drop_reason: DropReason | None = None
+
     # Human-facing provenance. NEVER the fold cursor (use seq). Bounded to
     # int64 ms UTC: it is serialized into the WAL, so it must honor the repo's
     # int64-ms boundary contract rather than accept an arbitrary-width Python int.
@@ -109,6 +136,22 @@ class IntentEvent(BaseModel):
         ge=0,
         le=9_223_372_036_854_775_807,
         description="int64 ms UTC epoch timestamp (provenance only).",
+    )
+
+    # Reviewer finding 2: process wall-clock at WAL append time (NOT bar time).
+    # ``ts_ms`` for SIZING_RESOLVED events carries the STRATEGY BAR TIMESTAMP
+    # (set_holdings(..., time)), which can precede the engine process start in
+    # delayed live feeds or historical runs. ``appended_at_ms`` is populated by
+    # IntentWal.append() using time.time_ns() // 1_000_000 so it is always in
+    # the same time domain as ``legacy_sizing_only_cutoff_ms`` (engine_started_at_ms).
+    # Backward-compat: events on disk before this field was added parse with
+    # ``appended_at_ms=None``; the fold treats None as pre-cutoff (safe default
+    # — publisher will classify those as legacy and not double-report).
+    appended_at_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=9_223_372_036_854_775_807,
+        description="Process wall-clock ms at WAL append time (not bar time).",
     )
 
     @model_validator(mode="after")
@@ -121,5 +164,21 @@ class IntentEvent(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _check_drop_reason_invariant(self) -> IntentEvent:
+        """drop_reason is present iff event_type is INTENT_DROPPED_BEFORE_SUBMIT."""
+        is_drop = self.event_type is IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT
+        has_reason = self.drop_reason is not None
+        if is_drop and not has_reason:
+            raise ValueError(
+                "drop_reason must be set for INTENT_DROPPED_BEFORE_SUBMIT events"
+            )
+        if not is_drop and has_reason:
+            raise ValueError(
+                f"drop_reason must be None for {self.event_type!r} events "
+                "(only INTENT_DROPPED_BEFORE_SUBMIT carries a drop_reason)"
+            )
+        return self
 
-__all__ = ["IntentEvent", "IntentEventType", "IntentKind"]
+
+__all__ = ["DropReason", "IntentEvent", "IntentEventType", "IntentKind"]
