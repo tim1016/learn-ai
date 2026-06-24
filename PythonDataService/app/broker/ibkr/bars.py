@@ -206,7 +206,14 @@ def _handle_duplicate(
     if existing == incoming:
         if counters is not None:
             counters.skipped_duplicate += 1
-        logger.warning(
+        # Logged at INFO, not WARNING — the live-idempotent ADR's
+        # "surface, never silence" intent is satisfied by the
+        # ``skipped_duplicate`` counter and the aggregate-stall
+        # SUBSCRIPTION_STALE WARNING. Per-bar visibility doesn't need
+        # to land in the Incidents panel. The "Applied correction"
+        # log below stays WARNING because it actually changes the
+        # bar's value.
+        logger.info(
             "Idempotent skip of redelivered IBKR 5-second bar",
             extra={"symbol": symbol, "source_ms": source_ms, "action": "skipped_duplicate"},
         )

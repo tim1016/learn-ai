@@ -382,3 +382,82 @@ def test_aggregate_handles_ib_async_open_underscore_attribute() -> None:
     assert minute.low == Decimal("99.00")
     assert minute.close == Decimal("100.50")
     assert minute.volume == 10
+
+
+# ---------------------------------------------------------------------------
+# Log-level demotion (incident taxonomy PR-3, plan §4.2 / codex D4): the
+# idempotent-skip log was demoted from WARNING to INFO so per-bar
+# redeliveries no longer land in the Recent Incidents panel. The
+# ``skipped_duplicate`` counter + the aggregate SUBSCRIPTION_STALE
+# WARNING still satisfy the ADR's "surface, never silence" intent.
+# ---------------------------------------------------------------------------
+
+
+def test_live_idempotent_skip_logs_at_info_not_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Sets up the second-feed-of-same-bar duplicate-skip path and asserts
+    # the emitted log record is INFO. A regression here (a future change
+    # bumping it back to WARNING) re-introduces ~80% of the Incidents
+    # panel noise documented in unknown-incident-modes-2026-06-24.md.
+    counters = LiveBarCounters()
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(0, "100", "101", "99", "100.5", 10),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="live_idempotent",
+        counters=counters,
+    )
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.broker.ibkr.bars"):
+        aggregate_realtime_bar(
+            current,
+            _bar(0, "100", "101", "99", "100.5", 10),
+            symbol="SPY",
+            last_source_ms=last_ms,
+            policy="live_idempotent",
+            counters=counters,
+        )
+
+    skips = [r for r in caplog.records if r.message.startswith("Idempotent skip")]
+    assert len(skips) == 1
+    assert skips[0].levelname == "INFO"
+    # The structured `extra` must survive the demotion — the classifier
+    # and any downstream telemetry key off `action`.
+    assert skips[0].action == "skipped_duplicate"
+    assert counters.skipped_duplicate == 1
+
+
+def test_live_applied_correction_still_logs_at_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Sibling guard: the "Applied correction" emit was deliberately
+    # left at WARNING in PR-3 because corrections actually change the
+    # bar's value, unlike the idempotent skip path.
+    counters = LiveBarCounters()
+    current, _, last_ms = aggregate_realtime_bar(
+        None,
+        _bar(0, "100", "100.5", "99.5", "100.2", 10),
+        symbol="SPY",
+        last_source_ms=None,
+        policy="live_idempotent",
+        counters=counters,
+    )
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.broker.ibkr.bars"):
+        aggregate_realtime_bar(
+            current,
+            _bar(0, "100", "101", "99", "100.5", 10),
+            symbol="SPY",
+            last_source_ms=last_ms,
+            policy="live_idempotent",
+            counters=counters,
+        )
+
+    corrections = [r for r in caplog.records if r.message.startswith("Applied correction")]
+    assert len(corrections) == 1
+    assert corrections[0].levelname == "WARNING"
+    assert counters.applied_correction == 1

@@ -251,6 +251,15 @@ class IbkrClient:
         self._last_probe_error: str | None = None
         self._last_recovery_ms: int | None = None
         self._recovery_error: str | None = None
+        # Broker-event-log filesystem-write failure counter + last
+        # timestamp. The emit site logs the FIRST failure per run at
+        # WARNING and suppresses subsequent ones (codex D5) so a recurring
+        # read-only mount can't spam the Incidents panel. Both fields are
+        # surfaced via ``health()`` so the cockpit runtime banner can
+        # render "evidence integrity degraded" even when trading
+        # continues.
+        self._broker_event_log_write_failed_count: int = 0
+        self._last_broker_event_log_write_failed_at_ms: int | None = None
         # Wall-clock when the client's own observable connection state last
         # changed — set by ``connect`` / ``disconnect`` / 1100 / 1101.
         # ``health()`` returns this verbatim; the cockpit overlay composer
@@ -288,11 +297,21 @@ class IbkrClient:
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, sort_keys=True) + "\n")
         except OSError as exc:
-            logger.warning(
-                "Could not append IBKR broker event log: %s",
-                exc,
-                extra={"action": "broker_event_log_write_failed"},
-            )
+            # Rate-limit per codex D5: first failure per run logs WARNING
+            # (and the classifier catches it as
+            # BROKER_EVENT_LOG_WRITE_FAILED → INFRA); subsequent failures
+            # increment the counter + stamp the timestamp without
+            # re-emitting the line. The counter + last-failure stamp
+            # surface through ``health()`` so the cockpit runtime banner
+            # can still render "evidence integrity degraded".
+            self._broker_event_log_write_failed_count += 1
+            self._last_broker_event_log_write_failed_at_ms = now_ms_utc()
+            if self._broker_event_log_write_failed_count == 1:
+                logger.warning(
+                    "Could not append IBKR broker event log: %s",
+                    exc,
+                    extra={"action": "broker_event_log_write_failed"},
+                )
 
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
         """ib_async errorEvent handler.
@@ -364,7 +383,16 @@ class IbkrClient:
                 # State transition (healthy → soft_lost) — stamp at the
                 # mutation site so ``health()`` stays a pure read.
                 self._last_event_ms = now_ms_utc()
-            logger.warning(
+            # Logged at INFO, not WARNING — IBKR codes 1100/504 are
+            # frequent transient blips during a healthy session and the
+            # auto-reconnect-monitor already surfaces the cases that
+            # don't recover within one tick as a WARNING-level
+            # BROKER_RECONNECT_FAILED. The classifier's app.broker.ibkr.client
+            # exact-anchor still catches this row as BROKER_DISCONNECT
+            # when it does fire (manual ops, edge timing) — the demotion
+            # only changes whether the parse_incidents WARNING gate
+            # picks it up.
+            logger.info(
                 "IBKR connectivity lost",
                 extra={
                     "error_code": errorCode,
@@ -649,6 +677,8 @@ class IbkrClient:
             last_recovery_ms=self._last_recovery_ms,
             recovery_error=self._recovery_error,
             last_transition_ms=self._last_event_ms,
+            broker_event_log_write_failed_count=self._broker_event_log_write_failed_count,
+            last_broker_event_log_write_failed_at_ms=self._last_broker_event_log_write_failed_at_ms,
         )
 
     @property
