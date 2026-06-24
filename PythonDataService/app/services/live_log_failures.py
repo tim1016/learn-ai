@@ -18,22 +18,18 @@ This module exposes two parsers built on the same header tokenisation:
   ``incident_category`` so the frontend never re-derives meaning from
   raw Python tracebacks.
 
-Timestamp policy: Python's ``logging.Formatter`` defaults to ``time.localtime``
-for ``%(asctime)s``, so live.log timestamps are in the engine host's local
-TZ — not UTC. We surface both:
+Timestamp policy: the engine logger's ``_StepFormatter`` pins
+``converter = time.gmtime`` (``app.engine.live.run_logging``), so live.log
+timestamps are wall-clock UTC regardless of the engine host's local TZ.
+We surface both:
 
-* ``raw_ts``: the original timestamp string from the log (always correct for
-  display alongside the engine's other UI strings).
-* ``ts_ms``: the same timestamp parsed *as if* UTC. This is internally
-  consistent for sequencing failures within one run (since every log line in
-  a run shares the same TZ) and for the ``since_ms`` cursor, but it is NOT
-  guaranteed to equal wall-clock UTC ms when the host TZ ≠ UTC.
-
-The UI should render ``raw_ts`` for absolute display and use ``ts_ms`` only
-for ordering and incremental polling. This caveat applies to both
-``FailureRow`` and ``IncidentRow``. Treating ``IncidentRow.ts_ms`` as
-canonical UTC is gated on a follow-up backend change that emits live log
-timestamps as ``int64 ms UTC`` at source.
+* ``raw_ts``: the verbatim timestamp string from the log (``YYYY-MM-DD
+  HH:MM:SS.mmm`` in UTC). Useful for cross-referencing against the
+  on-disk live.log file when the operator opens the raw-log drawer.
+* ``ts_ms``: the same instant as canonical ``int64`` ms since Unix epoch
+  UTC, parsed via :func:`_parse_header_ts_ms`. Suitable for ordering,
+  the ``since_ms`` cursor, and viewer-local rendering (the UI converts
+  to the browser's TZ for display).
 """
 
 from __future__ import annotations

@@ -2,6 +2,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { afterEach, describe, expect, it } from 'vitest';
+import { formatLocalTimestamp } from '../../../../../utils/local-timestamp';
 import { IncidentsPanelComponent } from './incidents-panel.component';
 import type { IncidentRow } from './incidents.types';
 
@@ -235,11 +236,17 @@ describe('IncidentsPanelComponent', () => {
   });
 
   it('renders viewer-local time as the primary timestamp and keeps raw_ts as a secondary mono', async () => {
-    // The engine writes raw_ts in its host's local TZ (often UTC in
-    // containerised deploys). The cockpit operator wants the wall-clock
-    // they actually look at, so the row shows ``ts_ms`` formatted in the
-    // viewer's local TZ (.ts-local) and keeps raw_ts beside it
-    // (.ts-raw, mono, dimmed) for cross-referencing live.log.
+    // The engine logger pins ``time.gmtime``, so ``raw_ts`` is verbatim
+    // UTC and ``ts_ms`` is canonical int64 ms UTC. The cockpit operator
+    // wants the wall-clock they actually look at, so the row formats
+    // ``ts_ms`` in the viewer's TZ (.ts-local) and keeps ``raw_ts``
+    // beside it (.ts-raw, mono, dimmed) for cross-referencing live.log.
+    //
+    // The literal-TZ assertions live in the shared helper's own spec
+    // (``utils/local-timestamp.spec``); here we only need to prove that
+    // the component wires ``ts_ms`` through ``formatLocalTimestamp`` —
+    // re-resolving the runner's IANA zone via ``Intl`` is enough to
+    // keep the assertion deterministic across UTC / ET / PT runners.
     const tsMs = 1781014378021; // 2026-06-09 14:12:58.021 UTC
     const { fixture, httpMock } = render();
     flushIncidents(httpMock, [
@@ -258,15 +265,8 @@ describe('IncidentsPanelComponent', () => {
     const raw = el.querySelector<HTMLElement>('.ts-raw');
     expect(local).toBeTruthy();
     expect(raw).toBeTruthy();
-    // Compose the expected local-time string the same way the component
-    // does (no Intl, viewer's TZ). This keeps the test deterministic
-    // regardless of whether the runner is on UTC, ET, or anywhere else.
-    const d = new Date(tsMs);
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    const expected =
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-      ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    expect(local?.textContent?.trim()).toBe(expected);
+    const runnerZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(local?.textContent?.trim()).toBe(formatLocalTimestamp(tsMs, runnerZone));
     expect(raw?.textContent?.trim()).toBe('2026-06-09 14:12:58.021');
   });
 

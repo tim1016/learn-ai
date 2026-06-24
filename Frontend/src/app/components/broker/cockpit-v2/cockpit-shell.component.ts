@@ -33,6 +33,7 @@ import type {
   OperatorGate,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { formatLocalClock } from '../../../utils/local-timestamp';
 
 import { projectAccountAttention } from './lib/account-summary-attention';
 import { ClockSync } from './lib/clock-sync';
@@ -575,11 +576,7 @@ export class CockpitShellComponent {
   // ── presentation helpers ────────────────────────────────────────────
 
   formatClock(ms: number): string {
-    const d = new Date(ms);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    return `${hh}:${mm}:${ss}`;
+    return formatLocalClock(ms);
   }
 
   intentLabel(value: string | null | undefined): string {

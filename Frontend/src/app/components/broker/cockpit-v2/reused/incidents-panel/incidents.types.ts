@@ -9,11 +9,12 @@
  * is mirrored hand-typed here rather than regenerated through the broker
  * OpenAPI types so a future regen does not churn unrelated types.
  *
- * `ts_ms` is documented as ordering / cursor-only under the existing log
- * parser contract (it is `raw_ts` parsed as if UTC, which is host-local
- * for engines whose host TZ ≠ UTC). Tables and drawer headers render
- * `raw_ts` for absolute display until the engine emits canonical UTC ms
- * at source.
+ * `ts_ms` is canonical `int64` ms since Unix epoch UTC. The engine
+ * logger's `_StepFormatter` pins `time.gmtime`, so live.log timestamps
+ * are wall-clock UTC at source and the parser produces canonical ms.
+ * The cockpit renders `ts_ms` in the viewer's TZ for the primary
+ * timestamp and keeps `raw_ts` (verbatim UTC string from the log) beside
+ * it for cross-referencing live.log.
  */
 
 export const INCIDENT_CATEGORIES = [

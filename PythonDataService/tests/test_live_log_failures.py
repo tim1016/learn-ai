@@ -49,9 +49,10 @@ def test_parse_failures_extracts_single_error_without_traceback() -> None:
     assert row.logger == "ib_async.wrapper"
     assert row.message == "Error 1100, reqId -1: lost"
     assert row.traceback is None
-    # raw_ts is verbatim from the log; ts_ms parses that as if UTC.
+    # raw_ts is verbatim from the log (UTC, since the engine logger
+    # pins time.gmtime); ts_ms is the same instant as canonical int64
+    # ms since Unix epoch UTC.
     assert row.raw_ts == "2026-06-09 14:12:58.021"
-    # 2026-06-09 14:12:58.021 treated as UTC.
     assert row.ts_ms == 1781014378021
 
 
