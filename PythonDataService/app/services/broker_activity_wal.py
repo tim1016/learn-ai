@@ -27,6 +27,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.schemas.broker_activity import BrokerActivityRow
 
@@ -70,7 +71,16 @@ def instance_broker_activity_wal_path(
     events for the instance; ``_migrate_per_run_wals_to_instance_wal`` in
     ``broker_activity_publisher`` does the one-time fold of the legacy
     per-run files into it.
+
+    ``strategy_instance_id`` is validated at this seam (mirrors the
+    pattern on ``stable_desired_state_path``): the value flows into a
+    directory segment, so we fail closed on path-traversal /
+    separator / NUL / empty inputs before touching the filesystem. This
+    is also what keeps the value off the CodeQL ``py/path-injection``
+    taint chain for downstream callers (the migration helper and the
+    WAL writer's existence/atomic-rename ops).
     """
+    validate_strategy_instance_id(strategy_instance_id)
     return artifacts_root / "live_instances" / strategy_instance_id / "broker_activity.jsonl"
 
 
