@@ -203,6 +203,56 @@ def test_migration_ignores_run_dirs_for_other_instances(tmp_path: Path) -> None:
     assert [r.exec_id for r in migrated] == ["mine"]
 
 
+def test_migration_skips_non_object_legacy_ledger_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """Regression: codex P2 review on PR #673. A historical
+    ``run_ledger.json`` containing valid JSON that is not an object
+    (``null``, ``[]``, a bare string from a partial/corrupt artifact)
+    would crash ``ledger.get(...)`` with ``AttributeError`` during
+    publisher construction — blocking broker-activity from starting
+    for otherwise-healthy instances. The migration must skip these
+    the same way it skips unreadable JSON.
+    """
+    artifacts_root = tmp_path / "artifacts"
+    healthy_dir = _seed_legacy_run(
+        artifacts_root,
+        "run-healthy",
+        [_row(seq=1, ts_ms=1_700_000_000_000, exec_id="healthy")],
+    )
+    assert healthy_dir.exists()
+    # Three flavours of valid-but-non-object JSON: null, array, bare string.
+    for run_id, bad_payload in [
+        ("run-null", "null"),
+        ("run-array", "[]"),
+        ("run-string", '"sid-migrate-test"'),
+    ]:
+        bad_dir = artifacts_root / "live_runs" / run_id
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "run_ledger.json").write_text(bad_payload, encoding="utf-8")
+        # Seed a legacy WAL too — if the migration crashed on the ledger,
+        # we wouldn't even reach this file. Its content is irrelevant; we
+        # only assert it is NOT migrated (the ledger was unreadable).
+        (bad_dir / "broker_activity.jsonl").write_text(
+            _row(seq=1, ts_ms=1_700_000_001_000, exec_id=f"bad-{run_id}")
+            .model_dump_json()
+            + "\n",
+            encoding="utf-8",
+        )
+
+    target = instance_broker_activity_wal_path(artifacts_root, SID)
+    count = _migrate_per_run_wals_to_instance_wal(
+        artifacts_root=artifacts_root,
+        strategy_instance_id=SID,
+        target_path=target,
+    )
+
+    # Only the healthy row migrates; the three non-object ledgers are skipped.
+    assert count == 1
+    migrated = BrokerActivityWal(target).read_all()
+    assert [r.exec_id for r in migrated] == ["healthy"]
+
+
 def test_migration_skips_corrupt_legacy_wal_and_keeps_going(
     tmp_path: Path,
 ) -> None:

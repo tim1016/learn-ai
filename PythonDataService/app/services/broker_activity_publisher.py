@@ -175,6 +175,14 @@ def _migrate_per_run_wals_to_instance_wal(
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
             continue
+        # A legacy ledger that is valid JSON but not an object (``null``,
+        # ``[]``, a bare string from a partial / corrupted artifact) would
+        # crash ``.get(...)`` with AttributeError. The migration runs
+        # before the per-instance WAL opens, so one bad ledger here would
+        # block the publisher from starting for otherwise-healthy
+        # instances. Skip them the same way we skip unreadable JSON.
+        if not isinstance(ledger, dict):
+            continue
         if ledger.get("strategy_instance_id") != strategy_instance_id:
             continue
         legacy_path = legacy_per_run_broker_activity_wal_path(run_dir)
