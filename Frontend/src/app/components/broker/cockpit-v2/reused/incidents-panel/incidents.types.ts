@@ -27,6 +27,12 @@ export const INCIDENT_CATEGORIES = [
   'cold_start_divergence',
   'operator_halt',
   'subscription_stale',
+  'data_farm_degraded',
+  'broker_event_log_write_failed',
+  'foreign_fill_dropped',
+  'shutdown_flatten_failed',
+  'control_plane_lease_lost',
+  'sidecar_schema_drift',
   'unknown',
 ] as const;
 
@@ -34,9 +40,25 @@ export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number];
 
 export type IncidentLevel = 'WARNING' | 'ERROR' | 'CRITICAL';
 
+/**
+ * Source dimension paired with `IncidentCategory`. Whereas the category
+ * answers *what* failed, the source answers *whose action recovers it* —
+ * so the cockpit can badge rows and let the operator filter by side.
+ *
+ * Mirrors the backend's `IncidentSource` enum (codex 2026-06-24 D2).
+ */
+export const INCIDENT_SOURCES = ['broker', 'app', 'infra', 'operator', 'unknown'] as const;
+export type IncidentSource = (typeof INCIDENT_SOURCES)[number];
+
 /** One parsed WARNING / ERROR / CRITICAL block from live.log, tagged with
  * a backend-classified incident category. See the file-level docstring
- * for `raw_ts` / `ts_ms` semantics. */
+ * for `raw_ts` / `ts_ms` semantics.
+ *
+ * `incident_source` and `dynamic_facts` are typed as optional because the
+ * rollout sequence (D8) lets the backend ship them before this frontend
+ * deploys; a row without `incident_source` renders the UNKNOWN badge
+ * rather than blowing up. Once the rollout window closes both can be
+ * tightened to required. */
 export interface IncidentRow {
   ts_ms: number;
   raw_ts: string;
@@ -45,4 +67,6 @@ export interface IncidentRow {
   message: string;
   traceback: string | null;
   incident_category: IncidentCategory;
+  incident_source?: IncidentSource;
+  dynamic_facts?: Record<string, string | number>;
 }

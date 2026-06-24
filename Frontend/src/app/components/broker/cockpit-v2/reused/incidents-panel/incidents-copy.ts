@@ -1,4 +1,4 @@
-import type { IncidentCategory } from './incidents.types';
+import type { IncidentCategory, IncidentSource } from './incidents.types';
 
 /**
  * Severity tone for an incident row. Drives the row tint and the
@@ -113,6 +113,58 @@ export const INCIDENT_COPY: Record<IncidentCategory, IncidentCopy> = {
     recommendedAction:
       'No action needed if bars resume in the next minute. Restart the bot if the stall persists.',
   },
+  // Catalog expansion (codex 2026-06-24 D-decisions). Templates may
+  // reference typed `dynamic_facts` keys — `composeIncidentMessage`
+  // substitutes them at render time and falls back to the template
+  // literal when the runtime emitted the line without enough context.
+  data_farm_degraded: {
+    title: 'Market data farm degraded',
+    message:
+      'IBKR market data farm is degraded (code {tws_code}). The bot may hold decisions until fresh data resumes.',
+    severity: 'warning',
+    recommendedAction:
+      'No action needed if the farm recovers within a few minutes. Check IBKR Gateway / TWS for "HMDS" or "farm" warnings if it persists.',
+  },
+  broker_event_log_write_failed: {
+    title: 'Broker event log write failed',
+    message:
+      'The bot could not append IBKR events to its forensic log at {path}. Trading continues but the audit trail is incomplete.',
+    severity: 'warning',
+    recommendedAction:
+      'Check that the run directory is writable (read-only mount, disk full). The rate-limit keeps this row to one per run; recurrences are aggregated.',
+  },
+  foreign_fill_dropped: {
+    title: 'Foreign fill dropped',
+    message:
+      'A fill arrived for order {order_id} that the bot has no record of. It was dropped rather than mis-accounted.',
+    severity: 'critical',
+    recommendedAction:
+      'Open the broker account in IBKR to confirm whether the fill is real. If it is, reconcile and consider re-deploying a fresh run_id.',
+  },
+  shutdown_flatten_failed: {
+    title: 'Recovery flatten failed — positions may be open',
+    message:
+      'The bot tried to flatten positions during shutdown and the flatten itself raised. Positions may still be open at the broker.',
+    severity: 'blocking',
+    recommendedAction:
+      'Open IBKR and confirm all positions are closed before resuming. Reconcile and re-deploy a fresh run_id.',
+  },
+  control_plane_lease_lost: {
+    title: 'Control-plane lease lost',
+    message:
+      'The child-watchdog lost its lease against the control plane. The bot may not be supervised correctly.',
+    severity: 'critical',
+    recommendedAction:
+      'Check the host daemon logs. Restart the supervisor if the lease does not re-acquire within a minute.',
+  },
+  sidecar_schema_drift: {
+    title: 'Live-state sidecar unreadable — clean restart needed',
+    message:
+      'The bot could not read its live-state sidecar at {path} (schema drift or corruption). The same run cannot resume safely.',
+    severity: 'blocking',
+    recommendedAction:
+      'Reconcile the broker account and re-deploy a fresh run_id. Engineering should review the schema-drift detail.',
+  },
   unknown: {
     title: 'Unknown error — see raw traceback',
     message:
@@ -129,4 +181,50 @@ export const INCIDENT_COPY: Record<IncidentCategory, IncidentCopy> = {
 export function getIncidentCopy(category: IncidentCategory | null | undefined): IncidentCopy {
   if (category === null || category === undefined) return INCIDENT_COPY.unknown;
   return INCIDENT_COPY[category] ?? INCIDENT_COPY.unknown;
+}
+
+const _PLACEHOLDER_RE = /\{(\w+)\}/g;
+
+/**
+ * Substitute `{name}` placeholders in `template` with typed values from
+ * `facts` (the hybrid-C wire shape, codex D1). Missing facts leave the
+ * placeholder literal so an operator can still see the gap — better
+ * than rendering a broken sentence with empty slots.
+ */
+export function composeIncidentMessage(
+  template: string,
+  facts: Record<string, string | number> | undefined,
+): string {
+  if (!facts) return template;
+  return template.replace(_PLACEHOLDER_RE, (_match, key: string) => {
+    const value = facts[key];
+    return value === undefined ? `{${key}}` : String(value);
+  });
+}
+
+export interface IncidentSourceLabel {
+  /** Two-to-five char badge text shown in the row's leading slot. */
+  text: string;
+  /** Long-form name shown in filter chips and aria-labels. */
+  longName: string;
+  /** Tone token; the SCSS keys colour on this. */
+  tone: 'broker' | 'app' | 'infra' | 'operator' | 'unknown';
+}
+
+const SOURCE_LABELS: Record<IncidentSource, IncidentSourceLabel> = {
+  broker: { text: 'BROKER', longName: 'Broker', tone: 'broker' },
+  app: { text: 'APP', longName: 'App', tone: 'app' },
+  infra: { text: 'INFRA', longName: 'Infra', tone: 'infra' },
+  operator: { text: 'YOU', longName: 'Operator', tone: 'operator' },
+  unknown: { text: '?', longName: 'Unknown', tone: 'unknown' },
+};
+
+/** Look up the badge text + tone for an incident source, falling back to
+ * UNKNOWN when the backend rolled out without the source field yet
+ * (rollout-safety per D8). */
+export function getIncidentSourceLabel(
+  source: IncidentSource | null | undefined,
+): IncidentSourceLabel {
+  if (source === null || source === undefined) return SOURCE_LABELS.unknown;
+  return SOURCE_LABELS[source] ?? SOURCE_LABELS.unknown;
 }

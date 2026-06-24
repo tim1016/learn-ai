@@ -18,6 +18,24 @@
   } @else if (!hasData()) {
     <p class="muted">No warnings or errors for this run.</p>
   } @else {
+    @let activeFilter = sourceFilter();
+    <div class="source-filter" role="group" aria-label="Filter incidents by source">
+      @for (chip of sourceChips(); track chip.key) {
+        <button
+          type="button"
+          class="source-chip"
+          [class.active]="chip.key === activeFilter"
+          [attr.aria-pressed]="chip.key === activeFilter"
+          (click)="setSourceFilter(chip.key)"
+        >
+          <span class="chip-label">{{ chip.label }}</span>
+          <span class="chip-count">{{ chip.count }}</span>
+        </button>
+      }
+    </div>
+    @if (rows().length === 0) {
+      <p class="muted">No incidents match the {{ activeFilter }} filter.</p>
+    } @else {
     <ul class="incidents">
       @for (r of rows(); track trackRow($index, r); let i = $index) {
         @let open = isExpanded(i);
@@ -35,6 +53,15 @@
             (click)="toggle(i)"
             [attr.aria-expanded]="open"
           >
+            <span
+              class="source-badge"
+              [class.source-broker]="r.sourceLabel.tone === 'broker'"
+              [class.source-app]="r.sourceLabel.tone === 'app'"
+              [class.source-infra]="r.sourceLabel.tone === 'infra'"
+              [class.source-operator]="r.sourceLabel.tone === 'operator'"
+              [class.source-unknown]="r.sourceLabel.tone === 'unknown'"
+              [attr.aria-label]="'Source: ' + r.sourceLabel.longName"
+            >{{ r.sourceLabel.text }}</span>
             <span class="severity-tag">{{ r.copy.severity }}</span>
             <span class="ts mono" [title]="'logger: ' + r.logger">{{ r.raw_ts }}</span>
             <span class="title">{{ r.copy.title }}</span>
@@ -42,7 +69,7 @@
           </button>
           @if (open) {
             <div class="incident-body">
-              <p class="message">{{ r.copy.message }}</p>
+              <p class="message">{{ r.composedMessage }}</p>
               <p class="recommended"><strong>Recommended:</strong> {{ r.copy.recommendedAction }}</p>
               <div class="actions">
                 <button type="button" class="raw-log-button" (click)="openRawLog()">
@@ -61,5 +88,6 @@
         </li>
       }
     </ul>
+    }
   }
 </section>

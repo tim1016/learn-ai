@@ -11,13 +11,42 @@ import {
   signal,
 } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import { INCIDENT_COPY, type IncidentCopy, getIncidentCopy } from './incidents-copy';
-import type { IncidentCategory, IncidentRow } from './incidents.types';
+import {
+  INCIDENT_COPY,
+  type IncidentCopy,
+  type IncidentSourceLabel,
+  composeIncidentMessage,
+  getIncidentCopy,
+  getIncidentSourceLabel,
+} from './incidents-copy';
+import {
+  INCIDENT_SOURCES,
+  type IncidentCategory,
+  type IncidentRow,
+  type IncidentSource,
+} from './incidents.types';
 
 const POLL_INTERVAL_MS = 5_000;
 
+type SourceFilter = 'all' | IncidentSource;
+
+/** Source-filter chip options shown above the table. "All" first, then
+ * broker → app → infra → operator → unknown to mirror the side-of-the-
+ * world ordering an operator scans by. */
+const SOURCE_FILTER_OPTIONS: readonly SourceFilter[] = ['all', ...INCIDENT_SOURCES] as const;
+
 interface DisplayRow extends IncidentRow {
   copy: IncidentCopy;
+  /** Template-expanded message (hybrid-C dynamic_facts substituted). */
+  composedMessage: string;
+  /** Badge + tone for the source dimension. */
+  sourceLabel: IncidentSourceLabel;
+}
+
+interface SourceFilterChip {
+  key: SourceFilter;
+  label: string;
+  count: number;
 }
 
 /**
@@ -47,20 +76,57 @@ export class IncidentsPanelComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   protected readonly expanded = signal<Set<number>>(new Set());
+  /** Per-session source filter (codex D7: no localStorage). Resets to
+   * `'all'` when the component is destroyed / the route changes. */
+  protected readonly sourceFilter = signal<SourceFilter>('all');
 
   protected readonly incidentsResource = resource<IncidentRow[], string | null>({
     params: () => this.runId(),
     loader: ({ params }) => this.loadIncidents(params),
   });
 
-  protected readonly rows = computed<DisplayRow[]>(() =>
-    (this.incidentsResource.value() ?? []).map((r) => ({
-      ...r,
-      copy: getIncidentCopy(r.incident_category),
-    })),
+  /** All rows after copy resolution + template expansion + source-label
+   * resolution. Filtering happens downstream so the chip counts can read
+   * the unfiltered total. */
+  protected readonly allRows = computed<DisplayRow[]>(() =>
+    (this.incidentsResource.value() ?? []).map((r) => {
+      const copy = getIncidentCopy(r.incident_category);
+      return {
+        ...r,
+        copy,
+        composedMessage: composeIncidentMessage(copy.message, r.dynamic_facts),
+        sourceLabel: getIncidentSourceLabel(r.incident_source),
+      };
+    }),
   );
 
-  protected readonly hasData = computed<boolean>(() => this.rows().length > 0);
+  /** Rows after applying the source filter chip. */
+  protected readonly rows = computed<DisplayRow[]>(() => {
+    const filter = this.sourceFilter();
+    if (filter === 'all') return this.allRows();
+    return this.allRows().filter((r) => r.sourceLabel.tone === filter);
+  });
+
+  /** Chips shown above the table. Counts read from `allRows` so they
+   * stay stable as the user clicks through filters. */
+  protected readonly sourceChips = computed<SourceFilterChip[]>(() => {
+    const all = this.allRows();
+    const counts = new Map<SourceFilter, number>();
+    counts.set('all', all.length);
+    for (const r of all) {
+      const key = r.sourceLabel.tone as SourceFilter;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return SOURCE_FILTER_OPTIONS.filter(
+      (key) => key === 'all' || (counts.get(key) ?? 0) > 0,
+    ).map((key) => ({
+      key,
+      label: key === 'all' ? 'All' : getIncidentSourceLabel(key).longName,
+      count: counts.get(key) ?? 0,
+    }));
+  });
+
+  protected readonly hasData = computed<boolean>(() => this.allRows().length > 0);
 
   /** Map an IncidentCategory to a known key for the INCIDENT_COPY map.
    * Defensive against backend emitting unknown categories. */
@@ -101,6 +167,13 @@ export class IncidentsPanelComponent {
 
   protected openRawLog(): void {
     this.rawLogRequested.emit();
+  }
+
+  protected setSourceFilter(filter: SourceFilter): void {
+    this.sourceFilter.set(filter);
+    // Collapse any expanded rows that the new filter hides — keeps the
+    // expand state from "leaking" into a future filter switch.
+    this.expanded.set(new Set());
   }
 
   /** Track key includes the message prefix so consecutive identical

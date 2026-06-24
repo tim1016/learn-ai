@@ -159,4 +159,104 @@ describe('IncidentsPanelComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('No warnings or errors for this run.');
   });
+
+  it('renders a source badge per row driven by incident_source', async () => {
+    // PR-2 cockpit work: every row shows a small badge (BROKER / APP /
+    // INFRA / YOU / ?) so the operator can see whose side the incident
+    // is on without reading the message.
+    const { fixture, httpMock } = render();
+    flushIncidents(httpMock, [
+      makeRow({ incident_category: 'broker_disconnect', incident_source: 'broker' }),
+      makeRow({ incident_category: 'engine_fatal', incident_source: 'app' }),
+      makeRow({ incident_category: 'broker_event_log_write_failed', incident_source: 'infra' }),
+      makeRow({ incident_category: 'operator_halt', incident_source: 'operator' }),
+    ]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const badges = Array.from(el.querySelectorAll<HTMLElement>('.source-badge'));
+    expect(badges).toHaveLength(4);
+    expect(badges[0]?.textContent?.trim()).toBe('BROKER');
+    expect(badges[0]?.classList.contains('source-broker')).toBe(true);
+    expect(badges[1]?.textContent?.trim()).toBe('APP');
+    expect(badges[2]?.textContent?.trim()).toBe('INFRA');
+    expect(badges[3]?.textContent?.trim()).toBe('YOU');
+  });
+
+  it('badges a row UNKNOWN when the backend omits incident_source (D8 rollout window)', async () => {
+    // Backend rolled out the source field; frontend may deploy after.
+    // Until the rollout window closes the panel must accept rows without
+    // the field and render the UNKNOWN badge rather than crash.
+    const { fixture, httpMock } = render();
+    flushIncidents(httpMock, [
+      // makeRow's default omits incident_source.
+      makeRow({ incident_category: 'broker_disconnect' }),
+    ]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const badge = el.querySelector<HTMLElement>('.source-badge');
+    expect(badge?.textContent?.trim()).toBe('?');
+    expect(badge?.classList.contains('source-unknown')).toBe(true);
+  });
+
+  it('filters rows by source when a chip is clicked', async () => {
+    // The cockpit filter is the per-session affordance from D7. Clicking
+    // a chip hides rows not on that side; the unfiltered chip counts
+    // stay stable so the operator can see the side-distribution at a
+    // glance even while filtering.
+    const { fixture, httpMock } = render();
+    flushIncidents(httpMock, [
+      makeRow({ incident_category: 'broker_disconnect', incident_source: 'broker' }),
+      makeRow({ incident_category: 'broker_reconnect_failed', incident_source: 'broker' }),
+      makeRow({ incident_category: 'engine_fatal', incident_source: 'app' }),
+    ]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll('.incident-row')).toHaveLength(3);
+
+    // Find the App chip and click it.
+    const chips = Array.from(el.querySelectorAll<HTMLButtonElement>('.source-chip'));
+    const appChip = chips.find((c) => c.textContent?.includes('App'));
+    if (!appChip) throw new Error('App filter chip not found');
+    appChip.click();
+    fixture.detectChanges();
+
+    // Only the engine_fatal row should be visible.
+    const rows = Array.from(el.querySelectorAll<HTMLElement>('.incident-row'));
+    expect(rows).toHaveLength(1);
+    const badges = Array.from(el.querySelectorAll<HTMLElement>('.source-badge'));
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.textContent?.trim()).toBe('APP');
+  });
+
+  it('interpolates dynamic_facts into the message when the row is expanded', async () => {
+    // Hybrid-C wire shape (D1): backend ships the typed fact, frontend
+    // substitutes it into the category template. The rendered message
+    // must include the substituted value, not the literal placeholder.
+    const { fixture, httpMock } = render();
+    flushIncidents(httpMock, [
+      makeRow({
+        incident_category: 'data_farm_degraded',
+        incident_source: 'broker',
+        dynamic_facts: { tws_code: 2103 },
+      }),
+    ]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const head = el.querySelector<HTMLButtonElement>('.incident-head');
+    if (!head) throw new Error('incident-head not found');
+    head.click();
+    fixture.detectChanges();
+
+    const message = el.querySelector<HTMLElement>('.message');
+    expect(message?.textContent).toContain('2103');
+    expect(message?.textContent).not.toContain('{tws_code}');
+  });
 });

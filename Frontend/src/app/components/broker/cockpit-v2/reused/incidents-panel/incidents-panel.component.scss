@@ -43,7 +43,7 @@
 
 .incident-head {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto auto 1fr auto;
   align-items: center;
   gap: 0.6rem;
   width: 100%;
@@ -54,6 +54,65 @@
   cursor: pointer;
   color: inherit;
   font: inherit;
+}
+
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.4rem;
+  height: 1.4rem;
+  padding: 0 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+
+  &.source-broker { color: var(--bull); border-color: color-mix(in srgb, var(--bull) 35%, var(--border)); }
+  &.source-app { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); }
+  &.source-infra { color: var(--text); border-color: color-mix(in srgb, var(--text) 25%, var(--border)); }
+  &.source-operator { color: var(--bear); border-color: color-mix(in srgb, var(--bear) 35%, var(--border)); }
+  &.source-unknown { color: var(--text-muted); }
+}
+
+.source-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+
+  &:hover { background: var(--bg-hover); }
+  &.active {
+    background: var(--bg-hover);
+    border-color: var(--text);
+    font-weight: 600;
+  }
+
+  .chip-count {
+    font-size: 0.7rem;
+    opacity: 0.75;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--bg);
+  }
 }
 
 .severity-tag {
