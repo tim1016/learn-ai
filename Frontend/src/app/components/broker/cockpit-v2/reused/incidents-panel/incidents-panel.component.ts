@@ -35,6 +35,26 @@ interface DisplayRow extends IncidentRow {
   composedMessage: string;
   /** Badge + tone for the source dimension. */
   sourceLabel: IncidentSourceLabel;
+  /** ``ts_ms`` formatted in the viewer's local timezone
+   * ("YYYY-MM-DD HH:MM:SS"). Rendered as the primary timestamp; the
+   * backend's ``raw_ts`` (engine-host clock with millisecond precision)
+   * is kept beside it for cross-referencing against live.log. */
+  localTime: string;
+}
+
+/** Format an int64 ms-since-epoch as "YYYY-MM-DD HH:MM:SS" in the viewer's
+ * local timezone. The cockpit shell header already names the viewer's TZ
+ * ("Local time: HH:MM:SS ET"), so we don't repeat the TZ label on every
+ * row — that would just be visual noise. Avoiding ``Intl`` keeps unit
+ * tests deterministic across vitest's jsdom env where ICU data isn't
+ * always complete. */
+function formatViewerLocalTime(tsMs: number): string {
+  const d = new Date(tsMs);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
 }
 
 interface SourceFilterChip {
@@ -90,6 +110,7 @@ export class IncidentsPanelComponent {
         copy,
         composedMessage: composeIncidentMessage(copy.message, r.dynamic_facts),
         sourceLabel: getIncidentSourceLabel(r.incident_source),
+        localTime: formatViewerLocalTime(r.ts_ms),
       };
     }),
   );
