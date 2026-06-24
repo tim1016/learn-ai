@@ -12,19 +12,13 @@ import {
 } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import {
-  INCIDENT_COPY,
   type IncidentCopy,
   type IncidentSourceLabel,
   composeIncidentMessage,
   getIncidentCopy,
   getIncidentSourceLabel,
 } from './incidents-copy';
-import {
-  INCIDENT_SOURCES,
-  type IncidentCategory,
-  type IncidentRow,
-  type IncidentSource,
-} from './incidents.types';
+import { INCIDENT_SOURCES, type IncidentRow, type IncidentSource } from './incidents.types';
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -127,13 +121,6 @@ export class IncidentsPanelComponent {
   });
 
   protected readonly hasData = computed<boolean>(() => this.allRows().length > 0);
-
-  /** Map an IncidentCategory to a known key for the INCIDENT_COPY map.
-   * Defensive against backend emitting unknown categories. */
-  protected categoryKey(c: IncidentCategory | null | undefined): IncidentCategory {
-    if (c === null || c === undefined) return 'unknown';
-    return c in INCIDENT_COPY ? c : 'unknown';
-  }
 
   constructor() {
     const timer = setInterval(() => this.incidentsResource.reload(), POLL_INTERVAL_MS);
