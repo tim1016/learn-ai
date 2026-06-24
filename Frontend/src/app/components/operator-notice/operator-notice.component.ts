@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import type { OperatorNotice, OperatorNoticeActionKind } from '../../models/operator-notice';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import type { OperatorNotice, OperatorNoticeAction, OperatorNoticeActionKind } from '../../models/operator-notice';
 
 const CLICKABLE_KINDS: readonly OperatorNoticeActionKind[] = [
   'open_runbook',
@@ -18,6 +18,7 @@ const CLICKABLE_KINDS: readonly OperatorNoticeActionKind[] = [
 })
 export class OperatorNoticeComponent {
   readonly notice = input.required<OperatorNotice>();
+  readonly actionClicked = output<OperatorNoticeAction>();
 
   readonly tier = computed(() => this.notice().tier);
 
@@ -38,8 +39,6 @@ export class OperatorNoticeComponent {
   );
 
   onActionClick(): void {
-    // Navigation/affordance is wired by the consumer in PR 1 — for now we
-    // simply surface the click; routing to runbook target lands in PR 5
-    // when broker-activity notices land.
+    this.actionClicked.emit(this.notice().action);
   }
 }

@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 import { OperatorNoticeComponent } from './operator-notice.component';
-import type { OperatorNotice } from '../../models/operator-notice';
+import type { OperatorNotice, OperatorNoticeAction } from '../../models/operator-notice';
 
 function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
   return {
@@ -49,6 +49,17 @@ describe('OperatorNoticeComponent', () => {
     });
 
     expect(screen.getByRole('button', { name: /how to recover/i })).toBeTruthy();
+  });
+
+  it('emits the action when a clickable action button is clicked', async () => {
+    const action: OperatorNoticeAction = { kind: 'open_runbook', label: 'How to recover', target: 'runtime-freshness' };
+    let captured: OperatorNoticeAction | null = null;
+    await render(OperatorNoticeComponent, {
+      inputs: { notice: makeNotice({ action }) },
+      on: { actionClicked: (a: OperatorNoticeAction) => { captured = a; } },
+    });
+    await screen.getByRole('button', { name: /how to recover/i }).click();
+    expect(captured).toEqual(action);
   });
 
   it('renders external_manual_check as an inert label, not a clickable button', async () => {

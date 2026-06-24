@@ -1,5 +1,7 @@
 @if (headline()) {
   <div class="runtime-banner" data-testid="runtime-banner">
+    <!-- TODO (PR 5+): bind (actionClicked) to a navigation handler once a notice
+         consumer that needs routing (e.g. incident notices) ships. -->
     <app-operator-notice [notice]="headline()!" />
     @if (additionalReasons().length > 0) {
       <details class="runtime-banner__more">
