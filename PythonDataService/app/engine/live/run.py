@@ -102,6 +102,7 @@ def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
         disconnect_broker,
         request_engine_exit,
         aggregator=None,
+        executor=None,
     ):
         from app.engine.live.child_watchdog import ChildWatchdog
 
@@ -115,6 +116,7 @@ def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
             request_engine_exit=request_engine_exit,
             now_ms=lambda: int(time.time() * 1000),
             aggregator=aggregator,
+            executor=executor,
         )
 
     return _factory
@@ -1779,6 +1781,38 @@ def cmd_start(args: argparse.Namespace) -> int:
                     # instead of being held for operator resolution.
                     _write_desired_state("PAUSED", reason="reconcile_ambiguous_exposure")
                     engine._paused = True
+
+            # PR 2 — post-halt watchdog gate. Refuse to enter the trading
+            # loop if a previous halt left broker state uncertain.  The
+            # gate reads operator_incidents/*.json from the run_dir and
+            # returns a blocking OperatorIncident when one of the three
+            # uncertain-outcome watchdog codes is still unresolved.
+            # Only checked when run_dir exists (always true here, since
+            # _entry_sidecar was just written) and regardless of whether
+            # a real IBKR client is present — the gate applies to all
+            # run modes that actually persist incidents.
+            from app.engine.live.post_halt_gate import check_post_halt_gate
+
+            _blocking_incident = check_post_halt_gate(args.run_dir, now_ms=now_ms())
+            if _blocking_incident is not None:
+                print(
+                    f"[START] HALT post_halt_gate: {_blocking_incident.notice.code} "
+                    f"(prior watchdog halt left broker state uncertain). "
+                    f"Use Reconcile-now before restarting.",
+                    file=sys.stderr,
+                )
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.fatal_halt,
+                        }
+                    ),
+                )
+                return 1
 
             try:
                 # PRD #619-B B3 — start the runtime publisher just

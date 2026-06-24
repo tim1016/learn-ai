@@ -249,6 +249,9 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "broker_observation_consistency",
         # ADR-0008 §5 / Reconciliation PR 1 — cold-start receipt projection.
         "reconciliation",
+        # Operator-notice PR 2 — post-halt incident headline (None unless an
+        # unresolved watchdog incident requires reconciliation).
+        "incident_headline",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
