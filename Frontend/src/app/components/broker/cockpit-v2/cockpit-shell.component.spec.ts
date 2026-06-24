@@ -10,6 +10,7 @@ import { provideRouter } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CockpitShellComponent } from './cockpit-shell.component';
+import { STALE_DEBOUNCE_MS } from './runtime-banner/runtime-banner.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import type {
   OperatorSurfaceControlPlane,
@@ -320,6 +321,10 @@ describe('CockpitShellComponent', () => {
 
     const fixture = await renderShell(stub);
     await fixture.whenStable();
+    fixture.detectChanges();
+    // The warning-tier freshness headline is debounced by the banner. Push
+    // the fake clock past the debounce window so the banner reveals it.
+    await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS + 1_000);
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
