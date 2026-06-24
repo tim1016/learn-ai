@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/angular';
-import { describe, expect, it } from 'vitest';
-import { RuntimeBannerComponent } from './runtime-banner.component';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RuntimeBannerComponent, STALE_DEBOUNCE_MS } from './runtime-banner.component';
 import type { OperatorNotice, OperatorSurfaceRuntimeFreshness } from '../../../../api/live-instances.types';
 
 function withHeadline(): OperatorSurfaceRuntimeFreshness {
@@ -59,7 +59,35 @@ function incidentNotice(): OperatorNotice {
   };
 }
 
+function criticalFreshnessNotice(): OperatorNotice {
+  return {
+    code: 'runtime.command_loop_unresponsive',
+    tier: 'critical',
+    title: 'Command loop unresponsive',
+    message: 'The command loop has not heartbeated.',
+    source_codes: ['COMMAND_LOOP_UNRESPONSIVE'],
+    forensic_facts: {},
+    action: { kind: 'open_runbook', label: 'Runbook', target: 'command-loop' },
+    runbook_slug: 'command-loop',
+    occurred_at_ms: null,
+  };
+}
+
+/** Advance the fake clock past the debounce window and flush pending async
+ *  work so the banner's computed signals re-evaluate against the new clock. */
+async function advancePastDebounce(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS + 1_000);
+}
+
 describe('RuntimeBannerComponent', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders nothing when there is no headline and no stale reasons', async () => {
     const { container } = await render(RuntimeBannerComponent, {
       inputs: { freshness: freshFreshness(), incidentHeadline: null },
@@ -67,10 +95,15 @@ describe('RuntimeBannerComponent', () => {
     expect(container.querySelector('[data-testid="runtime-banner"]')).toBeNull();
   });
 
-  it('renders the headline as the primary OperatorNotice', async () => {
-    await render(RuntimeBannerComponent, {
+  it('holds the freshness headline back until staleness persists past the debounce window', async () => {
+    const { container } = await render(RuntimeBannerComponent, {
       inputs: { freshness: withHeadline() },
     });
+    // Immediately after the first stale observation, the banner is suppressed.
+    expect(container.querySelector('[data-testid="runtime-banner"]')).toBeNull();
+
+    await advancePastDebounce();
+
     expect(screen.getByText('Market data is stale')).toBeTruthy();
     expect(
       screen.getByText(/most recent bar is older than the freshness window/i),
@@ -81,6 +114,7 @@ describe('RuntimeBannerComponent', () => {
     const { container } = await render(RuntimeBannerComponent, {
       inputs: { freshness: withHeadline() },
     });
+    await advancePastDebounce();
     expect(container.textContent).not.toContain('BAR_LOOP_LATEST_BAR_STALE');
   });
 
@@ -100,9 +134,35 @@ describe('RuntimeBannerComponent', () => {
       },
     ];
     await render(RuntimeBannerComponent, { inputs: { freshness: f } });
+    await advancePastDebounce();
     // The banner is hidden because there is no headline (session-closed
     // is suppressed). Reasons surface elsewhere in the cockpit.
     expect(screen.queryByText('Market closed')).toBeNull();
+  });
+
+  // Debounce-specific cases.
+
+  it('renders critical-tier freshness headlines immediately, bypassing the debounce', async () => {
+    const f = freshFreshness();
+    f.headline = criticalFreshnessNotice();
+    f.posture_demoted = true;
+    await render(RuntimeBannerComponent, { inputs: { freshness: f } });
+    expect(screen.getByText('Command loop unresponsive')).toBeTruthy();
+  });
+
+  it('resets the debounce when freshness recovers, so a brief blip never shows the banner', async () => {
+    const stale = withHeadline();
+    const fresh = freshFreshness();
+
+    const { rerender, container } = await render(RuntimeBannerComponent, {
+      inputs: { freshness: stale },
+    });
+    // Spend less than the debounce window in the stale state, then recover.
+    await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS / 2);
+    await rerender({ inputs: { freshness: fresh } });
+    // Even if we now wait, the banner should not render — the timer was reset.
+    await advancePastDebounce();
+    expect(container.querySelector('[data-testid="runtime-banner"]')).toBeNull();
   });
 
   // PR 5 — incident_headline wiring
@@ -114,6 +174,7 @@ describe('RuntimeBannerComponent', () => {
         incidentHeadline: incidentNotice(),
       },
     });
+    await advancePastDebounce();
     const incidentEl = document.querySelector('[data-testid="runtime-banner-incident"]');
     expect(incidentEl).not.toBeNull();
     expect(incidentEl?.textContent ?? '').toContain('Flatten timed out');
@@ -137,15 +198,19 @@ describe('RuntimeBannerComponent', () => {
     expect(screen.getByText('Flatten timed out')).toBeTruthy();
   });
 
-  it('does not render the incident block when incidentHeadline is null', async () => {
+  it('shows the incident block immediately and the freshness headline after the debounce', async () => {
     const { container } = await render(RuntimeBannerComponent, {
       inputs: {
         freshness: withHeadline(),
         incidentHeadline: null,
       },
     });
+    // Incident absent and freshness still debounced.
     expect(container.querySelector('[data-testid="runtime-banner-incident"]')).toBeNull();
-    // Freshness headline still visible
+    expect(container.querySelector('[data-testid="runtime-banner"]')).toBeNull();
+
+    await advancePastDebounce();
+    expect(container.querySelector('[data-testid="runtime-banner-incident"]')).toBeNull();
     expect(screen.getByText('Market data is stale')).toBeTruthy();
   });
 });
