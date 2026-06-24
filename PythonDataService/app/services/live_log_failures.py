@@ -236,13 +236,16 @@ _SUBSCRIPTION_STALE_RE = re.compile(
 # on stable substrings emitted by our own code so they can't false-positive
 # on operator prose. extract_facts() reads named groups from a subset of
 # them to populate dynamic_facts (path / order_id), so changes here must
-# keep those groups intact.
+# keep those groups intact. Path-extraction patterns deliberately use
+# ``[^\n]`` (line-local) instead of DOTALL so they cannot reach into a
+# traceback frame and grab an unrelated stack-file path when the
+# emitting message itself has no path.
 _FOREIGN_FILL_DROPPED_RE = re.compile(
     r"Dropping IBKR fill for unknown order_id(?:\s*(?:=|:)\s*(?P<order_id>\w+))?"
 )
-_BROKER_EVENT_LOG_WRITE_RE = re.compile(
-    r"Could not append IBKR broker event log(?:.*?(?P<path>/[\w\./\-]+))?",
-    re.DOTALL,
+_BROKER_EVENT_LOG_WRITE_MARKER = "Could not append IBKR broker event log"
+_BROKER_EVENT_LOG_WRITE_PATH_RE = re.compile(
+    r"Could not append IBKR broker event log[^\n]*?(?P<path>/[\w\./\-]+\.jsonl)\b"
 )
 _SHUTDOWN_FLATTEN_FAILED_MARKERS: tuple[str, ...] = (
     "Recovery flatten itself failed",
@@ -253,7 +256,13 @@ _SIDECAR_SCHEMA_DRIFT_MARKERS: tuple[str, ...] = (
     "live-state sidecar write failed",
     "LiveStateSidecarCorruptError",
 )
-_SIDECAR_PATH_RE = re.compile(r"(?P<path>/[\w\./\-]+\.json)")
+# Anchored on the emitting marker substring (same line, line-local) so a
+# random ``*.json`` path elsewhere in the traceback can't be mistaken
+# for the sidecar's path.
+_SIDECAR_PATH_RE = re.compile(
+    r"(?:live-state sidecar write failed|LiveStateSidecarCorruptError)"
+    r"[^\n]*?(?P<path>/[\w\./\-]+\.json)\b"
+)
 
 # D3 — substrings whose presence in EITHER the message OR the traceback
 # of a SHUTDOWN_FLATTEN_FAILED row means the proximate cause is the
@@ -312,7 +321,7 @@ def _classify_one(logger: str, message: str) -> IncidentCategory | None:
     # an INFRA failure (read-only mount / disk full), not a trading
     # failure — the source map routes it to INFRA. Emit-site rate-limit
     # lives in a separate cleanup PR per the plan's §6 phasing.
-    if _BROKER_EVENT_LOG_WRITE_RE.search(message):
+    if _BROKER_EVENT_LOG_WRITE_MARKER in message:
         return IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED
     # Fill arrived with an order_id our intent ledger has never seen
     # (cross-restart resolver missed). Surfaces as a BROKER-side
@@ -475,6 +484,10 @@ def extract_facts(
         if m is not None:
             facts["tws_code"] = int(m.group(1))
     elif category == IncidentCategory.DATA_FARM_DEGRADED:
+        # Header-only by design: the emit site in ``app.broker.ibkr.client``
+        # always folds the TWS code (2103 / 2105) into the message string,
+        # so a traceback fallback would only ever produce a false positive
+        # (e.g. an unrelated literal in a stack frame).
         m = _IBKR_DATA_FARM_CODE_RE.search(message)
         if m is not None:
             facts["tws_code"] = int(m.group(1))
@@ -483,11 +496,17 @@ def extract_facts(
         if m is not None and m.group("order_id") is not None:
             facts["order_id"] = m.group("order_id")
     elif category == IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED:
+        # Line-local search: the path is only emitted on the same line as
+        # the marker, never in a downstream traceback frame. Searching the
+        # combined haystack would otherwise let an unrelated ``.jsonl`` path
+        # in the stack pose as the failed-write target.
         haystack = message if traceback is None else f"{message}\n{traceback}"
-        m = _BROKER_EVENT_LOG_WRITE_RE.search(haystack)
-        if m is not None and m.group("path") is not None:
+        m = _BROKER_EVENT_LOG_WRITE_PATH_RE.search(haystack)
+        if m is not None:
             facts["path"] = m.group("path")
     elif category == IncidentCategory.SIDECAR_SCHEMA_DRIFT:
+        # Same line-local discipline as broker_event_log_write_failed: the
+        # path lives on the marker line, not in the traceback.
         haystack = message if traceback is None else f"{message}\n{traceback}"
         m = _SIDECAR_PATH_RE.search(haystack)
         if m is not None:

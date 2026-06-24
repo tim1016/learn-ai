@@ -409,12 +409,12 @@ def test_parse_incidents_unknown_category_for_unrecognised_message() -> None:
         # DATA_FARM_DEGRADED — IBKR data-farm warnings via our client.
         (
             "app.broker.ibkr.client",
-            "IBKR data farm degraded: 2103",
+            "IBKR data farm degraded (code 2103)",
             IncidentCategory.DATA_FARM_DEGRADED,
         ),
         (
             "app.broker.ibkr.client",
-            "IBKR data farm degraded: 2105",
+            "IBKR data farm degraded (code 2105)",
             IncidentCategory.DATA_FARM_DEGRADED,
         ),
         # BROKER_EVENT_LOG_WRITE_FAILED — INFRA-side filesystem failure.
@@ -654,12 +654,57 @@ def test_extract_facts_pulls_tws_code_from_traceback_for_broker_disconnect() -> 
 
 @pytest.mark.parametrize("code", [2103, 2105])
 def test_extract_facts_pulls_tws_code_for_data_farm_degraded(code: int) -> None:
+    # Production emit shape — ``app.broker.ibkr.client._on_ib_error`` folds
+    # the TWS code into the message string with this exact pattern so the
+    # incident-table classifier can read it from ``%(message)s``.
     facts = extract_facts(
         IncidentCategory.DATA_FARM_DEGRADED,
-        message=f"IBKR data farm degraded: {code}",
+        message=f"IBKR data farm degraded (code {code})",
     )
 
     assert facts == {"tws_code": code}
+
+
+def test_extract_facts_does_not_pull_path_from_unrelated_traceback() -> None:
+    """Regression for the path-extraction broadness: a broker-event-log
+    write failure whose emit line has no path must NOT pick up an
+    unrelated ``.jsonl`` path that happens to appear in a downstream
+    traceback frame. The extractor is line-local, so the only way a
+    path lands in dynamic_facts is if the emit site put it there.
+    """
+    facts = extract_facts(
+        IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED,
+        message="Could not append IBKR broker event log: read-only fs",
+        traceback=(
+            "Traceback (most recent call last):\n"
+            '  File "/app/broker/ibkr/client.py", line 286, in _record_broker_event\n'
+            "    fh.write(json.dumps(payload, sort_keys=True))\n"
+            "OSError: [Errno 30] Read-only file system: '/app/other/file.jsonl'\n"
+        ),
+    )
+
+    assert facts == {}
+
+
+def test_extract_facts_does_not_pull_path_for_sidecar_drift_from_unrelated_json() -> None:
+    """Same line-local discipline for SIDECAR_SCHEMA_DRIFT — an unrelated
+    ``.json`` path in a downstream stack frame must not pose as the
+    sidecar's path. The marker substring + path must share a line.
+    """
+    facts = extract_facts(
+        IncidentCategory.SIDECAR_SCHEMA_DRIFT,
+        message="live-state sidecar write failed: extra fields forbidden",
+        traceback=(
+            "Traceback (most recent call last):\n"
+            '  File "/app/engine/live/live_portfolio.py", line 1, in persist\n'
+            "ValidationError: extra fields forbidden\n"
+            # An unrelated json path further down the trace — must not be
+            # picked up as the sidecar path.
+            'cached_settings_path="/app/cache/settings.json"\n'
+        ),
+    )
+
+    assert facts == {}
 
 
 def test_extract_facts_pulls_order_id_for_foreign_fill_dropped() -> None:
