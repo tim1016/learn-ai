@@ -96,8 +96,8 @@ export interface ChartSnapshotResponse {
 }
 
 /** One parsed ERROR/CRITICAL block from live.log. ``raw_ts`` is the
- * literal log string (host-local TZ); ``ts_ms`` parses it as if UTC and
- * is only valid for sequencing. */
+ * verbatim UTC log string (the engine logger pins ``time.gmtime``);
+ * ``ts_ms`` is the same instant as canonical ``int64`` ms UTC. */
 export interface FailureRow {
   ts_ms: number;
   raw_ts: string;

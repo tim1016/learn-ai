@@ -188,11 +188,11 @@ class LogLine(BaseModel):
 class FailureRecord(BaseModel):
     """One ERROR/CRITICAL block parsed from live.log.
 
-    ``raw_ts`` is the literal timestamp string as written by the engine's
-    logger (host-local TZ); ``ts_ms`` is the same value parsed as if it
-    were UTC, suitable for sequencing and the ``since_ms`` cursor but not
-    guaranteed to equal wall-clock UTC ms when the engine host's TZ ≠ UTC.
-    See :mod:`app.services.live_log_failures` for the timestamp caveat.
+    ``raw_ts`` is the verbatim timestamp string from the log (UTC, since
+    the engine logger's ``_StepFormatter`` pins ``time.gmtime``);
+    ``ts_ms`` is the same instant as canonical ``int64`` ms since Unix
+    epoch UTC. See :mod:`app.services.live_log_failures` for the parser
+    contract.
     """
 
     ts_ms: int
@@ -216,8 +216,8 @@ class IncidentRecord(BaseModel):
     ``unknown`` on the frontend for rollout safety.
 
     Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord`:
-    ``raw_ts`` is the display string, ``ts_ms`` is ordering/cursor-only
-    until the engine emits canonical UTC ms timestamps.
+    ``raw_ts`` is the verbatim UTC timestamp string from the log;
+    ``ts_ms`` is the same instant as canonical ``int64`` ms UTC.
 
     ``dynamic_facts`` carries the typed hybrid-C named values the
     frontend may interpolate into its category template (codex D1).
