@@ -206,7 +206,8 @@ class FailureRecord(BaseModel):
 class IncidentRecord(BaseModel):
     """One WARNING/ERROR/CRITICAL block parsed from live.log, with a
     backend-classified ``incident_category`` the frontend keys its copy
-    map on.
+    map on plus an ``incident_source`` for the cockpit's BROKER / APP /
+    INFRA / OPERATOR badge + filter (codex 2026-06-24 D2 / D8).
 
     Mirrors :class:`app.services.live_log_failures.IncidentRow` as the wire
     DTO. The ``incident_category`` enum is the single source of truth for
@@ -217,6 +218,12 @@ class IncidentRecord(BaseModel):
     Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord`:
     ``raw_ts`` is the display string, ``ts_ms`` is ordering/cursor-only
     until the engine emits canonical UTC ms timestamps.
+
+    ``dynamic_facts`` carries the typed hybrid-C named values the
+    frontend may interpolate into its category template (codex D1).
+    Empty by default so rows whose category has no fact extractor (or
+    whose runtime emitted the line without enough context) still render
+    the template verbatim.
     """
 
     ts_ms: int
@@ -226,6 +233,8 @@ class IncidentRecord(BaseModel):
     message: str
     traceback: str | None = None
     incident_category: str
+    incident_source: str
+    dynamic_facts: dict[str, str | int] = {}
 
 
 HydratePolicy = Literal["require", "optional", "disabled"]

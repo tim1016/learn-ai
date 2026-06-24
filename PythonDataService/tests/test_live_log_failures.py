@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 
 from app.services.live_log_failures import (
+    _DEFAULT_SOURCE,
     IncidentCategory,
+    IncidentSource,
     classify,
+    classify_source,
+    extract_facts,
     parse_failures,
     parse_incidents,
 )
@@ -371,3 +375,397 @@ def test_parse_incidents_unknown_category_for_unrecognised_message() -> None:
 
     assert len(rows) == 1
     assert rows[0].incident_category == IncidentCategory.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# Catalog expansion (codex 2026-06-24 D-decisions): classify() recognises
+# the six new categories on their anchor (logger, message) pairs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("logger", "message", "expected"),
+    [
+        # BROKER_DISCONNECT — new anchor on our own wrapper. Exact match,
+        # not a substring, so unrelated prose can't false-positive.
+        (
+            "app.broker.ibkr.client",
+            "IBKR connectivity lost",
+            IncidentCategory.BROKER_DISCONNECT,
+        ),
+        # Same message, wrong logger — must NOT classify as
+        # BROKER_DISCONNECT (the anchor is logger-pinned).
+        (
+            "app.misc",
+            "IBKR connectivity lost",
+            IncidentCategory.UNKNOWN,
+        ),
+        # BROKER_DISCONNECT — ib_async.client TCP-level disconnect.
+        (
+            "ib_async.client",
+            "Peer closed connection.",
+            IncidentCategory.BROKER_DISCONNECT,
+        ),
+        # DATA_FARM_DEGRADED — IBKR data-farm warnings via our client.
+        (
+            "app.broker.ibkr.client",
+            "IBKR data farm degraded: 2103",
+            IncidentCategory.DATA_FARM_DEGRADED,
+        ),
+        (
+            "app.broker.ibkr.client",
+            "IBKR data farm degraded: 2105",
+            IncidentCategory.DATA_FARM_DEGRADED,
+        ),
+        # BROKER_EVENT_LOG_WRITE_FAILED — INFRA-side filesystem failure.
+        (
+            "app.broker.ibkr.client",
+            "Could not append IBKR broker event log: /app/_broker/events.jsonl read-only",
+            IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED,
+        ),
+        # FOREIGN_FILL_DROPPED — cross-restart resolver missed.
+        (
+            "app.engine.live.intent_ledger",
+            "Dropping IBKR fill for unknown order_id=42",
+            IncidentCategory.FOREIGN_FILL_DROPPED,
+        ),
+        # SHUTDOWN_FLATTEN_FAILED — recovery flatten cascade.
+        (
+            "app.engine.live.run",
+            "Recovery flatten itself failed during shutdown",
+            IncidentCategory.SHUTDOWN_FLATTEN_FAILED,
+        ),
+        (
+            "app.engine.live.run",
+            "broker.cancel_open_orders failed during shutdown_flatten",
+            IncidentCategory.SHUTDOWN_FLATTEN_FAILED,
+        ),
+        (
+            "app.engine.live.run",
+            "broker.cancel_open_orders failed during fatal halt",
+            IncidentCategory.SHUTDOWN_FLATTEN_FAILED,
+        ),
+        # CONTROL_PLANE_LEASE_LOST — child-watchdog lease loss.
+        (
+            "app.engine.live.child_watchdog",
+            "CONTROL_PLANE_LEASE_LOST: lease expired after 45s",
+            IncidentCategory.CONTROL_PLANE_LEASE_LOST,
+        ),
+        # SIDECAR_SCHEMA_DRIFT — both anchors.
+        (
+            "app.engine.live.live_portfolio",
+            "live-state sidecar write failed: extra fields forbidden",
+            IncidentCategory.SIDECAR_SCHEMA_DRIFT,
+        ),
+        (
+            "app.engine.live.live_portfolio",
+            "LiveStateSidecarCorruptError: missing required field",
+            IncidentCategory.SIDECAR_SCHEMA_DRIFT,
+        ),
+    ],
+)
+def test_classify_recognises_new_categories(
+    logger: str, message: str, expected: IncidentCategory
+) -> None:
+    assert classify(logger, message) == expected
+
+
+# ---------------------------------------------------------------------------
+# classify_source() — default-per-category map + D3 refinement + D6
+# UNKNOWN-source derivation from the logger namespace.
+# ---------------------------------------------------------------------------
+
+
+def test_default_source_map_covers_every_category() -> None:
+    """Round-trip guard: every ``IncidentCategory`` value must have a
+    ``_DEFAULT_SOURCE`` entry so a new enum addition can't silently
+    fall through ``classify_source()``.
+    """
+    missing = [c for c in IncidentCategory if c not in _DEFAULT_SOURCE]
+
+    assert missing == [], (
+        f"_DEFAULT_SOURCE is missing entries for: {[c.value for c in missing]}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        (IncidentCategory.BROKER_DISCONNECT, IncidentSource.BROKER),
+        (IncidentCategory.BROKER_RECONNECT_FAILED, IncidentSource.BROKER),
+        (IncidentCategory.LOST_FILL, IncidentSource.BROKER),
+        (IncidentCategory.OUTSIDE_MUTATION, IncidentSource.BROKER),
+        (IncidentCategory.SUBSCRIPTION_STALE, IncidentSource.BROKER),
+        (IncidentCategory.DATA_FARM_DEGRADED, IncidentSource.BROKER),
+        (IncidentCategory.FOREIGN_FILL_DROPPED, IncidentSource.BROKER),
+        (IncidentCategory.ENGINE_FATAL, IncidentSource.APP),
+        (IncidentCategory.PORTFOLIO_INIT_FAIL, IncidentSource.APP),
+        (IncidentCategory.RECONCILE_MISSING, IncidentSource.APP),
+        (IncidentCategory.COLD_START_DIVERGENCE, IncidentSource.APP),
+        (IncidentCategory.SIDECAR_SCHEMA_DRIFT, IncidentSource.APP),
+        (IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED, IncidentSource.INFRA),
+        (IncidentCategory.CONTROL_PLANE_LEASE_LOST, IncidentSource.INFRA),
+        (IncidentCategory.OPERATOR_HALT, IncidentSource.OPERATOR),
+    ],
+)
+def test_classify_source_returns_default_for_known_categories(
+    category: IncidentCategory, expected: IncidentSource
+) -> None:
+    # Logger / message / traceback don't matter for the default map; they
+    # only matter for the SHUTDOWN_FLATTEN_FAILED refinement and the
+    # UNKNOWN logger heuristic. Pass empty strings to prove the map is
+    # what the function is reading.
+    assert classify_source(category, logger="", message="", traceback=None) == expected
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "NotConnectedError",
+        "ConnectionError",
+        "Socket disconnect",
+        "Peer closed connection",
+        "IBKRBarStreamError",
+        "IBKR client is not connected",
+    ],
+)
+def test_classify_source_refines_shutdown_flatten_failed_to_broker(marker: str) -> None:
+    """D3: any of the six broker-side markers in the traceback flips
+    SHUTDOWN_FLATTEN_FAILED's source from the APP default to BROKER.
+    """
+    traceback = (
+        "Traceback (most recent call last):\n"
+        '  File "/app/engine/live/run.py", line 1, in flatten\n'
+        f"    raise {marker}('lost')\n"
+    )
+
+    source = classify_source(
+        IncidentCategory.SHUTDOWN_FLATTEN_FAILED,
+        logger="app.engine.live.run",
+        message="Recovery flatten itself failed",
+        traceback=traceback,
+    )
+
+    assert source == IncidentSource.BROKER
+
+
+def test_classify_source_keeps_shutdown_flatten_failed_as_app_when_engine_side() -> None:
+    """No broker marker in either message or traceback ⇒ stays APP."""
+    traceback = (
+        "Traceback (most recent call last):\n"
+        '  File "/app/engine/live/run.py", line 1, in flatten\n'
+        "    raise ValueError('portfolio invariant violated')\n"
+    )
+
+    source = classify_source(
+        IncidentCategory.SHUTDOWN_FLATTEN_FAILED,
+        logger="app.engine.live.run",
+        message="Recovery flatten itself failed",
+        traceback=traceback,
+    )
+
+    assert source == IncidentSource.APP
+
+
+def test_classify_source_refines_shutdown_flatten_via_message_alone() -> None:
+    """Marker in the message (no traceback at all) also flips to BROKER."""
+    source = classify_source(
+        IncidentCategory.SHUTDOWN_FLATTEN_FAILED,
+        logger="app.engine.live.run",
+        message="Recovery flatten itself failed: Peer closed connection.",
+        traceback=None,
+    )
+
+    assert source == IncidentSource.BROKER
+
+
+@pytest.mark.parametrize(
+    ("logger", "expected"),
+    [
+        ("ib_async.client", IncidentSource.BROKER),
+        ("ib_async.wrapper", IncidentSource.BROKER),
+        ("app.broker.ibkr.client", IncidentSource.BROKER),
+        ("app.broker.ibkr.bars", IncidentSource.BROKER),
+        ("app.engine.live.child_watchdog", IncidentSource.INFRA),
+        ("app.engine.live.run", IncidentSource.APP),
+        ("app.engine.live.live_portfolio", IncidentSource.APP),
+        ("__main__", IncidentSource.APP),
+        ("app.misc", IncidentSource.UNKNOWN),
+        ("third_party.lib", IncidentSource.UNKNOWN),
+    ],
+)
+def test_classify_source_for_unknown_derives_from_logger_namespace(
+    logger: str, expected: IncidentSource
+) -> None:
+    """D6: UNKNOWN-category rows still get a source via the logger
+    namespace heuristic so the cockpit can badge them.
+    """
+    assert (
+        classify_source(IncidentCategory.UNKNOWN, logger=logger, message="anything", traceback=None)
+        == expected
+    )
+
+
+# ---------------------------------------------------------------------------
+# extract_facts() — hybrid-C named values per category (codex D1).
+# ---------------------------------------------------------------------------
+
+
+def test_extract_facts_returns_empty_dict_for_categories_without_extractor() -> None:
+    """Categories that have no fact extractor return an empty dict so
+    the frontend renders the template verbatim.
+    """
+    facts = extract_facts(
+        IncidentCategory.OPERATOR_HALT,
+        message="poison_sentinel.operator_declared: operator halted bot via CLI",
+    )
+
+    assert facts == {}
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_tws_code"),
+    [(1100, 1100), (1101, 1101), (1102, 1102), (2110, 2110)],
+)
+def test_extract_facts_pulls_tws_code_for_broker_disconnect(
+    code: int, expected_tws_code: int
+) -> None:
+    facts = extract_facts(
+        IncidentCategory.BROKER_DISCONNECT,
+        message=f"Error {code}, reqId -1: lost",
+    )
+
+    assert facts == {"tws_code": expected_tws_code}
+
+
+def test_extract_facts_pulls_tws_code_from_traceback_for_broker_disconnect() -> None:
+    """The header message may not carry the code (e.g. our app.broker.ibkr.client
+    'IBKR connectivity lost' anchor); the traceback fallback should still
+    populate ``tws_code`` when it appears further down.
+    """
+    facts = extract_facts(
+        IncidentCategory.BROKER_DISCONNECT,
+        message="IBKR connectivity lost",
+        traceback="ib_async.wrapper Error 1100, reqId -1: connectivity lost",
+    )
+
+    assert facts == {"tws_code": 1100}
+
+
+@pytest.mark.parametrize("code", [2103, 2105])
+def test_extract_facts_pulls_tws_code_for_data_farm_degraded(code: int) -> None:
+    facts = extract_facts(
+        IncidentCategory.DATA_FARM_DEGRADED,
+        message=f"IBKR data farm degraded: {code}",
+    )
+
+    assert facts == {"tws_code": code}
+
+
+def test_extract_facts_pulls_order_id_for_foreign_fill_dropped() -> None:
+    facts = extract_facts(
+        IncidentCategory.FOREIGN_FILL_DROPPED,
+        message="Dropping IBKR fill for unknown order_id=42",
+    )
+
+    assert facts == {"order_id": "42"}
+
+
+def test_extract_facts_returns_empty_when_order_id_pattern_absent() -> None:
+    """The classifier may match the row on the bare phrase even if the
+    runtime didn't include an order_id; facts should stay empty so the
+    frontend falls back to the template literal.
+    """
+    facts = extract_facts(
+        IncidentCategory.FOREIGN_FILL_DROPPED,
+        message="Dropping IBKR fill for unknown order_id (id missing)",
+    )
+
+    assert facts == {}
+
+
+def test_extract_facts_pulls_path_for_broker_event_log_write_failed() -> None:
+    facts = extract_facts(
+        IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED,
+        message="Could not append IBKR broker event log: /app/_broker/events.jsonl read-only",
+    )
+
+    assert facts == {"path": "/app/_broker/events.jsonl"}
+
+
+def test_extract_facts_pulls_path_for_sidecar_schema_drift() -> None:
+    facts = extract_facts(
+        IncidentCategory.SIDECAR_SCHEMA_DRIFT,
+        message="live-state sidecar write failed at /app/artifacts/live_runs/abc/state.json",
+    )
+
+    assert facts == {"path": "/app/artifacts/live_runs/abc/state.json"}
+
+
+# ---------------------------------------------------------------------------
+# parse_incidents() — end-to-end sanity check that the new fields land on
+# every row.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_incidents_populates_incident_source_and_dynamic_facts() -> None:
+    """Three rows spanning three sources: BROKER (1100 disconnect),
+    INFRA (broker-event-log write fail), and UNKNOWN-derived-to-APP
+    (engine logger with no catalog match).
+    """
+    text = (
+        "2026-06-09 14:12:58,021 ERROR ib_async.wrapper Error 1100, reqId -1: lost\n"
+        "2026-06-09 14:12:58,087 WARNING app.broker.ibkr.client "
+        "Could not append IBKR broker event log: /app/_broker/events.jsonl read-only\n"
+        "2026-06-09 14:12:58,127 ERROR app.engine.live.run unexpected state in driver\n"
+    )
+
+    rows = parse_incidents(text)
+
+    assert len(rows) == 3
+
+    # BROKER_DISCONNECT row carries the tws_code fact.
+    assert rows[0].incident_category == IncidentCategory.BROKER_DISCONNECT
+    assert rows[0].incident_source == IncidentSource.BROKER
+    assert rows[0].dynamic_facts == {"tws_code": 1100}
+
+    # BROKER_EVENT_LOG_WRITE_FAILED row is INFRA and carries the path.
+    assert rows[1].incident_category == IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED
+    assert rows[1].incident_source == IncidentSource.INFRA
+    assert rows[1].dynamic_facts == {"path": "/app/_broker/events.jsonl"}
+
+    # Unrecognised engine row falls through to UNKNOWN; D6 derives APP.
+    assert rows[2].incident_category == IncidentCategory.UNKNOWN
+    assert rows[2].incident_source == IncidentSource.APP
+    assert rows[2].dynamic_facts == {}
+
+
+def test_parse_incidents_classifies_shutdown_flatten_failed_source_per_d3() -> None:
+    """A shutdown-flatten row with a broker-side marker in its traceback
+    flips to BROKER per D3; the same row without that marker stays APP.
+    """
+    broker_side = (
+        "2026-06-09 14:12:58,021 ERROR app.engine.live.run "
+        "Recovery flatten itself failed\n"
+        "Traceback (most recent call last):\n"
+        '  File "/app/run.py", line 1, in flatten\n'
+        "ib_async.wrapper.NotConnectedError: socket is closed\n"
+    )
+    engine_side = (
+        "2026-06-09 14:12:58,021 ERROR app.engine.live.run "
+        "Recovery flatten itself failed\n"
+        "Traceback (most recent call last):\n"
+        '  File "/app/run.py", line 1, in flatten\n'
+        "ValueError: portfolio invariant violated\n"
+    )
+
+    broker_rows = parse_incidents(broker_side)
+    engine_rows = parse_incidents(engine_side)
+
+    assert len(broker_rows) == 1
+    assert broker_rows[0].incident_category == IncidentCategory.SHUTDOWN_FLATTEN_FAILED
+    assert broker_rows[0].incident_source == IncidentSource.BROKER
+
+    assert len(engine_rows) == 1
+    assert engine_rows[0].incident_category == IncidentCategory.SHUTDOWN_FLATTEN_FAILED
+    assert engine_rows[0].incident_source == IncidentSource.APP
