@@ -27,7 +27,7 @@ from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
-    stable_broker_activity_wal_path,
+    instance_broker_activity_wal_path,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -88,7 +88,7 @@ def _seed_publisher(tmp_path: Path, rows: list[BrokerActivityRow]) -> BrokerActi
     repo._path.parent.mkdir(parents=True, exist_ok=True)
     repo.write(envelope)
     # Seed WAL.
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     for row in rows:
         wal.allocate_seq()
         wal.append_row(row)
@@ -272,7 +272,7 @@ async def test_sse_stream_backfills_from_since_seq_then_goes_live(
     # Push one live row via the publisher's broadcast surface.
     live_row = _row(4, exec_id="live-after-backfill")
     wal = BrokerActivityWal(
-        stable_broker_activity_wal_path(tmp_path / "run-dir")
+        instance_broker_activity_wal_path(tmp_path / "artifacts", SID)
     )
     wal.allocate_seq()
     wal.append_row(live_row)
@@ -308,7 +308,7 @@ async def test_sse_stream_dedupes_when_row_arrives_during_backfill(
     # subscriber that registers before draining will see it twice.
     racing_row = _row(3, exec_id="racing-row")
     wal = BrokerActivityWal(
-        stable_broker_activity_wal_path(tmp_path / "run-dir")
+        instance_broker_activity_wal_path(tmp_path / "artifacts", SID)
     )
     wal.allocate_seq()
     wal.append_row(racing_row)

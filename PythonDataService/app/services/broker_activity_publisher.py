@@ -41,7 +41,9 @@ remains authoritative; the publisher never silently corrects cockpit state.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +59,7 @@ from app.engine.live.intent_ledger import (
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
+    _fsync_parent_dir,
     stable_live_state_path,
 )
 from app.operator.incidents.store import IncidentStore
@@ -81,7 +84,9 @@ from app.services.broker_activity_reconciler import (
 )
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
-    stable_broker_activity_wal_path,
+    BrokerActivityWalCorruptError,
+    instance_broker_activity_wal_path,
+    legacy_per_run_broker_activity_wal_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,6 +135,107 @@ def _now_ms() -> int:
     return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
+def _migrate_per_run_wals_to_instance_wal(
+    *,
+    artifacts_root: Path,
+    strategy_instance_id: str,
+    target_path: Path,
+) -> int:
+    """One-time fold of every legacy per-run ``broker_activity.jsonl`` for
+    this instance into the new per-instance WAL at ``target_path``.
+
+    Runs at publisher construction when ``target_path`` does not yet
+    exist. Discovers candidate run dirs by scanning
+    ``<artifacts_root>/live_runs/*/run_ledger.json`` and matching on
+    ``strategy_instance_id``. Reads every existing per-run WAL, merges
+    rows in ``(ts_ms, source_run_id, source_seq)`` order, reseqs from 1
+    monotonically, preserves provenance in ``source_run_id`` /
+    ``source_seq``, and writes the merged stream atomically (write to
+    ``.tmp``, fsync, rename, fsync parent).
+
+    Corrupt per-run WALs are skipped with a structured log line — the
+    canonical per-instance WAL is what feeds the cockpit; a single bad
+    legacy file must not block the new file from coming up. Returns the
+    number of rows written. Returns 0 (without creating ``target_path``)
+    when no source rows exist; the publisher's normal append-on-write
+    path will then create the file on the first authored row.
+    """
+    live_runs = artifacts_root / "live_runs"
+    if not live_runs.exists():
+        return 0
+
+    collected: list[tuple[int, str, int, BrokerActivityRow]] = []
+    for run_dir in live_runs.iterdir():
+        if not run_dir.is_dir():
+            continue
+        ledger_path = run_dir / "run_ledger.json"
+        if not ledger_path.exists():
+            continue
+        try:
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        # A legacy ledger that is valid JSON but not an object (``null``,
+        # ``[]``, a bare string from a partial / corrupted artifact) would
+        # crash ``.get(...)`` with AttributeError. The migration runs
+        # before the per-instance WAL opens, so one bad ledger here would
+        # block the publisher from starting for otherwise-healthy
+        # instances. Skip them the same way we skip unreadable JSON.
+        if not isinstance(ledger, dict):
+            continue
+        if ledger.get("strategy_instance_id") != strategy_instance_id:
+            continue
+        legacy_path = legacy_per_run_broker_activity_wal_path(run_dir)
+        if not legacy_path.exists():
+            continue
+        try:
+            rows = BrokerActivityWal(legacy_path).read_all()
+        except BrokerActivityWalCorruptError as exc:
+            logger.warning(
+                "broker-activity migration: skipping corrupt legacy WAL",
+                extra={
+                    "strategy_instance_id": strategy_instance_id,
+                    "legacy_path": str(legacy_path),
+                    "detail": exc.detail,
+                },
+            )
+            continue
+        for row in rows:
+            collected.append((row.ts_ms, run_dir.name, row.seq, row))
+
+    if not collected:
+        return 0
+
+    collected.sort(key=lambda t: (t[0], t[1], t[2]))
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target_path.with_name(target_path.name + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        for new_seq, (_ts, run_id, orig_seq, row) in enumerate(collected, start=1):
+            migrated = row.model_copy(
+                update={
+                    "seq": new_seq,
+                    "source_run_id": run_id,
+                    "source_seq": orig_seq,
+                }
+            )
+            fh.write(migrated.model_dump_json() + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, target_path)
+    _fsync_parent_dir(target_path)
+
+    logger.info(
+        "broker-activity migration: migrated legacy per-run WALs",
+        extra={
+            "strategy_instance_id": strategy_instance_id,
+            "target_path": str(target_path),
+            "rows_written": len(collected),
+        },
+    )
+    return len(collected)
+
+
 class _ConsumerEnded(Exception):
     """Raised by ``_consumer_wrapper`` when the event consumer completes
     normally (the async generator was exhausted without raising).
@@ -176,7 +282,22 @@ class BrokerActivityPublisher:
         self._incident_store = incident_store
         self._sweep_interval_ms = sweep_interval_ms
         self._sweep_lookback_ms = sweep_lookback_ms
-        self._wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+        # WAL is scoped to the strategy instance, not the run, so it
+        # persists across redeploys (see ``instance_broker_activity_wal_path``
+        # docstring). On first publisher boot after the per-run → per-instance
+        # change, fold any legacy per-run WALs for this instance into the new
+        # file; on every subsequent boot the file already exists and the
+        # migration is a no-op.
+        instance_wal_path = instance_broker_activity_wal_path(
+            artifacts_root, strategy_instance_id
+        )
+        if not instance_wal_path.exists():
+            _migrate_per_run_wals_to_instance_wal(
+                artifacts_root=artifacts_root,
+                strategy_instance_id=strategy_instance_id,
+                target_path=instance_wal_path,
+            )
+        self._wal = BrokerActivityWal(instance_wal_path)
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id)
         )

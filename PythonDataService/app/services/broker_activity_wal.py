@@ -27,6 +27,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.engine.live.identity import _INSTANCE_ID_RE, validate_strategy_instance_id
 from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.schemas.broker_activity import BrokerActivityRow
 
@@ -44,10 +45,81 @@ class BrokerActivityWalCorruptError(RuntimeError):
         self.detail = detail
 
 
-def stable_broker_activity_wal_path(run_dir: Path) -> Path:
-    """Canonical path: ``<run_dir>/broker_activity.jsonl``. Sibling to
-    ``intent_events.jsonl`` per the ADR-0008 amendment."""
+def legacy_per_run_broker_activity_wal_path(run_dir: Path) -> Path:
+    """Legacy per-run WAL location: ``<run_dir>/broker_activity.jsonl``.
+
+    Retained for (a) reading any pre-migration WAL files that still live
+    under their original run dir, and (b) the one-time migration that
+    folds those files into the per-instance WAL. New publishers write to
+    ``instance_broker_activity_wal_path`` instead — see the docstring on
+    that function for the why.
+    """
     return run_dir / "broker_activity.jsonl"
+
+
+def instance_broker_activity_wal_path(
+    artifacts_root: Path, strategy_instance_id: str
+) -> Path:
+    """Canonical path: ``<artifacts_root>/live_instances/<sid>/broker_activity.jsonl``.
+
+    The WAL is scoped to the strategy instance, not the run, so it
+    persists across redeploys. Before this scoping, each redeploy created
+    a fresh empty WAL under ``live_runs/<run_id>/``, which made the
+    cockpit's Broker Activity panel drop every fill that happened in a
+    prior run — even though those fills were durably on disk in the old
+    run dir. The per-instance WAL accumulates the full lifetime of broker
+    events for the instance; ``_migrate_per_run_wals_to_instance_wal`` in
+    ``broker_activity_publisher`` does the one-time fold of the legacy
+    per-run files into it.
+
+    ``strategy_instance_id`` flows into a directory segment, so we
+    apply the same three-layer guard the LEAN-sidecar workspace builder
+    uses on ``run_id`` (``app.lean_sidecar.workspace.create_for_run``):
+
+    1. Validate via :func:`validate_strategy_instance_id` (fails closed
+       on path-traversal / separator / NUL / empty / non-pattern
+       inputs).
+    2. **Reconstruct from the regex match group** so the value used in
+       path construction below is provably from the regex capture
+       rather than from the raw caller input. CodeQL's
+       ``py/path-injection`` rule recognises ``re.Match.group(0)``
+       output as sanitised; the cross-function ``validate_*`` return
+       value it does not follow.
+    3. Resolve the constructed path and verify it stays under
+       ``<artifacts_root>/live_instances`` via :func:`os.path.commonpath`
+       — catches symlink escapes the regex cannot see.
+    """
+    # Boundary check (raises on bad input).
+    validate_strategy_instance_id(strategy_instance_id)
+    # Inline match.group(0) reconstruction so the value flowing into the
+    # path below is dataflow-provably from the regex capture, not the
+    # raw caller input. The cross-function ``validate_*`` return CodeQL
+    # does not follow.
+    match = _INSTANCE_ID_RE.fullmatch(strategy_instance_id)
+    if match is None:
+        # Defensive: validate_strategy_instance_id already raised on this case.
+        raise ValueError(
+            f"strategy_instance_id rejected on second check: {strategy_instance_id!r}"
+        )
+    safe_sid = match.group(0)
+
+    instances_root = (artifacts_root / "live_instances").resolve()
+    # ``resolve(strict=False)`` returns the canonical path even when the
+    # target does not yet exist — the publisher materialises the dir on
+    # first append.
+    candidate = (instances_root / safe_sid / "broker_activity.jsonl").resolve(strict=False)
+    try:
+        common = os.path.commonpath([str(candidate), str(instances_root)])
+    except ValueError as exc:
+        # ``commonpath`` raises on drive-letter mismatches (Windows).
+        raise ValueError(
+            f"broker-activity WAL path {candidate} cannot share a root with {instances_root}"
+        ) from exc
+    if common != str(instances_root):
+        raise ValueError(
+            f"broker-activity WAL path {candidate} escapes instances root {instances_root}"
+        )
+    return candidate
 
 
 class BrokerActivityWal:
@@ -174,5 +246,6 @@ class BrokerActivityWal:
 __all__ = [
     "BrokerActivityWal",
     "BrokerActivityWalCorruptError",
-    "stable_broker_activity_wal_path",
+    "instance_broker_activity_wal_path",
+    "legacy_per_run_broker_activity_wal_path",
 ]

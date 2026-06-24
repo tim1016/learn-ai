@@ -15,7 +15,7 @@ from app.schemas.broker_activity import BrokerActivityRow, Verdict
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
     BrokerActivityWalCorruptError,
-    stable_broker_activity_wal_path,
+    legacy_per_run_broker_activity_wal_path,
 )
 
 
@@ -37,7 +37,7 @@ def _row(seq: int) -> BrokerActivityRow:
 
 def test_canonical_path_is_sibling_of_intent_events(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-abc"
-    assert stable_broker_activity_wal_path(run_dir) == run_dir / "broker_activity.jsonl"
+    assert legacy_per_run_broker_activity_wal_path(run_dir) == run_dir / "broker_activity.jsonl"
 
 
 def test_append_and_read_round_trip(tmp_path: Path) -> None:
