@@ -295,12 +295,6 @@ def _classify_one(logger: str, message: str) -> IncidentCategory | None:
         logger == "ib_async.wrapper" or "ib_async.wrapper" in message
     ):
         return IncidentCategory.BROKER_DISCONNECT
-    # Catalog false negative — same event as the ib_async.wrapper anchor
-    # above, but emitted by our own wrapper at app.broker.ibkr.client.
-    # Anchored on both logger AND exact static message so prose mentions
-    # of "IBKR connectivity lost" elsewhere can't false-positive.
-    if logger == "app.broker.ibkr.client" and message == "IBKR connectivity lost":
-        return IncidentCategory.BROKER_DISCONNECT
     # Hard TCP-level disconnect from ib_async.client itself.
     if logger == "ib_async.client" and message.startswith("Peer closed connection"):
         return IncidentCategory.BROKER_DISCONNECT

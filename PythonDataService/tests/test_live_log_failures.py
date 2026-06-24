@@ -386,20 +386,11 @@ def test_parse_incidents_unknown_category_for_unrecognised_message() -> None:
 @pytest.mark.parametrize(
     ("logger", "message", "expected"),
     [
-        # BROKER_DISCONNECT — new anchor on our own wrapper. Exact match,
-        # not a substring, so unrelated prose can't false-positive.
-        (
-            "app.broker.ibkr.client",
-            "IBKR connectivity lost",
-            IncidentCategory.BROKER_DISCONNECT,
-        ),
-        # Same message, wrong logger — must NOT classify as
-        # BROKER_DISCONNECT (the anchor is logger-pinned).
-        (
-            "app.misc",
-            "IBKR connectivity lost",
-            IncidentCategory.UNKNOWN,
-        ),
+        # No exact-message anchor on app.broker.ibkr.client: PR-3 demoted
+        # the "IBKR connectivity lost" emit to INFO, so parse_incidents
+        # never sees that row in production. The ib_async.wrapper Error
+        # 1100/1101/1102/2110 path above is the canonical
+        # BROKER_DISCONNECT anchor.
         # BROKER_DISCONNECT — ib_async.client TCP-level disconnect.
         (
             "ib_async.client",
