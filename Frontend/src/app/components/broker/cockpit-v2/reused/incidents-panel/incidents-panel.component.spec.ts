@@ -234,6 +234,42 @@ describe('IncidentsPanelComponent', () => {
     expect(badges[0]?.textContent?.trim()).toBe('APP');
   });
 
+  it('renders viewer-local time as the primary timestamp and keeps raw_ts as a secondary mono', async () => {
+    // The engine writes raw_ts in its host's local TZ (often UTC in
+    // containerised deploys). The cockpit operator wants the wall-clock
+    // they actually look at, so the row shows ``ts_ms`` formatted in the
+    // viewer's local TZ (.ts-local) and keeps raw_ts beside it
+    // (.ts-raw, mono, dimmed) for cross-referencing live.log.
+    const tsMs = 1781014378021; // 2026-06-09 14:12:58.021 UTC
+    const { fixture, httpMock } = render();
+    flushIncidents(httpMock, [
+      makeRow({
+        ts_ms: tsMs,
+        raw_ts: '2026-06-09 14:12:58.021',
+        incident_category: 'broker_disconnect',
+        incident_source: 'broker',
+      }),
+    ]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const local = el.querySelector<HTMLElement>('.ts-local');
+    const raw = el.querySelector<HTMLElement>('.ts-raw');
+    expect(local).toBeTruthy();
+    expect(raw).toBeTruthy();
+    // Compose the expected local-time string the same way the component
+    // does (no Intl, viewer's TZ). This keeps the test deterministic
+    // regardless of whether the runner is on UTC, ET, or anywhere else.
+    const d = new Date(tsMs);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const expected =
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+      ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    expect(local?.textContent?.trim()).toBe(expected);
+    expect(raw?.textContent?.trim()).toBe('2026-06-09 14:12:58.021');
+  });
+
   it('interpolates dynamic_facts into the message when the row is expanded', async () => {
     // Hybrid-C wire shape (D1): backend ships the typed fact, frontend
     // substitutes it into the category template. The rendered message

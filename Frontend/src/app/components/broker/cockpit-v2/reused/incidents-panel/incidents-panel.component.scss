@@ -130,11 +130,22 @@
   .tone-unknown & { color: var(--text-muted); }
 }
 
-.ts {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  opacity: 0.8;
+.ts-block {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
   white-space: nowrap;
+}
+
+.ts-local {
+  font-size: 0.8rem;
+}
+
+.ts-raw {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  opacity: 0.55;
 }
 
 .title {

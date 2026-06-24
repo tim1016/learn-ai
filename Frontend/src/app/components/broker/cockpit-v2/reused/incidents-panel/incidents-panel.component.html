@@ -63,7 +63,10 @@
               [attr.aria-label]="'Source: ' + r.sourceLabel.longName"
             >{{ r.sourceLabel.text }}</span>
             <span class="severity-tag">{{ r.copy.severity }}</span>
-            <span class="ts mono" [title]="'logger: ' + r.logger">{{ r.raw_ts }}</span>
+            <span class="ts-block" [title]="'logger: ' + r.logger">
+              <span class="ts-local">{{ r.localTime }}</span>
+              <span class="ts-raw mono" title="engine host clock (raw live.log timestamp)">{{ r.raw_ts }}</span>
+            </span>
             <span class="title">{{ r.copy.title }}</span>
             <i class="pi" [class.pi-chevron-down]="!open" [class.pi-chevron-up]="open" aria-hidden="true"></i>
           </button>
