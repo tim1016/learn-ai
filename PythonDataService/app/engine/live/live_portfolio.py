@@ -761,6 +761,13 @@ class LivePortfolio:
                             drop_reason="broker_safety_halt",
                             ts_ms=_ts,
                         )
+                # Reviewer finding 1: clear in-memory queue AFTER the WAL fsyncs
+                # and BEFORE raising, so queue state matches WAL state. If a
+                # caller catches the error and the verdict later passes, the same
+                # orders will NOT be re-submitted (WAL already records them as
+                # dropped). Preserves append → fsync → clear ordering invariant.
+                self.pending_orders.clear()
+                self._intent_by_order_id.clear()
                 raise BrokerSafetyVerdictBlockError(
                     verdict=str(verdict_value),
                     detail=(

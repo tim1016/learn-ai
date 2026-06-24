@@ -170,11 +170,23 @@ def fold(
                 # publisher can dedupe orphaned sizing records from before the
                 # engine-start boundary (these will never receive a terminal
                 # event in this session). Post-cutoff or no-cutoff → None.
+                #
+                # Reviewer finding 2: compare appended_at_ms (process wall-clock
+                # at WAL write time) NOT ts_ms (strategy bar timestamp). For
+                # SIZING_RESOLVED events, ts_ms is the bar close time from
+                # set_holdings(..., time). In delayed live feeds or historical
+                # runs a current-run bar can have a close time BEFORE the engine
+                # process start, causing ts_ms < cutoff even for in-flight
+                # current-run intents. appended_at_ms is always in the same
+                # time domain as legacy_sizing_only_cutoff_ms (engine_started_at_ms).
+                # Backward-compat: events on disk before this field existed have
+                # appended_at_ms=None; treat as pre-cutoff (safe default — the
+                # publisher will classify and dedupe them as legacy orphans, which
+                # is exactly what they are: events from a prior engine process).
                 legacy_classification: str | None = None
-                if (
-                    legacy_sizing_only_cutoff_ms is not None
-                    and event.ts_ms is not None
-                    and event.ts_ms < legacy_sizing_only_cutoff_ms
+                if legacy_sizing_only_cutoff_ms is not None and (
+                    event.appended_at_ms is None
+                    or event.appended_at_ms < legacy_sizing_only_cutoff_ms
                 ):
                     legacy_classification = "legacy_sizing_only_dropped"
                 orders[event.intent_id] = SubmittedOrderView(

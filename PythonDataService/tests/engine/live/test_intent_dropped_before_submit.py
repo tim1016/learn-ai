@@ -35,7 +35,11 @@ NS = build_bot_order_namespace("testbot")
 # ─── helpers ────────────────────────────────────────────────────────────────
 
 
-def _sizing_resolved_event(seq: int, ts_ms: int) -> IntentEvent:
+def _sizing_resolved_event(
+    seq: int,
+    ts_ms: int,
+    appended_at_ms: int | None = None,
+) -> IntentEvent:
     iid = mint_intent_id()
     return IntentEvent(
         seq=seq,
@@ -50,6 +54,7 @@ def _sizing_resolved_event(seq: int, ts_ms: int) -> IntentEvent:
         sizing_provenance_at_resolve_time="test",
         sized_via="policy_set_holdings",
         ts_ms=ts_ms,
+        appended_at_ms=appended_at_ms,
     )
 
 
@@ -163,9 +168,14 @@ def test_fold_classifies_legacy_sizing_only_dropped() -> None:
 
 
 def test_fold_does_not_classify_post_cutoff() -> None:
-    """SIZING_RESOLVED-only at or after cutoff must NOT be classified (publisher handles)."""
+    """SIZING_RESOLVED-only with appended_at_ms >= cutoff must NOT be classified."""
     cutoff_ms = 1_750_000_000_000
-    event = _sizing_resolved_event(seq=1, ts_ms=cutoff_ms)
+    # ts_ms is bar time — can be anything. What matters is appended_at_ms >= cutoff.
+    event = _sizing_resolved_event(
+        seq=1,
+        ts_ms=cutoff_ms - 1_000,  # bar time before cutoff is irrelevant now
+        appended_at_ms=cutoff_ms,  # appended at exactly the cutoff → NOT legacy
+    )
     view = fold(LedgerProjection(), [event], legacy_sizing_only_cutoff_ms=cutoff_ms)
     iid = event.intent_id
     sentinel = view.submitted_orders[iid]
@@ -212,6 +222,112 @@ def test_fold_does_not_classify_when_pending_intent_follows() -> None:
     # PENDING_INTENT overwrites status — classification is not legacy since a
     # lifecycle event followed.
     assert view.submitted_orders[iid].classification is None
+
+
+# ─── reviewer finding tests ──────────────────────────────────────────────────
+
+
+def test_fold_uses_appended_at_for_legacy_classification() -> None:
+    """Finding 2: bar time before cutoff but appended_at >= cutoff → NOT legacy.
+
+    ``ts_ms`` is the strategy bar close timestamp (set_holdings(..., time)).
+    In delayed live feeds a current-run bar close can precede engine start.
+    The fold must use ``appended_at_ms`` (process wall-clock at WAL write time)
+    for the cutoff comparison, not ``ts_ms``.
+    """
+    cutoff_ms = 1_700_000_000_000
+    event = _sizing_resolved_event(
+        seq=1,
+        ts_ms=cutoff_ms - 1_000,  # bar time before cutoff — irrelevant for classification
+        appended_at_ms=cutoff_ms + 5_000,  # appended after cutoff → current-run intent
+    )
+    view = fold(LedgerProjection(), [event], legacy_sizing_only_cutoff_ms=cutoff_ms)
+    sentinel = view.submitted_orders[event.intent_id]
+    assert sentinel.classification is None, (
+        "Current-run intent (appended_at_ms > cutoff) must NOT be classified as legacy, "
+        "even when bar time is before the cutoff."
+    )
+
+
+def test_fold_classifies_event_with_no_appended_at_as_pre_cutoff() -> None:
+    """Finding 2 backward-compat: events on disk without appended_at_ms are pre-cutoff.
+
+    WAL entries written before this field was introduced parse with
+    ``appended_at_ms=None``. The fold treats None as pre-cutoff (safe default:
+    the event belongs to a prior engine process and will never receive a
+    terminal event in this session).
+    """
+    cutoff_ms = 1_700_000_000_000
+    event = _sizing_resolved_event(
+        seq=1,
+        ts_ms=cutoff_ms + 99_000,  # bar time well AFTER cutoff — should not matter
+        appended_at_ms=None,  # simulates an on-disk event before the field existed
+    )
+    view = fold(LedgerProjection(), [event], legacy_sizing_only_cutoff_ms=cutoff_ms)
+    sentinel = view.submitted_orders[event.intent_id]
+    assert sentinel.classification == "legacy_sizing_only_dropped", (
+        "Event with appended_at_ms=None must be treated as pre-cutoff for backward-compat."
+    )
+
+
+@pytest.mark.asyncio
+async def test_verdict_gate_clears_pending_orders_after_drop(tmp_path: Path) -> None:
+    """Finding 1: pending_orders and _intent_by_order_id must be empty after verdict-block.
+
+    The WAL records the drops (append → fsync), THEN in-memory state is cleared,
+    THEN BrokerSafetyVerdictBlockError is raised. If a caller catches the error
+    and the verdict later passes, the same orders must not re-appear in the queue.
+    """
+    from datetime import UTC, datetime
+
+    from app.engine.execution.order import Direction, Order, OrderType
+    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.live_portfolio import BrokerSafetyVerdictBlockError, LivePortfolio
+    from app.engine.live.order_identity import build_bot_order_namespace, mint_intent_id
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    wal_path = tmp_path / "intent_events.jsonl"
+    namespace = build_bot_order_namespace("verdict-clear-test")
+    broker = FakeBroker()
+    wal = IntentWal(wal_path)
+
+    portfolio = LivePortfolio(broker=broker, intent_wal=wal, bot_order_namespace=namespace)
+    # Inject a verdict provider that always returns unsafe.
+    portfolio.verdict_provider = lambda: "unsafe"
+
+    # Manually queue a pending order with an intent_id so the drop path fires.
+    iid = mint_intent_id()
+    order = Order(
+        order_id=42,
+        symbol="SPY",
+        quantity=10,
+        order_type=OrderType.MARKET,
+        time=datetime(2026, 6, 23, 14, 30, tzinfo=UTC),
+        direction=Direction.LONG,
+    )
+    portfolio.pending_orders.append(order)
+    portfolio._intent_by_order_id[order.order_id] = iid
+
+    with pytest.raises(BrokerSafetyVerdictBlockError):
+        await portfolio.submit_pending_orders()
+
+    # Queue must be empty after the raise — WAL state and memory state are consistent.
+    assert portfolio.pending_orders == [], (
+        "pending_orders must be cleared after verdict-block drop"
+    )
+    assert portfolio._intent_by_order_id == {}, (
+        "_intent_by_order_id must be cleared after verdict-block drop"
+    )
+
+    # WAL must contain the drop event for the intent.
+    drops = [
+        e
+        for e in wal.read_tail()
+        if e.event_type is IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT
+    ]
+    assert len(drops) == 1
+    assert drops[0].intent_id == iid
+    assert drops[0].drop_reason == "broker_safety_halt"
 
 
 # ─── engine bar-loop gate tests ─────────────────────────────────────────────

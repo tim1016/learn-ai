@@ -18,6 +18,7 @@ in-flight double-submit window to resolve), never dropped.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,11 @@ class IntentWal:
         returning**. The caller may call ``placeOrder`` only after this returns.
         """
         seq = self._allocate_seq()
+        # Reviewer finding 2: capture process wall-clock at append time so the
+        # fold can compare legacy_sizing_only_cutoff_ms (engine_started_at_ms,
+        # process wall-clock) to a field in the same time domain. ts_ms carries
+        # bar/strategy time and can precede process start in delayed feeds.
+        appended_at_ms = time.time_ns() // 1_000_000
         event = IntentEvent(
             seq=seq,
             event_type=event_type,
@@ -98,6 +104,7 @@ class IntentWal:
             order_spec=order_spec,
             drop_reason=drop_reason,
             ts_ms=ts_ms,
+            appended_at_ms=appended_at_ms,
             policy_kind=policy_kind,
             policy_value=policy_value,
             intended_qty=intended_qty,

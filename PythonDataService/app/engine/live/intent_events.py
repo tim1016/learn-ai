@@ -138,6 +138,22 @@ class IntentEvent(BaseModel):
         description="int64 ms UTC epoch timestamp (provenance only).",
     )
 
+    # Reviewer finding 2: process wall-clock at WAL append time (NOT bar time).
+    # ``ts_ms`` for SIZING_RESOLVED events carries the STRATEGY BAR TIMESTAMP
+    # (set_holdings(..., time)), which can precede the engine process start in
+    # delayed live feeds or historical runs. ``appended_at_ms`` is populated by
+    # IntentWal.append() using time.time_ns() // 1_000_000 so it is always in
+    # the same time domain as ``legacy_sizing_only_cutoff_ms`` (engine_started_at_ms).
+    # Backward-compat: events on disk before this field was added parse with
+    # ``appended_at_ms=None``; the fold treats None as pre-cutoff (safe default
+    # — publisher will classify those as legacy and not double-report).
+    appended_at_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=9_223_372_036_854_775_807,
+        description="Process wall-clock ms at WAL append time (not bar time).",
+    )
+
     @model_validator(mode="after")
     def _check_order_ref_invariant(self) -> IntentEvent:
         expected = f"{self.bot_order_namespace}:{self.intent_id}"
