@@ -1,0 +1,51 @@
+<section
+  data-testid="operator-notice"
+  class="operator-notice"
+  [class.tier-info]="tier() === 'info'"
+  [class.tier-warning]="tier() === 'warning'"
+  [class.tier-critical]="tier() === 'critical'"
+  role="status"
+  [attr.aria-live]="notice().tier === 'critical' ? 'assertive' : 'polite'"
+>
+  <header class="operator-notice__header">
+    <span class="operator-notice__tier-pill" [attr.data-tier]="notice().tier">
+      {{ notice().tier }}
+    </span>
+    <h3 class="operator-notice__title" data-testid="operator-notice-title">
+      {{ notice().title }}
+    </h3>
+  </header>
+
+  <p class="operator-notice__message" data-testid="operator-notice-message">
+    {{ notice().message }}
+  </p>
+
+  @if (hasClickableAction() && notice().action.label) {
+    <button
+      type="button"
+      class="operator-notice__action"
+      (click)="onActionClick()"
+    >
+      {{ notice().action.label }}
+    </button>
+  } @else if (hasInertActionLabel()) {
+    <p
+      class="operator-notice__action operator-notice__action--inert"
+      data-testid="operator-notice-action-inert"
+    >
+      {{ notice().action.label }}
+    </p>
+  }
+
+  @if (forensicFactEntries().length > 0) {
+    <details class="operator-notice__details" data-testid="operator-notice-forensic-facts">
+      <summary>Forensic detail</summary>
+      <dl>
+        @for (entry of forensicFactEntries(); track entry.key) {
+          <dt>{{ entry.key }}</dt>
+          <dd>{{ entry.value }}</dd>
+        }
+      </dl>
+    </details>
+  }
+</section>

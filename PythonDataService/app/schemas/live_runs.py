@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.engine.live.daemon_transport import DaemonResultKind
+from app.operator.notices.schema import OperatorNotice, RuntimeFreshnessReasonCode
 
 
 class RunState(StrEnum):
@@ -1358,18 +1359,20 @@ class OperatorSurfaceDomainFreshness(BaseModel):
 
     state: Literal["FRESH", "STALE", "NOT_APPLICABLE", "UNKNOWN", "DEGRADED"]
     age_ms: int | None = None
-    stale_reason_codes: list[str] = Field(default_factory=list)
+    stale_reason_codes: list[RuntimeFreshnessReasonCode] = Field(default_factory=list)
 
 
 class OperatorSurfaceRuntimeFreshness(BaseModel):
     """Child runtime freshness rendered verbatim by the cockpit."""
 
     posture_demoted: bool
-    stale_reason_codes: list[str] = Field(default_factory=list)
+    stale_reason_codes: list[RuntimeFreshnessReasonCode] = Field(default_factory=list)
     command_loop: OperatorSurfaceDomainFreshness
     broker: OperatorSurfaceDomainFreshness
     bar_loop: OperatorSurfaceDomainFreshness
     control_plane: OperatorSurfaceDomainFreshness
+    headline: OperatorNotice | None = None
+    additional_reasons: list[OperatorNotice] = Field(default_factory=list)
 
 
 class OperatorSurfaceControlPlane(BaseModel):

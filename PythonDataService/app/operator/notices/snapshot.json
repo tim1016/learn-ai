@@ -1,0 +1,27 @@
+{
+  "operator_notice_codes": [
+    "runtime.market_closed",
+    "runtime.market_session_halted",
+    "runtime.market_data_stale",
+    "runtime.market_data_feed_stalled",
+    "runtime.broker_probe_stale",
+    "runtime.broker_probe_missing",
+    "runtime.command_loop_unresponsive",
+    "runtime.engine_runtime_incompatible",
+    "runtime.control_plane_lease_stale",
+    "runtime.control_plane_boot_id_mismatch",
+    "watchdog.flatten_completed",
+    "watchdog.flatten_not_needed",
+    "watchdog.flatten_timed_out",
+    "watchdog.flatten_failed",
+    "watchdog.broker_disconnected_before_flatten",
+    "activity.publisher_starting",
+    "activity.publisher_not_running",
+    "activity.publisher_degraded",
+    "activity.source_blind_to_bot_orders",
+    "activity.dropped_paused_intent",
+    "reconciliation.required_after_uncertain_flatten",
+    "reconciliation.discovered_execution_not_in_engine_state"
+  ],
+  "schema_version": 1
+}
