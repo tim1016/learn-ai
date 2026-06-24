@@ -198,17 +198,19 @@ class BrokerActivityPublisher:
         # pending) drops the dedupe entry so the tick is free to
         # re-author if the engine ever re-emits the intent.
         # PR 5 — most-recent row's wall-clock ms for the health surface.
-        # Seeded on cold-start from the WAL so the health composer
-        # doesn't report ``degraded`` for a publisher that was just
-        # restarted after a gap; the WAL already has rows.
+        # Cold-start: latest_row_ms is None until this process observes a row.
+        # We do NOT seed from the WAL here because that would cause the health
+        # composer to compare now_ms against a stale historical timestamp and
+        # report ``degraded`` immediately after a healthy restart on a quiet
+        # strategy. The WAL is read below only for dedup (_seen_exec_ids) and
+        # pending-intent bookkeeping (_authored_pending_intent_ids); the
+        # health cursor advances exclusively inside _persist_and_broadcast
+        # when a row is authored in-process.
         self._latest_row_ms: int | None = None
         latest_verdict_by_intent: dict[str, str] = {}
         for row in self._wal.read_all():
             if row.exec_id:
                 self._seen_exec_ids.add(row.exec_id)
-            # Track the most recent row's ts_ms across the backlog.
-            if self._latest_row_ms is None or row.ts_ms > self._latest_row_ms:
-                self._latest_row_ms = row.ts_ms
             parsed = parse_order_ref(row.order_ref)
             if parsed is None:
                 continue

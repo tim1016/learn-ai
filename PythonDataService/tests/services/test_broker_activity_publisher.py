@@ -1759,3 +1759,110 @@ async def test_supervisor_logs_critical_on_unhandled_child_exception(
     assert any(
         "supervisor exiting" in r.message for r in critical_records
     ), f"expected 'supervisor exiting' in CRITICAL log; got {[r.message for r in critical_records]}"
+
+
+# ── Finding 1: latest_row_ms cold-start behaviour (PR reviewer P2) ─────────
+
+
+async def test_latest_row_ms_is_none_on_cold_start_with_existing_wal(
+    tmp_path: Path,
+) -> None:
+    """Finding 1 regression: a publisher constructed over an existing
+    broker_activity.jsonl WAL must NOT seed latest_row_ms from those
+    historical rows.  The health cursor must stay None until this process
+    authors a row in-process."""
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+
+    # Pre-populate the WAL with a stale row so cold-start seeding would
+    # have set latest_row_ms to a very old timestamp.
+    wal_path = stable_broker_activity_wal_path(run_dir)
+    wal_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_ms = 1_600_000_000_000  # 2020-09 — unmistakably old
+    stale_row = BrokerActivityRow(
+        seq=1,
+        ts_ms=stale_ms,
+        exec_id="exec-stale",
+        order_ref=ORDER_REF,
+        symbol="SPY",
+        side="BUY",
+        quantity=100.0,
+        order_type="MKT",
+        verdict=Verdict.EXPECTED,
+        template_key="normal_fill",
+        template_version=1,
+        headline="stale row",
+        narrative="stale row narrative",
+    )
+    wal = BrokerActivityWal(wal_path)
+    wal.allocate_seq()
+    wal.append_row(stale_row)
+
+    # Construct the publisher — cold-start reads the WAL for dedup.
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+    )
+    # Health cursor must be None — not seeded from the WAL.
+    assert publisher.latest_row_ms is None
+
+
+async def test_latest_row_ms_advances_after_in_process_row(
+    tmp_path: Path,
+) -> None:
+    """latest_row_ms must advance once _persist_and_broadcast is called
+    inside this process, regardless of whether the WAL was pre-populated."""
+    publisher, run_dir, _ = _build_publisher(tmp_path, [_fill_event()])
+    publisher.start()
+    try:
+        await _wait_for_rows(stable_broker_activity_wal_path(run_dir), want=1)
+        assert publisher.latest_row_ms is not None
+        assert publisher.latest_row_ms > 0
+    finally:
+        await publisher.stop()
+
+
+# ── Finding 2: registry stop_all + unregister clear timestamps (PR reviewer P2) ─
+
+
+async def test_stop_all_clears_registered_at_map(tmp_path: Path) -> None:
+    """Finding 2: after stop_all, re-registering the same instance must
+    record a fresh timestamp rather than reusing the stale pre-stop one."""
+    registry = BrokerActivityPublisherRegistry()
+    publisher_a, _, _ = _build_publisher(tmp_path / "run-a", [])
+    await registry.register(publisher_a, strategy_instance_id=SID)
+    first_ts = registry.registered_at_ms(SID)
+    assert first_ts is not None
+
+    await asyncio.sleep(0.015)  # ensure clock advances
+    await registry.stop_all()
+
+    # Map must be empty after stop_all.
+    assert registry.registered_at_ms(SID) is None
+
+    # Re-register: must get a strictly newer timestamp.
+    publisher_b, _, _ = _build_publisher(tmp_path / "run-b", [])
+    await registry.register(publisher_b, strategy_instance_id=SID)
+    second_ts = registry.registered_at_ms(SID)
+    assert second_ts is not None
+    assert second_ts > first_ts
+    await registry.stop_all()
+
+
+async def test_unregister_clears_registered_at_for_instance(
+    tmp_path: Path,
+) -> None:
+    """unregister must drop the timestamp entry so a re-bootstrap gets
+    a fresh clock instead of an inherited stale value."""
+    registry = BrokerActivityPublisherRegistry()
+    publisher_a, _, _ = _build_publisher(tmp_path / "run-a", [])
+    await registry.register(publisher_a, strategy_instance_id=SID)
+    assert registry.registered_at_ms(SID) is not None
+
+    await registry.unregister(SID)
+    assert registry.registered_at_ms(SID) is None

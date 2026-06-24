@@ -105,6 +105,7 @@ class BrokerActivityPublisherRegistry:
         async with self._lock:
             publishers = list(self._by_instance.values())
             self._by_instance.clear()
+            self._registered_at_by_instance.clear()
         for p in publishers:
             await p.stop()
 

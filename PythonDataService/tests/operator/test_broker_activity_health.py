@@ -358,3 +358,61 @@ class TestFacts:
         )
         # last_persisted_seq() returns 0 (empty WAL) → coerced to None
         assert result.facts.latest_row_seq is None
+
+
+# ── Finding 1: cold-start with no in-process rows (PR reviewer P2) ───────────
+
+
+class TestColdStartNoInProcessRows:
+    """latest_row_ms=None because the publisher has not yet authored a row
+    in this process (regardless of what the WAL contains).  The health
+    composer must use the registered_at grace path, not a stale WAL ts."""
+
+    def test_ready_during_grace_window(self) -> None:
+        """latest_row_ms=None + recently registered → ready (silent boot)."""
+        pub = _FakePublisher(is_running=True, latest_row_ms=None)
+        result = _compose(
+            publisher=pub,
+            registered_at_ms=_registered_at(5_000),  # 5 s ago
+            last_row_ms=None,
+            starting_timeout_ms=30_000,
+            degraded_after_idle_ms=60_000,
+        )
+        assert result.state == "ready"
+        assert result.headline is None
+
+    def test_degraded_after_grace_expires(self) -> None:
+        """latest_row_ms=None + registered > grace ago → degraded."""
+        pub = _FakePublisher(is_running=True, latest_row_ms=None)
+        result = _compose(
+            publisher=pub,
+            registered_at_ms=_registered_at(120_000),  # 2 minutes ago
+            last_row_ms=None,
+            starting_timeout_ms=30_000,
+            degraded_after_idle_ms=60_000,
+        )
+        assert result.state == "degraded"
+        assert result.headline is not None
+        assert result.headline.code == "activity.publisher_degraded"
+
+    def test_boundary_exactly_at_grace_is_degraded(self) -> None:
+        """Age == degraded_after_idle_ms with no rows → degraded (closed bound)."""
+        pub = _FakePublisher(is_running=True, latest_row_ms=None)
+        result = _compose(
+            publisher=pub,
+            registered_at_ms=_registered_at(60_000),  # exactly at threshold
+            last_row_ms=None,
+            degraded_after_idle_ms=60_000,
+        )
+        assert result.state == "degraded"
+
+    def test_boundary_one_ms_before_grace_is_ready(self) -> None:
+        """Age == degraded_after_idle_ms - 1 ms → still ready."""
+        pub = _FakePublisher(is_running=True, latest_row_ms=None)
+        result = _compose(
+            publisher=pub,
+            registered_at_ms=_registered_at(59_999),
+            last_row_ms=None,
+            degraded_after_idle_ms=60_000,
+        )
+        assert result.state == "ready"
