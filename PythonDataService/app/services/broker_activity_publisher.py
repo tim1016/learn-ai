@@ -106,6 +106,18 @@ def _now_ms() -> int:
     return int(datetime.now(tz=UTC).timestamp() * 1000)
 
 
+class _ConsumerEnded(Exception):
+    """Raised by ``_consumer_wrapper`` when the event consumer completes
+    normally (the async generator was exhausted without raising).
+
+    Normal completion is not a success condition for the supervisor — the
+    publisher is no longer consuming broker events and must be restarted.
+    Surfacing it as an exception causes the ``TaskGroup`` to cancel the
+    pending-intent sibling and exit, which flips ``is_running`` to False
+    so the registry can detect and re-bootstrap as appropriate.
+    """
+
+
 class BrokerActivityPublisher:
     """Per-strategy-instance background task + subscriber pub-sub.
 
@@ -305,11 +317,18 @@ class BrokerActivityPublisher:
           ``ExceptionGroup``, logged as CRITICAL, and the supervisor
           exits (causing ``is_running`` to flip False so health checks
           notice).
+
+        Normal completion of the consumer is treated as an error: the
+        publisher is no longer consuming broker events and must be
+        restarted. ``_consumer_wrapper`` raises ``_ConsumerEnded`` on
+        normal completion so the TaskGroup cancels the sibling and the
+        supervisor exits cleanly. The registry detects the supervisor's
+        death via ``is_running`` and can re-bootstrap as appropriate.
         """
         try:
             async with asyncio.TaskGroup() as tg:
                 consumer = tg.create_task(
-                    self._run_event_consumer(),
+                    self._consumer_wrapper(),
                     name=f"broker-activity-publisher:{self._strategy_instance_id}",
                 )
                 pending = tg.create_task(
@@ -317,6 +336,11 @@ class BrokerActivityPublisher:
                     name=f"broker-activity-pending-tick:{self._strategy_instance_id}",
                 )
                 self._child_tasks = [consumer, pending]
+        except* _ConsumerEnded:
+            logger.warning(
+                "broker-activity event consumer ended normally; supervisor exiting",
+                extra={"strategy_instance_id": self._strategy_instance_id},
+            )
         except* Exception as eg:
             logger.critical(
                 "broker-activity supervisor exiting due to unhandled child exception(s)",
@@ -325,6 +349,23 @@ class BrokerActivityPublisher:
                     "exceptions": [str(exc) for exc in eg.exceptions],
                 },
             )
+
+    async def _consumer_wrapper(self) -> None:
+        """Run the event consumer; raise ``_ConsumerEnded`` on normal exit.
+
+        ``asyncio.TaskGroup`` cancels siblings on a child *raise* but NOT on
+        a child's normal return. If the event source is exhausted without
+        raising, ``_run_event_consumer`` returns cleanly — leaving the
+        supervisor waiting on ``_pending_intent_loop`` forever, with
+        ``is_running`` still True and broker events silently lost.
+
+        Wrapping the consumer and converting its normal completion to
+        ``_ConsumerEnded`` surfaces the exit to the TaskGroup, which then
+        cancels the pending-intent sibling and lets the supervisor exit.
+        ``is_running`` flips False and the registry can re-bootstrap.
+        """
+        await self._run_event_consumer()
+        raise _ConsumerEnded("event source exhausted without raising")
 
     async def _run_event_consumer(self) -> None:
         """Drive the event source until cancelled or the source ends."""

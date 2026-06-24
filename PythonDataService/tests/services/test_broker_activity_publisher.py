@@ -966,6 +966,101 @@ async def test_registry_sweep_all_isolates_per_publisher_failures(
         await registry.stop_all()
 
 
+# ── PR #663 P2 regression — normal consumer completion must exit supervisor ──
+
+
+def _make_finite_event_source(events: list[IbkrOrderEvent]):
+    """Factory that yields ``events`` then returns (exhausts the generator).
+
+    Unlike ``_make_event_source`` this does NOT sleep forever — the async
+    generator is exhausted after the last event, so ``_run_event_consumer``
+    returns normally. This is the scenario that triggered the P2 finding:
+    the TaskGroup does not cancel siblings on a child's normal return.
+    """
+
+    async def _gen() -> AsyncIterator[IbkrOrderEvent]:
+        for ev in events:
+            yield ev
+        # Generator body ends — no await, no sleep, no raise.
+
+    return lambda: _gen()
+
+
+async def test_normal_consumer_completion_exits_supervisor(tmp_path: Path) -> None:
+    """PR #663 Codex P2: when the event source is exhausted without raising,
+    the supervisor must exit and ``is_running`` must become False.
+
+    Prior to the fix: ``_run_event_consumer`` returned normally; the
+    ``TaskGroup`` did NOT cancel the pending-intent sibling; the supervisor
+    sat alive forever; ``is_running`` stayed True; callers that checked
+    liveness would incorrectly believe the publisher was healthy.
+    """
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_finite_event_source(
+            [_fill_event(exec_id="finite-1"), _fill_event(exec_id="finite-2")]
+        ),
+    )
+    publisher.start()
+    # Give the event loop time to drain the two events and exhaust the source.
+    deadline = asyncio.get_event_loop().time() + 2.0
+    while asyncio.get_event_loop().time() < deadline:
+        if not publisher.is_running:
+            break
+        await asyncio.sleep(0.02)
+    assert not publisher.is_running, (
+        "supervisor stayed alive after event source was exhausted — "
+        "is_running must flip False when the consumer ends normally"
+    )
+    # All child tasks must be done or cancelled.
+    children = publisher._snapshot_children_for_tests()
+    for task in children:
+        assert task.done() or task.cancelled(), (
+            f"child task {task.get_name()!r} is still running after supervisor exit"
+        )
+
+
+async def test_is_running_false_after_consumer_ends_registry_can_reuse(
+    tmp_path: Path,
+) -> None:
+    """PR #663 Codex P2 contract: after ``is_running`` flips False due to
+    normal consumer completion, a registry caller can detect the dead state
+    and re-bootstrap rather than reusing a publisher that silently dropped
+    all broker events.
+    """
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_finite_event_source([]),
+    )
+    publisher.start()
+    # Poll until is_running becomes False (consumer immediately exhausted).
+    deadline = asyncio.get_event_loop().time() + 2.0
+    while asyncio.get_event_loop().time() < deadline:
+        if not publisher.is_running:
+            break
+        await asyncio.sleep(0.02)
+    assert not publisher.is_running, (
+        "is_running must be False after the event source is exhausted"
+    )
+    # A registry caller that checks liveness would not reuse this publisher.
+    # Confirm the property holds without raising.
+    assert publisher.is_running is False
+
+
 async def test_run_recovery_chain_halts_submissions_before_first_callback(
     tmp_path: Path,
 ) -> None:
