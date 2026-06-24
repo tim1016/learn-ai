@@ -39,6 +39,8 @@ timestamps as ``int64 ms UTC`` at source.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
@@ -213,10 +215,11 @@ def parse_failures(text: str) -> list[FailureRow]:
     return failures
 
 
-# Order matters: the first matching rule wins. Each rule is a (predicate,
-# category) pair where ``predicate(logger, message)`` returns True iff the
-# pair matches. The classifier consults the traceback as a fallback when
-# the (logger, message) headers don't match any rule.
+# Anchors are stable substrings emitted by our own code so they can't
+# false-positive on operator prose. Path-extraction patterns use
+# ``[^\n]`` (line-local) instead of DOTALL so they cannot reach into a
+# traceback frame and grab an unrelated stack-file path when the
+# emitting message itself has no path.
 _IBKR_DISCONNECT_CODE_RE = re.compile(r"\bError\s+(1100|1101|1102|2110)\b")
 _IBKR_DATA_FARM_CODE_RE = re.compile(r"\b(2103|2105)\b")
 _PROBE_FAILED_RE = re.compile(r"probe\s+failed", re.IGNORECASE)
@@ -231,15 +234,6 @@ _SUBSCRIPTION_STALE_RE = re.compile(
     r"(?:absorb_count.*threshold|live_idempotent.*absorb)",
     re.IGNORECASE,
 )
-
-# Catalog expansion (codex 2026-06-24 D-decisions). Patterns are anchored
-# on stable substrings emitted by our own code so they can't false-positive
-# on operator prose. extract_facts() reads named groups from a subset of
-# them to populate dynamic_facts (path / order_id), so changes here must
-# keep those groups intact. Path-extraction patterns deliberately use
-# ``[^\n]`` (line-local) instead of DOTALL so they cannot reach into a
-# traceback frame and grab an unrelated stack-file path when the
-# emitting message itself has no path.
 _FOREIGN_FILL_DROPPED_RE = re.compile(
     r"Dropping IBKR fill for unknown order_id(?:\s*(?:=|:)\s*(?P<order_id>\w+))?"
 )
@@ -256,18 +250,15 @@ _SIDECAR_SCHEMA_DRIFT_MARKERS: tuple[str, ...] = (
     "live-state sidecar write failed",
     "LiveStateSidecarCorruptError",
 )
-# Anchored on the emitting marker substring (same line, line-local) so a
-# random ``*.json`` path elsewhere in the traceback can't be mistaken
-# for the sidecar's path.
 _SIDECAR_PATH_RE = re.compile(
     r"(?:live-state sidecar write failed|LiveStateSidecarCorruptError)"
     r"[^\n]*?(?P<path>/[\w\./\-]+\.json)\b"
 )
 
-# D3 — substrings whose presence in EITHER the message OR the traceback
+# D3 — substrings whose presence in either the message OR the traceback
 # of a SHUTDOWN_FLATTEN_FAILED row means the proximate cause is the
-# broker socket being dead; classify_source() then relabels the source
-# from APP (default) to BROKER. Anything else stays APP.
+# broker socket being dead; the rule's ``refine_source`` then relabels
+# the source from APP (default) to BROKER. Anything else stays APP.
 _SHUTDOWN_FLATTEN_BROKER_MARKERS: tuple[str, ...] = (
     "NotConnectedError",
     "ConnectionError",
@@ -278,77 +269,310 @@ _SHUTDOWN_FLATTEN_BROKER_MARKERS: tuple[str, ...] = (
 )
 
 
-def _classify_one(logger: str, message: str) -> IncidentCategory | None:
-    """Try to classify a single (logger, message) pair.
+# ---------------------------------------------------------------------------
+# Match-predicate combinators, fact extractors, and source refiners.
+#
+# Combinators (``_search`` / ``_contains`` / ``_contains_any`` /
+# ``_logger_eq_and_startswith``) turn the matcher field of ``_RULES``
+# into a 1-call declaration of the rule's anchor instead of a per-rule
+# named function — 15 trivial matchers collapse to 4 reusable shapes.
+# Only ``_matches_ibkr_wrapper_disconnect`` keeps a named function
+# because its OR-clause (logger OR message-body name) doesn't fit a
+# clean combinator.
+# ---------------------------------------------------------------------------
 
-    Returns the category on a match or ``None`` when no rule matches —
-    the caller decides whether to consult the traceback as a fallback.
+
+def _haystack(message: str, traceback: str | None) -> str:
+    """Combine message + traceback for fact / refinement scans."""
+    return message if traceback is None else f"{message}\n{traceback}"
+
+
+def _search(pattern: re.Pattern[str]) -> Callable[[str, str], bool]:
+    """Match when ``pattern`` finds anything in the message body."""
+
+    def predicate(_logger: str, message: str) -> bool:
+        return pattern.search(message) is not None
+
+    return predicate
+
+
+def _contains(token: str) -> Callable[[str, str], bool]:
+    """Match when ``token`` is a substring of the message body."""
+
+    def predicate(_logger: str, message: str) -> bool:
+        return token in message
+
+    return predicate
+
+
+def _contains_any(*tokens: str) -> Callable[[str, str], bool]:
+    """Match when any of ``tokens`` is a substring of the message body."""
+
+    def predicate(_logger: str, message: str) -> bool:
+        return any(token in message for token in tokens)
+
+    return predicate
+
+
+def _logger_eq_and_startswith(logger_name: str, prefix: str) -> Callable[[str, str], bool]:
+    """Match when the header logger is ``logger_name`` AND message starts with ``prefix``."""
+
+    def predicate(logger: str, message: str) -> bool:
+        return logger == logger_name and message.startswith(prefix)
+
+    return predicate
+
+
+def _matches_ibkr_wrapper_disconnect(logger: str, message: str) -> bool:
+    """The one matcher that doesn't fit a clean combinator.
+
+    Anchored on ib_async.wrapper either in the header logger field or
+    the message body — the latter case is the traceback-fallback pass,
+    where the original header logger has been replaced with "" but the
+    body text still names the module. The dual anchor prevents
+    unrelated modules that quote ``Error 1100`` in prose from being
+    mis-classified.
     """
-    # BROKER_DISCONNECT must be anchored on the ib_async source so an
-    # unrelated module that mentions "Error 1100" in prose isn't
-    # mis-classified. The anchor can come from the header's logger field
-    # *or* from the message body itself — the latter case is what the
-    # traceback fallback exercises (where the original header logger
-    # has been replaced with "" but the traceback text still names
-    # ib_async.wrapper).
-    if _IBKR_DISCONNECT_CODE_RE.search(message) and (
+    return _IBKR_DISCONNECT_CODE_RE.search(message) is not None and (
         logger == "ib_async.wrapper" or "ib_async.wrapper" in message
-    ):
-        return IncidentCategory.BROKER_DISCONNECT
-    # Hard TCP-level disconnect from ib_async.client itself.
-    if logger == "ib_async.client" and message.startswith("Peer closed connection"):
-        return IncidentCategory.BROKER_DISCONNECT
-    # DATA_FARM_DEGRADED — IBKR codes 2103 / 2105 surfaced by our client
-    # wrapper. Distinct from connectivity loss: order path may still be
-    # alive, only market-data farm is degraded.
-    if logger == "app.broker.ibkr.client" and message.startswith("IBKR data farm degraded"):
-        return IncidentCategory.DATA_FARM_DEGRADED
-    if _PROBE_FAILED_RE.search(message):
-        return IncidentCategory.BROKER_RECONNECT_FAILED
-    if _ENGINE_FATAL_RE.search(message):
-        return IncidentCategory.ENGINE_FATAL
-    if _PORTFOLIO_INIT_RE.search(message):
-        return IncidentCategory.PORTFOLIO_INIT_FAIL
-    if _RECONCILE_MISSING_RE.search(message):
-        return IncidentCategory.RECONCILE_MISSING
-    # Filesystem write failure for the broker forensic JSONL log. This is
-    # an INFRA failure (read-only mount / disk full), not a trading
-    # failure — the source map routes it to INFRA. Emit-site rate-limit
-    # lives in a separate cleanup PR per the plan's §6 phasing.
-    if _BROKER_EVENT_LOG_WRITE_MARKER in message:
-        return IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED
-    # Fill arrived with an order_id our intent ledger has never seen
-    # (cross-restart resolver missed). Surfaces as a BROKER-side
-    # incident; downstream may auto-flatten depending on policy.
-    if _FOREIGN_FILL_DROPPED_RE.search(message):
-        return IncidentCategory.FOREIGN_FILL_DROPPED
-    # Shutdown / recovery flatten cascade. Default source is APP; the
-    # six broker-side markers in D3 relabel it to BROKER via
-    # classify_source().
-    for marker in _SHUTDOWN_FLATTEN_FAILED_MARKERS:
-        if marker in message:
-            return IncidentCategory.SHUTDOWN_FLATTEN_FAILED
-    # Child-watchdog control-plane lease loss — INFRA, not engine logic.
-    if "CONTROL_PLANE_LEASE_LOST" in message:
-        return IncidentCategory.CONTROL_PLANE_LEASE_LOST
-    # Live-state sidecar schema drift / corruption. Anchored on either
-    # the write-failure log line or the structured exception name.
-    for marker in _SIDECAR_SCHEMA_DRIFT_MARKERS:
-        if marker in message:
-            return IncidentCategory.SIDECAR_SCHEMA_DRIFT
-    # Poison-sentinel triggers — keep the order LOST_FILL → OUTSIDE_MUTATION
-    # → COLD_START_DIVERGENCE → OPERATOR_HALT. Each pattern is anchored on
-    # its own token so they don't shadow each other.
-    if _LOST_FILL_RE.search(message):
-        return IncidentCategory.LOST_FILL
-    if _OUTSIDE_MUTATION_RE.search(message):
-        return IncidentCategory.OUTSIDE_MUTATION
-    if _COLD_START_RE.search(message):
-        return IncidentCategory.COLD_START_DIVERGENCE
-    if _OPERATOR_HALT_RE.search(message):
-        return IncidentCategory.OPERATOR_HALT
-    if _SUBSCRIPTION_STALE_RE.search(message):
-        return IncidentCategory.SUBSCRIPTION_STALE
+    )
+
+
+def _extract_tws_disconnect_code(message: str, traceback: str | None) -> dict[str, str | int]:
+    m = _IBKR_DISCONNECT_CODE_RE.search(_haystack(message, traceback))
+    return {"tws_code": int(m.group(1))} if m is not None else {}
+
+
+def _extract_tws_data_farm_code(message: str, traceback: str | None) -> dict[str, str | int]:
+    # Header-only by design: the emit site in ``app.broker.ibkr.client``
+    # always folds the TWS code (2103 / 2105) into the message string,
+    # so a traceback fallback would only ever produce a false positive
+    # (e.g. an unrelated literal in a stack frame).
+    del traceback
+    m = _IBKR_DATA_FARM_CODE_RE.search(message)
+    return {"tws_code": int(m.group(1))} if m is not None else {}
+
+
+def _extract_foreign_fill_order_id(message: str, traceback: str | None) -> dict[str, str | int]:
+    del traceback
+    m = _FOREIGN_FILL_DROPPED_RE.search(message)
+    if m is None or m.group("order_id") is None:
+        return {}
+    return {"order_id": m.group("order_id")}
+
+
+def _extract_broker_event_log_path(message: str, traceback: str | None) -> dict[str, str | int]:
+    # Line-local search: the path is only emitted on the same line as
+    # the marker, never in a downstream traceback frame. Anchoring on
+    # the marker substring + ``[^\n]`` keeps an unrelated ``.jsonl``
+    # path in the stack from posing as the failed-write target.
+    m = _BROKER_EVENT_LOG_WRITE_PATH_RE.search(_haystack(message, traceback))
+    return {"path": m.group("path")} if m is not None else {}
+
+
+def _extract_sidecar_path(message: str, traceback: str | None) -> dict[str, str | int]:
+    # Same line-local discipline as broker_event_log_write_failed: the
+    # path lives on the marker line, not in the traceback.
+    m = _SIDECAR_PATH_RE.search(_haystack(message, traceback))
+    return {"path": m.group("path")} if m is not None else {}
+
+
+def _refine_shutdown_flatten_source(
+    message: str, traceback: str | None
+) -> IncidentSource | None:
+    """D3 refinement: APP → BROKER when a broker-side marker is present.
+
+    Returns ``None`` when no marker fires so the caller falls back to
+    the rule's default source (APP).
+    """
+    haystack = _haystack(message, traceback)
+    if any(marker in haystack for marker in _SHUTDOWN_FLATTEN_BROKER_MARKERS):
+        return IncidentSource.BROKER
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Declarative rule table.
+#
+# Single source of truth for incident classification. Adding a category
+# is one new ``IncidentCategory`` value + one row here — the default-source
+# map, fact-extractor dispatch, and source refinement are all derived
+# from this table at module load. Order matters: the first matching rule
+# wins. Multiple rules may share a ``category`` (BROKER_DISCONNECT has
+# both an ib_async.wrapper anchor and an ib_async.client anchor), but
+# they must share the same ``source`` — enforced by
+# ``_build_default_source`` below.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class IncidentRule:
+    """Declarative rule binding a category to its anchors and helpers.
+
+    * ``matches(logger, message)`` returns True iff the (logger, message)
+      pair belongs to this category. Predicates may consult the message
+      body for an embedded logger token to support the traceback-fallback
+      pass in ``classify()``.
+    * ``source`` is the operator-facing side that recovers this category
+      (D2). Multiple rules sharing a category must agree on source.
+    * ``fact_extractor(message, traceback)`` populates ``dynamic_facts``
+      for the hybrid-C wire shape (D1). One extractor per category — if
+      multiple rules for the same category set it, the first wins.
+    * ``refine_source(message, traceback)`` may override ``source`` based
+      on message / traceback content (D3 — currently only SHUTDOWN_FLATTEN_FAILED
+      uses one). Returning ``None`` keeps the default.
+    """
+
+    category: IncidentCategory
+    source: IncidentSource
+    matches: Callable[[str, str], bool]
+    fact_extractor: Callable[[str, str | None], dict[str, str | int]] | None = None
+    refine_source: Callable[[str, str | None], IncidentSource | None] | None = None
+
+
+_RULES: tuple[IncidentRule, ...] = (
+    IncidentRule(
+        IncidentCategory.BROKER_DISCONNECT, IncidentSource.BROKER,
+        _matches_ibkr_wrapper_disconnect, _extract_tws_disconnect_code,
+    ),
+    IncidentRule(
+        IncidentCategory.BROKER_DISCONNECT, IncidentSource.BROKER,
+        _logger_eq_and_startswith("ib_async.client", "Peer closed connection"),
+    ),
+    IncidentRule(
+        IncidentCategory.DATA_FARM_DEGRADED, IncidentSource.BROKER,
+        _logger_eq_and_startswith("app.broker.ibkr.client", "IBKR data farm degraded"),
+        _extract_tws_data_farm_code,
+    ),
+    IncidentRule(
+        IncidentCategory.BROKER_RECONNECT_FAILED, IncidentSource.BROKER,
+        _search(_PROBE_FAILED_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.ENGINE_FATAL, IncidentSource.APP,
+        _search(_ENGINE_FATAL_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.PORTFOLIO_INIT_FAIL, IncidentSource.APP,
+        _search(_PORTFOLIO_INIT_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.RECONCILE_MISSING, IncidentSource.APP,
+        _search(_RECONCILE_MISSING_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED, IncidentSource.INFRA,
+        _contains(_BROKER_EVENT_LOG_WRITE_MARKER), _extract_broker_event_log_path,
+    ),
+    IncidentRule(
+        IncidentCategory.FOREIGN_FILL_DROPPED, IncidentSource.BROKER,
+        _search(_FOREIGN_FILL_DROPPED_RE), _extract_foreign_fill_order_id,
+    ),
+    IncidentRule(
+        IncidentCategory.SHUTDOWN_FLATTEN_FAILED, IncidentSource.APP,
+        _contains_any(*_SHUTDOWN_FLATTEN_FAILED_MARKERS),
+        refine_source=_refine_shutdown_flatten_source,
+    ),
+    IncidentRule(
+        IncidentCategory.CONTROL_PLANE_LEASE_LOST, IncidentSource.INFRA,
+        _contains("CONTROL_PLANE_LEASE_LOST"),
+    ),
+    IncidentRule(
+        IncidentCategory.SIDECAR_SCHEMA_DRIFT, IncidentSource.APP,
+        _contains_any(*_SIDECAR_SCHEMA_DRIFT_MARKERS), _extract_sidecar_path,
+    ),
+    IncidentRule(
+        IncidentCategory.LOST_FILL, IncidentSource.BROKER, _search(_LOST_FILL_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.OUTSIDE_MUTATION, IncidentSource.BROKER, _search(_OUTSIDE_MUTATION_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.COLD_START_DIVERGENCE, IncidentSource.APP, _search(_COLD_START_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.OPERATOR_HALT, IncidentSource.OPERATOR, _search(_OPERATOR_HALT_RE),
+    ),
+    IncidentRule(
+        IncidentCategory.SUBSCRIPTION_STALE, IncidentSource.BROKER, _search(_SUBSCRIPTION_STALE_RE),
+    ),
+)
+
+
+def _build_default_source(
+    rules: tuple[IncidentRule, ...],
+) -> dict[IncidentCategory, IncidentSource]:
+    """Derive the per-category source map from ``rules`` at module load.
+
+    Enforces two invariants:
+
+    * Every non-UNKNOWN ``IncidentCategory`` value appears in at least
+      one rule (covered by the round-trip test
+      ``test_default_source_map_covers_every_category``).
+    * Rules sharing a category must share their ``source`` — otherwise
+      ``classify_source(category, …)`` would have no well-defined answer
+      for that category. Raises ``RuntimeError`` at module load on conflict.
+
+    UNKNOWN is terminal (no rule matches), so it's added explicitly here.
+    """
+    by_category: dict[IncidentCategory, IncidentSource] = {}
+    for rule in rules:
+        existing = by_category.get(rule.category)
+        if existing is not None and existing != rule.source:
+            raise RuntimeError(
+                f"Inconsistent IncidentRule.source for {rule.category}: "
+                f"existing {existing}, conflicting rule {rule.source}"
+            )
+        by_category[rule.category] = rule.source
+    by_category[IncidentCategory.UNKNOWN] = IncidentSource.UNKNOWN
+    return by_category
+
+
+def _build_fact_extractors(
+    rules: tuple[IncidentRule, ...],
+) -> dict[IncidentCategory, Callable[[str, str | None], dict[str, str | int]]]:
+    """Per-category fact-extractor map (first rule with one wins).
+
+    Categories without an extractor are simply absent from the map;
+    ``extract_facts`` returns an empty dict for them.
+    """
+    extractors: dict[
+        IncidentCategory, Callable[[str, str | None], dict[str, str | int]]
+    ] = {}
+    for rule in rules:
+        if rule.fact_extractor is not None and rule.category not in extractors:
+            extractors[rule.category] = rule.fact_extractor
+    return extractors
+
+
+def _build_source_refiners(
+    rules: tuple[IncidentRule, ...],
+) -> dict[IncidentCategory, Callable[[str, str | None], IncidentSource | None]]:
+    """Per-category source refiner map (first rule with one wins)."""
+    refiners: dict[
+        IncidentCategory, Callable[[str, str | None], IncidentSource | None]
+    ] = {}
+    for rule in rules:
+        if rule.refine_source is not None and rule.category not in refiners:
+            refiners[rule.category] = rule.refine_source
+    return refiners
+
+
+_DEFAULT_SOURCE: dict[IncidentCategory, IncidentSource] = _build_default_source(_RULES)
+_FACT_EXTRACTORS = _build_fact_extractors(_RULES)
+_SOURCE_REFINERS = _build_source_refiners(_RULES)
+
+
+def _classify_one(logger: str, message: str) -> IncidentCategory | None:
+    """Try to classify a single (logger, message) pair against ``_RULES``.
+
+    Returns the first matching rule's category or ``None`` when no rule
+    matches — the caller decides whether to consult the traceback as a
+    fallback.
+    """
+    for rule in _RULES:
+        if rule.matches(logger, message):
+            return rule.category
     return None
 
 
@@ -359,16 +583,16 @@ def classify(
 ) -> IncidentCategory:
     """Classify a log incident into an ``IncidentCategory``.
 
-    The classifier matches the ``logger`` / ``message`` pair against a
-    backend-owned regex catalog (the single source of truth for incident
-    categorisation). When the header pair is ambiguous and a traceback is
-    available, the same catalog is re-applied to the traceback body so a
-    generic header (e.g., ``Unhandled exception``) can still resolve to a
-    specific category when its underlying exception is recognisable
-    (e.g., ``IBKRBarStreamError`` rooted in an Error 1100). Returns
-    ``UNKNOWN`` when no rule matches in either pass — the frontend renders
-    UNKNOWN with the raw-log drawer immediately available so the page
-    degrades gracefully when the catalog lags reality.
+    The classifier matches the ``logger`` / ``message`` pair against the
+    backend-owned ``_RULES`` table (the single source of truth for
+    incident categorisation). When the header pair is ambiguous and a
+    traceback is available, the same table is re-applied to the traceback
+    body so a generic header (e.g., ``Unhandled exception``) can still
+    resolve to a specific category when its underlying exception is
+    recognisable (e.g., ``IBKRBarStreamError`` rooted in an Error 1100).
+    Returns ``UNKNOWN`` when no rule matches in either pass — the frontend
+    renders UNKNOWN with the raw-log drawer immediately available so the
+    page degrades gracefully when the catalog lags reality.
     """
     from_header = _classify_one(logger, message)
     if from_header is not None:
@@ -381,32 +605,6 @@ def classify(
         if from_traceback is not None:
             return from_traceback
     return IncidentCategory.UNKNOWN
-
-
-# Default source per category (codex D2 / D6 / D5). SHUTDOWN_FLATTEN_FAILED
-# starts as APP and is refined to BROKER by classify_source() when one of
-# the broker-side markers (D3) appears in the message or traceback.
-# UNKNOWN's default is the literal IncidentSource.UNKNOWN — classify_source()
-# overrides it with a logger-derived guess per D6.
-_DEFAULT_SOURCE: dict[IncidentCategory, IncidentSource] = {
-    IncidentCategory.BROKER_DISCONNECT: IncidentSource.BROKER,
-    IncidentCategory.BROKER_RECONNECT_FAILED: IncidentSource.BROKER,
-    IncidentCategory.LOST_FILL: IncidentSource.BROKER,
-    IncidentCategory.OUTSIDE_MUTATION: IncidentSource.BROKER,
-    IncidentCategory.SUBSCRIPTION_STALE: IncidentSource.BROKER,
-    IncidentCategory.DATA_FARM_DEGRADED: IncidentSource.BROKER,
-    IncidentCategory.FOREIGN_FILL_DROPPED: IncidentSource.BROKER,
-    IncidentCategory.ENGINE_FATAL: IncidentSource.APP,
-    IncidentCategory.PORTFOLIO_INIT_FAIL: IncidentSource.APP,
-    IncidentCategory.RECONCILE_MISSING: IncidentSource.APP,
-    IncidentCategory.COLD_START_DIVERGENCE: IncidentSource.APP,
-    IncidentCategory.SIDECAR_SCHEMA_DRIFT: IncidentSource.APP,
-    IncidentCategory.SHUTDOWN_FLATTEN_FAILED: IncidentSource.APP,
-    IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED: IncidentSource.INFRA,
-    IncidentCategory.CONTROL_PLANE_LEASE_LOST: IncidentSource.INFRA,
-    IncidentCategory.OPERATOR_HALT: IncidentSource.OPERATOR,
-    IncidentCategory.UNKNOWN: IncidentSource.UNKNOWN,
-}
 
 
 def _classify_source_for_unknown(logger: str) -> IncidentSource:
@@ -439,21 +637,21 @@ def classify_source(
 ) -> IncidentSource:
     """Resolve the source dimension paired with ``category``.
 
-    The default-per-category map (D2) gives the answer for most rows.
-    Two categories need extra information:
+    The default-per-category map (derived from ``_RULES``) gives the
+    answer for most rows. Two paths add information:
 
-    * ``SHUTDOWN_FLATTEN_FAILED`` (D3) — refine APP → BROKER when the
-      message or traceback contains any of the six broker-side markers.
+    * Rules with a ``refine_source`` may override their default based on
+      message / traceback content (D3 — currently SHUTDOWN_FLATTEN_FAILED
+      flips APP → BROKER when a broker-side marker fires).
     * ``UNKNOWN`` (D6) — derive from the logger namespace.
     """
-    if category == IncidentCategory.SHUTDOWN_FLATTEN_FAILED:
-        haystack = message if traceback is None else f"{message}\n{traceback}"
-        for marker in _SHUTDOWN_FLATTEN_BROKER_MARKERS:
-            if marker in haystack:
-                return IncidentSource.BROKER
-        return IncidentSource.APP
     if category == IncidentCategory.UNKNOWN:
         return _classify_source_for_unknown(logger)
+    refiner = _SOURCE_REFINERS.get(category)
+    if refiner is not None:
+        refined = refiner(message, traceback)
+        if refined is not None:
+            return refined
     return _DEFAULT_SOURCE[category]
 
 
@@ -471,41 +669,8 @@ def extract_facts(
     the runtime emitted the line without enough context to populate the
     facts — the frontend still renders the template literally.
     """
-    facts: dict[str, str | int] = {}
-    if category == IncidentCategory.BROKER_DISCONNECT:
-        haystack = message if traceback is None else f"{message}\n{traceback}"
-        m = _IBKR_DISCONNECT_CODE_RE.search(haystack)
-        if m is not None:
-            facts["tws_code"] = int(m.group(1))
-    elif category == IncidentCategory.DATA_FARM_DEGRADED:
-        # Header-only by design: the emit site in ``app.broker.ibkr.client``
-        # always folds the TWS code (2103 / 2105) into the message string,
-        # so a traceback fallback would only ever produce a false positive
-        # (e.g. an unrelated literal in a stack frame).
-        m = _IBKR_DATA_FARM_CODE_RE.search(message)
-        if m is not None:
-            facts["tws_code"] = int(m.group(1))
-    elif category == IncidentCategory.FOREIGN_FILL_DROPPED:
-        m = _FOREIGN_FILL_DROPPED_RE.search(message)
-        if m is not None and m.group("order_id") is not None:
-            facts["order_id"] = m.group("order_id")
-    elif category == IncidentCategory.BROKER_EVENT_LOG_WRITE_FAILED:
-        # Line-local search: the path is only emitted on the same line as
-        # the marker, never in a downstream traceback frame. Searching the
-        # combined haystack would otherwise let an unrelated ``.jsonl`` path
-        # in the stack pose as the failed-write target.
-        haystack = message if traceback is None else f"{message}\n{traceback}"
-        m = _BROKER_EVENT_LOG_WRITE_PATH_RE.search(haystack)
-        if m is not None:
-            facts["path"] = m.group("path")
-    elif category == IncidentCategory.SIDECAR_SCHEMA_DRIFT:
-        # Same line-local discipline as broker_event_log_write_failed: the
-        # path lives on the marker line, not in the traceback.
-        haystack = message if traceback is None else f"{message}\n{traceback}"
-        m = _SIDECAR_PATH_RE.search(haystack)
-        if m is not None:
-            facts["path"] = m.group("path")
-    return facts
+    extractor = _FACT_EXTRACTORS.get(category)
+    return extractor(message, traceback) if extractor is not None else {}
 
 
 def parse_incidents(text: str) -> list[IncidentRow]:
