@@ -1634,7 +1634,8 @@ async def test_child_task_cannot_outlive_supervisor(tmp_path: Path) -> None:
     # Give the event loop a tick so _run_supervisor can create the children.
     await asyncio.sleep(0)
     children = publisher._snapshot_children_for_tests()
-    assert len(children) == 2
+    # Consumer + pending-intent tick + PR 6 periodic sweep.
+    assert len(children) == 3
     await publisher.stop()
     assert not publisher.is_running
     for child in children:

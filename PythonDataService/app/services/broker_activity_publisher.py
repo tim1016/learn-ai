@@ -27,6 +27,15 @@ injected ``recovery_source_factory`` (production wiring runs
 registry surfaces ``any_recovery_active() == True`` and
 ``place_paper_order`` refuses new submissions — the broker connection is
 busy replaying history and a new order would race the sweep.
+
+PR 6 (operator-notice §11): a periodic sweep loop (``_periodic_sweep_loop``)
+runs immediately on start, then every ``_sweep_interval_ms`` milliseconds.
+The sweep fetches via the same ``recovery_source_factory``, filters by
+``_sweep_lookback_ms`` (client-side, keyed on ``exec_time_ms``), and emits
+a ``reconciliation.discovered_execution_not_in_engine_state`` critical
+``OperatorIncident`` via ``IncidentStore`` when the sweep finds a fill that
+is (a) not in the dedupe set and (b) carries no engine intent.  The engine
+remains authoritative; the publisher never silently corrects cockpit state.
 """
 
 from __future__ import annotations
@@ -49,6 +58,12 @@ from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
+)
+from app.operator.incidents.store import IncidentStore
+from app.operator.notices.schema import (
+    OperatorIncident,
+    OperatorNotice,
+    OperatorNoticeAction,
 )
 from app.schemas.broker_activity import (
     BrokerActivityRow,
@@ -91,6 +106,15 @@ RecoverySourceFactory = Callable[[], Awaitable[list[IbkrOrderEvent]]]
 # behind by this many rows we drop the connection rather than buffer
 # unboundedly. 256 covers a slow client + a fast bursty publisher.
 _SUBSCRIBER_QUEUE_SIZE = 256
+
+# PR 6 — periodic sweep cadence and lookback window.
+# ``DEFAULT_SWEEP_INTERVAL_MS``: how often the periodic sweep runs (60 s).
+# ``DEFAULT_SWEEP_LOOKBACK_MS``: client-side filter applied to
+# ``exec_time_ms`` on each returned fill — only executions newer than
+# ``now - lookback_ms`` are processed.  Limits exposure when the factory
+# returns a full-day snapshot that is large on high-turnover accounts.
+DEFAULT_SWEEP_INTERVAL_MS = 60_000
+DEFAULT_SWEEP_LOOKBACK_MS = 900_000
 
 
 # Period of the pending-intent tick (gap #1 of the broker-activity handoff).
@@ -139,12 +163,19 @@ class BrokerActivityPublisher:
         timing_policy: ReconciliationTimingPolicy,
         event_source_factory: EventSourceFactory,
         recovery_source_factory: RecoverySourceFactory | None = None,
+        incident_store: IncidentStore | None = None,
+        sweep_interval_ms: int = DEFAULT_SWEEP_INTERVAL_MS,
+        sweep_lookback_ms: int = DEFAULT_SWEEP_LOOKBACK_MS,
     ) -> None:
         self._strategy_instance_id = strategy_instance_id
         self._bot_order_namespace = bot_order_namespace
         self._timing_policy = timing_policy
         self._event_source_factory = event_source_factory
         self._recovery_source_factory = recovery_source_factory
+        # PR 6 — incident store and sweep config.
+        self._incident_store = incident_store
+        self._sweep_interval_ms = sweep_interval_ms
+        self._sweep_lookback_ms = sweep_lookback_ms
         self._wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id)
@@ -181,10 +212,16 @@ class BrokerActivityPublisher:
         # ``reconnect_recovery`` template fires instead of e.g. a raw
         # excessive-lag verdict on an exec the publisher missed mid-drop.
         self._reconnect_recovery_active: bool = False
-        # Serialises concurrent sweeps — a flapping connection could trigger
-        # back-to-back reconnects; the second sweep waits for the first to
-        # finish so the dedupe set is the merged truth, not a torn read.
+        # Serialises concurrent reconnect sweeps — a flapping connection could
+        # trigger back-to-back reconnects; the second sweep waits for the
+        # first to finish so the dedupe set is the merged truth, not a torn
+        # read.
         self._recovery_lock = asyncio.Lock()
+        # Serialises concurrent periodic sweeps against each other.  Separate
+        # from ``_recovery_lock`` so a slow periodic sweep does not block a
+        # reconnect sweep (and vice versa) — they serve different purposes and
+        # must not deadlock each other.
+        self._sweep_lock = asyncio.Lock()
         # On cold start, seed both dedupe sets from the WAL so we don't
         # re-author a row IBKR redelivers right after the publisher
         # restarts (``_seen_exec_ids``) AND so the pending-intent tick
@@ -355,7 +392,15 @@ class BrokerActivityPublisher:
                     self._pending_intent_loop(),
                     name=f"broker-activity-pending-tick:{self._strategy_instance_id}",
                 )
-                self._child_tasks = [consumer, pending]
+                # PR 6 — periodic IBKR reqExecutions sweep. Lives inside the
+                # supervisor's TaskGroup so structured-concurrency cancellation
+                # propagates uniformly: stop() cancels the supervisor → group
+                # cancels all three children.
+                sweep = tg.create_task(
+                    self._periodic_sweep_loop(),
+                    name=f"broker-activity-periodic-sweep:{self._strategy_instance_id}",
+                )
+                self._child_tasks = [consumer, pending, sweep]
         except* _ConsumerEnded:
             logger.warning(
                 "broker-activity event consumer ended normally; supervisor exiting",
@@ -823,6 +868,199 @@ class BrokerActivityPublisher:
                 extra={"strategy_instance_id": self._strategy_instance_id},
             )
 
+    # ── periodic sweep (PR 6 / operator-notice §11) ───────────────────
+
+    async def _periodic_sweep_loop(self) -> None:
+        """Immediate first sweep, then one per ``_sweep_interval_ms``.
+
+        A crash in ``_run_periodic_sweep`` is logged and the loop
+        continues — a transient factory error (e.g. broker hiccup)
+        should not silence all future sweeps.
+        """
+        try:
+            while not self._stopped.is_set():
+                try:
+                    await self._run_periodic_sweep()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "broker-activity periodic sweep raised; continuing",
+                        extra={"strategy_instance_id": self._strategy_instance_id},
+                    )
+                await asyncio.sleep(self._sweep_interval_ms / 1_000)
+        except asyncio.CancelledError:
+            raise
+
+    async def _run_periodic_sweep(self) -> int:
+        """Fetch executions and author/flag any that are new and unmatched.
+
+        Uses the same ``_recovery_source_factory`` and dedup path as
+        ``sweep_reconnect_recovery``.  Differs in two ways:
+
+        1. **Does NOT set ``_reconnect_recovery_active``** — the
+           periodic sweep is background bookkeeping, not a post-reconnect
+           halt.  Submissions are not gated.
+        2. **Emits a critical ``OperatorIncident``** when the sweep finds
+           a fill that is (a) not in ``_seen_exec_ids`` and (b) carries
+           no engine intent.  The engine remains authoritative; the
+           publisher still authors the ``unmatched_execution`` row so the
+           operator can see forensic detail, but NEVER silently corrects
+           cockpit portfolio state.
+
+        Returns the count of newly-authored rows (0 when the factory is
+        not wired or every exec_id was already known).
+        """
+        if self._recovery_source_factory is None:
+            return 0
+
+        now_ms = _now_ms()
+        cutoff_ms = now_ms - self._sweep_lookback_ms
+
+        async with self._sweep_lock:
+            events = await self._recovery_source_factory()
+            submitted = self._read_submitted_orders()
+            authored = 0
+            for event in events:
+                # Lookback filter: skip executions older than the window.
+                if event.exec_time_ms is not None and event.exec_time_ms < cutoff_ms:
+                    continue
+                if event.exec_id and event.exec_id in self._seen_exec_ids:
+                    continue
+                # Namespace filter: skip fills owned by a different instance
+                # (same logic as sweep_reconnect_recovery).
+                parsed_ref = parse_order_ref(event.order_ref)
+                if (
+                    parsed_ref is not None
+                    and parsed_ref[0] != self._bot_order_namespace
+                ):
+                    continue
+                intent_id = match_identity(
+                    event,
+                    submitted_orders=submitted,
+                    bot_order_namespace=self._bot_order_namespace,
+                )
+                if intent_id is None:
+                    # Foreign execution — not initiated by this bot.
+                    # Author the row for forensic visibility, then
+                    # emit a critical incident (PR 6 §11).
+                    self._author_and_broadcast(event=event, intent=None)
+                    authored += 1
+                    self._emit_cross_client_incident(event, now_ms=now_ms)
+                else:
+                    intent = self._build_engine_intent(intent_id)
+                    row = self._author_and_broadcast(event=event, intent=intent)
+                    if row is not None:
+                        authored += 1
+
+            logger.info(
+                "broker-activity periodic sweep complete: authored %d row(s)",
+                authored,
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "authored_count": authored,
+                    "lookback_ms": self._sweep_lookback_ms,
+                },
+            )
+            return authored
+
+    def _emit_cross_client_incident(
+        self, event: IbkrOrderEvent, *, now_ms: int
+    ) -> None:
+        """Emit a critical ``OperatorIncident`` for a foreign execution.
+
+        If no ``IncidentStore`` is wired (legacy callers, tests), logs a
+        structured WARN instead of raising — the contract is "surface the
+        anomaly", not "crash the sweep".
+        """
+        exec_id = event.exec_id or "unknown"
+        incident_id = f"cross-client-{exec_id}"
+        symbol = event.symbol or "UNKNOWN"
+        side = event.side or "UNKNOWN"
+        qty = event.fill_quantity or 0.0
+        price = event.last_fill_price or event.avg_fill_price or 0.0
+        perm_id = event.perm_id
+        order_ref = event.order_ref
+
+        if self._incident_store is None:
+            logger.warning(
+                "cross-client execution discovered but no IncidentStore wired; "
+                "incident not persisted",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "exec_id": exec_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": qty,
+                    "price": price,
+                },
+            )
+            return
+
+        incident = OperatorIncident(
+            incident_id=incident_id,
+            category="reconciliation",
+            notice=OperatorNotice(
+                code="reconciliation.discovered_execution_not_in_engine_state",
+                tier="critical",
+                title="Foreign execution discovered at broker",
+                message=(
+                    f"A {side} of {qty} {symbol} at {price} executed on this "
+                    "account but was not initiated by this bot. Verify the "
+                    "bot's positions against IBKR before resuming."
+                ),
+                forensic_facts={
+                    "exec_id": exec_id,
+                    "perm_id": perm_id,
+                    "order_ref": order_ref,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": qty,
+                    "price": price,
+                    "discovered_at_ms": now_ms,
+                },
+                action=OperatorNoticeAction(
+                    kind="external_manual_check",
+                    label="Check positions in IBKR",
+                    target="ibkr_positions",
+                ),
+                runbook_slug="cross-client-execution",
+            ),
+            started_at_ms=now_ms,
+            evidence={
+                "exec_id": exec_id,
+                "perm_id": perm_id,
+                "order_ref": order_ref,
+                "symbol": symbol,
+                "side": side,
+                "quantity": qty,
+                "price": price,
+            },
+        )
+        try:
+            self._incident_store.append(incident)
+            logger.warning(
+                "cross-client execution incident persisted",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "incident_id": incident_id,
+                    "exec_id": exec_id,
+                    "symbol": symbol,
+                },
+            )
+        except Exception as exc:
+            logger.critical(
+                "[publisher] failed to persist cross-client incident; "
+                "foreign execution will not surface in cockpit",
+                extra={
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "incident_id": incident_id,
+                    "exec_id": exec_id,
+                    "incident_payload": incident.model_dump_json(),
+                    "exception": repr(exc),
+                },
+            )
+
     # ── reconnect recovery (slice 3 / ADR 0011 amendment) ─────────────
 
     @property
@@ -982,6 +1220,8 @@ def _safe_float(value: object) -> float | None:
 
 
 __all__ = [
+    "DEFAULT_SWEEP_INTERVAL_MS",
+    "DEFAULT_SWEEP_LOOKBACK_MS",
     "BrokerActivityPublisher",
     "EventSourceFactory",
     "RecoverySourceFactory",
