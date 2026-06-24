@@ -1048,13 +1048,16 @@ class BrokerActivityPublisher:
                     "symbol": symbol,
                 },
             )
-        except Exception:
-            logger.exception(
-                "failed to persist cross-client execution incident",
+        except Exception as exc:
+            logger.critical(
+                "[publisher] failed to persist cross-client incident; "
+                "foreign execution will not surface in cockpit",
                 extra={
                     "strategy_instance_id": self._strategy_instance_id,
                     "incident_id": incident_id,
                     "exec_id": exec_id,
+                    "incident_payload": incident.model_dump_json(),
+                    "exception": repr(exc),
                 },
             )
 

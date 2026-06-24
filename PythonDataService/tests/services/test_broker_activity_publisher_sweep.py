@@ -340,3 +340,238 @@ async def test_sweep_no_incident_store_warns_not_raises(tmp_path: Path) -> None:
     # Must not raise.
     count = await publisher._run_periodic_sweep()
     assert count == 1  # row authored even without the store
+
+
+# ── Bootstrap wiring tests (P1 reviewer fix) ─────────────────────────
+#
+# These tests verify that bootstrap_publisher_for_instance wires an
+# IncidentStore so cross-client executions are persisted, not just logged.
+# The bootstrap has external dependencies (settings, IBKR client, registry)
+# so we monkeypatch them at the module boundary rather than touching the
+# real filesystem / broker.
+
+
+def _seed_bootstrap_env(artifacts_root: Path) -> None:
+    """Seed the minimal on-disk state needed by bootstrap_publisher_for_instance."""
+    from app.engine.live.live_state_sidecar import (
+        stable_live_state_path,
+    )
+
+    envelope = LiveStateEnvelope(
+        strategy_instance_id=SID,
+        run_id="run-bootstrap-test",
+        bot_order_namespace=NS,
+        ib_client_id=1,
+        last_processed_bar_ms=1,
+        last_artifact_flush_ms=1,
+    )
+    repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, SID))
+    repo._path.parent.mkdir(parents=True, exist_ok=True)
+    repo.write(envelope)
+
+
+async def test_bootstrap_passes_incident_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Finding (PR #665 P1): production bootstrap MUST pass an IncidentStore
+    so cross-client incidents are persisted, not just logged.
+
+    Monkeypatches the external deps (IBKR client, settings, registry) so we
+    can call bootstrap_publisher_for_instance without a running broker or
+    real containers.
+    """
+    import asyncio
+
+    import app.routers.broker_activity as ba_module
+
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _seed_bootstrap_env(artifacts_root)
+
+    # Patch settings so artifacts_root resolves.
+    class _FakeSettings:
+        live_runs_root = str(artifacts_root / "runs")
+
+    monkeypatch.setattr(ba_module, "get_settings", lambda: _FakeSettings())
+
+    # Patch IBKR client — connected fake.
+    class _FakeClient:
+        def is_connected(self) -> bool:
+            return True
+
+    monkeypatch.setattr(ba_module, "get_client", lambda: _FakeClient())
+
+    # Patch _latest_run_dir_for_instance so it returns our tmp run_dir.
+    def _fake_run_dir(art_root: Path, sid: str) -> Path:
+        return run_dir
+
+    import app.engine.live.run as run_module
+
+    monkeypatch.setattr(run_module, "_latest_run_dir_for_instance", _fake_run_dir)
+
+    # Patch event factories so the publisher doesn't try to talk to IBKR.
+    async def _empty_gen():
+        if False:
+            yield  # type: ignore[unreachable]
+        await asyncio.sleep(3600)
+
+    async def _empty_recovery() -> list:
+        return []
+
+    monkeypatch.setattr(ba_module, "stream_order_events", lambda _client: _empty_gen)
+    monkeypatch.setattr(
+        ba_module,
+        "executions_for_reconnect_recovery",
+        lambda _client: _empty_recovery,
+    )
+
+    # Use a fresh registry so we don't collide with other tests.
+    from app.services.broker_activity_publisher_registry import (
+        BrokerActivityPublisherRegistry,
+    )
+
+    fresh_reg = BrokerActivityPublisherRegistry()
+    monkeypatch.setattr(ba_module, "get_publisher_registry", lambda: fresh_reg)
+
+    publisher = await ba_module.bootstrap_publisher_for_instance(SID)
+    try:
+        assert publisher._incident_store is not None, (
+            "bootstrap_publisher_for_instance must wire an IncidentStore; got None"
+        )
+        assert isinstance(publisher._incident_store, IncidentStore), (
+            f"expected IncidentStore, got {type(publisher._incident_store)}"
+        )
+    finally:
+        await publisher.stop()
+
+
+async def test_sweep_persists_incident_via_bootstrapped_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """End-to-end: bootstrap a publisher (with its real IncidentStore),
+    run the sweep with a foreign exec, assert the incident JSON appears
+    in the run_dir/operator_incidents/ directory.
+    """
+    import asyncio
+
+    import app.routers.broker_activity as ba_module
+
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _seed_bootstrap_env(artifacts_root)
+
+    class _FakeSettings:
+        live_runs_root = str(artifacts_root / "runs")
+
+    monkeypatch.setattr(ba_module, "get_settings", lambda: _FakeSettings())
+
+    class _FakeClient:
+        def is_connected(self) -> bool:
+            return True
+
+    monkeypatch.setattr(ba_module, "get_client", lambda: _FakeClient())
+
+    import app.engine.live.run as run_module
+
+    monkeypatch.setattr(
+        run_module, "_latest_run_dir_for_instance", lambda _art, _sid: run_dir
+    )
+
+    from app.broker.ibkr.models import IbkrOrderEvent
+
+    foreign_fill = IbkrOrderEvent(
+        account_id="DU9999999",
+        order_id=99,
+        perm_id=1,
+        event_type="fill",
+        status="Filled",
+        order_ref=None,  # no namespace → unmatched
+        symbol="AAPL",
+        side="BUY",
+        order_type="MKT",
+        exec_id="foreign-bootstrap-e2e-1",
+        fill_quantity=10.0,
+        avg_fill_price=200.0,
+        cumulative_filled=10.0,
+        remaining=0.0,
+        last_fill_price=200.0,
+        exec_time_ms=None,
+        fee=0.5,
+        ts_ms=1_700_000_000_000,
+    )
+
+    async def _empty_gen():
+        if False:
+            yield  # type: ignore[unreachable]
+        await asyncio.sleep(3600)
+
+    # The bootstrap does partial(executions_for_reconnect_recovery, client).
+    # Calling the resulting factory must return an awaitable — so the patched
+    # function must return a coroutine (i.e. call the async def, not return it).
+    async def _foreign_recovery() -> list:
+        return [foreign_fill]
+
+    def _patched_recovery_factory(_client) -> object:
+        return _foreign_recovery()
+
+    monkeypatch.setattr(ba_module, "stream_order_events", lambda _client: _empty_gen)
+    monkeypatch.setattr(
+        ba_module,
+        "executions_for_reconnect_recovery",
+        _patched_recovery_factory,
+    )
+
+    from app.services.broker_activity_publisher_registry import (
+        BrokerActivityPublisherRegistry,
+    )
+
+    fresh_reg = BrokerActivityPublisherRegistry()
+    monkeypatch.setattr(ba_module, "get_publisher_registry", lambda: fresh_reg)
+
+    publisher = await ba_module.bootstrap_publisher_for_instance(SID)
+    try:
+        await publisher._run_periodic_sweep()
+
+        incident_dir = run_dir / "operator_incidents"
+        incident_files = list(incident_dir.glob("*.json"))
+        assert len(incident_files) >= 1, (
+            f"expected at least 1 incident file in {incident_dir}; found none"
+        )
+
+        from app.operator.notices.schema import OperatorIncident
+
+        incident = OperatorIncident.model_validate_json(
+            incident_files[0].read_text(encoding="utf-8")
+        )
+        assert incident.notice.code == "reconciliation.discovered_execution_not_in_engine_state"
+        assert incident.notice.tier == "critical"
+    finally:
+        await publisher.stop()
+
+
+async def test_sweep_handles_incident_persistence_failure_gracefully(
+    tmp_path: Path,
+) -> None:
+    """If incident_store.append raises (e.g. disk full), the publisher logs
+    CRITICAL and continues; the sweep does not crash and the return count
+    is still accurate (the event was processed, even if not persisted).
+    """
+    from unittest.mock import Mock
+
+    failing_store = Mock(spec=IncidentStore)
+    failing_store.append.side_effect = OSError("disk full")
+
+    foreign_fill = _fill_event(exec_id="disk-full-1", order_ref=None)
+    publisher, _, _ = _build_publisher(
+        tmp_path,
+        recovery_events=[foreign_fill],
+        incident_store=failing_store,
+    )
+
+    # Must not raise even though append fails.
+    count = await publisher._run_periodic_sweep()
+    assert count == 1, f"expected 1 event processed, got {count}"
+    # append was called (the code attempted to persist).
+    failing_store.append.assert_called_once()

@@ -42,6 +42,7 @@ from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
 )
+from app.operator.incidents.store import IncidentStore
 from app.schemas.broker_activity import (
     BrokerActivityPage,
     ReconciliationTimingPolicy,
@@ -162,6 +163,7 @@ async def bootstrap_publisher_for_instance(
         timing_policy=timing_policy,
         event_source_factory=partial(stream_order_events, client),
         recovery_source_factory=partial(executions_for_reconnect_recovery, client),
+        incident_store=IncidentStore(run_dir),
     )
     return await registry.register(
         publisher, strategy_instance_id=strategy_instance_id
