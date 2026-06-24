@@ -733,6 +733,15 @@ class IbkrConnectionHealth(BaseModel):
     recovery_error: str | None = None
     """Most recent post-reconnect recovery failure, cleared on recovery
     success."""
+    broker_event_log_write_failed_count: int = 0
+    """Cumulative count of broker-event-log JSONL write failures this run.
+    Only the *first* failure logs WARNING (codex D5 rate-limit); the
+    counter keeps incrementing so the cockpit runtime banner can still
+    render "evidence integrity degraded" on recurrences."""
+    last_broker_event_log_write_failed_at_ms: int | None = None
+    """Wall-clock timestamp (int64 ms UTC) of the most recent broker-
+    event-log write failure. Paired with the counter so an operator can
+    see both 'how often' and 'how recently'."""
 
 
 __all__ = [

@@ -553,3 +553,112 @@ def test_on_ib_error_stamps_last_event_ms_at_the_mutation_site(
     client._on_ib_error(-1, 1101, "restored", None)
     after_restore = client.last_event_ms
     assert after_restore >= after_first
+
+
+# ---------------------------------------------------------------------------
+# Log-level demotion (incident taxonomy PR-3, plan §4.1): "IBKR
+# connectivity lost" was demoted from WARNING to INFO because IBKR
+# codes 1100/504 are frequent transient blips during a healthy session
+# and the auto-reconnect-monitor already surfaces the cases that
+# don't recover within one tick as a WARNING-level
+# BROKER_RECONNECT_FAILED.
+# ---------------------------------------------------------------------------
+
+
+def test_on_ib_error_connectivity_lost_logs_at_info_not_warning(
+    settings_paper: IbkrSettings, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="app.broker.ibkr.client"):
+        client._on_ib_error(-1, 1100, "lost", None)
+
+    matching = [r for r in caplog.records if r.message == "IBKR connectivity lost"]
+    assert len(matching) == 1
+    assert matching[0].levelname == "INFO"
+    # The structured extra must survive the demotion — the classifier's
+    # exact-anchor on (logger, message) still catches the row as
+    # BROKER_DISCONNECT when it does fire (manual ops, edge timing).
+    assert matching[0].action == "connection_lost"
+    assert matching[0].error_code == 1100
+    # State machine unchanged by the demotion.
+    assert client.connection_lost is True
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit for broker-event-log write failures (codex D5). First
+# failure per run logs WARNING; subsequent failures suppress the log
+# but still increment the counter + stamp the timestamp. Both fields
+# surface through health() so the cockpit runtime banner can render
+# "evidence integrity degraded" on recurrences.
+# ---------------------------------------------------------------------------
+
+
+def _force_broker_event_log_write_failure(client: IbkrClient) -> None:
+    """Trigger ``_record_broker_event``'s exception branch deterministically.
+
+    Pointing ``live_runs_root`` at a path that can't be created (here:
+    under a regular file, so the ``mkdir(parents=True)`` raises NotADirectoryError)
+    forces an OSError on the very first write. Cheaper and more
+    deterministic than a tmpdir + chmod dance.
+    """
+    client._record_broker_event("TEST", probe="x")
+
+
+def test_record_broker_event_logs_first_failure_warning_suppresses_rest(
+    settings_paper: IbkrSettings, caplog: pytest.LogCaptureFixture, tmp_path
+) -> None:
+    # Point the events log at a path that the writer can't create
+    # (parent is a file, not a directory) so the mkdir + open chain
+    # raises an OSError every call.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    settings_paper.live_runs_root = str(blocker)
+    client = _client_with_fake_ib(settings_paper)
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="app.broker.ibkr.client"):
+        _force_broker_event_log_write_failure(client)
+        _force_broker_event_log_write_failure(client)
+        _force_broker_event_log_write_failure(client)
+
+    # Only the first failure emitted the WARNING line; subsequent ones
+    # were rate-limited away (codex D5).
+    write_warnings = [
+        r
+        for r in caplog.records
+        if r.message.startswith("Could not append IBKR broker event log")
+    ]
+    assert len(write_warnings) == 1
+    assert write_warnings[0].levelname == "WARNING"
+    assert write_warnings[0].action == "broker_event_log_write_failed"
+
+    # The counter and timestamp still track every failure.
+    assert client._broker_event_log_write_failed_count == 3
+    assert client._last_broker_event_log_write_failed_at_ms is not None
+
+
+def test_health_surfaces_broker_event_log_failure_counter_and_timestamp(
+    settings_paper: IbkrSettings, tmp_path
+) -> None:
+    # Same forced-failure setup; assert the two new fields flow through
+    # the health() snapshot so the cockpit runtime banner can render
+    # "evidence integrity degraded" without needing a custom probe.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    settings_paper.live_runs_root = str(blocker)
+    client = _client_with_fake_ib(settings_paper)
+
+    # Baseline before any failure.
+    h0 = client.health()
+    assert h0.broker_event_log_write_failed_count == 0
+    assert h0.last_broker_event_log_write_failed_at_ms is None
+
+    _force_broker_event_log_write_failure(client)
+    _force_broker_event_log_write_failure(client)
+
+    h1 = client.health()
+    assert h1.broker_event_log_write_failed_count == 2
+    assert h1.last_broker_event_log_write_failed_at_ms is not None
+    assert h1.last_broker_event_log_write_failed_at_ms >= h0.fetched_at_ms
