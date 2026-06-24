@@ -173,18 +173,27 @@ def watchdog_incident(
     started_at_ms: int,
     evidence: dict[str, object] | None = None,
 ) -> OperatorIncident:
-    """Build the initial ``OperatorIncident`` at halt inception.
+    """Build the initial ``OperatorIncident`` scaffold at halt inception.
 
-    The notice is a ``flatten_not_needed`` placeholder that will be overwritten
-    by ``WatchdogHaltExecutor`` at the terminal step.  Persisting the incident
-    early gives the store a durable record even if the executor crashes mid-way.
+    The notice is deliberately the most pessimistic terminal outcome —
+    ``flatten_failed`` — so that if the child process crashes AFTER the
+    initial append but BEFORE the executor writes the terminal notice, the
+    leftover incident is treated as critical by ``check_post_halt_gate`` and
+    blocks any restart until the operator reconciles.
+
+    The executor overwrites this scaffold with the real outcome (which may be
+    a safe info-tier notice) at the terminal step.  On successful halt the
+    scaffold is never visible to the gate in its pessimistic form.
     """
     incident_id = f"watchdog-{started_at_ms}-{uuid.uuid4().hex[:8]}"
-    placeholder_notice = flatten_not_needed_notice(occurred_at_ms=started_at_ms)
+    scaffold_notice = flatten_failed_notice(
+        error_summary="Watchdog halt is in progress or did not complete — verify positions at IBKR before resuming",
+        occurred_at_ms=started_at_ms,
+    )
     return OperatorIncident(
         incident_id=incident_id,
         category="watchdog",
-        notice=placeholder_notice,
+        notice=scaffold_notice,
         started_at_ms=started_at_ms,
         evidence={"reason": reason, **(evidence or {})},
     )

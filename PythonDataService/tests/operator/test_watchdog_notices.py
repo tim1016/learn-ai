@@ -141,14 +141,16 @@ def test_watchdog_incident_id_is_deterministic_format() -> None:
     assert all(c in "0123456789abcdef" for c in suffix)
 
 
-def test_watchdog_incident_placeholder_notice_is_info() -> None:
+def test_watchdog_incident_scaffold_notice_is_pessimistic_critical() -> None:
     incident = watchdog_incident(
         reason="LEASE_EXPIRED",
         started_at_ms=1_700_000_000_000,
     )
-    # Placeholder is flatten_not_needed (info) per plan spec
+    # Scaffold uses flatten_failed (critical) so a child crash mid-halt leaves
+    # a blocking incident for the post-halt gate (Finding 3 fix).
     assert isinstance(incident.notice, OperatorNotice)
-    assert incident.notice.tier == "info"
+    assert incident.notice.code == "watchdog.flatten_failed"
+    assert incident.notice.tier == "critical"
 
 
 def test_watchdog_incident_evidence_contains_reason() -> None:

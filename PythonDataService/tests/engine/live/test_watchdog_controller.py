@@ -487,3 +487,173 @@ async def test_flatten_now_returns_timed_out_when_bar_loop_does_not_clear_flag()
     assert engine._flatten_now_requested, (
         "flag must be set even when the coroutine is cancelled by timeout"
     )
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: halt sequence continues when initial incident write fails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_halt_continues_when_initial_incident_write_fails(tmp_path: Path) -> None:
+    """Finding 1: if the incident store raises on the initial append, all 5 steps still run."""
+    from unittest.mock import patch
+
+    rec = _OrderingRecorder()
+    controller = _FakeController(recorder=rec)
+
+    # Build an executor with a real store, then make .append raise on first call.
+    store = IncidentStore(tmp_path)
+    original_append = store.append
+    call_count = [0]
+
+    def _fail_first_append(incident: object) -> object:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("disk full")
+        return original_append(incident)  # type: ignore[arg-type]
+
+    _tick = [0]
+
+    def _clock_ms() -> int:
+        _tick[0] += 1
+        return _tick[0]
+
+    executor = WatchdogHaltExecutor(
+        controller, store, timeouts=_FAST_TIMEOUTS, clock_ms=_clock_ms
+    )
+
+    with patch.object(store, "append", side_effect=_fail_first_append):
+        incident = await executor.execute("LEASE_EXPIRED")
+
+    # All 5 steps must have run despite the initial write failure.
+    labels = [e.split(":", 1)[1] for e in rec.events]
+    assert "block_submissions" in labels, "step 1 must run even when initial append fails"
+    assert "persist_paused:LEASE_EXPIRED" in labels, "step 2 must run"
+    assert "flatten_now" in labels, "step 3 must run"
+    assert "disconnect_broker" in labels, "step 4 must run"
+    assert "request_engine_exit" in labels, "step 5 must run"
+
+    # The returned incident is still valid (in-memory object).
+    assert incident is not None
+    assert incident.notice.code == "watchdog.flatten_completed"
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: critical terminal incidents stay unresolved
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_critical_terminal_incidents_stay_unresolved(tmp_path: Path) -> None:
+    """Finding 2: flatten_timed_out incident is NOT resolved by the executor."""
+    rec = _OrderingRecorder()
+    # flatten sleeps long enough to trip the 100ms timeout
+    controller = _FakeController(recorder=rec, flatten_delay_s=10.0)
+    store = IncidentStore(tmp_path)
+    _tick = [0]
+
+    def _clock_ms() -> int:
+        _tick[0] += 1
+        return _tick[0]
+
+    executor = WatchdogHaltExecutor(
+        controller, store, timeouts=_FAST_TIMEOUTS, clock_ms=_clock_ms
+    )
+
+    incident = await executor.execute("LEASE_EXPIRED")
+
+    assert incident.notice.code == "watchdog.flatten_timed_out"
+    assert incident.resolved_at_ms is None, (
+        "critical outcome must NOT be auto-resolved; post-halt gate needs to see it"
+    )
+    # The store's unresolved list must include it.
+    unresolved = store.list_unresolved()
+    codes = [i.notice.code for i in unresolved]
+    assert "watchdog.flatten_timed_out" in codes
+
+
+@pytest.mark.asyncio
+async def test_critical_flatten_failed_stays_unresolved(tmp_path: Path) -> None:
+    """Finding 2: flatten_failed incident is NOT resolved by the executor."""
+    rec = _OrderingRecorder()
+    controller = _FakeController(recorder=rec, flatten_raises=RuntimeError("broker gone"))
+    store = IncidentStore(tmp_path)
+    _tick = [0]
+
+    def _clock_ms() -> int:
+        _tick[0] += 1
+        return _tick[0]
+
+    executor = WatchdogHaltExecutor(
+        controller, store, timeouts=_FAST_TIMEOUTS, clock_ms=_clock_ms
+    )
+
+    incident = await executor.execute("LEASE_EXPIRED")
+
+    assert incident.notice.code == "watchdog.flatten_failed"
+    assert incident.resolved_at_ms is None
+
+
+async def _assert_safe_outcome_is_resolved(tmp_path: Path, flatten_outcome: str) -> None:
+    store = IncidentStore(tmp_path / flatten_outcome)
+    tick = [0]
+
+    def _clock_ms() -> int:
+        tick[0] += 1
+        return tick[0]
+
+    rec = _OrderingRecorder()
+    controller = _FakeController(
+        recorder=rec,
+        flatten_outcome=flatten_outcome,  # type: ignore[arg-type]
+    )
+    executor = WatchdogHaltExecutor(
+        controller, store, timeouts=_FAST_TIMEOUTS, clock_ms=_clock_ms
+    )
+
+    incident = await executor.execute("LEASE_EXPIRED")
+
+    assert incident.resolved_at_ms is not None, (
+        f"safe outcome {flatten_outcome!r} must be auto-resolved"
+    )
+    unresolved = store.list_unresolved()
+    assert unresolved == [], f"Expected empty unresolved for {flatten_outcome!r}; got {unresolved}"
+
+
+@pytest.mark.asyncio
+async def test_safe_terminal_incidents_are_resolved(tmp_path: Path) -> None:
+    """flatten_completed and flatten_not_needed get resolved by the executor."""
+    await _assert_safe_outcome_is_resolved(tmp_path, "completed")
+    await _assert_safe_outcome_is_resolved(tmp_path, "not_needed")
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: scaffold incident (flatten_failed) blocks restart if child dies
+# ---------------------------------------------------------------------------
+
+
+def test_initial_scaffold_blocks_restart_if_child_dies(tmp_path: Path) -> None:
+    """Finding 3: a scaffold-only incident (no terminal write) blocks the post-halt gate.
+
+    Simulate a child crash AFTER the initial append but BEFORE the terminal
+    write by manually writing just the initial scaffold produced by
+    ``watchdog_incident()``.  The gate must return a blocking incident.
+    """
+    from app.engine.live.post_halt_gate import check_post_halt_gate
+    from app.operator.incidents.watchdog_notices import watchdog_incident
+
+    # Write only the scaffold — no terminal step, no resolve.
+    scaffold = watchdog_incident(reason="LEASE_EXPIRED", started_at_ms=1_700_000_000_000)
+    IncidentStore(tmp_path).append(scaffold)
+
+    # The scaffold's notice code is watchdog.flatten_failed (critical / uncertain).
+    assert scaffold.notice.code == "watchdog.flatten_failed", (
+        "scaffold must use the pessimistic flatten_failed code so the gate blocks restart"
+    )
+
+    result = check_post_halt_gate(tmp_path, now_ms=1_700_000_001_000)
+    assert result is not None, (
+        "post-halt gate must block restart when only the scaffold is present"
+    )
+    assert result.notice.code == "reconciliation.required_after_uncertain_flatten"

@@ -199,3 +199,33 @@ def test_mixed_incidents_blocks_when_any_uncertain(tmp_path: Path) -> None:
     result = check_post_halt_gate(tmp_path, now_ms=1_700_000_001_000)
     assert result is not None
     assert result.notice.code == "reconciliation.required_after_uncertain_flatten"
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: scaffold incident (watchdog.flatten_failed used as pessimistic
+# placeholder) blocks restart without a terminal write.
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_only_incident_blocks_restart(tmp_path: Path) -> None:
+    """Finding 3: the initial scaffold written by watchdog_incident() uses
+    watchdog.flatten_failed as its notice code.  If the child crashes before
+    the terminal write, this scaffold stays unresolved and the gate must block.
+    """
+    from app.operator.incidents.watchdog_notices import watchdog_incident
+
+    scaffold = watchdog_incident(reason="LEASE_EXPIRED", started_at_ms=1_700_000_000_000)
+
+    # Verify the scaffold has the pessimistic notice code.
+    assert scaffold.notice.code == "watchdog.flatten_failed", (
+        "scaffold must use flatten_failed so the post-halt gate blocks restart on crash"
+    )
+    assert scaffold.resolved_at_ms is None
+
+    IncidentStore(tmp_path).append(scaffold)
+
+    result = check_post_halt_gate(tmp_path, now_ms=1_700_000_001_000)
+    assert result is not None, (
+        "gate must block when only the scaffold is present (child died mid-halt)"
+    )
+    assert result.notice.code == "reconciliation.required_after_uncertain_flatten"

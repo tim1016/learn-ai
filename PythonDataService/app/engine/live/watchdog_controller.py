@@ -16,6 +16,15 @@ Terminal outcome map (notice code → tier):
     flatten timed_out                       → watchdog.flatten_timed_out   (critical)
     flatten failed (exception)              → watchdog.flatten_failed       (critical)
     broker disconnected before flatten ran  → watchdog.broker_disconnected_before_flatten (critical)
+
+Incident persistence design (Finding 1 / Finding 2):
+  - Incident writes are best-effort.  If the artifacts directory is
+    unwritable, the halt sequence STILL runs — we log CRITICAL with the
+    full incident payload so the operator can recover from logs.
+  - Only SAFE terminal outcomes (flatten_completed, flatten_not_needed) are
+    auto-resolved by the executor.  Critical outcomes remain unresolved so
+    ``check_post_halt_gate`` blocks restart until the reconciliation
+    orchestrator explicitly clears them.
 """
 
 from __future__ import annotations
@@ -43,6 +52,16 @@ logger = logging.getLogger(__name__)
 # Pinned constants (plan §3 §22).
 FLATTEN_TIMEOUT_MS: int = 20_000
 DISCONNECT_TIMEOUT_MS: int = 3_000
+
+# Notice codes that indicate the broker is in a clean state.  Only these are
+# auto-resolved by the executor.  All other (critical) terminal codes stay
+# unresolved so the post-halt gate blocks restart until reconciliation runs.
+_SAFE_OUTCOME_CODES: frozenset[str] = frozenset(
+    {
+        "watchdog.flatten_completed",
+        "watchdog.flatten_not_needed",
+    }
+)
 
 LeaseLossReason = Literal["LEASE_EXPIRED", "BOOT_ID_CHANGED"]
 
@@ -122,17 +141,37 @@ class WatchdogHaltExecutor:
     async def execute(self, reason: LeaseLossReason) -> OperatorIncident:
         """Run the 5 steps in order; persist a typed incident.
 
-        Returns the final ``OperatorIncident`` (resolved, with terminal notice).
-        Never raises — every step exception is caught, logged, and recorded in
-        the incident evidence.
+        Returns the final ``OperatorIncident`` (resolved or unresolved depending
+        on the terminal outcome).  Never raises — every step exception is caught,
+        logged, and recorded in the incident evidence.
+
+        Incident persistence is best-effort (Finding 1): if the artifacts
+        directory is unwritable the halt sequence STILL runs.  Failures are
+        logged at CRITICAL with the full incident payload.
+
+        Auto-resolve policy (Finding 2): only safe outcomes
+        (flatten_completed, flatten_not_needed) are resolved by this executor.
+        Critical outcomes stay unresolved so the post-halt gate blocks restart
+        until the reconciliation orchestrator clears them.
         """
         started_at_ms = self._clock_ms()
         ev = _StepEvidence()
 
-        # Build + persist the initial incident *before* executing steps so
-        # a crash mid-sequence still leaves a durable record.
+        # Build + persist the initial incident *before* executing steps so a
+        # crash mid-sequence still leaves a durable (pessimistic) record.
+        # Best-effort: a write failure must NOT abort the halt sequence.
         initial = watchdog_incident(reason=reason, started_at_ms=started_at_ms)
-        self._store.append(initial)
+        try:
+            self._store.append(initial)
+        except Exception as exc:
+            self._log.critical(
+                "[WATCHDOG] failed to persist initial halt incident; continuing halt sequence",
+                extra={
+                    "incident_id": initial.incident_id,
+                    "incident_payload": initial.model_dump_json(),
+                    "exception": repr(exc),
+                },
+            )
 
         # Step 1 — block submissions IMMEDIATELY (no timeout; synchronous intent).
         try:
@@ -170,16 +209,20 @@ class WatchdogHaltExecutor:
             self._log.critical("[WATCHDOG] %s", msg, exc_info=True)
 
         # Build terminal notice from outcome.
-        resolved_at_ms = self._clock_ms()
+        completed_at_ms = self._clock_ms()
         terminal_notice = _select_terminal_notice(
             flatten_outcome=flatten_outcome,
             flatten_ms=ev.flatten_ms,
             flatten_timeout_ms=self._timeouts.flatten_timeout_ms,
             flatten_error=ev.flatten_error,
-            occurred_at_ms=resolved_at_ms,
+            occurred_at_ms=completed_at_ms,
         )
 
-        # Amend the incident with the terminal notice + evidence + resolved timestamp.
+        # Decide whether this is a safe outcome that can be auto-resolved.
+        is_safe = terminal_notice.code in _SAFE_OUTCOME_CODES
+        resolved_at_ms = completed_at_ms if is_safe else None
+
+        # Amend the incident with the terminal notice + evidence.
         evidence: dict[str, object] = {
             "reason": reason,
             "block_submissions_ok": ev.block_submissions_ok,
@@ -199,15 +242,36 @@ class WatchdogHaltExecutor:
                 "resolved_at_ms": resolved_at_ms,
             }
         )
-        # Persist the amended notice before resolving so a crash between amend
-        # and resolve leaves the terminal notice on disk.
-        self._store.append(final_incident)
-        self._store.resolve(initial.incident_id, resolved_at_ms=resolved_at_ms)
+        # Best-effort: persist the terminal incident.  A write failure is logged
+        # at CRITICAL but does not prevent returning the in-memory incident.
+        try:
+            self._store.append(final_incident)
+        except Exception as exc:
+            self._log.critical(
+                "[WATCHDOG] failed to persist terminal halt incident",
+                extra={
+                    "incident_id": final_incident.incident_id,
+                    "incident_payload": final_incident.model_dump_json(),
+                    "exception": repr(exc),
+                },
+            )
+
+        # Only auto-resolve safe outcomes.  Critical outcomes stay unresolved
+        # so the post-halt gate blocks restart until reconciliation clears them.
+        if is_safe:
+            try:
+                self._store.resolve(initial.incident_id, resolved_at_ms=completed_at_ms)
+            except Exception as exc:
+                self._log.critical(
+                    "[WATCHDOG] failed to resolve safe incident",
+                    extra={"incident_id": initial.incident_id, "exception": repr(exc)},
+                )
 
         self._log.info(
-            "[WATCHDOG] halt complete notice=%s tier=%s",
+            "[WATCHDOG] halt complete notice=%s tier=%s resolved=%s",
             terminal_notice.code,
             terminal_notice.tier,
+            is_safe,
         )
         return final_incident
 
