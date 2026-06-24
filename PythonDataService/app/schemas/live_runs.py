@@ -1494,6 +1494,48 @@ class OperatorSurfaceReconciliation(BaseModel):
     last_reconcile_ms: int | None = None
 
 
+class BrokerActivityHealthFacts(BaseModel):
+    """Raw diagnostic facts behind the broker-activity health verdict.
+
+    Frontend renders these in the forensic-detail panel only; it must
+    not derive state from them.  State comes exclusively from
+    ``BrokerActivityHealth.state``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    publisher_registered: bool
+    publisher_running: bool
+    latest_row_seq: int | None
+    seconds_since_registered: int | None
+    seconds_since_last_row: int | None
+
+
+class BrokerActivityHealth(BaseModel):
+    """PR 5 — broker-activity publisher health surface.
+
+    A single typed verdict (``state``) plus an optional operator-facing
+    notice (``headline``) and a list of all active notices (``notices``).
+    ``facts`` carries the raw diagnostics; the cockpit never derives
+    state from them.
+
+    States:
+    - ``ready``       — publisher registered + running + emitting rows (or
+                        still within the silent-boot window).
+    - ``starting``    — publisher registered but not yet running; within
+                        the starting-timeout window.
+    - ``degraded``    — publisher registered + running but no rows recently.
+    - ``unavailable`` — publisher not registered or timed out while starting.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["ready", "starting", "degraded", "unavailable"]
+    headline: OperatorNotice | None = None
+    notices: list[OperatorNotice] = Field(default_factory=list)
+    facts: BrokerActivityHealthFacts
+
+
 class OperatorSurface(BaseModel):
     """Operator-facing projection of run state for the Terminal Cockpit
     (PRD #607 / Slice 1 / #608, extended by PRD #616).
@@ -1555,6 +1597,12 @@ class OperatorSurface(BaseModel):
     # PR 5/6 will wire the full incident UI; PR 2 plumbs the schema
     # only so cmd_start can surface the blocking condition.
     incident_headline: OperatorNotice | None = None
+    # PR 5 — broker-activity publisher health surface. ``None`` when no
+    # strategy instance is bound (e.g. nothing-ever-deployed) and no
+    # publisher is registered for the current instance. The cockpit
+    # replaces the implicit "Loading history…" spinner with the typed
+    # state machine from this field.
+    broker_activity_health: BrokerActivityHealth | None = None
 
 
 class LiveInstanceStatus(BaseModel):

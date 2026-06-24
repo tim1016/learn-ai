@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 import { RuntimeBannerComponent } from './runtime-banner.component';
-import type { OperatorSurfaceRuntimeFreshness } from '../../../../api/live-instances.types';
+import type { OperatorNotice, OperatorSurfaceRuntimeFreshness } from '../../../../api/live-instances.types';
 
 function withHeadline(): OperatorSurfaceRuntimeFreshness {
   const notice = {
@@ -45,10 +45,24 @@ function freshFreshness(): OperatorSurfaceRuntimeFreshness {
   };
 }
 
+function incidentNotice(): OperatorNotice {
+  return {
+    code: 'watchdog.flatten_timed_out',
+    tier: 'critical',
+    title: 'Flatten timed out',
+    message: 'The flatten-and-pause watchdog halt timed out.',
+    source_codes: [],
+    forensic_facts: {},
+    action: { kind: 'open_runbook', label: 'How to recover', target: 'watchdog-halt' },
+    runbook_slug: 'watchdog-halt',
+    occurred_at_ms: null,
+  };
+}
+
 describe('RuntimeBannerComponent', () => {
   it('renders nothing when there is no headline and no stale reasons', async () => {
     const { container } = await render(RuntimeBannerComponent, {
-      inputs: { freshness: freshFreshness() },
+      inputs: { freshness: freshFreshness(), incidentHeadline: null },
     });
     expect(container.querySelector('[data-testid="runtime-banner"]')).toBeNull();
   });
@@ -89,5 +103,49 @@ describe('RuntimeBannerComponent', () => {
     // The banner is hidden because there is no headline (session-closed
     // is suppressed). Reasons surface elsewhere in the cockpit.
     expect(screen.queryByText('Market closed')).toBeNull();
+  });
+
+  // PR 5 — incident_headline wiring
+
+  it('renders the incident headline above the freshness headline when both are set', async () => {
+    await render(RuntimeBannerComponent, {
+      inputs: {
+        freshness: withHeadline(),
+        incidentHeadline: incidentNotice(),
+      },
+    });
+    const incidentEl = document.querySelector('[data-testid="runtime-banner-incident"]');
+    expect(incidentEl).not.toBeNull();
+    expect(incidentEl?.textContent ?? '').toContain('Flatten timed out');
+    // Freshness headline also rendered
+    expect(screen.getByText('Market data is stale')).toBeTruthy();
+    // Incident block appears before the freshness headline in the DOM
+    const banner = document.querySelector('[data-testid="runtime-banner"]');
+    const incidentPos = banner?.innerHTML.indexOf('runtime-banner-incident') ?? -1;
+    const freshPos = banner?.innerHTML.indexOf('Market data is stale') ?? -1;
+    expect(incidentPos).toBeLessThan(freshPos);
+  });
+
+  it('renders the banner when incidentHeadline is set but freshness is null', async () => {
+    const { container } = await render(RuntimeBannerComponent, {
+      inputs: {
+        freshness: null,
+        incidentHeadline: incidentNotice(),
+      },
+    });
+    expect(container.querySelector('[data-testid="runtime-banner"]')).not.toBeNull();
+    expect(screen.getByText('Flatten timed out')).toBeTruthy();
+  });
+
+  it('does not render the incident block when incidentHeadline is null', async () => {
+    const { container } = await render(RuntimeBannerComponent, {
+      inputs: {
+        freshness: withHeadline(),
+        incidentHeadline: null,
+      },
+    });
+    expect(container.querySelector('[data-testid="runtime-banner-incident"]')).toBeNull();
+    // Freshness headline still visible
+    expect(screen.getByText('Market data is stale')).toBeTruthy();
   });
 });

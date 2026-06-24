@@ -1,17 +1,24 @@
-@if (headline()) {
+@if (hasBannerContent()) {
   <div class="runtime-banner" data-testid="runtime-banner">
-    <!-- TODO (PR 5+): bind (actionClicked) to a navigation handler once a notice
-         consumer that needs routing (e.g. incident notices) ships. -->
-    <app-operator-notice [notice]="headline()!" />
-    @if (additionalReasons().length > 0) {
-      <details class="runtime-banner__more">
-        <summary>{{ additionalReasons().length }} more reason(s)</summary>
-        <div class="runtime-banner__more-list">
-          @for (reason of additionalReasons(); track reason.code) {
-            <app-operator-notice [notice]="reason" />
-          }
-        </div>
-      </details>
+    <!-- TODO (post-merge): bind (actionClicked) on app-operator-notice to a
+         navigation handler once a notice consumer that needs routing ships. -->
+    @if (incidentHeadline(); as incident) {
+      <div class="runtime-banner__incident" data-testid="runtime-banner-incident">
+        <app-operator-notice [notice]="incident" />
+      </div>
+    }
+    @if (headline(); as h) {
+      <app-operator-notice [notice]="h" />
+      @if (additionalReasons().length > 0) {
+        <details class="runtime-banner__more">
+          <summary>{{ additionalReasons().length }} more reason(s)</summary>
+          <div class="runtime-banner__more-list">
+            @for (reason of additionalReasons(); track reason.code) {
+              <app-operator-notice [notice]="reason" />
+            }
+          </div>
+        </details>
+      }
     }
   </div>
 }

@@ -25,7 +25,7 @@ import {
   untracked,
 } from '@angular/core';
 
-import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
+import type { BrokerActivityHealth, LiveInstanceStatus } from '../../../../api/live-instances.types';
 
 import { BotTradeChartCardComponent } from '../reused/bot-trade-chart-card/bot-trade-chart-card.component';
 import { BrokerActivityTableComponent } from '../reused/broker-activity-table/broker-activity-table.component';
@@ -73,6 +73,13 @@ export class ActivityTabComponent {
   readonly backfillError = computed(() => this.stream()?.backfillError() ?? null);
   readonly sseStatus = computed(() => this.stream()?.sseStatus() ?? 'connecting');
   readonly sseError = computed(() => this.stream()?.sseError() ?? null);
+
+  /** PR 5 — pass the typed health verdict from the 4s status poll to the
+   *  table so it can replace the implicit spinner with a server-authored
+   *  notice. Null until the first status response arrives. */
+  readonly activityHealth = computed<BrokerActivityHealth | null>(
+    () => this.status().operator_surface.broker_activity_health ?? null,
+  );
 
   constructor() {
     // ``effect`` re-runs whenever a tracked dependency changes. The only

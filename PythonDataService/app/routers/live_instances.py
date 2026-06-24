@@ -104,6 +104,7 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
+from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
@@ -1720,6 +1721,11 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             reconciliation_ttl_ms=getattr(
                 settings, "reconciliation_receipt_ttl_ms", None
             ),
+            # PR 5 — broker-activity health. Plumbed directly from the
+            # module-level singleton registry; the router does not cache
+            # these values — the registry is the authoritative live state.
+            activity_publisher=get_publisher_registry().get(sid),
+            activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
             now_ms=observed_at_ms,
         ),
         fetched_at_ms=observed_at_ms,

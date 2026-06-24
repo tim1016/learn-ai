@@ -24,8 +24,10 @@ from pydantic import ValidationError
 
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
+from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
 from app.schemas.live_runs import (
+    BrokerActivityHealth,
     BrokerObservationConsistency,
     DesiredStateView,
     FocusAction,
@@ -59,6 +61,7 @@ from app.schemas.live_runs import (
     ReconciliationReceipt,
     RedeployAction,
 )
+from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.mutation_attempt import MutationAttempt
 from app.services.operator_capability import evaluate_all_actions
 from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
@@ -778,6 +781,15 @@ def compute_operator_surface(
     latest_broker_event_ms: int | None = None,
     latest_mutation_ms: int | None = None,
     reconciliation_ttl_ms: int | None = None,
+    # PR 5 — broker-activity publisher health inputs.
+    # ``activity_publisher`` is the registered publisher for the current
+    # instance (``None`` when nothing is registered).
+    # ``activity_publisher_registered_at_ms`` is the wall-clock ms when
+    # the publisher was first registered (from the registry).
+    activity_publisher: BrokerActivityPublisher | None = None,
+    activity_publisher_registered_at_ms: int | None = None,
+    # PR 2 — post-halt watchdog incident headline forwarded verbatim.
+    incident_headline_notice: object | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -795,6 +807,18 @@ def compute_operator_surface(
 
     owned_positions_empty = broker is None or not any(qty != 0 for qty in broker.owned_positions.values())
     resolved_guards = guard_state if guard_state is not None else empty_guard_state()
+
+    # PR 5 — broker-activity health. Only composed when there is a live
+    # binding (an active strategy instance context); without one there
+    # is no publisher to query.
+    broker_activity_health: BrokerActivityHealth | None = None
+    if live_binding is not None:
+        broker_activity_health = compose_broker_activity_health(
+            publisher=activity_publisher,
+            registered_at_ms=activity_publisher_registered_at_ms,
+            last_row_ms=activity_publisher.latest_row_ms if activity_publisher is not None else None,
+            now_ms=now_ms,
+        )
 
     return OperatorSurface(
         host_process=_project_host_process(
@@ -836,4 +860,5 @@ def compute_operator_surface(
             ttl_ms=reconciliation_ttl_ms,
             now_ms=now_ms,
         ),
+        broker_activity_health=broker_activity_health,
     )

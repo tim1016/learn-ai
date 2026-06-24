@@ -478,6 +478,34 @@ export interface OperatorSurfaceControlPlane {
   runbook_slug: string | null;
 }
 
+/** PR 5 — raw diagnostic facts behind the broker-activity health verdict.
+ *  Rendered in a forensic-detail panel only. The cockpit MUST NOT derive
+ *  state from these fields — state comes from `BrokerActivityHealth.state`. */
+export interface BrokerActivityHealthFacts {
+  publisher_registered: boolean;
+  publisher_running: boolean;
+  latest_row_seq: number | null;
+  seconds_since_registered: number | null;
+  seconds_since_last_row: number | null;
+}
+
+/** PR 5 — typed broker-activity publisher health verdict.
+ *
+ *  States:
+ *  - `ready`       — publisher registered + running + emitting rows (or in silent-boot window).
+ *  - `starting`    — publisher registered but not yet running; within the starting-timeout.
+ *  - `degraded`    — publisher running but no recent rows.
+ *  - `unavailable` — publisher not registered or timed out while starting.
+ */
+export interface BrokerActivityHealth {
+  state: 'ready' | 'starting' | 'degraded' | 'unavailable';
+  /** Backend-authored notice for the primary health display; null when state is `ready`. */
+  headline: OperatorNotice | null;
+  /** All active notices for this health verdict (empty when state is `ready`). */
+  notices: OperatorNotice[];
+  facts: BrokerActivityHealthFacts;
+}
+
 export interface OperatorSurface {
   /** Bump on breaking shape changes; additive fields do NOT bump the version. */
   schema_version: number;
@@ -511,6 +539,15 @@ export interface OperatorSurface {
    *  cockpit reads `state` directly to render the hazard banner. The
    *  cockpit does NOT derive its own state from raw receipt fields. */
   reconciliation: OperatorSurfaceReconciliation | null;
+  /** PR 5 — broker-activity publisher health surface. Null when no live
+   *  binding exists (no publisher is registered). The cockpit uses
+   *  `state` to replace the implicit "Loading history…" spinner with a
+   *  typed server-authored verdict. */
+  broker_activity_health: BrokerActivityHealth | null;
+  /** PR 2 — post-halt watchdog incident headline. Null when no unresolved
+   *  uncertain-outcome incident exists. The cockpit renders this above
+   *  the freshness headline in the runtime banner. */
+  incident_headline: OperatorNotice | null;
 }
 
 /** ADR-0008 §5 / PR 1 — operator-facing cold-start reconciliation state

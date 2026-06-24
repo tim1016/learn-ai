@@ -2,6 +2,7 @@ import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import type { BrokerActivityHealth, OperatorNotice } from '../../../../../api/live-instances.types';
 import { BrokerActivityTableComponent } from './broker-activity-table.component';
 import type { BrokerActivityRow } from './broker-activity.types';
 
@@ -32,12 +33,49 @@ function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
   };
 }
 
+function healthNotice(
+  code: OperatorNotice['code'],
+  tier: OperatorNotice['tier'],
+  title: string,
+): OperatorNotice {
+  return {
+    code,
+    tier,
+    title,
+    message: `${title} message`,
+    source_codes: [],
+    forensic_facts: {},
+    action: { kind: 'wait', label: null, target: null },
+    runbook_slug: 'broker-activity-health',
+    occurred_at_ms: null,
+  };
+}
+
+function health(
+  state: BrokerActivityHealth['state'],
+  headline: OperatorNotice | null = null,
+): BrokerActivityHealth {
+  return {
+    state,
+    headline,
+    notices: headline ? [headline] : [],
+    facts: {
+      publisher_registered: state !== 'unavailable',
+      publisher_running: state === 'ready' || state === 'degraded',
+      latest_row_seq: null,
+      seconds_since_registered: 10,
+      seconds_since_last_row: null,
+    },
+  };
+}
+
 function render(props: {
   rows: BrokerActivityRow[];
   backfillLoading?: boolean;
   backfillError?: string | null;
   sseStatus?: string;
   sseError?: string | null;
+  activityHealth?: BrokerActivityHealth | null;
 }) {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -49,6 +87,9 @@ function render(props: {
   fixture.componentRef.setInput('backfillError', props.backfillError ?? null);
   fixture.componentRef.setInput('sseStatus', props.sseStatus ?? 'open');
   fixture.componentRef.setInput('sseError', props.sseError ?? null);
+  if (props.activityHealth !== undefined) {
+    fixture.componentRef.setInput('activityHealth', props.activityHealth);
+  }
   fixture.detectChanges();
   return {
     el: fixture.nativeElement as HTMLElement,
@@ -190,5 +231,63 @@ describe('BrokerActivityTableComponent', () => {
     // when nullable numeric fields are missing; we assert presence not count).
     const dashed = Array.from(lagCells).some((c) => c.textContent?.includes('—'));
     expect(dashed).toBe(true);
+  });
+
+  // PR 5 — health state rendering
+
+  it('renders health notice and suppresses table when state is unavailable', () => {
+    const notice = healthNotice('activity.publisher_not_running', 'critical', 'Activity feed is not running');
+    const { el } = render({
+      rows: [],
+      activityHealth: health('unavailable', notice),
+    });
+    const healthEl = el.querySelector('[data-testid="broker-activity-health-notice"]');
+    expect(healthEl).not.toBeNull();
+    expect(healthEl?.textContent ?? '').toContain('Activity feed is not running');
+    // Table must not be rendered
+    expect(el.querySelector('table')).toBeNull();
+  });
+
+  it('renders health notice and suppresses table when state is starting', () => {
+    const notice = healthNotice('activity.publisher_starting', 'info', 'Activity feed is starting');
+    const { el } = render({
+      rows: [],
+      activityHealth: health('starting', notice),
+    });
+    const healthEl = el.querySelector('[data-testid="broker-activity-health-notice"]');
+    expect(healthEl).not.toBeNull();
+    expect(healthEl?.textContent ?? '').toContain('Activity feed is starting');
+    expect(el.querySelector('table')).toBeNull();
+  });
+
+  it('renders health notice AND the table when state is degraded', () => {
+    const notice = healthNotice('activity.publisher_degraded', 'warning', 'Activity feed is degraded');
+    const { el } = render({
+      rows: [row()],
+      activityHealth: health('degraded', notice),
+    });
+    const healthEl = el.querySelector('[data-testid="broker-activity-health-notice"]');
+    expect(healthEl).not.toBeNull();
+    expect(healthEl?.textContent ?? '').toContain('Activity feed is degraded');
+    // Table is still rendered when degraded
+    expect(el.querySelector('table')).not.toBeNull();
+  });
+
+  it('renders table normally when state is ready and no health notice shown', () => {
+    const { el } = render({
+      rows: [row()],
+      activityHealth: health('ready'),
+    });
+    expect(el.querySelector('[data-testid="broker-activity-health-notice"]')).toBeNull();
+    expect(el.querySelector('table')).not.toBeNull();
+  });
+
+  it('falls back to Loading history… when activityHealth is null and backfillLoading is true', () => {
+    const { el } = render({
+      rows: [],
+      backfillLoading: true,
+      activityHealth: null,
+    });
+    expect((el.textContent ?? '').toLowerCase()).toContain('loading history');
   });
 });
