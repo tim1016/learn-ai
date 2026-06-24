@@ -334,8 +334,16 @@ class IbkrClient:
             if not self._data_farm_degraded:
                 self._last_event_ms = now_ms_utc()
             self._data_farm_degraded = True
+            # The TWS code is folded into the message string (not only the
+            # structured ``extra``) because the incident-taxonomy
+            # classifier in ``app.services.live_log_failures`` reads the
+            # formatted ``%(message)s`` from ``live.log`` and ``extra``
+            # is dropped. Without the code in the message body, the
+            # DATA_FARM_DEGRADED row's ``dynamic_facts["tws_code"]``
+            # would always be empty in production.
             logger.warning(
-                "IBKR data farm degraded",
+                "IBKR data farm degraded (code %d)",
+                errorCode,
                 extra={
                     "error_code": errorCode,
                     "error": errorString,
