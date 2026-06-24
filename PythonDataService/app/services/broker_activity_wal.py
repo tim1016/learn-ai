@@ -72,16 +72,25 @@ def instance_broker_activity_wal_path(
     ``broker_activity_publisher`` does the one-time fold of the legacy
     per-run files into it.
 
-    ``strategy_instance_id`` is validated at this seam (mirrors the
-    pattern on ``stable_desired_state_path``): the value flows into a
-    directory segment, so we fail closed on path-traversal /
-    separator / NUL / empty inputs before touching the filesystem. This
-    is also what keeps the value off the CodeQL ``py/path-injection``
-    taint chain for downstream callers (the migration helper and the
-    WAL writer's existence/atomic-rename ops).
+    ``strategy_instance_id`` is validated at this seam: the value flows
+    into a directory segment, so we fail closed on path-traversal /
+    separator / NUL / empty inputs before touching the filesystem.
+    After constructing the path we additionally resolve it and verify
+    the resolved location is still under ``<artifacts_root>/live_instances``
+    — defense in depth, and the CodeQL-recognised sanitizer for
+    ``py/path-injection`` (the anchored regex alone is not recognised
+    by the query, so downstream sinks like ``mkdir`` / ``open`` /
+    ``os.replace`` in the migration helper would otherwise stay
+    tainted).
     """
     validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_instances" / strategy_instance_id / "broker_activity.jsonl"
+    instances_root = (artifacts_root / "live_instances").resolve()
+    candidate = (instances_root / strategy_instance_id / "broker_activity.jsonl").resolve()
+    if not candidate.is_relative_to(instances_root):
+        raise ValueError(
+            f"strategy_instance_id escapes instances root: {strategy_instance_id!r}"
+        )
+    return candidate
 
 
 class BrokerActivityWal:

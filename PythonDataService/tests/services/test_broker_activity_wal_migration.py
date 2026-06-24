@@ -82,7 +82,11 @@ def _seed_legacy_run(
 def test_instance_path_lands_under_live_instances(tmp_path: Path) -> None:
     artifacts_root = tmp_path / "artifacts"
     path = instance_broker_activity_wal_path(artifacts_root, SID)
-    assert path == artifacts_root / "live_instances" / SID / "broker_activity.jsonl"
+    # The builder resolves the path (defense-in-depth scope check); compare
+    # against the resolved expected so the assertion is robust to symlinks
+    # in the runner's temp dir (macOS' /tmp is a symlink, Linux' is not).
+    expected = (artifacts_root / "live_instances" / SID / "broker_activity.jsonl").resolve()
+    assert path == expected
 
 
 def test_migration_with_no_source_runs_is_a_no_op(tmp_path: Path) -> None:
