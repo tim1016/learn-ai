@@ -8,8 +8,11 @@ import pytest
 
 from app.services.live_log_failures import (
     _DEFAULT_SOURCE,
+    _RULES,
     IncidentCategory,
+    IncidentRule,
     IncidentSource,
+    _build_default_source,
     classify,
     classify_source,
     extract_facts,
@@ -805,3 +808,51 @@ def test_parse_incidents_classifies_shutdown_flatten_failed_source_per_d3() -> N
     assert len(engine_rows) == 1
     assert engine_rows[0].incident_category == IncidentCategory.SHUTDOWN_FLATTEN_FAILED
     assert engine_rows[0].incident_source == IncidentSource.APP
+
+
+# ---------------------------------------------------------------------------
+# _RULES table invariants. The refactor (issue #669) collapsed five
+# parallel structures into one declarative table; these tests lock in
+# the load-time guarantees that the derived maps depend on.
+# ---------------------------------------------------------------------------
+
+
+def test_rules_table_covers_every_non_unknown_category() -> None:
+    """Every IncidentCategory except UNKNOWN must have at least one rule.
+
+    UNKNOWN is the terminal fall-through and is added to _DEFAULT_SOURCE
+    explicitly by ``_build_default_source``; it deliberately has no rule.
+    """
+    categories_in_rules = {rule.category for rule in _RULES}
+    expected = set(IncidentCategory) - {IncidentCategory.UNKNOWN}
+
+    missing = expected - categories_in_rules
+    assert missing == set(), (
+        f"_RULES is missing rows for: {sorted(c.value for c in missing)}"
+    )
+
+    assert IncidentCategory.UNKNOWN not in categories_in_rules, (
+        "UNKNOWN must not appear in _RULES — it's the terminal fall-through"
+    )
+
+
+def test_build_default_source_raises_on_inconsistent_source() -> None:
+    """Two rules sharing a category must share a source — the builder
+    raises at module load to keep ``classify_source(category, …)`` from
+    silently picking whichever rule landed last.
+    """
+    bad_rules = (
+        IncidentRule(
+            category=IncidentCategory.BROKER_DISCONNECT,
+            source=IncidentSource.BROKER,
+            matches=lambda _logger, _message: False,
+        ),
+        IncidentRule(
+            category=IncidentCategory.BROKER_DISCONNECT,
+            source=IncidentSource.APP,  # conflict
+            matches=lambda _logger, _message: False,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=r"Inconsistent IncidentRule\.source"):
+        _build_default_source(bad_rules)
