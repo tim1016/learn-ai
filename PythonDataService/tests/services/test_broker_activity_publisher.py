@@ -40,7 +40,8 @@ from app.services.broker_activity_publisher_registry import (
 )
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
-    stable_broker_activity_wal_path,
+    instance_broker_activity_wal_path,
+    legacy_per_run_broker_activity_wal_path,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -183,12 +184,12 @@ async def _wait_for_rows(
 async def test_fill_event_is_authored_persisted_and_broadcast(
     tmp_path: Path,
 ) -> None:
-    publisher, run_dir, _ = _build_publisher(tmp_path, [_fill_event()])
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [_fill_event()])
     queue = publisher.subscribe()
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         assert rows[0].verdict == Verdict.EXPECTED
         assert rows[0].template_key == "normal_fill"
@@ -207,14 +208,14 @@ async def test_fill_event_is_authored_persisted_and_broadcast(
 async def test_intermediate_status_events_are_skipped(tmp_path: Path) -> None:
     """A Submitted / PreSubmitted transition on an OWNED order is not a
     row — only fills / cancellations / rejections produce rows."""
-    publisher, run_dir, _ = _build_publisher(
+    publisher, _run_dir, artifacts = _build_publisher(
         tmp_path,
         [_intermediate_status_event(), _fill_event()],
     )
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         # Only the fill became a row; the Submitted transition did not.
         assert len(rows) == 1
@@ -229,13 +230,13 @@ async def test_foreign_fill_authored_as_unmatched_execution(
     """A fill arriving with no order_ref (or a non-matching namespace)
     is authored as UNMATCHED_EXECUTION so the operator sees it
     immediately."""
-    publisher, run_dir, _ = _build_publisher(
+    publisher, _run_dir, artifacts = _build_publisher(
         tmp_path, [_fill_event(order_ref=None, exec_id="foreign-1")]
     )
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         assert rows[0].verdict == Verdict.UNEXPECTED
         assert rows[0].template_key == "unmatched_execution"
@@ -252,7 +253,7 @@ async def test_duplicate_exec_id_from_replay_is_deduped(tmp_path: Path) -> None:
     artifacts = tmp_path / "artifacts"
     run_dir = tmp_path / "run-dir"
     _seed_envelope(artifacts)
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     pre = BrokerActivityRow(
         seq=1,
         ts_ms=1_700_000_000_000 - 1,
@@ -284,7 +285,7 @@ async def test_duplicate_exec_id_from_replay_is_deduped(tmp_path: Path) -> None:
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=2
+            instance_broker_activity_wal_path(artifacts, SID), want=2
         )
         assert rows[0].headline == "pre-existing"
         assert rows[1].verdict == Verdict.UNEXPECTED
@@ -314,11 +315,11 @@ async def test_unauthorable_event_is_skipped_not_persisted(
         last_fill_price=450.0,
         ts_ms=1_700_000_000_000,
     )
-    publisher, run_dir, _ = _build_publisher(tmp_path, [bad_event, _fill_event()])
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [bad_event, _fill_event()])
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         # Only the good event landed; the bad one was skipped.
         assert len(rows) == 1
@@ -328,11 +329,11 @@ async def test_unauthorable_event_is_skipped_not_persisted(
 
 
 async def test_envelope_cursor_advances_per_row(tmp_path: Path) -> None:
-    publisher, run_dir, artifacts = _build_publisher(tmp_path, [_fill_event()])
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [_fill_event()])
     publisher.start()
     try:
         await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         repo = LiveStateSidecarRepo(stable_live_state_path(artifacts, SID))
         envelope = repo.read()
@@ -345,7 +346,7 @@ async def test_envelope_cursor_advances_per_row(tmp_path: Path) -> None:
 async def test_backfill_returns_rows_after_cursor(tmp_path: Path) -> None:
     """REST backfill API returns rows with seq > cursor for cold-start
     clients."""
-    publisher, run_dir, _ = _build_publisher(
+    publisher, _run_dir, artifacts = _build_publisher(
         tmp_path,
         [
             _fill_event(exec_id="e1"),
@@ -356,7 +357,7 @@ async def test_backfill_returns_rows_after_cursor(tmp_path: Path) -> None:
     publisher.start()
     try:
         await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=3
+            instance_broker_activity_wal_path(artifacts, SID), want=3
         )
         page = publisher.backfill(after_seq=1)
         assert [r.exec_id for r in page] == ["e2", "e3"]
@@ -475,7 +476,7 @@ async def test_fill_matches_via_intent_wal_when_sidecar_empty(
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         # The fill matched the WAL-folded intent — NOT unmatched.
         assert rows[0].verdict == Verdict.EXPECTED
@@ -500,7 +501,7 @@ async def test_event_for_foreign_namespace_is_silently_skipped(
     TWS click) still get authored as ``unmatched_execution``.
     """
     other_namespace_ref = "learn-ai/other-sid/v1:intent-x"
-    publisher, run_dir, _ = _build_publisher(
+    publisher, _run_dir, artifacts = _build_publisher(
         tmp_path,
         [
             # Other instance's fill — must be skipped.
@@ -515,7 +516,7 @@ async def test_event_for_foreign_namespace_is_silently_skipped(
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         # Only our fill landed; the other namespace's event was dropped
         # before authoring.
@@ -627,13 +628,13 @@ async def test_reconnect_sweep_authors_missed_execs_as_caveats(
     WAL with the ``reconnect_recovery`` template (verdict
     ``expected_with_caveat``)."""
     recovered = _fill_event(exec_id="recovered-1")
-    publisher, run_dir, _ = _build_publisher_with_recovery(
+    publisher, _run_dir, artifacts = _build_publisher_with_recovery(
         tmp_path, recovery_events=[recovered]
     )
     # No live events — purely test the sweep path.
     count = await publisher.sweep_reconnect_recovery()
     assert count == 1
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     rows = wal.read_all()
     assert len(rows) == 1
     assert rows[0].exec_id == "recovered-1"
@@ -652,7 +653,7 @@ async def test_reconnect_sweep_dedupes_already_seen_execs(tmp_path: Path) -> Non
     artifacts = tmp_path / "artifacts"
     run_dir = tmp_path / "run-dir"
     _seed_envelope(artifacts)
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     # Pre-populate the WAL — this row predates the disconnect.
     pre = BrokerActivityRow(
         seq=1,
@@ -708,12 +709,12 @@ async def test_reconnect_sweep_skips_foreign_namespace(tmp_path: Path) -> None:
         order_ref="learn-ai/some-other-instance/v1:other-intent",
         exec_id="foreign-recover-1",
     )
-    publisher, run_dir, _ = _build_publisher_with_recovery(
+    publisher, _run_dir, artifacts = _build_publisher_with_recovery(
         tmp_path, recovery_events=[foreign]
     )
     count = await publisher.sweep_reconnect_recovery()
     assert count == 0
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     assert wal.read_all() == []
 
 
@@ -770,7 +771,7 @@ async def test_excessive_lag_during_reconnect_window_renders_as_caveat_not_unexp
 
     count = await publisher.sweep_reconnect_recovery()
     assert count == 1
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     rows = wal.read_all()
     assert len(rows) == 1
     # The reconnect_recovery reason superseded TIMING_CAVEAT.
@@ -840,11 +841,11 @@ async def test_reconnect_sweep_no_op_without_factory(tmp_path: Path) -> None:
     """A publisher built without a ``recovery_source_factory`` (legacy
     callers / tests that don't exercise the sweep) returns 0 from
     ``sweep_reconnect_recovery`` without touching the WAL."""
-    publisher, run_dir, _ = _build_publisher(tmp_path, [])
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [])
     assert publisher._recovery_source_factory is None  # sanity
     count = await publisher.sweep_reconnect_recovery()
     assert count == 0
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     assert wal.read_all() == []
 
 
@@ -1209,7 +1210,9 @@ def _append_intent_wal_event(
         fh.write(event.model_dump_json() + "\n")
 
 
-def _pending_publisher(tmp_path: Path) -> tuple[BrokerActivityPublisher, Path]:
+def _pending_publisher(
+    tmp_path: Path,
+) -> tuple[BrokerActivityPublisher, Path, Path]:
     """Build a publisher whose event source never yields, so only the
     pending-intent tick can author rows."""
     artifacts = tmp_path / "artifacts"
@@ -1231,7 +1234,7 @@ def _pending_publisher(tmp_path: Path) -> tuple[BrokerActivityPublisher, Path]:
     )
     # Tick fast so tests don't sleep for the production 2 s cadence.
     publisher._pending_tick_period_s = 0.02
-    return publisher, run_dir
+    return publisher, run_dir, artifacts
 
 
 async def test_pending_intent_tick_authors_engine_only_pending_row(
@@ -1240,7 +1243,7 @@ async def test_pending_intent_tick_authors_engine_only_pending_row(
     """A PENDING_INTENT in the WAL with a usable order_spec produces an
     ``engine_only_pending`` row on the publisher's periodic tick — even
     when no broker events ever arrive."""
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1256,7 +1259,7 @@ async def test_pending_intent_tick_authors_engine_only_pending_row(
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
         )
     finally:
         await publisher.stop()
@@ -1275,7 +1278,7 @@ async def test_pending_intent_tick_does_not_duplicate_on_repeat(
 ) -> None:
     """The tick fires periodically; an unchanged pending intent must
     produce exactly one row, not one per tick."""
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1291,11 +1294,11 @@ async def test_pending_intent_tick_does_not_duplicate_on_repeat(
     publisher.start()
     try:
         await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
         )
         # Let several more ticks fire — dedup must hold across them.
         await asyncio.sleep(0.2)
-        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+        rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
     finally:
         await publisher.stop()
 
@@ -1309,7 +1312,7 @@ async def test_pending_intent_tick_skips_broker_acked_intent(
     """An intent whose WAL already has SUBMITTED is no longer pending —
     the tick must NOT author a pending row for it (the broker event
     path will produce the fill/cancel row when one arrives)."""
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1332,7 +1335,7 @@ async def test_pending_intent_tick_skips_broker_acked_intent(
     try:
         # Tick at least twice, then confirm the WAL stays empty.
         await asyncio.sleep(0.15)
-        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+        rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
     finally:
         await publisher.stop()
 
@@ -1349,7 +1352,7 @@ async def test_pending_intent_tick_skips_missing_order_spec(
     """A PENDING_INTENT lacking the order_spec fields the template
     requires is logged + skipped — never authored as a partially-
     rendered row (truthfulness contract)."""
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1360,7 +1363,7 @@ async def test_pending_intent_tick_skips_missing_order_spec(
     publisher.start()
     try:
         await asyncio.sleep(0.15)
-        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+        rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
     finally:
         await publisher.stop()
 
@@ -1375,7 +1378,7 @@ async def test_pending_intent_tick_re_authors_after_dedup_pruned(
     re-author — the dedup set is pruned to the currently-unacked set
     on every tick.
     """
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     intent_id = "pending-re"
     spec = {
         "symbol": "SPY",
@@ -1393,7 +1396,7 @@ async def test_pending_intent_tick_re_authors_after_dedup_pruned(
     publisher.start()
     try:
         await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
         )
         # Simulate the intent moving to SUBMITTED (broker acked) — dedup
         # set prunes, no new pending row authored.
@@ -1405,7 +1408,7 @@ async def test_pending_intent_tick_re_authors_after_dedup_pruned(
         )
         await asyncio.sleep(0.15)
         rows_after_ack = BrokerActivityWal(
-            stable_broker_activity_wal_path(run_dir)
+            instance_broker_activity_wal_path(artifacts, SID)
         ).read_all()
         # Still only one pending row (the dedup pruning is internal,
         # not observable on the WAL — but no new pending row appeared).
@@ -1423,7 +1426,7 @@ async def test_pending_intent_tick_skips_non_strategy_intent_kind(
     for engine-emitted strategy orders."""
     from app.engine.live.intent_events import IntentEvent
 
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     event = IntentEvent(
         seq=1,
         event_type="PENDING_INTENT",  # type: ignore[arg-type]
@@ -1446,7 +1449,7 @@ async def test_pending_intent_tick_skips_non_strategy_intent_kind(
     publisher.start()
     try:
         await asyncio.sleep(0.15)
-        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+        rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
     finally:
         await publisher.stop()
 
@@ -1458,7 +1461,7 @@ async def test_pending_intent_tick_broadcasts_to_subscribers(
 ) -> None:
     """The pending row reaches SSE subscribers like any other row —
     the cockpit's Working/Pending panel sees it without a reload."""
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, _artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1493,7 +1496,7 @@ async def test_pending_intent_tick_skips_intent_not_accepted_status(
     ``PROVABLY_ABSENT`` probe. The tick must NOT author a pending row
     for it; no broker event will ever supersede such a row, leaving
     the operator with a stale 'Awaiting broker ack' that lies."""
-    publisher, run_dir = _pending_publisher(tmp_path)
+    publisher, run_dir, artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1515,7 +1518,7 @@ async def test_pending_intent_tick_skips_intent_not_accepted_status(
     publisher.start()
     try:
         await asyncio.sleep(0.15)
-        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+        rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
     finally:
         await publisher.stop()
 
@@ -1535,7 +1538,7 @@ async def test_pending_intent_dedup_seeded_from_wal_on_restart(
     NOT re-author / re-broadcast the same intent — the frontend dedupes
     by ``seq`` and would otherwise show duplicate Working/Pending rows.
     """
-    publisher_a, run_dir = _pending_publisher(tmp_path)
+    publisher_a, run_dir, artifacts = _pending_publisher(tmp_path)
     _append_intent_wal_event(
         run_dir,
         seq=1,
@@ -1551,7 +1554,7 @@ async def test_pending_intent_dedup_seeded_from_wal_on_restart(
     publisher_a.start()
     try:
         await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1, timeout=1.0
+            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
         )
     finally:
         await publisher_a.stop()
@@ -1574,7 +1577,7 @@ async def test_pending_intent_dedup_seeded_from_wal_on_restart(
         # Let several ticks fire; the seeded dedupe should suppress
         # all of them.
         await asyncio.sleep(0.15)
-        rows = BrokerActivityWal(stable_broker_activity_wal_path(run_dir)).read_all()
+        rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
     finally:
         await publisher_b.stop()
 
@@ -1612,11 +1615,11 @@ async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:
         last_fill_price=450.0,
         ts_ms=1_700_000_000_000,
     )
-    publisher, run_dir, _ = _build_publisher(tmp_path, [bad_event, _fill_event()])
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [bad_event, _fill_event()])
     publisher.start()
     try:
         rows = await _wait_for_rows(
-            stable_broker_activity_wal_path(run_dir), want=1
+            instance_broker_activity_wal_path(artifacts, SID), want=1
         )
         assert rows[0].seq == 1
     finally:
@@ -1778,7 +1781,7 @@ async def test_latest_row_ms_is_none_on_cold_start_with_existing_wal(
 
     # Pre-populate the WAL with a stale row so cold-start seeding would
     # have set latest_row_ms to a very old timestamp.
-    wal_path = stable_broker_activity_wal_path(run_dir)
+    wal_path = instance_broker_activity_wal_path(artifacts, SID)
     wal_path.parent.mkdir(parents=True, exist_ok=True)
     stale_ms = 1_600_000_000_000  # 2020-09 — unmistakably old
     stale_row = BrokerActivityRow(
@@ -1818,10 +1821,10 @@ async def test_latest_row_ms_advances_after_in_process_row(
 ) -> None:
     """latest_row_ms must advance once _persist_and_broadcast is called
     inside this process, regardless of whether the WAL was pre-populated."""
-    publisher, run_dir, _ = _build_publisher(tmp_path, [_fill_event()])
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [_fill_event()])
     publisher.start()
     try:
-        await _wait_for_rows(stable_broker_activity_wal_path(run_dir), want=1)
+        await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         assert publisher.latest_row_ms is not None
         assert publisher.latest_row_ms > 0
     finally:
@@ -1867,3 +1870,151 @@ async def test_unregister_clears_registered_at_for_instance(
 
     await registry.unregister(SID)
     assert registry.registered_at_ms(SID) is None
+
+
+# ── Per-instance WAL migration (publisher init wiring) ──────────────
+
+
+def _seed_legacy_run_wal(
+    artifacts_root: Path,
+    run_id: str,
+    rows: list[BrokerActivityRow],
+) -> None:
+    """Build a legacy per-run dir with run_ledger.json + broker_activity.jsonl
+    so the publisher's migration step on init has something to fold."""
+    import json as _json
+
+    run_dir = artifacts_root / "live_runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run_ledger.json").write_text(
+        _json.dumps({"strategy_instance_id": SID}), encoding="utf-8"
+    )
+    legacy_wal = BrokerActivityWal(legacy_per_run_broker_activity_wal_path(run_dir))
+    for row in rows:
+        legacy_wal.allocate_seq()
+        legacy_wal.append_row(row)
+
+
+async def test_init_migrates_legacy_per_run_wals_on_cold_start(
+    tmp_path: Path,
+) -> None:
+    """When the per-instance WAL does not yet exist but legacy per-run
+    WALs are present for this strategy_instance_id, publisher __init__
+    folds them into the per-instance WAL before opening it."""
+    artifacts = tmp_path / "artifacts"
+    legacy_row = BrokerActivityRow(
+        seq=1,
+        ts_ms=1_699_999_999_000,
+        exec_id="legacy-fill-1",
+        perm_id=999,
+        order_ref=f"{NS}:intent-legacy",
+        symbol="SPY",
+        side="BUY",
+        quantity=100.0,
+        price=450.0,
+        order_type="MKT",
+        verdict=Verdict.EXPECTED,
+        template_key="normal_fill",
+        template_version=1,
+        headline="legacy",
+        narrative="legacy",
+    )
+    _seed_legacy_run_wal(artifacts, "run-legacy", [legacy_row])
+    _seed_envelope(artifacts)
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=tmp_path / "run-current",
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+    )
+
+    instance_wal = BrokerActivityWal(
+        instance_broker_activity_wal_path(artifacts, SID)
+    )
+    rows = instance_wal.read_all()
+    assert [r.exec_id for r in rows] == ["legacy-fill-1"]
+    assert rows[0].source_run_id == "run-legacy"
+    assert rows[0].source_seq == 1
+    # The dedup set was seeded from the migrated WAL — a re-delivery of
+    # the same exec_id would now be skipped.
+    assert "legacy-fill-1" in publisher._seen_exec_ids
+
+
+async def test_init_skips_migration_when_per_instance_wal_already_exists(
+    tmp_path: Path,
+) -> None:
+    """Re-bootstrap with a non-empty per-instance WAL must NOT re-fold
+    the legacy per-run files — that would clobber rows authored after
+    the first migration."""
+    artifacts = tmp_path / "artifacts"
+    legacy_row = BrokerActivityRow(
+        seq=1,
+        ts_ms=1_699_999_999_000,
+        exec_id="legacy-fill",
+        perm_id=999,
+        order_ref=f"{NS}:intent-legacy",
+        symbol="SPY",
+        side="BUY",
+        quantity=100.0,
+        price=450.0,
+        order_type="MKT",
+        verdict=Verdict.EXPECTED,
+        template_key="normal_fill",
+        template_version=1,
+        headline="legacy",
+        narrative="legacy",
+    )
+    _seed_legacy_run_wal(artifacts, "run-legacy", [legacy_row])
+    _seed_envelope(artifacts)
+
+    # First bootstrap migrates.
+    BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=tmp_path / "run-current",
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+    )
+
+    # Append a "post-migration" row directly to the per-instance WAL.
+    instance_path = instance_broker_activity_wal_path(artifacts, SID)
+    instance_wal = BrokerActivityWal(instance_path)
+    post = BrokerActivityRow(
+        seq=2,
+        ts_ms=1_700_000_500_000,
+        exec_id="post-migration",
+        perm_id=1000,
+        order_ref=f"{NS}:intent-post",
+        symbol="SPY",
+        side="SELL",
+        quantity=100.0,
+        price=455.0,
+        order_type="MKT",
+        verdict=Verdict.EXPECTED,
+        template_key="normal_fill",
+        template_version=1,
+        headline="post",
+        narrative="post",
+    )
+    instance_wal.allocate_seq()
+    instance_wal.append_row(post)
+
+    # Second bootstrap — must NOT re-migrate. The post-migration row stays.
+    BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=tmp_path / "run-current",
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+    )
+
+    rows = BrokerActivityWal(instance_path).read_all()
+    exec_ids = [r.exec_id for r in rows]
+    assert exec_ids == ["legacy-fill", "post-migration"], (
+        "second bootstrap re-ran migration and clobbered the live row"
+    )

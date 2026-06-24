@@ -98,6 +98,12 @@ export interface BrokerActivityRow {
   // Drill-down structured facts
   engine_overlay: EngineOverlay | null;
   divergence_facts: DivergenceFacts | null;
+
+  // Migration provenance — non-null only when the row was migrated from a
+  // legacy per-run WAL into the per-instance WAL. Backend default is null
+  // for rows authored directly into the per-instance WAL.
+  source_run_id?: string | null;
+  source_seq?: number | null;
 }
 
 export interface BrokerActivityPage {

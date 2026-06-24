@@ -32,7 +32,7 @@ from app.services.broker_activity_publisher import (
 )
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
-    stable_broker_activity_wal_path,
+    instance_broker_activity_wal_path,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -214,7 +214,7 @@ async def test_matched_exec_does_not_emit_incident(tmp_path: Path) -> None:
     incident_store = IncidentStore(tmp_path / "run-dir")
     matched_fill = _fill_event(exec_id="matched-sweep-1", order_ref=ORDER_REF)
 
-    publisher, run_dir, _ = _build_publisher(
+    publisher, _run_dir, artifacts = _build_publisher(
         tmp_path,
         recovery_events=[matched_fill],
         incident_store=incident_store,
@@ -226,7 +226,7 @@ async def test_matched_exec_does_not_emit_incident(tmp_path: Path) -> None:
     assert incidents == [], f"unexpected incidents: {incidents}"
 
     # The fill was authored in the WAL (normal path, not unmatched).
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     rows = wal.read_all()
     assert len(rows) == 1
     assert rows[0].exec_id == "matched-sweep-1"
@@ -306,7 +306,7 @@ async def test_lookback_bound_clamps_request_window(tmp_path: Path) -> None:
         exec_time_ms=cutoff_ms + 60_000,  # 1 minute after cutoff → processed
     )
 
-    publisher, run_dir, _ = _build_publisher(
+    publisher, _run_dir, artifacts = _build_publisher(
         tmp_path,
         recovery_events=[old_fill, recent_fill],
         incident_store=incident_store,
@@ -316,7 +316,7 @@ async def test_lookback_bound_clamps_request_window(tmp_path: Path) -> None:
 
     # Only the recent fill should have been processed.
     assert count == 1
-    wal = BrokerActivityWal(stable_broker_activity_wal_path(run_dir))
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     rows = wal.read_all()
     assert len(rows) == 1
     assert rows[0].exec_id == "recent-fill-1"

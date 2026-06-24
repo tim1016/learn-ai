@@ -44,10 +44,34 @@ class BrokerActivityWalCorruptError(RuntimeError):
         self.detail = detail
 
 
-def stable_broker_activity_wal_path(run_dir: Path) -> Path:
-    """Canonical path: ``<run_dir>/broker_activity.jsonl``. Sibling to
-    ``intent_events.jsonl`` per the ADR-0008 amendment."""
+def legacy_per_run_broker_activity_wal_path(run_dir: Path) -> Path:
+    """Legacy per-run WAL location: ``<run_dir>/broker_activity.jsonl``.
+
+    Retained for (a) reading any pre-migration WAL files that still live
+    under their original run dir, and (b) the one-time migration that
+    folds those files into the per-instance WAL. New publishers write to
+    ``instance_broker_activity_wal_path`` instead — see the docstring on
+    that function for the why.
+    """
     return run_dir / "broker_activity.jsonl"
+
+
+def instance_broker_activity_wal_path(
+    artifacts_root: Path, strategy_instance_id: str
+) -> Path:
+    """Canonical path: ``<artifacts_root>/live_instances/<sid>/broker_activity.jsonl``.
+
+    The WAL is scoped to the strategy instance, not the run, so it
+    persists across redeploys. Before this scoping, each redeploy created
+    a fresh empty WAL under ``live_runs/<run_id>/``, which made the
+    cockpit's Broker Activity panel drop every fill that happened in a
+    prior run — even though those fills were durably on disk in the old
+    run dir. The per-instance WAL accumulates the full lifetime of broker
+    events for the instance; ``_migrate_per_run_wals_to_instance_wal`` in
+    ``broker_activity_publisher`` does the one-time fold of the legacy
+    per-run files into it.
+    """
+    return artifacts_root / "live_instances" / strategy_instance_id / "broker_activity.jsonl"
 
 
 class BrokerActivityWal:
@@ -174,5 +198,6 @@ class BrokerActivityWal:
 __all__ = [
     "BrokerActivityWal",
     "BrokerActivityWalCorruptError",
-    "stable_broker_activity_wal_path",
+    "instance_broker_activity_wal_path",
+    "legacy_per_run_broker_activity_wal_path",
 ]

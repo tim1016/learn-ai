@@ -206,6 +206,15 @@ class BrokerActivityRow(BaseModel):
     engine_overlay: EngineOverlay | None = None
     divergence_facts: DivergenceFacts | None = None
 
+    # ── Migration provenance ────────────────────────────────────────
+    # Populated only when a row was migrated from a legacy per-run WAL
+    # into the per-instance WAL. ``source_run_id`` is the run dir name
+    # the row originated from; ``source_seq`` is the row's seq in that
+    # per-run WAL before the per-instance reseq. Both are ``None`` for
+    # rows authored directly into the per-instance WAL.
+    source_run_id: str | None = None
+    source_seq: int | None = None
+
 
 class BrokerActivityPage(BaseModel):
     """Paginated REST response from the WAL ad-hoc query endpoint.
