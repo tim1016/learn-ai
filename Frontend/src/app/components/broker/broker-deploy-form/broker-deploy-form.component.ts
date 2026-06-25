@@ -1,7 +1,9 @@
 import {
+  afterNextRender,
   ChangeDetectionStrategy,
   Component,
   computed,
+  ElementRef,
   effect,
   inject,
   resource,
@@ -62,6 +64,7 @@ export class BrokerDeployFormComponent {
   private readonly broker = inject(BrokerService);
   protected readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
@@ -357,6 +360,12 @@ export class BrokerDeployFormComponent {
       }
       this.autoSelectedDeploymentValidationAuditCopy.set(false);
     });
+
+    afterNextRender(() => {
+      if (!this.hasAnyRequiredFieldValue()) {
+        this.syncRenderedFieldValues({ includeEmpty: false });
+      }
+    });
   }
 
   private readonly required = computed<boolean>(
@@ -418,6 +427,7 @@ export class BrokerDeployFormComponent {
   readonly canSubmit = computed<boolean>(() => !this.busy() && this.blockedReason() === null);
 
   async submit(): Promise<void> {
+    this.syncRenderedFieldValues();
     if (!this.canSubmit()) return;
     if (this.startNow() && !this.readonlyFlag() && !this.liveConfirmed()) {
       this.showLiveConfirm.set(true);
@@ -487,6 +497,83 @@ export class BrokerDeployFormComponent {
       ? e.target.value
       : '';
   }
+  private renderedFieldValue(
+    field:
+      | 'strategyKey'
+      | 'specPath'
+      | 'accountId'
+      | 'qcBacktestId'
+      | 'qcAuditCopyPath'
+      | 'instanceId',
+  ): string | null {
+    const control = this.host.nativeElement.querySelector(
+      `[data-deploy-field="${field}"]`,
+    );
+    if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
+      return control.value;
+    }
+    return null;
+  }
+
+  private shouldSyncRenderedValue(
+    renderedValue: string | null,
+    signalValue: string,
+    includeEmpty: boolean,
+  ): renderedValue is string {
+    return (
+      renderedValue !== null &&
+      (includeEmpty || renderedValue.trim() !== '') &&
+      renderedValue !== signalValue
+    );
+  }
+
+  private hasAnyRequiredFieldValue(): boolean {
+    return [
+      this.strategyKey(),
+      this.specPath(),
+      this.accountId(),
+      this.qcBacktestId(),
+      this.qcAuditCopyPath(),
+      this.instanceId(),
+    ].some((value) => value.trim() !== '');
+  }
+
+  syncRenderedFieldValues(options: { includeEmpty?: boolean } = {}): void {
+    const includeEmpty = options.includeEmpty ?? true;
+    const strategyKey = this.renderedFieldValue('strategyKey');
+    if (this.shouldSyncRenderedValue(strategyKey, this.strategyKey(), includeEmpty)) {
+      this.manualSpecPath.set(false);
+      this.strategyKey.set(strategyKey);
+    }
+
+    const specPath = this.renderedFieldValue('specPath');
+    if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty)) {
+      this.specPath.set(specPath);
+    }
+
+    const accountId = this.renderedFieldValue('accountId');
+    if (this.shouldSyncRenderedValue(accountId, this.accountId(), includeEmpty)) {
+      this.manualAccountId.set(true);
+      this.accountId.set(accountId);
+    }
+
+    const qcBacktestId = this.renderedFieldValue('qcBacktestId');
+    if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty)) {
+      this.qcBacktestId.set(qcBacktestId);
+    }
+
+    const qcAuditCopyPath = this.renderedFieldValue('qcAuditCopyPath');
+    if (this.shouldSyncRenderedValue(qcAuditCopyPath, this.qcAuditCopyPath(), includeEmpty)) {
+      this.qcAuditCopyPath.set(qcAuditCopyPath);
+      this.autoSelectedDeploymentValidationAuditCopy.set(false);
+    }
+
+    const instanceId = this.renderedFieldValue('instanceId');
+    if (this.shouldSyncRenderedValue(instanceId, this.instanceId(), includeEmpty)) {
+      this.instanceId.set(instanceId);
+    }
+  }
+
   setStrategyKey(e: Event): void {
     this.manualSpecPath.set(false);
     this.strategyKey.set(this.text(e));

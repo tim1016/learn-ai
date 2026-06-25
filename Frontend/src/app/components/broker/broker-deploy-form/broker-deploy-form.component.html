@@ -30,12 +30,12 @@
   }
 
   <div class="workspace">
-    <form class="form" (submit)="$event.preventDefault(); submit()">
+    <form class="form" (input)="syncRenderedFieldValues()" (change)="syncRenderedFieldValues()" (submit)="$event.preventDefault(); submit()">
       <section class="group" aria-labelledby="strategy-section">
         <h2 id="strategy-section">Strategy</h2>
         <label class="field">
           <span>Strategy</span>
-          <select [value]="strategyKey()" (change)="setStrategyKey($event)" required>
+          <select data-deploy-field="strategyKey" [value]="strategyKey()" (change)="setStrategyKey($event)" required>
             <option value="" disabled>Select a strategy…</option>
             @for (s of strategies.value() ?? []; track s.name) {
               <option [value]="s.name">{{ s.display_name }}</option>
@@ -46,14 +46,14 @@
         @if (manualSpecPath()) {
           <label class="field">
             <span>Strategy settings file</span>
-            <input type="text" [value]="specPath()" (input)="setSpecPath($event)" required
+            <input data-deploy-field="specPath" type="text" [value]="specPath()" (input)="setSpecPath($event)" required
               placeholder="PythonDataService/app/engine/strategy/spec/fixtures/<name>.spec.json" autocomplete="off" spellcheck="false" />
             <small>Repo-relative path to the strategy settings JSON.</small>
           </label>
         } @else {
           <label class="field">
             <span>Strategy settings file</span>
-            <select [value]="specPath()" (change)="setSpecFixturePath($event)" required>
+            <select data-deploy-field="specPath" [value]="specPath()" (change)="setSpecFixturePath($event)" required>
               <option value="" disabled>Select a settings file…</option>
               @for (fixture of specFixtures.value() ?? []; track fixture.path) {
                 <option [value]="fixture.path">{{ fixture.spec_name || fixture.name }}</option>
@@ -69,7 +69,7 @@
         <h2 id="account-section">Account</h2>
         <label class="field">
           <span>Brokerage account</span>
-          <input type="text" [value]="accountId()" (input)="setAccountId($event)" required
+          <input data-deploy-field="accountId" type="text" [value]="accountId()" (input)="setAccountId($event)" required
             placeholder="DU1234567" autocomplete="off" />
           <small>{{ account.value() ? 'Prefilled from the connected broker.' : 'Broker disconnected; enter the account id.' }}</small>
         </label>
@@ -80,14 +80,14 @@
         <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result. Both fields come from one backtest you ran on <a href="https://www.quantconnect.com" target="_blank" rel="noopener noreferrer">quantconnect.com</a>.</p>
         <label class="field">
           <span>Backtest ID <span class="hint" title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;).">ⓘ</span></span>
-          <input type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
+          <input data-deploy-field="qcBacktestId" type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
             placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
           <small>Run the strategy on quantconnect.com, then copy this backtest's id from its page URL.</small>
         </label>
 
         <label class="field">
           <span>Algorithm audit copy <span class="hint" title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest.">ⓘ</span></span>
-          <select [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
+          <select data-deploy-field="qcAuditCopyPath" [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
             <option value="" disabled>Select the committed algorithm source…</option>
             @for (path of qcAuditCopyOptions(); track path) {
               <option [value]="path">{{ path }}</option>
@@ -234,7 +234,7 @@
 
         <label class="field">
           <span>Deployment name</span>
-          <input type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
+          <input data-deploy-field="instanceId" type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
             placeholder="spy-ema-paper-1" autocomplete="off" spellcheck="false" />
         </label>
       </section>

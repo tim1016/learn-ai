@@ -8,7 +8,7 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
-let activeFixture: { destroy(): void } | null = null;
+let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
 
 const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidationAlgorithm.py';
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
@@ -146,6 +146,7 @@ function fillRequired(component: BrokerDeployFormComponent) {
   component.qcBacktestId.set('bt-1');
   component.qcAuditCopyPath.set('references/qc-shadow/A.py');
   component.instanceId.set('spy-ema-paper-1');
+  activeFixture?.detectChanges();
 }
 
 function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement {
@@ -532,6 +533,56 @@ describe('BrokerDeployFormComponent', () => {
       'Ready to deploy.',
     );
     expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('syncs visibly filled controls even when no individual field event reached the signal setters', async () => {
+    const { fixture, component } = setup({ qcEntries: [] });
+    await flush();
+    fixture.detectChanges();
+
+    fieldControl(fixture, 'Strategy').value = 'deployment_validation';
+    fieldControl(fixture, 'Brokerage account').value = 'DU123';
+    fieldControl(fixture, 'Backtest ID').value = 'bt-validated';
+    fieldControl(fixture, 'Algorithm audit copy').value = DEPLOYMENT_VALIDATION_AUDIT_COPY;
+    fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
+
+    component.syncRenderedFieldValues();
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.strategyKey()).toBe('deployment_validation');
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Ready to deploy.',
+    );
+  });
+
+  it('syncs visibly cleared controls so stale values cannot be submitted', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fillRequired(component);
+
+    fieldControl(fixture, 'Strategy').value = '';
+    fieldControl(fixture, 'Strategy settings file').value = '';
+    fieldControl(fixture, 'Brokerage account').value = '';
+    fieldControl(fixture, 'Backtest ID').value = '';
+    fieldControl(fixture, 'Algorithm audit copy').value = '';
+    fieldControl(fixture, 'Deployment name').value = '';
+
+    component.syncRenderedFieldValues();
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.strategyKey()).toBe('');
+    expect(component.specPath()).toBe('');
+    expect(component.accountId()).toBe('');
+    expect(component.qcBacktestId()).toBe('');
+    expect(component.qcAuditCopyPath()).toBe('');
+    expect(component.instanceId()).toBe('');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing: Strategy, Strategy settings file, Brokerage account, Backtest ID, Algorithm audit copy, Deployment name.',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
   });
 
   it('does not overwrite a manually typed brokerage account when broker prefill resolves later', async () => {
