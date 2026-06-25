@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { BrokerActivityHealth, OperatorNotice } from '../../../../../api/live-instances.types';
 import { BrokerActivityTableComponent } from './broker-activity-table.component';
+import type { ActivityBrokerEventRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import type { BrokerActivityRow } from './broker-activity.types';
 
 function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
@@ -128,6 +129,44 @@ describe('BrokerActivityTableComponent', () => {
     expect(body?.textContent ?? '').toContain('AAPL');
     expect(body?.textContent ?? '').toContain('5');
     expect(body?.textContent ?? '').toContain('$150.00');
+  });
+
+  it('renders normalized projection event rows when supplied', () => {
+    const eventRows: ActivityBrokerEventRow[] = [
+      {
+        id: 'evidence:1',
+        ts_ms: 1_700_000_000_000,
+        row_type: 'endpoint_snapshot',
+        source: 'account.fetch_positions',
+        symbol: null,
+        side: null,
+        quantity: null,
+        price: null,
+        status: 'position',
+        summary: 'reqPositionsAsync captured by account.fetch_positions',
+        verdict: 'evidence',
+        replay_count: 1,
+        evidence: [
+          {
+            source: 'account.fetch_positions',
+            seq: 1,
+            ts_ms: 1_700_000_000_000,
+            request_call: 'reqPositionsAsync',
+            response_callback: 'position',
+          },
+        ],
+      },
+    ];
+    const { el } = render({ rows: [], sseStatus: 'projection' });
+    const fixture = TestBed.createComponent(BrokerActivityTableComponent);
+    fixture.componentRef.setInput('rows', []);
+    fixture.componentRef.setInput('eventRows', eventRows);
+    fixture.componentRef.setInput('sseStatus', 'projection');
+    fixture.detectChanges();
+    const projected = fixture.nativeElement as HTMLElement;
+    expect(el).toBeTruthy();
+    expect(projected.textContent ?? '').toContain('endpoint_snapshot');
+    expect(projected.textContent ?? '').toContain('reqPositionsAsync captured');
   });
 
   it('renders the backend-authored narrative is NOT visible until drill-down (verbatim contract)', () => {

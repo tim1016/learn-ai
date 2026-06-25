@@ -64,6 +64,15 @@ const READINESS_LABEL: Record<string, string> = {
   UNKNOWN: 'UNKNOWN',
 };
 
+type IndicatorTone = 'positive' | 'warning' | 'danger' | 'neutral';
+
+interface IndicatorChip {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly tone: IndicatorTone;
+}
+
 @Component({
   selector: 'app-cockpit-shell',
   standalone: true,
@@ -181,6 +190,23 @@ export class CockpitShellComponent {
         readinessLabel: READINESS_LABEL[s.readiness_verdict ?? 'UNKNOWN'] ?? 'UNKNOWN',
       };
     });
+  });
+
+  readonly indicatorChips = computed<IndicatorChip[]>(() => {
+    const s = this.status();
+    if (!s) return [];
+    const intent = this.intentLabel(s.desired_state?.state);
+    const readiness = s.readiness?.verdict ?? 'UNKNOWN';
+    const process = s.operator_surface.host_process.state;
+    const broker = s.operator_surface.broker.connection;
+    const lastRun = s.operator_surface.prior_run.classification;
+    return [
+      { id: 'process', label: 'PROCESS', value: process, tone: this._indicatorTone(process) },
+      { id: 'intent', label: 'INTENT', value: intent, tone: this._indicatorTone(intent) },
+      { id: 'readiness', label: 'READINESS', value: readiness, tone: this._indicatorTone(readiness) },
+      { id: 'broker', label: 'BROKER', value: broker, tone: this._indicatorTone(broker) },
+      { id: 'last-run', label: 'LAST RUN', value: lastRun, tone: this._indicatorTone(lastRun) },
+    ];
   });
 
   readonly isPoisoned = computed(() => {
@@ -738,5 +764,33 @@ export class CockpitShellComponent {
       return String((err as { message: unknown }).message);
     }
     return String(err);
+  }
+
+  private _indicatorTone(value: string): IndicatorTone {
+    switch (value) {
+      case 'UNSAFE':
+      case 'STOPPED':
+      case 'BLOCKED':
+      case 'HALT_TRIGGERED':
+      case 'EXITED_WITH_ERROR':
+      case 'DISCONNECTED':
+      case 'CLOSED':
+        return 'danger';
+      case 'DEGRADED':
+      case 'WAITING_FOR_HOST':
+      case 'STOPPING':
+      case 'PRE':
+      case 'POST':
+        return 'warning';
+      case 'PAPER_ONLY':
+      case 'READY':
+      case 'RUNNING':
+      case 'CONNECTED':
+      case 'CLEAN':
+      case 'RTH':
+        return 'positive';
+      default:
+        return 'neutral';
+    }
   }
 }

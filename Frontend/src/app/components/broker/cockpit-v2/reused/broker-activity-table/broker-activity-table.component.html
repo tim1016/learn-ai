@@ -12,16 +12,16 @@
             Feed unavailable
           }
           @case ('degraded') {
-            {{ executedRows().length }} row(s) · stream {{ sseStatus() }} · feed degraded
+            {{ eventRows()?.length ?? executedRows().length }} row(s) · stream {{ sseStatus() }} · feed degraded
           }
           @default {
-            {{ executedRows().length }} row(s) · stream {{ sseStatus() }}
+            {{ eventRows()?.length ?? executedRows().length }} row(s) · stream {{ sseStatus() }}
           }
         }
       } @else if (backfillLoading()) {
         Loading history…
       } @else {
-        {{ executedRows().length }} row(s) · stream {{ sseStatus() }}
+        {{ eventRows()?.length ?? executedRows().length }} row(s) · stream {{ sseStatus() }}
       }
     </span>
   </header>
@@ -50,7 +50,63 @@
       </div>
     }
 
-    @if (!health && !backfillLoading() && !hasRows()) {
+    @if (eventRows(); as events) {
+      @if (events.length > 0) {
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">DATE / TIME</th>
+            <th scope="col">TYPE</th>
+            <th scope="col">SOURCE</th>
+            <th scope="col">SYMBOL</th>
+            <th scope="col">SIDE</th>
+            <th scope="col" class="num">QTY</th>
+            <th scope="col" class="num">PRICE</th>
+            <th scope="col">STATUS</th>
+            <th scope="col">SUMMARY</th>
+            <th scope="col">EVIDENCE</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of events; track trackEventRow($index, row)) {
+            <tr [attr.data-testid]="'broker-activity-event-row-' + row.id">
+              <td class="ts">{{ fmtTimestampNy(row.ts_ms) }}</td>
+              <td>{{ row.row_type }}</td>
+              <td>{{ row.source }}</td>
+              <td>{{ row.symbol ?? '—' }}</td>
+              <td>{{ row.side ?? '—' }}</td>
+              <td class="num">
+                @if (row.quantity !== null) {
+                  {{ fmtNumber(row.quantity, 0) }}
+                } @else {
+                  —
+                }
+              </td>
+              <td class="num">
+                @if (row.price !== null) {
+                  {{ fmtCurrency(row.price) }}
+                } @else {
+                  —
+                }
+              </td>
+              <td>{{ row.status ?? row.verdict }}</td>
+              <td>
+                {{ row.summary }}
+                @if (row.replay_count > 1) {
+                  · seen {{ row.replay_count }}x
+                }
+              </td>
+              <td>{{ row.evidence.length }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+      } @else if (!backfillLoading()) {
+        <p class="empty" data-testid="broker-activity-empty">
+          No broker activity yet for this instance.
+        </p>
+      }
+    } @else if (!health && !backfillLoading() && !hasRows()) {
       <p class="empty" data-testid="broker-activity-empty">
         No broker activity yet for this instance.
       </p>

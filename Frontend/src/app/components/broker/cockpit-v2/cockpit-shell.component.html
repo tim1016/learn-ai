@@ -181,56 +181,22 @@
     <section class="identity-strip" data-testid="identity-strip">
       <div class="identity">
         <span class="instance-label">{{ s.strategy_instance_id }}</span>
-        <span class="provenance-hint">
-          @if (s.provenance?.code_sha) {
-            <span class="sha">code {{ s.provenance!.code_sha.substring(0, 8) }}</span>
-          }
-        </span>
       </div>
 
       <div class="indicators">
         <!-- Each indicator is independent — no synthetic master status. -->
-        <span
-          class="indicator process"
-          [attr.data-testid]="'indicator-process'"
-          [attr.data-value]="s.operator_surface.host_process.state"
-        >
-          PROCESS · {{ s.operator_surface.host_process.state }}
-        </span>
-        <span
-          class="indicator intent"
-          [attr.data-testid]="'indicator-intent'"
-          [attr.data-value]="intentLabel(s.desired_state?.state)"
-        >
-          INTENT · {{ intentLabel(s.desired_state?.state) }}
-        </span>
-        <span
-          class="indicator readiness"
-          [attr.data-testid]="'indicator-readiness'"
-          [attr.data-value]="s.readiness?.verdict ?? 'UNKNOWN'"
-        >
-          READINESS · {{ s.readiness?.verdict ?? 'UNKNOWN' }}
-        </span>
-        <span
-          class="indicator broker"
-          [attr.data-testid]="'indicator-broker'"
-          [attr.data-value]="s.operator_surface.broker.connection"
-        >
-          BROKER · {{ s.operator_surface.broker.connection }}
-        </span>
-        <span
-          class="indicator safety"
-          [attr.data-testid]="'indicator-safety'"
-          [attr.data-value]="s.operator_surface.broker.safety_verdict"
-        >
-          SAFETY · {{ s.operator_surface.broker.safety_verdict }}
-        </span>
-        <span class="indicator last-run" data-testid="indicator-last-run">
-          LAST RUN · {{ s.operator_surface.prior_run.classification }}
-        </span>
-        <span class="indicator session" data-testid="indicator-session">
-          SESSION · {{ s.operator_surface.trading_session.phase }}
-        </span>
+        @for (chip of indicatorChips(); track chip.id) {
+          <span
+            class="indicator"
+            [class.positive]="chip.tone === 'positive'"
+            [class.warning]="chip.tone === 'warning'"
+            [class.danger]="chip.tone === 'danger'"
+            [class.neutral]="chip.tone === 'neutral'"
+            [attr.data-testid]="'indicator-' + chip.id"
+          >
+            {{ chip.label }} · {{ chip.value }}
+          </span>
+        }
       </div>
 
       <div class="actions">

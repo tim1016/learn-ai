@@ -1,40 +1,28 @@
-// Activity tab (ADR 0014 / PRD #617).
+// Activity tab (unified projection).
 //
-// The broker-activity surface is now the canonical execution view: rows
-// are authored by the backend publisher and rendered verbatim by
-// ``BrokerActivityTableComponent`` + ``WorkingPendingOrdersSectionComponent``.
-// The previous ``SizingAuditTableComponent`` is deleted — its provenance
-// now lives in the row drill-down's ``engine_overlay.sizing_provenance``
-// (per ADR 0014 §7).
-//
-// Latest signal + Trade chart + Incidents remain on this tab; they're
-// different domains (decision feed, price chart, operational health),
-// not execution-narrative surfaces.
+// The backend-owned ``/activity`` projection is the canonical execution
+// view for this tab: chart fill markers, Orders Today, Broker Activity,
+// and attached full-IBKR-API evidence all come from one materialized
+// response so the UI cannot render an order in one surface but not another.
 
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
-  Injector,
   computed,
-  effect,
   inject,
   input,
-  runInInjectionContext,
-  signal,
-  untracked,
+  resource,
 } from '@angular/core';
+import { firstValueFrom } from 'rxjs';
 
 import type { BrokerActivityHealth, LiveInstanceStatus } from '../../../../api/live-instances.types';
 
 import { BotTradeChartCardComponent } from '../reused/bot-trade-chart-card/bot-trade-chart-card.component';
+import type { LiveInstanceActivityProjection } from '../reused/bot-trade-chart-card/bot-trade-chart-card.types';
 import { BrokerActivityTableComponent } from '../reused/broker-activity-table/broker-activity-table.component';
-import {
-  brokerActivityStream,
-  type BrokerActivityStream,
-} from '../reused/broker-activity-table/broker-activity-stream';
 import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-panel.component';
-import { IbkrApiEvidencePanelComponent } from '../reused/ibkr-api-evidence-panel/ibkr-api-evidence-panel.component';
 import { LatestSignalStripComponent } from '../reused/latest-signal-strip/latest-signal-strip.component';
 import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-orders-section/working-pending-orders-section.component';
 
@@ -44,7 +32,6 @@ import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-
     CommonModule,
     BotTradeChartCardComponent,
     BrokerActivityTableComponent,
-    IbkrApiEvidencePanelComponent,
     IncidentsPanelComponent,
     LatestSignalStripComponent,
     WorkingPendingOrdersSectionComponent,
@@ -56,7 +43,7 @@ import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-
 export class ActivityTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
 
-  private readonly injector = inject(Injector);
+  private readonly http = inject(HttpClient);
 
   readonly chartRunId = computed<string | null>(
     () => this.status().live_binding?.run_id ?? this.status().evidence_binding?.run_id ?? null,
@@ -64,17 +51,24 @@ export class ActivityTabComponent {
 
   readonly strategyInstanceId = computed<string>(() => this.status().strategy_instance_id);
 
-  // The broker-activity stream is owned at the tab level so both the
-  // executed-trades table and the working/pending panel render from the
-  // same authored row sequence. We tear it down + re-bootstrap whenever
-  // the strategy_instance_id changes.
-  private readonly stream = signal<BrokerActivityStream | null>(null);
+  readonly activityResource = resource<
+    LiveInstanceActivityProjection | null,
+    string
+  >({
+    params: () => this.strategyInstanceId(),
+    loader: ({ params }) => this.loadActivity(params),
+  });
 
-  readonly activityRows = computed(() => this.stream()?.rows() ?? []);
-  readonly backfillLoading = computed(() => this.stream()?.backfillLoading() ?? true);
-  readonly backfillError = computed(() => this.stream()?.backfillError() ?? null);
-  readonly sseStatus = computed(() => this.stream()?.sseStatus() ?? 'connecting');
-  readonly sseError = computed(() => this.stream()?.sseError() ?? null);
+  readonly activity = computed(() => this.activityResource.value() ?? null);
+  readonly ordersToday = computed(() => this.activity()?.orders_today ?? []);
+  readonly brokerEventRows = computed(() => this.activity()?.broker_activity_rows ?? []);
+  readonly backfillLoading = computed(() => this.activityResource.isLoading());
+  readonly backfillError = computed(() => {
+    const err = this.activityResource.error();
+    return err instanceof Error ? err.message : err ? String(err) : null;
+  });
+  readonly sseStatus = computed(() => (this.activity() ? 'projection' : 'loading'));
+  readonly sseError = computed<string | null>(() => null);
 
   /** PR 5 — pass the typed health verdict from the 4s status poll to the
    *  table so it can replace the implicit spinner with a server-authored
@@ -83,22 +77,12 @@ export class ActivityTabComponent {
     () => this.status().operator_surface.broker_activity_health ?? null,
   );
 
-  constructor() {
-    // ``effect`` re-runs whenever a tracked dependency changes. The only
-    // dependency that should trigger a teardown + rebootstrap is the
-    // strategy_instance_id — reading ``stream()`` directly would track
-    // the same signal we then write to inside the effect, looping
-    // forever and rebuilding the SSE connection on every change. Wrap
-    // the read in ``untracked`` so the effect only re-fires when
-    // ``strategyInstanceId`` itself changes; ``onCleanup`` closes the
-    // previous stream on sid change and on host destroy.
-    effect((onCleanup) => {
-      const sid = this.strategyInstanceId();
-      const next = runInInjectionContext(this.injector, () =>
-        brokerActivityStream(sid),
-      );
-      untracked(() => this.stream.set(next));
-      onCleanup(() => next.close());
-    });
+  private async loadActivity(sid: string): Promise<LiveInstanceActivityProjection | null> {
+    if (!sid) return null;
+    return firstValueFrom(
+      this.http.get<LiveInstanceActivityProjection>(
+        `/api/live-instances/${encodeURIComponent(sid)}/activity`,
+      ),
+    );
   }
 }

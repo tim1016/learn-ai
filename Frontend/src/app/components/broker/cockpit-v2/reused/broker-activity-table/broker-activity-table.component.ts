@@ -11,6 +11,7 @@ import { fmtCurrency, fmtNumber, fmtTimestampNy } from '../../../format';
 import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 
 import { BrokerActivityRowDetailComponent } from '../broker-activity-row-detail/broker-activity-row-detail.component';
+import type { ActivityBrokerEventRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import type {
   BrokerActivityRow,
   Verdict,
@@ -51,6 +52,7 @@ interface GroupedRows {
 })
 export class BrokerActivityTableComponent {
   readonly rows = input.required<BrokerActivityRow[]>();
+  readonly eventRows = input<ActivityBrokerEventRow[] | null>(null);
   readonly backfillLoading = input<boolean>(false);
   readonly backfillError = input<string | null>(null);
   readonly sseStatus = input<string>('connecting');
@@ -100,6 +102,7 @@ export class BrokerActivityTableComponent {
   });
 
   readonly hasRows = computed<boolean>(() => this.executedRows().length > 0);
+  readonly hasEventRows = computed<boolean>(() => (this.eventRows()?.length ?? 0) > 0);
 
   private readonly expanded = signal<Set<number>>(new Set());
 
@@ -156,4 +159,5 @@ export class BrokerActivityTableComponent {
 
   trackGroup = (_i: number, g: GroupedRows): string => g.key;
   trackRow = (_i: number, r: BrokerActivityRow): number => r.seq;
+  trackEventRow = (_i: number, r: ActivityBrokerEventRow): string => r.id;
 }

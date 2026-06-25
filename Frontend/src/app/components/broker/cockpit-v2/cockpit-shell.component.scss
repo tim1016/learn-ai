@@ -315,17 +315,10 @@
   .identity {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
 
     .instance-label {
       font-weight: 600;
       letter-spacing: 0.02em;
-    }
-
-    .provenance-hint {
-      font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-      font-size: var(--fs-xs, 0.7rem);
-      color: var(--text-muted, #7a89a9);
     }
   }
 
@@ -343,24 +336,16 @@
       border-radius: 2px;
       border: 1px solid rgba(255, 255, 255, 0.05);
 
-      &[data-value='UNSAFE'],
-      &[data-value='STOPPED'],
-      &[data-value='BLOCKED'],
-      &[data-value='HALT_TRIGGERED'],
-      &[data-value='DISCONNECTED'] {
+      &.danger {
         color: #ff8e8e;
         border-color: rgba(255, 142, 142, 0.4);
       }
 
-      &[data-value='DEGRADED'],
-      &[data-value='WAITING_FOR_HOST'] {
+      &.warning {
         color: #f3c969;
       }
 
-      &[data-value='PAPER_ONLY'],
-      &[data-value='READY'],
-      &[data-value='RUNNING'],
-      &[data-value='CONNECTED'] {
+      &.positive {
         color: #5edc92;
       }
     }

@@ -1719,6 +1719,143 @@ class ChartSnapshotResponse(BaseModel):
     runs: list[ChartSnapshotRun] = Field(default_factory=list)
 
 
+class ActivityEvidenceRef(BaseModel):
+    """Reference to a captured IBKR API request/callback observation.
+
+    The Activity projection is operator-facing and normalized, but every
+    row that comes from broker evidence can link back to the raw request /
+    response snapshot captured by the full broker API diagnostics recorder.
+    """
+
+    source: str
+    seq: int
+    ts_ms: int
+    request_call: str
+    response_callback: str | None = None
+
+
+class ActivityFillMarker(BaseModel):
+    """One broker-confirmed fill marker rendered on the price chart."""
+
+    id: str
+    row_seq: int
+    order_key: str
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    quantity: float
+    price: float
+    exec_ts_ms: int
+    position_effect: str
+    replay_count: int = 1
+    evidence: list[ActivityEvidenceRef] = Field(default_factory=list)
+
+
+class ActivityPositionAnnotation(BaseModel):
+    """Position lifecycle label derived from the broker-confirmed fills."""
+
+    id: str
+    ts_ms: int
+    symbol: str
+    label: str
+    net_position: float
+    uncertain: bool = False
+    reason: str | None = None
+
+
+class ActivityOrderOverlay(BaseModel):
+    """Optional chart overlay for a working order with a meaningful price."""
+
+    id: str
+    order_key: str
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    quantity: float
+    price: float
+    status: str
+    ts_ms: int
+
+
+class ActivityOrderRow(BaseModel):
+    """Same-day order blotter row for the Activity tab's Orders Today panel."""
+
+    order_key: str
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    quantity: float
+    order_type: str
+    status: str
+    group: Literal["active", "resolved", "engine_pending"]
+    submitted_ts_ms: int
+    last_update_ts_ms: int
+    filled_quantity: float = 0.0
+    avg_fill_price: float | None = None
+    position_effect: str | None = None
+    replay_count: int = 1
+    evidence: list[ActivityEvidenceRef] = Field(default_factory=list)
+
+
+class ActivityBrokerEventRow(BaseModel):
+    """Normalized broker event ledger row for the selected session date."""
+
+    id: str
+    ts_ms: int
+    row_type: str
+    source: str
+    symbol: str | None = None
+    side: Literal["BUY", "SELL"] | None = None
+    quantity: float | None = None
+    price: float | None = None
+    status: str | None = None
+    summary: str
+    verdict: str
+    replay_count: int = 1
+    evidence: list[ActivityEvidenceRef] = Field(default_factory=list)
+
+
+class ActivityPositionSnapshot(BaseModel):
+    """Present-tense broker position snapshot carried by the projection."""
+
+    symbol: str
+    quantity: float
+    source: Literal["broker_snapshot", "unavailable"] = "broker_snapshot"
+    as_of_ms: int | None = None
+
+
+class ActivityReconciliationWarning(BaseModel):
+    """Fail-honest warning when lifecycle derivation cannot be trusted."""
+
+    code: str
+    message: str
+    row_ids: list[str] = Field(default_factory=list)
+
+
+class LiveInstanceActivityProjection(BaseModel):
+    """Backend-materialized Activity tab view for one exchange/session date.
+
+    The chart, Orders Today panel, Broker Activity table, and raw evidence
+    drill-downs all read this one contract so no chart marker can exist
+    without a matching ledger row.
+    """
+
+    schema_version: int = 1
+    strategy_instance_id: str
+    session_date: str
+    timezone: str = "America/New_York"
+    symbol: str
+    resolution: str
+    has_bars: bool
+    now_ms: int
+    bars: list[dict] = Field(default_factory=list)
+    fill_markers: list[ActivityFillMarker] = Field(default_factory=list)
+    position_annotations: list[ActivityPositionAnnotation] = Field(default_factory=list)
+    order_overlays: list[ActivityOrderOverlay] = Field(default_factory=list)
+    orders_today: list[ActivityOrderRow] = Field(default_factory=list)
+    broker_activity_rows: list[ActivityBrokerEventRow] = Field(default_factory=list)
+    position_snapshot: list[ActivityPositionSnapshot] = Field(default_factory=list)
+    reconciliation_warnings: list[ActivityReconciliationWarning] = Field(default_factory=list)
+    evidence: list[ActivityEvidenceRef] = Field(default_factory=list)
+
+
 class ActiveDateEntry(BaseModel):
     """Slice 6 — one date the operator can select on the chart.
 

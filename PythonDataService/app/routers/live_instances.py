@@ -24,6 +24,7 @@ import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
+from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
@@ -66,6 +67,13 @@ from app.routers.live_runs import (
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.live_runs import (
     ActiveDateEntry,
+    ActivityBrokerEventRow,
+    ActivityEvidenceRef,
+    ActivityFillMarker,
+    ActivityOrderRow,
+    ActivityPositionAnnotation,
+    ActivityPositionSnapshot,
+    ActivityReconciliationWarning,
     AuditCopySizingLookup,
     BrokerObservationConsistency,
     ChartSnapshotResponse,
@@ -93,6 +101,7 @@ from app.schemas.live_runs import (
     InstanceStartDefaults,
     IntentActuation,
     LiveBinding,
+    LiveInstanceActivityProjection,
     LiveInstanceStatus,
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
@@ -105,6 +114,7 @@ from app.schemas.live_runs import (
     SizingAuditRow,
 )
 from app.services.broker_activity_publisher_registry import get_publisher_registry
+from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
@@ -2032,6 +2042,335 @@ def _resolve_chart_bars(
     return [_bar_to_dict(b) for b in bars]
 
 
+def _ny_session_bounds_ms(day: date) -> tuple[int, int]:
+    """Return America/New_York calendar-day bounds as UTC ms.
+
+    The Activity tab's selected date is the exchange/session date, not a
+    UTC bucket. This includes PRE/RTH/POST/CLOSED broker events whose
+    wall-clock belongs to that NY date.
+    """
+    start = datetime.combine(day, datetime.min.time(), tzinfo=_NY_TZ)
+    end = start + timedelta(days=1)
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+def _activity_evidence_refs_for_session(
+    *,
+    sid: str,
+    symbol: str | None,
+    start_ms: int,
+    end_ms: int,
+) -> list[ActivityEvidenceRef]:
+    refs: list[ActivityEvidenceRef] = []
+    events = get_ibkr_api_evidence_recorder().backfill(after_seq=0, limit=1_000)
+    for event in events:
+        if not (start_ms <= event.ts_ms < end_ms):
+            continue
+        if event.strategy_instance_id not in (None, sid):
+            continue
+        if symbol is not None and event.symbol not in (None, symbol):
+            continue
+        refs.append(
+            ActivityEvidenceRef(
+                source=event.source,
+                seq=event.seq,
+                ts_ms=event.ts_ms,
+                request_call=str(event.request.call),
+                response_callback=str(event.response.callback) if event.response else None,
+            )
+        )
+    return refs
+
+
+def _activity_row_time_ms(row) -> int:
+    return int(row.exec_ts_ms or row.ts_ms)
+
+
+def _activity_order_key(row) -> str:
+    if row.perm_id is not None:
+        return f"perm:{row.perm_id}"
+    if row.order_ref:
+        return f"ref:{row.order_ref}"
+    if row.exec_id:
+        return f"exec:{row.exec_id}"
+    return f"row:{row.seq}"
+
+
+def _activity_fill_key(row) -> str:
+    if row.exec_id:
+        return f"exec:{row.exec_id}"
+    return _activity_order_key(row)
+
+
+def _position_effect_for_fill(
+    *, prior: float, side: Literal["BUY", "SELL"], quantity: float
+) -> tuple[str, float, str | None]:
+    signed = quantity if side == "BUY" else -quantity
+    next_position = prior + signed
+
+    if abs(prior) <= 1e-9 and next_position > 0:
+        return "Open long", next_position, "OPEN"
+    if abs(prior) <= 1e-9 and next_position < 0:
+        return "Open short", next_position, "OPEN"
+    if prior > 0 and signed > 0:
+        return "Add long", next_position, None
+    if prior < 0 and signed < 0:
+        return "Add short", next_position, None
+    if prior > 0 and next_position > 0:
+        return "Reduce long", next_position, None
+    if prior < 0 and next_position < 0:
+        return "Reduce short", next_position, None
+    if prior > 0 and abs(next_position) <= 1e-9:
+        return "Close long", next_position, "CLOSE"
+    if prior < 0 and abs(next_position) <= 1e-9:
+        return "Close short", next_position, "CLOSE"
+    return "Reverse", next_position, "REVERSE"
+
+
+def _read_activity_wal_rows(
+    *, artifacts_root: Path, sid: str, start_ms: int, end_ms: int
+) -> list:
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
+    rows = wal.read_all()
+    return [row for row in rows if start_ms <= _activity_row_time_ms(row) < end_ms]
+
+
+def _latest_activity_wal_day(*, artifacts_root: Path, sid: str) -> date | None:
+    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
+    rows = wal.read_all()
+    if not rows:
+        return None
+    latest_ms = max(_activity_row_time_ms(row) for row in rows)
+    return datetime.fromtimestamp(latest_ms / 1000, tz=UTC).astimezone(_NY_TZ).date()
+
+
+def _build_activity_projection(
+    *,
+    sid: str,
+    day: date,
+    symbol: str | None,
+    resolution: str,
+    bars: list[dict],
+    wal_rows: list,
+    evidence_refs: list[ActivityEvidenceRef],
+) -> LiveInstanceActivityProjection:
+    by_fill_key: dict[str, list] = {}
+    for row in wal_rows:
+        if row.verdict == "engine_only_pending" or row.price is None or row.exec_ts_ms is None:
+            continue
+        by_fill_key.setdefault(_activity_fill_key(row), []).append(row)
+
+    fill_markers: list[ActivityFillMarker] = []
+    annotations: list[ActivityPositionAnnotation] = []
+    warnings: list[ActivityReconciliationWarning] = []
+    net_by_symbol: dict[str, float] = {}
+
+    for fill_key, fill_rows in sorted(
+        by_fill_key.items(), key=lambda item: min(_activity_row_time_ms(row) for row in item[1])
+    ):
+        row = sorted(fill_rows, key=lambda r: (0 if r.verdict != "unexpected" else 1, r.seq))[0]
+        prior = net_by_symbol.get(row.symbol, 0.0)
+        effect, next_position, lifecycle_label = _position_effect_for_fill(
+            prior=prior,
+            side=row.side,
+            quantity=float(row.quantity),
+        )
+        net_by_symbol[row.symbol] = next_position
+        marker = ActivityFillMarker(
+            id=fill_key,
+            row_seq=row.seq,
+            order_key=_activity_order_key(row),
+            symbol=row.symbol,
+            side=row.side,
+            quantity=float(row.quantity),
+            price=float(row.price),
+            exec_ts_ms=int(row.exec_ts_ms),
+            position_effect=effect,
+            replay_count=len(fill_rows),
+            evidence=[ref for ref in evidence_refs if ref.request_call in {"placeOrder", "reqExecutionsAsync", "reqAllOpenOrders"}],
+        )
+        fill_markers.append(marker)
+        if len(fill_rows) > 1:
+            warnings.append(
+                ActivityReconciliationWarning(
+                    code="broker_replay_collapsed",
+                    message=(
+                        f"Broker execution {fill_key} was observed {len(fill_rows)} times; "
+                        "the chart and Orders Today count it once."
+                    ),
+                    row_ids=[str(r.seq) for r in fill_rows],
+                )
+            )
+        if lifecycle_label is not None:
+            annotations.append(
+                ActivityPositionAnnotation(
+                    id=f"{lifecycle_label.lower()}:{fill_key}",
+                    ts_ms=int(row.exec_ts_ms),
+                    symbol=row.symbol,
+                    label=lifecycle_label,
+                    net_position=next_position,
+                )
+            )
+
+    orders_today: list[ActivityOrderRow] = []
+    for order_key, rows in sorted(
+        _group_rows_by_order_key(wal_rows).items(),
+        key=lambda item: max(_activity_row_time_ms(row) for row in item[1]),
+        reverse=True,
+    ):
+        ordered = sorted(rows, key=_activity_row_time_ms)
+        first = ordered[0]
+        fill_rows = [
+            row
+            for row in ordered
+            if row.verdict != "engine_only_pending" and row.price is not None and row.exec_ts_ms is not None
+        ]
+        unique_fill_rows = {
+            _activity_fill_key(row): row
+            for row in fill_rows
+        }
+        filled_quantity = sum(float(row.quantity) for row in unique_fill_rows.values())
+        avg_fill = (
+            sum(float(row.price) * float(row.quantity) for row in unique_fill_rows.values()) / filled_quantity
+            if filled_quantity > 0
+            else None
+        )
+        has_pending = any(row.verdict == "engine_only_pending" for row in ordered)
+        has_terminal = bool(fill_rows) or any(
+            code.value in {"cancellation", "rejection"} for row in ordered for code in row.reason_codes
+        )
+        group: Literal["active", "resolved", "engine_pending"]
+        if has_terminal:
+            group = "resolved"
+            status_label = "filled" if fill_rows else "resolved"
+        elif has_pending:
+            group = "engine_pending"
+            status_label = "engine pending"
+        else:
+            group = "active"
+            status_label = "working"
+        latest = ordered[-1]
+        orders_today.append(
+            ActivityOrderRow(
+                order_key=order_key,
+                symbol=first.symbol,
+                side=first.side,
+                quantity=float(first.quantity),
+                order_type=first.order_type,
+                status=status_label,
+                group=group,
+                submitted_ts_ms=int(first.ts_ms),
+                last_update_ts_ms=_activity_row_time_ms(latest),
+                filled_quantity=filled_quantity,
+                avg_fill_price=avg_fill,
+                position_effect=(
+                    next((m.position_effect for m in fill_markers if m.order_key == order_key), None)
+                ),
+                replay_count=max(1, len(fill_rows) - len(unique_fill_rows) + 1),
+                evidence=[ref for ref in evidence_refs if ref.request_call in {"placeOrder", "reqAllOpenOrders"}],
+            )
+        )
+
+    broker_events: list[ActivityBrokerEventRow] = []
+    for marker in fill_markers:
+        broker_events.append(
+            ActivityBrokerEventRow(
+                id=marker.id,
+                ts_ms=marker.exec_ts_ms,
+                row_type="fill",
+                source="broker_activity_wal",
+                symbol=marker.symbol,
+                side=marker.side,
+                quantity=marker.quantity,
+                price=marker.price,
+                status=marker.position_effect,
+                summary=(
+                    f"{marker.side} {marker.quantity:g} {marker.symbol} @ "
+                    f"{marker.price:.2f} · {marker.position_effect}"
+                ),
+                verdict="expected",
+                replay_count=marker.replay_count,
+                evidence=marker.evidence,
+            )
+        )
+    for row in wal_rows:
+        if row.verdict == "engine_only_pending":
+            broker_events.append(
+                ActivityBrokerEventRow(
+                    id=f"pending:{row.seq}",
+                    ts_ms=int(row.ts_ms),
+                    row_type="order_intent",
+                    source="broker_activity_wal",
+                    symbol=row.symbol,
+                    side=row.side,
+                    quantity=float(row.quantity),
+                    status="engine pending",
+                    summary=row.headline,
+                    verdict=row.verdict.value,
+                    evidence=[ref for ref in evidence_refs if ref.request_call == "placeOrder"],
+                )
+            )
+    for ref in evidence_refs:
+        broker_events.append(
+            ActivityBrokerEventRow(
+                id=f"evidence:{ref.seq}",
+                ts_ms=ref.ts_ms,
+                row_type="endpoint_snapshot",
+                source=ref.source,
+                status=ref.response_callback,
+                summary=f"{ref.request_call} captured by {ref.source}",
+                verdict="evidence",
+                evidence=[ref],
+            )
+        )
+    broker_events.sort(key=lambda row: row.ts_ms, reverse=True)
+
+    if not any(ref.request_call == "reqPositionsAsync" for ref in evidence_refs):
+        warnings.append(
+            ActivityReconciliationWarning(
+                code="broker_position_snapshot_unavailable",
+                message=(
+                    "No full broker positions snapshot was captured for this selected session date; "
+                    "position lifecycle annotations are derived from fills and should be treated as explanatory."
+                ),
+            )
+        )
+
+    return LiveInstanceActivityProjection(
+        strategy_instance_id=sid,
+        session_date=day.isoformat(),
+        symbol=symbol or "",
+        resolution=resolution,
+        has_bars=bool(bars),
+        now_ms=_now_ms(),
+        bars=bars,
+        fill_markers=fill_markers,
+        position_annotations=annotations,
+        order_overlays=[],
+        orders_today=orders_today,
+        broker_activity_rows=broker_events,
+        position_snapshot=[
+            ActivityPositionSnapshot(
+                symbol=sym,
+                quantity=qty,
+                source="unavailable",
+                as_of_ms=None,
+            )
+            for sym, qty in sorted(net_by_symbol.items())
+            if abs(qty) > 1e-9
+        ],
+        reconciliation_warnings=warnings,
+        evidence=evidence_refs,
+    )
+
+
+def _group_rows_by_order_key(rows: list) -> dict[str, list]:
+    groups: dict[str, list] = {}
+    for row in rows:
+        groups.setdefault(_activity_order_key(row), []).append(row)
+    return groups
+
+
 @router.get(
     "/{strategy_instance_id}/chart-snapshot",
     response_model=ChartSnapshotResponse,
@@ -2126,6 +2465,88 @@ async def get_chart_snapshot(
         now_ms=_now_ms(),
         bars=bars,
         runs=snapshot_runs,
+    )
+
+
+@router.get(
+    "/{strategy_instance_id}/activity",
+    response_model=LiveInstanceActivityProjection,
+)
+async def get_instance_activity(
+    strategy_instance_id: str,
+    session_date: Annotated[str | None, Query(alias="session_date")] = None,
+    resolution: Annotated[str, Query()] = "1m",
+) -> LiveInstanceActivityProjection:
+    """Materialized Activity-tab projection for one exchange/session date.
+
+    This is the canonical source for the Activity tab. The chart markers,
+    Orders Today blotter, Broker Activity ledger, and attached raw IBKR
+    endpoint evidence all come from this one response so the frontend cannot
+    render a broker fill on the chart that is absent from the activity table.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    if resolution not in ("1m", "5s"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="resolution must be '1m' or '5s'")
+
+    explicit_session_date = session_date is not None
+    try:
+        day = date.fromisoformat(session_date) if explicit_session_date else _today_ny()
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid session_date") from None
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    artifacts_root = root.parent
+    if not explicit_session_date:
+        today_start_ms, today_end_ms = _ny_session_bounds_ms(day)
+        today_wal_rows = _read_activity_wal_rows(
+            artifacts_root=artifacts_root,
+            sid=sid,
+            start_ms=today_start_ms,
+            end_ms=today_end_ms,
+        )
+        if not today_wal_rows:
+            day = _latest_activity_wal_day(artifacts_root=artifacts_root, sid=sid) or day
+
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    _process, live_binding = _interpret_daemon_process(daemon, root)
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    symbol = _resolve_symbol(root, live_binding, runs)
+    is_today = day == _today_ny()
+
+    if is_today and symbol is not None:
+        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+        try:
+            if resolution == "1m":
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
+            else:
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
+        except Exception as exc:
+            logger.info("ensure_subscribed for activity %s/%s declined: %s", symbol, resolution, exc)
+
+    bars = _resolve_chart_bars(symbol=symbol, resolution=resolution, day=day, is_today=is_today)
+    start_ms, end_ms = _ny_session_bounds_ms(day)
+    wal_rows = _read_activity_wal_rows(
+        artifacts_root=artifacts_root,
+        sid=sid,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    evidence_refs = _activity_evidence_refs_for_session(
+        sid=sid,
+        symbol=symbol,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    return _build_activity_projection(
+        sid=sid,
+        day=day,
+        symbol=symbol,
+        resolution=resolution,
+        bars=bars,
+        wal_rows=wal_rows,
+        evidence_refs=evidence_refs,
     )
 
 
