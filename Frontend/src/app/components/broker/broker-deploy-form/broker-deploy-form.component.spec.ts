@@ -34,6 +34,7 @@ function setup(
       description: string;
       sizing_surface: 'policy' | 'explicit';
     }[];
+    accountPromise?: Promise<{ account_id: string } | null>;
   } = {},
 ) {
   const svc = {
@@ -95,7 +96,7 @@ function setup(
     ),
   };
   const broker = {
-    account: vi.fn().mockResolvedValue({ account_id: 'DU123' }),
+    account: vi.fn().mockReturnValue(opts.accountPromise ?? Promise.resolve({ account_id: 'DU123' })),
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
@@ -151,6 +152,43 @@ function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElemen
   const el = fixture.nativeElement.querySelector('button[type="submit"]');
   if (!(el instanceof HTMLButtonElement)) throw new Error('no submit button');
   return el;
+}
+
+function fieldControl(
+  fixture: { nativeElement: HTMLElement },
+  labelText: string,
+): HTMLInputElement | HTMLSelectElement {
+  const labels = Array.from(fixture.nativeElement.querySelectorAll<HTMLLabelElement>('label.field'));
+  const label = labels.find((candidate) =>
+    candidate.querySelector('span')?.textContent?.includes(labelText),
+  );
+  const control = label?.querySelector('input, select');
+  if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
+    return control;
+  }
+  throw new Error(`missing field control: ${labelText}`);
+}
+
+function changeSelect(
+  fixture: { nativeElement: HTMLElement },
+  labelText: string,
+  value: string,
+): void {
+  const control = fieldControl(fixture, labelText);
+  if (!(control instanceof HTMLSelectElement)) throw new Error(`${labelText} is not a select`);
+  control.value = value;
+  control.dispatchEvent(new Event('change'));
+}
+
+function typeText(
+  fixture: { nativeElement: HTMLElement },
+  labelText: string,
+  value: string,
+): void {
+  const control = fieldControl(fixture, labelText);
+  if (!(control instanceof HTMLInputElement)) throw new Error(`${labelText} is not an input`);
+  control.value = value;
+  control.dispatchEvent(new Event('input'));
 }
 
 afterEach(() => {
@@ -461,6 +499,54 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
 
     expect(component.qcAuditCopyPath()).toBe('');
+  });
+
+  it('auto-selects the deployment validation spec after the operator previously used manual spec mode', async () => {
+    const { fixture, component } = setup({ qcEntries: [] });
+    await flush();
+    component.useManualSpecPath();
+    component.specPath.set('custom/manual.spec.json');
+    fixture.detectChanges();
+
+    changeSelect(fixture, 'Strategy', 'deployment_validation');
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.manualSpecPath()).toBe(false);
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
+    expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+  });
+
+  it('clears the missing-fields message when required fields are filled through the rendered controls', async () => {
+    const { fixture } = setup({ qcEntries: [] });
+    await flush();
+    fixture.detectChanges();
+
+    changeSelect(fixture, 'Strategy', 'deployment_validation');
+    typeText(fixture, 'Backtest ID', 'bt-validated');
+    typeText(fixture, 'Deployment name', 'deployment-validation-paper');
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Ready to deploy.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not overwrite a manually typed brokerage account when broker prefill resolves later', async () => {
+    let resolveAccount: (value: { account_id: string }) => void = () => undefined;
+    const accountPromise = new Promise<{ account_id: string }>((resolve) => {
+      resolveAccount = resolve;
+    });
+    const { fixture, component } = setup({ accountPromise });
+    fixture.detectChanges();
+
+    typeText(fixture, 'Brokerage account', 'DU999');
+    resolveAccount({ account_id: 'DU123' });
+    await flush();
+
+    expect(component.accountId()).toBe('DU999');
   });
 
   it('lists the missing required fields in the blocked reason', async () => {
