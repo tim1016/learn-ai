@@ -19,6 +19,11 @@ from __future__ import annotations
 
 import logging
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import IbkrClient, _is_paper_account
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
@@ -72,6 +77,16 @@ async def fetch_account_summary(client: IbkrClient) -> IbkrAccountSummary:
         raise RuntimeError("connected client has no account_id")
 
     rows = await client.ib.accountSummaryAsync(account_id)
+    get_ibkr_api_evidence_recorder().record(
+        source="account.fetch_account_summary",
+        account_id=account_id,
+        request=evidence_request("accountSummaryAsync", account_id=account_id),
+        response=evidence_response(
+            "accountSummary",
+            fields={"row_count": len(rows)},
+            objects=rows,
+        ),
+    )
 
     # Build a lookup keyed by tag, but only for the account+base currency
     # we care about. IBKR streams back rows for each currency the account
@@ -184,6 +199,16 @@ async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
 
     raw = await client.ib.reqPositionsAsync()
     fetched_at_ms = now_ms_utc()
+    get_ibkr_api_evidence_recorder().record(
+        source="account.fetch_positions",
+        account_id=account_id,
+        request=evidence_request("reqPositionsAsync"),
+        response=evidence_response(
+            "position",
+            fields={"row_count": len(raw)},
+            objects=raw,
+        ),
+    )
 
     positions: list[IbkrPosition] = []
     for pos in raw:

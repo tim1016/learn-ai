@@ -38,6 +38,10 @@ from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr import contracts as ibkr_contracts
+from app.broker.ibkr.api_evidence import (
+    IbkrApiEvidenceEvent,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import (
     BrokerError,
@@ -138,6 +142,10 @@ _OPTION_CONTRACTS_CACHE: TtlCache[
 ] = TtlCache(ttl_seconds=300.0, max_size=512)
 
 
+def _ibkr_api_evidence_to_sse(event: IbkrApiEvidenceEvent) -> str:
+    return f"event: ibkr_api\ndata: {event.model_dump_json()}\n\n"
+
+
 def reset_broker_search_state_for_testing() -> None:
     """Test-only hook — flush the throttle bucket and TTL cache so an
     earlier test cannot starve the next one of tokens."""
@@ -145,6 +153,48 @@ def reset_broker_search_state_for_testing() -> None:
     _SYMBOL_SEARCH_BUCKET = TokenBucket(rate_per_second=0.2, capacity=1)
     _SYMBOL_SEARCH_CACHE = TtlCache(ttl_seconds=60.0, max_size=256)
     _OPTION_CONTRACTS_CACHE = TtlCache(ttl_seconds=300.0, max_size=512)
+
+
+# ── /ibkr/evidence diagnostics ────────────────────────────────────────
+
+
+@router.get("/ibkr/evidence", response_model=list[IbkrApiEvidenceEvent])
+async def ibkr_api_evidence_backfill(
+    after_seq: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 250,
+) -> list[IbkrApiEvidenceEvent]:
+    """Recent raw IBKR API evidence captured at broker adapter boundaries."""
+    return get_ibkr_api_evidence_recorder().backfill(after_seq=after_seq, limit=limit)
+
+
+@router.get("/ibkr/evidence/stream")
+async def ibkr_api_evidence_stream(
+    since_seq: Annotated[int, Query(ge=0)] = 0,
+) -> StreamingResponse:
+    """SSE stream of raw IBKR API evidence for cockpit diagnostics."""
+    recorder = get_ibkr_api_evidence_recorder()
+
+    async def event_source():
+        for event in recorder.backfill(after_seq=since_seq, limit=500):
+            yield _ibkr_api_evidence_to_sse(event)
+        subscription = recorder.subscribe()
+        try:
+            while True:
+                event = await subscription.queue.get()
+                if event is None:
+                    break
+                if event.seq > since_seq:
+                    yield _ibkr_api_evidence_to_sse(event)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            recorder.unsubscribe(subscription)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── /health ────────────────────────────────────────────────────────────

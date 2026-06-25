@@ -34,6 +34,7 @@ import {
   type BrokerActivityStream,
 } from '../reused/broker-activity-table/broker-activity-stream';
 import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-panel.component';
+import { IbkrApiEvidencePanelComponent } from '../reused/ibkr-api-evidence-panel/ibkr-api-evidence-panel.component';
 import { LatestSignalStripComponent } from '../reused/latest-signal-strip/latest-signal-strip.component';
 import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-orders-section/working-pending-orders-section.component';
 
@@ -43,6 +44,7 @@ import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-
     CommonModule,
     BotTradeChartCardComponent,
     BrokerActivityTableComponent,
+    IbkrApiEvidencePanelComponent,
     IncidentsPanelComponent,
     LatestSignalStripComponent,
     WorkingPendingOrdersSectionComponent,

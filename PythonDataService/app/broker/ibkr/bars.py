@@ -31,6 +31,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
 from app.broker.ibkr.models import IbkrMinuteBar
@@ -308,6 +313,20 @@ async def stream_raw_5s_bars(
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
     bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    recorder = get_ibkr_api_evidence_recorder()
+    recorder.record(
+        source="bars.stream_raw_5s_bars.subscribe",
+        symbol=symbol.upper(),
+        request=evidence_request(
+            "reqRealTimeBars",
+            contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
+            barSize=5,
+            whatToShow="TRADES",
+            useRTH=use_rth,
+            realTimeBarsOptions=[],
+        ),
+        response=evidence_response("realTimeBarList", fields={"bar_count": len(bars)}),
+    )
     sym = symbol.upper()
     index = 0
     try:
@@ -322,6 +341,12 @@ async def stream_raw_5s_bars(
                 continue
             raw_bar = bars[index]
             index += 1
+            recorder.record(
+                source="bars.stream_raw_5s_bars.bar",
+                symbol=sym,
+                request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
+                response=evidence_response("realTimeBar", objects=[raw_bar]),
+            )
             source_ms = _bar_time_ms(raw_bar)
             contribution = _contribution(raw_bar)
             yield IbkrMinuteBar(
@@ -359,6 +384,20 @@ async def stream_minute_bars(
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
     bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    recorder = get_ibkr_api_evidence_recorder()
+    recorder.record(
+        source="bars.stream_minute_bars.subscribe",
+        symbol=symbol.upper(),
+        request=evidence_request(
+            "reqRealTimeBars",
+            contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
+            barSize=5,
+            whatToShow="TRADES",
+            useRTH=use_rth,
+            realTimeBarsOptions=[],
+        ),
+        response=evidence_response("realTimeBarList", fields={"bar_count": len(bars)}),
+    )
     index = 0
     current: _MinuteAccumulator | None = None
     last_source_ms: int | None = None
@@ -380,6 +419,12 @@ async def stream_minute_bars(
                 continue
             raw_bar = bars[index]
             index += 1
+            recorder.record(
+                source="bars.stream_minute_bars.bar",
+                symbol=symbol.upper(),
+                request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
+                response=evidence_response("realTimeBar", objects=[raw_bar]),
+            )
             current, emitted, last_source_ms = aggregate_realtime_bar(
                 current,
                 raw_bar,

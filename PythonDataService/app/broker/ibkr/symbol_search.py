@@ -23,6 +23,11 @@ from __future__ import annotations
 import logging
 from typing import get_args
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import IbkrClient
 from app.schemas.broker_search import SymbolMatch
 
@@ -59,6 +64,16 @@ async def search_symbols(
 
     client.require_connected()
     raw = await client.ib.reqMatchingSymbolsAsync(pattern)
+    get_ibkr_api_evidence_recorder().record(
+        source="symbol_search.search_symbols",
+        symbol=pattern,
+        request=evidence_request("reqMatchingSymbolsAsync", pattern=pattern, sec_type=sec_type),
+        response=evidence_response(
+            "symbolSamples",
+            fields={"row_count": len(raw)},
+            objects=raw,
+        ),
+    )
 
     out: list[SymbolMatch] = []
     for desc in raw:

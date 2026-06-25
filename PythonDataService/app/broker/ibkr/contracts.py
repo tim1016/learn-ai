@@ -20,6 +20,11 @@ import logging
 from datetime import UTC, datetime
 from typing import Literal
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import OptionRight
 
@@ -70,6 +75,19 @@ async def qualify_underlying(client: IbkrClient, symbol: str):
     client.require_connected()
     stock = Stock(symbol=symbol, exchange="SMART", currency="USD")
     qualified = await client.ib.qualifyContractsAsync(stock)
+    get_ibkr_api_evidence_recorder().record(
+        source="contracts.qualify_underlying",
+        symbol=symbol,
+        request=evidence_request(
+            "qualifyContractsAsync",
+            contract={"symbol": symbol, "secType": "STK", "exchange": "SMART", "currency": "USD"},
+        ),
+        response=evidence_response(
+            "contractDetails",
+            fields={"contract_count": len(qualified)},
+            objects=qualified,
+        ),
+    )
     if not qualified:
         raise ValueError(f"IBKR could not qualify underlying {symbol!r} (SMART/USD).")
     return qualified[0]
@@ -88,6 +106,22 @@ async def list_expirations(client: IbkrClient, symbol: str) -> list[int]:
         futFopExchange="",
         underlyingSecType=stock.secType,
         underlyingConId=stock.conId,
+    )
+    get_ibkr_api_evidence_recorder().record(
+        source="contracts.list_expirations",
+        symbol=symbol,
+        request=evidence_request(
+            "reqSecDefOptParamsAsync",
+            underlyingSymbol=stock.symbol,
+            futFopExchange="",
+            underlyingSecType=stock.secType,
+            underlyingConId=int(stock.conId),
+        ),
+        response=evidence_response(
+            "securityDefinitionOptionParameter",
+            fields={"row_count": len(params)},
+            objects=params,
+        ),
     )
     if not params:
         return []
@@ -116,6 +150,23 @@ async def list_strikes(
         futFopExchange="",
         underlyingSecType=stock.secType,
         underlyingConId=stock.conId,
+    )
+    get_ibkr_api_evidence_recorder().record(
+        source="contracts.list_strikes",
+        symbol=symbol,
+        request=evidence_request(
+            "reqSecDefOptParamsAsync",
+            underlyingSymbol=stock.symbol,
+            futFopExchange="",
+            underlyingSecType=stock.secType,
+            underlyingConId=int(stock.conId),
+            expiry=expiry_ms_to_yyyymmdd(expiry_ms),
+        ),
+        response=evidence_response(
+            "securityDefinitionOptionParameter",
+            fields={"row_count": len(params)},
+            objects=params,
+        ),
     )
     target = expiry_ms_to_yyyymmdd(expiry_ms)
     strikes: set[float] = set()
@@ -146,6 +197,28 @@ async def build_option_contract(
         multiplier="100",
     )
     qualified = await client.ib.qualifyContractsAsync(contract)
+    get_ibkr_api_evidence_recorder().record(
+        source="contracts.build_option_contract",
+        symbol=symbol,
+        request=evidence_request(
+            "qualifyContractsAsync",
+            contract={
+                "symbol": symbol,
+                "secType": "OPT",
+                "lastTradeDateOrContractMonth": expiry_ms_to_yyyymmdd(expiry_ms),
+                "strike": float(strike),
+                "right": right,
+                "exchange": "SMART",
+                "currency": "USD",
+                "multiplier": "100",
+            },
+        ),
+        response=evidence_response(
+            "contractDetails",
+            fields={"contract_count": len(qualified)},
+            objects=qualified,
+        ),
+    )
     if not qualified:
         raise ValueError(
             f"IBKR could not qualify option "
@@ -188,6 +261,28 @@ async def search_option_contracts(
         multiplier="100",
     )
     raw = await client.ib.qualifyContractsAsync(contract)
+    get_ibkr_api_evidence_recorder().record(
+        source="contracts.search_option_contracts",
+        symbol=symbol,
+        request=evidence_request(
+            "qualifyContractsAsync",
+            contract={
+                "symbol": symbol,
+                "secType": "OPT",
+                "lastTradeDateOrContractMonth": expiry_ms_to_yyyymmdd(expiry_ms),
+                "strike": float(strike),
+                "right": right,
+                "exchange": "SMART",
+                "currency": "USD",
+                "multiplier": "100",
+            },
+        ),
+        response=evidence_response(
+            "contractDetails",
+            fields={"contract_count": len(raw)},
+            objects=raw,
+        ),
+    )
     out: list[OptionContractMatch] = []
     for c in raw:
         if c is None:

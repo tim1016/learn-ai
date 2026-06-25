@@ -123,6 +123,10 @@ def all_open_orders_request_evidence() -> IbkrApiRequestEvidence:
     return IbkrApiRequestEvidence(call="reqAllOpenOrders", params={})
 
 
+def snapshot_ibkr_object(obj: object | None) -> IbkrObjectSnapshot | None:
+    return _object_snapshot(obj)
+
+
 def snapshot_contract(contract: object | None) -> IbkrObjectSnapshot | None:
     return _object_snapshot(contract)
 

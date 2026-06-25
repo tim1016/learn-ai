@@ -20,6 +20,10 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
+from app.broker.ibkr.api_evidence import (
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
 from app.broker.ibkr.contracts import expiry_ms_to_yyyymmdd
 from app.broker.ibkr.models import (
@@ -445,6 +449,14 @@ async def _place_and_build_ack(
     )
 
     trade = client.ib.placeOrder(qualified_contract, order)
+    ibkr_evidence = build_place_order_evidence(qualified_contract, order, trade)
+    get_ibkr_api_evidence_recorder().record(
+        source="orders.place_paper_order",
+        account_id=account_id,
+        symbol=spec.symbol,
+        request=ibkr_evidence.request,
+        response=ibkr_evidence.response,
+    )
 
     # ib_async.placeOrder returns synchronously with a Trade whose
     # order.orderId is set. Status starts as 'PendingSubmit' and updates
@@ -475,7 +487,7 @@ async def _place_and_build_ack(
         order_type=spec.order_type,
         limit_price=spec.limit_price,
         status=order_status,
-        ibkr_evidence=build_place_order_evidence(qualified_contract, order, trade),
+        ibkr_evidence=ibkr_evidence,
         placed_at_ms=now_ms_utc(),
     )
 
@@ -544,7 +556,14 @@ async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
     if account_id is None:
         raise BrokerError("connected client has no account_id")
 
+    request_snapshot = all_open_orders_request_evidence()
     trades = await client.ib.reqAllOpenOrdersAsync()
+    get_ibkr_api_evidence_recorder().record(
+        source="orders.list_open_orders",
+        account_id=account_id,
+        request=request_snapshot,
+        response=evidence_response("openOrder", fields={"trade_count": len(trades)}, objects=trades),
+    )
     out: list[IbkrOpenOrder] = []
     for trade in trades:
         if not order_belongs_to_account(trade, account_id):
@@ -614,11 +633,19 @@ async def cancel_paper_order(
             f"No open order with order_id={order_id} owned by this client."
         )
     client.ib.cancelOrder(trade.order)
+    request_snapshot = cancel_order_request_evidence(trade.order)
+    get_ibkr_api_evidence_recorder().record(
+        source="orders.cancel_paper_order",
+        account_id=account_id,
+        symbol=event_symbol(trade),
+        request=request_snapshot,
+        response=evidence_response("orderStatus", objects=[trade]),
+    )
     return _trade_to_open_order(
         trade,
         account_id,
         client.settings.client_id,
-        request=cancel_order_request_evidence(trade.order),
+        request=request_snapshot,
         response_callback="orderStatus",
     )
 

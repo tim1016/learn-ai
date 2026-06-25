@@ -83,15 +83,34 @@ def _coerce_quote(value: float | None) -> float | None:
 
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
 IbkrApiRequestName = Literal[
-    "placeOrder",
+    "accountSummaryAsync",
     "cancelOrder",
+    "placeOrder",
+    "qualifyContractsAsync",
     "reqAllOpenOrders",
     "reqExecutionsAsync",
+    "reqMatchingSymbolsAsync",
+    "reqMktData",
+    "reqPnL",
+    "reqPnLSingle",
+    "reqPositionsAsync",
+    "reqRealTimeBars",
+    "reqSecDefOptParamsAsync",
 ]
 IbkrApiCallbackName = Literal[
+    "accountSummary",
+    "contractDetails",
     "openOrder",
     "orderStatus",
     "execDetails",
+    "pnl",
+    "pnlSingle",
+    "position",
+    "realTimeBar",
+    "realTimeBarList",
+    "securityDefinitionOptionParameter",
+    "symbolSamples",
+    "tickSnapshot",
 ]
 
 
