@@ -14,6 +14,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, NavigationEnd } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { filter } from 'rxjs/operators';
+import { BrokerBannerComponent } from './broker-banner.component';
 
 interface NavItem {
   label: string;
@@ -118,7 +119,7 @@ const NAV: NavGroup[] = [
 @Component({
   selector: 'app-sidebar',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, BrokerBannerComponent],
   styleUrl: './app-sidebar.component.scss',
   template: `
     <aside class="sidebar">
@@ -203,9 +204,7 @@ const NAV: NavGroup[] = [
       </nav>
 
       <div class="status-footer">
-        <span class="paper-dot"></span>
-        <span class="paper-mode">Paper Mode</span>
-        <span class="paper-note">No real orders</span>
+        <app-broker-banner />
       </div>
     </aside>
   `,

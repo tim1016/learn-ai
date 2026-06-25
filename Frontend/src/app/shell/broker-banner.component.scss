@@ -1,75 +1,169 @@
+@use '../styles/tokens' as *;
+
 :host {
   display: block;
 }
 
 .broker-banner {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  background: $bg-canvas;
+  border: 1px solid $border;
+  border-radius: $radius;
+  color: $text-secondary;
+}
+
+.broker-banner-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.broker-banner-kicker {
+  color: $text-muted;
+  font-family: $font-mono;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.broker-banner-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.9rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  letter-spacing: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  gap: 7px;
+  min-width: 0;
+  color: $text-primary;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
 
-  &.is-paper {
-    background: var(--paper-banner-bg, #fef3c7);
-    color: var(--paper-banner-fg, #78350f);
-  }
+.broker-banner-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  background: $text-muted;
+  border-radius: 50%;
+}
 
-  &.is-live {
-    background: var(--live-banner-bg, #fee2e2);
-    color: var(--live-banner-fg, #7f1d1d);
-  }
+.broker-banner-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: $text-muted;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  &.is-degraded {
-    background: var(--warn-banner-bg, #fef9c3);
-    color: var(--warn-banner-fg, #713f12);
-  }
+.is-paper {
+  border-color: color-mix(in srgb, $bull 36%, $border);
 
-  &.is-disconnected {
-    background: var(--disc-banner-bg, #f3f4f6);
-    color: var(--disc-banner-fg, #4b5563);
-  }
-
-  &.is-disabled {
-    background: var(--info-banner-bg, #dbeafe);
-    color: var(--info-banner-fg, #1e40af);
+  .broker-banner-dot {
+    background: $bull;
+    box-shadow: 0 0 7px color-mix(in srgb, $bull 70%, transparent);
   }
 }
 
-.broker-banner-icon {
-  font-size: 1rem;
-  line-height: 1;
+.is-live,
+.is-degraded {
+  border-color: color-mix(in srgb, $bear 42%, $border);
+
+  .broker-banner-dot {
+    background: $bear;
+    box-shadow: 0 0 7px color-mix(in srgb, $bear 60%, transparent);
+  }
 }
 
-.broker-banner-text {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.8rem;
+.is-disconnected {
+  .broker-banner-dot {
+    background: $text-muted;
+  }
 }
 
-.broker-banner-cta {
-  margin-left: auto;
-  padding: 0.25rem 0.85rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  border-radius: 4px;
-  border: 1px solid currentcolor;
-  background: transparent;
-  color: inherit;
+.is-disabled {
+  border-color: var(--badge-info-border);
+
+  .broker-banner-dot {
+    background: $info;
+  }
+}
+
+.broker-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 7px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-sm;
+  color: $text-secondary;
   cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  transition: background $t-fast, border-color $t-fast, color $t-fast;
 
   &:hover:not(:disabled) {
-    background: rgba(0, 0, 0, 0.08);
+    background: $bg-elevated;
+    color: $text-primary;
   }
 
   &:focus-visible {
-    outline: 2px solid currentcolor;
+    outline: 2px solid $accent;
     outline-offset: 2px;
   }
 
   &:disabled {
-    opacity: 0.6;
     cursor: not-allowed;
+    opacity: 0.65;
   }
+
+  &.is-on {
+    border-color: color-mix(in srgb, $bull 36%, $border);
+  }
+}
+
+.broker-toggle-track {
+  flex-shrink: 0;
+  position: relative;
+  width: 32px;
+  height: 18px;
+  background: $bg-hover;
+  border: 1px solid $border;
+  border-radius: 999px;
+}
+
+.broker-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: $text-muted;
+  border-radius: 50%;
+  transition: transform $t-ui, background $t-ui;
+}
+
+.broker-toggle.is-on {
+  .broker-toggle-track {
+    background: color-mix(in srgb, $bull 16%, $bg-hover);
+    border-color: color-mix(in srgb, $bull 45%, $border);
+  }
+
+  .broker-toggle-thumb {
+    background: $bull;
+    transform: translateX(14px);
+  }
+}
+
+.broker-toggle-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
