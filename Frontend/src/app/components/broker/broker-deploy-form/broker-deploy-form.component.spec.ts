@@ -583,6 +583,27 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('keeps deploy form validation usable when broker account prefill fails', async () => {
+    const { fixture } = setup({
+      accountPromise: Promise.reject(new Error('broker account unavailable')),
+      qcEntries: [],
+    });
+    await flush();
+    fixture.detectChanges();
+
+    changeSelect(fixture, 'Strategy', 'deployment_validation');
+    typeText(fixture, 'Brokerage account', 'DUM284968');
+    typeText(fixture, 'Backtest ID', 'd2fe45a7142e88575f6fbd75229f8681');
+    typeText(fixture, 'Deployment name', 'june25');
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Ready to deploy.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
   it('syncs visibly cleared controls so stale values cannot be submitted', async () => {
     const { fixture, component } = setup();
     await flush();

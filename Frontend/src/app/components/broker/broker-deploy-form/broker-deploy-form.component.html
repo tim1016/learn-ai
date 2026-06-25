@@ -71,7 +71,7 @@
           <span>Brokerage account</span>
           <input data-deploy-field="accountId" type="text" [value]="accountId()" (input)="setAccountId($event)" required
             placeholder="DU1234567" autocomplete="off" />
-          <small>{{ account.value() ? 'Prefilled from the connected broker.' : 'Broker disconnected; enter the account id.' }}</small>
+          <small>{{ brokerAccountAvailable() ? 'Prefilled from the connected broker.' : 'Broker disconnected; enter the account id.' }}</small>
         </label>
       </section>
 

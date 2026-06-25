@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   ElementRef,
   effect,
   inject,
@@ -65,6 +66,7 @@ export class BrokerDeployFormComponent {
   protected readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
@@ -191,6 +193,14 @@ export class BrokerDeployFormComponent {
     if (entries.includes(DEPLOYMENT_VALIDATION_AUDIT_COPY)) return entries;
     return [DEPLOYMENT_VALIDATION_AUDIT_COPY, ...entries];
   });
+
+  readonly brokerAccountAvailable = computed<boolean>(
+    () => this.account.hasValue() && this.account.value() !== null,
+  );
+
+  private readonly brokerAccountId = computed<string>(
+    () => (this.account.hasValue() ? (this.account.value()?.account_id ?? '') : ''),
+  );
 
   readonly launchMode = computed<'paper' | 'live'>(() => (this.readonlyFlag() ? 'paper' : 'live'));
 
@@ -329,7 +339,7 @@ export class BrokerDeployFormComponent {
     });
     effect(() => {
       if (this.manualAccountId()) return;
-      const nextAccount = this.seededAccountId() || (this.account.value()?.account_id ?? '');
+      const nextAccount = this.seededAccountId() || this.brokerAccountId();
       if (nextAccount && this.accountId() !== nextAccount) {
         this.accountId.set(nextAccount);
       }
@@ -364,6 +374,10 @@ export class BrokerDeployFormComponent {
     afterEveryRender(() => {
       this.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
     });
+    const restoreSyncHandle = window.setInterval(() => {
+      this.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
+    }, 250);
+    this.destroyRef.onDestroy(() => window.clearInterval(restoreSyncHandle));
   }
 
   private readonly required = computed<boolean>(
