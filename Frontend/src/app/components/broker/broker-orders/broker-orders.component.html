@@ -268,6 +268,12 @@
                 >
                   ✕
                 </button>
+                @if (hasIbkrEvidence(o)) {
+                  <details class="ibkr-evidence">
+                    <summary>IBKR</summary>
+                    <pre>{{ ibkrEvidenceJson(o) }}</pre>
+                  </details>
+                }
               </td>
             </tr>
           }
@@ -310,6 +316,12 @@
             }
             @if (e.error_message) {
               <span class="event-err">{{ e.error_message }}</span>
+            }
+            @if (hasIbkrEvidence(e)) {
+              <details class="ibkr-evidence event-evidence">
+                <summary>IBKR</summary>
+                <pre>{{ ibkrEvidenceJson(e) }}</pre>
+              </details>
             }
           </li>
         }

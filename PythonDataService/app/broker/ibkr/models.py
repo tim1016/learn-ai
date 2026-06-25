@@ -21,7 +21,7 @@ import math
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.broker.safety_verdict import BrokerSafetyVerdict
 
@@ -82,6 +82,80 @@ def _coerce_quote(value: float | None) -> float | None:
 
 
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
+IbkrApiRequestName = Literal[
+    "placeOrder",
+    "cancelOrder",
+    "reqAllOpenOrders",
+    "reqExecutionsAsync",
+]
+IbkrApiCallbackName = Literal[
+    "openOrder",
+    "orderStatus",
+    "execDetails",
+]
+
+
+class IbkrObjectSnapshot(BaseModel):
+    """JSON-safe snapshot of one ib_async object.
+
+    ``object_type`` records the originating Python type while ``fields`` carries
+    every public field we could observe. Datetime fields are converted at the
+    broker boundary to ``int64 ms UTC`` to preserve the repo-wide timestamp
+    contract.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    object_type: str
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class IbkrApiRequestEvidence(BaseModel):
+    """Typed envelope for one IBKR API request/call."""
+
+    model_config = ConfigDict(frozen=True)
+
+    call: IbkrApiRequestName
+    params: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class IbkrApiResponseEvidence(BaseModel):
+    """Typed envelope for one IBKR callback/response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    callback: IbkrApiCallbackName
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class IbkrTradeSnapshot(BaseModel):
+    """Full ib_async Trade evidence grouped by its child objects."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trade: IbkrObjectSnapshot | None = None
+    contract: IbkrObjectSnapshot | None = None
+    order: IbkrObjectSnapshot | None = None
+    order_status: IbkrObjectSnapshot | None = None
+    fills: list[IbkrObjectSnapshot] = Field(default_factory=list)
+    log: list[IbkrObjectSnapshot] = Field(default_factory=list)
+    advanced_error: str | None = None
+
+
+class IbkrTradeEvidence(BaseModel):
+    """Full IBKR request/response/object evidence for an order lifecycle row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    request: IbkrApiRequestEvidence | None = None
+    response: IbkrApiResponseEvidence | None = None
+    contract: IbkrObjectSnapshot | None = None
+    order: IbkrObjectSnapshot | None = None
+    order_status: IbkrObjectSnapshot | None = None
+    trade: IbkrTradeSnapshot | None = None
+    fill: IbkrObjectSnapshot | None = None
+    execution: IbkrObjectSnapshot | None = None
+    commission_report: IbkrObjectSnapshot | None = None
 
 
 class IbkrAccountSummary(BaseModel):
@@ -490,6 +564,8 @@ class IbkrOrderEvent(BaseModel):
     error_code: int | None = None
     error_message: str | None = None
 
+    ibkr_evidence: IbkrTradeEvidence | None = None
+
     ts_ms: int
 
 
@@ -527,6 +603,7 @@ class IbkrOpenOrder(BaseModel):
     # orchestrator joins this back to the WAL to prove ownership without
     # trusting per-client ``order_id`` alone.
     order_ref: str | None = None
+    ibkr_evidence: IbkrTradeEvidence | None = None
     fetched_at_ms: int
 
 
@@ -552,6 +629,7 @@ class IbkrOrderAck(BaseModel):
     order_type: OrderType
     limit_price: float | None = None
     status: OrderStatus
+    ibkr_evidence: IbkrTradeEvidence | None = None
     placed_at_ms: int
 
 
@@ -753,9 +831,14 @@ __all__ = [
     "DiagnosticReportDisabled",
     "DiagnosticStatus",
     "IbkrAccountSummary",
+    "IbkrApiCallbackName",
+    "IbkrApiRequestEvidence",
+    "IbkrApiRequestName",
+    "IbkrApiResponseEvidence",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrMinuteBar",
+    "IbkrObjectSnapshot",
     "IbkrOpenOrder",
     "IbkrOptionQuote",
     "IbkrOrderAck",
@@ -767,6 +850,8 @@ __all__ = [
     "IbkrStrikeList",
     "IbkrSurfaceExpiry",
     "IbkrSurfaceSnapshot",
+    "IbkrTradeEvidence",
+    "IbkrTradeSnapshot",
     "OptionRight",
     "OrderAction",
     "OrderEventType",

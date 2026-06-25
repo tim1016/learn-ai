@@ -222,6 +222,38 @@
   border-top: 1px solid var(--border-subtle, #e5e7eb);
 }
 
+.ibkr-evidence {
+  margin-top: 0.35rem;
+  max-width: min(760px, calc(100vw - 3rem));
+  color: var(--text-primary);
+
+  summary {
+    cursor: pointer;
+    color: var(--text-secondary, #6b7280);
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  pre {
+    margin: 0.35rem 0 0;
+    max-height: 280px;
+    overflow: auto;
+    padding: 0.6rem;
+    border: 1px solid var(--border-subtle, #e5e7eb);
+    border-radius: 6px;
+    background: var(--bg-canvas-alt, #f9fafb);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
+.event-evidence {
+  flex: 1 1 100%;
+}
+
 .event-line {
   padding: 0.35rem 0.5rem;
   border-bottom: 1px solid var(--border-subtle, #e5e7eb);

@@ -22,6 +22,7 @@ import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
   IbkrOpenOrder,
   IbkrOrderAck,
+  IbkrOrderEvidenceFields,
   IbkrOrderEvent,
   IbkrOrderSpec,
   OrderAction,
@@ -323,6 +324,14 @@ export class BrokerOrdersComponent {
     }
   }
 
+  hasIbkrEvidence(value: IbkrOrderEvidenceFields | IbkrOrderEvent): boolean {
+    return Boolean(value.ibkr_evidence);
+  }
+
+  ibkrEvidenceJson(value: IbkrOrderEvidenceFields | IbkrOrderEvent): string {
+    return JSON.stringify(value.ibkr_evidence ?? null, null, 2);
+  }
+
   private openEventStream(): void {
     const existing = this.eventStream();
     if (existing) existing.close();
@@ -343,4 +352,3 @@ function cryptoUuid(): string {
   // sufficient as an idempotency token for paper orders only.
   return Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
 }
-

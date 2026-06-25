@@ -1,8 +1,6 @@
 """Paper-trading order placement (Phase 3a).
 
-Public surface (curated):
-
-* ``place_paper_order(client, spec)`` — places a market or limit order
+Public surface: ``place_paper_order(client, spec)`` places a market or limit order
   via ``ib_async.IB.placeOrder``. Returns an ``IbkrOrderAck`` synchronously
   once IBKR has assigned an ``orderId``. Status transitions after that
   point arrive via Phase 3b's order event stream.
@@ -12,9 +10,8 @@ mode, port validator, DU account sentinel (Phase 1), per-request
 ``confirm_paper`` (this module) — must all be true. Any one false and
 the placeOrder call is never reached.
 
-Order types: MKT, LMT only. Time-in-force: DAY, GTC, IOC, OPG. Brackets,
-OCO, trailing stops, market-on-close, IB algos — all deferred to Phase 3b
-or later.
+Order types: MKT, LMT only. Time-in-force: DAY, GTC, IOC, OPG.
+Brackets, OCO, trailing stops, market-on-close, and IB algos are deferred.
 """
 
 from __future__ import annotations
@@ -26,11 +23,28 @@ from collections.abc import AsyncIterator
 from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
 from app.broker.ibkr.contracts import expiry_ms_to_yyyymmdd
 from app.broker.ibkr.models import (
+    IbkrApiCallbackName,
+    IbkrApiRequestEvidence,
     IbkrOpenOrder,
     IbkrOrderAck,
     IbkrOrderEvent,
     IbkrOrderSpec,
-    OrderEventType,
+)
+from app.broker.ibkr.order_evidence import (
+    all_open_orders_request_evidence,
+    build_execution_recovery_evidence,
+    build_fill_event_evidence,
+    build_open_order_evidence,
+    build_place_order_evidence,
+    build_status_event_evidence,
+    cancel_order_request_evidence,
+)
+from app.broker.ibkr.order_projection import (
+    event_order_type,
+    event_side,
+    event_symbol,
+    order_belongs_to_account,
+    resolve_event_type,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -126,40 +140,6 @@ class OrderRefusedDuringReconnectRecoveryError(OrderRefusedError):
 
 class OrderNotFoundError(BrokerError):
     """Cancel or lookup targeted an order that IBKR doesn't know about."""
-
-
-def _event_symbol(trade) -> str | None:
-    """Operator-facing symbol for the underlying contract. Sourced from
-    ``Trade.contract.symbol``; ``None`` only on a degenerate trade
-    without a contract (defensive — should not happen on a real ib_async
-    Trade)."""
-    contract = getattr(trade, "contract", None)
-    if contract is None:
-        return None
-    symbol = getattr(contract, "symbol", None)
-    return str(symbol) if symbol else None
-
-
-def _event_side(trade):
-    """Map ib_async ``Order.action`` ("BUY"/"SELL") onto the row's
-    side. ``None`` only if the action is missing or unrecognised — the
-    reconciler treats ``None`` as unauthorable rather than silently
-    defaulting to a side."""
-    action = getattr(getattr(trade, "order", None), "action", None)
-    if action == "BUY":
-        return "BUY"
-    if action == "SELL":
-        return "SELL"
-    return None
-
-
-def _event_order_type(trade) -> str | None:
-    """ib_async ``Order.orderType`` is the operator-facing type string
-    ("MKT", "LMT", "STP", …). Returns ``None`` if absent; the reconciler
-    treats absence as a publisher-halt condition rather than substituting
-    a default that would mis-author the operator-facing row."""
-    order_type = getattr(getattr(trade, "order", None), "orderType", None)
-    return str(order_type) if order_type else None
 
 
 def _check_reconnect_recovery_halt() -> None:
@@ -495,6 +475,7 @@ async def _place_and_build_ack(
         order_type=spec.order_type,
         limit_price=spec.limit_price,
         status=order_status,
+        ibkr_evidence=build_place_order_evidence(qualified_contract, order, trade),
         placed_at_ms=now_ms_utc(),
     )
 
@@ -506,6 +487,9 @@ def _trade_to_open_order(
     trade,
     account_id: str,
     client_id: int,
+    *,
+    request: IbkrApiRequestEvidence | None = None,
+    response_callback: IbkrApiCallbackName = "openOrder",
 ) -> IbkrOpenOrder:
     """``ib_async.Trade`` → ``IbkrOpenOrder`` wire model."""
     contract = trade.contract
@@ -540,26 +524,13 @@ def _trade_to_open_order(
         # downstream (the cold-start reconciliation orchestrator treats
         # absence as "not ours via ref").
         order_ref=(getattr(order, "orderRef", "") or None),
+        ibkr_evidence=build_open_order_evidence(
+            trade,
+            request=request,
+            response_callback=response_callback,
+        ),
         fetched_at_ms=now_ms_utc(),
     )
-
-
-def _order_belongs_to_account(trade: object, account_id: str) -> bool:
-    """Whether ``trade`` belongs to the connected account.
-
-    Orders we place via ``_build_order`` (``MarketOrder``/``LimitOrder``) do not
-    set ``order.account`` — ib_async leaves it ``""``. So an empty account means
-    "this single-account client's own order" and belongs to ``account_id``; only
-    a *non-empty* account that differs is genuinely foreign (e.g. another client
-    on the same gateway).
-
-    The previous check ``order.account != account_id`` dropped our OWN orders
-    (``"" != "DU…"``), which blinded the live engine to its own fills, left the
-    position tally at zero (→ fleet "unattributed" contamination), and tripped a
-    false lost-fill fatal halt. See #441.
-    """
-    order_account = getattr(getattr(trade, "order", None), "account", "") or ""
-    return order_account in ("", account_id)
 
 
 async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
@@ -576,10 +547,17 @@ async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
     trades = await client.ib.reqAllOpenOrdersAsync()
     out: list[IbkrOpenOrder] = []
     for trade in trades:
-        if not _order_belongs_to_account(trade, account_id):
+        if not order_belongs_to_account(trade, account_id):
             continue
         try:
-            out.append(_trade_to_open_order(trade, account_id, client.settings.client_id))
+            out.append(
+                _trade_to_open_order(
+                    trade,
+                    account_id,
+                    client.settings.client_id,
+                    request=all_open_orders_request_evidence(),
+                )
+            )
         except Exception as exc:
             logger.warning(
                 "Skipping unparseable open order conId=%s: %s",
@@ -631,25 +609,18 @@ async def cancel_paper_order(
     # per-client integers that can collide. Without this check a caller-supplied
     # order_id could cancel a foreign order. Mirrors the guard list_open_orders
     # and stream_order_events already apply.
-    if not _order_belongs_to_account(trade, account_id):
+    if not order_belongs_to_account(trade, account_id):
         raise OrderNotFoundError(
             f"No open order with order_id={order_id} owned by this client."
         )
     client.ib.cancelOrder(trade.order)
-    return _trade_to_open_order(trade, account_id, client.settings.client_id)
-
-
-def _resolve_event_type(
-    trade,
-    *,
-    is_fill: bool,
-) -> OrderEventType:
-    if is_fill:
-        return "fill"
-    status = getattr(trade.orderStatus, "status", "")
-    if status in {"Cancelled", "ApiCancelled"}:
-        return "cancel"
-    return "status"
+    return _trade_to_open_order(
+        trade,
+        account_id,
+        client.settings.client_id,
+        request=cancel_order_request_evidence(trade.order),
+        response_callback="orderStatus",
+    )
 
 
 def _trade_to_status_event(
@@ -663,14 +634,15 @@ def _trade_to_status_event(
         order_id=int(trade.order.orderId),
         perm_id=int(trade.order.permId) if trade.order.permId else None,
         con_id=int(trade.contract.conId) if trade.contract else None,
-        event_type=_resolve_event_type(trade, is_fill=False),
+        event_type=resolve_event_type(trade, is_fill=False),
         status=getattr(trade.orderStatus, "status", None),
         order_ref=order_ref,
-        symbol=_event_symbol(trade),
-        side=_event_side(trade),
-        order_type=_event_order_type(trade),
+        symbol=event_symbol(trade),
+        side=event_side(trade),
+        order_type=event_order_type(trade),
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
+        ibkr_evidence=build_status_event_evidence(trade),
         ts_ms=now_ms_utc(),
     )
 
@@ -737,7 +709,6 @@ def _fill_to_event(
     total_qty = float(getattr(trade.order, "totalQuantity", 0.0) or 0.0)
     running_remaining = max(total_qty - running_shares, 0.0)
     running_avg = (running_notional / running_shares) if running_shares else None
-
     return IbkrOrderEvent(
         account_id=account_id,
         order_id=int(trade.order.orderId),
@@ -746,9 +717,9 @@ def _fill_to_event(
         event_type="fill",
         status=getattr(trade.orderStatus, "status", None),
         order_ref=order_ref,
-        symbol=_event_symbol(trade),
-        side=_event_side(trade),
-        order_type=_event_order_type(trade),
+        symbol=event_symbol(trade),
+        side=event_side(trade),
+        order_type=event_order_type(trade),
         exec_id=str(exec_id) if exec_id else None,
         client_id=int(client_id_raw) if client_id_raw is not None else None,
         fill_quantity=float(getattr(exec_obj, "shares", 0.0) or 0.0),
@@ -758,6 +729,7 @@ def _fill_to_event(
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
+        ibkr_evidence=build_fill_event_evidence(trade, fill, exec_obj, commission_obj),
         ts_ms=now_ms_utc(),
     )
 
@@ -911,7 +883,7 @@ def _fill_to_recovery_event(
             trade = trades_by_order_id.get(int(order_id_raw))
         except (TypeError, ValueError):
             trade = None
-    order_type = _event_order_type(trade) if trade is not None else None
+    order_type = event_order_type(trade)
 
     # Commission rides on the fill once IBKR reports it (a beat after
     # the execution). None until reported — never a fabricated zero so
@@ -953,6 +925,12 @@ def _fill_to_recovery_event(
         last_fill_price=price,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
+        ibkr_evidence=build_execution_recovery_evidence(
+            fill,
+            contract,
+            execution,
+            commission_obj,
+        ),
         ts_ms=now_ms_utc(),
     )
 
@@ -996,7 +974,7 @@ async def stream_order_events(
             client.require_live()
             trades = list(client.ib.trades())
             for trade in trades:
-                if not _order_belongs_to_account(trade, account_id):
+                if not order_belongs_to_account(trade, account_id):
                     continue
                 oid = int(trade.order.orderId)
 
