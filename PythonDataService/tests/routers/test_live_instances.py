@@ -1741,6 +1741,33 @@ async def test_daemon_health_unreachable_surfaces_as_503(
     assert response.status_code == 503
 
 
+async def test_renew_daemon_lease_forwards_to_host_daemon(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    payload = {
+        **_idle_health(),
+        "lease_status": "CONNECTED",
+        "last_lease_written_at_ms": 1700000000100,
+    }
+    calls: list[str] = []
+
+    async def fake_renew(base_url: str):
+        calls.append(base_url)
+        return payload
+
+    monkeypatch.setattr(host_daemon_client, "renew_control_plane_lease", fake_renew)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/daemon-health/renew-lease")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lease_status"] == "CONNECTED"
+    assert body["last_lease_written_at_ms"] == 1700000000100
+    assert calls
+
+
 # ── start / stop proxy (ADR 0007 — token forwarded server-side) ──────
 
 

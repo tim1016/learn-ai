@@ -4,6 +4,7 @@ import type { OperatorNotice, OperatorNoticeAction, OperatorNoticeActionKind } f
 const CLICKABLE_KINDS: readonly OperatorNoticeActionKind[] = [
   'open_runbook',
   'focus_cockpit_action',
+  'renew_control_plane_lease',
   'redeploy',
 ];
 

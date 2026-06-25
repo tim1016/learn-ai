@@ -227,6 +227,11 @@ export interface HostRunnerHealth {
   /** Best-effort count of how many commits behind the working tree the running
    * code is (null when equal/unknown). */
   commits_behind?: number | null;
+  /** Daemon control-plane identity and lease diagnostics. */
+  daemon_boot_id?: string | null;
+  lease_status?: string | null;
+  last_lease_written_at_ms?: number | null;
+  orphan_candidates_count?: number;
 }
 
 export interface HostRunnerStartRequest {

@@ -148,6 +148,7 @@ function makeStub(): Partial<LiveRunsService> {
     setInstanceDesiredState: vi.fn(),
     flattenAndPause: vi.fn(),
     issueInstanceCommand: vi.fn(),
+    renewControlPlaneLease: vi.fn().mockResolvedValue({}),
   };
 }
 
@@ -438,6 +439,59 @@ describe('CockpitShellComponent', () => {
     // Raw enum codes must NOT appear as visible copy (fixes #657).
     expect(el.textContent).not.toContain('COMMAND_LOOP_STALE');
     expect(el.textContent).not.toContain('CONTROL_PLANE_LEASE_STALE');
+  });
+
+  it('renews a stale control-plane lease from the runtime banner', async () => {
+    const stub = makeStub();
+    const status = makeStatus();
+    const runtimeFreshness: OperatorSurfaceRuntimeFreshness = {
+      posture_demoted: true,
+      stale_reason_codes: ['CONTROL_PLANE_LEASE_STALE'],
+      headline: {
+        code: 'runtime.control_plane_lease_stale',
+        tier: 'critical',
+        title: 'Control-plane lease is stale',
+        message: "Another control-plane lease holder hasn't checked in.",
+        source_codes: ['CONTROL_PLANE_LEASE_STALE'],
+        forensic_facts: { control_plane_age_ms: 50_000 },
+        action: {
+          kind: 'renew_control_plane_lease',
+          label: 'Renew control-plane lease',
+          target: 'daemon_lease',
+        },
+        runbook_slug: 'runtime-freshness',
+        occurred_at_ms: null,
+      },
+      additional_reasons: [],
+      command_loop: { state: 'FRESH', age_ms: 500, stale_reason_codes: [] },
+      broker: { state: 'FRESH', age_ms: 500, stale_reason_codes: [] },
+      bar_loop: { state: 'FRESH', age_ms: 500, stale_reason_codes: [] },
+      control_plane: {
+        state: 'STALE',
+        age_ms: 50_000,
+        stale_reason_codes: ['CONTROL_PLANE_LEASE_STALE'],
+      },
+    };
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      operator_surface: { ...status.operator_surface, runtime_freshness: runtimeFreshness },
+    });
+
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const button = el.querySelector(
+      'button[data-testid="operator-notice-action"]',
+    ) as HTMLButtonElement | null;
+    expect(button?.textContent).toContain('Renew control-plane lease');
+
+    button?.click();
+    await fixture.whenStable();
+
+    expect(stub.renewControlPlaneLease).toHaveBeenCalledOnce();
+    expect(stub.getInstanceStatus).toHaveBeenCalledTimes(2);
   });
 
   it('renders the Stop button only inside the overflow menu (canonical render-site rule)', async () => {

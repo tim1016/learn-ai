@@ -155,7 +155,13 @@
       <app-runtime-banner
         [freshness]="runtime"
         [incidentHeadline]="s.operator_surface.incident_headline ?? null"
+        (actionClicked)="handleRuntimeAction($event)"
       />
+      @if (runtimeActionError()) {
+        <div class="error-banner" role="alert" data-testid="runtime-action-error">
+          {{ runtimeActionError() }}
+        </div>
+      }
     }
 
     @if (controlPlaneBanner(); as banner) {

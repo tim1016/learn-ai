@@ -218,6 +218,17 @@ class DaemonLeaseWriter:
         self._write_now()
         self._task = asyncio.create_task(self._run(), name="daemon_lease_writer")
 
+    def renew_now(self) -> None:
+        """Write one fresh lease immediately.
+
+        Used by the cockpit recovery action when a child reports a stale
+        control-plane lease but the daemon HTTP API is still reachable.
+        The writer task remains the owner of periodic renewal; this method
+        is just a synchronous nudge through the same atomic writer path.
+        """
+        self._write_now()
+        self._wake.set()
+
     async def stop(self) -> None:
         """Cancel + drain. Bounded by ``2 * cadence`` seconds."""
         if self._task is None:

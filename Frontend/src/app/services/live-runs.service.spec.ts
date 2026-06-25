@@ -120,4 +120,35 @@ describe('LiveRunsService start/stop proxy', () => {
 
     await expect(promise).resolves.toEqual(health);
   });
+
+  it('renewControlPlaneLease posts to the data-plane proxy, not the daemon directly', async () => {
+    const health: HostRunnerHealth = {
+      ok: true,
+      repo_root: '/r',
+      live_runs_root: '/r/artifacts',
+      fetched_at_ms: 1,
+      process: {
+        state: 'idle',
+        run_id: null,
+        pid: null,
+        started_at_ms: null,
+        ended_at_ms: null,
+        exit_code: null,
+        command: [],
+        log_path: null,
+        message: null,
+      },
+      daemon_boot_id: 'boot-abc',
+      lease_status: 'CONNECTED',
+      last_lease_written_at_ms: 2,
+    };
+    const promise = service.renewControlPlaneLease();
+
+    const req = httpMock.expectOne('/api/live-instances/daemon-health/renew-lease');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.url.startsWith('http')).toBe(false);
+    req.flush(health);
+
+    await expect(promise).resolves.toEqual(health);
+  });
 });

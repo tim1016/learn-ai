@@ -1526,6 +1526,33 @@ async def get_daemon_health() -> HostRunnerHealth:
     )
 
 
+@router.post("/daemon-health/renew-lease", response_model=HostRunnerHealth)
+async def renew_daemon_lease() -> HostRunnerHealth:
+    """Ask the host daemon to write a fresh control-plane lease now.
+
+    This is the cockpit recovery action for
+    ``runtime.control_plane_lease_stale``. The data plane forwards the
+    authenticated request so the browser never holds the daemon token.
+    """
+    settings = get_settings()
+    try:
+        result = await host_daemon_client.renew_control_plane_lease(
+            settings.live_runner_daemon_url
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("renew_daemon_lease", exc)
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    try:
+        return HostRunnerHealth.model_validate(result)
+    except ValidationError as exc:
+        logger.warning("invalid renew-lease payload from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid renew-lease envelope",
+        ) from exc
+
+
 def _instance_ledger_account_id(root: Path, sid: str) -> str | None:
     """Latest ledger ``account_id`` for ``sid`` (``None`` when no ledger
     or the ledger pre-dates the field).  Pure read; used by the fleet

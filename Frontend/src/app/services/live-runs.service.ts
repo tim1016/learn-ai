@@ -113,6 +113,12 @@ export class LiveRunsService {
     );
   }
 
+  renewControlPlaneLease(): Promise<HostRunnerHealth> {
+    return firstValueFrom(
+      this.http.post<HostRunnerHealth>(`${this.instancesBase}/daemon-health/renew-lease`, {}),
+    );
+  }
+
   // Start/Stop route through the data plane for the same reason — the daemon
   // enforces a mandatory X-Live-Runner-Token on every actuation route
   // (ADR 0007), and the browser must never hold that shared secret.

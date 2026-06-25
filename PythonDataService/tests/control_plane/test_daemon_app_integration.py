@@ -269,6 +269,34 @@ async def test_lifespan_starts_lease_writer_and_writes_daemon_lease(
 
 
 @pytest.mark.asyncio
+async def test_renew_control_plane_lease_writes_daemon_lease_now(
+    tmp_path: Path, fake_token: str
+) -> None:
+    """The cockpit recovery action nudges the reachable daemon to refresh
+    its lease immediately, without restarting the child or bypassing auth."""
+    mgr = _make_manager(tmp_path, boot_id="boot-RENEW")
+
+    app = create_app(manager=mgr, allowed_origins=["http://localhost"])
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
+    ) as ac:
+        response = await ac.post("/control-plane/renew-lease")
+
+        assert response.status_code == 200
+        body = response.json()
+        lease = read_daemon_lease(mgr.artifacts_root)
+        assert lease is not None
+        assert lease.boot_id == "boot-RENEW"
+        assert lease.status == "CONNECTED"
+        assert body["daemon_boot_id"] == "boot-RENEW"
+        assert isinstance(body["last_lease_written_at_ms"], int)
+
+
+@pytest.mark.asyncio
 async def test_lifespan_flushes_draining_lease_on_shutdown(
     tmp_path: Path, fake_token: str
 ) -> None:

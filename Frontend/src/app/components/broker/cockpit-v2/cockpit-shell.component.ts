@@ -30,6 +30,7 @@ import type {
   FleetAccountSummary,
   LiveInstanceStatus,
   LiveInstanceSummary,
+  OperatorNoticeAction,
   OperatorGate,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -113,6 +114,7 @@ export class CockpitShellComponent {
   readonly summariesError = signal<string | null>(null);
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
+  readonly runtimeActionError = signal<string | null>(null);
   readonly errorMessage = computed<string | null>(
     () =>
       this.mutationError() ??
@@ -541,6 +543,28 @@ export class CockpitShellComponent {
       await this._refreshStatus(id);
     } catch (err) {
       this.reconcileError.set(this._humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  async handleRuntimeAction(action: OperatorNoticeAction): Promise<void> {
+    if (action.kind !== 'renew_control_plane_lease') {
+      return;
+    }
+    if (this.busyAction() !== null) {
+      return;
+    }
+    const id = this.selectedInstanceId();
+    this.busyAction.set('renew_control_plane_lease');
+    this.runtimeActionError.set(null);
+    try {
+      await this._live.renewControlPlaneLease();
+      if (id) {
+        await this._refreshStatus(id);
+      }
+    } catch (err) {
+      this.runtimeActionError.set(this._humanError(err));
     } finally {
       this.busyAction.set(null);
     }
