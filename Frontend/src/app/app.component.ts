@@ -2,7 +2,6 @@ import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
-import { BrokerBannerComponent } from './shell/broker-banner.component';
 import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
 import { BrokerHealthService } from './services/broker-health.service';
 
@@ -16,7 +15,6 @@ import { BrokerHealthService } from './services/broker-health.service';
   imports: [
     RouterOutlet,
     AppSidebarComponent,
-    BrokerBannerComponent,
     MethodologyDrawerComponent,
     Toast,
   ],
@@ -50,7 +48,6 @@ import { BrokerHealthService } from './services/broker-health.service';
   template: `
     <app-sidebar />
     <main class="main">
-      <app-broker-banner />
       <div class="main-content">
         <router-outlet />
       </div>

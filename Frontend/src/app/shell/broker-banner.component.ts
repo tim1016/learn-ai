@@ -2,11 +2,9 @@ import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/c
 import { BrokerHealthService } from '../services/broker-health.service';
 
 /**
- * Always-on global banner reflecting IBKR connection state.
+ * Sidebar broker connection control.
  *
- * Renders in the shell above the router-outlet so every page sees it.
- * Three visual states (yellow paper / red live / grey disconnected)
- * driven by ``BrokerHealthService.bannerState`` — see the service
+ * Driven by ``BrokerHealthService.bannerState`` — see the service
  * docstring for why the truth source is ``health.is_paper`` and never
  * the ``IBKR_MODE`` env var.
  */
@@ -18,52 +16,40 @@ import { BrokerHealthService } from '../services/broker-health.service';
     @let state = banner();
     @let action = lifecycleAction();
     @if (state) {
-      <div
+      <section
         class="broker-banner"
         [class.is-paper]="state.kind === 'paper'"
         [class.is-live]="state.kind === 'live'"
         [class.is-degraded]="state.kind === 'degraded'"
         [class.is-disconnected]="state.kind === 'disconnected'"
         [class.is-disabled]="state.kind === 'disabled'"
-        role="status"
         [attr.aria-label]="state.aria"
       >
-        <span class="broker-banner-icon" aria-hidden="true">{{ state.icon }}</span>
-        <span class="broker-banner-text">{{ state.text }}</span>
-        @if (state.kind === 'disconnected') {
+        <div class="broker-banner-copy" role="status" [attr.aria-label]="state.aria">
+          <span class="broker-banner-kicker">IBKR</span>
+          <span class="broker-banner-title">
+            <span class="broker-banner-dot" aria-hidden="true"></span>
+            {{ state.title }}
+          </span>
+          <span class="broker-banner-detail">{{ state.detail }}</span>
+        </div>
+        @if (state.toggleLabel; as label) {
           <button
             type="button"
-            class="broker-banner-cta"
-            (click)="connect()"
+            class="broker-toggle"
+            [class.is-on]="state.connected"
+            (click)="toggleConnection()"
             [disabled]="action !== null"
-            aria-label="Connect to IB Gateway"
+            [attr.aria-pressed]="state.connected"
+            [attr.aria-label]="state.toggleAria"
           >
-            {{ action === 'connect' ? 'Connecting…' : 'Connect' }}
+            <span class="broker-toggle-track" aria-hidden="true">
+              <span class="broker-toggle-thumb"></span>
+            </span>
+            <span class="broker-toggle-label">{{ toggleText(label, action) }}</span>
           </button>
         }
-        @if (state.kind === 'paper' || state.kind === 'live') {
-          <button
-            type="button"
-            class="broker-banner-cta"
-            (click)="disconnect()"
-            [disabled]="action !== null"
-            aria-label="Disconnect from IB Gateway"
-          >
-            {{ action === 'disconnect' ? 'Disconnecting…' : 'Disconnect' }}
-          </button>
-        }
-        @if (state.kind === 'degraded') {
-          <button
-            type="button"
-            class="broker-banner-cta"
-            (click)="reconnect()"
-            [disabled]="action !== null"
-            aria-label="Reconnect to IB Gateway"
-          >
-            {{ action === 'reconnect' ? 'Reconnecting…' : 'Reconnect' }}
-          </button>
-        }
-      </div>
+      </section>
     }
   `,
 })
@@ -71,16 +57,17 @@ export class BrokerBannerComponent {
   private readonly healthService = inject(BrokerHealthService);
   readonly lifecycleAction = this.healthService.lifecycleAction;
 
-  connect(): Promise<void> {
+  toggleConnection(): Promise<void> {
+    const state = this.banner();
+    if (state === null || state.toggleLabel === null) return Promise.resolve();
+    if (state.connected) return this.healthService.disconnect();
     return this.healthService.connect();
   }
 
-  disconnect(): Promise<void> {
-    return this.healthService.disconnect();
-  }
-
-  reconnect(): Promise<void> {
-    return this.healthService.reconnect();
+  toggleText(label: 'Connect' | 'Disconnect', action: string | null): string {
+    if (action === 'connect') return 'Connecting';
+    if (action === 'disconnect') return 'Disconnecting';
+    return label;
   }
 
   readonly banner = computed(() => {
@@ -89,42 +76,57 @@ export class BrokerBannerComponent {
     if (state === 'disabled-host-runner-active') {
       return {
         kind: 'disabled' as const,
-        icon: 'ℹ',
-        text: 'Broker connection disabled — paper-run is active. Visit /broker/paper-run for live status.',
+        title: 'Host-owned',
+        detail: 'Paper-run owns IBKR',
         aria: 'IBKR broker connection disabled — host-venv runner owns IBKR for paper-run',
+        connected: false,
+        toggleLabel: null,
+        toggleAria: null,
       };
     }
     const h = this.healthService.health();
     if (state === 'paper') {
       return {
         kind: 'paper' as const,
-        icon: '🟡',
-        text: `PAPER MODE — ${h?.account_id ?? 'unknown'} · IBKR connected`,
+        title: 'Paper connected',
+        detail: h?.account_id ?? 'unknown account',
         aria: 'Connected to IBKR paper account',
+        connected: true,
+        toggleLabel: 'Disconnect' as const,
+        toggleAria: 'Disconnect from IB Gateway',
       };
     }
     if (state === 'live') {
       return {
         kind: 'live' as const,
-        icon: '⚠️',
-        text: `LIVE MODE — ${h?.account_id ?? 'unknown'} · IBKR connected`,
+        title: 'Live connected',
+        detail: h?.account_id ?? 'unknown account',
         aria: 'Connected to IBKR LIVE account — real money at risk',
+        connected: true,
+        toggleLabel: 'Disconnect' as const,
+        toggleAria: 'Disconnect from IB Gateway',
       };
     }
     if (state === 'degraded') {
       const label = this.degradedLabel(h?.connection_state);
       return {
         kind: 'degraded' as const,
-        icon: '!',
-        text: `IBKR DEGRADED — ${label}`,
+        title: 'Degraded',
+        detail: label,
         aria: `IBKR broker degraded: ${label}`,
+        connected: true,
+        toggleLabel: 'Disconnect' as const,
+        toggleAria: 'Disconnect from IB Gateway',
       };
     }
     return {
       kind: 'disconnected' as const,
-      icon: '⛔',
-      text: 'BROKER DISCONNECTED',
+      title: 'Disconnected',
+      detail: 'IBKR offline',
       aria: 'IBKR broker is disconnected',
+      connected: false,
+      toggleLabel: 'Connect' as const,
+      toggleAria: 'Connect to IB Gateway',
     };
   });
 
