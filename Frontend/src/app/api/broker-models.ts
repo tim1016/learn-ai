@@ -18,8 +18,8 @@ import type { components } from './broker.types';
 
 export type IbkrAccountSummary = components['schemas']['IbkrAccountSummary'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
-export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'];
-export type IbkrOrderAck = components['schemas']['IbkrOrderAck'];
+export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] & IbkrOrderEvidenceFields;
+export type IbkrOrderAck = components['schemas']['IbkrOrderAck'] & IbkrOrderEvidenceFields;
 export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'];
 export type IbkrPosition = components['schemas']['IbkrPosition'];
 export type IbkrPositionsSnapshot = components['schemas']['IbkrPositionsSnapshot'];
@@ -52,6 +52,45 @@ export type SecType =
   | 'BAG';
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
 export type OrderEventType = 'status' | 'fill' | 'cancel' | 'error';
+export type IbkrEvidenceScalar = string | number | boolean | null;
+export type IbkrEvidenceValue =
+  | IbkrEvidenceScalar
+  | IbkrEvidenceValue[]
+  | { [key: string]: IbkrEvidenceValue };
+
+export interface IbkrObjectSnapshot {
+  object_type: string;
+  fields: { [key: string]: IbkrEvidenceValue };
+}
+
+export interface IbkrApiRequestSnapshot {
+  call: string;
+  params: { [key: string]: IbkrEvidenceValue };
+}
+
+export interface IbkrApiResponseSnapshot {
+  callback: string;
+  fields: { [key: string]: IbkrEvidenceValue };
+}
+
+export interface IbkrTradeSnapshot {
+  trade: IbkrObjectSnapshot | null;
+  contract: IbkrObjectSnapshot | null;
+  order: IbkrObjectSnapshot | null;
+  order_status: IbkrObjectSnapshot | null;
+  fills: IbkrObjectSnapshot[];
+  log: IbkrObjectSnapshot[];
+  advanced_error: string | null;
+}
+
+export interface IbkrOrderEvidenceFields {
+  ibkr_request?: IbkrApiRequestSnapshot | null;
+  ibkr_response?: IbkrApiResponseSnapshot | null;
+  ibkr_contract?: IbkrObjectSnapshot | null;
+  ibkr_order?: IbkrObjectSnapshot | null;
+  ibkr_order_status?: IbkrObjectSnapshot | null;
+  ibkr_trade?: IbkrTradeSnapshot | null;
+}
 
 // ── SSE payload models (hand-mirrored from app.broker.ibkr.models) ────
 
@@ -115,13 +154,30 @@ export interface IbkrOrderEvent {
   con_id: number | null;
   event_type: OrderEventType;
   status: OrderStatus | null;
+  order_ref: string | null;
+  symbol: string | null;
+  side: OrderAction | null;
+  order_type: string | null;
+  exec_id: string | null;
+  client_id: number | null;
   fill_quantity: number | null;
   avg_fill_price: number | null;
   cumulative_filled: number | null;
   remaining: number | null;
   last_fill_price: number | null;
+  exec_time_ms: number | null;
+  fee: number | null;
   error_code: number | null;
   error_message: string | null;
+  ibkr_request: IbkrApiRequestSnapshot | null;
+  ibkr_response: IbkrApiResponseSnapshot | null;
+  ibkr_contract: IbkrObjectSnapshot | null;
+  ibkr_order: IbkrObjectSnapshot | null;
+  ibkr_order_status: IbkrObjectSnapshot | null;
+  ibkr_trade: IbkrTradeSnapshot | null;
+  ibkr_fill: IbkrObjectSnapshot | null;
+  ibkr_execution: IbkrObjectSnapshot | null;
+  ibkr_commission_report: IbkrObjectSnapshot | null;
   ts_ms: number;
 }
 

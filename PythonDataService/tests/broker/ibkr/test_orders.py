@@ -130,6 +130,16 @@ async def test_place_paper_order_market_buy_returns_ack() -> None:
     assert ack.limit_price is None
     assert ack.status == "PendingSubmit"
     assert ack.placed_at_ms > 0
+    assert ack.ibkr_request is not None
+    assert ack.ibkr_request.call == "placeOrder"
+    assert ack.ibkr_response is not None
+    assert ack.ibkr_response.callback == "openOrder"
+    assert ack.ibkr_contract is not None
+    assert ack.ibkr_contract.fields["conId"] == 12345
+    assert ack.ibkr_order is not None
+    assert ack.ibkr_order.fields["totalQuantity"] == 10
+    assert ack.ibkr_order_status is not None
+    assert ack.ibkr_order_status.fields["status"] == "PendingSubmit"
     client.ib.placeOrder.assert_called_once()
 
 
@@ -363,6 +373,12 @@ async def test_list_open_orders_includes_own_orders_with_empty_account() -> None
 
     out = await list_open_orders(client)
     assert [o.order_id for o in out] == [44]
+    assert out[0].ibkr_request is not None
+    assert out[0].ibkr_request.call == "reqAllOpenOrders"
+    assert out[0].ibkr_contract is not None
+    assert out[0].ibkr_contract.fields["symbol"] == "SPY"
+    assert out[0].ibkr_order is not None
+    assert out[0].ibkr_order.fields["orderId"] == 44
 
 
 @pytest.mark.asyncio
@@ -520,6 +536,11 @@ async def test_stream_order_events_populates_exec_id_and_client_id_on_fill() -> 
     assert fill_event.client_id == 42
     assert fill_event.fill_quantity == 10.0
     assert fill_event.last_fill_price == 500.5
+    assert fill_event.ibkr_response is not None
+    assert fill_event.ibkr_response.callback == "execDetails"
+    assert fill_event.ibkr_execution is not None
+    assert fill_event.ibkr_execution.fields["execId"] == "exec-abc-1"
+    assert fill_event.ibkr_fill is not None
 
 
 @pytest.mark.asyncio

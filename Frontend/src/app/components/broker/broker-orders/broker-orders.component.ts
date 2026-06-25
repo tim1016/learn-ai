@@ -22,6 +22,7 @@ import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
   IbkrOpenOrder,
   IbkrOrderAck,
+  IbkrOrderEvidenceFields,
   IbkrOrderEvent,
   IbkrOrderSpec,
   OrderAction,
@@ -323,6 +324,36 @@ export class BrokerOrdersComponent {
     }
   }
 
+  hasIbkrEvidence(value: IbkrOrderEvidenceFields | IbkrOrderEvent): boolean {
+    return Boolean(
+      value.ibkr_request ||
+        value.ibkr_response ||
+        value.ibkr_contract ||
+        value.ibkr_order ||
+        value.ibkr_order_status ||
+        value.ibkr_trade ||
+        ('ibkr_fill' in value &&
+          (value.ibkr_fill || value.ibkr_execution || value.ibkr_commission_report)),
+    );
+  }
+
+  ibkrEvidenceJson(value: IbkrOrderEvidenceFields | IbkrOrderEvent): string {
+    const evidence: Record<string, unknown> = {
+      request: value.ibkr_request ?? null,
+      response: value.ibkr_response ?? null,
+      contract: value.ibkr_contract ?? null,
+      order: value.ibkr_order ?? null,
+      order_status: value.ibkr_order_status ?? null,
+      trade: value.ibkr_trade ?? null,
+    };
+    if ('ibkr_fill' in value) {
+      evidence['fill'] = value.ibkr_fill ?? null;
+      evidence['execution'] = value.ibkr_execution ?? null;
+      evidence['commission_report'] = value.ibkr_commission_report ?? null;
+    }
+    return JSON.stringify(evidence, null, 2);
+  }
+
   private openEventStream(): void {
     const existing = this.eventStream();
     if (existing) existing.close();
@@ -343,4 +374,3 @@ function cryptoUuid(): string {
   // sufficient as an idempotency token for paper orders only.
   return Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
 }
-

@@ -24,12 +24,20 @@ import logging
 from collections.abc import AsyncIterator
 
 from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
+from app.broker.ibkr.contract_evidence import (
+    ibkr_object_type,
+    snapshot_ibkr_object,
+)
 from app.broker.ibkr.contracts import expiry_ms_to_yyyymmdd
 from app.broker.ibkr.models import (
+    IbkrApiRequestSnapshot,
+    IbkrApiResponseSnapshot,
+    IbkrObjectSnapshot,
     IbkrOpenOrder,
     IbkrOrderAck,
     IbkrOrderEvent,
     IbkrOrderSpec,
+    IbkrTradeSnapshot,
     OrderEventType,
 )
 from app.utils.timestamps import now_ms_utc
@@ -126,6 +134,55 @@ class OrderRefusedDuringReconnectRecoveryError(OrderRefusedError):
 
 class OrderNotFoundError(BrokerError):
     """Cancel or lookup targeted an order that IBKR doesn't know about."""
+
+
+def _object_snapshot(obj: object | None) -> IbkrObjectSnapshot | None:
+    fields = snapshot_ibkr_object(obj)
+    object_type = ibkr_object_type(obj)
+    if fields is None or object_type is None:
+        return None
+    return IbkrObjectSnapshot(object_type=object_type, fields=fields)
+
+
+def _trade_snapshot(trade: object | None) -> IbkrTradeSnapshot | None:
+    if trade is None:
+        return None
+    fills = [
+        snap
+        for fill in list(getattr(trade, "fills", []) or [])
+        if (snap := _object_snapshot(fill)) is not None
+    ]
+    logs = [
+        snap
+        for row in list(getattr(trade, "log", []) or [])
+        if (snap := _object_snapshot(row)) is not None
+    ]
+    advanced_error = getattr(trade, "advancedError", None)
+    return IbkrTradeSnapshot(
+        trade=_object_snapshot(trade),
+        contract=_object_snapshot(getattr(trade, "contract", None)),
+        order=_object_snapshot(getattr(trade, "order", None)),
+        order_status=_object_snapshot(getattr(trade, "orderStatus", None)),
+        fills=fills,
+        log=logs,
+        advanced_error=str(advanced_error) if advanced_error else None,
+    )
+
+
+def _place_order_request_snapshot(contract: object, order: object) -> IbkrApiRequestSnapshot:
+    return IbkrApiRequestSnapshot(
+        call="placeOrder",
+        params={
+            "contract": snapshot_ibkr_object(contract) or {},
+            "order": snapshot_ibkr_object(order) or {},
+        },
+    )
+
+
+def _trade_response_snapshot(callback: str, trade: object) -> IbkrApiResponseSnapshot:
+    trade_snapshot = _trade_snapshot(trade)
+    fields = trade_snapshot.model_dump(mode="json") if trade_snapshot else {}
+    return IbkrApiResponseSnapshot(callback=callback, fields=fields)
 
 
 def _event_symbol(trade) -> str | None:
@@ -495,6 +552,12 @@ async def _place_and_build_ack(
         order_type=spec.order_type,
         limit_price=spec.limit_price,
         status=order_status,
+        ibkr_request=_place_order_request_snapshot(qualified_contract, order),
+        ibkr_response=_trade_response_snapshot("openOrder", trade),
+        ibkr_contract=_object_snapshot(qualified_contract),
+        ibkr_order=_object_snapshot(order),
+        ibkr_order_status=_object_snapshot(getattr(trade, "orderStatus", None)),
+        ibkr_trade=_trade_snapshot(trade),
         placed_at_ms=now_ms_utc(),
     )
 
@@ -506,6 +569,9 @@ def _trade_to_open_order(
     trade,
     account_id: str,
     client_id: int,
+    *,
+    request: IbkrApiRequestSnapshot | None = None,
+    response_callback: str = "openOrder",
 ) -> IbkrOpenOrder:
     """``ib_async.Trade`` → ``IbkrOpenOrder`` wire model."""
     contract = trade.contract
@@ -540,6 +606,12 @@ def _trade_to_open_order(
         # downstream (the cold-start reconciliation orchestrator treats
         # absence as "not ours via ref").
         order_ref=(getattr(order, "orderRef", "") or None),
+        ibkr_request=request,
+        ibkr_response=_trade_response_snapshot(response_callback, trade),
+        ibkr_contract=_object_snapshot(contract),
+        ibkr_order=_object_snapshot(order),
+        ibkr_order_status=_object_snapshot(status_obj),
+        ibkr_trade=_trade_snapshot(trade),
         fetched_at_ms=now_ms_utc(),
     )
 
@@ -579,7 +651,14 @@ async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
         if not _order_belongs_to_account(trade, account_id):
             continue
         try:
-            out.append(_trade_to_open_order(trade, account_id, client.settings.client_id))
+            out.append(
+                _trade_to_open_order(
+                    trade,
+                    account_id,
+                    client.settings.client_id,
+                    request=IbkrApiRequestSnapshot(call="reqAllOpenOrders", params={}),
+                )
+            )
         except Exception as exc:
             logger.warning(
                 "Skipping unparseable open order conId=%s: %s",
@@ -636,7 +715,16 @@ async def cancel_paper_order(
             f"No open order with order_id={order_id} owned by this client."
         )
     client.ib.cancelOrder(trade.order)
-    return _trade_to_open_order(trade, account_id, client.settings.client_id)
+    return _trade_to_open_order(
+        trade,
+        account_id,
+        client.settings.client_id,
+        request=IbkrApiRequestSnapshot(
+            call="cancelOrder",
+            params={"order": snapshot_ibkr_object(trade.order) or {}, "manualCancelOrderTime": None},
+        ),
+        response_callback="orderStatus",
+    )
 
 
 def _resolve_event_type(
@@ -671,6 +759,11 @@ def _trade_to_status_event(
         order_type=_event_order_type(trade),
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
         remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
+        ibkr_response=_trade_response_snapshot("orderStatus", trade),
+        ibkr_contract=_object_snapshot(getattr(trade, "contract", None)),
+        ibkr_order=_object_snapshot(getattr(trade, "order", None)),
+        ibkr_order_status=_object_snapshot(getattr(trade, "orderStatus", None)),
+        ibkr_trade=_trade_snapshot(trade),
         ts_ms=now_ms_utc(),
     )
 
@@ -737,6 +830,7 @@ def _fill_to_event(
     total_qty = float(getattr(trade.order, "totalQuantity", 0.0) or 0.0)
     running_remaining = max(total_qty - running_shares, 0.0)
     running_avg = (running_notional / running_shares) if running_shares else None
+    trade_snapshot = _trade_snapshot(trade)
 
     return IbkrOrderEvent(
         account_id=account_id,
@@ -758,6 +852,22 @@ def _fill_to_event(
         last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
+        ibkr_response=IbkrApiResponseSnapshot(
+            callback="execDetails",
+            fields={
+                "trade": trade_snapshot.model_dump(mode="json") if trade_snapshot else None,
+                "fill": snapshot_ibkr_object(fill) or {},
+                "execution": snapshot_ibkr_object(exec_obj) or {},
+                "commission_report": snapshot_ibkr_object(commission_obj) or {},
+            },
+        ),
+        ibkr_contract=_object_snapshot(getattr(trade, "contract", None)),
+        ibkr_order=_object_snapshot(getattr(trade, "order", None)),
+        ibkr_order_status=_object_snapshot(getattr(trade, "orderStatus", None)),
+        ibkr_trade=trade_snapshot,
+        ibkr_fill=_object_snapshot(fill),
+        ibkr_execution=_object_snapshot(exec_obj),
+        ibkr_commission_report=_object_snapshot(commission_obj),
         ts_ms=now_ms_utc(),
     )
 
@@ -953,6 +1063,20 @@ def _fill_to_recovery_event(
         last_fill_price=price,
         exec_time_ms=exec_time_ms,
         fee=float(fee) if fee is not None else None,
+        ibkr_request=IbkrApiRequestSnapshot(call="reqExecutionsAsync", params={}),
+        ibkr_response=IbkrApiResponseSnapshot(
+            callback="execDetails",
+            fields={
+                "fill": snapshot_ibkr_object(fill) or {},
+                "contract": snapshot_ibkr_object(contract) or {},
+                "execution": snapshot_ibkr_object(execution) or {},
+                "commission_report": snapshot_ibkr_object(commission_obj) or {},
+            },
+        ),
+        ibkr_contract=_object_snapshot(contract),
+        ibkr_fill=_object_snapshot(fill),
+        ibkr_execution=_object_snapshot(execution),
+        ibkr_commission_report=_object_snapshot(commission_obj),
         ts_ms=now_ms_utc(),
     )
 

@@ -21,7 +21,7 @@ import math
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.broker.safety_verdict import BrokerSafetyVerdict
 
@@ -82,6 +82,54 @@ def _coerce_quote(value: float | None) -> float | None:
 
 
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
+IbkrEvidenceValue = JsonValue
+
+
+class IbkrObjectSnapshot(BaseModel):
+    """JSON-safe snapshot of one ib_async object.
+
+    ``object_type`` records the originating Python type while ``fields`` carries
+    every public field we could observe. Datetime fields are converted at the
+    broker boundary to ``int64 ms UTC`` to preserve the repo-wide timestamp
+    contract.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    object_type: str
+    fields: dict[str, IbkrEvidenceValue] = Field(default_factory=dict)
+
+
+class IbkrApiRequestSnapshot(BaseModel):
+    """Typed envelope for one IBKR API request/call."""
+
+    model_config = ConfigDict(frozen=True)
+
+    call: str
+    params: dict[str, IbkrEvidenceValue] = Field(default_factory=dict)
+
+
+class IbkrApiResponseSnapshot(BaseModel):
+    """Typed envelope for one IBKR callback/response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    callback: str
+    fields: dict[str, IbkrEvidenceValue] = Field(default_factory=dict)
+
+
+class IbkrTradeSnapshot(BaseModel):
+    """Full ib_async Trade evidence grouped by its child objects."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trade: IbkrObjectSnapshot | None = None
+    contract: IbkrObjectSnapshot | None = None
+    order: IbkrObjectSnapshot | None = None
+    order_status: IbkrObjectSnapshot | None = None
+    fills: list[IbkrObjectSnapshot] = Field(default_factory=list)
+    log: list[IbkrObjectSnapshot] = Field(default_factory=list)
+    advanced_error: str | None = None
 
 
 class IbkrAccountSummary(BaseModel):
@@ -490,6 +538,16 @@ class IbkrOrderEvent(BaseModel):
     error_code: int | None = None
     error_message: str | None = None
 
+    ibkr_request: IbkrApiRequestSnapshot | None = None
+    ibkr_response: IbkrApiResponseSnapshot | None = None
+    ibkr_contract: IbkrObjectSnapshot | None = None
+    ibkr_order: IbkrObjectSnapshot | None = None
+    ibkr_order_status: IbkrObjectSnapshot | None = None
+    ibkr_trade: IbkrTradeSnapshot | None = None
+    ibkr_fill: IbkrObjectSnapshot | None = None
+    ibkr_execution: IbkrObjectSnapshot | None = None
+    ibkr_commission_report: IbkrObjectSnapshot | None = None
+
     ts_ms: int
 
 
@@ -527,6 +585,12 @@ class IbkrOpenOrder(BaseModel):
     # orchestrator joins this back to the WAL to prove ownership without
     # trusting per-client ``order_id`` alone.
     order_ref: str | None = None
+    ibkr_request: IbkrApiRequestSnapshot | None = None
+    ibkr_response: IbkrApiResponseSnapshot | None = None
+    ibkr_contract: IbkrObjectSnapshot | None = None
+    ibkr_order: IbkrObjectSnapshot | None = None
+    ibkr_order_status: IbkrObjectSnapshot | None = None
+    ibkr_trade: IbkrTradeSnapshot | None = None
     fetched_at_ms: int
 
 
@@ -552,6 +616,12 @@ class IbkrOrderAck(BaseModel):
     order_type: OrderType
     limit_price: float | None = None
     status: OrderStatus
+    ibkr_request: IbkrApiRequestSnapshot | None = None
+    ibkr_response: IbkrApiResponseSnapshot | None = None
+    ibkr_contract: IbkrObjectSnapshot | None = None
+    ibkr_order: IbkrObjectSnapshot | None = None
+    ibkr_order_status: IbkrObjectSnapshot | None = None
+    ibkr_trade: IbkrTradeSnapshot | None = None
     placed_at_ms: int
 
 
@@ -753,9 +823,12 @@ __all__ = [
     "DiagnosticReportDisabled",
     "DiagnosticStatus",
     "IbkrAccountSummary",
+    "IbkrApiRequestSnapshot",
+    "IbkrApiResponseSnapshot",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrMinuteBar",
+    "IbkrObjectSnapshot",
     "IbkrOpenOrder",
     "IbkrOptionQuote",
     "IbkrOrderAck",
@@ -767,6 +840,7 @@ __all__ = [
     "IbkrStrikeList",
     "IbkrSurfaceExpiry",
     "IbkrSurfaceSnapshot",
+    "IbkrTradeSnapshot",
     "OptionRight",
     "OrderAction",
     "OrderEventType",
