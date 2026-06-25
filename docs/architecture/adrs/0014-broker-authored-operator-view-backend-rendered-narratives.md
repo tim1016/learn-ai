@@ -82,6 +82,33 @@ The full row is written at author time; the authored strings are *not* re-render
 
 `LiveStateEnvelope` carries only a `last_broker_activity_wal_seq: int` cursor for fold/resume; it does not store rows. The publisher writes the WAL; the envelope tracks the highest seq folded into the resume state.
 
+## Amendment 2026-06-25 — Host-runner-owned raw callback WAL
+
+**Status:** Accepted for issue #684 PR 2. Supersedes ADR 0014 §4 only where §4 made the data-plane publisher the live event source and the sole live author of broker-activity capture. The backend-rendered narrative rule, the closed verdict enum, and the template truthfulness contract remain unchanged.
+
+The June25 incident showed that the data-plane publisher is the wrong owner for first-capture durability: the host runner can submit and fill orders while the long-lived data-plane process is stale, detached, or crashed. Therefore the process that owns the order lifecycle must also own the durable broker-callback evidence.
+
+### New ownership chain
+
+1. The host runner writes an append-only per-run raw callback WAL, `broker_callbacks.jsonl`, before any callback can be lost to a detached data-plane publisher.
+2. Each raw row records the broker callback fact (`orderStatus`, `execDetails`, `commissionReport`, position snapshot, disconnect/reconnect event) plus idempotency keys: `exec_id`, `perm_id`, `order_ref`, callback type, and the run-local callback `seq`.
+3. The data-plane broker-activity publisher becomes a projector/enricher over `broker_callbacks.jsonl`: it reads raw callback facts, joins the current engine overlay by `order_ref`, applies the existing pure reconciliation/template functions, and appends authored `BrokerActivityRow`s to `broker_activity.jsonl`.
+4. The cockpit continues to read only the authored broker-activity surface. Raw callbacks are audit/projection input, not UI copy.
+
+### What changes
+
+- `broker_callbacks.jsonl` is the authoritative capture record for broker activity because it is written by the host runner that owns the IBKR order lifecycle.
+- `broker_activity.jsonl` remains the authored operator-view WAL, but it is now a derived projection. Losing or restarting the data-plane publisher must not lose raw history; the projection can be rebuilt from raw callbacks.
+- A submit-enabled start may temporarily fail closed when durable callback capture cannot be attached. That guard is transitional and is superseded by host-runner-owned capture once the raw callback WAL is implemented.
+- Reconnect sweeps and redeliveries dedupe against raw callback idempotency keys before projection so repeated IBKR delivery cannot double-count fills.
+
+### What does not change
+
+- ADR 0008's `order_ref` ownership ladder and uncertain-ack semantics are unchanged.
+- ADR 0008's JSONL durability contract is reused: append-only rows, monotonic `seq`, fsync-before-return, and tolerance only for one trailing unterminated line.
+- ADR 0014's narrative contract is unchanged: verdicts, `headline`, and `narrative` are still backend-authored, template-versioned, and persisted on `BrokerActivityRow`.
+- The data plane may still enrich, backfill, stream, and expose the authored rows, but it is no longer the authority for whether a broker callback happened.
+
 ### 6. Per-instance configurable timing policy
 
 Lag-driven verdict thresholds (`expected` → `expected_with_caveat` → `unexpected`) are not hardcoded universal constants. Each strategy instance's configuration carries a `reconciliation_timing_policy` block:
@@ -120,7 +147,7 @@ The Activity tab's existing components are replaced, not supplemented:
 
 **Negative:**
 - A new template requires a code change, a test case, and a `template_version` bump. Templates are not configuration. Acceptable because templates ARE the truthfulness contract.
-- The publisher introduces a stateful background task per instance — new lifecycle surface to manage (start when instance starts, stop when instance stops, drain SSE subscribers on stop). Modeled on the existing `/api/broker/orders/stream` precedent.
+- The publisher introduces a stateful background task per instance — new lifecycle surface to manage (start when instance starts, stop when instance stops, drain SSE subscribers on stop). After the 2026-06-25 amendment it is a projector over host-runner-captured callbacks, not the first durable capture point.
 - Activity-tab UX regressions are possible while operators learn the new verdict semantics. Mitigated by the runbook landing alongside (`docs/runbooks/live-trade-reconciliation.md`).
 - Two refresh sources on the cockpit (the existing 4s poll + the new Activity-tab SSE) is more wiring than a single source. Accepted because the alternative (delete the 4s poll) would dark-fire three other tabs.
 
@@ -133,7 +160,8 @@ The Activity tab's existing components are replaced, not supplemented:
 
 - `PythonDataService/app/services/broker_activity_reconciler.py` — pure functions (`match_identity`, `classify_verdict`, `select_template`, `render_narrative`).
 - `PythonDataService/app/services/broker_activity_templates.py` — versioned template constants + selection table.
-- `PythonDataService/app/services/broker_activity_publisher.py` — stateful per-instance publisher; the only WAL writer.
+- `PythonDataService/app/services/broker_activity_publisher.py` — stateful per-instance projector/enricher; writes authored `broker_activity.jsonl` rows but is no longer the authority for raw broker-callback capture.
+- `run_dir/broker_callbacks.jsonl` — host-runner-owned raw broker-callback WAL accepted by the 2026-06-25 amendment; implementation lands in the following slice.
 - `PythonDataService/app/schemas/broker_activity.py` — `BrokerActivityRow`, `EngineOverlay`, `DivergenceFacts`, `Verdict`, `ReconciliationTimingPolicy`.
 - `PythonDataService/app/engine/live/live_state_sidecar.py` — `last_broker_activity_wal_seq` cursor (additive).
 - `PythonDataService/app/routers/broker_activity.py` — SSE stream + paginated REST backfill.
