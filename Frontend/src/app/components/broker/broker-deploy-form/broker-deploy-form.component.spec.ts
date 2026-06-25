@@ -534,6 +534,28 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('syncs visibly filled controls even when no individual field event reached the signal setters', async () => {
+    const { fixture, component } = setup({ qcEntries: [] });
+    await flush();
+    fixture.detectChanges();
+
+    fieldControl(fixture, 'Strategy').value = 'deployment_validation';
+    fieldControl(fixture, 'Brokerage account').value = 'DU123';
+    fieldControl(fixture, 'Backtest ID').value = 'bt-validated';
+    fieldControl(fixture, 'Algorithm audit copy').value = DEPLOYMENT_VALIDATION_AUDIT_COPY;
+    fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
+
+    component.syncRenderedFieldValues();
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.strategyKey()).toBe('deployment_validation');
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Ready to deploy.',
+    );
+  });
+
   it('does not overwrite a manually typed brokerage account when broker prefill resolves later', async () => {
     let resolveAccount: (value: { account_id: string }) => void = () => undefined;
     const accountPromise = new Promise<{ account_id: string }>((resolve) => {

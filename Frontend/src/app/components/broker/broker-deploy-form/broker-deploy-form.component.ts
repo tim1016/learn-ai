@@ -2,6 +2,8 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
+  ElementRef,
   effect,
   inject,
   resource,
@@ -62,6 +64,8 @@ export class BrokerDeployFormComponent {
   private readonly broker = inject(BrokerService);
   protected readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
@@ -357,6 +361,9 @@ export class BrokerDeployFormComponent {
       }
       this.autoSelectedDeploymentValidationAuditCopy.set(false);
     });
+
+    const syncHandle = window.setInterval(() => this.syncRenderedFieldValues(), 500);
+    this.destroyRef.onDestroy(() => window.clearInterval(syncHandle));
   }
 
   private readonly required = computed<boolean>(
@@ -418,6 +425,7 @@ export class BrokerDeployFormComponent {
   readonly canSubmit = computed<boolean>(() => !this.busy() && this.blockedReason() === null);
 
   async submit(): Promise<void> {
+    this.syncRenderedFieldValues();
     if (!this.canSubmit()) return;
     if (this.startNow() && !this.readonlyFlag() && !this.liveConfirmed()) {
       this.showLiveConfirm.set(true);
@@ -487,6 +495,63 @@ export class BrokerDeployFormComponent {
       ? e.target.value
       : '';
   }
+  private renderedFieldValue(
+    field:
+      | 'strategyKey'
+      | 'specPath'
+      | 'accountId'
+      | 'qcBacktestId'
+      | 'qcAuditCopyPath'
+      | 'instanceId',
+  ): string | null {
+    const control = this.host.nativeElement.querySelector(
+      `[data-deploy-field="${field}"]`,
+    );
+    if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
+      return control.value;
+    }
+    return null;
+  }
+
+  syncRenderedFieldValues(): void {
+    const strategyKey = this.renderedFieldValue('strategyKey');
+    if (strategyKey !== null && strategyKey.trim() !== '' && strategyKey !== this.strategyKey()) {
+      this.manualSpecPath.set(false);
+      this.strategyKey.set(strategyKey);
+    }
+
+    const specPath = this.renderedFieldValue('specPath');
+    if (specPath !== null && specPath.trim() !== '' && specPath !== this.specPath()) {
+      this.specPath.set(specPath);
+    }
+
+    const accountId = this.renderedFieldValue('accountId');
+    if (accountId !== null && accountId.trim() !== '' && accountId !== this.accountId()) {
+      this.manualAccountId.set(true);
+      this.accountId.set(accountId);
+    }
+
+    const qcBacktestId = this.renderedFieldValue('qcBacktestId');
+    if (qcBacktestId !== null && qcBacktestId.trim() !== '' && qcBacktestId !== this.qcBacktestId()) {
+      this.qcBacktestId.set(qcBacktestId);
+    }
+
+    const qcAuditCopyPath = this.renderedFieldValue('qcAuditCopyPath');
+    if (
+      qcAuditCopyPath !== null &&
+      qcAuditCopyPath.trim() !== '' &&
+      qcAuditCopyPath !== this.qcAuditCopyPath()
+    ) {
+      this.qcAuditCopyPath.set(qcAuditCopyPath);
+      this.autoSelectedDeploymentValidationAuditCopy.set(false);
+    }
+
+    const instanceId = this.renderedFieldValue('instanceId');
+    if (instanceId !== null && instanceId.trim() !== '' && instanceId !== this.instanceId()) {
+      this.instanceId.set(instanceId);
+    }
+  }
+
   setStrategyKey(e: Event): void {
     this.manualSpecPath.set(false);
     this.strategyKey.set(this.text(e));
