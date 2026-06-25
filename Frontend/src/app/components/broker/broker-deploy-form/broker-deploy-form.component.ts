@@ -4,7 +4,6 @@ import {
   computed,
   effect,
   inject,
-  linkedSignal,
   resource,
   signal,
 } from '@angular/core';
@@ -87,9 +86,8 @@ export class BrokerDeployFormComponent {
   // fresh run_id). Preferred over the broker-account prefill so the ledger's
   // account survives even if the broker probe is down or resolves late.
   private readonly seededAccountId = signal<string>('');
-  readonly accountId = linkedSignal<string>(
-    () => this.seededAccountId() || (this.account.value()?.account_id ?? ''),
-  );
+  private readonly manualAccountId = signal<boolean>(false);
+  readonly accountId = signal<string>('');
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
   readonly instanceId = signal<string>('');
@@ -303,7 +301,10 @@ export class BrokerDeployFormComponent {
       this.specPath.set(seedSpecPath);
     }
     const seedAccount = qp.get('account_id');
-    if (seedAccount) this.seededAccountId.set(seedAccount);
+    if (seedAccount) {
+      this.seededAccountId.set(seedAccount);
+      this.accountId.set(seedAccount);
+    }
     const seedBacktestId = qp.get('qc_backtest_id');
     if (seedBacktestId) this.qcBacktestId.set(seedBacktestId);
     const seedAuditCopy = qp.get('qc_audit_copy_path');
@@ -322,6 +323,13 @@ export class BrokerDeployFormComponent {
         strategy === 'deployment_validation' ? DEPLOYMENT_VALIDATION_SPEC_PATH : null;
       const nextPath = match?.path ?? fallback;
       if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
+    });
+    effect(() => {
+      if (this.manualAccountId()) return;
+      const nextAccount = this.seededAccountId() || (this.account.value()?.account_id ?? '');
+      if (nextAccount && this.accountId() !== nextAccount) {
+        this.accountId.set(nextAccount);
+      }
     });
     // Reference parity must not silently downgrade — if the audit-copy choice
     // changes such that the gate is no longer proven_match, reset the preset to
@@ -480,6 +488,7 @@ export class BrokerDeployFormComponent {
       : '';
   }
   setStrategyKey(e: Event): void {
+    this.manualSpecPath.set(false);
     this.strategyKey.set(this.text(e));
   }
   setSpecPath(e: Event): void {
@@ -493,6 +502,7 @@ export class BrokerDeployFormComponent {
     this.manualSpecPath.set(true);
   }
   setAccountId(e: Event): void {
+    this.manualAccountId.set(true);
     this.accountId.set(this.text(e));
   }
   setQcBacktestId(e: Event): void {
