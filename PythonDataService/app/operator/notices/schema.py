@@ -73,6 +73,7 @@ class OperatorNoticeAction(BaseModel):
         "wait",
         "open_runbook",
         "focus_cockpit_action",
+        "renew_control_plane_lease",
         "external_manual_check",
         "redeploy",
     ]

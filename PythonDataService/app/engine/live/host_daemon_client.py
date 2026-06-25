@@ -166,6 +166,11 @@ async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> di
     )
 
 
+async def renew_control_plane_lease(base_url: str) -> dict:
+    """POST /control-plane/renew-lease and return HostRunnerHealth as a dict."""
+    return await _post_action(f"{base_url.rstrip('/')}/control-plane/renew-lease", {})
+
+
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
     """Typed POST core for the four mutation forwards.
 

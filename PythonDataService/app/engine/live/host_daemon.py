@@ -228,6 +228,34 @@ class RunnerProcessManager:
             orphan_candidates_count=len(self._orphan_candidates),
         )
 
+    def renew_control_plane_lease(self) -> HostRunnerHealth:
+        """Force an immediate daemon lease write and return fresh health.
+
+        This is the cockpit-side recovery nudge for
+        ``CONTROL_PLANE_LEASE_STALE``. It only succeeds when this daemon
+        process is reachable and owns a lease writer; it does not restart
+        child processes or submit broker orders.
+        """
+        if self._lease_writer is None:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "daemon lease writer is not available",
+            )
+        renew = getattr(self._lease_writer, "renew_now", None)
+        if not callable(renew):
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "daemon lease writer cannot renew on demand",
+            )
+        try:
+            renew()
+        except OSError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "daemon lease renewal failed",
+            ) from exc
+        return self.health()
+
     def _compute_git_sha(self) -> str | None:
         """Live HEAD of the daemon's repo_root, or None if git is unavailable."""
         try:
@@ -1018,6 +1046,13 @@ def create_app(
     @app.get("/health", response_model=HostRunnerHealth, dependencies=auth)
     async def health() -> HostRunnerHealth:
         return process_manager.health()
+
+    @app.post("/control-plane/renew-lease", response_model=HostRunnerHealth, dependencies=auth)
+    async def renew_control_plane_lease() -> HostRunnerHealth:
+        try:
+            return await run_in_threadpool(process_manager.renew_control_plane_lease)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.get("/process", response_model=HostRunnerProcessStatus, dependencies=auth)
     async def process() -> HostRunnerProcessStatus:

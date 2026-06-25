@@ -17,6 +17,7 @@ Asserts:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -25,6 +26,7 @@ import pytest
 from httpx import ASGITransport
 
 from app.engine.live.control_plane import (
+    DaemonLease,
     daemon_lease_path,
     read_daemon_lease,
 )
@@ -266,6 +268,78 @@ async def test_lifespan_starts_lease_writer_and_writes_daemon_lease(
     assert lease.boot_id == "boot-LEASE"
     # On clean shutdown the final lease is DRAINING.
     assert lease.status == "DRAINING"
+
+
+async def test_renew_control_plane_lease_writes_daemon_lease_now(
+    tmp_path: Path, fake_token: str
+) -> None:
+    """The cockpit recovery action nudges the reachable daemon to refresh
+    its lease immediately, without restarting the child or bypassing auth."""
+    mgr = _make_manager(tmp_path, boot_id="boot-RENEW")
+
+    app = create_app(manager=mgr, allowed_origins=["http://localhost"])
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
+    ) as ac:
+        writer = mgr._lease_writer
+        assert writer is not None
+        original_writer = writer._writer
+        writes: list[int] = []
+
+        def spy_writer(path: Path, lease: DaemonLease) -> None:
+            writes.append(lease.written_at_ms)
+            original_writer(path, lease)
+
+        writer._writer = spy_writer
+
+        response = await ac.post("/control-plane/renew-lease")
+
+        assert response.status_code == 200
+        body = response.json()
+        for _ in range(20):
+            if len(writes) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        lease = read_daemon_lease(mgr.artifacts_root)
+        assert lease is not None
+        assert lease.boot_id == "boot-RENEW"
+        assert lease.status == "CONNECTED"
+        assert body["daemon_boot_id"] == "boot-RENEW"
+        assert isinstance(body["last_lease_written_at_ms"], int)
+        # One synchronous renew write plus one cadence-loop write proves
+        # the threadpool caller woke the asyncio task safely.
+        assert len(writes) >= 2
+
+
+async def test_renew_control_plane_lease_surfaces_write_failure(
+    tmp_path: Path, fake_token: str
+) -> None:
+    mgr = _make_manager(tmp_path, boot_id="boot-RENEW-FAIL")
+
+    app = create_app(manager=mgr, allowed_origins=["http://localhost"])
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=transport,
+        base_url="http://daemon",
+        timeout=5.0,
+        headers={"X-Live-Runner-Token": fake_token},
+    ) as ac:
+        writer = mgr._lease_writer
+        assert writer is not None
+
+        def failing_writer(_path: Path, _lease: DaemonLease) -> None:
+            raise OSError("disk full")
+
+        writer._writer = failing_writer
+
+        response = await ac.post("/control-plane/renew-lease")
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "daemon lease renewal failed"
 
 
 @pytest.mark.asyncio

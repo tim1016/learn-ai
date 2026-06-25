@@ -17,7 +17,7 @@ import logging
 import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NoReturn
 from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
@@ -1526,6 +1526,33 @@ async def get_daemon_health() -> HostRunnerHealth:
     )
 
 
+@router.post("/daemon-health/renew-lease", response_model=HostRunnerHealth)
+async def renew_daemon_lease() -> HostRunnerHealth:
+    """Ask the host daemon to write a fresh control-plane lease now.
+
+    This is the cockpit recovery action for
+    ``runtime.control_plane_lease_stale``. The data plane forwards the
+    authenticated request so the browser never holds the daemon token.
+    """
+    settings = get_settings()
+    try:
+        result = await host_daemon_client.renew_control_plane_lease(
+            settings.live_runner_daemon_url
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("renew_daemon_lease", exc)
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    try:
+        return HostRunnerHealth.model_validate(result)
+    except ValidationError as exc:
+        logger.warning("invalid renew-lease payload from host daemon: %s", exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="host daemon returned an invalid renew-lease envelope",
+        ) from exc
+
+
 def _instance_ledger_account_id(root: Path, sid: str) -> str | None:
     """Latest ledger ``account_id`` for ``sid`` (``None`` when no ledger
     or the ledger pre-dates the field).  Pure read; used by the fleet
@@ -1872,13 +1899,24 @@ _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
         "intermediate state. Verify positions directly via the broker "
         "before deciding whether to retry."
     ),
+    "renew_daemon_lease": (
+        "A control-plane lease renewal request was sent to the host runner "
+        "daemon but the response was lost. Refresh the cockpit to read the "
+        "latest control-plane state before deciding whether to retry."
+    ),
 }
 
 
 def _raise_outcome_unknown(
-    endpoint: Literal["deploy", "start_run", "stop_run", "emergency_flatten"],
+    endpoint: Literal[
+        "deploy",
+        "start_run",
+        "stop_run",
+        "emergency_flatten",
+        "renew_daemon_lease",
+    ],
     exc: host_daemon_client.HostDaemonOutcomeUnknownError,
-) -> None:
+) -> NoReturn:
     """Surface an ambiguous-outcome mutation failure as a typed 409 (PRD #619-C5).
 
     The body is :class:`MutationOutcomeUnknownResponse`; the cockpit

@@ -30,7 +30,8 @@ of truth for:
   `watchdog.*`, `activity.*`, `reconciliation.*`); all PR 1–6 slots
   declared upfront.
 - `OperatorNoticeAction.kind = Literal["none", "wait", "open_runbook",
-  "focus_cockpit_action", "external_manual_check", "redeploy"]`
+  "focus_cockpit_action", "renew_control_plane_lease",
+  "external_manual_check", "redeploy"]`
 - `OperatorNotice` — `code`, `tier`, `title`, `message`, `source_codes`,
   `forensic_facts`, `action`, `runbook_slug`, `occurred_at_ms`.
 - `OperatorIncident` — `incident_id`, `category`, `notice`,
@@ -57,9 +58,15 @@ of truth for:
 
 ### Action semantics
 
-`OperatorNoticeAction.kind` separates affordance from navigation:
+`OperatorNoticeAction.kind` separates finished notice copy from the
+closed affordance the cockpit may expose:
 
-- Clickable: `focus_cockpit_action`, `open_runbook`, `redeploy`.
+- Navigation/focus affordances: `focus_cockpit_action`, `open_runbook`,
+  `redeploy`. `redeploy` routes to the existing deploy/configuration
+  flow; it never silently redeploys.
+- Bounded remediation affordances: `renew_control_plane_lease`. These
+  actions must be explicitly named in this contract, routed through the
+  data plane, and implemented as one-shot backend-authored operations.
 - Non-clickable explicit non-automation: `external_manual_check`.
   "Check positions in IBKR" must not look like the cockpit performed
   reconciliation.
@@ -84,8 +91,10 @@ parametrized-tested against the rules table. A snapshot test pins the
 
 - Backend owns trader-facing copy. Adding a new failure mode requires a
   backend rule + a snapshot update.
-- The frontend renderer is a dumb component. Code-driven safety
-  decisions in the UI become impossible by construction.
+- The frontend renderer is dumb about safety semantics: it renders
+  backend-authored copy and may dispatch only closed backend-authored
+  action kinds. Code-driven safety decisions or ad-hoc copy in the UI
+  remain out of bounds.
 - ADRs 0013 and 0014 carry forward; this generalizes their principle.
 
 ## Implementation

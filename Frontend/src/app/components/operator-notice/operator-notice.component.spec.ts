@@ -51,6 +51,18 @@ describe('OperatorNoticeComponent', () => {
     expect(screen.getByRole('button', { name: /how to recover/i })).toBeTruthy();
   });
 
+  it('renders the control-plane lease renew action as a button', async () => {
+    await render(OperatorNoticeComponent, {
+      inputs: {
+        notice: makeNotice({
+          action: { kind: 'renew_control_plane_lease', label: 'Renew control-plane lease', target: 'daemon_lease' },
+        }),
+      },
+    });
+
+    expect(screen.getByRole('button', { name: /renew control-plane lease/i })).toBeTruthy();
+  });
+
   it('emits the action when a clickable action button is clicked', async () => {
     const action: OperatorNoticeAction = { kind: 'open_runbook', label: 'How to recover', target: 'runtime-freshness' };
     let captured: OperatorNoticeAction | null = null;

@@ -31,12 +31,13 @@ def test_tier_literal_is_three_values():
     assert set(get_literal_args(OperatorNoticeTier)) == {"info", "warning", "critical"}
 
 
-def test_action_kind_is_six_values():
+def test_action_kind_is_seven_values():
     assert set(get_literal_args(OperatorNoticeAction.model_fields["kind"].annotation)) == {
         "none",
         "wait",
         "open_runbook",
         "focus_cockpit_action",
+        "renew_control_plane_lease",
         "external_manual_check",
         "redeploy",
     }

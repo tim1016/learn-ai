@@ -57,7 +57,11 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "in a guarded state. Verify only one cockpit or host runner is "
             "attached to this run."
         ),
-        action=OperatorNoticeAction(kind="open_runbook", label="How to recover", target=_RUNBOOK),
+        action=OperatorNoticeAction(
+            kind="renew_control_plane_lease",
+            label="Renew control-plane lease",
+            target="daemon_lease",
+        ),
         runbook_slug=_RUNBOOK,
     ),
     _Rule(

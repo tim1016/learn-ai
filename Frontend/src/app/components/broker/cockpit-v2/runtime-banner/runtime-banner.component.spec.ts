@@ -150,6 +150,31 @@ describe('RuntimeBannerComponent', () => {
     expect(screen.getByText('Command loop unresponsive')).toBeTruthy();
   });
 
+  it('emits operator notice actions from the freshness headline', async () => {
+    const f = freshFreshness();
+    const action = {
+      kind: 'renew_control_plane_lease' as const,
+      label: 'Renew control-plane lease',
+      target: 'daemon_lease',
+    };
+    f.headline = {
+      ...criticalFreshnessNotice(),
+      code: 'runtime.control_plane_lease_stale',
+      title: 'Control-plane lease is stale',
+      action,
+    };
+    f.posture_demoted = true;
+    let captured: typeof action | null = null;
+
+    await render(RuntimeBannerComponent, {
+      inputs: { freshness: f },
+      on: { actionClicked: (a) => { captured = a as typeof action; } },
+    });
+    await screen.getByRole('button', { name: /renew control-plane lease/i }).click();
+
+    expect(captured).toEqual(action);
+  });
+
   it('resets the debounce when freshness recovers, so a brief blip never shows the banner', async () => {
     const stale = withHeadline();
     const fresh = freshFreshness();

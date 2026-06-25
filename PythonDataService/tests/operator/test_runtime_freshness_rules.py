@@ -170,6 +170,16 @@ def test_reasons_preserve_priority_order_descending():
     ]
 
 
+def test_control_plane_lease_stale_offers_renew_action():
+    runtime = _runtime_with(control_plane=["CONTROL_PLANE_LEASE_STALE"])
+    headline, _ = compose_runtime_freshness_notices(runtime)
+    assert headline is not None
+    assert headline.code == "runtime.control_plane_lease_stale"
+    assert headline.action.kind == "renew_control_plane_lease"
+    assert headline.action.label == "Renew control-plane lease"
+    assert headline.action.target == "daemon_lease"
+
+
 def test_feed_stalled_fires_even_when_other_domain_is_also_stale():
     """Regression for thermo M1: previously ``mode='exact'`` compared against the
     GLOBAL active code set, so a co-occurring stale code in any other domain

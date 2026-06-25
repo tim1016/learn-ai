@@ -363,7 +363,7 @@ class MutationOutcomeUnknownResponse(BaseModel):
     could not be proven (PRD #619-C5).
 
     Surfaced by ``deploy_instance`` / ``start_run`` / ``stop_run`` /
-    ``emergency_flatten_instance`` when the typed daemon POST returns
+    ``emergency_flatten_instance`` / ``renew_daemon_lease`` when the typed daemon POST returns
     ``DaemonResult.kind == "UNREACHABLE"`` with
     ``outcome_ambiguous=True`` — i.e., the request was (partly or
     fully) sent but the response was lost.  The mutation may or may not
@@ -390,8 +390,15 @@ class MutationOutcomeUnknownResponse(BaseModel):
     # underlying exception carried no message).
     detail: str | None = None
     # Canonical endpoint label so the cockpit can show the right copy
-    # ("deploy" / "start_run" / "stop_run" / "emergency_flatten").
-    endpoint: Literal["deploy", "start_run", "stop_run", "emergency_flatten"]
+    # ("deploy" / "start_run" / "stop_run" / "emergency_flatten" /
+    # "renew_daemon_lease").
+    endpoint: Literal[
+        "deploy",
+        "start_run",
+        "stop_run",
+        "emergency_flatten",
+        "renew_daemon_lease",
+    ]
     # ``int64 ms UTC`` of the failure.
     occurred_at_ms: int = Field(ge=0)
     # Operator-language one-liner, server-authored per endpoint, telling
