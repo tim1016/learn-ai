@@ -1899,11 +1899,22 @@ _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
         "intermediate state. Verify positions directly via the broker "
         "before deciding whether to retry."
     ),
+    "renew_daemon_lease": (
+        "A control-plane lease renewal request was sent to the host runner "
+        "daemon but the response was lost. Refresh the cockpit to read the "
+        "latest control-plane state before deciding whether to retry."
+    ),
 }
 
 
 def _raise_outcome_unknown(
-    endpoint: Literal["deploy", "start_run", "stop_run", "emergency_flatten"],
+    endpoint: Literal[
+        "deploy",
+        "start_run",
+        "stop_run",
+        "emergency_flatten",
+        "renew_daemon_lease",
+    ],
     exc: host_daemon_client.HostDaemonOutcomeUnknownError,
 ) -> None:
     """Surface an ambiguous-outcome mutation failure as a typed 409 (PRD #619-C5).

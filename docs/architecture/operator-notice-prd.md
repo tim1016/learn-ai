@@ -80,6 +80,7 @@ class OperatorNoticeAction(BaseModel):
         "wait",
         "open_runbook",
         "focus_cockpit_action",
+        "renew_control_plane_lease",
         "external_manual_check",
         "redeploy",
     ]
@@ -118,9 +119,14 @@ A tier exists only if it triggers a different trader response. `advisory` was dr
 
 ### 4.3 Action semantics
 
-`OperatorNoticeAction.kind` separates **affordance** from **navigation**:
+`OperatorNoticeAction.kind` separates finished notice copy from the
+closed affordance the cockpit may expose:
 
-- Clickable in cockpit: `focus_cockpit_action`, `open_runbook`, `redeploy`.
+- Navigation/focus affordances: `focus_cockpit_action`, `open_runbook`,
+  `redeploy`.
+- Bounded remediation affordances: `renew_control_plane_lease`. These
+  actions must be explicitly named in this contract, routed through the
+  data plane, and implemented as one-shot backend-authored operations.
 - Non-clickable explicit non-automation: `external_manual_check`. This matters — "Check positions in IBKR" must not look like the cockpit performed reconciliation.
 - `redeploy` routes to the Configuration tab and pre-focuses the existing redeploy/start flow. It never triggers a redeploy silently.
 - `none` / `wait` carry no affordance.
@@ -237,6 +243,7 @@ Final reason-code list will be sourced verbatim from the existing `RuntimeFreshn
 ### 6.3 Trader-facing copy (anchor examples)
 
 - `runtime.market_data_feed_stalled` — title "Market data feed is stalled" — "No fresh IBKR bar has arrived for 92 seconds; the expected window is 30 seconds. New trading decisions are held until fresh data arrives." — action `external_manual_check` ("Check IBKR connection").
+- `runtime.control_plane_lease_stale` — title "Control-plane lease is stale" — "Another control-plane lease holder hasn't checked in. The bot is in a guarded state. Verify only one cockpit or host runner is attached to this run." — action `renew_control_plane_lease` ("Renew control-plane lease", target `daemon_lease`).
 - `runtime.command_loop_unresponsive` — title "Bot is not responding to commands" — "Pause, Resume, Stop, or Flatten may not take effect until the bot recovers. If this persists, stop the bot from the host runner and verify positions at IBKR." — action `external_manual_check` ("Check positions in IBKR", target `ibkr_positions`).
 - `runtime.market_closed` — title "Market closed" — "The bot is idle until the regular trading session opens. No trading decision is being made." — action `none`. Suppressed from banner; rendered on the session card.
 

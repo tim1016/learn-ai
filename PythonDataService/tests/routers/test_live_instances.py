@@ -2090,6 +2090,27 @@ async def test_emergency_flatten_outcome_unknown_returns_typed_409(
     )
 
 
+async def test_renew_daemon_lease_outcome_unknown_returns_typed_409(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    async def fake_renew(_base_url: str) -> dict:
+        raise _outcome_unknown_exc(category="read_timeout")
+
+    monkeypatch.setattr(host_daemon_client, "renew_control_plane_lease", fake_renew)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/daemon-health/renew-lease")
+
+    assert response.status_code == 409
+    _assert_outcome_unknown_body(
+        response.json()["detail"],
+        endpoint="renew_daemon_lease",
+        category="read_timeout",
+    )
+
+
 def test_outcome_unknown_reason_code_is_in_documented_vocabulary() -> None:
     """The reason code must be present in the closed REASON_CODES set
     so the Frontend's typed lookup ships the operator copy alongside C5."""
