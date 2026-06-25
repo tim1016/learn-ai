@@ -10,11 +10,11 @@
         <select
           class="date-picker"
           aria-label="Chart date"
-          [value]="chartDate() ?? ''"
-          (change)="onDateSelected(($any($event.target).value || null))"
+          [value]="chartDate()"
+          (change)="onDateSelected($any($event.target).value)"
         >
-          <option value="">Today</option>
-          @for (d of activeDates(); track d.date) {
+          <option [value]="todayDate()">Today</option>
+          @for (d of pickerDates(); track d.date) {
             <option [value]="d.date">
               {{ d.date }}{{ d.has_bars ? '' : ' (no bars)' }}
               @if (d.run_count > 0) {

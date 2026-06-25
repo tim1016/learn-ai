@@ -9,6 +9,7 @@ import {
   effect,
   inject,
   input,
+  output,
   resource,
   signal,
   viewChild,
@@ -35,6 +36,7 @@ import type {
   ChartSnapshotResponse,
   ChartSnapshotRun,
   IbkrMinuteBar,
+  LiveInstanceActivityProjection,
 } from './bot-trade-chart-card.types';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -67,6 +69,14 @@ function formatLocalTickMark(time: UTCTimestamp, tickMarkType: number): string {
   }
 }
 
+export function localDateString(now = new Date()): string {
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
 /** True when the chart's right-edge is showing the latest bar — i.e. the
  * user has not scrolled back to inspect history. */
 export function isAtLiveEdge(
@@ -79,7 +89,25 @@ export function isAtLiveEdge(
   return range.to >= barCount - 1 - threshold;
 }
 
+/** Map a strategy/fill event timestamp onto the candle timestamp used by
+ * lightweight-charts. Broker bars are keyed by ``start_ms`` on the chart,
+ * while the live engine records trade rows at the bar close/fill instant.
+ * Markers whose time is not present in the series can disappear, so snap
+ * events to the candle whose [start_ms, end_ms] contains them. */
+export function markerTimeForEventMs(
+  eventMs: number,
+  bars: readonly IbkrMinuteBar[],
+): UTCTimestamp {
+  const bar = bars.find((b) => b.start_ms <= eventMs && eventMs <= b.end_ms);
+  return ((bar?.start_ms ?? eventMs) / 1000) as UTCTimestamp;
+}
+
 export type ChartResolution = '1m' | '5s';
+
+export interface ChartSelection {
+  readonly sessionDate: string;
+  readonly resolution: ChartResolution;
+}
 
 // Per-run color palette. Old runs darker, current run is the green pulse
 // used elsewhere on the panel — keeps the eye drawn to the live session.
@@ -128,13 +156,19 @@ export class BotTradeChartCardComponent {
    * ledger — but the symbol shows up in the status chip. ``null`` =
    * unknown — the chart renders an idle state. */
   readonly symbol = input<string | null>(null);
+  /** Materialized Activity projection. When present, chart markers come from
+   * broker-confirmed fills in this backend-owned ledger instead of from
+   * trades.parquet. */
+  readonly activity = input<LiveInstanceActivityProjection | null>(null);
   /** Initial bar resolution shown when the card mounts. */
   readonly initialResolution = input<ChartResolution>('1m');
+  readonly selectionChange = output<ChartSelection>();
 
   /** The date currently being displayed. Owned by the card's own selector
    * (Slice 6) — defaults to today and stops live polling when the user
    * picks a past date. */
-  protected readonly chartDate = signal<string | null>(null);
+  protected readonly chartDate = signal<string>(localDateString());
+  protected readonly todayDate = signal<string>(localDateString());
 
   protected readonly resolution = signal<ChartResolution>('1m');
   protected readonly resolutionOptions = RESOLUTION_OPTIONS;
@@ -171,7 +205,7 @@ export class BotTradeChartCardComponent {
   });
 
   protected readonly bars = computed<IbkrMinuteBar[]>(
-    () => this.snapshotResource.value()?.bars ?? [],
+    () => this.activity()?.bars ?? this.snapshotResource.value()?.bars ?? [],
   );
 
   protected readonly runs = computed<ChartSnapshotRun[]>(
@@ -192,37 +226,30 @@ export class BotTradeChartCardComponent {
   protected readonly activeDates = computed<ActiveDateEntry[]>(
     () => this.activeDatesResource.value() ?? [],
   );
+  protected readonly pickerDates = computed<ActiveDateEntry[]>(() =>
+    this.activeDates().filter((d) => d.date !== this.todayDate()),
+  );
 
   /** True for the currently-displayed date when persistence has no bars for
    * it — the "bars unavailable" badge case (Slice 6). */
   protected readonly missingBarsForSelectedDate = computed<boolean>(() => {
     const date = this.chartDate();
-    if (!date) return false;
     const entry = this.activeDates().find((d) => d.date === date);
     return entry !== undefined && !entry.has_bars;
   });
 
   protected readonly isPastDate = computed<boolean>(() => {
-    const date = this.chartDate();
-    if (!date) return false;
-    // Local-calendar comparison — the chart renders times in the browser's
-    // local TZ, so the "is this today?" check must use the operator's
-    // wall-clock day (PR #483 review). ``toISOString`` would compare the
-    // UTC day and misclassify "today" for operators west of UTC around
-    // local midnight.
-    const now = new Date();
-    const today = [
-      now.getFullYear(),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0'),
-    ].join('-');
-    return date < today;
+    return this.chartDate() < this.todayDate();
   });
 
   protected readonly statusLabel = computed<string>(() => {
     if (this.strategyInstanceId() === null) return 'No instance selected';
     if (this.symbol() === null) return 'No symbol resolved yet';
     const snap = this.snapshotResource.value();
+    const activity = this.activity();
+    if (activity) {
+      return activity.has_bars ? `Session ${activity.session_date}` : 'Bars unavailable for this date';
+    }
     if (!snap) return this.snapshotResource.isLoading() ? 'Loading…' : '';
     if (this.isPastDate()) {
       return snap.has_bars ? `Static — ${snap.date}` : 'Bars unavailable for this date';
@@ -232,6 +259,8 @@ export class BotTradeChartCardComponent {
 
   protected readonly statusTone = computed<'ok' | 'warn' | 'bad' | 'idle'>(() => {
     const snap = this.snapshotResource.value();
+    const activity = this.activity();
+    if (activity) return activity.has_bars ? 'ok' : 'warn';
     if (snap === null || snap === undefined) {
       return this.snapshotResource.isLoading() ? 'warn' : 'idle';
     }
@@ -240,12 +269,20 @@ export class BotTradeChartCardComponent {
   });
 
   protected readonly tradeCount = computed<number>(() =>
-    this.runs().reduce((sum, run) => sum + run.trades.length, 0),
+    this.activity()?.fill_markers.length
+      ?? this.runs().reduce((sum, run) => sum + run.trades.length, 0),
   );
 
   constructor() {
     effect(() => {
       this.resolution.set(this.initialResolution());
+    });
+
+    effect(() => {
+      this.selectionChange.emit({
+        sessionDate: this.chartDate(),
+        resolution: this.resolution(),
+      });
     });
 
     afterNextRender(() => this.initChart());
@@ -277,6 +314,14 @@ export class BotTradeChartCardComponent {
 
     // Live polling only on today's view; past dates are static.
     this.pollTimer = setInterval(() => {
+      const priorToday = this.todayDate();
+      const nextToday = localDateString();
+      if (nextToday !== priorToday) {
+        this.todayDate.set(nextToday);
+        if (this.chartDate() === priorToday) {
+          this.chartDate.set(nextToday);
+        }
+      }
       if (!this.isPastDate()) {
         this.snapshotResource.reload();
       }
@@ -333,7 +378,7 @@ export class BotTradeChartCardComponent {
 
   /** Date-picker change handler (Slice 6). Setting a date triggers the
    * snapshot resource to refetch via its params dependency. */
-  protected onDateSelected(date: string | null): void {
+  protected onDateSelected(date: string): void {
     this.chartDate.set(date);
   }
 
@@ -423,18 +468,47 @@ export class BotTradeChartCardComponent {
   private syncMarkers(): void {
     if (!this.markersPlugin) return;
     const out: SeriesMarker<Time>[] = [];
+    const bars = this.bars();
+    const activity = this.activity();
+    if (activity) {
+      activity.fill_markers.forEach((marker) => {
+        const isBuy = marker.side === 'BUY';
+        out.push({
+          time: markerTimeForEventMs(marker.exec_ts_ms, bars),
+          position: isBuy ? 'belowBar' : 'aboveBar',
+          color: isBuy ? '#60a5fa' : '#f97316',
+          shape: isBuy ? 'arrowUp' : 'arrowDown',
+          text:
+            `${marker.side} ${marker.quantity}` +
+            ` · ${marker.position_effect}` +
+            (marker.replay_count > 1 ? ` · seen ${marker.replay_count}x` : ''),
+        });
+      });
+      activity.position_annotations.forEach((annotation) => {
+        out.push({
+          time: markerTimeForEventMs(annotation.ts_ms, bars),
+          position: annotation.label === 'OPEN' ? 'belowBar' : 'aboveBar',
+          color: annotation.uncertain ? '#fbbf24' : '#e2e8f0',
+          shape: 'circle',
+          text: annotation.uncertain ? 'POSITION UNCERTAIN' : annotation.label,
+        });
+      });
+      out.sort((a, b) => (a.time as number) - (b.time as number));
+      this.markersPlugin.setMarkers(out);
+      return;
+    }
     this.runs().forEach((run) => {
       const color = this.runColor(run);
       run.trades.forEach((t, i) => {
         out.push({
-          time: (t.entry_time_ms / 1000) as UTCTimestamp,
+          time: markerTimeForEventMs(t.entry_time_ms, bars),
           position: 'belowBar',
           color,
           shape: 'arrowUp',
           text: `BUY #${i + 1}`,
         });
         out.push({
-          time: (t.exit_time_ms / 1000) as UTCTimestamp,
+          time: markerTimeForEventMs(t.exit_time_ms, bars),
           position: 'aboveBar',
           color: t.pnl_points >= 0 ? '#4ade80' : '#ef4444',
           shape: 'circle',

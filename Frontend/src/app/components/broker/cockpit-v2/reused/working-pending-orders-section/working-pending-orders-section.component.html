@@ -1,36 +1,78 @@
-@if (hasPending()) {
+@if (hasOrders()) {
   <section
     class="working-pending"
-    data-testid="working-pending-orders"
-    aria-label="Working / Pending orders"
+    data-testid="orders-today"
+    aria-label="Orders Today"
   >
     <header class="head">
-      <h3>WORKING / PENDING ORDERS</h3>
-      <span class="muted">{{ pendingRows().length }} pending</span>
+      <h3>ORDERS TODAY</h3>
+      <span class="muted">{{ displayRows().length }} order(s)</span>
     </header>
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">INTENT TS</th>
-          <th scope="col">SYMBOL</th>
-          <th scope="col">SIDE</th>
-          <th scope="col" class="num">QUANTITY</th>
-          <th scope="col">INTENT ID</th>
-          <th scope="col">STATUS</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (p of pendingRows(); track trackRow($index, p)) {
-          <tr [attr.data-testid]="'working-pending-row-' + p.row.seq">
-            <td class="ts">{{ p.intentTs }}</td>
-            <td>{{ p.row.symbol }}</td>
-            <td>{{ p.row.side }}</td>
-            <td class="num">{{ fmtNumber(p.row.quantity, 0) }}</td>
-            <td class="mono">{{ p.intentId ?? '—' }}</td>
-            <td>{{ p.row.headline }}</td>
-          </tr>
-        }
-      </tbody>
-    </table>
+
+    @if (activeRows().length > 0) {
+      <h4>Active</h4>
+      <ng-container
+        [ngTemplateOutlet]="ordersTable"
+        [ngTemplateOutletContext]="{ rows: activeRows() }"
+      />
+    }
+    @if (enginePendingRows().length > 0) {
+      <h4>Engine pending</h4>
+      <ng-container
+        [ngTemplateOutlet]="ordersTable"
+        [ngTemplateOutletContext]="{ rows: enginePendingRows() }"
+      />
+    }
+    @if (resolvedRows().length > 0) {
+      <h4>Resolved</h4>
+      <ng-container
+        [ngTemplateOutlet]="ordersTable"
+        [ngTemplateOutletContext]="{ rows: resolvedRows() }"
+      />
+    }
   </section>
 }
+
+<ng-template #ordersTable let-rows="rows">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">LAST UPDATE</th>
+        <th scope="col">SYMBOL</th>
+        <th scope="col">SIDE</th>
+        <th scope="col" class="num">ORDER QTY</th>
+        <th scope="col" class="num">FILLED</th>
+        <th scope="col" class="num">AVG FILL</th>
+        <th scope="col">TYPE</th>
+        <th scope="col">STATUS</th>
+        <th scope="col">POSITION EFFECT</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (p of rows; track trackRow($index, p)) {
+        <tr [attr.data-testid]="'orders-today-row-' + p.row.order_key">
+          <td class="ts">{{ p.updatedTs }}</td>
+          <td>{{ p.row.symbol }}</td>
+          <td>{{ p.row.side }}</td>
+          <td class="num">{{ fmtNumber(p.row.quantity, 0) }}</td>
+          <td class="num">{{ fmtNumber(p.row.filled_quantity, 0) }}</td>
+          <td class="num">
+            @if (p.row.avg_fill_price !== null) {
+              {{ fmtNumber(p.row.avg_fill_price, 2) }}
+            } @else {
+              —
+            }
+          </td>
+          <td>{{ p.row.order_type }}</td>
+          <td>
+            {{ p.row.status }}
+            @if (p.row.replay_count > 1) {
+              · seen {{ p.row.replay_count }}x
+            }
+          </td>
+          <td>{{ p.row.position_effect ?? '—' }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</ng-template>

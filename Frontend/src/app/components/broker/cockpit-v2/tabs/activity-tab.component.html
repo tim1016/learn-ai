@@ -12,26 +12,27 @@
     <app-bot-trade-chart-card
       [strategyInstanceId]="status().strategy_instance_id"
       [symbol]="status().symbol"
+      [activity]="activity()"
+      (selectionChange)="onChartSelectionChange($event)"
     />
   </section>
 
-  <section class="subsection" data-testid="activity-working-pending" aria-label="Working / Pending orders">
-    <app-working-pending-orders-section [rows]="activityRows()" />
-  </section>
+  @if (ordersToday().length > 0) {
+    <section class="subsection" data-testid="activity-orders-today" aria-label="Orders Today">
+      <app-working-pending-orders-section [orders]="ordersToday()" />
+    </section>
+  }
 
   <section class="subsection" data-testid="activity-broker-activity" aria-label="Broker activity">
     <app-broker-activity-table
-      [rows]="activityRows()"
+      [rows]="[]"
+      [eventRows]="brokerEventRows()"
       [backfillLoading]="backfillLoading()"
       [backfillError]="backfillError()"
       [sseStatus]="sseStatus()"
       [sseError]="sseError()"
       [activityHealth]="activityHealth()"
     />
-  </section>
-
-  <section class="subsection" data-testid="activity-ibkr-api-evidence" aria-label="IBKR API evidence">
-    <app-ibkr-api-evidence-panel />
   </section>
 
   <section class="subsection" data-testid="activity-incidents" aria-label="Incidents">

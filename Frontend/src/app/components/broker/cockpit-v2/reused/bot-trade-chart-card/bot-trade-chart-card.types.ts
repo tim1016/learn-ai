@@ -95,6 +95,115 @@ export interface ChartSnapshotResponse {
   runs: ChartSnapshotRun[];
 }
 
+export interface ActivityEvidenceRef {
+  source: string;
+  seq: number;
+  ts_ms: number;
+  request_call: string;
+  response_callback: string | null;
+}
+
+export interface ActivityFillMarker {
+  id: string;
+  row_seq: number;
+  order_key: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  exec_ts_ms: number;
+  position_effect: string;
+  replay_count: number;
+  evidence: ActivityEvidenceRef[];
+}
+
+export interface ActivityPositionAnnotation {
+  id: string;
+  ts_ms: number;
+  symbol: string;
+  label: string;
+  net_position: number;
+  uncertain: boolean;
+  reason: string | null;
+}
+
+export interface ActivityOrderOverlay {
+  id: string;
+  order_key: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  status: string;
+  ts_ms: number;
+}
+
+export interface ActivityOrderRow {
+  order_key: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  order_type: string;
+  status: string;
+  group: 'active' | 'resolved' | 'engine_pending';
+  submitted_ts_ms: number;
+  last_update_ts_ms: number;
+  filled_quantity: number;
+  avg_fill_price: number | null;
+  position_effect: string | null;
+  replay_count: number;
+  evidence: ActivityEvidenceRef[];
+}
+
+export interface ActivityBrokerEventRow {
+  id: string;
+  ts_ms: number;
+  row_type: string;
+  source: string;
+  symbol: string | null;
+  side: 'BUY' | 'SELL' | null;
+  quantity: number | null;
+  price: number | null;
+  status: string | null;
+  summary: string;
+  verdict: string;
+  replay_count: number;
+  evidence: ActivityEvidenceRef[];
+}
+
+export interface ActivityPositionSnapshot {
+  symbol: string;
+  quantity: number;
+  source: 'broker_snapshot' | 'unavailable';
+  as_of_ms: number | null;
+}
+
+export interface ActivityReconciliationWarning {
+  code: string;
+  message: string;
+  row_ids: string[];
+}
+
+export interface LiveInstanceActivityProjection {
+  schema_version: number;
+  strategy_instance_id: string;
+  session_date: string;
+  timezone: string;
+  symbol: string;
+  resolution: '1m' | '5s';
+  has_bars: boolean;
+  now_ms: number;
+  bars: IbkrMinuteBar[];
+  fill_markers: ActivityFillMarker[];
+  position_annotations: ActivityPositionAnnotation[];
+  order_overlays: ActivityOrderOverlay[];
+  orders_today: ActivityOrderRow[];
+  broker_activity_rows: ActivityBrokerEventRow[];
+  position_snapshot: ActivityPositionSnapshot[];
+  reconciliation_warnings: ActivityReconciliationWarning[];
+  evidence: ActivityEvidenceRef[];
+}
+
 /** One parsed ERROR/CRITICAL block from live.log. ``raw_ts`` is the
  * verbatim UTC log string (the engine logger pins ``time.gmtime``);
  * ``ts_ms`` is the same instant as canonical ``int64`` ms UTC. */

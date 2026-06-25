@@ -8,15 +8,17 @@ server-side and the serialized response carries both `live_binding` and
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
 from app.routers import live_instances
+from app.schemas.broker_activity import BrokerActivityRow
 from tests._fixtures.daemon_transport import as_typed_get
 
 
@@ -50,6 +52,43 @@ def _write_live_state(root: Path, sid: str, run_id: str, positions: dict[str, in
     )
 
 
+def _broker_activity_row(**overrides) -> BrokerActivityRow:
+    payload = {
+        "seq": 1,
+        "ts_ms": 1_700_000_000_000,
+        "exec_id": "exec-1",
+        "perm_id": 9001,
+        "order_ref": "learn-ai/spy_activity/v1:intent-1",
+        "symbol": "SPY",
+        "side": "BUY",
+        "quantity": 1.0,
+        "price": 100.0,
+        "commission": 1.0,
+        "net_amount": -101.0,
+        "order_type": "MKT",
+        "exec_ts_ms": 1_700_000_000_000,
+        "verdict": "expected",
+        "template_key": "normal_fill_v1",
+        "template_version": 1,
+        "headline": "BUY 1 SPY @ $100.00",
+        "narrative": "Filled as intended.",
+        "reason_codes": ["normal_fill"],
+        "engine_overlay": None,
+        "divergence_facts": None,
+    }
+    payload.update(overrides)
+    return BrokerActivityRow.model_validate(payload)
+
+
+def _write_broker_activity_rows(root: Path, sid: str, rows: list[BrokerActivityRow]) -> None:
+    path = root.parent / "live_instances" / sid / "broker_activity.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(row.model_dump_json() + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "live_runs"
@@ -68,6 +107,14 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.main import app
 
     return app, root
+
+
+@pytest.fixture(autouse=True)
+def clear_ibkr_api_evidence_recorder():
+    recorder = get_ibkr_api_evidence_recorder()
+    recorder.clear()
+    yield
+    recorder.clear()
 
 
 def _set_daemon(
@@ -329,6 +376,278 @@ async def test_chart_snapshot_rejects_malformed_date(
             "/api/live-instances/spy_chart/chart-snapshot", params={"date": "not-a-date"}
         )
     assert response.status_code == 400
+
+
+async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orders(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Activity projection owns the chart-table invariant: broker fills
+    render as chart markers from the same same-day ledger rows that feed
+    Orders Today / Broker Activity. Duplicate broker replays collapse to one
+    marker with a replay count instead of becoming phantom sells."""
+    app, root = app_with_root
+    sid = "spy_activity"
+    _write_ledger(root, "run-activity", sid, 100)
+    day = live_instances._today_ny()
+    base_ms = int(
+        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
+        * 1000
+    )
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=base_ms - 120_000,
+                exec_ts_ms=None,
+                exec_id=None,
+                perm_id=None,
+                order_ref=f"learn-ai/{sid}/v1:intent-pending",
+                side="SELL",
+                price=None,
+                commission=None,
+                net_amount=None,
+                verdict="engine_only_pending",
+                template_key="pending_v1",
+                headline="Awaiting broker acknowledgement",
+                narrative="Engine emitted intent; no broker ack yet.",
+                reason_codes=["pending_acknowledgement"],
+            ),
+            _broker_activity_row(
+                seq=2,
+                ts_ms=base_ms,
+                exec_ts_ms=base_ms,
+                exec_id="exec-buy",
+                perm_id=101,
+                order_ref=f"learn-ai/{sid}/v1:intent-buy",
+                side="BUY",
+                price=735.72,
+                headline="BUY 1 SPY @ $735.72",
+            ),
+            _broker_activity_row(
+                seq=3,
+                ts_ms=base_ms + 60_000,
+                exec_ts_ms=base_ms + 60_000,
+                exec_id="exec-sell",
+                perm_id=102,
+                order_ref=f"learn-ai/{sid}/v1:intent-sell",
+                side="SELL",
+                price=738.06,
+                headline="SELL 1 SPY @ $738.06",
+            ),
+            _broker_activity_row(
+                seq=4,
+                ts_ms=base_ms + 120_000,
+                exec_ts_ms=base_ms + 60_000,
+                exec_id="exec-sell",
+                perm_id=102,
+                order_ref=f"learn-ai/{sid}/v1:intent-sell",
+                side="SELL",
+                price=738.06,
+                verdict="unexpected",
+                template_key="duplicate_execution_v1",
+                headline="Duplicate broker execution replay",
+                narrative="IBKR replayed an execution we already observed.",
+                reason_codes=["duplicate_execution"],
+            ),
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["timezone"] == "America/New_York"
+    assert [m["side"] for m in body["fill_markers"]] == ["BUY", "SELL"]
+    assert body["fill_markers"][1]["replay_count"] == 2
+    assert body["fill_markers"][0]["position_effect"] == "Open long"
+    assert body["fill_markers"][1]["position_effect"] == "Close long"
+    assert {o["group"] for o in body["orders_today"]} == {"engine_pending", "resolved"}
+    assert any(w["code"] == "broker_replay_collapsed" for w in body["reconciliation_warnings"])
+    fill_event_ids = [row["id"] for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
+    assert fill_event_ids.count("exec:exec-sell") == 1
+
+
+async def test_activity_projection_preserves_backend_fill_verdict(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_unexpected_fill"
+    _write_ledger(root, "run-unexpected", sid, 100)
+    day = live_instances._today_ny()
+    fill_ms = int(
+        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
+        * 1000
+    )
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=fill_ms,
+                exec_ts_ms=fill_ms,
+                exec_id="exec-foreign",
+                perm_id=301,
+                order_ref=None,
+                verdict="unexpected",
+                template_key="unmatched_execution_v1",
+                headline="Unmatched broker execution",
+                narrative="Broker reported a fill without a matching engine intent.",
+                reason_codes=["unmatched_execution"],
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    fill_events = [
+        row for row in response.json()["broker_activity_rows"] if row["row_type"] == "fill"
+    ]
+    assert len(fill_events) == 1
+    assert fill_events[0]["verdict"] == "unexpected"
+
+
+async def test_activity_projection_emits_terminal_non_fill_events(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_cancelled"
+    _write_ledger(root, "run-cancelled", sid, 100)
+    day = live_instances._today_ny()
+    cancel_ms = int(
+        datetime(day.year, day.month, day.day, 13, 0, tzinfo=live_instances._NY_TZ).timestamp()
+        * 1000
+    )
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=cancel_ms,
+                exec_ts_ms=None,
+                exec_id=None,
+                perm_id=401,
+                price=None,
+                commission=None,
+                net_amount=None,
+                verdict="expected",
+                template_key="cancellation",
+                headline="Broker cancelled SPY order",
+                narrative="Broker terminal state was cancellation.",
+                reason_codes=["cancellation"],
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["orders_today"][0]["group"] == "resolved"
+    terminal_events = [
+        row for row in body["broker_activity_rows"] if row["row_type"] == "order_terminal"
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["summary"] == "Broker cancelled SPY order"
+    assert terminal_events[0]["status"] == "cancellation"
+
+
+def test_ny_session_bounds_use_next_calendar_midnight_on_dst_transition() -> None:
+    start_ms, end_ms = live_instances._ny_session_bounds_ms(date(2026, 3, 8))
+
+    start = datetime.fromtimestamp(start_ms / 1000, tz=live_instances._NY_TZ)
+    end = datetime.fromtimestamp(end_ms / 1000, tz=live_instances._NY_TZ)
+    assert start == datetime(2026, 3, 8, 0, 0, tzinfo=live_instances._NY_TZ)
+    assert end == datetime(2026, 3, 9, 0, 0, tzinfo=live_instances._NY_TZ)
+    assert end_ms - start_ms == 23 * 60 * 60 * 1000
+
+
+async def test_activity_projection_defaults_to_latest_broker_ledger_session(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "june23"
+    _write_ledger(root, "run-june23", sid, 100)
+    latest_day = live_instances._today_ny() - timedelta(days=2)
+    latest_ms = int(
+        datetime(
+            latest_day.year,
+            latest_day.month,
+            latest_day.day,
+            12,
+            0,
+            tzinfo=live_instances._NY_TZ,
+        ).timestamp()
+        * 1000
+    )
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=latest_ms,
+                exec_ts_ms=latest_ms,
+                exec_id="exec-latest",
+                perm_id=201,
+                order_ref=f"learn-ai/{sid}/v1:intent-latest",
+                side="BUY",
+                price=700.00,
+                headline="BUY 1 SPY @ $700.00",
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_date"] == latest_day.isoformat()
+    assert [m["id"] for m in body["fill_markers"]] == ["exec:exec-latest"]
+
+
+async def test_activity_projection_surfaces_full_broker_api_evidence_rows(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_evidence"
+    _write_ledger(root, "run-evidence", sid, 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    get_ibkr_api_evidence_recorder().record(
+        source="account.fetch_positions",
+        account_id="DU123",
+        symbol="SPY",
+        strategy_instance_id=sid,
+        request=evidence_request("reqPositionsAsync"),
+        response=evidence_response("position", fields={"row_count": 1}),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert any(ref["request_call"] == "reqPositionsAsync" for ref in body["evidence"])
+    assert any(
+        row["row_type"] == "endpoint_snapshot" and row["source"] == "account.fetch_positions"
+        for row in body["broker_activity_rows"]
+    )
+    assert not any(
+        warning["code"] == "broker_position_snapshot_unavailable"
+        for warning in body["reconciliation_warnings"]
+    )
 
 
 async def test_active_dates_returns_run_dates_with_no_bars_marker(

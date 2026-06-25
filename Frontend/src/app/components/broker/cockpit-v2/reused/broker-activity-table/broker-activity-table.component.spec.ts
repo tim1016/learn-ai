@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { BrokerActivityHealth, OperatorNotice } from '../../../../../api/live-instances.types';
 import { BrokerActivityTableComponent } from './broker-activity-table.component';
+import type { ActivityBrokerEventRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import type { BrokerActivityRow } from './broker-activity.types';
 
 function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
@@ -76,6 +77,7 @@ function render(props: {
   sseStatus?: string;
   sseError?: string | null;
   activityHealth?: BrokerActivityHealth | null;
+  eventRows?: ActivityBrokerEventRow[] | null;
 }) {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -87,6 +89,7 @@ function render(props: {
   fixture.componentRef.setInput('backfillError', props.backfillError ?? null);
   fixture.componentRef.setInput('sseStatus', props.sseStatus ?? 'open');
   fixture.componentRef.setInput('sseError', props.sseError ?? null);
+  fixture.componentRef.setInput('eventRows', props.eventRows ?? null);
   if (props.activityHealth !== undefined) {
     fixture.componentRef.setInput('activityHealth', props.activityHealth);
   }
@@ -128,6 +131,37 @@ describe('BrokerActivityTableComponent', () => {
     expect(body?.textContent ?? '').toContain('AAPL');
     expect(body?.textContent ?? '').toContain('5');
     expect(body?.textContent ?? '').toContain('$150.00');
+  });
+
+  it('renders normalized projection event rows when supplied', () => {
+    const eventRows: ActivityBrokerEventRow[] = [
+      {
+        id: 'evidence:1',
+        ts_ms: 1_700_000_000_000,
+        row_type: 'endpoint_snapshot',
+        source: 'account.fetch_positions',
+        symbol: null,
+        side: null,
+        quantity: null,
+        price: null,
+        status: 'position',
+        summary: 'reqPositionsAsync captured by account.fetch_positions',
+        verdict: 'evidence',
+        replay_count: 1,
+        evidence: [
+          {
+            source: 'account.fetch_positions',
+            seq: 1,
+            ts_ms: 1_700_000_000_000,
+            request_call: 'reqPositionsAsync',
+            response_callback: 'position',
+          },
+        ],
+      },
+    ];
+    const { el } = render({ rows: [], eventRows, sseStatus: 'projection' });
+    expect(el.textContent ?? '').toContain('endpoint_snapshot');
+    expect(el.textContent ?? '').toContain('reqPositionsAsync captured');
   });
 
   it('renders the backend-authored narrative is NOT visible until drill-down (verbatim contract)', () => {

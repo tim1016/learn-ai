@@ -27,6 +27,31 @@ def test_evidence_recorder_backfills_after_seq() -> None:
     assert recorder.backfill(after_seq=1) == [second]
 
 
+def test_evidence_recorder_retains_more_than_default_activity_backfill_window() -> None:
+    recorder = IbkrApiEvidenceRecorder()
+
+    for i in range(1_005):
+        recorder.record(
+            source=f"test.bulk.{i}",
+            request=evidence_request("reqMktData", symbol="SPY"),
+        )
+
+    events = recorder.backfill(after_seq=0, limit=1_005)
+    assert len(events) == 1_005
+    assert events[0].seq == 1
+
+
+def test_evidence_recorder_clear_resets_events_and_sequence() -> None:
+    recorder = IbkrApiEvidenceRecorder()
+    recorder.record(source="test.clear", request=evidence_request("reqPositionsAsync"))
+
+    recorder.clear()
+    event = recorder.record(source="test.after_clear", request=evidence_request("reqPnL"))
+
+    assert event.seq == 1
+    assert recorder.backfill(after_seq=0) == [event]
+
+
 @pytest.mark.asyncio
 async def test_evidence_recorder_broadcasts_to_subscribers() -> None:
     recorder = IbkrApiEvidenceRecorder()

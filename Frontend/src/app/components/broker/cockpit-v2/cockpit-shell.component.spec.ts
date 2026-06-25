@@ -229,7 +229,7 @@ describe('CockpitShellComponent', () => {
     expect(chip).toBeNull();
   });
 
-  it('renders five independent indicators on the identity strip', async () => {
+  it('renders independent indicators on the identity strip', async () => {
     const fixture = await renderShell(makeStub());
     await fixture.whenStable();
     fixture.detectChanges();
@@ -240,9 +240,114 @@ describe('CockpitShellComponent', () => {
       'indicator-readiness',
       'indicator-broker',
       'indicator-safety',
+      'indicator-last-run',
     ]) {
       expect(el.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
     }
+    expect(el.querySelector('[data-testid="indicator-session"]')).toBeNull();
+  });
+
+  it('does not render a provenance hint in the identity strip', async () => {
+    const stub = makeStub();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...makeStatus(),
+      provenance: {
+        run_id: 'run-1',
+        schema_version: '1',
+        code_sha: 'abc12345def67890',
+        strategy_spec_path: '',
+        strategy_spec_sha256: '',
+        qc_audit_copy_path: '',
+        qc_audit_copy_sha256: '',
+        qc_cloud_backtest_id: '',
+        account_id: '',
+        start_date_ms: null,
+        created_at_ms: null,
+        live_config: {},
+      },
+    });
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.provenance-hint')).toBeNull();
+    expect(el.querySelector('[data-testid="identity-strip"]')?.textContent).not.toContain('abc12345');
+  });
+
+  it('renders indicator chips from a reactive status signal without data-value styling hooks', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const component = fixture.componentInstance;
+    const status = component.status();
+    if (status === null) {
+      throw new Error('expected initial status');
+    }
+    if (status.readiness === null) {
+      throw new Error('expected readiness vector');
+    }
+    const updated: typeof status = {
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        host_process: {
+          ...status.operator_surface.host_process,
+          state: 'WAITING_FOR_HOST',
+        },
+        broker: {
+          ...status.operator_surface.broker,
+          safety_verdict: 'PAPER_ONLY',
+          connection: 'CONNECTED',
+        },
+      },
+      readiness: {
+        ...status.readiness,
+        verdict: 'READY',
+      },
+    };
+    component.status.set(updated);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const process = el.querySelector('[data-testid="indicator-process"]');
+    expect(process?.textContent?.trim()).toBe('PROCESS · WAITING_FOR_HOST');
+    expect(process?.classList.contains('warning')).toBe(true);
+    expect(process?.hasAttribute('data-value')).toBe(false);
+    expect(el.querySelector('[data-testid="indicator-safety"]')?.textContent?.trim()).toBe(
+      'SAFETY · PAPER_ONLY',
+    );
+    expect(el.querySelector('[data-testid="indicator-session"]')).toBeNull();
+  });
+
+  it('renders unreachable host process state as danger', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const component = fixture.componentInstance;
+    const status = component.status();
+    if (status === null) {
+      throw new Error('expected initial status');
+    }
+    component.status.set({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        host_process: {
+          ...status.operator_surface.host_process,
+          state: 'UNREACHABLE',
+        },
+      },
+    });
+    fixture.detectChanges();
+
+    const process = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="indicator-process"]',
+    );
+    expect(process?.textContent?.trim()).toBe('PROCESS · UNREACHABLE');
+    expect(process?.classList.contains('danger')).toBe(true);
   });
 
   it('exposes a Deploy new strategy link in the page utility row pointing at /broker/deploy', async () => {
