@@ -1,12 +1,75 @@
 <section class="ibkr-api-panel" data-testid="ibkr-api-evidence-panel">
   <header class="panel-head">
-    <h3>IBKR API evidence</h3>
+    <h3>Broker API evidence</h3>
     <span class="status" [attr.data-status]="sseStatus()">{{ sseStatus() }}</span>
   </header>
+
+  @if (snapshotError(); as err) {
+    <p class="error" role="alert">{{ err }}</p>
+  }
 
   @if (sseError(); as err) {
     <p class="error" role="alert">{{ err }}</p>
   }
+
+  <div class="health-grid" data-testid="broker-diagnostics-summary">
+    <section class="health-block">
+      <h4>Data plane</h4>
+      @if (dataPlane(); as dp) {
+        <dl>
+          <dt>revision</dt>
+          <dd><code>{{ dp.code_revision.slice(0, 12) }}</code></dd>
+          <dt>started</dt>
+          <dd>{{ fmtTimestampNy(dp.process_start_ms) }}</dd>
+          <dt>reload</dt>
+          <dd><code>{{ dp.reload }}</code></dd>
+        </dl>
+      } @else {
+        <p class="empty">{{ loading() ? 'Loading data-plane health…' : 'Unavailable' }}</p>
+      }
+    </section>
+
+    <section class="health-block">
+      <h4>Broker link</h4>
+      @if (connectionHealth(); as health) {
+        <dl>
+          <dt>state</dt>
+          <dd><code>{{ health.connection_state }}</code></dd>
+          <dt>account</dt>
+          <dd><code>{{ health.account_id || '—' }}</code></dd>
+          <dt>mode</dt>
+          <dd><code>{{ health.mode }}</code></dd>
+        </dl>
+      } @else {
+        <p class="empty">{{ loading() ? 'Loading broker health…' : 'Unavailable' }}</p>
+      }
+    </section>
+
+    <section class="health-block checks">
+      <h4>Diagnose</h4>
+      @if (diagnostic(); as diag) {
+        @if (diag.disabled) {
+          <p class="empty">{{ diag.reason }}</p>
+        } @else {
+          <div class="diagnose-status" [attr.data-status]="diag.overall_status">
+            {{ diag.overall_status }}
+          </div>
+          @if (diagnosticChecks().length) {
+            <ul>
+              @for (check of diagnosticChecks(); track check.name) {
+                <li [attr.data-status]="check.status">
+                  <span>{{ check.label }}</span>
+                  <code>{{ check.status }}</code>
+                </li>
+              }
+            </ul>
+          }
+        }
+      } @else {
+        <p class="empty">{{ loading() ? 'Loading diagnostics…' : 'Unavailable' }}</p>
+      }
+    </section>
+  </div>
 
   @if (lines().length === 0) {
     <p class="empty">No IBKR API evidence captured yet.</p>
@@ -26,6 +89,17 @@
               <span class="account">{{ line.account_id }}</span>
             }
           </div>
+          @if (line.serializer_warnings.length) {
+            <ul class="serializer-warnings" aria-label="Serializer warnings">
+              @for (warning of line.serializer_warnings; track warning.object_type + warning.serializer_error) {
+                <li>
+                  <strong>Serializer warning</strong>
+                  <code>{{ warning.object_type }}</code>
+                  <span>{{ warning.serializer_error }}</span>
+                </li>
+              }
+            </ul>
+          }
           <details>
             <summary>Raw IBKR payload</summary>
             <pre>{{ line.payload_json }}</pre>

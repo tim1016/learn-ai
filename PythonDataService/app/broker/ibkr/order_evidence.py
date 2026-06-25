@@ -8,6 +8,7 @@ the ib_async object kinds the order path currently captures.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
@@ -26,6 +27,8 @@ from app.broker.ibkr.models import (
     IbkrTradeEvidence,
     IbkrTradeSnapshot,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def build_place_order_evidence(
@@ -179,7 +182,19 @@ def snapshot_trade(trade: object | None) -> IbkrTradeSnapshot | None:
 def _object_snapshot(obj: object | None) -> IbkrObjectSnapshot | None:
     if obj is None:
         return None
-    return IbkrObjectSnapshot(object_type=_object_type(obj), fields=_snapshot_fields(obj))
+    object_type = _object_type(obj)
+    try:
+        return IbkrObjectSnapshot(object_type=object_type, fields=_snapshot_fields(obj))
+    except TypeError as exc:
+        logger.warning(
+            "IBKR evidence serializer emitted placeholder for unsupported object: %s",
+            exc,
+            extra={"object_type": object_type, "serializer_error": str(exc)},
+        )
+        return IbkrObjectSnapshot(
+            object_type=object_type,
+            fields={"serializer_error": str(exc)},
+        )
 
 
 def _snapshot_fields(obj: object) -> dict[str, JsonValue]:

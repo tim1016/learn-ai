@@ -138,6 +138,15 @@ class IbkrApiRequestEvidence(BaseModel):
     params: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class IbkrSerializerWarning(BaseModel):
+    """Structured warning emitted when an IBKR object cannot be fully serialized."""
+
+    model_config = ConfigDict(frozen=True)
+
+    object_type: str
+    serializer_error: str
+
+
 class IbkrApiResponseEvidence(BaseModel):
     """Typed envelope for one IBKR callback/response."""
 
@@ -145,6 +154,31 @@ class IbkrApiResponseEvidence(BaseModel):
 
     callback: IbkrApiCallbackName
     fields: dict[str, JsonValue] = Field(default_factory=dict)
+    serializer_warnings: list[IbkrSerializerWarning] = Field(default_factory=list)
+
+
+DataPlaneReloadMode = Literal[
+    "disabled",
+    "watchfiles",
+    "watchfiles-polling",
+    "unknown",
+]
+
+
+class DataPlaneHealth(BaseModel):
+    """Code-liveness metadata for the long-running FastAPI data plane.
+
+    PRD #684 uses this as the operator's fast check for "fixed on disk"
+    versus "actually live in the process". All timestamps are int64 ms UTC.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    service: Literal["polygon-data-service"] = "polygon-data-service"
+    code_revision: str
+    process_start_ms: int = Field(gt=0)
+    fetched_at_ms: int = Field(gt=0)
+    reload: DataPlaneReloadMode
 
 
 class IbkrTradeSnapshot(BaseModel):
@@ -844,6 +878,8 @@ class IbkrConnectionHealth(BaseModel):
 __all__ = [
     "BrokerConnectionState",
     "ClientConnectionState",
+    "DataPlaneHealth",
+    "DataPlaneReloadMode",
     "DiagnosticCheck",
     "DiagnosticReport",
     "DiagnosticReportActive",
@@ -866,6 +902,7 @@ __all__ = [
     "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
+    "IbkrSerializerWarning",
     "IbkrStrikeList",
     "IbkrSurfaceExpiry",
     "IbkrSurfaceSnapshot",

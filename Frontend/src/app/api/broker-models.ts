@@ -96,9 +96,15 @@ export interface IbkrApiRequestEvidence {
   params: Record<string, IbkrEvidenceValue>;
 }
 
+export interface IbkrSerializerWarning {
+  object_type: string;
+  serializer_error: string;
+}
+
 export interface IbkrApiResponseEvidence {
   callback: IbkrApiCallbackName;
   fields: Record<string, IbkrEvidenceValue>;
+  serializer_warnings: IbkrSerializerWarning[];
 }
 
 export interface IbkrTradeSnapshot {
@@ -137,6 +143,20 @@ export interface IbkrApiEvidenceEvent {
 
 export interface IbkrOrderEvidenceFields {
   ibkr_evidence?: IbkrTradeEvidence | null;
+}
+
+export type DataPlaneReloadMode =
+  | 'disabled'
+  | 'watchfiles'
+  | 'watchfiles-polling'
+  | 'unknown';
+
+export interface DataPlaneHealth {
+  service: 'polygon-data-service';
+  code_revision: string;
+  process_start_ms: number;
+  fetched_at_ms: number;
+  reload: DataPlaneReloadMode;
 }
 
 // ── SSE payload models (hand-mirrored from app.broker.ibkr.models) ────

@@ -61,6 +61,7 @@ from app.broker.ibkr.health import (
 )
 from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
+    DataPlaneHealth,
     DiagnosticReport,
     DiagnosticReportDisabled,
     IbkrAccountSummary,
@@ -102,6 +103,7 @@ from app.broker.ibkr.surface import (
 )
 from app.broker.ibkr.symbol_search import search_symbols
 from app.schemas.broker_search import OptionContractMatch, SymbolMatch
+from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 from app.utils.throttle import TokenBucket, TtlCache
 
@@ -198,6 +200,12 @@ async def ibkr_api_evidence_stream(
 
 
 # ── /health ────────────────────────────────────────────────────────────
+
+
+@router.get("/data-plane/health", response_model=DataPlaneHealth)
+async def data_plane_health_endpoint() -> DataPlaneHealth:
+    """Code-liveness diagnostic for the long-running FastAPI data plane."""
+    return data_plane_health()
 
 
 @router.get("/health", response_model=IbkrConnectionHealth)
