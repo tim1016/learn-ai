@@ -181,6 +181,7 @@ class DaemonLeaseWriter:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._status: Literal["CONNECTED", "DRAINING"] = "CONNECTED"
         self._last_written_at_ms: int | None = None
 
@@ -211,6 +212,7 @@ class DaemonLeaseWriter:
         """Start renewing the lease. Idempotent."""
         if self._task is not None and not self._task.done():
             return
+        self._loop = asyncio.get_running_loop()
         self._stop.clear()
         self._wake.clear()
         # Write once up-front so a freshly-started daemon is observably
@@ -226,8 +228,8 @@ class DaemonLeaseWriter:
         The writer task remains the owner of periodic renewal; this method
         is just a synchronous nudge through the same atomic writer path.
         """
-        self._write_now()
-        self._wake.set()
+        self._write_now(raise_on_error=True)
+        self._wake_threadsafe()
 
     async def stop(self) -> None:
         """Cancel + drain. Bounded by ``2 * cadence`` seconds."""
@@ -245,6 +247,7 @@ class DaemonLeaseWriter:
                 await self._task
         finally:
             self._task = None
+            self._loop = None
 
     async def _run(self) -> None:
         cadence_s = self._cadence_ms / 1000.0
@@ -256,7 +259,14 @@ class DaemonLeaseWriter:
                 pass
             self._write_now()
 
-    def _write_now(self) -> None:
+    def _wake_threadsafe(self) -> None:
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._wake.set)
+            return
+        self._wake.set()
+
+    def _write_now(self, *, raise_on_error: bool = False) -> None:
         lease = DaemonLease(
             boot_id=self._boot_id,
             written_at_ms=self._now_ms(),
@@ -275,5 +285,7 @@ class DaemonLeaseWriter:
                     "artifacts_root": str(self._artifacts_root),
                 },
             )
+            if raise_on_error:
+                raise
             return
         self._last_written_at_ms = lease.written_at_ms

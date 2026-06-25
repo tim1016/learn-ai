@@ -17,7 +17,7 @@ import logging
 import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NoReturn
 from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
@@ -1916,7 +1916,7 @@ def _raise_outcome_unknown(
         "renew_daemon_lease",
     ],
     exc: host_daemon_client.HostDaemonOutcomeUnknownError,
-) -> None:
+) -> NoReturn:
     """Surface an ambiguous-outcome mutation failure as a typed 409 (PRD #619-C5).
 
     The body is :class:`MutationOutcomeUnknownResponse`; the cockpit

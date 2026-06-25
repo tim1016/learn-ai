@@ -247,7 +247,13 @@ class RunnerProcessManager:
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "daemon lease writer cannot renew on demand",
             )
-        renew()
+        try:
+            renew()
+        except OSError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "daemon lease renewal failed",
+            ) from exc
         return self.health()
 
     def _compute_git_sha(self) -> str | None:
