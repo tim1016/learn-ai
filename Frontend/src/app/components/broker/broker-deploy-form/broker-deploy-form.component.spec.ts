@@ -557,6 +557,32 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
+  it('imports visibly restored fields even when one signal was already prefilled', async () => {
+    const { fixture, component } = setup({
+      accountPromise: Promise.resolve({ account_id: 'DUM284968' }),
+      qcEntries: [],
+    });
+    await flush();
+    fixture.detectChanges();
+
+    fieldControl(fixture, 'Strategy').value = 'deployment_validation';
+    fieldControl(fixture, 'Backtest ID').value = 'd2fe45a7142e88575f6fbd75229f8681';
+    fieldControl(fixture, 'Algorithm audit copy').value = DEPLOYMENT_VALIDATION_AUDIT_COPY;
+    fieldControl(fixture, 'Deployment name').value = 'june25';
+
+    component.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.strategyKey()).toBe('deployment_validation');
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
+    expect(component.accountId()).toBe('DUM284968');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Ready to deploy.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
   it('syncs visibly cleared controls so stale values cannot be submitted', async () => {
     const { fixture, component } = setup();
     await flush();

@@ -1,5 +1,5 @@
 import {
-  afterNextRender,
+  afterEveryRender,
   ChangeDetectionStrategy,
   Component,
   computed,
@@ -361,10 +361,8 @@ export class BrokerDeployFormComponent {
       this.autoSelectedDeploymentValidationAuditCopy.set(false);
     });
 
-    afterNextRender(() => {
-      if (!this.hasAnyRequiredFieldValue()) {
-        this.syncRenderedFieldValues({ includeEmpty: false });
-      }
+    afterEveryRender(() => {
+      this.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
     });
   }
 
@@ -519,57 +517,49 @@ export class BrokerDeployFormComponent {
     renderedValue: string | null,
     signalValue: string,
     includeEmpty: boolean,
+    onlyEmptySignals: boolean,
   ): renderedValue is string {
     return (
       renderedValue !== null &&
       (includeEmpty || renderedValue.trim() !== '') &&
+      (!onlyEmptySignals || signalValue.trim() === '') &&
       renderedValue !== signalValue
     );
   }
 
-  private hasAnyRequiredFieldValue(): boolean {
-    return [
-      this.strategyKey(),
-      this.specPath(),
-      this.accountId(),
-      this.qcBacktestId(),
-      this.qcAuditCopyPath(),
-      this.instanceId(),
-    ].some((value) => value.trim() !== '');
-  }
-
-  syncRenderedFieldValues(options: { includeEmpty?: boolean } = {}): void {
+  syncRenderedFieldValues(options: { includeEmpty?: boolean; onlyEmptySignals?: boolean } = {}): void {
     const includeEmpty = options.includeEmpty ?? true;
+    const onlyEmptySignals = options.onlyEmptySignals ?? false;
     const strategyKey = this.renderedFieldValue('strategyKey');
-    if (this.shouldSyncRenderedValue(strategyKey, this.strategyKey(), includeEmpty)) {
+    if (this.shouldSyncRenderedValue(strategyKey, this.strategyKey(), includeEmpty, onlyEmptySignals)) {
       this.manualSpecPath.set(false);
       this.strategyKey.set(strategyKey);
     }
 
     const specPath = this.renderedFieldValue('specPath');
-    if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty)) {
+    if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty, onlyEmptySignals)) {
       this.specPath.set(specPath);
     }
 
     const accountId = this.renderedFieldValue('accountId');
-    if (this.shouldSyncRenderedValue(accountId, this.accountId(), includeEmpty)) {
+    if (this.shouldSyncRenderedValue(accountId, this.accountId(), includeEmpty, onlyEmptySignals)) {
       this.manualAccountId.set(true);
       this.accountId.set(accountId);
     }
 
     const qcBacktestId = this.renderedFieldValue('qcBacktestId');
-    if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty)) {
+    if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty, onlyEmptySignals)) {
       this.qcBacktestId.set(qcBacktestId);
     }
 
     const qcAuditCopyPath = this.renderedFieldValue('qcAuditCopyPath');
-    if (this.shouldSyncRenderedValue(qcAuditCopyPath, this.qcAuditCopyPath(), includeEmpty)) {
+    if (this.shouldSyncRenderedValue(qcAuditCopyPath, this.qcAuditCopyPath(), includeEmpty, onlyEmptySignals)) {
       this.qcAuditCopyPath.set(qcAuditCopyPath);
       this.autoSelectedDeploymentValidationAuditCopy.set(false);
     }
 
     const instanceId = this.renderedFieldValue('instanceId');
-    if (this.shouldSyncRenderedValue(instanceId, this.instanceId(), includeEmpty)) {
+    if (this.shouldSyncRenderedValue(instanceId, this.instanceId(), includeEmpty, onlyEmptySignals)) {
       this.instanceId.set(instanceId);
     }
   }
