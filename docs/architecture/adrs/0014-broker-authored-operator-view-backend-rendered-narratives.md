@@ -57,17 +57,16 @@ Template authoring discipline (codified in tests):
 - **No speculation.** Templates may only reference structured facts that are present on the row at write time. A template that would render *"during fast market"* is rejected unless the row carries a structured `market_condition` fact.
 - **Closed reason-code vocabulary** drives selection. Reasons (`normal_fill`, `price_divergence`, `quantity_divergence`, `partial_fill`, `cancellation`, `rejection`, `pending_acknowledgement`, `reconnect_recovery`, `unmatched_execution`, `duplicate_execution`, `missing_commission`, `timing_caveat`) are a `StrEnum`; adding one requires a code change, not a config edit.
 
-### 4. The stateful publisher pattern
+### 4. Raw capture first, authored projection second
 
-The reconciliation publisher is a data-plane-owned background task per strategy instance. It:
+Broker-activity has two durable stages:
 
-1. Consumes the existing `stream_order_events` (IBKR fill/status events) for that instance's `bot_order_namespace`.
-2. Joins each event to the engine's `LiveStateEnvelope.submitted_orders` by `order_ref` (the namespace round-trip locked in by ADR 0008, surfaced on every event by `IbkrOrderEvent.order_ref`).
-3. Calls the pure reconciliation functions (`match_identity` → `classify_verdict` → `select_template` → `render_narrative`).
-4. Appends one record to the append-only `broker_activity.jsonl` WAL.
-5. Fans the authored `BrokerActivityRow` out to all SSE subscribers for that instance.
+1. The host runner consumes live IBKR callbacks from the order-owning broker adapter (`orderStatus`, `execDetails`, `commissionReport`, position snapshots, disconnect/reconnect events) and appends them to `run_dir/broker_callbacks.jsonl`.
+2. `broker_callbacks.jsonl` is the first-capture authority. Each row carries `seq`, callback type, `observed_at_ms`, raw callback facts, and idempotency keys (`exec_id`, `perm_id`, `order_ref`, callback type). For callbacks without `exec_id`, idempotency is keyed by `(callback_type, order_ref, perm_id, broker status/time fields, seq)` until implementation narrows the exact tuple in code and tests.
+3. The data-plane broker-activity publisher is a projector/enricher over `broker_callbacks.jsonl`. It reads raw callback rows after the projection cursor, joins engine overlay from `LiveStateEnvelope.submitted_orders` by `order_ref`, calls the pure reconciliation functions (`match_identity` → `classify_verdict` → `select_template` → `render_narrative`), and appends authored `BrokerActivityRow`s to `broker_activity.jsonl`.
+4. The publisher fans authored `BrokerActivityRow`s out to SSE subscribers. The cockpit never reads raw callbacks and never composes verdicts or narratives.
 
-Authoring itself is pure. Only the publisher holds state (the per-instance sequence counter, the SSE subscriber set, the last-seen execution-identity dedupe cache). The publisher is the *only* code path that writes to `broker_activity.jsonl`.
+Authoring itself is pure. The host runner owns first capture; the publisher owns projection state, SSE fan-out, and the authored `broker_activity.jsonl` WAL. The data plane may be stopped and later rebuild the authored projection from `broker_callbacks.jsonl`; it is not the authority for whether a broker callback happened.
 
 ### 5. Persistence — facts AND authored output
 
@@ -80,34 +79,17 @@ Each `broker_activity.jsonl` record contains:
 
 The full row is written at author time; the authored strings are *not* re-rendered on read. This preserves operator-view reproducibility and makes the WAL safe to ship to forensic tooling.
 
-`LiveStateEnvelope` carries only a `last_broker_activity_wal_seq: int` cursor for fold/resume; it does not store rows. The publisher writes the WAL; the envelope tracks the highest seq folded into the resume state.
+`LiveStateEnvelope` carries `last_broker_callbacks_wal_seq: int` and `last_broker_activity_wal_seq: int` cursors for fold/resume; it does not store raw callbacks or authored rows. The raw callback cursor records the highest callback `seq` projected into authored rows. The activity cursor records the highest authored row `seq` visible to REST/SSE backfill.
 
-## Amendment 2026-06-25 — Host-runner-owned raw callback WAL
+Every authored `BrokerActivityRow` produced from a raw callback carries projection provenance: `source_callback_seq`, `source_callback_type`, and the raw callback idempotency key used. Pending rows that have no broker callback carry `source_callback_seq = null` and are superseded by the first matching callback row. Projection replay is therefore deterministic: read raw callbacks with `seq > last_broker_callbacks_wal_seq`, author rows idempotently, append them to `broker_activity.jsonl`, then advance both cursors only after the authored append fsyncs.
 
-**Status:** Accepted for issue #684 PR 2. Supersedes ADR 0014 §4 only where §4 made the data-plane publisher the live event source and the sole live author of broker-activity capture. The backend-rendered narrative rule, the closed verdict enum, and the template truthfulness contract remain unchanged.
+If the authored projection is corrupt or intentionally rebuilt, the safe rebuild rule is: truncate/recreate `broker_activity.jsonl`, reset both broker-activity cursors to `0`, replay `broker_callbacks.jsonl` from the beginning, and preserve `source_callback_seq` on each authored row. Ad-hoc dedupe from `exec_id` alone is forbidden because status, cancellation, rejection, position, and disconnect callbacks may not have an execution id.
 
-The June25 incident showed that the data-plane publisher is the wrong owner for first-capture durability: the host runner can submit and fill orders while the long-lived data-plane process is stale, detached, or crashed. Therefore the process that owns the order lifecycle must also own the durable broker-callback evidence.
+## Historical note 2026-06-25 — Host-runner-owned raw callback WAL
 
-### New ownership chain
+**Status:** Folded into §4 and §5 above. Supersedes the original ADR 0014 §4 design where the data-plane publisher consumed live IBKR events directly and was the first durable capture point. The backend-rendered narrative rule, the closed verdict enum, and the template truthfulness contract remain unchanged.
 
-1. The host runner writes an append-only per-run raw callback WAL, `broker_callbacks.jsonl`, before any callback can be lost to a detached data-plane publisher.
-2. Each raw row records the broker callback fact (`orderStatus`, `execDetails`, `commissionReport`, position snapshot, disconnect/reconnect event) plus idempotency keys: `exec_id`, `perm_id`, `order_ref`, callback type, and the run-local callback `seq`.
-3. The data-plane broker-activity publisher becomes a projector/enricher over `broker_callbacks.jsonl`: it reads raw callback facts, joins the current engine overlay by `order_ref`, applies the existing pure reconciliation/template functions, and appends authored `BrokerActivityRow`s to `broker_activity.jsonl`.
-4. The cockpit continues to read only the authored broker-activity surface. Raw callbacks are audit/projection input, not UI copy.
-
-### What changes
-
-- `broker_callbacks.jsonl` is the authoritative capture record for broker activity because it is written by the host runner that owns the IBKR order lifecycle.
-- `broker_activity.jsonl` remains the authored operator-view WAL, but it is now a derived projection. Losing or restarting the data-plane publisher must not lose raw history; the projection can be rebuilt from raw callbacks.
-- A submit-enabled start may temporarily fail closed when durable callback capture cannot be attached. That guard is transitional and is superseded by host-runner-owned capture once the raw callback WAL is implemented.
-- Reconnect sweeps and redeliveries dedupe against raw callback idempotency keys before projection so repeated IBKR delivery cannot double-count fills.
-
-### What does not change
-
-- ADR 0008's `order_ref` ownership ladder and uncertain-ack semantics are unchanged.
-- ADR 0008's JSONL durability contract is reused: append-only rows, monotonic `seq`, fsync-before-return, and tolerance only for one trailing unterminated line.
-- ADR 0014's narrative contract is unchanged: verdicts, `headline`, and `narrative` are still backend-authored, template-versioned, and persisted on `BrokerActivityRow`.
-- The data plane may still enrich, backfill, stream, and expose the authored rows, but it is no longer the authority for whether a broker callback happened.
+The June25 incident showed that the data-plane publisher is the wrong owner for first-capture durability: the host runner can submit and fill orders while the long-lived data-plane process is stale, detached, or crashed. The current contract is therefore the two-stage model in §4: host-runner raw callback capture first, data-plane authored projection second.
 
 ### 6. Per-instance configurable timing policy
 
@@ -163,7 +145,7 @@ The Activity tab's existing components are replaced, not supplemented:
 - `PythonDataService/app/services/broker_activity_publisher.py` — stateful per-instance projector/enricher; writes authored `broker_activity.jsonl` rows but is no longer the authority for raw broker-callback capture.
 - `run_dir/broker_callbacks.jsonl` — host-runner-owned raw broker-callback WAL accepted by the 2026-06-25 amendment; implementation lands in the following slice.
 - `PythonDataService/app/schemas/broker_activity.py` — `BrokerActivityRow`, `EngineOverlay`, `DivergenceFacts`, `Verdict`, `ReconciliationTimingPolicy`.
-- `PythonDataService/app/engine/live/live_state_sidecar.py` — `last_broker_activity_wal_seq` cursor (additive).
+- `PythonDataService/app/engine/live/live_state_sidecar.py` — projection cursors: `last_broker_callbacks_wal_seq` for raw callback replay and `last_broker_activity_wal_seq` for authored row backfill.
 - `PythonDataService/app/routers/broker_activity.py` — SSE stream + paginated REST backfill.
 - ADR 0008 §3 — sibling WAL pattern (`intent_events.jsonl`). The amendment registering `broker_activity.jsonl` as a peer WAL ships with this slice.
 - `Frontend/src/app/components/broker/cockpit-v2/tabs/activity-tab/broker-activity-table.component.ts` — render-only SSE subscriber.
