@@ -82,7 +82,17 @@ def _coerce_quote(value: float | None) -> float | None:
 
 
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
-IbkrEvidenceValue = JsonValue
+IbkrApiRequestName = Literal[
+    "placeOrder",
+    "cancelOrder",
+    "reqAllOpenOrders",
+    "reqExecutionsAsync",
+]
+IbkrApiCallbackName = Literal[
+    "openOrder",
+    "orderStatus",
+    "execDetails",
+]
 
 
 class IbkrObjectSnapshot(BaseModel):
@@ -97,25 +107,25 @@ class IbkrObjectSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     object_type: str
-    fields: dict[str, IbkrEvidenceValue] = Field(default_factory=dict)
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class IbkrApiRequestSnapshot(BaseModel):
+class IbkrApiRequestEvidence(BaseModel):
     """Typed envelope for one IBKR API request/call."""
 
     model_config = ConfigDict(frozen=True)
 
-    call: str
-    params: dict[str, IbkrEvidenceValue] = Field(default_factory=dict)
+    call: IbkrApiRequestName
+    params: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class IbkrApiResponseSnapshot(BaseModel):
+class IbkrApiResponseEvidence(BaseModel):
     """Typed envelope for one IBKR callback/response."""
 
     model_config = ConfigDict(frozen=True)
 
-    callback: str
-    fields: dict[str, IbkrEvidenceValue] = Field(default_factory=dict)
+    callback: IbkrApiCallbackName
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class IbkrTradeSnapshot(BaseModel):
@@ -130,6 +140,22 @@ class IbkrTradeSnapshot(BaseModel):
     fills: list[IbkrObjectSnapshot] = Field(default_factory=list)
     log: list[IbkrObjectSnapshot] = Field(default_factory=list)
     advanced_error: str | None = None
+
+
+class IbkrTradeEvidence(BaseModel):
+    """Full IBKR request/response/object evidence for an order lifecycle row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    request: IbkrApiRequestEvidence | None = None
+    response: IbkrApiResponseEvidence | None = None
+    contract: IbkrObjectSnapshot | None = None
+    order: IbkrObjectSnapshot | None = None
+    order_status: IbkrObjectSnapshot | None = None
+    trade: IbkrTradeSnapshot | None = None
+    fill: IbkrObjectSnapshot | None = None
+    execution: IbkrObjectSnapshot | None = None
+    commission_report: IbkrObjectSnapshot | None = None
 
 
 class IbkrAccountSummary(BaseModel):
@@ -538,15 +564,7 @@ class IbkrOrderEvent(BaseModel):
     error_code: int | None = None
     error_message: str | None = None
 
-    ibkr_request: IbkrApiRequestSnapshot | None = None
-    ibkr_response: IbkrApiResponseSnapshot | None = None
-    ibkr_contract: IbkrObjectSnapshot | None = None
-    ibkr_order: IbkrObjectSnapshot | None = None
-    ibkr_order_status: IbkrObjectSnapshot | None = None
-    ibkr_trade: IbkrTradeSnapshot | None = None
-    ibkr_fill: IbkrObjectSnapshot | None = None
-    ibkr_execution: IbkrObjectSnapshot | None = None
-    ibkr_commission_report: IbkrObjectSnapshot | None = None
+    ibkr_evidence: IbkrTradeEvidence | None = None
 
     ts_ms: int
 
@@ -585,12 +603,7 @@ class IbkrOpenOrder(BaseModel):
     # orchestrator joins this back to the WAL to prove ownership without
     # trusting per-client ``order_id`` alone.
     order_ref: str | None = None
-    ibkr_request: IbkrApiRequestSnapshot | None = None
-    ibkr_response: IbkrApiResponseSnapshot | None = None
-    ibkr_contract: IbkrObjectSnapshot | None = None
-    ibkr_order: IbkrObjectSnapshot | None = None
-    ibkr_order_status: IbkrObjectSnapshot | None = None
-    ibkr_trade: IbkrTradeSnapshot | None = None
+    ibkr_evidence: IbkrTradeEvidence | None = None
     fetched_at_ms: int
 
 
@@ -616,12 +629,7 @@ class IbkrOrderAck(BaseModel):
     order_type: OrderType
     limit_price: float | None = None
     status: OrderStatus
-    ibkr_request: IbkrApiRequestSnapshot | None = None
-    ibkr_response: IbkrApiResponseSnapshot | None = None
-    ibkr_contract: IbkrObjectSnapshot | None = None
-    ibkr_order: IbkrObjectSnapshot | None = None
-    ibkr_order_status: IbkrObjectSnapshot | None = None
-    ibkr_trade: IbkrTradeSnapshot | None = None
+    ibkr_evidence: IbkrTradeEvidence | None = None
     placed_at_ms: int
 
 
@@ -823,8 +831,10 @@ __all__ = [
     "DiagnosticReportDisabled",
     "DiagnosticStatus",
     "IbkrAccountSummary",
-    "IbkrApiRequestSnapshot",
-    "IbkrApiResponseSnapshot",
+    "IbkrApiCallbackName",
+    "IbkrApiRequestEvidence",
+    "IbkrApiRequestName",
+    "IbkrApiResponseEvidence",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrMinuteBar",
@@ -840,6 +850,7 @@ __all__ = [
     "IbkrStrikeList",
     "IbkrSurfaceExpiry",
     "IbkrSurfaceSnapshot",
+    "IbkrTradeEvidence",
     "IbkrTradeSnapshot",
     "OptionRight",
     "OrderAction",

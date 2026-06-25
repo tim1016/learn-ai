@@ -52,6 +52,12 @@ export type SecType =
   | 'BAG';
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
 export type OrderEventType = 'status' | 'fill' | 'cancel' | 'error';
+export type IbkrApiRequestName =
+  | 'placeOrder'
+  | 'cancelOrder'
+  | 'reqAllOpenOrders'
+  | 'reqExecutionsAsync';
+export type IbkrApiCallbackName = 'openOrder' | 'orderStatus' | 'execDetails';
 export type IbkrEvidenceScalar = string | number | boolean | null;
 export type IbkrEvidenceValue =
   | IbkrEvidenceScalar
@@ -63,13 +69,13 @@ export interface IbkrObjectSnapshot {
   fields: Record<string, IbkrEvidenceValue>;
 }
 
-export interface IbkrApiRequestSnapshot {
-  call: string;
+export interface IbkrApiRequestEvidence {
+  call: IbkrApiRequestName;
   params: Record<string, IbkrEvidenceValue>;
 }
 
-export interface IbkrApiResponseSnapshot {
-  callback: string;
+export interface IbkrApiResponseEvidence {
+  callback: IbkrApiCallbackName;
   fields: Record<string, IbkrEvidenceValue>;
 }
 
@@ -83,13 +89,20 @@ export interface IbkrTradeSnapshot {
   advanced_error: string | null;
 }
 
+export interface IbkrTradeEvidence {
+  request: IbkrApiRequestEvidence | null;
+  response: IbkrApiResponseEvidence | null;
+  contract: IbkrObjectSnapshot | null;
+  order: IbkrObjectSnapshot | null;
+  order_status: IbkrObjectSnapshot | null;
+  trade: IbkrTradeSnapshot | null;
+  fill: IbkrObjectSnapshot | null;
+  execution: IbkrObjectSnapshot | null;
+  commission_report: IbkrObjectSnapshot | null;
+}
+
 export interface IbkrOrderEvidenceFields {
-  ibkr_request?: IbkrApiRequestSnapshot | null;
-  ibkr_response?: IbkrApiResponseSnapshot | null;
-  ibkr_contract?: IbkrObjectSnapshot | null;
-  ibkr_order?: IbkrObjectSnapshot | null;
-  ibkr_order_status?: IbkrObjectSnapshot | null;
-  ibkr_trade?: IbkrTradeSnapshot | null;
+  ibkr_evidence?: IbkrTradeEvidence | null;
 }
 
 // ── SSE payload models (hand-mirrored from app.broker.ibkr.models) ────
@@ -169,15 +182,7 @@ export interface IbkrOrderEvent {
   fee: number | null;
   error_code: number | null;
   error_message: string | null;
-  ibkr_request: IbkrApiRequestSnapshot | null;
-  ibkr_response: IbkrApiResponseSnapshot | null;
-  ibkr_contract: IbkrObjectSnapshot | null;
-  ibkr_order: IbkrObjectSnapshot | null;
-  ibkr_order_status: IbkrObjectSnapshot | null;
-  ibkr_trade: IbkrTradeSnapshot | null;
-  ibkr_fill: IbkrObjectSnapshot | null;
-  ibkr_execution: IbkrObjectSnapshot | null;
-  ibkr_commission_report: IbkrObjectSnapshot | null;
+  ibkr_evidence: IbkrTradeEvidence | null;
   ts_ms: number;
 }
 
