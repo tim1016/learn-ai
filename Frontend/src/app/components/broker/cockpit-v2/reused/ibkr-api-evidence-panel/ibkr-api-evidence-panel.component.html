@@ -1,0 +1,37 @@
+<section class="ibkr-api-panel" data-testid="ibkr-api-evidence-panel">
+  <header class="panel-head">
+    <h3>IBKR API evidence</h3>
+    <span class="status" [attr.data-status]="sseStatus()">{{ sseStatus() }}</span>
+  </header>
+
+  @if (sseError(); as err) {
+    <p class="error" role="alert">{{ err }}</p>
+  }
+
+  @if (lines().length === 0) {
+    <p class="empty">No IBKR API evidence captured yet.</p>
+  } @else {
+    <ul class="evidence-list">
+      @for (line of lines(); track trackLine($index, line)) {
+        <li class="evidence-row">
+          <div class="summary">
+            <span class="seq">#{{ line.seq }}</span>
+            <span class="time">{{ line.display_ts }}</span>
+            <span class="call">{{ line.request.call }}</span>
+            <span class="source">{{ line.source }}</span>
+            @if (line.symbol) {
+              <span class="symbol">{{ line.symbol }}</span>
+            }
+            @if (line.account_id) {
+              <span class="account">{{ line.account_id }}</span>
+            }
+          </div>
+          <details>
+            <summary>Raw IBKR payload</summary>
+            <pre>{{ line.payload_json }}</pre>
+          </details>
+        </li>
+      }
+    </ul>
+  }
+</section>

@@ -23,6 +23,11 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import IbkrPnLTick, _coerce_optional_float
 from app.utils.timestamps import now_ms_utc
@@ -85,6 +90,13 @@ async def stream_account_pnl(
     # ``reqPnL`` returns a PnL object whose fields update in place as the
     # broker streams events. We keep a handle to cancel on exit.
     pnl = client.ib.reqPnL(account_id)
+    recorder = get_ibkr_api_evidence_recorder()
+    recorder.record(
+        source="pnl.stream_account_pnl.subscribe",
+        account_id=account_id,
+        request=evidence_request("reqPnL", account=account_id, modelCode=""),
+        response=evidence_response("pnl", objects=[pnl]),
+    )
     logger.info("Subscribed to account P&L for %s", account_id)
 
     try:
@@ -96,6 +108,12 @@ async def stream_account_pnl(
             # updating, so re-reading it would emit plausible-but-frozen P&L
             # forever. Halt instead of streaming stale risk numbers.
             client.require_live()
+            recorder.record(
+                source="pnl.stream_account_pnl.tick",
+                account_id=account_id,
+                request=evidence_request("reqPnL", account=account_id, modelCode=""),
+                response=evidence_response("pnl", objects=[pnl]),
+            )
             yield _account_pnl_to_tick(pnl, account_id)
     finally:
         try:
@@ -128,9 +146,21 @@ async def stream_position_pnl(
 
     # Subscribe once per contract; keep handles so we can cancel on exit.
     subscriptions: dict[int, object] = {}
+    recorder = get_ibkr_api_evidence_recorder()
     for con_id in con_ids:
         try:
             subscriptions[con_id] = client.ib.reqPnLSingle(account_id, "", con_id)
+            recorder.record(
+                source="pnl.stream_position_pnl.subscribe",
+                account_id=account_id,
+                request=evidence_request(
+                    "reqPnLSingle",
+                    account=account_id,
+                    modelCode="",
+                    conId=int(con_id),
+                ),
+                response=evidence_response("pnlSingle", objects=[subscriptions[con_id]]),
+            )
         except Exception as exc:
             logger.warning("reqPnLSingle failed for con_id=%s: %s", con_id, exc)
 
@@ -150,6 +180,17 @@ async def stream_position_pnl(
             # objects, so halt rather than emit stale per-position risk.
             client.require_live()
             for con_id, pnl_single in subscriptions.items():
+                recorder.record(
+                    source="pnl.stream_position_pnl.tick",
+                    account_id=account_id,
+                    request=evidence_request(
+                        "reqPnLSingle",
+                        account=account_id,
+                        modelCode="",
+                        conId=int(con_id),
+                    ),
+                    response=evidence_response("pnlSingle", objects=[pnl_single]),
+                )
                 yield _position_pnl_to_tick(pnl_single, account_id, con_id)
     finally:
         for con_id in subscriptions:

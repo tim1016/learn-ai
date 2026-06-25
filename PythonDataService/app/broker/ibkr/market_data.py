@@ -33,6 +33,11 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Literal
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.contracts import (
     build_chain_contracts,
@@ -231,9 +236,45 @@ async def stream_option_chain(
     stock_ticker = None
     try:
         stock_ticker = client.ib.reqMktData(stock, "", False, False)
+        recorder = get_ibkr_api_evidence_recorder()
+        recorder.record(
+            source="market_data.stream_option_chain.underlying",
+            symbol=symbol,
+            request=evidence_request(
+                "reqMktData",
+                contract={"conId": int(stock.conId), "symbol": stock.symbol, "secType": stock.secType},
+                genericTickList="",
+                snapshot=False,
+                regulatorySnapshot=False,
+                mktDataOptions=[],
+            ),
+            response=evidence_response("tickSnapshot", objects=[stock_ticker]),
+        )
         for c in contracts:
             by_conid[int(c.conId)] = (float(c.strike), c.right)
-            tickers.append(client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False))
+            ticker = client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False)
+            tickers.append(ticker)
+            recorder.record(
+                source="market_data.stream_option_chain.option",
+                symbol=symbol,
+                request=evidence_request(
+                    "reqMktData",
+                    contract={
+                        "conId": int(c.conId),
+                        "symbol": c.symbol,
+                        "secType": c.secType,
+                        "lastTradeDateOrContractMonth": c.lastTradeDateOrContractMonth,
+                        "strike": float(c.strike),
+                        "right": c.right,
+                        "exchange": c.exchange,
+                    },
+                    genericTickList=GENERIC_TICK_LIST,
+                    snapshot=False,
+                    regulatorySnapshot=False,
+                    mktDataOptions=[],
+                ),
+                response=evidence_response("tickSnapshot", objects=[ticker]),
+            )
 
         logger.info(
             "Subscribed %d tickers for %s expiry=%s strikes=%s",
@@ -256,6 +297,22 @@ async def stream_option_chain(
                 )
 
             underlying_price = _resolve_market_price(stock_ticker)
+            recorder.record(
+                source="market_data.stream_option_chain.tick",
+                symbol=symbol,
+                request=evidence_request(
+                    "reqMktData",
+                    contract_count=len(tickers) + 1,
+                    genericTickList=GENERIC_TICK_LIST,
+                    snapshot=False,
+                    regulatorySnapshot=False,
+                ),
+                response=evidence_response(
+                    "tickSnapshot",
+                    fields={"ticker_count": len(tickers) + 1},
+                    objects=[stock_ticker, *tickers],
+                ),
+            )
 
             yield IbkrChainSnapshot(
                 symbol=symbol,

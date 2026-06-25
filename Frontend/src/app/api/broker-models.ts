@@ -53,11 +53,33 @@ export type SecType =
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
 export type OrderEventType = 'status' | 'fill' | 'cancel' | 'error';
 export type IbkrApiRequestName =
+  | 'accountSummaryAsync'
   | 'placeOrder'
   | 'cancelOrder'
+  | 'qualifyContractsAsync'
   | 'reqAllOpenOrders'
-  | 'reqExecutionsAsync';
-export type IbkrApiCallbackName = 'openOrder' | 'orderStatus' | 'execDetails';
+  | 'reqExecutionsAsync'
+  | 'reqMatchingSymbolsAsync'
+  | 'reqMktData'
+  | 'reqPnL'
+  | 'reqPnLSingle'
+  | 'reqPositionsAsync'
+  | 'reqRealTimeBars'
+  | 'reqSecDefOptParamsAsync';
+export type IbkrApiCallbackName =
+  | 'accountSummary'
+  | 'contractDetails'
+  | 'openOrder'
+  | 'orderStatus'
+  | 'execDetails'
+  | 'pnl'
+  | 'pnlSingle'
+  | 'position'
+  | 'realTimeBar'
+  | 'realTimeBarList'
+  | 'securityDefinitionOptionParameter'
+  | 'symbolSamples'
+  | 'tickSnapshot';
 export type IbkrEvidenceScalar = string | number | boolean | null;
 export type IbkrEvidenceValue =
   | IbkrEvidenceScalar
@@ -99,6 +121,18 @@ export interface IbkrTradeEvidence {
   fill: IbkrObjectSnapshot | null;
   execution: IbkrObjectSnapshot | null;
   commission_report: IbkrObjectSnapshot | null;
+}
+
+export interface IbkrApiEvidenceEvent {
+  seq: number;
+  ts_ms: number;
+  source: string;
+  account_id: string | null;
+  symbol: string | null;
+  strategy_instance_id: string | null;
+  request: IbkrApiRequestEvidence;
+  response: IbkrApiResponseEvidence | null;
+  error: string | null;
 }
 
 export interface IbkrOrderEvidenceFields {

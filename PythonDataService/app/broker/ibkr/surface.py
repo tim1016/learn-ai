@@ -33,6 +33,11 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
+from app.broker.ibkr.api_evidence import (
+    evidence_request,
+    evidence_response,
+    get_ibkr_api_evidence_recorder,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.contracts import (
     build_chain_contracts,
@@ -142,13 +147,49 @@ async def stream_option_surface(
 
     try:
         stock_ticker = client.ib.reqMktData(stock, "", False, False)
+        recorder = get_ibkr_api_evidence_recorder()
+        recorder.record(
+            source="surface.stream_option_surface.underlying",
+            symbol=symbol,
+            request=evidence_request(
+                "reqMktData",
+                contract={"conId": int(stock.conId), "symbol": stock.symbol, "secType": stock.secType},
+                genericTickList="",
+                snapshot=False,
+                regulatorySnapshot=False,
+                mktDataOptions=[],
+            ),
+            response=evidence_response("tickSnapshot", objects=[stock_ticker]),
+        )
         for exp, contracts in qualified_by_expiry.items():
             conid_map: dict[int, tuple[float, OptionRight]] = {}
             tlist: list = []
             for c in contracts:
                 conid_map[int(c.conId)] = (float(c.strike), c.right)
-                tlist.append(client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False))
+                ticker = client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False)
+                tlist.append(ticker)
                 all_contracts.append(c)
+                recorder.record(
+                    source="surface.stream_option_surface.option",
+                    symbol=symbol,
+                    request=evidence_request(
+                        "reqMktData",
+                        contract={
+                            "conId": int(c.conId),
+                            "symbol": c.symbol,
+                            "secType": c.secType,
+                            "lastTradeDateOrContractMonth": c.lastTradeDateOrContractMonth,
+                            "strike": float(c.strike),
+                            "right": c.right,
+                            "exchange": c.exchange,
+                        },
+                        genericTickList=GENERIC_TICK_LIST,
+                        snapshot=False,
+                        regulatorySnapshot=False,
+                        mktDataOptions=[],
+                    ),
+                    response=evidence_response("tickSnapshot", objects=[ticker]),
+                )
             by_expiry_conid[exp] = conid_map
             tickers_by_expiry[exp] = tlist
 
@@ -179,6 +220,25 @@ async def stream_option_surface(
                 )
 
             underlying_price = _resolve_market_price(stock_ticker)
+            all_tickers = [stock_ticker]
+            for tlist in tickers_by_expiry.values():
+                all_tickers.extend(tlist)
+            recorder.record(
+                source="surface.stream_option_surface.tick",
+                symbol=symbol,
+                request=evidence_request(
+                    "reqMktData",
+                    contract_count=len(all_tickers),
+                    genericTickList=GENERIC_TICK_LIST,
+                    snapshot=False,
+                    regulatorySnapshot=False,
+                ),
+                response=evidence_response(
+                    "tickSnapshot",
+                    fields={"ticker_count": len(all_tickers), "expiry_count": len(sorted_expiries)},
+                    objects=all_tickers,
+                ),
+            )
 
             yield IbkrSurfaceSnapshot(
                 symbol=symbol,
