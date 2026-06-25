@@ -13,6 +13,7 @@
       [strategyInstanceId]="status().strategy_instance_id"
       [symbol]="status().symbol"
       [activity]="activity()"
+      (selectionChange)="onChartSelectionChange($event)"
     />
   </section>
 

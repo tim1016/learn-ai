@@ -14,12 +14,18 @@ import {
   inject,
   input,
   resource,
+  signal,
 } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import type { BrokerActivityHealth, LiveInstanceStatus } from '../../../../api/live-instances.types';
 
-import { BotTradeChartCardComponent } from '../reused/bot-trade-chart-card/bot-trade-chart-card.component';
+import {
+  BotTradeChartCardComponent,
+  type ChartResolution,
+  localDateString,
+  type ChartSelection,
+} from '../reused/bot-trade-chart-card/bot-trade-chart-card.component';
 import type { LiveInstanceActivityProjection } from '../reused/bot-trade-chart-card/bot-trade-chart-card.types';
 import { BrokerActivityTableComponent } from '../reused/broker-activity-table/broker-activity-table.component';
 import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-panel.component';
@@ -44,6 +50,8 @@ export class ActivityTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
 
   private readonly http = inject(HttpClient);
+  readonly selectedSessionDate = signal<string>(localDateString());
+  readonly selectedResolution = signal<ChartResolution>('1m');
 
   readonly chartRunId = computed<string | null>(
     () => this.status().live_binding?.run_id ?? this.status().evidence_binding?.run_id ?? null,
@@ -53,10 +61,20 @@ export class ActivityTabComponent {
 
   readonly activityResource = resource<
     LiveInstanceActivityProjection | null,
-    string
+    {
+      sid: string;
+      sessionDate: string;
+      resolution: ChartResolution;
+      refreshKey: number;
+    }
   >({
-    params: () => this.strategyInstanceId(),
-    loader: ({ params }) => this.loadActivity(params),
+    params: () => ({
+      sid: this.strategyInstanceId(),
+      sessionDate: this.selectedSessionDate(),
+      resolution: this.selectedResolution(),
+      refreshKey: this.status().live_binding ? this.status().fetched_at_ms : 0,
+    }),
+    loader: ({ params }) => this.loadActivity(params.sid, params.sessionDate, params.resolution),
   });
 
   readonly activity = computed(() => this.activityResource.value() ?? null);
@@ -77,11 +95,21 @@ export class ActivityTabComponent {
     () => this.status().operator_surface.broker_activity_health ?? null,
   );
 
-  private async loadActivity(sid: string): Promise<LiveInstanceActivityProjection | null> {
+  onChartSelectionChange(selection: ChartSelection): void {
+    this.selectedSessionDate.set(selection.sessionDate);
+    this.selectedResolution.set(selection.resolution);
+  }
+
+  private async loadActivity(
+    sid: string,
+    sessionDate: string,
+    resolution: ChartResolution,
+  ): Promise<LiveInstanceActivityProjection | null> {
     if (!sid) return null;
     return firstValueFrom(
       this.http.get<LiveInstanceActivityProjection>(
         `/api/live-instances/${encodeURIComponent(sid)}/activity`,
+        { params: { session_date: sessionDate, resolution } },
       ),
     );
   }

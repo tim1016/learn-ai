@@ -8,7 +8,7 @@ server-side and the serialized response carries both `live_binding` and
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -107,6 +107,14 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.main import app
 
     return app, root
+
+
+@pytest.fixture(autouse=True)
+def clear_ibkr_api_evidence_recorder():
+    recorder = get_ibkr_api_evidence_recorder()
+    recorder.clear()
+    yield
+    recorder.clear()
 
 
 def _set_daemon(
@@ -461,6 +469,107 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     assert any(w["code"] == "broker_replay_collapsed" for w in body["reconciliation_warnings"])
     fill_event_ids = [row["id"] for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert fill_event_ids.count("exec:exec-sell") == 1
+
+
+async def test_activity_projection_preserves_backend_fill_verdict(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_unexpected_fill"
+    _write_ledger(root, "run-unexpected", sid, 100)
+    day = live_instances._today_ny()
+    fill_ms = int(
+        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
+        * 1000
+    )
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=fill_ms,
+                exec_ts_ms=fill_ms,
+                exec_id="exec-foreign",
+                perm_id=301,
+                order_ref=None,
+                verdict="unexpected",
+                template_key="unmatched_execution_v1",
+                headline="Unmatched broker execution",
+                narrative="Broker reported a fill without a matching engine intent.",
+                reason_codes=["unmatched_execution"],
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    fill_events = [
+        row for row in response.json()["broker_activity_rows"] if row["row_type"] == "fill"
+    ]
+    assert len(fill_events) == 1
+    assert fill_events[0]["verdict"] == "unexpected"
+
+
+async def test_activity_projection_emits_terminal_non_fill_events(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_cancelled"
+    _write_ledger(root, "run-cancelled", sid, 100)
+    day = live_instances._today_ny()
+    cancel_ms = int(
+        datetime(day.year, day.month, day.day, 13, 0, tzinfo=live_instances._NY_TZ).timestamp()
+        * 1000
+    )
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=cancel_ms,
+                exec_ts_ms=None,
+                exec_id=None,
+                perm_id=401,
+                price=None,
+                commission=None,
+                net_amount=None,
+                verdict="expected",
+                template_key="cancellation",
+                headline="Broker cancelled SPY order",
+                narrative="Broker terminal state was cancellation.",
+                reason_codes=["cancellation"],
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["orders_today"][0]["group"] == "resolved"
+    terminal_events = [
+        row for row in body["broker_activity_rows"] if row["row_type"] == "order_terminal"
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["summary"] == "Broker cancelled SPY order"
+    assert terminal_events[0]["status"] == "cancellation"
+
+
+def test_ny_session_bounds_use_next_calendar_midnight_on_dst_transition() -> None:
+    start_ms, end_ms = live_instances._ny_session_bounds_ms(date(2026, 3, 8))
+
+    start = datetime.fromtimestamp(start_ms / 1000, tz=live_instances._NY_TZ)
+    end = datetime.fromtimestamp(end_ms / 1000, tz=live_instances._NY_TZ)
+    assert start == datetime(2026, 3, 8, 0, 0, tzinfo=live_instances._NY_TZ)
+    assert end == datetime(2026, 3, 9, 0, 0, tzinfo=live_instances._NY_TZ)
+    assert end_ms - start_ms == 23 * 60 * 60 * 1000
 
 
 async def test_activity_projection_defaults_to_latest_broker_ledger_session(

@@ -199,12 +199,14 @@ export class CockpitShellComponent {
     const readiness = s.readiness?.verdict ?? 'UNKNOWN';
     const process = s.operator_surface.host_process.state;
     const broker = s.operator_surface.broker.connection;
+    const safety = s.operator_surface.broker.safety_verdict;
     const lastRun = s.operator_surface.prior_run.classification;
     return [
       { id: 'process', label: 'PROCESS', value: process, tone: this._indicatorTone(process) },
       { id: 'intent', label: 'INTENT', value: intent, tone: this._indicatorTone(intent) },
       { id: 'readiness', label: 'READINESS', value: readiness, tone: this._indicatorTone(readiness) },
       { id: 'broker', label: 'BROKER', value: broker, tone: this._indicatorTone(broker) },
+      { id: 'safety', label: 'SAFETY', value: safety, tone: this._indicatorTone(safety) },
       { id: 'last-run', label: 'LAST RUN', value: lastRun, tone: this._indicatorTone(lastRun) },
     ];
   });
@@ -775,6 +777,7 @@ export class CockpitShellComponent {
       case 'EXITED_WITH_ERROR':
       case 'DISCONNECTED':
       case 'CLOSED':
+      case 'UNREACHABLE':
         return 'danger';
       case 'DEGRADED':
       case 'WAITING_FOR_HOST':

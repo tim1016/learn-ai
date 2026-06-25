@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.broker.ibkr.models import IbkrMinuteBar
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.operator.notices.schema import OperatorNotice, RuntimeFreshnessReasonCode
 
@@ -1715,7 +1716,7 @@ class ChartSnapshotResponse(BaseModel):
     resolution: str
     has_bars: bool
     now_ms: int
-    bars: list[dict] = Field(default_factory=list)
+    bars: list[IbkrMinuteBar] = Field(default_factory=list)
     runs: list[ChartSnapshotRun] = Field(default_factory=list)
 
 

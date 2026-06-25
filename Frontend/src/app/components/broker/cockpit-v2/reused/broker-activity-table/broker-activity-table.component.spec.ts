@@ -77,6 +77,7 @@ function render(props: {
   sseStatus?: string;
   sseError?: string | null;
   activityHealth?: BrokerActivityHealth | null;
+  eventRows?: ActivityBrokerEventRow[] | null;
 }) {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -88,6 +89,7 @@ function render(props: {
   fixture.componentRef.setInput('backfillError', props.backfillError ?? null);
   fixture.componentRef.setInput('sseStatus', props.sseStatus ?? 'open');
   fixture.componentRef.setInput('sseError', props.sseError ?? null);
+  fixture.componentRef.setInput('eventRows', props.eventRows ?? null);
   if (props.activityHealth !== undefined) {
     fixture.componentRef.setInput('activityHealth', props.activityHealth);
   }
@@ -157,16 +159,9 @@ describe('BrokerActivityTableComponent', () => {
         ],
       },
     ];
-    const { el } = render({ rows: [], sseStatus: 'projection' });
-    const fixture = TestBed.createComponent(BrokerActivityTableComponent);
-    fixture.componentRef.setInput('rows', []);
-    fixture.componentRef.setInput('eventRows', eventRows);
-    fixture.componentRef.setInput('sseStatus', 'projection');
-    fixture.detectChanges();
-    const projected = fixture.nativeElement as HTMLElement;
-    expect(el).toBeTruthy();
-    expect(projected.textContent ?? '').toContain('endpoint_snapshot');
-    expect(projected.textContent ?? '').toContain('reqPositionsAsync captured');
+    const { el } = render({ rows: [], eventRows, sseStatus: 'projection' });
+    expect(el.textContent ?? '').toContain('endpoint_snapshot');
+    expect(el.textContent ?? '').toContain('reqPositionsAsync captured');
   });
 
   it('renders the backend-authored narrative is NOT visible until drill-down (verbatim contract)', () => {

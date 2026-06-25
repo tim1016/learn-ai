@@ -25,7 +25,7 @@ from app.broker.ibkr.models import (
 from app.broker.ibkr.order_evidence import snapshot_ibkr_object
 from app.utils.timestamps import now_ms_utc
 
-_MAX_EVENTS = 1_000
+_MAX_EVENTS = 10_000
 _SUBSCRIBER_QUEUE_SIZE = 256
 
 
@@ -85,6 +85,10 @@ class IbkrApiEvidenceRecorder:
 
     def backfill(self, *, after_seq: int = 0, limit: int = 250) -> list[IbkrApiEvidenceEvent]:
         return [event for event in self._events if event.seq > after_seq][:limit]
+
+    def clear(self) -> None:
+        self._seq = 0
+        self._events.clear()
 
     def subscribe(self) -> IbkrApiEvidenceSubscription:
         queue: asyncio.Queue[IbkrApiEvidenceEvent | None] = asyncio.Queue(

@@ -9,6 +9,7 @@ import {
   effect,
   inject,
   input,
+  output,
   resource,
   signal,
   viewChild,
@@ -103,6 +104,11 @@ export function markerTimeForEventMs(
 
 export type ChartResolution = '1m' | '5s';
 
+export interface ChartSelection {
+  readonly sessionDate: string;
+  readonly resolution: ChartResolution;
+}
+
 // Per-run color palette. Old runs darker, current run is the green pulse
 // used elsewhere on the panel — keeps the eye drawn to the live session.
 const RUN_COLORS = ['#60a5fa', '#a78bfa', '#f472b6', '#fbbf24', '#fb923c'];
@@ -156,6 +162,7 @@ export class BotTradeChartCardComponent {
   readonly activity = input<LiveInstanceActivityProjection | null>(null);
   /** Initial bar resolution shown when the card mounts. */
   readonly initialResolution = input<ChartResolution>('1m');
+  readonly selectionChange = output<ChartSelection>();
 
   /** The date currently being displayed. Owned by the card's own selector
    * (Slice 6) — defaults to today and stops live polling when the user
@@ -269,6 +276,13 @@ export class BotTradeChartCardComponent {
   constructor() {
     effect(() => {
       this.resolution.set(this.initialResolution());
+    });
+
+    effect(() => {
+      this.selectionChange.emit({
+        sessionDate: this.chartDate(),
+        resolution: this.resolution(),
+      });
     });
 
     afterNextRender(() => this.initChart());

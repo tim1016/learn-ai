@@ -239,11 +239,11 @@ describe('CockpitShellComponent', () => {
       'indicator-intent',
       'indicator-readiness',
       'indicator-broker',
+      'indicator-safety',
       'indicator-last-run',
     ]) {
       expect(el.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
     }
-    expect(el.querySelector('[data-testid="indicator-safety"]')).toBeNull();
     expect(el.querySelector('[data-testid="indicator-session"]')).toBeNull();
   });
 
@@ -315,8 +315,39 @@ describe('CockpitShellComponent', () => {
     expect(process?.textContent?.trim()).toBe('PROCESS · WAITING_FOR_HOST');
     expect(process?.classList.contains('warning')).toBe(true);
     expect(process?.hasAttribute('data-value')).toBe(false);
-    expect(el.querySelector('[data-testid="indicator-safety"]')).toBeNull();
+    expect(el.querySelector('[data-testid="indicator-safety"]')?.textContent?.trim()).toBe(
+      'SAFETY · PAPER_ONLY',
+    );
     expect(el.querySelector('[data-testid="indicator-session"]')).toBeNull();
+  });
+
+  it('renders unreachable host process state as danger', async () => {
+    const fixture = await renderShell(makeStub());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const component = fixture.componentInstance;
+    const status = component.status();
+    if (status === null) {
+      throw new Error('expected initial status');
+    }
+    component.status.set({
+      ...status,
+      operator_surface: {
+        ...status.operator_surface,
+        host_process: {
+          ...status.operator_surface.host_process,
+          state: 'UNREACHABLE',
+        },
+      },
+    });
+    fixture.detectChanges();
+
+    const process = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="indicator-process"]',
+    );
+    expect(process?.textContent?.trim()).toBe('PROCESS · UNREACHABLE');
+    expect(process?.classList.contains('danger')).toBe(true);
   });
 
   it('exposes a Deploy new strategy link in the page utility row pointing at /broker/deploy', async () => {

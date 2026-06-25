@@ -1988,6 +1988,7 @@ def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | 
 # this module; everything else operates on bar-time milliseconds where
 # the timezone is already explicit.
 _NY_TZ = ZoneInfo("America/New_York")
+_ACTIVITY_EVIDENCE_BACKFILL_LIMIT = 10_000
 
 
 def _today_ny() -> date:
@@ -2050,7 +2051,7 @@ def _ny_session_bounds_ms(day: date) -> tuple[int, int]:
     wall-clock belongs to that NY date.
     """
     start = datetime.combine(day, datetime.min.time(), tzinfo=_NY_TZ)
-    end = start + timedelta(days=1)
+    end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=_NY_TZ)
     return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
 
@@ -2062,7 +2063,10 @@ def _activity_evidence_refs_for_session(
     end_ms: int,
 ) -> list[ActivityEvidenceRef]:
     refs: list[ActivityEvidenceRef] = []
-    events = get_ibkr_api_evidence_recorder().backfill(after_seq=0, limit=1_000)
+    events = get_ibkr_api_evidence_recorder().backfill(
+        after_seq=0,
+        limit=_ACTIVITY_EVIDENCE_BACKFILL_LIMIT,
+    )
     for event in events:
         if not (start_ms <= event.ts_ms < end_ms):
             continue
@@ -2164,11 +2168,13 @@ def _build_activity_projection(
     annotations: list[ActivityPositionAnnotation] = []
     warnings: list[ActivityReconciliationWarning] = []
     net_by_symbol: dict[str, float] = {}
+    selected_fill_rows: dict[str, object] = {}
 
     for fill_key, fill_rows in sorted(
         by_fill_key.items(), key=lambda item: min(_activity_row_time_ms(row) for row in item[1])
     ):
         row = sorted(fill_rows, key=lambda r: (0 if r.verdict != "unexpected" else 1, r.seq))[0]
+        selected_fill_rows[fill_key] = row
         prior = net_by_symbol.get(row.symbol, 0.0)
         effect, next_position, lifecycle_label = _position_effect_for_fill(
             prior=prior,
@@ -2273,6 +2279,7 @@ def _build_activity_projection(
 
     broker_events: list[ActivityBrokerEventRow] = []
     for marker in fill_markers:
+        selected_row = selected_fill_rows[marker.id]
         broker_events.append(
             ActivityBrokerEventRow(
                 id=marker.id,
@@ -2288,7 +2295,7 @@ def _build_activity_projection(
                     f"{marker.side} {marker.quantity:g} {marker.symbol} @ "
                     f"{marker.price:.2f} · {marker.position_effect}"
                 ),
-                verdict="expected",
+                verdict=selected_row.verdict.value,
                 replay_count=marker.replay_count,
                 evidence=marker.evidence,
             )
@@ -2308,6 +2315,24 @@ def _build_activity_projection(
                     summary=row.headline,
                     verdict=row.verdict.value,
                     evidence=[ref for ref in evidence_refs if ref.request_call == "placeOrder"],
+                )
+            )
+        elif row.price is None and any(
+            code.value in {"cancellation", "rejection"} for code in row.reason_codes
+        ):
+            broker_events.append(
+                ActivityBrokerEventRow(
+                    id=f"terminal:{row.seq}",
+                    ts_ms=_activity_row_time_ms(row),
+                    row_type="order_terminal",
+                    source="broker_activity_wal",
+                    symbol=row.symbol,
+                    side=row.side,
+                    quantity=float(row.quantity),
+                    status="/".join(code.value for code in row.reason_codes),
+                    summary=row.headline,
+                    verdict=row.verdict.value,
+                    evidence=[ref for ref in evidence_refs if ref.request_call == "reqAllOpenOrders"],
                 )
             )
     for ref in evidence_refs:
