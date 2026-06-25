@@ -1,8 +1,8 @@
 import {
+  afterNextRender,
   ChangeDetectionStrategy,
   Component,
   computed,
-  DestroyRef,
   ElementRef,
   effect,
   inject,
@@ -65,7 +65,6 @@ export class BrokerDeployFormComponent {
   protected readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
-  private readonly destroyRef = inject(DestroyRef);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
@@ -362,8 +361,11 @@ export class BrokerDeployFormComponent {
       this.autoSelectedDeploymentValidationAuditCopy.set(false);
     });
 
-    const syncHandle = window.setInterval(() => this.syncRenderedFieldValues(), 500);
-    this.destroyRef.onDestroy(() => window.clearInterval(syncHandle));
+    afterNextRender(() => {
+      if (!this.hasAnyRequiredFieldValue()) {
+        this.syncRenderedFieldValues({ includeEmpty: false });
+      }
+    });
   }
 
   private readonly required = computed<boolean>(
@@ -513,41 +515,61 @@ export class BrokerDeployFormComponent {
     return null;
   }
 
-  syncRenderedFieldValues(): void {
+  private shouldSyncRenderedValue(
+    renderedValue: string | null,
+    signalValue: string,
+    includeEmpty: boolean,
+  ): renderedValue is string {
+    return (
+      renderedValue !== null &&
+      (includeEmpty || renderedValue.trim() !== '') &&
+      renderedValue !== signalValue
+    );
+  }
+
+  private hasAnyRequiredFieldValue(): boolean {
+    return [
+      this.strategyKey(),
+      this.specPath(),
+      this.accountId(),
+      this.qcBacktestId(),
+      this.qcAuditCopyPath(),
+      this.instanceId(),
+    ].some((value) => value.trim() !== '');
+  }
+
+  syncRenderedFieldValues(options: { includeEmpty?: boolean } = {}): void {
+    const includeEmpty = options.includeEmpty ?? true;
     const strategyKey = this.renderedFieldValue('strategyKey');
-    if (strategyKey !== null && strategyKey.trim() !== '' && strategyKey !== this.strategyKey()) {
+    if (this.shouldSyncRenderedValue(strategyKey, this.strategyKey(), includeEmpty)) {
       this.manualSpecPath.set(false);
       this.strategyKey.set(strategyKey);
     }
 
     const specPath = this.renderedFieldValue('specPath');
-    if (specPath !== null && specPath.trim() !== '' && specPath !== this.specPath()) {
+    if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty)) {
       this.specPath.set(specPath);
     }
 
     const accountId = this.renderedFieldValue('accountId');
-    if (accountId !== null && accountId.trim() !== '' && accountId !== this.accountId()) {
+    if (this.shouldSyncRenderedValue(accountId, this.accountId(), includeEmpty)) {
       this.manualAccountId.set(true);
       this.accountId.set(accountId);
     }
 
     const qcBacktestId = this.renderedFieldValue('qcBacktestId');
-    if (qcBacktestId !== null && qcBacktestId.trim() !== '' && qcBacktestId !== this.qcBacktestId()) {
+    if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty)) {
       this.qcBacktestId.set(qcBacktestId);
     }
 
     const qcAuditCopyPath = this.renderedFieldValue('qcAuditCopyPath');
-    if (
-      qcAuditCopyPath !== null &&
-      qcAuditCopyPath.trim() !== '' &&
-      qcAuditCopyPath !== this.qcAuditCopyPath()
-    ) {
+    if (this.shouldSyncRenderedValue(qcAuditCopyPath, this.qcAuditCopyPath(), includeEmpty)) {
       this.qcAuditCopyPath.set(qcAuditCopyPath);
       this.autoSelectedDeploymentValidationAuditCopy.set(false);
     }
 
     const instanceId = this.renderedFieldValue('instanceId');
-    if (instanceId !== null && instanceId.trim() !== '' && instanceId !== this.instanceId()) {
+    if (this.shouldSyncRenderedValue(instanceId, this.instanceId(), includeEmpty)) {
       this.instanceId.set(instanceId);
     }
   }
