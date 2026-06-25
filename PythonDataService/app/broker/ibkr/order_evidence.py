@@ -194,6 +194,8 @@ def _typed_fields(obj: object) -> Mapping[str, object]:
         return {field.name: getattr(obj, field.name) for field in fields(obj)}
     if isinstance(obj, SimpleNamespace):
         return vars(obj)
+    if isinstance(obj, tuple) and hasattr(obj, "_asdict"):
+        return obj._asdict()
     if hasattr(obj, "__dict__"):
         return {
             key: value
@@ -224,6 +226,8 @@ def _json_value(value: object) -> JsonValue:
         return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
         return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple) and hasattr(value, "_asdict"):
+        return {str(key): _json_value(item) for key, item in value._asdict().items()}
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return [_json_value(item) for item in value]
     if isinstance(value, SimpleNamespace):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import namedtuple
+
 import pytest
 
 from app.broker.ibkr.api_evidence import (
@@ -66,3 +68,29 @@ async def test_evidence_recorder_broadcasts_to_subscribers() -> None:
     assert await subscription.queue.get() == event
     recorder.unsubscribe(subscription)
     assert await subscription.queue.get() is None
+
+
+def test_evidence_response_snapshots_namedtuple_account_value() -> None:
+    account_value = namedtuple("AccountValue", "account tag value currency")(
+        account="DU1234567",
+        tag="NetLiquidation",
+        value="100123.45",
+        currency="USD",
+    )
+
+    response = evidence_response(
+        "accountSummary",
+        fields={"row_count": 1},
+        objects=[account_value],
+    )
+
+    assert response.fields["row_count"] == 1
+    assert response.fields["object_0"] == {
+        "object_type": "tests.broker.ibkr.test_api_evidence.AccountValue",
+        "fields": {
+            "account": "DU1234567",
+            "tag": "NetLiquidation",
+            "value": "100123.45",
+            "currency": "USD",
+        },
+    }
