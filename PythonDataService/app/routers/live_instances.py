@@ -29,6 +29,7 @@ from app.broker.ibkr.config import get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.command_channel import CommandChannel, CommandVerb
+from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
@@ -598,6 +599,10 @@ def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dic
     symbol = live_config.get("symbol") if isinstance(live_config, dict) else None
     if isinstance(symbol, str) and symbol:
         return symbol
+    if isinstance(live_config, dict):
+        symbol = stock_symbol_from_action_plan(live_config.get("action"))
+        if symbol is not None:
+            return symbol
     # Spec fallback — read the strategy spec the ledger pins and pick the
     # first symbol. A multi-symbol strategy (none in the fleet today) would
     # surface here as the first one; the per-day TODO above lays out the

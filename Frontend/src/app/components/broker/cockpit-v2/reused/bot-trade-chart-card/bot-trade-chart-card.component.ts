@@ -269,9 +269,17 @@ export class BotTradeChartCardComponent {
   });
 
   protected readonly tradeCount = computed<number>(() =>
-    this.activity()?.fill_markers.length
+    this.activityFillMarkers()?.length
       ?? this.runs().reduce((sum, run) => sum + run.trades.length, 0),
   );
+
+  protected readonly activityFillMarkers = computed(() => {
+    const activity = this.activity();
+    if (!activity) return null;
+    const chartSymbol = activity.symbol.trim().toUpperCase();
+    if (!chartSymbol) return activity.fill_markers;
+    return activity.fill_markers.filter((marker) => marker.symbol.toUpperCase() === chartSymbol);
+  });
 
   constructor() {
     effect(() => {
@@ -471,7 +479,7 @@ export class BotTradeChartCardComponent {
     const bars = this.bars();
     const activity = this.activity();
     if (activity) {
-      activity.fill_markers.forEach((marker) => {
+      this.activityFillMarkers()?.forEach((marker) => {
         const isBuy = marker.side === 'BUY';
         out.push({
           time: markerTimeForEventMs(marker.exec_ts_ms, bars),
