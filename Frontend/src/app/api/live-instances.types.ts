@@ -602,6 +602,7 @@ export interface FleetAccountSummary {
    *  BROKER_ACCOUNT_MISMATCH. */
   account_identity_reason_codes: string[];
   contamination: FleetContamination;
+  notice?: OperatorNotice | null;
 }
 
 export type ReadinessVerdictEnum = 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN';

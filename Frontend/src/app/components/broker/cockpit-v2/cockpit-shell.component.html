@@ -88,6 +88,13 @@
       </header>
       @if (accountRowExpanded()) {
         <div class="account-detail" data-testid="account-detail">
+          @if (account.notice; as notice) {
+            <app-operator-notice
+              class="account-notice"
+              [notice]="notice"
+              data-testid="account-summary-notice"
+            />
+          }
           <p class="summary-line">{{ account.contamination.summary }}</p>
           @if (account.account_identity_reason_codes.length) {
             <ul class="reason-list">

@@ -51,6 +51,7 @@ from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
 from app.engine.strategy.spec.schema import load_spec_from_path
+from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
     COMMAND_POLL_INTERVAL_MS,
@@ -1645,7 +1646,42 @@ async def get_account_summary() -> FleetAccountSummary:
         policy_blocks_starts=settings.fleet_dirty_blocks_starts,
     )
     payload["contamination"] = FleetContamination(**payload["contamination"])
+    payload["notice"] = _account_summary_notice(
+        net_positions_available=net is not None,
+        broker_account_known=broker_known,
+    )
     return FleetAccountSummary(**payload)
+
+
+def _account_summary_notice(
+    *,
+    net_positions_available: bool,
+    broker_account_known: bool,
+) -> OperatorNotice | None:
+    if net_positions_available and broker_account_known:
+        return None
+    missing: list[str] = []
+    if not net_positions_available:
+        missing.append("net positions")
+    if not broker_account_known:
+        missing.append("connected account")
+    missing_text = " and ".join(missing)
+    return OperatorNotice(
+        code="activity.source_blind_to_bot_orders",
+        tier="warning",
+        title="Broker evidence is unavailable",
+        message=(
+            f"The data plane could not fetch broker {missing_text}. "
+            "Account contamination and identity are not fully proven; verify "
+            "positions in IBKR before trusting an empty or unknown fleet view."
+        ),
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check positions in IBKR",
+            target="ibkr_positions",
+        ),
+        runbook_slug="broker-evidence-health",
+    )
 
 
 @router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)

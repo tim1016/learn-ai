@@ -86,6 +86,12 @@ class TestUnavailableWhenNotRegistered:
         assert len(result.notices) == 1
         assert result.notices[0].code == "activity.publisher_not_running"
 
+    def test_copy_does_not_claim_the_bot_process_is_stopped(self) -> None:
+        result = _compose(publisher=None)
+        assert result.headline is not None
+        assert "Start the bot process" not in result.headline.message
+        assert "capture" in result.headline.message
+
     def test_facts_publisher_registered_false(self) -> None:
         result = _compose(publisher=None)
         assert result.facts.publisher_registered is False
@@ -166,6 +172,16 @@ class TestUnavailableWhenTimedOut:
         )
         assert result.headline is not None
         assert result.headline.tier == "critical"
+
+    def test_copy_distinguishes_detached_capture_from_host_process_state(self) -> None:
+        pub = _FakePublisher(is_running=False)
+        result = _compose(
+            publisher=pub,
+            registered_at_ms=_registered_at(120_000),
+            starting_timeout_ms=30_000,
+        )
+        assert result.headline is not None
+        assert "host process state is separate" in result.headline.message
 
 
 # ── ready (running, no rows yet, within silent-boot window) ───────────────────

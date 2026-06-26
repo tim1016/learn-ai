@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { FleetAccountSummary } from '../../../../api/live-instances.types';
 import {
   FLEET_ACCOUNT_CONFLICTING_CLEAN,
   FLEET_ACCOUNT_CONSISTENT_CLEAN,
@@ -42,6 +43,26 @@ describe('projectAccountAttention', () => {
       contamination: {
         ...FLEET_ACCOUNT_CONSISTENT_CLEAN.contamination,
         policy_blocks_starts: true,
+      },
+    };
+    const r = projectAccountAttention(fixture);
+    expect(r.isAttention).toBe(true);
+    expect(r.isCollapsible).toBe(false);
+  });
+
+  it('backend-authored account notice → attention even with clean positions', () => {
+    const fixture: FleetAccountSummary = {
+      ...FLEET_ACCOUNT_CONSISTENT_CLEAN,
+      notice: {
+        code: 'activity.source_blind_to_bot_orders',
+        tier: 'warning',
+        title: 'Broker evidence is unavailable',
+        message: 'The data plane could not fetch broker net positions.',
+        source_codes: [],
+        forensic_facts: {},
+        action: { kind: 'external_manual_check', label: 'Check positions in IBKR', target: null },
+        runbook_slug: 'broker-evidence-health',
+        occurred_at_ms: null,
       },
     };
     const r = projectAccountAttention(fixture);

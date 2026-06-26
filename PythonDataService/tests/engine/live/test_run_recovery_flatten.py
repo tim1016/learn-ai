@@ -14,7 +14,13 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
-from app.engine.live.run import _is_recovery_readonly, _recovery_flatten, _resolve_recovery_broker
+from app.engine.live.run import (
+    _is_recovery_readonly,
+    _record_recovery_flatten_residual_incident,
+    _recovery_flatten,
+    _resolve_recovery_broker,
+)
+from app.operator.incidents.store import IncidentStore
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 
@@ -59,6 +65,26 @@ async def test_recovery_flatten_submits_one_sell_per_long_position() -> None:
     assert len(sell_orders) == 1
     assert sell_orders[0].symbol == "SPY"
     assert sell_orders[0].quantity == 100
+
+
+@pytest.mark.asyncio
+async def test_record_recovery_flatten_residual_incident_persists_open_positions(
+    tmp_path,
+) -> None:
+    broker = FakeBroker()
+    _seed_position(broker, "SPY", 1.0)
+
+    await _record_recovery_flatten_residual_incident(
+        run_dir=tmp_path,
+        broker=broker,
+        occurred_at_ms=1_700_000_000_000,
+        error_summary="TimeoutError()",
+    )
+
+    [incident] = IncidentStore(tmp_path).list_unresolved()
+    assert incident.notice.code == "watchdog.flatten_failed"
+    assert "SPY +1" in incident.notice.message
+    assert incident.evidence["residual_positions"] == {"SPY": 1.0}
 
 
 class DeferredPermIdBroker(FakeBroker):

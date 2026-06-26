@@ -144,6 +144,7 @@ function makeStub(): Partial<LiveRunsService> {
         policy_blocks_starts: false,
         summary: 'clean',
       },
+      notice: null,
     }),
     setInstanceDesiredState: vi.fn(),
     flattenAndPause: vi.fn(),
@@ -246,6 +247,50 @@ describe('CockpitShellComponent', () => {
       expect(el.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
     }
     expect(el.querySelector('[data-testid="indicator-session"]')).toBeNull();
+  });
+
+  it('renders backend-authored account summary notices', async () => {
+    const stub = makeStub();
+    stub.getAccountSummary = vi.fn().mockResolvedValue({
+      account_id: 'DU1',
+      account_identity: 'CONSISTENT',
+      account_identity_reason_codes: [],
+      contamination: {
+        net_positions: null,
+        explained_total: {},
+        explained_by_instance: [],
+        residual: {},
+        verdict: 'unknown',
+        policy_blocks_starts: false,
+        summary: 'Net account position unavailable — contamination unknown.',
+      },
+      notice: {
+        code: 'activity.source_blind_to_bot_orders',
+        tier: 'warning',
+        title: 'Broker evidence is unavailable',
+        message: 'The data plane could not fetch broker net positions.',
+        source_codes: [],
+        forensic_facts: {},
+        action: {
+          kind: 'external_manual_check',
+          label: 'Check positions in IBKR',
+          target: 'ibkr_positions',
+        },
+        runbook_slug: 'broker-evidence-health',
+        occurred_at_ms: null,
+      },
+    });
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="account-summary-notice"]')?.textContent).toContain(
+      'Broker evidence is unavailable',
+    );
+    expect(el.querySelector('[data-testid="account-summary"]')?.classList).toContain(
+      'attention',
+    );
   });
 
   it('does not render a provenance hint in the identity strip', async () => {

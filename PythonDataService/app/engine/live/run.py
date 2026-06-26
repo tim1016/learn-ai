@@ -645,6 +645,43 @@ async def _recovery_flatten(
     return liquidated
 
 
+async def _record_recovery_flatten_residual_incident(
+    *,
+    run_dir: Path,
+    broker,
+    occurred_at_ms: int,
+    error_summary: str | None,
+) -> None:
+    """Persist a critical incident when failed recovery flatten leaves exposure."""
+    try:
+        snapshot = await broker.fetch_positions()
+    except Exception:
+        logger.exception(
+            "Could not fetch positions after recovery flatten failure",
+            extra={"step": "8"},
+        )
+        return
+    residuals: dict[str, float] = {}
+    for pos in snapshot.positions:
+        qty = float(pos.quantity)
+        if qty != 0:
+            residuals[str(pos.symbol)] = qty
+    if not residuals:
+        return
+
+    from app.operator.incidents.store import IncidentStore
+    from app.operator.incidents.watchdog_notices import (
+        residual_positions_after_failed_flatten_incident,
+    )
+
+    incident = residual_positions_after_failed_flatten_incident(
+        positions=residuals,
+        started_at_ms=occurred_at_ms,
+        error_summary=error_summary,
+    )
+    IncidentStore(run_dir).append(incident)
+
+
 def _lookup_sizing_surface(strategy_key: str) -> str | None:
     """Resolve the strategy's registered ``sizing_surface`` (ADR 0009 § 6).
 
@@ -1958,9 +1995,16 @@ def cmd_start(args: argparse.Namespace) -> int:
                                 file=sys.stderr,
                             )
                     except Exception:
+                        flatten_error = sys.exc_info()[1]
                         logger.exception(
                             "Recovery flatten itself failed",
                             extra={"step": "8"},
+                        )
+                        await _record_recovery_flatten_residual_incident(
+                            run_dir=args.run_dir,
+                            broker=broker_for_flatten,
+                            occurred_at_ms=int(time.time() * 1000),
+                            error_summary=repr(flatten_error),
                         )
                         print(
                             "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",

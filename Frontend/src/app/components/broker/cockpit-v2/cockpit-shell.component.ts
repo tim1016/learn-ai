@@ -52,6 +52,7 @@ import { AuditTabComponent } from './tabs/audit-tab.component';
 import { ConfigurationTabComponent } from './tabs/configuration-tab.component';
 import { StatusRiskTabComponent } from './tabs/status-risk-tab.component';
 import { HostProcessNoticeComponent } from './reused/host-process-notice/host-process-notice.component';
+import { OperatorNoticeComponent } from '../../operator-notice/operator-notice.component';
 import { RuntimeBannerComponent } from './runtime-banner/runtime-banner.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 
@@ -86,6 +87,7 @@ interface IndicatorChip {
     ConfigurationTabComponent,
     TypedHaltConfirmComponent,
     HostProcessNoticeComponent,
+    OperatorNoticeComponent,
     RuntimeBannerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
