@@ -13,11 +13,12 @@ import {
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { actionTooltip, disabledReasonCopy } from '../lib/disabled-reason-copy';
+import { IbkrApiEvidencePanelComponent } from '../reused/ibkr-api-evidence-panel/ibkr-api-evidence-panel.component';
 
 @Component({
   selector: 'app-audit-tab',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, IbkrApiEvidencePanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './audit-tab.component.html',
   styleUrl: './audit-tab.component.scss',

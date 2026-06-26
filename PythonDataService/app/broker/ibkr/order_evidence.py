@@ -8,6 +8,7 @@ the ib_async object kinds the order path currently captures.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
@@ -26,6 +27,8 @@ from app.broker.ibkr.models import (
     IbkrTradeEvidence,
     IbkrTradeSnapshot,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def build_place_order_evidence(
@@ -179,7 +182,20 @@ def snapshot_trade(trade: object | None) -> IbkrTradeSnapshot | None:
 def _object_snapshot(obj: object | None) -> IbkrObjectSnapshot | None:
     if obj is None:
         return None
-    return IbkrObjectSnapshot(object_type=_object_type(obj), fields=_snapshot_fields(obj))
+    object_type = _object_type(obj)
+    try:
+        return IbkrObjectSnapshot(object_type=object_type, fields=_snapshot_fields(obj))
+    except (TypeError, ValueError, OSError, OverflowError) as exc:
+        logger.warning(
+            "IBKR evidence serializer emitted placeholder for unsupported object: %s",
+            exc,
+            extra={"object_type": object_type, "serializer_error": str(exc)},
+        )
+        return IbkrObjectSnapshot(
+            object_type=object_type,
+            fields={"serializer_error": str(exc)},
+            serializer_error=str(exc),
+        )
 
 
 def _snapshot_fields(obj: object) -> dict[str, JsonValue]:
@@ -194,6 +210,8 @@ def _typed_fields(obj: object) -> Mapping[str, object]:
         return {field.name: getattr(obj, field.name) for field in fields(obj)}
     if isinstance(obj, SimpleNamespace):
         return vars(obj)
+    if isinstance(obj, tuple) and hasattr(obj, "_asdict"):
+        return obj._asdict()
     if hasattr(obj, "__dict__"):
         return {
             key: value
@@ -224,6 +242,8 @@ def _json_value(value: object) -> JsonValue:
         return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
         return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple) and hasattr(value, "_asdict"):
+        return {str(key): _json_value(item) for key, item in value._asdict().items()}
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return [_json_value(item) for item in value]
     if isinstance(value, SimpleNamespace):

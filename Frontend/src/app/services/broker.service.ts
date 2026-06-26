@@ -2,8 +2,10 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type {
+  DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
+  IbkrApiEvidenceEvent,
   IbkrAccountSummary,
   IbkrConnectionHealth,
   IbkrOpenOrder,
@@ -43,8 +45,22 @@ export class BrokerService {
     return firstValueFrom(this.http.get<IbkrConnectionHealth>(`${this.base}/health`));
   }
 
+  dataPlaneHealth(): Promise<DataPlaneHealth> {
+    return firstValueFrom(
+      this.http.get<DataPlaneHealth>(`${this.base}/data-plane/health`),
+    );
+  }
+
   diagnose(): Promise<DiagnosticReport> {
     return firstValueFrom(this.http.get<DiagnosticReport>(`${this.base}/diagnose`));
+  }
+
+  ibkrApiEvidence(afterSeq = 0, limit = 250): Promise<IbkrApiEvidenceEvent[]> {
+    return firstValueFrom(
+      this.http.get<IbkrApiEvidenceEvent[]>(`${this.base}/ibkr/evidence`, {
+        params: { after_seq: afterSeq, limit },
+      }),
+    );
   }
 
   connect(): Promise<IbkrConnectionHealth> {

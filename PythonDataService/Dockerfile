@@ -22,6 +22,9 @@ RUN pip install -r requirements-light.txt
 # --- Runtime stage ---
 FROM python:3.12-slim
 
+ARG GIT_SHA=unknown
+ENV GIT_SHA="${GIT_SHA}"
+
 WORKDIR /app
 
 # curl for healthcheck, tzdata for ZoneInfo("US/Eastern")

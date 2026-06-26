@@ -34,6 +34,72 @@
   color: var(--recon-tolerance-red, #b91c1c);
 }
 
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.health-block {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-canvas-alt, #f9fafb);
+
+  h4 {
+    margin: 0 0 0.45rem;
+    color: var(--text-secondary, #6b7280);
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.25rem 0.5rem;
+    margin: 0;
+    font-size: 0.76rem;
+  }
+
+  dt {
+    color: var(--text-secondary, #6b7280);
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  ul {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.76rem;
+  }
+}
+
+.diagnose-status {
+  display: inline-flex;
+  padding: 0.1rem 0.35rem;
+  border-radius: 5px;
+  background: var(--bg-elevated, #ffffff);
+  font: 0.72rem ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-transform: uppercase;
+}
+
 .evidence-list {
   display: flex;
   flex-direction: column;
@@ -86,6 +152,32 @@
   background: var(--bg-canvas-alt, #f3f4f6);
 }
 
+.serializer-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.15rem 0.45rem;
+    padding: 0.45rem;
+    border: 1px solid rgba(185, 28, 28, 0.25);
+    border-radius: 5px;
+    background: rgba(185, 28, 28, 0.06);
+    color: var(--recon-tolerance-red, #b91c1c);
+    font-size: 0.75rem;
+
+    span {
+      grid-column: 1 / -1;
+      overflow-wrap: anywhere;
+    }
+  }
+}
+
 details {
   margin-top: 0.4rem;
 
@@ -109,4 +201,10 @@ pre {
   font: 0.72rem/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
 }

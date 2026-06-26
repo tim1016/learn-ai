@@ -55,13 +55,19 @@ services:
       - app-network
 
   python-service:
-    build: ./PythonDataService
+    build:
+      context: ./PythonDataService
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: polygon-data-service
     restart: always
     ports:
       - "8000:8000"
     volumes:
       - ./PythonDataService/app:/app/app:z
+      # Development liveness diagnostics: the image can receive GIT_SHA at
+      # build time, while the bind-mounted dev service can read HEAD directly.
+      - ./.git:/app/.git:ro,z
       # Mount pytest.ini so ad-hoc `podman exec polygon-data-service pytest`
       # picks up `asyncio_mode = auto` without rebuilding the image after
       # local config tweaks. Baked into the image too — see Dockerfile.
@@ -151,6 +157,12 @@ services:
       # Live-run artifact root. Container path is fixed by the volume mount
       # (./PythonDataService/artifacts:/app/artifacts).
       - IBKR_LIVE_RUNS_ROOT=/app/artifacts/live_runs
+      # PRD #684 — macOS/Podman bind mounts do not propagate inotify
+      # reliably into the container. Force watchfiles polling so
+      # ``uvicorn --reload`` sees host edits, and surface the mode via
+      # /api/broker/data-plane/health.
+      - WATCHFILES_FORCE_POLLING=${WATCHFILES_FORCE_POLLING:-true}
+      - UVICORN_RELOAD=${UVICORN_RELOAD:-true}
     # Map stable host aliases to the container's default gateway (the
     # host on Linux Podman and Windows Podman). ``host.containers.internal``
     # is the Podman-native spelling; ``host.docker.internal`` remains
@@ -163,7 +175,16 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        case "$$(printf '%s' "$${UVICORN_RELOAD:-true}" | tr '[:upper:]' '[:lower:]')" in
+          false|0|no|off)
+            exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+            ;;
+        esac
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

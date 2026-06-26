@@ -21,6 +21,7 @@ from app.broker.ibkr.models import (
     IbkrApiRequestEvidence,
     IbkrApiRequestName,
     IbkrApiResponseEvidence,
+    IbkrSerializerWarning,
 )
 from app.broker.ibkr.order_evidence import snapshot_ibkr_object
 from app.utils.timestamps import now_ms_utc
@@ -133,7 +134,23 @@ def evidence_response(
     objects: Iterable[object] = (),
 ) -> IbkrApiResponseEvidence:
     out: dict[str, JsonValue] = dict(fields or {})
+    warnings: list[IbkrSerializerWarning] = []
     for index, obj in enumerate(objects):
         snapshot = snapshot_ibkr_object(obj)
-        out[f"object_{index}"] = snapshot.model_dump(mode="json") if snapshot else {}
-    return IbkrApiResponseEvidence(callback=callback, fields=out)
+        if snapshot is None:
+            out[f"object_{index}"] = {}
+            continue
+        error = snapshot.serializer_error
+        if isinstance(error, str):
+            warnings.append(
+                IbkrSerializerWarning(
+                    object_type=snapshot.object_type,
+                    serializer_error=error,
+                )
+            )
+        out[f"object_{index}"] = snapshot.model_dump(mode="json")
+    return IbkrApiResponseEvidence(
+        callback=callback,
+        fields=out,
+        serializer_warnings=warnings,
+    )
