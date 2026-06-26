@@ -55,7 +55,16 @@ def test_idempotency_key_includes_non_exec_fields_for_callbacks_without_exec_id(
 
     key = broker_callback_idempotency_key(event)
 
-    assert key == "fill||99|learn-ai/S1/v1:intent-1|Filled|1780000000001|1780000000000"
+    assert key == "fill||99|learn-ai/S1/v1:intent-1|Filled|1780000000001"
+
+
+def test_idempotency_key_ignores_observation_time_for_redelivery() -> None:
+    first = _event(exec_id="exec-1", ts_ms=1_780_000_000_000)
+    redelivered = _event(exec_id="exec-1", ts_ms=1_780_000_010_000)
+
+    assert broker_callback_idempotency_key(first) == broker_callback_idempotency_key(
+        redelivered
+    )
 
 
 def test_seq_continues_across_reopen(tmp_path: Path) -> None:
@@ -78,6 +87,22 @@ def test_read_tolerates_single_trailing_partial_line(tmp_path: Path) -> None:
         fh.write('{"seq": 2, "callback_type": "fill"')
 
     assert [record.seq for record in wal.read_all()] == [1]
+
+
+def test_append_after_tolerated_partial_tail_truncates_tail(tmp_path: Path) -> None:
+    path = tmp_path / "broker_callbacks.jsonl"
+    wal = BrokerCallbackWal(path)
+    wal.append_event(_event(exec_id="exec-1"))
+
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write('{"seq": 2, "callback_type": "fill"')
+
+    record = BrokerCallbackWal(path).append_event(_event(exec_id="exec-2"))
+
+    assert record.seq == 2
+    records = BrokerCallbackWal(path).read_all()
+    assert [item.seq for item in records] == [1, 2]
+    assert records[1].event.exec_id == "exec-2"
 
 
 def test_malformed_complete_line_poisons(tmp_path: Path) -> None:

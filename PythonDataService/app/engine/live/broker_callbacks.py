@@ -65,6 +65,7 @@ class BrokerCallbackWal:
             event=event,
         )
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._truncate_tolerated_tail()
         with open(self._path, "a", encoding="utf-8") as fh:
             fh.write(record.model_dump_json() + "\n")
             self._next_seq = seq + 1
@@ -112,6 +113,21 @@ class BrokerCallbackWal:
             self._next_seq = (existing[-1].seq + 1) if existing else 1
         return self._next_seq
 
+    def _truncate_tolerated_tail(self) -> None:
+        """Discard the one unterminated trailing line that ``read_all`` tolerates."""
+        if not self._path.exists():
+            return
+        raw = self._path.read_bytes()
+        if not raw or raw.endswith(b"\n"):
+            return
+        last_newline = raw.rfind(b"\n")
+        truncate_at = last_newline + 1 if last_newline >= 0 else 0
+        with open(self._path, "rb+") as fh:
+            fh.truncate(truncate_at)
+            fh.flush()
+            os.fsync(fh.fileno())
+        _fsync_parent_dir(self._path)
+
 
 def broker_callback_idempotency_key(event: IbkrOrderEvent) -> str:
     """Return the stable raw-callback dedupe key named by ADR 0014 §4."""
@@ -122,7 +138,6 @@ def broker_callback_idempotency_key(event: IbkrOrderEvent) -> str:
         event.order_ref or "",
         event.status or "",
         str(event.exec_time_ms or ""),
-        str(event.ts_ms),
     ]
     return "|".join(parts)
 

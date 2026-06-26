@@ -641,6 +641,10 @@ class LiveEngine:
         self._broker_callbacks_wal = (
             BrokerCallbackWal(callback_wal_path) if callback_wal_path is not None else None
         )
+        self._broker_callbacks_wal_attached_to_stream = False
+        if self._broker_callbacks_wal is not None and isinstance(self._broker, IbkrBrokerAdapter):
+            self._broker.set_broker_callback_sink(self._append_raw_broker_callback)
+            self._broker_callbacks_wal_attached_to_stream = True
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
         # PRD #619-B B3 — engine_runtime aggregator. Producer hooks below
@@ -2189,10 +2193,15 @@ class LiveEngine:
 
     def _append_raw_broker_callbacks(self, raw_events: list[IbkrOrderEvent]) -> None:
         """Persist raw broker callbacks before projection or portfolio mutation."""
-        if self._broker_callbacks_wal is None:
+        if self._broker_callbacks_wal is None or self._broker_callbacks_wal_attached_to_stream:
             return
         for event in raw_events:
-            self._broker_callbacks_wal.append_event(event)
+            self._append_raw_broker_callback(event)
+
+    def _append_raw_broker_callback(self, event: IbkrOrderEvent) -> None:
+        if self._broker_callbacks_wal is None:
+            return
+        self._broker_callbacks_wal.append_event(event)
 
     def _extend_seen_executions(self, seen_executions: list[dict], raw_events: list[IbkrOrderEvent]) -> None:
         """Append fill events from a raw drain to the cumulative executions list.

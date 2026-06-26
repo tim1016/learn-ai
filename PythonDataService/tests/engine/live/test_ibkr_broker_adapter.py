@@ -205,3 +205,53 @@ async def test_event_stream_buffers_all_fills_including_foreign() -> None:
     finally:
         await adapter.stop_event_stream()
         live_portfolio_module.stream_order_events = original
+
+
+@pytest.mark.asyncio
+async def test_event_stream_invokes_callback_sink_before_buffer_drain() -> None:
+    client, _ = _client(owned_open_id=100)
+    adapter = IbkrBrokerAdapter(client)
+    captured: list[IbkrOrderEvent] = []
+    adapter.set_broker_callback_sink(captured.append)
+
+    queued: asyncio.Queue[IbkrOrderEvent | None] = asyncio.Queue()
+
+    async def _fake_stream(*_args, **_kwargs) -> AsyncIterator[IbkrOrderEvent]:
+        while True:
+            event = await queued.get()
+            if event is None:
+                return
+            yield event
+
+    import app.engine.live.live_portfolio as live_portfolio_module
+
+    original = live_portfolio_module.stream_order_events
+    live_portfolio_module.stream_order_events = _fake_stream
+    try:
+        await adapter.start_event_stream()
+
+        event = IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=100,
+            event_type="fill",
+            status="Filled",
+            exec_id="exec-owned-1",
+            fill_quantity=10.0,
+            avg_fill_price=500.0,
+            last_fill_price=500.0,
+            cumulative_filled=10.0,
+            remaining=0.0,
+            ts_ms=1,
+        )
+        await queued.put(event)
+
+        for _ in range(200):
+            if captured:
+                break
+            await asyncio.sleep(0.01)
+
+        assert captured == [event]
+        assert adapter.drain_broker_events() == [event]
+    finally:
+        await adapter.stop_event_stream()
+        live_portfolio_module.stream_order_events = original

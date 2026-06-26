@@ -299,7 +299,7 @@ async def test_real_broker_fill_is_written_to_raw_callback_wal(tmp_path: Path) -
     assert records[0].callback_type == "fill"
     assert records[0].event.order_id == 100
     assert records[0].event.fill_quantity == 200.0
-    assert records[0].idempotency_key.endswith(f"|{fill_ts_ms}")
+    assert records[0].idempotency_key == "fill||||Filled|"
 
 
 @pytest.mark.asyncio
@@ -327,7 +327,7 @@ async def test_real_broker_status_is_written_to_raw_callback_wal(tmp_path: Path)
     assert records[0].seq == 1
     assert records[0].callback_type == "status"
     assert records[0].event.status == "Submitted"
-    assert records[0].idempotency_key.endswith(f"|{status_ts_ms}")
+    assert records[0].idempotency_key == "status||||Submitted|"
 
 
 @pytest.mark.asyncio
