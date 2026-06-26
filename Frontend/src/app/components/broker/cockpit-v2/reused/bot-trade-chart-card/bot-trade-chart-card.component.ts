@@ -102,6 +102,15 @@ export function markerTimeForEventMs(
   return ((bar?.start_ms ?? eventMs) / 1000) as UTCTimestamp;
 }
 
+export function filterActivityItemsForSymbol<T extends { symbol: string }>(
+  activitySymbol: string,
+  items: T[],
+): T[] {
+  const chartSymbol = activitySymbol.trim().toUpperCase();
+  if (!chartSymbol) return items;
+  return items.filter((item) => item.symbol.toUpperCase() === chartSymbol);
+}
+
 export type ChartResolution = '1m' | '5s';
 
 export interface ChartSelection {
@@ -276,9 +285,13 @@ export class BotTradeChartCardComponent {
   protected readonly activityFillMarkers = computed(() => {
     const activity = this.activity();
     if (!activity) return null;
-    const chartSymbol = activity.symbol.trim().toUpperCase();
-    if (!chartSymbol) return activity.fill_markers;
-    return activity.fill_markers.filter((marker) => marker.symbol.toUpperCase() === chartSymbol);
+    return filterActivityItemsForSymbol(activity.symbol, activity.fill_markers);
+  });
+
+  protected readonly activityPositionAnnotations = computed(() => {
+    const activity = this.activity();
+    if (!activity) return null;
+    return filterActivityItemsForSymbol(activity.symbol, activity.position_annotations);
   });
 
   constructor() {
@@ -492,7 +505,7 @@ export class BotTradeChartCardComponent {
             (marker.replay_count > 1 ? ` · seen ${marker.replay_count}x` : ''),
         });
       });
-      activity.position_annotations.forEach((annotation) => {
+      this.activityPositionAnnotations()?.forEach((annotation) => {
         out.push({
           time: markerTimeForEventMs(annotation.ts_ms, bars),
           position: annotation.label === 'OPEN' ? 'belowBar' : 'aboveBar',

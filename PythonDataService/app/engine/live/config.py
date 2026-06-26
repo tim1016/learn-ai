@@ -91,9 +91,10 @@ def stock_symbol_from_action_plan(action: object) -> str | None:
     """Return the single stock underlying declared by a live action plan.
 
     Slice 1 action plans are operator-authored deploy identity. For the current
-    stock-only runtime path, a one-leg stock action is the traded ticker when
-    ``live_config.symbol`` is absent. Option and multi-underlying plans are not
-    consumable by the stock runtime yet, so they deliberately return ``None``.
+    stock-only runtime path, exactly one long stock leg is the traded ticker
+    when ``live_config.symbol`` is absent. Option, short, and multi-leg plans
+    are not consumable by the stock runtime yet, so they deliberately return
+    ``None``.
     """
     if not isinstance(action, dict):
         return None
@@ -105,6 +106,8 @@ def stock_symbol_from_action_plan(action: object) -> str | None:
     for leg in on_enter:
         if not isinstance(leg, dict):
             return None
+        if leg.get("position") != "long":
+            return None
         instrument = leg.get("instrument")
         if not isinstance(instrument, dict):
             return None
@@ -115,6 +118,6 @@ def stock_symbol_from_action_plan(action: object) -> str | None:
             return None
         symbols.add(underlying.strip().upper())
 
-    if len(symbols) != 1:
+    if len(symbols) != 1 or len(on_enter) != 1:
         return None
     return next(iter(symbols))

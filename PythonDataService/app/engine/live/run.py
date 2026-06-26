@@ -756,7 +756,7 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
         symbol_from_action = stock_symbol_from_action_plan(payload.get("action"))
         if symbol_from_action is None:
             raise ValueError(
-                "live_config.action must declare exactly one stock underlying "
+                "live_config.action must declare exactly one long stock leg "
                 "when live_config.symbol is absent"
             )
         kwargs["symbol"] = symbol_from_action

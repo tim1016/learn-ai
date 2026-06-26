@@ -959,7 +959,7 @@ def test_live_config_from_ledger_rejects_action_without_stock_symbol() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"live_config\.action must declare exactly one stock underlying",
+        match=r"live_config\.action must declare exactly one long stock leg",
     ):
         _live_config_from_ledger(
             {
@@ -984,6 +984,32 @@ def test_live_config_from_ledger_rejects_action_without_stock_symbol() -> None:
                     ],
                 },
                 "sizing": {"kind": "FixedShares", "value": 1},
+            }
+        )
+
+
+def test_live_config_from_ledger_rejects_short_stock_action_without_symbol() -> None:
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(
+        ValueError,
+        match=r"live_config\.action must declare exactly one long stock leg",
+    ):
+        _live_config_from_ledger(
+            {
+                "action": {
+                    "on_enter": [
+                        {
+                            "leg_id": "leg_1",
+                            "instrument": {"kind": "stock", "underlying": "TSLA"},
+                            "position": "short",
+                            "qty_ratio": 1,
+                        }
+                    ],
+                    "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+                },
             }
         )
 
