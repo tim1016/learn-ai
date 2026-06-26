@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -224,6 +224,7 @@ class IbkrBrokerAdapter(BrokerAdapter):
         self._event_buffer: list[IbkrOrderEvent] = []
         self._event_task: asyncio.Task[None] | None = None
         self._stream_failure: BaseException | None = None
+        self._broker_callback_sink: Callable[[IbkrOrderEvent], None] | None = None
 
     @property
     def owned_order_ids(self) -> set[int]:
@@ -239,6 +240,12 @@ class IbkrBrokerAdapter(BrokerAdapter):
         a dead stream means broker fills are no longer being ingested.
         """
         return self._stream_failure
+
+    def set_broker_callback_sink(
+        self, sink: Callable[[IbkrOrderEvent], None] | None
+    ) -> None:
+        """Install a synchronous receipt-time hook for durable raw callbacks."""
+        self._broker_callback_sink = sink
 
     async def fetch_account_summary(self):
         return await fetch_account_summary(self._client)
@@ -306,13 +313,12 @@ class IbkrBrokerAdapter(BrokerAdapter):
                 # consumer (Phase C-2c-b2-ii) reads the unfiltered
                 # buffer instead.
                 #
-                # Filter to fills only — § 7 only cares about
-                # executions, and the engine doesn't act on
-                # status/cancel/error transitions for foreign orders.
-                # Buffering them would force the engine to no-op
-                # over them on every drain. (CodeRabbit P2 from #191.)
-                if event.event_type != "fill":
-                    continue
+                # ADR 0014 / issue #684 PR3 — buffer every callback type so the
+                # host runner can persist the raw broker-callback WAL. The
+                # engine's portfolio path still no-ops non-fill events in
+                # ``LiveEngine._convert_ibkr_fill``.
+                if self._broker_callback_sink is not None:
+                    self._broker_callback_sink(event)
                 self._event_buffer.append(event)
         except asyncio.CancelledError:
             raise

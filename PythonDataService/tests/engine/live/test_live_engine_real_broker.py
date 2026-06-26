@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,7 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.data.trade_bar import TradeBar
+from app.engine.live.broker_callbacks import BrokerCallbackWal, broker_callbacks_wal_path
 from app.engine.live.live_engine import LiveEngine
 from app.engine.live.live_portfolio import LiveBrokerEventStreamError
 from app.engine.strategy.base import Strategy
@@ -110,6 +112,18 @@ class _StubIbkrBroker:
                 last_fill_price=price,
                 cumulative_filled=fill_quantity,
                 remaining=0.0,
+                ts_ms=ts_ms,
+            )
+        )
+
+    def push_status(self, *, order_id: int, status: str, ts_ms: int) -> None:
+        """Test helper: queue an IBKR order-status event."""
+        self._buffer.append(
+            IbkrOrderEvent(
+                account_id="DU123",
+                order_id=order_id,
+                event_type="status",
+                status=status,
                 ts_ms=ts_ms,
             )
         )
@@ -252,6 +266,68 @@ async def test_real_broker_fill_event_updates_portfolio_and_strategy() -> None:
     # Position state reflects the fill.
     assert result.open_positions == {"SPY": 200}
     assert result.pending_orders == 0
+
+
+@pytest.mark.asyncio
+async def test_real_broker_fill_is_written_to_raw_callback_wal(tmp_path: Path) -> None:
+    broker = _StubIbkrBroker()
+    engine = LiveEngine(None, broker=broker, output_dir=tmp_path)
+    strategy = _OneEntryStrategy()
+    bars = [
+        _ibkr_bar(datetime(2026, 5, 4, 14, 30, tzinfo=UTC)),
+        _ibkr_bar(datetime(2026, 5, 4, 14, 31, tzinfo=UTC)),
+        _ibkr_bar(datetime(2026, 5, 4, 14, 32, tzinfo=UTC)),
+    ]
+    fill_ts_ms = int(datetime(2026, 5, 4, 14, 32, tzinfo=UTC).timestamp() * 1000)
+    bars_iter = _gated_ibkr_bars(
+        bars,
+        broker,
+        on_index=2,
+        fill_kwargs=dict(
+            order_id=100,
+            fill_quantity=200.0,
+            price=500.50,
+            ts_ms=fill_ts_ms,
+        ),
+    )
+
+    await engine.run(strategy, ibkr_bars=bars_iter)
+
+    records = BrokerCallbackWal(broker_callbacks_wal_path(tmp_path)).read_all()
+    assert len(records) == 1
+    assert records[0].seq == 1
+    assert records[0].callback_type == "fill"
+    assert records[0].event.order_id == 100
+    assert records[0].event.fill_quantity == 200.0
+    assert records[0].idempotency_key == "fill||||Filled|"
+
+
+@pytest.mark.asyncio
+async def test_real_broker_status_is_written_to_raw_callback_wal(tmp_path: Path) -> None:
+    broker = _StubIbkrBroker()
+    engine = LiveEngine(None, broker=broker, output_dir=tmp_path)
+    strategy = _RecordingStrategy()
+    bars = [
+        _ibkr_bar(datetime(2026, 5, 4, 14, 30, tzinfo=UTC)),
+        _ibkr_bar(datetime(2026, 5, 4, 14, 31, tzinfo=UTC)),
+    ]
+    status_ts_ms = int(datetime(2026, 5, 4, 14, 31, tzinfo=UTC).timestamp() * 1000)
+
+    async def _push_status_before_second_bar() -> AsyncIterator[IbkrMinuteBar]:
+        for idx, bar in enumerate(bars):
+            if idx == 1:
+                broker.push_status(order_id=100, status="Submitted", ts_ms=status_ts_ms)
+            yield bar
+
+    result = await engine.run(strategy, ibkr_bars=_push_status_before_second_bar())
+
+    records = BrokerCallbackWal(broker_callbacks_wal_path(tmp_path)).read_all()
+    assert result.order_events == []
+    assert len(records) == 1
+    assert records[0].seq == 1
+    assert records[0].callback_type == "status"
+    assert records[0].event.status == "Submitted"
+    assert records[0].idempotency_key == "status||||Submitted|"
 
 
 @pytest.mark.asyncio
