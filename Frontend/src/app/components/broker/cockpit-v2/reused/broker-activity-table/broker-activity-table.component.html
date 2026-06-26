@@ -69,7 +69,15 @@
         </thead>
         <tbody>
           @for (row of events; track trackEventRow($index, row)) {
-            <tr [attr.data-testid]="'broker-activity-event-row-' + row.id">
+            <tr
+                class="data-row"
+                [class.expanded]="isEventExpanded(row)"
+                [attr.data-testid]="'broker-activity-event-row-' + row.id"
+                [attr.aria-expanded]="isEventExpanded(row)"
+                (click)="toggleEvent(row)"
+                (keydown.enter)="toggleEvent(row)"
+                tabindex="0"
+              >
               <td class="ts">{{ fmtTimestampNy(row.ts_ms) }}</td>
               <td>
                 {{ row.display_type }}
@@ -115,6 +123,36 @@
               </td>
               <td>{{ row.evidence.length }}</td>
             </tr>
+              @if (isEventExpanded(row)) {
+                <tr class="drawer-row" [attr.data-testid]="'broker-activity-event-drawer-' + row.id">
+                  <td colspan="10">
+                    <div class="event-detail">
+                      @if (row.evidence.length > 0) {
+                        <h4>Broker API evidence</h4>
+                        <ul>
+                          @for (ref of row.evidence; track trackEvidence($index, ref)) {
+                            <li>
+                              <div class="event-detail-line">
+                                <span class="seq">#{{ ref.seq }}</span>
+                                <span>{{ fmtTimestampNy(ref.ts_ms) }}</span>
+                                <code>{{ ref.request_call }}</code>
+                                @if (ref.response_callback) {
+                                  <span>→</span>
+                                  <code>{{ ref.response_callback }}</code>
+                                }
+                                <span>{{ ref.source }}</span>
+                              </div>
+                              <div class="event-detail-identity">{{ evidenceIdentity(ref) }}</div>
+                            </li>
+                          }
+                        </ul>
+                      } @else {
+                        <p>No row-level IBKR evidence is linked to this Activity row.</p>
+                      }
+                    </div>
+                  </td>
+                </tr>
+              }
           }
         </tbody>
       </table>

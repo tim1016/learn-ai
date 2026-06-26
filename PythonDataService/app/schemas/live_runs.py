@@ -1783,6 +1783,11 @@ class ActivityEvidenceRef(BaseModel):
     ts_ms: int
     request_call: str
     response_callback: str | None = None
+    order_ref: str | None = None
+    order_id: int | None = None
+    perm_id: int | None = None
+    exec_id: str | None = None
+    symbol: str | None = None
 
 
 class ActivityFillMarker(BaseModel):

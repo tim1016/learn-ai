@@ -106,6 +106,7 @@ export class BrokerActivityTableComponent {
   readonly hasEventRows = computed<boolean>(() => (this.eventRows()?.length ?? 0) > 0);
 
   private readonly expanded = signal<Set<number>>(new Set());
+  private readonly expandedEvents = signal<Set<string>>(new Set());
 
   isExpanded(seq: number): boolean {
     return this.expanded().has(seq);
@@ -118,6 +119,30 @@ export class BrokerActivityTableComponent {
       else next.add(seq);
       return next;
     });
+  }
+
+  isEventExpanded(row: ActivityBrokerEventRow): boolean {
+    return this.expandedEvents().has(row.visible_row_id);
+  }
+
+  toggleEvent(row: ActivityBrokerEventRow): void {
+    this.expandedEvents.update((s) => {
+      const next = new Set(s);
+      if (next.has(row.visible_row_id)) next.delete(row.visible_row_id);
+      else next.add(row.visible_row_id);
+      return next;
+    });
+  }
+
+  evidenceIdentity(ref: ActivityBrokerEventRow['evidence'][number]): string {
+    const parts = [
+      ref.order_ref ? `ref ${ref.order_ref}` : null,
+      ref.exec_id ? `exec ${ref.exec_id}` : null,
+      ref.perm_id !== null && ref.perm_id !== undefined ? `perm ${ref.perm_id}` : null,
+      ref.order_id !== null && ref.order_id !== undefined ? `order ${ref.order_id}` : null,
+      ref.symbol ? ref.symbol : null,
+    ].filter((part): part is string => part !== null);
+    return parts.length > 0 ? parts.join(' · ') : 'No row identity captured';
   }
 
   /** Closed-enum chip class — frontend picks the colour from the enum;
@@ -161,4 +186,5 @@ export class BrokerActivityTableComponent {
   trackGroup = (_i: number, g: GroupedRows): string => g.key;
   trackRow = (_i: number, r: BrokerActivityRow): number => r.seq;
   trackEventRow = (_i: number, r: ActivityBrokerEventRow): string => r.visible_row_id;
+  trackEvidence = (_i: number, r: ActivityBrokerEventRow['evidence'][number]): number => r.seq;
 }

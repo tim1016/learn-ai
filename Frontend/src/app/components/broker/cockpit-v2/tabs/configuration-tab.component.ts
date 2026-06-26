@@ -8,6 +8,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { RouterLink } from '@angular/router';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
+import { fmtTimestampNy } from '../../format';
 
 @Component({
   selector: 'app-configuration-tab',
@@ -29,4 +30,73 @@ export class ConfigurationTabComponent {
   readonly dailyOrderCap = computed(() => this.status().operator_surface.daily_order_cap);
   readonly actionPlan = computed(() => this.status().action_plan);
   readonly actionPlanProj = computed(() => this.status().operator_surface.action_plan);
+  readonly fmtTimestampNy = fmtTimestampNy;
+
+  orderMode(readonly: boolean | null | undefined): string {
+    return readonly ? 'Read-only observation' : 'Order placement allowed';
+  }
+
+  hydratePolicyLabel(policy: string | null | undefined): string {
+    switch (policy) {
+      case 'require':
+        return 'Require previous run state';
+      case 'allow_missing':
+        return 'Use previous state when available';
+      case 'ignore':
+        return 'Start without previous state';
+      case null:
+      case undefined:
+      case '':
+        return '—';
+      default:
+        return policy;
+    }
+  }
+
+  instrumentSurfaceLabel(surface: string | null | undefined): string {
+    switch (surface) {
+      case 'explicit':
+        return 'Explicit instrument list';
+      case 'inferred':
+        return 'Inferred from strategy';
+      case null:
+      case undefined:
+      case '':
+        return '—';
+      default:
+        return surface;
+    }
+  }
+
+  sizingSourceLabel(value: string | null | undefined): string {
+    switch (value) {
+      case 'live_override':
+        return 'Live configuration override';
+      case 'strategy_default':
+        return 'Strategy default';
+      case 'pre_policy':
+        return 'Pre-policy run';
+      case null:
+      case undefined:
+      case '':
+        return '—';
+      default:
+        return value;
+    }
+  }
+
+  governedByLabel(value: string | null | undefined): string {
+    switch (value) {
+      case 'live_config':
+        return 'Live configuration';
+      case 'strategy_spec':
+        return 'Strategy specification';
+      case null:
+      case undefined:
+      case '':
+        return '—';
+      default:
+        return value;
+    }
+  }
 }
