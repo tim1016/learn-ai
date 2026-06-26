@@ -106,6 +106,8 @@ def reconstruct_broker_activity_for_run(
     rows_skipped_existing = 0
     for source_event in source_events:
         event = _enrich_event_identity(source_event.event, submitted_orders)
+        if source == "legacy_execution_artifacts":
+            event = _enrich_legacy_fill_shape(event, intent_by_id)
         key = _event_key(event)
         if key in existing_keys:
             rows_skipped_existing += 1
@@ -139,18 +141,38 @@ def reconstruct_broker_activity_for_run(
 def _enrich_event_identity(
     event: IbkrOrderEvent, submitted_orders: dict[str, dict[str, Any]]
 ) -> IbkrOrderEvent:
-    if event.order_ref:
+    if event.order_ref and event.order_type:
         return event
     for entry in submitted_orders.values():
         if event.perm_id is not None and _as_int_or_none(entry.get("perm_id")) == event.perm_id:
-            order_ref = _as_str_or_none(entry.get("order_ref"))
-            if order_ref:
-                return event.model_copy(update={"order_ref": order_ref})
+            return _copy_identity_from_entry(event, entry)
         if event.order_id and _as_int_or_none(entry.get("order_id")) == event.order_id:
-            order_ref = _as_str_or_none(entry.get("order_ref"))
-            if order_ref:
-                return event.model_copy(update={"order_ref": order_ref})
+            return _copy_identity_from_entry(event, entry)
     return event
+
+
+def _copy_identity_from_entry(event: IbkrOrderEvent, entry: dict[str, Any]) -> IbkrOrderEvent:
+    updates: dict[str, Any] = {}
+    order_ref = _as_str_or_none(entry.get("order_ref"))
+    if order_ref and not event.order_ref:
+        updates["order_ref"] = order_ref
+    order_type = _as_str_or_none(entry.get("order_type"))
+    if order_type and not event.order_type:
+        updates["order_type"] = order_type
+    return event.model_copy(update=updates) if updates else event
+
+
+def _enrich_legacy_fill_shape(
+    event: IbkrOrderEvent, intent_by_id: dict[str, EngineIntent]
+) -> IbkrOrderEvent:
+    parsed_ref = parse_order_ref(event.order_ref)
+    if parsed_ref is None:
+        return event
+    intent = intent_by_id.get(parsed_ref[1])
+    if intent is None or intent.requested_qty is None or event.fill_quantity is None:
+        return event
+    remaining = max(abs(intent.requested_qty) - abs(event.fill_quantity), 0.0)
+    return event.model_copy(update={"remaining": remaining})
 
 
 def _resolve_run_dir(run_id: str, artifacts_root: Path) -> Path:
@@ -201,7 +223,9 @@ def _submitted_orders(
 def _fold_intent_wal(run_dir: Path) -> dict[str, dict[str, Any]]:
     try:
         events = IntentWal(run_dir / "intent_events.jsonl").read_tail()
-    except (IntentWalCorruptError, OSError):
+    except IntentWalCorruptError as exc:
+        raise ValueError(f"cannot reconstruct from corrupt intent WAL: {exc}") from exc
+    except OSError:
         return {}
     if not events:
         return {}
@@ -321,12 +345,12 @@ def _legacy_execution_events(run_dir: Path) -> list[_SourceEvent]:
             order_ref=order_ref if order_ref and ":" in order_ref else None,
             symbol=_as_str_or_none(row.get("symbol")) or "",
             side=side,
-            order_type="MKT",
+            order_type=_as_str_or_none(row.get("order_type")),
             exec_id=_as_str_or_none(row.get("exec_id")),
             fill_quantity=abs(quantity),
             avg_fill_price=price,
             cumulative_filled=abs(quantity),
-            remaining=0.0,
+            remaining=_as_float_or_none(row.get("remaining")),
             last_fill_price=price,
             exec_time_ms=_as_int_or_none(row.get("exec_time_ms")) or ts_ms,
             fee=_as_float_or_none(row.get("fee")),
@@ -337,15 +361,15 @@ def _legacy_execution_events(run_dir: Path) -> list[_SourceEvent]:
 
 
 def _order_id_from_legacy_row(row: dict[str, Any]) -> int:
-    value = _as_int_or_none(row.get("perm_id"))
-    if value is not None:
-        return value
     client_order_id = _as_str_or_none(row.get("client_order_id"))
     if client_order_id:
         _, _, suffix = client_order_id.rpartition("-")
         parsed = _as_int_or_none(suffix)
         if parsed is not None:
             return parsed
+    value = _as_int_or_none(row.get("perm_id"))
+    if value is not None:
+        return value
     return 0
 
 
@@ -416,7 +440,7 @@ def _existing_row_keys(rows: list[BrokerActivityRow]) -> set[tuple[str, str]]:
         if row.exec_id:
             keys.add(("exec_id", row.exec_id))
         elif row.order_ref:
-            keys.add(("lifecycle", f"{row.order_ref}|{row.template_key}|{row.ts_ms}"))
+            keys.add(("lifecycle", f"{row.order_ref}|{row.template_key}"))
     return keys
 
 
@@ -424,19 +448,26 @@ def _event_key(event: IbkrOrderEvent) -> tuple[str, str]:
     if event.exec_id:
         return ("exec_id", event.exec_id)
     if event.order_ref:
-        return ("lifecycle", f"{event.order_ref}|{event.event_type}|{event.status}|{event.ts_ms}")
+        return ("lifecycle", f"{event.order_ref}|{_lifecycle_template_key(event)}")
     return (
         "raw",
         "|".join(
             [
                 str(event.order_id),
-                event.event_type,
-                event.status or "",
                 str(event.perm_id or ""),
-                str(event.ts_ms),
+                _lifecycle_template_key(event),
             ]
         ),
     )
+
+
+def _lifecycle_template_key(event: IbkrOrderEvent) -> str:
+    status = (event.status or "").lower()
+    if event.event_type == "cancel" or status == "cancelled":
+        return "cancellation"
+    if event.event_type == "error" or status in {"rejected", "apicancelled"}:
+        return "rejection"
+    return event.event_type
 
 
 def _as_float_or_none(value: object) -> float | None:

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter
 from app.engine.live.broker_callbacks import BrokerCallbackWal, broker_callbacks_wal_path
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
-from app.schemas.broker_activity import Verdict
+from app.schemas.broker_activity import BrokerActivityRow, ReasonCode, Verdict
 from app.services.broker_activity_reconstruction import reconstruct_broker_activity_for_run
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
@@ -52,7 +54,9 @@ def _write_intent_wal(
     *,
     quantity: int = 100,
     order_id: int = 42,
-    perm_id: int = 9001,
+    perm_id: int | None = 9001,
+    order_type: str = "MKT",
+    limit_price: float | None = None,
 ) -> None:
     wal = IntentWal(run_dir / "intent_events.jsonl")
     wal.append(
@@ -64,7 +68,8 @@ def _write_intent_wal(
             "symbol": "SPY",
             "action": "BUY" if quantity > 0 else "SELL",
             "quantity": abs(quantity),
-            "order_type": "MKT",
+            "order_type": order_type,
+            **({"limit_price": limit_price} if limit_price is not None else {}),
         },
         ts_ms=1_780_000_000_000,
     )
@@ -183,6 +188,98 @@ def test_reconstruct_legacy_executions_preserves_sell_side_and_order_ref(
     assert rows[0].recovery_reason == "legacy_artifacts_missing_activity_wal"
 
 
+def test_reconstruct_legacy_executions_prefers_client_order_id_over_perm_id(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = _run_dir(artifacts_root)
+    _write_ledger(run_dir)
+    _write_intent_wal(run_dir, perm_id=None)
+    writer = ExecutionWriter(run_dir / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=1_780_000_000_300,
+            exec_id="exec-legacy-owned",
+            perm_id=9001,
+            client_order_id="live-42",
+            account_id="DU123",
+            symbol="SPY",
+            fill_quantity=100,
+            fill_price=501.25,
+            fee=1.0,
+            exec_time_ms=1_780_000_000_250,
+        )
+    )
+    writer.close()
+
+    reconstruct_broker_activity_for_run(RUN_ID, artifacts_root=artifacts_root)
+
+    rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, SID)).read_all()
+    assert rows[0].order_ref == ORDER_REF
+    assert rows[0].verdict == Verdict.EXPECTED
+
+
+def test_reconstruct_legacy_executions_uses_order_type_from_intent_wal(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = _run_dir(artifacts_root)
+    _write_ledger(run_dir)
+    _write_intent_wal(run_dir, order_type="LMT", limit_price=501.25)
+    writer = ExecutionWriter(run_dir / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=1_780_000_000_300,
+            exec_id="exec-legacy-limit",
+            perm_id=9001,
+            client_order_id="live-42",
+            account_id="DU123",
+            symbol="SPY",
+            fill_quantity=100,
+            fill_price=501.25,
+            fee=1.0,
+            exec_time_ms=1_780_000_000_250,
+        )
+    )
+    writer.close()
+
+    reconstruct_broker_activity_for_run(RUN_ID, artifacts_root=artifacts_root)
+
+    rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, SID)).read_all()
+    assert rows[0].order_type == "LMT"
+
+
+def test_reconstruct_legacy_partial_fill_is_not_marked_terminal_divergence(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = _run_dir(artifacts_root)
+    _write_ledger(run_dir)
+    _write_intent_wal(run_dir, quantity=100)
+    writer = ExecutionWriter(run_dir / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=1_780_000_000_300,
+            exec_id="exec-legacy-partial",
+            perm_id=9001,
+            client_order_id="live-42",
+            account_id="DU123",
+            symbol="SPY",
+            fill_quantity=50,
+            fill_price=501.25,
+            fee=1.0,
+            exec_time_ms=1_780_000_000_250,
+        )
+    )
+    writer.close()
+
+    reconstruct_broker_activity_for_run(RUN_ID, artifacts_root=artifacts_root)
+
+    rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, SID)).read_all()
+    assert rows[0].verdict == Verdict.EXPECTED_WITH_CAVEAT
+    assert rows[0].reason_codes == (ReasonCode.PARTIAL_FILL,)
+
+
 def test_reconstruct_is_idempotent_against_existing_live_rows(tmp_path: Path) -> None:
     artifacts_root = tmp_path / "artifacts"
     run_dir = _run_dir(artifacts_root)
@@ -198,3 +295,85 @@ def test_reconstruct_is_idempotent_against_existing_live_rows(tmp_path: Path) ->
     assert second.rows_written == 0
     assert second.rows_skipped_existing == 1
     assert [row.exec_id for row in rows] == ["exec-raw-1"]
+
+
+def test_reconstruct_skips_existing_lifecycle_row_with_different_timestamp(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = _run_dir(artifacts_root)
+    _write_ledger(run_dir)
+    _write_intent_wal(run_dir)
+    BrokerCallbackWal(broker_callbacks_wal_path(run_dir)).append_event(
+        IbkrOrderEvent(
+            account_id="DU123",
+            order_id=42,
+            perm_id=9001,
+            event_type="status",
+            status="Cancelled",
+            order_ref=ORDER_REF,
+            symbol="SPY",
+            side="BUY",
+            order_type="MKT",
+            fill_quantity=0.0,
+            cumulative_filled=0.0,
+            remaining=100.0,
+            ts_ms=1_780_000_000_900,
+        )
+    )
+    BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, SID)).append_row(
+        BrokerActivityRow(
+            seq=1,
+            ts_ms=1_780_000_000_100,
+            exec_id=None,
+            perm_id=9001,
+            order_ref=ORDER_REF,
+            symbol="SPY",
+            side="BUY",
+            quantity=100.0,
+            price=None,
+            commission=None,
+            net_amount=None,
+            order_type="MKT",
+            exec_ts_ms=None,
+            verdict=Verdict.EXPECTED,
+            template_key="cancellation",
+            template_version=1,
+            headline="Cancelled buy of 100 SPY",
+            narrative="existing live row",
+            reason_codes=(ReasonCode.CANCELLATION,),
+        )
+    )
+
+    result = reconstruct_broker_activity_for_run(RUN_ID, artifacts_root=artifacts_root)
+
+    rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, SID)).read_all()
+    assert result.rows_written == 0
+    assert result.rows_skipped_existing == 1
+    assert len(rows) == 1
+
+
+def test_reconstruct_propagates_corrupt_intent_wal(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = _run_dir(artifacts_root)
+    _write_ledger(run_dir)
+    (run_dir / "intent_events.jsonl").write_text("not-json\n", encoding="utf-8")
+    writer = ExecutionWriter(run_dir / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=1_780_000_000_300,
+            exec_id="exec-legacy-corrupt-intent",
+            perm_id=9001,
+            client_order_id="live-42",
+            account_id="DU123",
+            symbol="SPY",
+            fill_quantity=100,
+            fill_price=501.25,
+            fee=1.0,
+            exec_time_ms=1_780_000_000_250,
+        )
+    )
+    writer.close()
+
+    with pytest.raises(ValueError, match="corrupt intent WAL"):
+        reconstruct_broker_activity_for_run(RUN_ID, artifacts_root=artifacts_root)
