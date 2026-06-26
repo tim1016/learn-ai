@@ -752,10 +752,14 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     kwargs: dict = {}
     if "symbol" in payload:
         kwargs["symbol"] = str(payload["symbol"])
-    else:
+    elif "action" in payload:
         symbol_from_action = stock_symbol_from_action_plan(payload.get("action"))
-        if symbol_from_action is not None:
-            kwargs["symbol"] = symbol_from_action
+        if symbol_from_action is None:
+            raise ValueError(
+                "live_config.action must declare exactly one stock underlying "
+                "when live_config.symbol is absent"
+            )
+        kwargs["symbol"] = symbol_from_action
     if "force_flat_at" in payload:
         raw = payload["force_flat_at"]
         if raw is None:

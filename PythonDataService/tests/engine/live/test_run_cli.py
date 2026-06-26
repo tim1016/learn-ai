@@ -952,6 +952,42 @@ def test_live_config_from_ledger_explicit_symbol_wins_over_action_symbol() -> No
     assert cfg.symbol == "QQQ"
 
 
+def test_live_config_from_ledger_rejects_action_without_stock_symbol() -> None:
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(
+        ValueError,
+        match=r"live_config\.action must declare exactly one stock underlying",
+    ):
+        _live_config_from_ledger(
+            {
+                "action": {
+                    "on_enter": [
+                        {
+                            "leg_id": "leg_1",
+                            "instrument": {"kind": "stock", "underlying": "TSLA"},
+                            "position": "long",
+                            "qty_ratio": 1,
+                        },
+                        {
+                            "leg_id": "leg_2",
+                            "instrument": {"kind": "stock", "underlying": "AAPL"},
+                            "position": "long",
+                            "qty_ratio": 1,
+                        },
+                    ],
+                    "on_exit": [
+                        {"kind": "close_leg", "entry_leg_id": "leg_1"},
+                        {"kind": "close_leg", "entry_leg_id": "leg_2"},
+                    ],
+                },
+                "sizing": {"kind": "FixedShares", "value": 1},
+            }
+        )
+
+
 def test_live_config_from_ledger_handles_null_force_flat() -> None:
     from app.engine.live.run import _live_config_from_ledger
 
