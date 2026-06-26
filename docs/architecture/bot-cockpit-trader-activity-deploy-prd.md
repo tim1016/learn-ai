@@ -49,6 +49,108 @@ This PRD depends on several pieces that are not production-wired today. They are
 6. **Deploy package registry.** No package registry exists today. The package slice must define package storage, validation assertions, and how today's raw deploy fields map into a package.
 7. **Broker position evidence source.** Activity `position_snapshot` is currently `source="unavailable"` in the projection. Trader-readable position evidence depends on wiring a real broker position snapshot feed or rendering an explicit "not captured" narrative.
 
+## Current Bot Cockpit Business Logic For Review
+
+This section documents the current implementation model as of 2026-06-26. It is intentionally written as a precise business-logic contract for peer review by other reasoning systems. It describes what the cockpit currently means by "bot exists", "bot is alive", "bot died", "bot is retired", and "bot can be acted on". It is separate from the proposed Activity and Deploy improvements above.
+
+### Core entities and evidence sources
+
+1. A **bot identity** is `strategy_instance_id`. It is the durable cockpit identity, the broker attribution namespace component, and the grouping key for historical runs.
+2. A **run** is a content-addressed run directory under `live_runs/<run_id>`, with `run_ledger.json` as the durable deployment evidence. Multiple runs may belong to one `strategy_instance_id`.
+3. A **live binding** exists only when the host daemon reports a process for the instance and that process is in a live state with a visible `run_id`. The cockpit does not infer liveness from the latest run directory alone.
+4. **Evidence binding** points to the latest known run for an instance, even when no live process is bound. This lets the cockpit show last decisions, last exit, provenance, and artifacts after a process exits.
+5. **Desired state** is durable operator intent: `RUNNING`, `PAUSED`, or `STOPPED`. It is not the same as actual process state.
+6. **Process state** is daemon-observed runtime state: `RUNNING`, `STOPPING`, `EXITED`, `IDLE`, `WAITING_FOR_HOST`, or `UNREACHABLE` after projection.
+7. **Readiness** is a backend verdict over gates such as broker connection, paper safety, reconcile receipt, runtime freshness, and configuration.
+8. **Operator surface** is the backend-authored cockpit projection that composes process state, desired state, readiness, broker evidence, reconciliation, mutation evidence, action capabilities, and notices. Frontend renders this projection; it must not invent operational verdicts.
+
+### Bot creation and start lifecycle
+
+1. Deploy creates a new run ledger by forwarding to the host daemon. The daemon owns git-clean checks, content hashing, and run directory creation.
+2. The data-plane deploy endpoint derives account identity from the connected broker account. If the connected account is unavailable or mismatches a legacy client-supplied account hint, deploy fails closed.
+3. The run ledger records `strategy_instance_id`, `strategy_key`, strategy spec path/hash, audit copy path/hash, account id, live config, sizing provenance, and action plan.
+4. Starting a run is a separate operation. The cockpit may show Start enabled only when the operator surface says it is enabled, but the data-plane `start_run` endpoint rechecks the same gates immediately before forwarding to the daemon.
+5. Start is blocked if:
+   - the run has `poisoned.flag`;
+   - durable desired state is `STOPPED`;
+   - the daemon already reports `running`;
+   - the daemon reports `stopping`;
+   - the daemon is unreachable;
+   - required start settings are incomplete.
+6. If Start is accepted, the host daemon spawns `python -m app.engine.live.run start ...` and records process metadata.
+7. After successful start, broker-activity publisher registration is attempted. Registration failure does not roll back the process start; lazy bootstrap may retry when Activity is read.
+
+### Cold-start reconciliation lifecycle
+
+1. Before a live runner may enter its bar loop and submit new orders, it must run cold-start reconciliation and write `reconciliation_receipt.json`.
+2. The orchestrator writes an `in_progress` receipt first so a crash cannot leave a stale `passed` receipt from an earlier boot.
+3. The reconciler reads:
+   - stable live-state sidecar;
+   - current run intent WAL;
+   - prior run unresolved intent tail, when available;
+   - prior emergency-flatten audit, when available;
+   - broker open orders and executions, synchronized from IBKR.
+4. The classifier returns one of:
+   - `Continue`: broker state matches known projection and allowed namespaces.
+   - `Adopt`: broker confirms an owned but unresolved/orphaned order. The run records adoption and may pause when exposure is ambiguous.
+   - `Poison`: broker or artifact state cannot be proven safe.
+5. Poison reasons include sidecar corruption, WAL corruption, broker probe failure, missing or unparseable order references, foreign or unknown namespaces, and foreign broker ids.
+6. Unknown namespace executions are normally poison. The 2026-06-26 fleet-reset fix allows a specifically listed fresh deployment to ignore historical unknown completed executions only when all are at or before a flat-account baseline, account positions were empty, open orders were empty, and the new `strategy_instance_id` is explicitly listed in the fleet baseline. Unknown open orders are never ignored.
+7. No submit is allowed without a durable final receipt. A failed receipt write is fatal.
+
+### Alive, paused, stopped, dead, and retired semantics
+
+The cockpit should use these meanings consistently:
+
+| Term | Current source of truth | Meaning | Can resume without redeploy? |
+|---|---|---|---|
+| Alive / running | Daemon process state projected as `RUNNING` with live binding | A host child process is active for this instance. It may be trading, paused, waiting for bars, or waiting for signals. | Already running |
+| Trading-enabled | `RUNNING` process plus desired state `RUNNING`, broker/readiness gates acceptable, runtime not demoted | The engine is permitted to process strategy decisions and submit orders when the strategy emits actionable signals. | Yes |
+| Paused | Durable desired state `PAUSED`; optionally a live process still exists | The bot should not open new positions. Existing live process can still drain commands such as flatten/reconcile. | Yes, via Resume if guards pass |
+| Flatten-and-pause | Composed endpoint: first persist `PAUSED`, then enqueue `FLATTEN_NOW` if a live binding exists | Prevent re-entry first, then flatten owned exposure. If command enqueue fails, durable PAUSE remains. | Yes, after operator review |
+| Exited | Daemon/process sidecar has terminal `ended_at_ms` or `exit_code`; no live binding | The process ended. This may be clean, operator-driven, exception, max-order halt, or fatal halt. | Maybe; blocked if poisoned or STOPPED |
+| Dead | Informal synonym for terminal process exit | A process died when it transitioned out of running into a terminal sidecar/daemon state. Death does not always mean poison. | Depends on exit reason and flags |
+| Poisoned / retired run | `poisoned.flag` exists or `last_exit.halt_trigger` resolves to a poisoned halt | The run is permanently unsafe to resume. Start is blocked with redeploy-required semantics. | No; redeploy required |
+| Permanently stopped instance | Durable desired state `STOPPED` | The instance is retired through operator intent; Start is blocked. | No; redeploy required |
+| Host unreachable | Daemon fetch fails or projection maps to `UNREACHABLE` | Cockpit cannot prove process state. This is unknown, not proof of death. | Not until host service returns |
+| Waiting for host | Desired state `RUNNING`, daemon reachable, no tracked subprocess | Operator requested trading but process is not active. | Start process |
+
+Important distinction: a bot can be **alive but not currently in a trade**. A running deployment-validation bot that emits `HOLD` and has no position is alive and waiting, not dead.
+
+### Runtime command semantics
+
+1. `PAUSE`, `RESUME`, and `STOP` are durable desired-state writes, not one-shot run commands.
+2. If a live binding exists and its run directory is visible, the desired-state endpoint also enqueues the corresponding command for the live engine to acknowledge.
+3. If no live binding exists, desired-state writes are durable-only and affect the next start.
+4. `FLATTEN`, `RECONCILE`, and `MARK_POISONED` are one-shot commands that require a live binding, except account-wide `emergency-flatten`.
+5. `flatten-and-pause` is the only normal cockpit path that composes durable `PAUSED` with one-shot `FLATTEN_NOW`.
+6. `emergency-flatten` is account-wide, paper-guarded, daemon-mediated, and independent of a live binding. It is for recovery after the binding is gone or unsafe.
+7. Runtime reconcile requires a live engine because the engine must acquire the submit lock, probe the broker, run reconciliation, and write receipt/ack evidence.
+8. Mutation reconciliation is read-only. It classifies whether a previously ambiguous cockpit mutation likely took effect; it never replays the original mutation.
+
+### Trade and signal semantics for deployment-validation bots
+
+The deployment-validation strategy is a lifecycle-validation strategy, not an alpha model. Its canonical implementation is `DeploymentValidationConsecutiveGreen`.
+
+1. It consumes 1-minute bars.
+2. It starts detection at 09:45 ET.
+3. While flat and not entry-pending, two consecutive green minute bars (`close > open`) emit `ENTER`.
+4. The live action plan converts `ENTER` into a fixed one-share market buy for the configured instrument.
+5. After entry fill, it counts three bars and emits `EXIT`.
+6. The live action plan converts `EXIT` into close-leg / market sell.
+7. At or after 15:45 ET, any open/pending position is liquidated and the bot stops detecting new entries for the day.
+8. Different symbols using the same deployment-validation strategy naturally emit different signals because each symbol has its own minute-bar stream.
+
+### Failure classes reviewers should challenge
+
+1. **Fatal halt with poison:** the process exits and writes `poisoned.flag`. Current business rule blocks restart and requires redeploy.
+2. **Fatal halt without poison:** the process exits non-zero but does not mark the run poisoned. Current cockpit classifies prior run as error/halt depending on sidecar fields and may allow Start unless other guards block.
+3. **Exception exit:** runtime broker/IO or process error. Current cockpit exposes `EXITED_WITH_ERROR`; recovery depends on start guards, broker state, and reconciliation.
+4. **Max-orders exceeded:** order cap guard terminates the run to prevent runaway submits.
+5. **Operator clean stop / keyboard interrupt:** terminal but not poison by itself.
+6. **Daemon unreachable:** not a death assertion. It is inability to observe; cockpit must degrade actions and tell the operator not to trust liveness until the daemon is reachable.
+7. **Unknown broker state:** fail closed at reconciliation. Do not permit submits when broker positions, open orders, executions, or ownership cannot be proven.
+
 ## User Stories
 
 1. As a trader, I want the Bot Cockpit Activity tab to show every broker fill that happened, so that I can trust the cockpit during a live-paper session.
@@ -307,6 +409,82 @@ Acceptance gates:
 - Deploy refuses reuse of any historical bot name / `strategy_instance_id` for unrelated bots, not only currently active names, while allowing explicit same-instance recovery redeploys from a parent run.
 - Deploy/redeploy fails closed with a trader-readable package-evidence-drift message when package artifact hashes no longer match.
 - PrimeNG components and app theme tokens are used for ordinary tables/panels/forms/badges where replacement is straightforward within the slice's owned surface.
+
+## Observed Evidence: 2026-06-26 Paper Session
+
+This section records the local artifact evidence observed on 2026-06-26 so reviewers can compare the business logic above against real cockpit outcomes. It is not a normative requirement by itself; it is an incident/data appendix.
+
+### Run/death summary
+
+Artifact scan source: `PythonDataService/artifacts/live_runs/*/{run_ledger.json,run_status.json,reconciliation_receipt.json,poisoned.flag,decisions.parquet,live.log}`.
+
+Today-specific terminal/running evidence:
+
+| Category | Count | Notes |
+|---|---:|---|
+| Fatal-halt deaths on 2026-06-26 | 8 | Includes earlier individual local bots plus the first four-symbol redeploy attempt. |
+| Poisoned runs on 2026-06-26 | 4 | The first AAPL/SPY/TSLA/DIA redeploy attempt wrote `poisoned.flag` for each bot. |
+| Currently running four-symbol deployment-validation bots | 4 | AAPL, SPY, TSLA, DIA all have daemon state `running` and clean reconciliation receipts. |
+| Current open positions in latest portfolio evidence | 0 | Latest portfolio update in each live log shows `position=0.0` for AAPL, SPY, TSLA, and DIA. |
+
+Fatal-halt rows from today:
+
+| Created UTC | Strategy instance | Symbol | Run id prefix | Exit reason | Poison? | Reconciliation |
+|---|---|---|---|---|---|---|
+| 2026-06-26T13:52:03Z | `JUN26TSLA` | TSLA | `3c7bde89` | `fatal_halt` | No | passed / clean |
+| 2026-06-26T15:12:09Z | `JUN26GM` | GM | `575fca6b` | `fatal_halt` | No | none |
+| 2026-06-26T18:58:54Z | `DEPVAL-AAPL-20260626` | AAPL | `93e5505d` | `fatal_halt` | Yes | failed |
+| 2026-06-26T18:58:54Z | `DEPVAL-SPY-20260626` | SPY | `490e84c1` | `fatal_halt` | Yes | failed |
+| 2026-06-26T18:58:54Z | `DEPVAL-TSLA-20260626` | TSLA | `67bf40c3` | `fatal_halt` | Yes | failed |
+| 2026-06-26T18:58:54Z | `DEPVAL-DIA-20260626` | DIA | `4fe11e27` | `fatal_halt` | Yes | failed |
+
+The four poisoned DEPVAL runs all have:
+
+```json
+{
+  "trigger": "cold_start_divergence",
+  "details": {
+    "reason": "unknown_namespace",
+    "source": "reconciliation_orchestrator"
+  }
+}
+```
+
+Plain interpretation: the account had historical broker executions from namespaces that the newly deployed bots did not own. The cold-start reconciler could not prove those executions were safe to ignore, so it correctly killed and poisoned the first redeploy attempt before any new order submission.
+
+### Fleet-reset redeploy evidence
+
+The practical fix used today was a fleet-reset baseline: after the operator flattened the account, canceled open orders, and verified no positions/open orders, a baseline was recorded for the explicit four new strategy instances. The classifier may ignore only completed unknown-namespace executions at or before that baseline, and only for the listed strategy ids. Unknown open orders remain poison.
+
+Current successful four-symbol run evidence:
+
+| Strategy instance | Symbol | Current run id prefix | Reconciliation receipt | Process state |
+|---|---|---|---|---|
+| `DEPVAL-AAPL-20260626` | AAPL | `ccef6a3c` | passed / clean | running |
+| `DEPVAL-SPY-20260626` | SPY | `5e9d9d10` | passed / clean | running |
+| `DEPVAL-TSLA-20260626` | TSLA | `db9057fd` | passed / clean | running |
+| `DEPVAL-DIA-20260626` | DIA | `fdd47e3e` | passed / clean | running |
+
+### Current trade/signal summary for the four live bots
+
+Latest decisions snapshot from the current runs:
+
+| Bot | Decision rows | ENTER count | EXIT count | Latest signal | Current position evidence |
+|---|---:|---:|---:|---|---|
+| AAPL | 48 | 3 | 3 | HOLD | Flat |
+| SPY | 48 | 4 | 4 | HOLD | Flat |
+| TSLA | 48 | 3 | 3 | HOLD | Flat |
+| DIA | 48 | 5 | 5 | HOLD | Flat |
+
+Business-logic implication: these bots are alive and have traded, but at this snapshot they are out of the market. `HOLD` plus `position=0.0` means "waiting for the next entry condition", not "dead".
+
+### Review questions raised by today's evidence
+
+1. Should an operator-requested account flatten create an explicit first-class "fleet reset" workflow in Bot Cockpit rather than a hidden artifact written by an engineer/operator tool?
+2. Should the cockpit distinguish "fatal halt with no poison" from "fatal halt with poison" more visibly, since the recovery path differs?
+3. Should `cold_start_divergence: unknown_namespace` explain "historical execution in another namespace" as the primary trader label, with raw namespace/order refs only in technical details?
+4. Should a run that passes reconciliation and then fatal-halts for a non-poison reason be eligible for Start by default, or should every fatal halt require an explicit operator acknowledgement before Start?
+5. Should the Activity tab show a lifecycle row for every bot death, even when no trade occurred, so deaths are counted in the same timeline as fills?
 
 ## Out of Scope
 
