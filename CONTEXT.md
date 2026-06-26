@@ -158,6 +158,94 @@ never branch on those strings. This retires `recovery-flatten-*`,
 
 ## Sharpened by grilling (2026-05-30)
 
+- **Bot Cockpit** — the canonical trader-facing name for the deployed-strategy
+  operator console. It is the surface where a trader monitors and controls a
+  `strategy_instance_id`. Implementation docs may refer to `cockpit-v2`, but
+  trader-facing copy should use Bot Cockpit language, not "terminal cockpit" or
+  code-oriented names.
+- **Trader-facing event language** — Bot Cockpit rows, cards, panels, badges,
+  and section summaries use human-readable labels and explanations. Raw
+  event/type codes such as `endpoint_snapshot` or `account_positions` are
+  diagnostic evidence only; they may appear in an expandable technical-details
+  area, but never as the primary text a trader has to interpret.
+- **Backend-authored trader narrative** — trader-facing explanations for broker
+  activity, audit evidence, incidents, and reconciliation states are authored by
+  the backend from structured facts. The frontend renders the authored language
+  and may format layout, ET display time, numbers, badges, and expansion state,
+  but it does not decide what a broker or audit event means.
+- **Event narrative registry** — the closed backend vocabulary of trader-facing
+  event meanings. Each supported event meaning has a human label, explanation,
+  severity/attention level, and diagnostic facts that can be expanded for audit.
+  Unsupported event meanings fail visibly as unmapped diagnostics instead of
+  being guessed by the Bot Cockpit.
+- **Exchange-time display** — primary Bot Cockpit tables, panels, and audit
+  summaries display market/session times in `America/New_York` (ET), matching
+  the U.S. market clock the bot trades. Canonical `int64 ms UTC` remains the
+  storage and wire format, and may appear in expandable technical/audit details
+  when exact forensic evidence is needed.
+- **Backend-authored folding** — repeated Bot Cockpit rows or panels are folded
+  only when the backend supplies a stable fold identity and count. The frontend
+  must not infer sameness by comparing rendered text, raw JSON, timestamps, or
+  partial event fields; it renders the authored fold key/count and preserves the
+  individual evidence rows inside expansion.
+- **Activity structural cluster** — the backend-authored identity that groups
+  related Activity rows under one logical order or execution family, such as
+  partial fills under the same broker order. This is distinct from duplicate
+  noise folding; clustering explains structure, folding suppresses repetition.
+- **Usable activity row** — a Bot Cockpit Activity update worth changing the
+  visible table: a broker fill, order lifecycle event, trader-relevant broker
+  evidence summary, or incident that changes what the trader can understand or
+  act on. Low-level polling/file-refresh churn is diagnostic evidence, not a
+  reason to redraw the primary table.
+- **Stable activity stream** — the Bot Cockpit Activity table is updated by
+  incrementally merging backend-authored rows or fold-count changes by stable
+  visible-row identity. Parent panels stay mounted; row expansion state, scroll
+  context, and table identity are preserved. Visible highlighting or motion
+  occurs only when a usable row is added or a visible fold count changes.
+- **Configuration vs audit boundary** — Configuration shows what the bot was
+  intended and configured to run with. Audit shows evidence of what actually
+  happened and whether that evidence supports the intended configuration. The
+  same raw fact should not be duplicated as primary content in both places; if
+  needed, one surface may link to or summarize the other as provenance.
+- **Bot name / strategy instance ID** — one canonical identity for a deployed
+  bot. The deploy flow may prefill a random, trader-editable name, but the final
+  value is lifetime-unique, system-safe, and is the durable
+  `strategy_instance_id` used for paths, ownership, broker attribution, and Bot
+  Cockpit identity. There is no separate display-only bot-name variable.
+- **Closed-trade summary** — a trader-readable round-trip summary derived from
+  durable trade artifacts. It is not a broker execution row and must not be
+  counted as another fill; it references the constituent fill evidence that
+  produced the round trip.
+- **Validated strategy package** — the deployable unit for live-paper bots. It
+  immutably binds a strategy implementation/spec, approved settings, golden
+  fixture/parity evidence, and required backtest/audit provenance by content
+  hash. The Deploy a strategy page owns creating or selecting this package;
+  Engine Lab is not the package-authoring surface for this workflow.
+- **Strategy package settings** — package-specific tunable settings exposed as
+  named, human-readable controls only when the selected validated strategy
+  package requires them. Raw settings-file paths are technical provenance, not a
+  normal trader input.
+- **Connected broker account** — the broker account currently observed through
+  the connected broker session. Deploy displays this account as read-only
+  evidence and fails closed when the account is unavailable or ambiguous; traders
+  do not type broker account identifiers into the deploy form.
+- **Trader-readable instrument picker** — Deploy action plans use rich,
+  trader-friendly stock and option selectors instead of raw symbol/contract
+  entry rows. Stocks surface recognisable symbol/company/exchange context when
+  available. Options surface underlying, expiry, strike, call/put, multiplier,
+  and market quote context when available; raw contract identifiers remain
+  technical details.
+- **PrimeNG-first cockpit UI** — Bot Cockpit and Deploy UI should prefer PrimeNG
+  components for tables, accordions, badges, panels, forms, dropdowns, pickers,
+  and dialogs, with custom CSS limited to layout and theme glue. Apache ECharts
+  remains appropriate for charting. Existing bespoke controls should be replaced
+  with PrimeNG only inside the narrow surface owned by the current slice, when
+  the replacement is straightforward and preserves behavior.
+- **Theme-token evidence styling** — broker/audit evidence surfaces use the
+  app's theme tokens for contrast, severity, spacing, and emphasis. One-off
+  hard-coded colors are avoided; PrimeNG components should be styled through the
+  app theme/token layer so evidence panels remain readable in the supported
+  themes.
 - **Instance control room** — the operator console's correct shape. Its subject
   is the **strategy_instance**; the **current run** and its artifacts are
   attached as *evidence*, not as the object being operated. Contrast with the

@@ -11,6 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+import { InputTextModule } from 'primeng/inputtext';
 import type {
   HostRunnerDeployRequest,
   HostRunnerDeployResponse,
@@ -56,6 +57,7 @@ const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '
     BrokerConnectivityStripComponent,
     BrokerOperationResultComponent,
     ActionPlanPickerComponent,
+    InputTextModule,
   ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
@@ -74,8 +76,8 @@ export class BrokerDeployFormComponent {
   // Used only to pre-empt the daemon's "already active" 409: a start-immediately
   // deploy onto an instance that already has a live runner is rejected.
   readonly instances = resource({ loader: () => this.svc.getInstances() });
-  // Best-effort: the account prefill is convenience only — broker may be down,
-  // in which case the operator types the account id manually.
+  // Display-only: the deploy boundary derives this from the connected broker
+  // session and rejects deployment while broker identity is unavailable.
   readonly account = resource({ loader: () => this.broker.account() });
   // ADR 0009 § 9 — broker positions for the symbol-scoped all-in coexistence
   // guard (Decision 13). Loaded once on form open; the guard only consults it
@@ -87,11 +89,6 @@ export class BrokerDeployFormComponent {
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
   readonly manualSpecPath = signal<boolean>(false);
-  // Seeded from a re-deploy deep-link (recover a poisoned/halted instance with a
-  // fresh run_id). Preferred over the broker-account prefill so the ledger's
-  // account survives even if the broker probe is down or resolves late.
-  private readonly seededAccountId = signal<string>('');
-  private readonly manualAccountId = signal<boolean>(false);
   readonly accountId = signal<string>('');
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
@@ -228,7 +225,7 @@ export class BrokerDeployFormComponent {
     const missing: string[] = [];
     if (this.strategyKey().trim() === '') missing.push('Strategy');
     if (this.specPath().trim() === '') missing.push('Strategy settings file');
-    if (this.accountId().trim() === '') missing.push('Brokerage account');
+    if (this.accountId().trim() === '') missing.push('Connected broker account');
     if (this.qcBacktestId().trim() === '') missing.push('Backtest ID');
     if (this.qcAuditCopyPath().trim() === '') missing.push('Algorithm audit copy');
     if (this.instanceId().trim() === '') missing.push('Deployment name');
@@ -313,11 +310,6 @@ export class BrokerDeployFormComponent {
       this.manualSpecPath.set(true);
       this.specPath.set(seedSpecPath);
     }
-    const seedAccount = qp.get('account_id');
-    if (seedAccount) {
-      this.seededAccountId.set(seedAccount);
-      this.accountId.set(seedAccount);
-    }
     const seedBacktestId = qp.get('qc_backtest_id');
     if (seedBacktestId) this.qcBacktestId.set(seedBacktestId);
     const seedAuditCopy = qp.get('qc_audit_copy_path');
@@ -338,11 +330,7 @@ export class BrokerDeployFormComponent {
       if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
     });
     effect(() => {
-      if (this.manualAccountId()) return;
-      const nextAccount = this.seededAccountId() || this.brokerAccountId();
-      if (nextAccount && this.accountId() !== nextAccount) {
-        this.accountId.set(nextAccount);
-      }
+      this.accountId.set(this.brokerAccountId());
     });
     // Reference parity must not silently downgrade — if the audit-copy choice
     // changes such that the gate is no longer proven_match, reset the preset to
@@ -427,6 +415,9 @@ export class BrokerDeployFormComponent {
     if (this.startNow() && this.instanceAlreadyRunning()) {
       return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
     }
+    if (!this.brokerAccountAvailable()) {
+      return 'Connected broker account unavailable. Connect the broker session before deploying.';
+    }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
     // button disables BEFORE submit() runs; throwing inside submit() would
@@ -454,7 +445,6 @@ export class BrokerDeployFormComponent {
       strategy_spec_path: this.specPath().trim(),
       qc_audit_copy_path: this.qcAuditCopyPath().trim(),
       qc_cloud_backtest_id: this.qcBacktestId().trim(),
-      account_id: this.accountId().trim(),
       start_date_ms: this.startDateMs,
       strategy_instance_id: this.instanceId().trim(),
       strategy_key: strategyKey,
@@ -555,12 +545,6 @@ export class BrokerDeployFormComponent {
       this.specPath.set(specPath);
     }
 
-    const accountId = this.renderedFieldValue('accountId');
-    if (this.shouldSyncRenderedValue(accountId, this.accountId(), includeEmpty, onlyEmptySignals)) {
-      this.manualAccountId.set(true);
-      this.accountId.set(accountId);
-    }
-
     const qcBacktestId = this.renderedFieldValue('qcBacktestId');
     if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty, onlyEmptySignals)) {
       this.qcBacktestId.set(qcBacktestId);
@@ -593,8 +577,7 @@ export class BrokerDeployFormComponent {
     this.manualSpecPath.set(true);
   }
   setAccountId(e: Event): void {
-    this.manualAccountId.set(true);
-    this.accountId.set(this.text(e));
+    void e;
   }
   setQcBacktestId(e: Event): void {
     this.qcBacktestId.set(this.text(e));

@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.engine.live.daemon_transport import DaemonResultKind
@@ -465,20 +465,17 @@ class HostRunnerActionResponse(BaseModel):
     exit_reason: str | None = None
 
 
-class HostRunnerDeployRequest(BaseModel):
-    """Request body for creating a run via the daemon (ADR 0006).
+class HostRunnerDeployBaseRequest(BaseModel):
+    """Common deploy request fields shared by public API and host daemon.
 
-    The daemon supplies ``repo_root`` / ``run_root`` from its own config — they
-    are deliberately NOT client-chosen. ``strategy_spec_path`` and
-    ``qc_audit_copy_path`` are resolved against the daemon's repo root and
-    confined to it. The QC anchor (``qc_cloud_backtest_id`` +
-    ``qc_audit_copy_path``) is required — a live run is never created without it.
+    ``account_id`` is deliberately absent here. The public data-plane API
+    derives it from connected broker evidence; the host-daemon request carries
+    the derived value after that boundary has failed closed.
     """
 
     strategy_spec_path: str = Field(min_length=1)
     qc_audit_copy_path: str = Field(min_length=1)
     qc_cloud_backtest_id: str = Field(min_length=1)
-    account_id: str = Field(min_length=1)
     start_date_ms: int = Field(ge=0)
     strategy_instance_id: str = ""
     # The hand-coded algorithm module the run starts under (#416). Recorded in
@@ -557,6 +554,52 @@ class HostRunnerDeployRequest(BaseModel):
                 ReconciliationTimingPolicy.model_validate(policy_block).model_dump()
             )
         return value
+
+
+class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
+    """Public deploy request accepted by ``/api/live-instances``.
+
+    Legacy clients may still send ``account_id``. The data-plane route treats
+    it only as an optional consistency check and never forwards it as authority;
+    the connected broker session authors the daemon payload.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:
+        extras = self.model_extra or {}
+        unexpected = sorted(key for key in extras if key != "account_id")
+        if unexpected:
+            raise ValueError(f"unknown deploy request fields: {unexpected}")
+        if "account_id" in extras:
+            value = extras["account_id"]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    "legacy account_id must be a non-empty string when provided"
+                )
+        return self
+
+    def client_supplied_account_id(self) -> str | None:
+        value = (self.model_extra or {}).get("account_id")
+        if not isinstance(value, str):
+            return None
+        return value.strip()
+
+
+class HostRunnerDeployRequest(HostRunnerDeployBaseRequest):
+    """Request body for creating a run via the daemon (ADR 0006).
+
+    The daemon supplies ``repo_root`` / ``run_root`` from its own config — they
+    are deliberately NOT client-chosen. ``strategy_spec_path`` and
+    ``qc_audit_copy_path`` are resolved against the daemon's repo root and
+    confined to it. The QC anchor (``qc_cloud_backtest_id`` +
+    ``qc_audit_copy_path``) is required — a live run is never created without it.
+    ``account_id`` is backend-authored by the public API boundary before this
+    request reaches the daemon.
+    """
+
+    account_id: str = Field(min_length=1)
 
 
 class HostRunnerDeployResponse(BaseModel):
@@ -1806,9 +1849,12 @@ class ActivityBrokerEventRow(BaseModel):
     """Normalized broker event ledger row for the selected session date."""
 
     id: str
+    visible_row_id: str | None = None
     ts_ms: int
     row_type: str
+    display_type: str | None = None
     source: str
+    source_label: str | None = None
     symbol: str | None = None
     side: Literal["BUY", "SELL"] | None = None
     quantity: float | None = None
@@ -1817,7 +1863,23 @@ class ActivityBrokerEventRow(BaseModel):
     summary: str
     verdict: str
     replay_count: int = 1
+    fold_key: str | None = None
+    fold_count: int = Field(default=1, ge=1)
+    cluster_key: str | None = None
+    cluster_label: str | None = None
+    child_evidence_ids: list[str] = Field(default_factory=list)
+    constituent_fill_ids: list[str] = Field(default_factory=list)
     evidence: list[ActivityEvidenceRef] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _default_visible_contract(self) -> ActivityBrokerEventRow:
+        if not self.visible_row_id:
+            self.visible_row_id = self.id
+        if self.display_type is None:
+            self.display_type = self.row_type.replace("_", " ").title()
+        if self.source_label is None:
+            self.source_label = self.source.replace("_", " ").title()
+        return self
 
 
 class ActivityPositionSnapshot(BaseModel):

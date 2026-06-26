@@ -17,6 +17,11 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
+from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
+from app.engine.live.intent_events import IntentEventType
+from app.engine.live.intent_wal import IntentWal
+from app.engine.live.run_ledger import LiveRunLedger
+from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
 from tests._fixtures.daemon_transport import as_typed_get
@@ -87,6 +92,76 @@ def _write_broker_activity_rows(root: Path, sid: str, rows: list[BrokerActivityR
         "".join(row.model_dump_json() + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _write_repairable_ledger(root: Path, run_id: str, sid: str, created_at_ms: int) -> Path:
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    write_live_run_ledger(
+        run_dir / "run_ledger.json",
+        LiveRunLedger(
+            run_id=run_id,
+            code_sha="abc123",
+            strategy_instance_id=sid,
+            strategy_spec_path="spec.json",
+            strategy_spec_sha256="spec-sha",
+            qc_audit_copy_path="qc.py",
+            qc_audit_copy_sha256="qc-sha",
+            qc_cloud_backtest_id="qc-1",
+            account_id="DU123",
+            start_date_ms=created_at_ms,
+            live_config={},
+        ),
+    )
+    return run_dir
+
+
+def _write_repair_intent(run_dir: Path, sid: str, *, quantity: int = 100) -> None:
+    namespace = f"learn-ai/{sid}/v1"
+    intent_id = "intent-repair-1"
+    order_ref = f"{namespace}:{intent_id}"
+    wal = IntentWal(run_dir / "intent_events.jsonl")
+    wal.append(
+        event_type=IntentEventType.PENDING_INTENT,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=order_ref,
+        order_spec={
+            "symbol": "SPY",
+            "action": "BUY" if quantity > 0 else "SELL",
+            "quantity": abs(quantity),
+            "order_type": "MKT",
+        },
+        ts_ms=1_782_400_000_000,
+    )
+    wal.append(
+        event_type=IntentEventType.SUBMITTED,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=order_ref,
+        order_id=42,
+        perm_id=9001,
+        ts_ms=1_782_400_000_100,
+    )
+
+
+def _write_execution(run_dir: Path, *, ts_ms: int, exec_id: str = "exec-repair-1") -> None:
+    writer = ExecutionWriter(run_dir / "executions.parquet")
+    writer.append_row(
+        ExecutionRow(
+            ts_ms=ts_ms,
+            exec_id=exec_id,
+            perm_id=9001,
+            client_order_id="live-42",
+            account_id="DU123",
+            symbol="SPY",
+            fill_quantity=100,
+            fill_price=501.25,
+            fee=1.0,
+            exec_time_ms=ts_ms - 50,
+        )
+    )
+    writer.close()
 
 
 @pytest.fixture
@@ -641,13 +716,90 @@ async def test_activity_projection_surfaces_full_broker_api_evidence_rows(
     body = response.json()
     assert any(ref["request_call"] == "reqPositionsAsync" for ref in body["evidence"])
     assert any(
-        row["row_type"] == "endpoint_snapshot" and row["source"] == "account.fetch_positions"
+        row["row_type"] == "broker_evidence"
+        and row["display_type"] == "Broker positions refreshed"
+        and row["status"] == "Positions refreshed"
+        and row["source"] == "account.fetch_positions"
         for row in body["broker_activity_rows"]
     )
+    assert not any(row["row_type"] == "endpoint_snapshot" for row in body["broker_activity_rows"])
     assert not any(
         warning["code"] == "broker_position_snapshot_unavailable"
         for warning in body["reconciliation_warnings"]
     )
+
+
+async def test_activity_projection_repairs_execution_artifact_without_wal_mutation(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "june25"
+    run_id = "run-june25"
+    fill_ms = int(datetime(2026, 6, 25, 15, 0, tzinfo=UTC).timestamp() * 1000)
+    run_dir = _write_repairable_ledger(root, run_id, sid, fill_ms)
+    _write_repair_intent(run_dir, sid)
+    _write_execution(run_dir, ts_ms=fill_ms)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/live-instances/{sid}/activity",
+            params={"session_date": "2026-06-25"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_date"] == "2026-06-25"
+    assert [row["id"] for row in body["fill_markers"]] == ["exec:exec-repair-1"]
+    fill_rows = [
+        row for row in body["broker_activity_rows"] if row["row_type"] == "fill"
+    ]
+    assert len(fill_rows) == 1
+    assert fill_rows[0]["source"] == "activity_repair_projection"
+    assert fill_rows[0]["display_type"] == "Broker fill"
+    assert fill_rows[0]["visible_row_id"] == "fill:exec:exec-repair-1"
+    assert not (root.parent / "live_instances" / sid / "broker_activity.jsonl").exists()
+
+
+async def test_activity_projection_adds_closed_trade_summary_without_double_counting(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "june25_closed"
+    run_id = "run-june25-closed"
+    entry_ms = int(datetime(2026, 6, 25, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    exit_ms = int(datetime(2026, 6, 25, 15, 0, tzinfo=UTC).timestamp() * 1000)
+    run_dir = _write_repairable_ledger(root, run_id, sid, entry_ms)
+    _write_repair_intent(run_dir, sid)
+    _write_execution(run_dir, ts_ms=exit_ms, exec_id="exec-closed-1")
+    writer = TradeWriter(run_dir / "trades.parquet")
+    writer.append_row(
+        TradeRow(
+            entry_time_ms=entry_ms,
+            exit_time_ms=exit_ms,
+            entry_price=500.0,
+            exit_price=501.25,
+            pnl_points=1.25,
+        )
+    )
+    writer.close()
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/live-instances/{sid}/activity",
+            params={"session_date": "2026-06-25"},
+        )
+
+    assert response.status_code == 200
+    rows = response.json()["broker_activity_rows"]
+    fill_rows = [row for row in rows if row["row_type"] == "fill"]
+    summary_rows = [row for row in rows if row["row_type"] == "closed_trade_summary"]
+    assert len(fill_rows) == 1
+    assert len(summary_rows) == 1
+    assert summary_rows[0]["display_type"] == "Closed trade"
+    assert summary_rows[0]["source_label"] == "Trade history"
+    assert summary_rows[0]["constituent_fill_ids"] == []
 
 
 async def test_active_dates_returns_run_dates_with_no_bars_marker(
@@ -1530,12 +1682,32 @@ def _deploy_body() -> dict:
     }
 
 
+def _set_connected_broker_account(
+    monkeypatch: pytest.MonkeyPatch,
+    account_id: str | None = "DU111",
+    *,
+    known: bool = True,
+) -> None:
+    async def fake_connected_account() -> tuple[str | None, bool]:
+        return account_id, known
+
+    monkeypatch.setattr(
+        live_instances,
+        "_fetch_broker_connected_account",
+        fake_connected_account,
+    )
+
+
 async def test_deploy_instance_created_returns_201(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, _ = app_with_root
+    captured: dict = {}
 
-    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+    _set_connected_broker_account(monkeypatch, "DU111")
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
         return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
 
     monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
@@ -1547,12 +1719,111 @@ async def test_deploy_instance_created_returns_201(
     body = response.json()
     assert body["run_id"] == "run-new"
     assert body["created"] is True
+    assert captured["account_id"] == "DU111"
+
+
+async def test_deploy_instance_uses_connected_broker_account_when_request_omits_account(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    captured: dict = {}
+    body = _deploy_body()
+    body.pop("account_id")
+
+    _set_connected_broker_account(monkeypatch, "DU222")
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 201
+    assert captured["account_id"] == "DU222"
+
+
+async def test_deploy_instance_rejects_stale_client_account_id(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    _set_connected_broker_account(monkeypatch, "DU222")
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise AssertionError("daemon deploy must not be called on account mismatch")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 409
+    assert "account mismatch" in response.json()["detail"].lower()
+
+
+async def test_deploy_instance_rejects_blank_legacy_account_id(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    body = _deploy_body()
+    body["account_id"] = " "
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise AssertionError("daemon deploy must not be called for invalid payload")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 422
+
+
+async def test_deploy_instance_rejects_unknown_public_deploy_field(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    body = _deploy_body()
+    body["operator_account_override"] = "DU111"
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise AssertionError("daemon deploy must not be called for invalid payload")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 422
+
+
+async def test_deploy_instance_rejects_when_connected_broker_account_unavailable(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+
+    _set_connected_broker_account(monkeypatch, None, known=False)
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise AssertionError("daemon deploy must not be called without broker account")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 409
+    assert "connected broker account unavailable" in response.json()["detail"].lower()
 
 
 async def test_deploy_instance_idempotent_returns_200(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, _ = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:
         return {"run_id": "run-existing", "run_dir": "/runs/run-existing", "created": False, "start": None}
@@ -1570,6 +1841,7 @@ async def test_deploy_instance_dirty_tree_propagates_409(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, _ = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:
         raise host_daemon_client.HostDaemonError(409, "Working tree is dirty; commit or stash before deploying.")
@@ -1587,6 +1859,7 @@ async def test_deploy_instance_daemon_unreachable_propagates_503(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, _ = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:
         raise host_daemon_client.HostDaemonError(503, "host daemon unreachable: connection refused")
@@ -1605,6 +1878,7 @@ async def test_deploy_instance_invalid_payload_returns_502(
     """A schema-invalid deploy payload from the daemon is an upstream contract
     failure → 502, not a 500 that makes the data plane look broken."""
     app, _ = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:
         return {"unexpected": "shape"}  # missing run_id/run_dir/created
@@ -2038,6 +2312,7 @@ async def test_deploy_outcome_unknown_returns_typed_409(
     OUTCOME_UNKNOWN — the run may or may not have been created on the
     daemon side."""
     app, _ = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:
         raise _outcome_unknown_exc()

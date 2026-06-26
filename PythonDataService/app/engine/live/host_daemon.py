@@ -44,6 +44,7 @@ from app.engine.live.deploy import (
     RunAlreadyExistsError,
     SizingPolicyMissingError,
     SpecOrAuditMissingError,
+    StrategyInstanceIdAlreadyUsedError,
     UnknownLiveConfigKeyError,
     deploy_run,
     git_head_sha,
@@ -550,6 +551,7 @@ class RunnerProcessManager:
             live_config=request.live_config,
             strategy_instance_id=request.strategy_instance_id,
             strategy_key=request.strategy_key,
+            parent_run_id=request.parent_run_id,
             force=request.force,
             idempotent=True,
         )
@@ -568,6 +570,17 @@ class RunnerProcessManager:
         except InvalidInstanceIdError as exc:
             raise HostRunnerError(
                 status.HTTP_400_BAD_REQUEST, f"Invalid deployment name: {exc}"
+            ) from exc
+        except StrategyInstanceIdAlreadyUsedError as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                (
+                    "Deployment name is already used by an existing strategy instance. "
+                    "Bot names are durable strategy instance IDs because paths and "
+                    "broker order references remain evidence. Redeploy from the current "
+                    "run to continue the same instance, or choose a new name. "
+                    f"Existing run: {exc.existing_run_id}."
+                ),
             ) from exc
         except ExplicitSurfaceSizingMismatchError as exc:
             raise HostRunnerError(

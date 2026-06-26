@@ -68,6 +68,10 @@ def repo_with_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return repo, spec_path, qc_path
 
 
+def _ledger_run_dirs(run_root: Path) -> list[Path]:
+    return [path for path in run_root.iterdir() if (path / "run_ledger.json").is_file()]
+
+
 def test_parser_supports_init_ledger_and_pre_flight() -> None:
     parser = build_parser()
     init_args = parser.parse_args(
@@ -311,7 +315,7 @@ def test_init_ledger_succeeds_in_clean_tree(repo_with_inputs: tuple[Path, Path, 
     assert rc == 0
 
     runs_root = tmp_path / "live_runs"
-    runs = list(runs_root.iterdir())
+    runs = _ledger_run_dirs(runs_root)
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["account_id"] == "DU111"
@@ -382,7 +386,7 @@ def test_init_ledger_writes_strategy_instance_id(
     )
     assert rc == 0
 
-    runs = list((tmp_path / "live_runs").iterdir())
+    runs = _ledger_run_dirs(tmp_path / "live_runs")
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "spy-ema-paper-1"
@@ -426,7 +430,7 @@ def test_init_ledger_writes_strategy_key(
     )
     assert rc == 0
 
-    runs = list((tmp_path / "live_runs").iterdir())
+    runs = _ledger_run_dirs(tmp_path / "live_runs")
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_key"] == "spy_ema_crossover"

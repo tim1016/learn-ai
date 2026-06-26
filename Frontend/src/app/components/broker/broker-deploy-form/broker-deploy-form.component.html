@@ -68,10 +68,10 @@
       <section class="group" aria-labelledby="account-section">
         <h2 id="account-section">Account</h2>
         <label class="field">
-          <span>Brokerage account</span>
-          <input data-deploy-field="accountId" type="text" [value]="accountId()" (input)="setAccountId($event)" required
-            placeholder="DU1234567" autocomplete="off" />
-          <small>{{ brokerAccountAvailable() ? 'Prefilled from the connected broker.' : 'Broker disconnected; enter the account id.' }}</small>
+          <span>Connected broker account</span>
+          <input pInputText data-deploy-field="accountId" type="text" [value]="accountId()" readonly required
+            placeholder="Broker account unavailable" autocomplete="off" aria-readonly="true" />
+          <small>{{ brokerAccountAvailable() ? 'Sourced from the connected broker session.' : 'Connect the broker session before deploying.' }}</small>
         </label>
       </section>
 

@@ -301,14 +301,15 @@ export type SizingPreset = 'safe_canary' | 'reference_parity' | 'custom';
 export type GovernedBy = 'live_config' | 'strategy_explicit';
 export type SizingProvenance = 'reference_native' | 'live_override' | 'spec_default';
 
-/** Deploy (create-a-run) request — forwarded by the data plane to the daemon
- * (ADR 0006). The QC anchor (`qc_cloud_backtest_id` + `qc_audit_copy_path`) is
- * mandatory by design. `start: true` chains a launch using `start_options`. */
+/** Deploy (create-a-run) request — accepted by the data plane, which derives
+ * broker account identity from the connected broker session before forwarding
+ * to the daemon (ADR 0006). The QC anchor (`qc_cloud_backtest_id` +
+ * `qc_audit_copy_path`) is mandatory by design. `start: true` chains a launch
+ * using `start_options`. */
 export interface HostRunnerDeployRequest {
   strategy_spec_path: string;
   qc_audit_copy_path: string;
   qc_cloud_backtest_id: string;
-  account_id: string;
   start_date_ms: number;
   strategy_instance_id: string;
   /** Algorithm module the run is reconciled to (#416); pins the Start guard. */
