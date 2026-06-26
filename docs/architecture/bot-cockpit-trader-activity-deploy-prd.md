@@ -414,7 +414,7 @@ Acceptance gates:
 
 This section records the local artifact evidence observed on 2026-06-26 so reviewers can compare the business logic above against real cockpit outcomes. It is not a normative requirement by itself; it is an incident/data appendix.
 
-### Run/death summary
+### Mode-separated run summary
 
 Artifact scan source: `PythonDataService/artifacts/live_runs/*/{run_ledger.json,run_status.json,reconciliation_receipt.json,poisoned.flag,decisions.parquet,live.log}`.
 
@@ -422,21 +422,49 @@ Today-specific terminal/running evidence:
 
 | Category | Count | Notes |
 |---|---:|---|
-| Fatal-halt deaths on 2026-06-26 | 8 | Includes earlier individual local bots plus the first four-symbol redeploy attempt. |
-| Poisoned runs on 2026-06-26 | 4 | The first AAPL/SPY/TSLA/DIA redeploy attempt wrote `poisoned.flag` for each bot. |
+| Real runtime crash/death requiring diagnosis | 1 | `JUN26TSLA` reconciled clean, traded, then fatal-halted after watchdog/control-plane lease loss and an unprovable submit during flatten. |
+| Start-gate refusal due to dirty account position | 1 | `JUN26GM` never reached reconciliation; it halted immediately because the account still held a TSLA position while GM was the expected symbol. |
+| Safety-system poison refusals | 4 | The first AAPL/SPY/TSLA/DIA redeploy attempt wrote `poisoned.flag` for each bot before any new order submission. This is fail-closed behavior, not a strategy crash. |
 | Currently running four-symbol deployment-validation bots | 4 | AAPL, SPY, TSLA, DIA all have daemon state `running` and clean reconciliation receipts. |
 | Current open positions in latest portfolio evidence | 0 | Latest portfolio update in each live log shows `position=0.0` for AAPL, SPY, TSLA, and DIA. |
 
-Fatal-halt rows from today:
+Mode-separated rows from today:
 
-| Created UTC | Strategy instance | Symbol | Run id prefix | Exit reason | Poison? | Reconciliation |
-|---|---|---|---|---|---|---|
-| 2026-06-26T13:52:03Z | `JUN26TSLA` | TSLA | `3c7bde89` | `fatal_halt` | No | passed / clean |
-| 2026-06-26T15:12:09Z | `JUN26GM` | GM | `575fca6b` | `fatal_halt` | No | none |
-| 2026-06-26T18:58:54Z | `DEPVAL-AAPL-20260626` | AAPL | `93e5505d` | `fatal_halt` | Yes | failed |
-| 2026-06-26T18:58:54Z | `DEPVAL-SPY-20260626` | SPY | `490e84c1` | `fatal_halt` | Yes | failed |
-| 2026-06-26T18:58:54Z | `DEPVAL-TSLA-20260626` | TSLA | `67bf40c3` | `fatal_halt` | Yes | failed |
-| 2026-06-26T18:58:54Z | `DEPVAL-DIA-20260626` | DIA | `4fe11e27` | `fatal_halt` | Yes | failed |
+| Created UTC | Strategy instance | Symbol | Run id prefix | Mode | Exit reason | Poison? | Reconciliation |
+|---|---|---|---|---|---|---|---|
+| 2026-06-26T13:52:03Z | `JUN26TSLA` | TSLA | `3c7bde89` | Runtime crash/death | `fatal_halt` | No | passed / clean |
+| 2026-06-26T15:12:09Z | `JUN26GM` | GM | `575fca6b` | Start-gate refusal | `fatal_halt` | No | none |
+| 2026-06-26T18:58:54Z | `DEPVAL-AAPL-20260626` | AAPL | `93e5505d` | Safety-system poison refusal | `fatal_halt` | Yes | failed |
+| 2026-06-26T18:58:54Z | `DEPVAL-SPY-20260626` | SPY | `490e84c1` | Safety-system poison refusal | `fatal_halt` | Yes | failed |
+| 2026-06-26T18:58:54Z | `DEPVAL-TSLA-20260626` | TSLA | `67bf40c3` | Safety-system poison refusal | `fatal_halt` | Yes | failed |
+| 2026-06-26T18:58:54Z | `DEPVAL-DIA-20260626` | DIA | `4fe11e27` | Safety-system poison refusal | `fatal_halt` | Yes | failed |
+
+### Genuine runtime crash: `JUN26TSLA`
+
+`JUN26TSLA` is the only confirmed runtime death in this evidence set. It was not a cold-start poison case:
+
+1. Cold-start reconciliation passed with `outcome=clean`.
+2. The bot traded TSLA repeatedly.
+3. At 2026-06-26T14:50:05Z the child watchdog entered `SUSPECTED_LOSS` because the control-plane lease expired.
+4. At 2026-06-26T14:50:10Z the watchdog recorded `CONTROL_PLANE_LEASE_LOST`, blocked submissions, persisted paused state, and requested flatten.
+5. Flatten did not complete within 20 seconds.
+6. The watchdog disconnected the broker and requested engine exit.
+7. The engine then attempted shutdown flatten, but `cancel_open_orders` failed because the IBKR client was already disconnected.
+8. The final exception was `SubmitUncertainHaltError`: submit state was not provable after `broker.place_order` raised `NotConnectedError: IBKR client is not connected`.
+
+This is the real crash to diagnose. The likely bug class is watchdog shutdown ordering / flatten timeout handling: the system disconnected the broker before the remaining flatten/cancel path could prove whether submit/flatten state was safe. The result was a non-poison fatal halt that left the account carrying TSLA exposure.
+
+### Dirty-account start refusal: `JUN26GM`
+
+`JUN26GM` did not crash while trading. It never got past the start gate:
+
+```text
+[START] HALT unexpected_position:
+1 unexpected position(s): [{'symbol': 'TSLA', 'quantity': 1.0, 'reason': 'non_strategy_symbol'}]
+(expected long-only GM; operator must reconcile the account before starting)
+```
+
+There is no reconciliation receipt because the unexpected-position gate runs before cold-start reconciliation. This halt was caused by the leftover TSLA position from the `JUN26TSLA` failure. It is a safety refusal in a dirty account, not an independent GM strategy crash.
 
 The four poisoned DEPVAL runs all have:
 
@@ -450,7 +478,18 @@ The four poisoned DEPVAL runs all have:
 }
 ```
 
-Plain interpretation: the account had historical broker executions from namespaces that the newly deployed bots did not own. The cold-start reconciler could not prove those executions were safe to ignore, so it correctly killed and poisoned the first redeploy attempt before any new order submission.
+Plain interpretation: the account had historical broker executions from namespaces that the newly deployed bots did not own. The cold-start reconciler could not prove those executions were safe to ignore, so it correctly refused the first redeploy attempt before any new order submission. These bots were blocked at the starting gate; they did not crash during trading.
+
+### Compounding failure chain
+
+The observed sequence was:
+
+1. `JUN26TSLA` genuinely fatal-halted and left TSLA exposure.
+2. `JUN26GM` used a fresh strategy id and a different expected symbol, then failed the unexpected-position gate because TSLA was still open.
+3. The first DEPVAL fleet redeploy minted four new strategy ids. Their namespaces did not own the morning executions, so the cold-start reconciler poisoned all four with `unknown_namespace`.
+4. After an explicit flatten/cancel/flat-account baseline, the fleet-reset redeploy succeeded and all four bots ran cleanly.
+
+Business-logic implication: most later "deaths" were downstream safety refusals caused by deploying new namespaces into a dirty account. The cockpit should not collapse these into one "bot died" bucket.
 
 ### Fleet-reset redeploy evidence
 
@@ -485,6 +524,9 @@ Business-logic implication: these bots are alive and have traded, but at this sn
 3. Should `cold_start_divergence: unknown_namespace` explain "historical execution in another namespace" as the primary trader label, with raw namespace/order refs only in technical details?
 4. Should a run that passes reconciliation and then fatal-halts for a non-poison reason be eligible for Start by default, or should every fatal halt require an explicit operator acknowledgement before Start?
 5. Should the Activity tab show a lifecycle row for every bot death, even when no trade occurred, so deaths are counted in the same timeline as fills?
+6. Should recovery redeploy default to reusing the same `strategy_instance_id` through parent lineage, and make minting a fresh id a deliberate "new bot, dirty-account risk" action?
+7. Should Deploy refuse fresh-namespace bots unless the account is flat or the operator has run an explicit fleet-reset baseline workflow?
+8. Should watchdog lease-loss flatten keep the broker connected until cancel/open-position proof is complete, or explicitly mark the outcome as unresolved and require emergency flatten before any further deploy?
 
 ## Out of Scope
 
