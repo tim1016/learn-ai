@@ -733,7 +733,11 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     """
     from datetime import time
 
-    from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS, LiveConfig
+    from app.engine.live.config import (
+        LIVE_CONFIG_LEDGER_KEYS,
+        LiveConfig,
+        stock_symbol_from_action_plan,
+    )
 
     if not payload:
         return LiveConfig()
@@ -748,6 +752,14 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     kwargs: dict = {}
     if "symbol" in payload:
         kwargs["symbol"] = str(payload["symbol"])
+    elif "action" in payload:
+        symbol_from_action = stock_symbol_from_action_plan(payload.get("action"))
+        if symbol_from_action is None:
+            raise ValueError(
+                "live_config.action must declare exactly one long stock leg "
+                "when live_config.symbol is absent"
+            )
+        kwargs["symbol"] = symbol_from_action
     if "force_flat_at" in payload:
         raw = payload["force_flat_at"]
         if raw is None:
@@ -1223,15 +1235,13 @@ def cmd_start(args: argparse.Namespace) -> int:
     except ImportError as exc:
         print(f"[START] could not import strategy module {args.strategy!r}: {exc}", file=sys.stderr)
         return 2
-    strategy_cls = getattr(module, registration.class_name, None)
-    if strategy_cls is None:
+    if getattr(module, registration.class_name, None) is None:
         print(
             f"[START] strategy module {args.strategy!r} has no class "
             f"{registration.class_name!r} (registered in StrategyRegistration.class_name).",
             file=sys.stderr,
         )
         return 2
-    strategy = strategy_cls()
 
     # Apply ledger.live_config so the runtime matches what was hashed
     # into run_id. Without this, code_sha + spec_hash + qc_audit_hash
@@ -1243,6 +1253,21 @@ def cmd_start(args: argparse.Namespace) -> int:
     except (TypeError, ValueError) as exc:
         print(
             f"[START] could not apply ledger.live_config to LiveConfig: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        param_kwargs = (
+            {"symbol": live_config.symbol}
+            if "symbol" in registration.param_schema.model_fields
+            else {}
+        )
+        strategy_params = registration.param_schema(**param_kwargs)
+        strategy = registration.build(strategy_params)
+    except Exception as exc:
+        print(
+            f"[START] could not build strategy {args.strategy!r} "
+            f"for symbol {live_config.symbol!r}: {exc}",
             file=sys.stderr,
         )
         return 2

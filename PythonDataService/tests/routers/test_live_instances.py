@@ -38,6 +38,54 @@ def _write_ledger(
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_resolve_symbol_prefers_stock_action_plan_over_spec_fixture(tmp_path: Path) -> None:
+    """A deployed TSLA action plan must not chart the SPY fixture symbol.
+
+    The deployment-validation spec fixture is pinned to SPY, but live deploys
+    can carry the operator-selected stock in ``live_config.action``. The
+    cockpit chart/activity resolver must use that stock before falling back to
+    the fixture.
+    """
+    root = tmp_path / "live_runs"
+    run_dir = root / "run-tsla"
+    run_dir.mkdir(parents=True)
+    spec_path = tmp_path / "deployment_validation.spec.json"
+    spec_path.write_text(json.dumps({"symbols": ["SPY"]}), encoding="utf-8")
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-tsla",
+                "strategy_instance_id": "JUN26TSLA",
+                "created_at_ms": 100,
+                "strategy_spec_path": str(spec_path),
+                "live_config": {
+                    "action": {
+                        "on_enter": [
+                            {
+                                "leg_id": "leg_1",
+                                "instrument": {"kind": "stock", "underlying": "TSLA"},
+                                "position": "long",
+                                "qty_ratio": 1,
+                            }
+                        ],
+                        "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+                    },
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    symbol = live_instances._resolve_symbol(
+        root,
+        live_binding=None,
+        runs=[{"run_dir": str(run_dir)}],
+    )
+
+    assert symbol == "TSLA"
+
+
 def _write_live_state(root: Path, sid: str, run_id: str, positions: dict[str, int]) -> None:
     live_state_dir = root.parent / "live_state" / sid
     live_state_dir.mkdir(parents=True, exist_ok=True)

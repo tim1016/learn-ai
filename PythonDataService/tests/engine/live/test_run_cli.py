@@ -906,6 +906,114 @@ def test_live_config_from_ledger_applies_known_fields() -> None:
     assert cfg.max_submit_latency_ms == 250
 
 
+def test_live_config_from_ledger_uses_single_stock_action_symbol() -> None:
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger(
+        {
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "leg_1",
+                        "instrument": {"kind": "stock", "underlying": "tsla"},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+            },
+            "sizing": {"kind": "FixedShares", "value": 1},
+        }
+    )
+
+    assert cfg.symbol == "TSLA"
+
+
+def test_live_config_from_ledger_explicit_symbol_wins_over_action_symbol() -> None:
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger(
+        {
+            "symbol": "QQQ",
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "leg_1",
+                        "instrument": {"kind": "stock", "underlying": "TSLA"},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+            },
+        }
+    )
+
+    assert cfg.symbol == "QQQ"
+
+
+def test_live_config_from_ledger_rejects_action_without_stock_symbol() -> None:
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(
+        ValueError,
+        match=r"live_config\.action must declare exactly one long stock leg",
+    ):
+        _live_config_from_ledger(
+            {
+                "action": {
+                    "on_enter": [
+                        {
+                            "leg_id": "leg_1",
+                            "instrument": {"kind": "stock", "underlying": "TSLA"},
+                            "position": "long",
+                            "qty_ratio": 1,
+                        },
+                        {
+                            "leg_id": "leg_2",
+                            "instrument": {"kind": "stock", "underlying": "AAPL"},
+                            "position": "long",
+                            "qty_ratio": 1,
+                        },
+                    ],
+                    "on_exit": [
+                        {"kind": "close_leg", "entry_leg_id": "leg_1"},
+                        {"kind": "close_leg", "entry_leg_id": "leg_2"},
+                    ],
+                },
+                "sizing": {"kind": "FixedShares", "value": 1},
+            }
+        )
+
+
+def test_live_config_from_ledger_rejects_short_stock_action_without_symbol() -> None:
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(
+        ValueError,
+        match=r"live_config\.action must declare exactly one long stock leg",
+    ):
+        _live_config_from_ledger(
+            {
+                "action": {
+                    "on_enter": [
+                        {
+                            "leg_id": "leg_1",
+                            "instrument": {"kind": "stock", "underlying": "TSLA"},
+                            "position": "short",
+                            "qty_ratio": 1,
+                        }
+                    ],
+                    "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+                },
+            }
+        )
+
+
 def test_live_config_from_ledger_handles_null_force_flat() -> None:
     from app.engine.live.run import _live_config_from_ledger
 

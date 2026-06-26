@@ -86,3 +86,38 @@ class LiveConfig:
     # (``caveat_lag_ms=2000``, ``excessive_lag_ms=10000``).
     reconciliation_timing_policy: dict | None = None
 
+
+def stock_symbol_from_action_plan(action: object) -> str | None:
+    """Return the single stock underlying declared by a live action plan.
+
+    Slice 1 action plans are operator-authored deploy identity. For the current
+    stock-only runtime path, exactly one long stock leg is the traded ticker
+    when ``live_config.symbol`` is absent. Option, short, and multi-leg plans
+    are not consumable by the stock runtime yet, so they deliberately return
+    ``None``.
+    """
+    if not isinstance(action, dict):
+        return None
+    on_enter = action.get("on_enter")
+    if not isinstance(on_enter, list) or not on_enter:
+        return None
+
+    symbols: set[str] = set()
+    for leg in on_enter:
+        if not isinstance(leg, dict):
+            return None
+        if leg.get("position") != "long":
+            return None
+        instrument = leg.get("instrument")
+        if not isinstance(instrument, dict):
+            return None
+        if instrument.get("kind") != "stock":
+            return None
+        underlying = instrument.get("underlying")
+        if not isinstance(underlying, str) or not underlying.strip():
+            return None
+        symbols.add(underlying.strip().upper())
+
+    if len(symbols) != 1 or len(on_enter) != 1:
+        return None
+    return next(iter(symbols))

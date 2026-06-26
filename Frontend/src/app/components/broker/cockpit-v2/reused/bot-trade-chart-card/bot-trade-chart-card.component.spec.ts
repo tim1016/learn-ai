@@ -1,6 +1,7 @@
 import type { Logical, LogicalRange } from 'lightweight-charts';
 import { describe, expect, it } from 'vitest';
 import {
+  filterActivityItemsForSymbol,
   isAtLiveEdge,
   localDateString,
   markerTimeForEventMs,
@@ -72,6 +73,27 @@ describe('markerTimeForEventMs', () => {
 
   it('preserves the original event timestamp when no candle contains it', () => {
     expect(markerTimeForEventMs(1_700_000, [bar(1_800_000)])).toBe(1_700);
+  });
+});
+
+describe('filterActivityItemsForSymbol', () => {
+  it('keeps only markers and annotations for the chart symbol', () => {
+    const items = [
+      { id: 'tsla-open', symbol: 'TSLA' },
+      { id: 'spy-open', symbol: 'SPY' },
+      { id: 'tsla-close', symbol: 'tsla' },
+    ];
+
+    expect(filterActivityItemsForSymbol('tsla', items).map((item) => item.id)).toEqual([
+      'tsla-open',
+      'tsla-close',
+    ]);
+  });
+
+  it('keeps all activity items when the activity symbol is blank', () => {
+    const items = [{ id: 'tsla-open', symbol: 'TSLA' }];
+
+    expect(filterActivityItemsForSymbol(' ', items)).toBe(items);
   });
 });
 
