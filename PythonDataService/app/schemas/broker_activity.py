@@ -30,6 +30,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 OrderSide = Literal["BUY", "SELL"]
+RecoveryProvenance = Literal["reconstructed"]
 
 
 class Verdict(StrEnum):
@@ -214,6 +215,12 @@ class BrokerActivityRow(BaseModel):
     # rows authored directly into the per-instance WAL.
     source_run_id: str | None = None
     source_seq: int | None = None
+
+    # ── Reconstruction provenance ───────────────────────────────────
+    # Populated only for rows repaired after the fact from raw callbacks
+    # or legacy run artifacts. Live-captured rows leave both fields null.
+    recovery_provenance: RecoveryProvenance | None = None
+    recovery_reason: str | None = None
 
 
 class BrokerActivityPage(BaseModel):
