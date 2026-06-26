@@ -115,14 +115,14 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
+from app.services.activity_evidence_matching import (
+    activity_evidence_ref_from_event,
+    matching_evidence_refs,
+)
 from app.services.activity_projection_contract import (
     activity_cluster_label,
     activity_evidence_narrative,
     fold_activity_event_rows,
-)
-from app.services.activity_evidence_matching import (
-    activity_evidence_ref_from_event,
-    matching_evidence_refs,
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.broker_activity_publisher_registry import get_publisher_registry

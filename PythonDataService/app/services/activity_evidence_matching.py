@@ -125,9 +125,7 @@ def _ref_matches_identity(ref: ActivityEvidenceRef, row_identity: dict[str, str 
         return True
     if ref.perm_id is not None and row_identity.get("perm_id") == ref.perm_id:
         return True
-    if ref.order_id is not None and row_identity.get("order_id") == ref.order_id:
-        return True
-    return False
+    return ref.order_id is not None and row_identity.get("order_id") == ref.order_id
 
 
 def _as_str_or_none(value: object) -> str | None:
