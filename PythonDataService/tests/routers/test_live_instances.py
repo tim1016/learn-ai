@@ -589,6 +589,80 @@ async def test_activity_projection_preserves_backend_fill_verdict(
     assert fill_events[0]["verdict"] == "unexpected"
 
 
+async def test_activity_projection_matches_evidence_to_specific_order(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_evidence_join"
+    _write_ledger(root, "run-evidence-join", sid, 100)
+    day = live_instances._today_ny()
+    fill_ms = int(
+        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
+        * 1000
+    )
+    buy_ref = f"learn-ai/{sid}/v1:intent-buy"
+    sell_ref = f"learn-ai/{sid}/v1:intent-sell"
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=fill_ms,
+                exec_ts_ms=fill_ms,
+                exec_id="exec-buy",
+                perm_id=501,
+                order_ref=buy_ref,
+                side="BUY",
+            ),
+            _broker_activity_row(
+                seq=2,
+                ts_ms=fill_ms + 60_000,
+                exec_ts_ms=fill_ms + 60_000,
+                exec_id="exec-sell",
+                perm_id=502,
+                order_ref=sell_ref,
+                side="SELL",
+            ),
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    buy_evidence = get_ibkr_api_evidence_recorder().record(
+        source="orders.place_paper_order",
+        account_id="DU123",
+        symbol="SPY",
+        strategy_instance_id=sid,
+        request=evidence_request(
+            "placeOrder",
+            order={"orderRef": buy_ref, "permId": 501, "orderId": 11},
+        ),
+        response=evidence_response("openOrder", fields={"permId": 501}),
+    )
+    sell_evidence = get_ibkr_api_evidence_recorder().record(
+        source="orders.place_paper_order",
+        account_id="DU123",
+        symbol="SPY",
+        strategy_instance_id=sid,
+        request=evidence_request(
+            "placeOrder",
+            order={"orderRef": sell_ref, "permId": 502, "orderId": 12},
+        ),
+        response=evidence_response("openOrder", fields={"permId": 502}),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    fills = {
+        row["id"]: row
+        for row in response.json()["broker_activity_rows"]
+        if row["row_type"] == "fill"
+    }
+    assert [ref["seq"] for ref in fills["exec:exec-buy"]["evidence"]] == [buy_evidence.seq]
+    assert [ref["seq"] for ref in fills["exec:exec-sell"]["evidence"]] == [sell_evidence.seq]
+
+
 async def test_activity_projection_emits_terminal_non_fill_events(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

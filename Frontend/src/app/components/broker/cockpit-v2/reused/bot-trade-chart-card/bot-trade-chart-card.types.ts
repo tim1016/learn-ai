@@ -101,6 +101,11 @@ export interface ActivityEvidenceRef {
   ts_ms: number;
   request_call: string;
   response_callback: string | null;
+  order_ref: string | null;
+  order_id: number | null;
+  perm_id: number | null;
+  exec_id: string | null;
+  symbol: string | null;
 }
 
 export interface ActivityFillMarker {

@@ -116,6 +116,53 @@
     }
   }
 
+  .event-detail {
+    padding: 0.75rem 0.875rem;
+    color: var(--text-secondary);
+
+    h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.78rem;
+      color: var(--text-primary);
+    }
+
+    ul {
+      display: grid;
+      gap: 0.45rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    p {
+      margin: 0;
+      color: var(--text-muted);
+    }
+  }
+
+  .event-detail-line,
+  .event-detail-identity {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .event-detail-line {
+    font-size: 0.75rem;
+  }
+
+  .event-detail-identity {
+    margin-top: 0.15rem;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+
+  .seq {
+    font-family: var(--font-mono);
+    color: var(--text-subtle);
+  }
+
   .chip {
     display: inline-block;
     padding: 0.1rem 0.45rem;

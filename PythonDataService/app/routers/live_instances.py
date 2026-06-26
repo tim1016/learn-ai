@@ -115,6 +115,10 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
+from app.services.activity_evidence_matching import (
+    activity_evidence_ref_from_event,
+    matching_evidence_refs,
+)
 from app.services.activity_projection_contract import (
     activity_cluster_label,
     activity_evidence_narrative,
@@ -2190,15 +2194,7 @@ def _activity_evidence_refs_for_session(
             continue
         if symbol is not None and event.symbol not in (None, symbol):
             continue
-        refs.append(
-            ActivityEvidenceRef(
-                source=event.source,
-                seq=event.seq,
-                ts_ms=event.ts_ms,
-                request_call=str(event.request.call),
-                response_callback=str(event.response.callback) if event.response else None,
-            )
-        )
+        refs.append(activity_evidence_ref_from_event(event))
     return refs
 
 
@@ -2309,7 +2305,11 @@ def _build_activity_projection(
             exec_ts_ms=int(row.exec_ts_ms),
             position_effect=effect,
             replay_count=len(fill_rows),
-            evidence=[ref for ref in evidence_refs if ref.request_call in {"placeOrder", "reqExecutionsAsync", "reqAllOpenOrders"}],
+            evidence=matching_evidence_refs(
+                row,
+                evidence_refs,
+                request_calls={"placeOrder", "reqExecutionsAsync", "reqAllOpenOrders"},
+            ),
         )
         fill_markers.append(marker)
         if len(fill_rows) > 1:
@@ -2389,7 +2389,11 @@ def _build_activity_projection(
                     next((m.position_effect for m in fill_markers if m.order_key == order_key), None)
                 ),
                 replay_count=max(1, len(fill_rows) - len(unique_fill_rows) + 1),
-                evidence=[ref for ref in evidence_refs if ref.request_call in {"placeOrder", "reqAllOpenOrders"}],
+                evidence=matching_evidence_refs(
+                    first,
+                    evidence_refs,
+                    request_calls={"placeOrder", "reqAllOpenOrders"},
+                ),
             )
         )
 
@@ -2447,7 +2451,11 @@ def _build_activity_projection(
                     status="engine pending",
                     summary=row.headline,
                     verdict=row.verdict.value,
-                    evidence=[ref for ref in evidence_refs if ref.request_call == "placeOrder"],
+                    evidence=matching_evidence_refs(
+                        row,
+                        evidence_refs,
+                        request_calls={"placeOrder"},
+                    ),
                 )
             )
         elif row.price is None and any(
@@ -2468,7 +2476,11 @@ def _build_activity_projection(
                     status="/".join(code.value for code in row.reason_codes),
                     summary=row.headline,
                     verdict=row.verdict.value,
-                    evidence=[ref for ref in evidence_refs if ref.request_call == "reqAllOpenOrders"],
+                    evidence=matching_evidence_refs(
+                        row,
+                        evidence_refs,
+                        request_calls={"reqAllOpenOrders"},
+                    ),
                 )
             )
     for ref in evidence_refs:

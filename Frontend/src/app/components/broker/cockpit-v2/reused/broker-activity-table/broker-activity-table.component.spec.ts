@@ -100,6 +100,11 @@ function eventRow(overrides: Partial<ActivityBrokerEventRow> = {}): ActivityBrok
         ts_ms: 1_700_000_000_000,
         request_call: 'reqPositionsAsync',
         response_callback: 'position',
+        order_ref: null,
+        order_id: null,
+        perm_id: null,
+        exec_id: null,
+        symbol: 'SPY',
       },
     ],
     ...overrides,
@@ -201,6 +206,11 @@ describe('BrokerActivityTableComponent', () => {
             ts_ms: 1_700_000_001_000,
             request_call: 'reqPositionsAsync',
             response_callback: 'position',
+            order_ref: null,
+            order_id: null,
+            perm_id: null,
+            exec_id: null,
+            symbol: 'SPY',
           },
         ],
       }),
@@ -209,6 +219,45 @@ describe('BrokerActivityTableComponent', () => {
 
     const refreshed = el.querySelector('[data-testid="broker-activity-event-row-evidence:2"]');
     expect(refreshed).toBe(original);
+  });
+
+  it('expands event rows and shows row-level IBKR evidence refs', () => {
+    const { el, component, fixture } = render({
+      rows: [],
+      eventRows: [
+        eventRow({
+          id: 'fill:exec-1',
+          visible_row_id: 'fill:exec-1',
+          row_type: 'fill',
+          display_type: 'Broker fill',
+          evidence: [
+            {
+              source: 'orders.place_paper_order',
+              seq: 42,
+              ts_ms: 1_700_000_000_100,
+              request_call: 'placeOrder',
+              response_callback: 'openOrder',
+              order_ref: 'learn-ai/sid/v1/intent-1',
+              order_id: 11,
+              perm_id: 9001,
+              exec_id: 'exec-1',
+              symbol: 'SPY',
+            },
+          ],
+        }),
+      ],
+    });
+    expect(el.textContent ?? '').not.toContain('placeOrder');
+
+    component.toggleEvent(eventRow({ id: 'fill:exec-1', visible_row_id: 'fill:exec-1' }));
+    fixture.detectChanges();
+
+    const drawer = el.querySelector('[data-testid="broker-activity-event-drawer-fill:exec-1"]');
+    expect(drawer).not.toBeNull();
+    expect(drawer?.textContent ?? '').toContain('placeOrder');
+    expect(drawer?.textContent ?? '').toContain('openOrder');
+    expect(drawer?.textContent ?? '').toContain('perm 9001');
+    expect(drawer?.textContent ?? '').toContain('exec exec-1');
   });
 
   it('renders the backend-authored narrative is NOT visible until drill-down (verbatim contract)', () => {

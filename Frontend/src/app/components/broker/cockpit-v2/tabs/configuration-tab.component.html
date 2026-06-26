@@ -22,54 +22,57 @@
   <section class="subsection" data-testid="configuration-deployment">
     <h3>Deployment</h3>
     <dl class="kv-grid">
-      <dt>strategy_key</dt>
+      <dt>Strategy</dt>
       <dd>{{ startDefaults()?.strategy ?? '—' }}</dd>
 
-      <dt>spec_path</dt>
-      <dd>{{ provenance()?.strategy_spec_path ?? '—' }}</dd>
-
-      <dt>schema_version</dt>
+      <dt>Schema version</dt>
       <dd>{{ provenance()?.schema_version ?? '—' }}</dd>
 
-      <dt>account</dt>
+      <dt>Broker account</dt>
       <dd>{{ provenance()?.account_id ?? '—' }}</dd>
 
-      <dt>max_orders_per_day</dt>
+      <dt>Daily order limit</dt>
       <dd>{{ startDefaults()?.max_orders_per_day ?? '—' }}</dd>
 
-      <dt>readonly</dt>
-      <dd>{{ startDefaults()?.readonly ?? false }}</dd>
+      <dt>Order mode</dt>
+      <dd>{{ orderMode(startDefaults()?.readonly) }}</dd>
 
-      <dt>hydrate_policy</dt>
-      <dd>{{ startDefaults()?.hydrate_policy ?? '—' }}</dd>
+      <dt>Restore previous state</dt>
+      <dd>{{ hydratePolicyLabel(startDefaults()?.hydrate_policy) }}</dd>
 
-      <dt>instrument_surface</dt>
-      <dd>{{ status().instrument_surface ?? '—' }}</dd>
+      <dt>Instrument handling</dt>
+      <dd>{{ instrumentSurfaceLabel(status().instrument_surface) }}</dd>
     </dl>
+    <details>
+      <summary>Technical deployment evidence</summary>
+      <dl class="kv-grid">
+        <dt>strategy_spec_path</dt>
+        <dd>{{ provenance()?.strategy_spec_path ?? '—' }}</dd>
+      </dl>
+    </details>
   </section>
 
   @if (sizing(); as siz) {
     <section class="subsection" data-testid="configuration-sizing">
       <h3>Sizing</h3>
       <dl class="kv-grid">
-        <dt>preset</dt>
+        <dt>Preset</dt>
         <dd>{{ siz.preset ?? '—' }}</dd>
 
-        <dt>policy</dt>
-        <dd>
-          @if (siz.policy) {
-            <code>{{ siz.policy | json }}</code>
-          } @else {
-            <span class="muted">pre-policy run</span>
-          }
-        </dd>
+        <dt>Evidence source</dt>
+        <dd>{{ sizingSourceLabel(siz.sizing_provenance) }}</dd>
 
-        <dt>provenance</dt>
-        <dd>{{ siz.sizing_provenance }}</dd>
-
-        <dt>governed_by</dt>
-        <dd>{{ siz.governed_by }}</dd>
+        <dt>Controlled by</dt>
+        <dd>{{ governedByLabel(siz.governed_by) }}</dd>
       </dl>
+      <details>
+        <summary>Technical sizing policy</summary>
+        @if (siz.policy) {
+          <pre class="json">{{ siz.policy | json }}</pre>
+        } @else {
+          <p class="muted">Pre-policy run</p>
+        }
+      </details>
     </section>
   }
 
@@ -83,11 +86,14 @@
   <section class="subsection" data-testid="configuration-action-plan">
     <h3>Action plan</h3>
     <p>
-      consumption: <code>{{ actionPlanProj().consumption }}</code> ·
-      anomaly: <code>{{ actionPlanProj().anomaly_verdict }}</code>
+      Engine use: <code>{{ actionPlanProj().consumption }}</code> ·
+      anomaly check: <code>{{ actionPlanProj().anomaly_verdict }}</code>
     </p>
     @if (actionPlan()) {
-      <pre class="json">{{ actionPlan() | json }}</pre>
+      <details>
+        <summary>Technical action-plan JSON</summary>
+        <pre class="json">{{ actionPlan() | json }}</pre>
+      </details>
     } @else {
       <p class="muted">No action plan recorded.</p>
     }
@@ -97,12 +103,12 @@
     <section class="subsection" data-testid="configuration-lineage">
       <h3>Redeploy lineage</h3>
       <dl class="kv-grid">
-        <dt>parent_run_id</dt>
+        <dt>Previous run</dt>
         <dd>{{ ln.parent_run_id ?? '—' }}</dd>
-        <dt>redeploy_reason</dt>
+        <dt>Reason</dt>
         <dd>{{ ln.redeploy_reason ?? '—' }}</dd>
-        <dt>redeployed_at_ms</dt>
-        <dd>{{ ln.redeployed_at_ms ?? '—' }}</dd>
+        <dt>Redeployed at</dt>
+        <dd>{{ ln.redeployed_at_ms ? fmtTimestampNy(ln.redeployed_at_ms) : '—' }}</dd>
       </dl>
     </section>
   }
