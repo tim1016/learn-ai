@@ -306,13 +306,10 @@ class IbkrBrokerAdapter(BrokerAdapter):
                 # consumer (Phase C-2c-b2-ii) reads the unfiltered
                 # buffer instead.
                 #
-                # Filter to fills only — § 7 only cares about
-                # executions, and the engine doesn't act on
-                # status/cancel/error transitions for foreign orders.
-                # Buffering them would force the engine to no-op
-                # over them on every drain. (CodeRabbit P2 from #191.)
-                if event.event_type != "fill":
-                    continue
+                # ADR 0014 / issue #684 PR3 — buffer every callback type so the
+                # host runner can persist the raw broker-callback WAL. The
+                # engine's portfolio path still no-ops non-fill events in
+                # ``LiveEngine._convert_ibkr_fill``.
                 self._event_buffer.append(event)
         except asyncio.CancelledError:
             raise

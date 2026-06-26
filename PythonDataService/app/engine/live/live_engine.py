@@ -43,6 +43,12 @@ from app.engine.live.artifacts import (
     TradeRow,
 )
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
+from app.engine.live.broker_callbacks import (
+    BrokerCallbackWal,
+)
+from app.engine.live.broker_callbacks import (
+    broker_callbacks_wal_path as default_broker_callbacks_wal_path,
+)
 from app.engine.live.command_channel import (
     Command,
     CommandChannel,
@@ -82,6 +88,10 @@ logger = logging.getLogger(__name__)
 
 
 _ENGINE_TZ = ZoneInfo("America/New_York")
+
+
+def broker_callbacks_wal_path_from_output(output_dir: Path | None) -> Path | None:
+    return default_broker_callbacks_wal_path(output_dir) if output_dir is not None else None
 
 
 async def _next_bar_or_shutdown(
@@ -482,6 +492,11 @@ class LiveEngine:
         # the broker still echoes the prior session's ``perm_id`` on fills.
         # ``None`` keeps the prior pre-Phase-5E behavior (warn + drop).
         intent_wal_path: Path | None = None,
+        # ADR 0014 / issue #684 PR3 — host-runner-owned raw callback WAL.
+        # Defaults to ``<output_dir>/broker_callbacks.jsonl`` when a run_dir is
+        # present. Tests may pass an explicit path; callers with no output_dir
+        # stay artifact-free.
+        broker_callbacks_wal_path: Path | None = None,
         # Phase 7B / VCR-0010 — mid-session broker safety verdict observer.
         # Called at the top of every bar iteration (BEFORE pending submits).
         # When the provider returns a non-``paper-only`` and non-``None``
@@ -618,6 +633,14 @@ class LiveEngine:
         # Phase 5E / VCR-0012 — fold path for the cross-restart fill classifier
         # (see ``_resolve_meta_via_intent_wal``).
         self._intent_wal_path = intent_wal_path
+        callback_wal_path = (
+            broker_callbacks_wal_path
+            if broker_callbacks_wal_path is not None
+            else broker_callbacks_wal_path_from_output(output_dir)
+        )
+        self._broker_callbacks_wal = (
+            BrokerCallbackWal(callback_wal_path) if callback_wal_path is not None else None
+        )
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
         # PRD #619-B B3 — engine_runtime aggregator. Producer hooks below
@@ -1029,6 +1052,7 @@ class LiveEngine:
                 # a second drain in _drain_real_broker_order_events
                 # would see nothing.
                 raw_real_events = self._drain_raw_real_broker_events()
+                self._append_raw_broker_callbacks(raw_real_events)
                 if self._halt_enabled and raw_real_events:
                     last_clean_ms = (
                         int(previous_bar.end_time.timestamp() * 1000)
@@ -1284,6 +1308,7 @@ class LiveEngine:
                 started_event_stream = False
                 self._raise_if_event_stream_failed()
                 final_raw_events = self._drain_raw_real_broker_events()
+                self._append_raw_broker_callbacks(final_raw_events)
                 if self._halt_enabled and final_raw_events:
                     last_clean_ms = int(previous_bar.end_time.timestamp() * 1000) if previous_bar is not None else 0
                     self._extend_seen_executions(seen_executions, final_raw_events)
@@ -2161,6 +2186,13 @@ class LiveEngine:
         if not isinstance(self._broker, IbkrEventAdapter):
             return []
         return self._broker.drain_broker_events()
+
+    def _append_raw_broker_callbacks(self, raw_events: list[IbkrOrderEvent]) -> None:
+        """Persist raw broker callbacks before projection or portfolio mutation."""
+        if self._broker_callbacks_wal is None:
+            return
+        for event in raw_events:
+            self._broker_callbacks_wal.append_event(event)
 
     def _extend_seen_executions(self, seen_executions: list[dict], raw_events: list[IbkrOrderEvent]) -> None:
         """Append fill events from a raw drain to the cumulative executions list.

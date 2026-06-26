@@ -70,13 +70,17 @@ class LiveStateEnvelope(BaseModel):
     # Defaults to 0 so envelopes written before this field read back cleanly.
     last_intent_wal_seq: int = Field(default=0, ge=0)
 
-    # ADR 0014 — broker_activity.jsonl WAL cursor. Tracks the highest
-    # ``seq`` already folded into the publisher's resume state. The
-    # actual rows live in the sibling ``broker_activity.jsonl`` (ADR-0008
-    # amendment); the envelope only carries the cursor so cold-start can
-    # resume the publisher without re-walking the WAL from seq 0.
-    # Defaults to 0 so envelopes written before this field shipped read
+    # ADR 0014 — raw broker callback projection cursor. Tracks the highest
+    # ``broker_callbacks.jsonl`` seq projected into authored broker-activity
+    # rows. Defaults to 0 so envelopes written before this field shipped read
     # back cleanly.
+    last_broker_callbacks_wal_seq: int = Field(default=0, ge=0)
+
+    # ADR 0014 — broker_activity.jsonl authored-row cursor. Tracks the highest
+    # ``seq`` already exposed through the publisher's REST/SSE surface. The
+    # actual rows live in ``broker_activity.jsonl``; the envelope only carries
+    # the cursor so cold-start can resume the publisher without re-walking the
+    # WAL from seq 0. Defaults to 0 so older envelopes read back cleanly.
     last_broker_activity_wal_seq: int = Field(default=0, ge=0)
 
     # ADR 0009 § 11 — the per-trade sizing audit log. Bounded ring buffer
