@@ -5,6 +5,7 @@ import {
   input,
   signal,
 } from '@angular/core';
+import { TagModule } from 'primeng/tag';
 
 import type { BrokerActivityHealth } from '../../../../../api/live-instances.types';
 import { fmtCurrency, fmtNumber, fmtTimestampNy } from '../../../format';
@@ -46,7 +47,7 @@ interface GroupedRows {
 @Component({
   selector: 'app-broker-activity-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BrokerActivityRowDetailComponent, OperatorNoticeComponent],
+  imports: [BrokerActivityRowDetailComponent, OperatorNoticeComponent, TagModule],
   templateUrl: './broker-activity-table.component.html',
   styleUrl: './broker-activity-table.component.scss',
 })

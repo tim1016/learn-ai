@@ -171,6 +171,50 @@ def test_deploy_run_refuses_historical_strategy_instance_id_reuse(
 
 
 @requires_git
+def test_deploy_run_allows_parent_lineage_same_instance_redeploy(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    first = deploy_run(
+        _params(repo, spec, qc, run_root, strategy_instance_id="spy-ema-paper")
+    )
+    second = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            run_root,
+            strategy_instance_id="spy-ema-paper",
+            parent_run_id=first.run_id,
+            start_date_ms=1700000001000,
+        )
+    )
+
+    assert second.created is True
+    assert second.run_id != first.run_id
+    ledger = json.loads((second.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["strategy_instance_id"] == "spy-ema-paper"
+
+
+@requires_git
+def test_deploy_run_fails_closed_on_corrupt_historical_ledger(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+    bad_run = run_root / "bad-run"
+    bad_run.mkdir(parents=True)
+    (bad_run / "run_ledger.json").write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(DeployIOError, match=r"could not read historical ledger"):
+        deploy_run(
+            _params(repo, spec, qc, run_root, strategy_instance_id="spy-ema-paper")
+        )
+
+
+@requires_git
 def test_deploy_run_refuses_dirty_tree(
     repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
 ) -> None:

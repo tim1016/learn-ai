@@ -35,7 +35,7 @@ Activity and incidents will fold repeated consecutive phenomena using backend-au
 
 Audit and Configuration will be separated: Configuration shows what the bot was intended and configured to run with; Audit shows evidence of what happened and whether that evidence supports the intended configuration. Raw JSON and exact codes move to technical details.
 
-Deploy a strategy will create or select validated strategy packages through a backend-owned package registry. The package registry is net-new: today's deploy form still submits loose raw fields. The final bot name is the lifetime-unique, system-safe `strategy_instance_id`. The broker account is display-only evidence from the connected broker session; if it is unavailable or ambiguous, Deploy fails closed. Strategy settings appear only when the selected package requires trader-tunable controls. Stock and option action-plan selection uses rich trader-readable pickers. PrimeNG components and app theme tokens are the default UI vocabulary, with Apache ECharts retained for charts.
+Deploy a strategy will create or select validated strategy packages through a backend-owned package registry. The package registry is net-new: today's deploy form still submits loose raw fields. The final bot name is the durable, system-safe `strategy_instance_id`; unrelated bots cannot reuse an existing identity, while recovery redeploys continue the same identity through explicit parent lineage. The broker account is display-only evidence from the connected broker session; if it is unavailable or ambiguous, Deploy fails closed. Strategy settings appear only when the selected package requires trader-tunable controls. Stock and option action-plan selection uses rich trader-readable pickers. PrimeNG components and app theme tokens are the default UI vocabulary, with Apache ECharts retained for charts.
 
 ## Grounded Implementation Gaps
 
@@ -82,7 +82,7 @@ This PRD depends on several pieces that are not production-wired today. They are
 29. As a trader, I want Audit to show evidence of what happened, so that it does not duplicate Configuration as another raw settings page.
 30. As a trader, I want Configuration to show intended bot setup, so that I know what the bot was supposed to run.
 31. As a trader, I want duplicated audit/config fields removed or linked, so that I do not have to reconcile two versions of the same fact.
-32. As a trader, I want Deploy a strategy to prefill a random bot name candidate, so that I can start from a sensible lifetime-unique identity.
+32. As a trader, I want Deploy a strategy to prefill a random bot name candidate, so that I can start from a sensible system-safe identity.
 33. As a trader, I want to edit the bot name before deploy, so that the Bot Cockpit identity is meaningful to me.
 34. As an engineer, I want the bot name to be the `strategy_instance_id`, so that there is no display-only identity drifting from durable identity.
 35. As a trader, I want bot-name lifetime uniqueness enforced, so that I do not confuse two deployed bots or reuse a broker attribution namespace.
@@ -113,7 +113,7 @@ This PRD depends on several pieces that are not production-wired today. They are
 60. As an implementation agent, I want the PRD broken into vertical slices later, so that each slice can be independently verified.
 61. As an engineer, I want the CI path to use recorded/replayed fill fixtures, so that implementation is not blocked on waiting for a future market session.
 62. As an engineer, I want Deploy's removal of manual broker-account entry called out as an intentional behavior change, so that redeploy behavior during broker outages is reviewed deliberately.
-63. As a trader, I want closed-trade summaries visually tied to their constituent fills, so that I do not double-count a round trip as extra broker activity.
+63. As a trader, I want closed-trade summaries visually tied to their constituent fills when the backend has a reliable join key, so that I do not double-count a round trip as extra broker activity.
 64. As an engineer, I want package evidence drift to fail closed at deploy/redeploy, so that a package cannot silently point at changed validation artifacts.
 
 ## Implementation Decisions
@@ -142,7 +142,7 @@ This PRD depends on several pieces that are not production-wired today. They are
 22. Package creation takes selected strategy/spec inputs plus selected validation evidence; storage and validation are backend-owned.
 23. Strategy settings are shown only as package-defined trader controls when required.
 24. Bot name and `strategy_instance_id` are the same final identity.
-25. Deploy may prefill a random editable bot name, but the final identity is lifetime-unique and system-safe.
+25. Deploy may prefill a random editable bot name, but the final identity is system-safe and cannot collide with an unrelated historical bot.
 26. Broker account on Deploy is read-only evidence from the connected broker session.
 27. Deploy fails closed when the connected broker account is absent or ambiguous; this intentionally removes current manual account entry.
 28. Action-plan stock and option selection uses trader-readable instrument pickers.
@@ -170,7 +170,7 @@ Idempotency and merge rules:
 - Lifecycle rows dedupe by order identity plus lifecycle meaning.
 - Reconstructed rows carry source run id, source sequence when known, recovery provenance, and recovery reason.
 - Closed-trade summaries from `trades.parquet` use a separate stable identity from broker fill rows. They do not pretend to be IBKR executions.
-- A closed-trade summary appears as its own `closed_trade_summary` row type/section and references its constituent fill visible-row ids. It is an economic round-trip summary, not another broker execution, and it must not be counted in broker-fill totals.
+- A closed-trade summary appears as its own `closed_trade_summary` row type/section. It references constituent fill visible-row ids only when the backend has a reliable join key. It is an economic round-trip summary, not another broker execution, and it must not be counted in broker-fill totals.
 
 Visible row contract:
 
@@ -178,7 +178,7 @@ Visible row contract:
 - Rows that represent a single authored broker row carry the broker row sequence in technical details.
 - Folded rows carry `fold_key`, `fold_count`, and the child evidence rows/ids.
 - Structurally clustered rows carry `cluster_key` and `cluster_label` separately from fold fields.
-- Closed-trade summary rows carry constituent fill references so the UI can show the relationship without double-counting.
+- Closed-trade summary rows may carry constituent fill references when the backend can prove the relationship without time-window guessing.
 
 ## Event Narrative Registry Contract
 
@@ -256,9 +256,9 @@ Do not implement this PRD as one branch. Split it into two independent epics.
 
 ### Epic A — Activity truth, narratives, and stability
 
-1. **A0: Activity projection response contract.** Define the full response schema once: `visible_row_id`, row type, `cluster_key`, `cluster_label`, `fold_key`, `fold_count`, provenance, child evidence references, constituent fill references, and all timestamp fields as `int64 ms UTC`. A1/A1b/A2/A3 extend this stable interface instead of changing it independently.
+1. **A0: Activity projection response contract.** Define the full response schema once: `visible_row_id`, row type, `cluster_key`, `cluster_label`, `fold_key`, `fold_count`, provenance, child evidence references, optional constituent fill references, and all timestamp fields as `int64 ms UTC`. A1/A1b/A2/A3 extend this stable interface instead of changing it independently.
 2. **A1: Execution-fill repair wiring.** Production repair trigger, separate repair projection/cache, lock/idempotency, source artifact signature, JUNE-25-style fixture, execution reconstruction from callbacks/`executions.parquet`, and provenance. No broker-activity WAL writes from Activity GET.
-3. **A1b: Closed-trade summary projection.** `trades.parquet` summary rows, distinct `closed_trade_summary` row type/section, constituent fill references, no double-counting with broker fills.
+3. **A1b: Closed-trade summary projection.** `trades.parquet` summary rows, distinct `closed_trade_summary` row type/section, optional proven constituent fill references, no double-counting with broker fills.
 4. **A2: Evidence narrative registry.** Catalog current evidence recorder events, backend-authored labels/explanations, unmapped diagnostic fallback, per-surface raw-code tests for Activity.
 5. **A3: Backend cluster/fold contract.** `visible_row_id`, `cluster_key`, `cluster_label`, `fold_key`, `fold_count`, child evidence details; migrate away from Angular-derived grouping.
 6. **A4: Frontend incremental merge.** Signal-backed row store keyed by `visible_row_id`; preserve expansion state and avoid full-table replacement. `resource()` may load raw responses, but it must not be bound directly to table replacement when no-flash behavior is required.
@@ -267,7 +267,7 @@ Do not implement this PRD as one branch. Split it into two independent epics.
 ### Epic B — Deploy validated packages
 
 1. **B1: Package registry contract.** Backend schema, storage, validation assertions, package creation/selection API, and mapping from today's raw deploy fields.
-2. **B2: Deploy form package flow.** Bot-name prefill and lifetime uniqueness, package selector/creator, display-only connected account, fail-closed account behavior, package settings controls.
+2. **B2: Deploy form package flow.** Bot-name prefill, unrelated-identity collision protection, recovery redeploy lineage, package selector/creator, display-only connected account, fail-closed account behavior, package settings controls.
 3. **B3: Instrument pickers and UI modernization.** Trader-readable stock/option pickers, PrimeNG forms/panels/badges/dialogs within the owned Deploy surface, app theme-token styling.
 
 Cross-cutting gates such as "no raw codes in primary UI" are scoped per surface and per slice. A slice passes when its owned surfaces are clean; the full PRD passes when all named surfaces are clean.
@@ -295,7 +295,7 @@ Prior art exists in the cockpit component specs, broker activity service tests, 
 Acceptance gates:
 
 - A backend projection test proves a JUNE-25-style recorded fixture with `executions.parquet` and no per-instance broker activity WAL produces repaired Activity fill rows in CI.
-- A backend projection test proves a recorded fixture with `trades.parquet` produces closed-trade summary rows with constituent fill references in CI.
+- A backend projection test proves a recorded fixture with `trades.parquet` produces closed-trade summary rows in CI without inferring constituent fill references from time windows.
 - A frontend render test proves repaired fill rows and closed-trade summary rows render in the correct Activity sections without double-counting fills.
 - A replayed recent-stream fill fixture appears in Activity without manual reconstruction in CI.
 - A fresh live-paper fill from the next market-session bot run is used as post-merge operational confirmation, not as a PR merge blocker.
@@ -304,7 +304,7 @@ Acceptance gates:
 - Activity refresh does not replace the whole visible table when no usable row changed.
 - All primary market/session times are displayed in ET while technical details retain canonical UTC millisecond evidence.
 - Deploy can create/select a validated package, use bot name as identity, display connected account read-only, and avoid raw settings path inputs unless shown as technical provenance.
-- Deploy refuses reuse of any historical bot name / `strategy_instance_id`, not only currently active names.
+- Deploy refuses reuse of any historical bot name / `strategy_instance_id` for unrelated bots, not only currently active names, while allowing explicit same-instance recovery redeploys from a parent run.
 - Deploy/redeploy fails closed with a trader-readable package-evidence-drift message when package artifact hashes no longer match.
 - PrimeNG components and app theme tokens are used for ordinary tables/panels/forms/badges where replacement is straightforward within the slice's owned surface.
 

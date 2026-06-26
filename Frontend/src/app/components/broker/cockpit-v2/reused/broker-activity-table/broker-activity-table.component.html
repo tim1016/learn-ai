@@ -74,9 +74,12 @@
               <td>
                 {{ row.display_type }}
                 @if (row.fold_count > 1) {
-                  <span class="count-badge" [attr.aria-label]="'Repeated ' + row.fold_count + ' times'">
-                    {{ row.fold_count }}x
-                  </span>
+                  <p-tag
+                    class="activity-tag"
+                    severity="info"
+                    [value]="row.fold_count + 'x'"
+                    [attr.aria-label]="'Repeated ' + row.fold_count + ' times'"
+                  />
                 }
               </td>
               <td>{{ row.source_label }}</td>
@@ -99,13 +102,15 @@
               <td>{{ row.status ?? row.verdict }}</td>
               <td>
                 {{ row.summary }}
-                @if (row.cluster_label) {
-                  <span class="cluster-label">{{ row.cluster_label }}</span>
+                @if (row.cluster_label; as clusterLabel) {
+                  <p-tag class="activity-tag" severity="secondary" [value]="clusterLabel" />
                 }
                 @if (row.constituent_fill_ids.length > 0) {
-                  <span class="cluster-label">
-                    {{ row.constituent_fill_ids.length }} fill(s)
-                  </span>
+                  <p-tag
+                    class="activity-tag"
+                    severity="info"
+                    [value]="row.constituent_fill_ids.length + ' fill(s)'"
+                  />
                 }
               </td>
               <td>{{ row.evidence.length }}</td>

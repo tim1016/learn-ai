@@ -799,7 +799,7 @@ async def test_activity_projection_adds_closed_trade_summary_without_double_coun
     assert len(summary_rows) == 1
     assert summary_rows[0]["display_type"] == "Closed trade"
     assert summary_rows[0]["source_label"] == "Trade history"
-    assert summary_rows[0]["constituent_fill_ids"] == ["fill:exec:exec-closed-1"]
+    assert summary_rows[0]["constituent_fill_ids"] == []
 
 
 async def test_active_dates_returns_run_dates_with_no_bars_marker(
@@ -1762,6 +1762,42 @@ async def test_deploy_instance_rejects_stale_client_account_id(
 
     assert response.status_code == 409
     assert "account mismatch" in response.json()["detail"].lower()
+
+
+async def test_deploy_instance_rejects_blank_legacy_account_id(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    body = _deploy_body()
+    body["account_id"] = " "
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise AssertionError("daemon deploy must not be called for invalid payload")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 422
+
+
+async def test_deploy_instance_rejects_unknown_public_deploy_field(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = app_with_root
+    body = _deploy_body()
+    body["operator_account_override"] = "DU111"
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        raise AssertionError("daemon deploy must not be called for invalid payload")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 422
 
 
 async def test_deploy_instance_rejects_when_connected_broker_account_unavailable(

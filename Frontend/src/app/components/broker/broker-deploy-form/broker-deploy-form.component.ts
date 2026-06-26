@@ -11,6 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+import { InputTextModule } from 'primeng/inputtext';
 import type {
   HostRunnerDeployRequest,
   HostRunnerDeployResponse,
@@ -56,6 +57,7 @@ const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '
     BrokerConnectivityStripComponent,
     BrokerOperationResultComponent,
     ActionPlanPickerComponent,
+    InputTextModule,
   ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
@@ -74,8 +76,8 @@ export class BrokerDeployFormComponent {
   // Used only to pre-empt the daemon's "already active" 409: a start-immediately
   // deploy onto an instance that already has a live runner is rejected.
   readonly instances = resource({ loader: () => this.svc.getInstances() });
-  // Best-effort: the account prefill is convenience only — broker may be down,
-  // in which case the operator types the account id manually.
+  // Display-only: the deploy boundary derives this from the connected broker
+  // session and rejects deployment while broker identity is unavailable.
   readonly account = resource({ loader: () => this.broker.account() });
   // ADR 0009 § 9 — broker positions for the symbol-scoped all-in coexistence
   // guard (Decision 13). Loaded once on form open; the guard only consults it

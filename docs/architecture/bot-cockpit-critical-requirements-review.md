@@ -12,8 +12,9 @@
    stable synthetic projection identity and explicit `activity_repair_projection`
    provenance.
 3. Closed-trade summaries from `trades.parquet` are separate
-   `closed_trade_summary` Activity rows. They reference constituent fill
-   visible-row ids and are not counted as additional broker fills.
+   `closed_trade_summary` Activity rows. They do not infer constituent fill
+   ids until the backend has a reliable join key, and they are not counted as
+   additional broker fills.
 4. Broker evidence rows now use backend-authored trader labels such as
    "Broker positions refreshed" and "Broker executions refreshed". Unknown
    recorder calls route to an unmapped broker diagnostic.
@@ -25,9 +26,11 @@
    backend still tolerates legacy clients that send `account_id`, but treats it
    only as a consistency hint: mismatches are rejected and the daemon payload is
    authored from the connected broker account.
-7. Bot name / `strategy_instance_id` is lifetime-unique across historical run
-   ledgers. Exact idempotent redeploy of the same content-addressed run remains
-   allowed; creating a new run with a historical bot name is rejected.
+7. Bot name / `strategy_instance_id` is protected against accidental reuse
+   across unrelated historical run ledgers. Exact idempotent redeploy of the
+   same content-addressed run remains allowed, and same-instance recovery
+   redeploys are allowed only when the request supplies a parent run whose
+   ledger already belongs to that strategy instance.
 8. Activity repair cache selection uses cheap artifact-existence and file-stat
    fingerprints before reading parquet. Warm cache hits do not scan
    `executions.parquet` or `trades.parquet`.
@@ -52,9 +55,9 @@
 2. Confirm whether direct host-daemon `/deploy` should also be forbidden outside
    the data-plane API. The daemon still requires `account_id` because it does not
    own broker session state; it should be treated as a privileged host seam.
-3. Confirm whether exact idempotent redeploy with the same bot name should stay
-   allowed. The implementation preserves it because no new evidence namespace is
-   created.
+3. Confirm whether same-instance recovery redeploy with an explicit parent run
+   should stay allowed. The implementation preserves it because it continues the
+   existing evidence namespace rather than creating a new unrelated bot.
 4. Confirm whether the first implementation of validated strategy packages may
    remain a follow-up slice. This pass did not add the package registry because
    the deploy form already has substantial validation and the production risk was

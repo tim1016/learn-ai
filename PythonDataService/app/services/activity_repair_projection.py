@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from app.schemas.broker_activity import BrokerActivityRow
@@ -50,7 +51,7 @@ def load_activity_repair_projection(
     against the caller's current WAL rows before returning so a live row that
     arrives after cache creation suppresses its repaired counterpart.
     """
-    run_specs = tuple(_run_specs_with_trade_artifacts(runs))
+    run_specs = tuple(_run_specs_with_repair_artifacts(runs))
     if not run_specs:
         return ActivityRepairProjection(broker_rows=(), closed_trade_rows=())
 
@@ -142,7 +143,7 @@ def _closed_trade_events_for_run(
     execution_rows = _read_parquet_rows(run_dir / "executions.parquet")
     fallback_symbol = _first_symbol(execution_rows)
     out: list[ActivityBrokerEventRow] = []
-    for idx, row in enumerate(rows, start=1):
+    for row in rows:
         entry_ms = _as_int_or_none(row.get("entry_time_ms"))
         exit_ms = _as_int_or_none(row.get("exit_time_ms"))
         entry_price = _as_float_or_none(row.get("entry_price"))
@@ -153,13 +154,20 @@ def _closed_trade_events_for_run(
         if entry_ms is None or entry_price is None or exit_price is None or pnl_points is None:
             continue
         trade_symbol = _as_str_or_none(row.get("symbol")) or fallback_symbol
-        fill_ids = _constituent_fill_ids(execution_rows, entry_ms=entry_ms, exit_ms=exit_ms)
         summary = (
             f"Closed {trade_symbol or 'trade'} round trip: "
             f"{entry_price:.2f} to {exit_price:.2f}, "
             f"{pnl_points:+.2f} points"
         )
-        stable_id = f"closed:{run_id}:{idx}:{entry_ms}:{exit_ms}"
+        stable_id = _closed_trade_stable_id(
+            run_id,
+            entry_ms=entry_ms,
+            exit_ms=exit_ms,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl_points=pnl_points,
+            symbol=trade_symbol,
+        )
         out.append(
             ActivityBrokerEventRow(
                 id=stable_id,
@@ -175,16 +183,18 @@ def _closed_trade_events_for_run(
                 verdict="trade_summary",
                 cluster_key=stable_id,
                 cluster_label="Round trip",
-                constituent_fill_ids=fill_ids,
             )
         )
     return out
 
 
-def _run_specs_with_trade_artifacts(runs: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
+def _run_specs_with_repair_artifacts(runs: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
     for run in runs:
         run_dir = Path(str(run.get("run_dir", "")))
         if not run_dir.is_dir():
+            continue
+        if (run_dir / "broker_callbacks.jsonl").is_file():
+            yield run
             continue
         if (run_dir / "executions.parquet").is_file():
             yield run
@@ -201,7 +211,7 @@ def _source_signature(
     run_specs: tuple[dict[str, Any], ...],
 ) -> str:
     live_state = artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
-    parts = [f"schema:{_CACHE_SCHEMA_VERSION}", _file_fingerprint(live_state)]
+    parts = [f"schema:{_CACHE_SCHEMA_VERSION}", _live_state_repair_fingerprint(live_state)]
     for run in run_specs:
         run_dir = Path(str(run["run_dir"]))
         parts.append(f"run:{run['run_id']}")
@@ -214,6 +224,24 @@ def _source_signature(
         ):
             parts.append(_file_fingerprint(run_dir / name))
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _live_state_repair_fingerprint(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "live_state:missing"
+    except (OSError, json.JSONDecodeError):
+        return f"live_state:unreadable:{_file_fingerprint(path)}"
+    if not isinstance(payload, dict):
+        return f"live_state:unusable:{_file_fingerprint(path)}"
+    relevant = {
+        "bot_order_namespace": payload.get("bot_order_namespace"),
+        "sizing_resolutions": payload.get("sizing_resolutions"),
+        "submitted_orders": payload.get("submitted_orders"),
+    }
+    encoded = json.dumps(relevant, sort_keys=True, separators=(",", ":"), default=str)
+    return "live_state:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _file_fingerprint(path: Path) -> str:
@@ -277,23 +305,9 @@ def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
         return []
     try:
         return pq.read_table(path).to_pylist()
-    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid) as exc:
+    except (OSError, pa.ArrowException) as exc:
         logger.warning("activity repair parquet read failed for %s: %s", path, exc, exc_info=True)
         return []
-
-
-def _constituent_fill_ids(
-    rows: list[dict[str, Any]], *, entry_ms: int, exit_ms: int
-) -> list[str]:
-    fill_ids: list[str] = []
-    for row in rows:
-        ts_ms = _as_int_or_none(row.get("exec_time_ms")) or _as_int_or_none(row.get("ts_ms"))
-        if ts_ms is None or not (entry_ms <= ts_ms <= exit_ms):
-            continue
-        exec_id = _as_str_or_none(row.get("exec_id"))
-        if exec_id:
-            fill_ids.append(f"fill:exec:{exec_id}")
-    return fill_ids
 
 
 def _first_symbol(rows: list[dict[str, Any]]) -> str | None:
@@ -314,6 +328,30 @@ def _row_key(row: BrokerActivityRow) -> tuple[str, str]:
     if row.order_ref:
         return ("lifecycle", f"{row.order_ref}|{row.template_key}")
     return ("row", str(row.seq))
+
+
+def _closed_trade_stable_id(
+    run_id: str,
+    *,
+    entry_ms: int,
+    exit_ms: int,
+    entry_price: float,
+    exit_price: float,
+    pnl_points: float,
+    symbol: str | None,
+) -> str:
+    payload = {
+        "entry_ms": entry_ms,
+        "entry_price": entry_price,
+        "exit_ms": exit_ms,
+        "exit_price": exit_price,
+        "pnl_points": pnl_points,
+        "run_id": run_id,
+        "symbol": symbol or "",
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    return f"closed:{run_id}:{entry_ms}:{exit_ms}:{digest}"
 
 
 def _as_float_or_none(value: object) -> float | None:

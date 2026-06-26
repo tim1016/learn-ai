@@ -59,7 +59,7 @@ This repair path is **net-new production wiring**, not a relabel of existing cod
 
 Repair does **not** append to the canonical per-instance `broker_activity.jsonl` during Activity reads. Activity GET is read-only with respect to the broker-activity WAL. Repaired rows are written to a separate derived repair projection/cache with its own lock, artifact signature, provenance, and stable visible-row identity. Activity reads the live broker-activity WAL plus the repair projection. This keeps broker-WAL sequence ownership with the live publisher and avoids racing live subscription writes with historical repair writes.
 
-The trader should see the fill/trade with provenance in expansion. They should not have to know whether the row came from live capture, callback replay, legacy execution reconstruction, or closed-trade summary projection. Closed-trade summaries are a distinct Activity row type/section; they reference their constituent fill rows and must not be counted as additional broker executions.
+The trader should see the fill/trade with provenance in expansion. They should not have to know whether the row came from live capture, callback replay, legacy execution reconstruction, or closed-trade summary projection. Closed-trade summaries are a distinct Activity row type/section; they reference constituent fill rows only when the backend has a reliable join key and must not be counted as additional broker executions.
 
 The next live validation is a normal-market bot run: after a real broker fill, the fill must appear in Bot Cockpit Activity without manual reconstruction. This is an operational confirmation, not a CI merge gate.
 
@@ -115,9 +115,9 @@ Strategy settings are shown only when the selected package requires tunable sett
 
 ### 9. Bot name is the strategy instance identity
 
-Deploy may prefill a random, trader-editable bot name. The final bot name is lifetime-unique, system-safe, and becomes the durable `strategy_instance_id`.
+Deploy may prefill a random, trader-editable bot name. The final bot name is system-safe and becomes the durable `strategy_instance_id`.
 
-There is no separate display-only bot-name variable. The value is used for Bot Cockpit identity, paths, ownership, and broker attribution, subject to the existing strategy-instance and order-ref constraints. A stopped or retired bot name is not reusable because its paths and broker `order_ref` namespace remain durable evidence.
+There is no separate display-only bot-name variable. The value is used for Bot Cockpit identity, paths, ownership, and broker attribution, subject to the existing strategy-instance and order-ref constraints. A stopped or retired bot name is not reusable for an unrelated bot because its paths and broker `order_ref` namespace remain durable evidence; a recovery redeploy continues the same identity only through explicit parent-run lineage.
 
 ### 10. Broker account is display-only deploy evidence
 

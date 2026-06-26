@@ -21,6 +21,9 @@ codes are unchanged.
 from __future__ import annotations
 
 import subprocess
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +39,8 @@ from app.engine.live.run_ledger import (
 # Default paths included in the dirty-tree gate. Mirrors the CLI default so the
 # CLI and the daemon refuse to deploy from the same dirty scope.
 DEFAULT_CLEAN_TREE_SCOPE: tuple[str, ...] = ("PythonDataService", "references/qc-shadow")
+_INSTANCE_LOCK_WAIT_SECONDS = 30.0
+_INSTANCE_LOCK_POLL_SECONDS = 0.05
 
 
 class DeployError(Exception):
@@ -146,6 +151,7 @@ class DeployParams:
     # the ledger so the console defaults the Start card from it and `run start`
     # rejects a mismatched --strategy. Not hashed into run_id; "" = unrecorded.
     strategy_key: str = ""
+    parent_run_id: str | None = None
     clean_tree_scope: tuple[str, ...] = DEFAULT_CLEAN_TREE_SCOPE
     force: bool = False
     idempotent: bool = False
@@ -250,7 +256,11 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
 
 
 def _existing_run_for_strategy_instance(
-    run_root: Path, strategy_instance_id: str, *, allow_run_id: str
+    run_root: Path,
+    strategy_instance_id: str,
+    *,
+    allow_run_id: str,
+    allow_same_instance_redeploy: bool,
 ) -> str | None:
     if not run_root.is_dir():
         return None
@@ -262,11 +272,70 @@ def _existing_run_for_strategy_instance(
             continue
         try:
             ledger = read_ledger(ledger_path)
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as exc:
+            raise DeployIOError(
+                f"could not read historical ledger {ledger_path}: {exc}"
+            ) from exc
         if ledger.strategy_instance_id == strategy_instance_id:
+            if allow_same_instance_redeploy:
+                continue
             return ledger.run_id
     return None
+
+
+def _run_dir_for_id(run_root: Path, run_id: str) -> Path:
+    if not run_id or "/" in run_id or "\\" in run_id or run_id in (".", ".."):
+        raise DeployIOError(f"invalid parent_run_id: {run_id!r}")
+    return run_root / run_id
+
+
+def _parent_run_matches_strategy_instance(
+    run_root: Path, parent_run_id: str | None, strategy_instance_id: str
+) -> bool:
+    if not parent_run_id:
+        return False
+    ledger_path = _run_dir_for_id(run_root, parent_run_id) / "run_ledger.json"
+    if not ledger_path.is_file():
+        raise DeployIOError(f"parent_run_id {parent_run_id!r} has no run_ledger.json")
+    try:
+        ledger = read_ledger(ledger_path)
+    except (OSError, ValueError) as exc:
+        raise DeployIOError(f"could not read parent ledger {ledger_path}: {exc}") from exc
+    return ledger.strategy_instance_id == strategy_instance_id
+
+
+@contextmanager
+def _strategy_instance_lock(run_root: Path, strategy_instance_id: str) -> Iterator[None]:
+    lock_dir = run_root / ".strategy_instance_locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{strategy_instance_id}.lock"
+    deadline = time.monotonic() + _INSTANCE_LOCK_WAIT_SECONDS
+    while True:
+        try:
+            lock_path.mkdir()
+            break
+        except FileExistsError as exc:
+            if time.monotonic() >= deadline:
+                raise DeployIOError(
+                    "timed out waiting for strategy_instance_id deploy lock: "
+                    f"{strategy_instance_id!r}"
+                ) from exc
+            time.sleep(_INSTANCE_LOCK_POLL_SECONDS)
+        except OSError as exc:
+            raise DeployIOError(
+                f"could not acquire strategy_instance_id deploy lock {lock_path}: {exc}"
+            ) from exc
+    try:
+        yield
+    finally:
+        try:
+            lock_path.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise DeployIOError(
+                f"could not release strategy_instance_id deploy lock {lock_path}: {exc}"
+            ) from exc
 
 
 def git_head_sha(repo_root: Path) -> str:
@@ -362,43 +431,55 @@ def deploy_run(params: DeployParams) -> DeployResult:
         # stay inside the typed contract, not escape as a 500 traceback.
         raise DeployIOError(str(exc)) from exc
 
-    if ledger.strategy_instance_id:
-        existing_run_id = _existing_run_for_strategy_instance(
-            params.run_root,
-            ledger.strategy_instance_id,
-            allow_run_id=ledger.run_id,
-        )
-        if existing_run_id is not None:
-            raise StrategyInstanceIdAlreadyUsedError(
+    lock_context = (
+        _strategy_instance_lock(params.run_root, ledger.strategy_instance_id)
+        if ledger.strategy_instance_id
+        else nullcontext()
+    )
+    with lock_context:
+        if ledger.strategy_instance_id:
+            allow_same_instance_redeploy = _parent_run_matches_strategy_instance(
+                params.run_root,
+                params.parent_run_id,
                 ledger.strategy_instance_id,
-                existing_run_id,
             )
-
-    run_dir = params.run_root / ledger.run_id
-    ledger_path = run_dir / "run_ledger.json"
-
-    if run_dir.exists() and not params.force:
-        if params.idempotent and ledger_path.is_file():
-            try:
-                existing = read_ledger(ledger_path)
-            except (OSError, ValueError) as exc:
-                raise RunAlreadyExistsError(ledger.run_id, run_dir) from exc
-            # run_id is content-addressed and excludes strategy_instance_id, so a
-            # re-deploy with the same inputs but a DIFFERENT instance binding is
-            # NOT a safe no-op — returning the old ledger would attach a later
-            # start() to the wrong durable instance. Require both to match.
-            if (
-                existing.run_id == ledger.run_id
-                and existing.strategy_instance_id == ledger.strategy_instance_id
-            ):
-                return DeployResult(
-                    run_id=ledger.run_id, run_dir=run_dir, created=False, ledger=existing
+            existing_run_id = _existing_run_for_strategy_instance(
+                params.run_root,
+                ledger.strategy_instance_id,
+                allow_run_id=ledger.run_id,
+                allow_same_instance_redeploy=allow_same_instance_redeploy,
+            )
+            if existing_run_id is not None:
+                raise StrategyInstanceIdAlreadyUsedError(
+                    ledger.strategy_instance_id,
+                    existing_run_id,
                 )
-            raise RunAlreadyExistsError(ledger.run_id, run_dir)
-        raise RunAlreadyExistsError(ledger.run_id, run_dir)
 
-    try:
-        write_ledger(ledger_path, ledger)
-    except OSError as exc:
-        raise DeployIOError(str(exc)) from exc
+        run_dir = params.run_root / ledger.run_id
+        ledger_path = run_dir / "run_ledger.json"
+
+        if run_dir.exists() and not params.force:
+            if params.idempotent and ledger_path.is_file():
+                try:
+                    existing = read_ledger(ledger_path)
+                except (OSError, ValueError) as exc:
+                    raise RunAlreadyExistsError(ledger.run_id, run_dir) from exc
+                # run_id is content-addressed and excludes strategy_instance_id, so a
+                # re-deploy with the same inputs but a DIFFERENT instance binding is
+                # NOT a safe no-op — returning the old ledger would attach a later
+                # start() to the wrong durable instance. Require both to match.
+                if (
+                    existing.run_id == ledger.run_id
+                    and existing.strategy_instance_id == ledger.strategy_instance_id
+                ):
+                    return DeployResult(
+                        run_id=ledger.run_id, run_dir=run_dir, created=False, ledger=existing
+                    )
+                raise RunAlreadyExistsError(ledger.run_id, run_dir)
+            raise RunAlreadyExistsError(ledger.run_id, run_dir)
+
+        try:
+            write_ledger(ledger_path, ledger)
+        except OSError as exc:
+            raise DeployIOError(str(exc)) from exc
     return DeployResult(run_id=ledger.run_id, run_dir=run_dir, created=True, ledger=ledger)

@@ -566,12 +566,25 @@ class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
 
     model_config = ConfigDict(extra="allow")
 
+    @model_validator(mode="after")
+    def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:
+        extras = self.model_extra or {}
+        unexpected = sorted(key for key in extras if key != "account_id")
+        if unexpected:
+            raise ValueError(f"unknown deploy request fields: {unexpected}")
+        if "account_id" in extras:
+            value = extras["account_id"]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    "legacy account_id must be a non-empty string when provided"
+                )
+        return self
+
     def client_supplied_account_id(self) -> str | None:
         value = (self.model_extra or {}).get("account_id")
         if not isinstance(value, str):
             return None
-        text = value.strip()
-        return text or None
+        return value.strip()
 
 
 class HostRunnerDeployRequest(HostRunnerDeployBaseRequest):
