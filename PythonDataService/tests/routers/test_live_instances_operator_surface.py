@@ -414,6 +414,7 @@ async def test_account_summary_endpoint_returns_composed_dto(app_with_root, monk
         "account_identity",
         "account_identity_reason_codes",
         "contamination",
+        "notice",
     }
     assert body["account_identity"] in {"CONSISTENT", "CONFLICTING", "UNKNOWN"}
     assert isinstance(body["account_identity_reason_codes"], list)

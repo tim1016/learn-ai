@@ -454,6 +454,7 @@ async def _recovery_flatten(
     live_state_path: Path | None = None,
     live_state_seed: LiveStateEnvelope | None = None,
     bot_order_namespace: str | None = None,
+    failed_symbols: list[str] | None = None,
 ) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
 
@@ -637,12 +638,58 @@ async def _recovery_flatten(
                     )
             liquidated += 1
         except Exception:
+            if failed_symbols is not None:
+                failed_symbols.append(str(pos.symbol))
             logger.exception(
                 "Recovery flatten place_order failed for %s",
                 pos.symbol,
                 extra={"step": "8"},
             )
     return liquidated
+
+
+async def _record_recovery_flatten_residual_incident(
+    *,
+    run_dir: Path,
+    broker,
+    occurred_at_ms: int,
+    error_summary: str | None,
+) -> None:
+    """Persist a critical incident when failed recovery flatten leaves exposure."""
+    from app.operator.incidents.store import IncidentStore
+    from app.operator.incidents.watchdog_notices import (
+        recovery_flatten_uncertain_incident,
+        residual_positions_after_failed_flatten_incident,
+    )
+
+    try:
+        snapshot = await broker.fetch_positions()
+    except Exception:
+        logger.exception(
+            "Could not fetch positions after recovery flatten failure",
+            extra={"step": "8"},
+        )
+        IncidentStore(run_dir).append(
+            recovery_flatten_uncertain_incident(
+                started_at_ms=occurred_at_ms,
+                error_summary=error_summary,
+            )
+        )
+        return
+    residuals: dict[str, float] = {}
+    for pos in snapshot.positions:
+        qty = float(pos.quantity)
+        if qty != 0:
+            residuals[str(pos.symbol)] = qty
+    if not residuals:
+        return
+
+    incident = residual_positions_after_failed_flatten_incident(
+        positions=residuals,
+        started_at_ms=occurred_at_ms,
+        error_summary=error_summary,
+    )
+    IncidentStore(run_dir).append(incident)
 
 
 def _lookup_sizing_surface(strategy_key: str) -> str | None:
@@ -1937,13 +1984,25 @@ def cmd_start(args: argparse.Namespace) -> int:
                             from app.engine.live.live_state_sidecar import stable_live_state_path
 
                             live_state_path = stable_live_state_path(_artifacts_root, strategy_instance_id)
+                        failed_symbols: list[str] = []
                         n = await _recovery_flatten(
                             broker_for_flatten,
                             readonly=is_readonly,
                             live_state_path=live_state_path,
                             live_state_seed=live_state_seed,
                             bot_order_namespace=f"learn-ai/{strategy_instance_id}/v1",
+                            failed_symbols=failed_symbols,
                         )
+                        if failed_symbols and not is_readonly:
+                            await _record_recovery_flatten_residual_incident(
+                                run_dir=args.run_dir,
+                                broker=broker_for_flatten,
+                                occurred_at_ms=int(time.time() * 1000),
+                                error_summary=(
+                                    "Recovery flatten place_order failed for "
+                                    f"{', '.join(failed_symbols)}"
+                                ),
+                            )
                         if is_readonly:
                             print(
                                 f"[START] readonly: recovery flatten skipped — "
@@ -1958,9 +2017,16 @@ def cmd_start(args: argparse.Namespace) -> int:
                                 file=sys.stderr,
                             )
                     except Exception:
+                        flatten_error = sys.exc_info()[1]
                         logger.exception(
                             "Recovery flatten itself failed",
                             extra={"step": "8"},
+                        )
+                        await _record_recovery_flatten_residual_incident(
+                            run_dir=args.run_dir,
+                            broker=broker_for_flatten,
+                            occurred_at_ms=int(time.time() * 1000),
+                            error_summary=repr(flatten_error),
                         )
                         print(
                             "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",

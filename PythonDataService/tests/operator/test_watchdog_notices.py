@@ -8,6 +8,7 @@ from app.operator.incidents.watchdog_notices import (
     flatten_failed_notice,
     flatten_not_needed_notice,
     flatten_timed_out_notice,
+    residual_positions_after_failed_flatten_incident,
     watchdog_incident,
 )
 from app.operator.notices.schema import OperatorNotice
@@ -92,6 +93,22 @@ def test_flatten_failed_notice_has_content() -> None:
     assert n.action.label
     assert n.runbook_slug == "watchdog-halt"
     assert n.forensic_facts["error_summary"] == "TimeoutError()"
+
+
+def test_residual_positions_after_failed_flatten_incident_names_positions() -> None:
+    incident = residual_positions_after_failed_flatten_incident(
+        positions={"SPY": 1.0, "QQQ": -2.0},
+        started_at_ms=1_700_000_000_000,
+        error_summary="TimeoutError()",
+    )
+
+    assert incident.category == "watchdog"
+    assert incident.resolved_at_ms is None
+    assert incident.notice.code == "watchdog.flatten_failed"
+    assert incident.notice.tier == "critical"
+    assert "SPY +1" in incident.notice.message
+    assert "QQQ -2" in incident.notice.message
+    assert incident.evidence["residual_positions"] == {"SPY": 1.0, "QQQ": -2.0}
 
 
 # ---------------------------------------------------------------------------

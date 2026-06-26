@@ -1949,6 +1949,7 @@ class FleetAccountSummary(BaseModel):
     account_identity: Literal["CONSISTENT", "CONFLICTING", "UNKNOWN"]
     account_identity_reason_codes: list[str] = Field(default_factory=list)
     contamination: FleetContamination
+    notice: OperatorNotice | None = None
 
 
 class IntentActuation(BaseModel):

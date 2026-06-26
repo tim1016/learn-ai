@@ -24,6 +24,7 @@ executor amends the notice at terminal step.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 
 from app.operator.notices.schema import (
     OperatorIncident,
@@ -162,6 +163,74 @@ def broker_disconnected_before_flatten_notice(
     )
 
 
+def residual_positions_after_failed_flatten_incident(
+    *,
+    positions: Mapping[str, float],
+    started_at_ms: int,
+    error_summary: str | None = None,
+) -> OperatorIncident:
+    """Critical incident for a failed recovery flatten with known residuals."""
+    non_zero = {symbol: qty for symbol, qty in positions.items() if qty != 0}
+    parts = ", ".join(f"{symbol} {qty:+g}" for symbol, qty in sorted(non_zero.items()))
+    incident_id = f"watchdog-residual-{started_at_ms}-{uuid.uuid4().hex[:8]}"
+    notice = OperatorNotice(
+        code="watchdog.flatten_failed",
+        tier="critical",
+        title="Recovery flatten failed: residual position remains",
+        message=(
+            "The bot exited after losing its broker/runtime path, recovery flatten failed, "
+            f"and IBKR still reports residual position(s): {parts}. "
+            "Verify and close these positions manually before restarting."
+        ),
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check positions at IBKR",
+            target="ibkr_positions",
+        ),
+        runbook_slug=_RUNBOOK_SLUG,
+        forensic_facts={
+            "error_summary": error_summary,
+            "residual_positions": parts,
+            "residual_count": len(non_zero),
+        },
+        occurred_at_ms=started_at_ms,
+    )
+    return OperatorIncident(
+        incident_id=incident_id,
+        category="watchdog",
+        notice=notice,
+        started_at_ms=started_at_ms,
+        evidence={
+            "residual_positions": dict(non_zero),
+            "error_summary": error_summary,
+        },
+    )
+
+
+def recovery_flatten_uncertain_incident(
+    *,
+    started_at_ms: int,
+    error_summary: str | None = None,
+) -> OperatorIncident:
+    """Critical incident when recovery flatten failed and residuals are unknown."""
+    incident_id = f"watchdog-recovery-uncertain-{started_at_ms}-{uuid.uuid4().hex[:8]}"
+    notice = flatten_failed_notice(
+        error_summary=error_summary,
+        occurred_at_ms=started_at_ms,
+    )
+    return OperatorIncident(
+        incident_id=incident_id,
+        category="watchdog",
+        notice=notice,
+        started_at_ms=started_at_ms,
+        evidence={
+            "residual_positions": None,
+            "error_summary": error_summary,
+            "positions_fetch_failed": True,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Incident scaffold builder
 # ---------------------------------------------------------------------------
@@ -205,5 +274,7 @@ __all__ = [
     "flatten_failed_notice",
     "flatten_not_needed_notice",
     "flatten_timed_out_notice",
+    "recovery_flatten_uncertain_incident",
+    "residual_positions_after_failed_flatten_incident",
     "watchdog_incident",
 ]

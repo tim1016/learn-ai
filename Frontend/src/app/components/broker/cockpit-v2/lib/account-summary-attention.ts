@@ -15,7 +15,7 @@ export interface AccountAttentionState {
  * Stable attention formula (PRD #616 §"User Stories" 14):
  *
  *   account_identity !== 'CONSISTENT' || contamination.verdict !== 'clean' ||
- *   contamination.policy_blocks_starts
+ *   contamination.policy_blocks_starts || notice != null
  *
  * `policy_blocks_starts` stays in the formula even when currently
  * impossible-with-clean so future policy semantics do not require an
@@ -27,7 +27,8 @@ export function projectAccountAttention(
   const isAttention =
     summary.account_identity !== 'CONSISTENT' ||
     summary.contamination.verdict !== 'clean' ||
-    summary.contamination.policy_blocks_starts;
+    summary.contamination.policy_blocks_starts ||
+    summary.notice != null;
   return {
     isAttention,
     isCollapsible: !isAttention,

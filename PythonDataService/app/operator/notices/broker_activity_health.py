@@ -113,10 +113,11 @@ def compose_broker_activity_health(
         notice = _notice(
             code="activity.publisher_not_running",
             tier="critical",
-            title="Activity feed is not running",
+            title="Activity capture is unavailable",
             message=(
-                "The broker-activity publisher is not registered for this instance. "
-                "Start the bot process to begin receiving activity events."
+                "No broker-activity publisher is registered for this instance. "
+                "The bot process may still be running, but the cockpit cannot "
+                "confirm durable activity capture from the data plane."
             ),
         )
         return BrokerActivityHealth(
@@ -150,10 +151,11 @@ def compose_broker_activity_health(
             notice = _notice(
                 code="activity.publisher_not_running",
                 tier="critical",
-                title="Activity feed is not running",
+                title="Activity capture is detached",
                 message=(
                     "The broker-activity publisher was registered but failed to start "
-                    "within the expected window. Restart the bot process to recover."
+                    "within the expected window. The host process state is separate; "
+                    "check the data-plane publisher before trusting an empty feed."
                 ),
             )
             return BrokerActivityHealth(
@@ -182,7 +184,8 @@ def compose_broker_activity_health(
                 title="Activity feed is degraded",
                 message=(
                     "The broker-activity publisher is running but has not emitted any rows "
-                    "within the expected window. Check the bot process logs."
+                    "within the expected window. This can mean no activity yet, but "
+                    "capture health is no longer proven; check data-plane publisher logs."
                 ),
             )
             return BrokerActivityHealth(

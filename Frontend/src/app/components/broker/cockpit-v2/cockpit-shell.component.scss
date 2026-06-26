@@ -150,6 +150,11 @@
     padding: 0.25rem 1rem 0.75rem 1rem;
     font-size: var(--fs-sm, 0.85rem);
 
+    .account-notice {
+      display: block;
+      margin-bottom: 0.65rem;
+    }
+
     .reason-list {
       display: flex;
       gap: 0.5rem;

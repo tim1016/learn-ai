@@ -1243,6 +1243,32 @@ async def test_account_fleet_unknown_without_broker(
     assert response.json()["verdict"] == "unknown"
 
 
+async def test_account_summary_surfaces_broker_evidence_notice_when_positions_unavailable(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema", "spy_ema", 100)
+    _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
+
+    async def fake_net() -> None:
+        return None
+
+    async def fake_account() -> tuple[None, bool]:
+        return None, False
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
+    monkeypatch.setattr(live_instances, "_fetch_broker_connected_account", fake_account)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account-summary")
+
+    body = response.json()
+    assert body["contamination"]["verdict"] == "unknown"
+    assert body["notice"]["code"] == "activity.source_blind_to_bot_orders"
+    assert "could not fetch broker net positions" in body["notice"]["message"]
+
+
 async def test_instance_commands_returns_bound_run_timeline(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
