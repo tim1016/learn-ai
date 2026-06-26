@@ -76,6 +76,7 @@ async def reconcile(
     current_run_id: str | None = None,
     current_strategy_instance_id: str | None = None,
     current_namespace: str | None = None,
+    ignore_unknown_namespaces_before_ms: int | None = None,
 ) -> ReconciliationResult:
     """Run the cold-start reconciliation procedure and persist a receipt.
 
@@ -221,6 +222,7 @@ async def reconcile(
         allowed_namespaces=allowed_namespaces,
         prior_run_unacked_tail=prior_tail,
         emergency_audit=emergency_audit,
+        ignore_unknown_namespaces_before_ms=ignore_unknown_namespaces_before_ms,
     )
 
     # Step 8: poison branch.

@@ -71,6 +71,7 @@ class BrokerExecutionView:
     exec_id: str | None = None
     symbol: str | None = None
     quantity: float = 0.0
+    exec_time_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ def classify(
     allowed_namespaces: frozenset[str],
     prior_run_unacked_tail: Sequence[IntentEvent] = (),
     emergency_audit: Sequence[IntentEvent] = (),
+    ignore_unknown_namespaces_before_ms: int | None = None,
 ) -> ReconcileVerdict:
     """Reconcile the broker snapshot against the projection. See module docstring.
 
@@ -148,6 +150,7 @@ def classify(
         exec_id: str | None,
         order_id: int | None,
         active: bool,
+        exec_time_ms: int | None,
     ) -> None:
         # A known perm_id / exec_id proves the order is ours regardless of the
         # ref string — broker-assigned, globally unique, recorded only because we
@@ -170,6 +173,13 @@ def classify(
         if namespace not in allowed_namespaces:
             if known_by_id:
                 return  # ours by perm/exec despite a foreign-looking ref
+            if (
+                not active
+                and ignore_unknown_namespaces_before_ms is not None
+                and exec_time_ms is not None
+                and exec_time_ms <= ignore_unknown_namespaces_before_ms
+            ):
+                return
             poison_reasons.add("unknown_namespace")  # exact-match, never prefix
             return
         # Namespace is exactly ours.
@@ -208,6 +218,7 @@ def classify(
             exec_id=None,
             order_id=order.order_id,
             active=_is_active(order),
+            exec_time_ms=None,
         )
     for execution in broker_snapshot.executions:
         consider(
@@ -216,6 +227,7 @@ def classify(
             exec_id=execution.exec_id,
             order_id=None,
             active=False,
+            exec_time_ms=execution.exec_time_ms,
         )
 
     if poison_reasons:

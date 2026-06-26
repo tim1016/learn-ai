@@ -993,6 +993,7 @@ def _build_broker_snapshot_from_ibkr(
                 float(getattr(e, "fill_quantity", 0.0) or 0.0)
                 * (-1.0 if getattr(e, "side", None) == "SELL" else 1.0)
             ),
+            exec_time_ms=getattr(e, "exec_time_ms", None),
         )
         for e in executions
         if getattr(e, "event_type", None) == "fill"
@@ -1775,6 +1776,15 @@ def cmd_start(args: argparse.Namespace) -> int:
                     strategy_instance_id=strategy_instance_id,
                     current_created_ms=ledger.created_at_ms,
                 )
+                from app.engine.live.fleet_reset_baseline import (
+                    read_applicable_baseline,
+                )
+
+                _baseline = read_applicable_baseline(
+                    live_runs_root=args.run_dir.parent,
+                    account_id=ledger.account_id,
+                    strategy_instance_id=strategy_instance_id,
+                )
 
                 async def _probe():
                     return _broker_snapshot
@@ -1794,6 +1804,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                         current_run_id=ledger.run_id,
                         current_strategy_instance_id=strategy_instance_id,
                         current_namespace=_bot_order_namespace,
+                        ignore_unknown_namespaces_before_ms=(
+                            _baseline.baseline_at_ms if _baseline is not None else None
+                        ),
                     )
                 except Exception as exc:
                     # Receipt-write failure is fatal per the contract

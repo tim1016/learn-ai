@@ -102,6 +102,63 @@ def test_poison_unknown_namespace() -> None:
     assert verdict.reason == "unknown_namespace"
 
 
+def test_prior_unknown_namespace_execution_can_be_covered_by_fleet_reset_baseline() -> None:
+    snap = BrokerSnapshot(
+        executions=(
+            BrokerExecutionView(
+                order_ref=f"learn-ai/retired/v1:{mint_intent_id()}",
+                exec_time_ms=1_700_000_000_000,
+            ),
+        )
+    )
+    verdict = classify(
+        projection=_view(),
+        broker_snapshot=snap,
+        allowed_namespaces=ALLOWED,
+        ignore_unknown_namespaces_before_ms=1_700_000_000_001,
+    )
+    assert isinstance(verdict, Continue)
+
+
+def test_unknown_namespace_after_fleet_reset_baseline_still_poisons() -> None:
+    snap = BrokerSnapshot(
+        executions=(
+            BrokerExecutionView(
+                order_ref=f"learn-ai/retired/v1:{mint_intent_id()}",
+                exec_time_ms=1_700_000_000_002,
+            ),
+        )
+    )
+    verdict = classify(
+        projection=_view(),
+        broker_snapshot=snap,
+        allowed_namespaces=ALLOWED,
+        ignore_unknown_namespaces_before_ms=1_700_000_000_001,
+    )
+    assert isinstance(verdict, Poison)
+    assert verdict.reason == "unknown_namespace"
+
+
+def test_unknown_namespace_open_order_ignores_no_fleet_reset_baseline() -> None:
+    snap = BrokerSnapshot(
+        open_orders=(
+            BrokerOrderView(
+                order_ref=f"learn-ai/retired/v1:{mint_intent_id()}",
+                status="Submitted",
+                remaining=1.0,
+            ),
+        )
+    )
+    verdict = classify(
+        projection=_view(),
+        broker_snapshot=snap,
+        allowed_namespaces=ALLOWED,
+        ignore_unknown_namespaces_before_ms=1_700_000_000_001,
+    )
+    assert isinstance(verdict, Poison)
+    assert verdict.reason == "unknown_namespace"
+
+
 def test_poison_no_order_ref() -> None:
     snap = BrokerSnapshot(open_orders=(BrokerOrderView(order_ref=None, perm_id=None),))
     verdict = classify(projection=_view(), broker_snapshot=snap, allowed_namespaces=ALLOWED)
