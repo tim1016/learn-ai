@@ -85,26 +85,36 @@ export class IbkrApiEvidencePanelComponent {
     this.loading.set(true);
     this.snapshotError.set(null);
     try {
-      const [dataPlane, health, diagnostic, evidence] = await Promise.all([
+      const [dataPlane, health, diagnostic, evidence] = await Promise.allSettled([
         this.broker.dataPlaneHealth(),
         this.broker.health(),
         this.broker.diagnose(),
         this.broker.ibkrApiEvidence(0, MAX_EVENTS),
       ]);
-      this.dataPlane.set(dataPlane);
-      this.connectionHealth.set(health);
-      this.diagnostic.set(diagnostic);
-      this.backfillEvents.set(evidence);
-      this.openStream(maxSeq(evidence));
+      if (this.destroyRef.destroyed) return;
+      if (dataPlane.status === 'fulfilled') this.dataPlane.set(dataPlane.value);
+      if (health.status === 'fulfilled') this.connectionHealth.set(health.value);
+      if (diagnostic.status === 'fulfilled') this.diagnostic.set(diagnostic.value);
+      const events = evidence.status === 'fulfilled' ? evidence.value : [];
+      this.backfillEvents.set(events);
+      const failed = [dataPlane, health, diagnostic, evidence].filter(
+        (result) => result.status === 'rejected',
+      );
+      if (failed.length) {
+        this.snapshotError.set('Some broker diagnostics failed to load.');
+      }
+      this.openStream(maxSeq(events));
     } catch (error) {
+      if (this.destroyRef.destroyed) return;
       this.snapshotError.set((error as Error).message || 'Could not load broker diagnostics.');
       this.openStream(0);
     } finally {
-      this.loading.set(false);
+      if (!this.destroyRef.destroyed) this.loading.set(false);
     }
   }
 
   private openStream(sinceSeq: number): void {
+    if (this.destroyRef.destroyed) return;
     const stream = runInInjectionContext(this.injector, () =>
       brokerSse<IbkrApiEvidenceEvent>(
         `/api/broker/ibkr/evidence/stream?since_seq=${sinceSeq}`,

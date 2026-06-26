@@ -127,6 +127,7 @@ class IbkrObjectSnapshot(BaseModel):
 
     object_type: str
     fields: dict[str, JsonValue] = Field(default_factory=dict)
+    serializer_error: str | None = Field(default=None, exclude=True)
 
 
 class IbkrApiRequestEvidence(BaseModel):

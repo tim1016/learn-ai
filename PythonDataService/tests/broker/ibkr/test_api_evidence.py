@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import namedtuple
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -192,3 +193,24 @@ def test_evidence_response_unknown_object_is_placeholder_not_crash(caplog) -> No
     )
     assert response.fields["row_count"] == 1
     assert "Cannot snapshot unsupported IBKR evidence object" in caplog.text
+
+
+def test_evidence_response_conversion_error_is_placeholder_not_crash(caplog) -> None:
+    class ExplodingDatetime(datetime):
+        def timestamp(self) -> float:
+            raise ValueError("timestamp outside supported range")
+
+    response = evidence_response(
+        "position",
+        objects=[
+            SimpleNamespace(
+                observed_at=ExplodingDatetime(2026, 6, 25, tzinfo=UTC),
+            )
+        ],
+    )
+
+    placeholder = response.fields["object_0"]
+    assert placeholder["fields"]["serializer_error"] == "timestamp outside supported range"
+    assert len(response.serializer_warnings) == 1
+    assert response.serializer_warnings[0].serializer_error == "timestamp outside supported range"
+    assert "timestamp outside supported range" in caplog.text

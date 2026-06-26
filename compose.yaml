@@ -179,9 +179,11 @@ services:
       - /bin/sh
       - -c
       - |
-        if [ "$${UVICORN_RELOAD:-true}" = "false" ]; then
-          exec uvicorn app.main:app --host 0.0.0.0 --port 8000
-        fi
+        case "$$(printf '%s' "$${UVICORN_RELOAD:-true}" | tr '[:upper:]' '[:lower:]')" in
+          false|0|no|off)
+            exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+            ;;
+        esac
         exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

@@ -12,6 +12,9 @@ from app.utils.timestamps import now_ms_utc
 
 def _read_git_revision() -> str:
     repo_root = Path(os.getenv("DATA_PLANE_GIT_ROOT", Path(__file__).resolve().parents[2]))
+    revision = _read_git_head(repo_root)
+    if revision != "unknown":
+        return revision
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -25,6 +28,33 @@ def _read_git_revision() -> str:
         return "unknown"
     revision = result.stdout.strip()
     return revision if revision else "unknown"
+
+
+def _read_git_head(repo_root: Path) -> str:
+    git_dir = repo_root / ".git"
+    if git_dir.is_file():
+        try:
+            marker = git_dir.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return "unknown"
+        prefix = "gitdir:"
+        if not marker.lower().startswith(prefix):
+            return "unknown"
+        git_dir = (git_dir.parent / marker[len(prefix):].strip()).resolve()
+    head_path = git_dir / "HEAD"
+    try:
+        head = head_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    ref_prefix = "ref:"
+    if head.startswith(ref_prefix):
+        ref_path = git_dir / head[len(ref_prefix):].strip()
+        try:
+            revision = ref_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return "unknown"
+        return revision if revision else "unknown"
+    return head if head else "unknown"
 
 
 def _reload_mode() -> DataPlaneReloadMode:

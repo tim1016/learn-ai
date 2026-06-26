@@ -120,6 +120,20 @@ function evidence(seq: number, serializerError?: string): IbkrApiEvidenceEvent {
   };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('IbkrApiEvidencePanelComponent', () => {
   let broker: {
     health: ReturnType<typeof vi.fn>;
@@ -194,5 +208,35 @@ describe('IbkrApiEvidencePanelComponent', () => {
     expect(text).toContain('Serializer warning');
     expect(text).toContain('OpaqueIbkrObject');
     expect(text).toContain('OtherOpaqueObject');
+  });
+
+  it('renders successful diagnostics when one snapshot probe fails', async () => {
+    broker.diagnose.mockRejectedValue(new Error('diagnose failed'));
+
+    const fixture = await render();
+    const text = fixture.nativeElement.textContent as string;
+
+    expect(text).toContain('Some broker diagnostics failed to load.');
+    expect(text).toContain('8398d285978a');
+    expect(text).toContain('DU1234567');
+    expect(text).toContain('reqPositionsAsync');
+    expect(FakeEventSource.instances[0]?.url).toBe(
+      '/api/broker/ibkr/evidence/stream?since_seq=1',
+    );
+  });
+
+  it('does not open the evidence stream after the component is destroyed mid-load', async () => {
+    const dataPlane = deferred<DataPlaneHealth>();
+    broker.dataPlaneHealth.mockReturnValue(dataPlane.promise);
+    const fixture = TestBed.createComponent(IbkrApiEvidencePanelComponent);
+    fixture.detectChanges();
+
+    fixture.destroy();
+    dataPlane.resolve(dataPlaneHealth());
+    await fixture.whenStable();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(FakeEventSource.instances).toEqual([]);
   });
 });

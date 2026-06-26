@@ -140,7 +140,7 @@ def evidence_response(
         if snapshot is None:
             out[f"object_{index}"] = {}
             continue
-        error = snapshot.fields.get("serializer_error")
+        error = snapshot.serializer_error
         if isinstance(error, str):
             warnings.append(
                 IbkrSerializerWarning(

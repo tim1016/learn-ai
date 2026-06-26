@@ -185,7 +185,7 @@ def _object_snapshot(obj: object | None) -> IbkrObjectSnapshot | None:
     object_type = _object_type(obj)
     try:
         return IbkrObjectSnapshot(object_type=object_type, fields=_snapshot_fields(obj))
-    except TypeError as exc:
+    except (TypeError, ValueError, OSError, OverflowError) as exc:
         logger.warning(
             "IBKR evidence serializer emitted placeholder for unsupported object: %s",
             exc,
@@ -194,6 +194,7 @@ def _object_snapshot(obj: object | None) -> IbkrObjectSnapshot | None:
         return IbkrObjectSnapshot(
             object_type=object_type,
             fields={"serializer_error": str(exc)},
+            serializer_error=str(exc),
         )
 
 
