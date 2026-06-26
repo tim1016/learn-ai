@@ -207,6 +207,30 @@ def residual_positions_after_failed_flatten_incident(
     )
 
 
+def recovery_flatten_uncertain_incident(
+    *,
+    started_at_ms: int,
+    error_summary: str | None = None,
+) -> OperatorIncident:
+    """Critical incident when recovery flatten failed and residuals are unknown."""
+    incident_id = f"watchdog-recovery-uncertain-{started_at_ms}-{uuid.uuid4().hex[:8]}"
+    notice = flatten_failed_notice(
+        error_summary=error_summary,
+        occurred_at_ms=started_at_ms,
+    )
+    return OperatorIncident(
+        incident_id=incident_id,
+        category="watchdog",
+        notice=notice,
+        started_at_ms=started_at_ms,
+        evidence={
+            "residual_positions": None,
+            "error_summary": error_summary,
+            "positions_fetch_failed": True,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Incident scaffold builder
 # ---------------------------------------------------------------------------
@@ -250,6 +274,7 @@ __all__ = [
     "flatten_failed_notice",
     "flatten_not_needed_notice",
     "flatten_timed_out_notice",
+    "recovery_flatten_uncertain_incident",
     "residual_positions_after_failed_flatten_incident",
     "watchdog_incident",
 ]
