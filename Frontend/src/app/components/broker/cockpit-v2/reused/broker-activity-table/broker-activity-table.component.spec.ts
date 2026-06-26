@@ -70,6 +70,42 @@ function health(
   };
 }
 
+function eventRow(overrides: Partial<ActivityBrokerEventRow> = {}): ActivityBrokerEventRow {
+  return {
+    id: 'evidence:1',
+    visible_row_id: 'fold:evidence:reqPositionsAsync:position',
+    ts_ms: 1_700_000_000_000,
+    row_type: 'broker_evidence',
+    display_type: 'Broker positions refreshed',
+    source: 'account.fetch_positions',
+    source_label: 'IBKR API evidence',
+    symbol: null,
+    side: null,
+    quantity: null,
+    price: null,
+    status: 'Positions refreshed',
+    summary: 'The bot refreshed broker-held positions for the connected account.',
+    verdict: 'evidence',
+    replay_count: 1,
+    fold_key: 'evidence:reqPositionsAsync:position',
+    fold_count: 1,
+    cluster_key: null,
+    cluster_label: null,
+    child_evidence_ids: ['evidence:1'],
+    constituent_fill_ids: [],
+    evidence: [
+      {
+        source: 'account.fetch_positions',
+        seq: 1,
+        ts_ms: 1_700_000_000_000,
+        request_call: 'reqPositionsAsync',
+        response_callback: 'position',
+      },
+    ],
+    ...overrides,
+  };
+}
+
 function render(props: {
   rows: BrokerActivityRow[];
   backfillLoading?: boolean;
@@ -134,34 +170,45 @@ describe('BrokerActivityTableComponent', () => {
   });
 
   it('renders normalized projection event rows when supplied', () => {
-    const eventRows: ActivityBrokerEventRow[] = [
-      {
-        id: 'evidence:1',
-        ts_ms: 1_700_000_000_000,
-        row_type: 'endpoint_snapshot',
-        source: 'account.fetch_positions',
-        symbol: null,
-        side: null,
-        quantity: null,
-        price: null,
-        status: 'position',
-        summary: 'reqPositionsAsync captured by account.fetch_positions',
-        verdict: 'evidence',
-        replay_count: 1,
+    const eventRows: ActivityBrokerEventRow[] = [eventRow()];
+    const { el } = render({ rows: [], eventRows, sseStatus: 'projection' });
+    expect(el.textContent ?? '').toContain('Broker positions refreshed');
+    expect(el.textContent ?? '').toContain('IBKR API evidence');
+    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
+    expect(el.textContent ?? '').not.toContain('endpoint_snapshot');
+    expect(el.textContent ?? '').not.toContain('reqPositionsAsync');
+  });
+
+  it('preserves event row DOM nodes across no-op projection refreshes', () => {
+    const { el, fixture } = render({
+      rows: [],
+      eventRows: [eventRow()],
+      sseStatus: 'projection',
+    });
+    const original = el.querySelector('[data-testid="broker-activity-event-row-evidence:1"]');
+    expect(original).not.toBeNull();
+
+    fixture.componentRef.setInput('eventRows', [
+      eventRow({
+        id: 'evidence:2',
+        ts_ms: 1_700_000_001_000,
+        fold_count: 1,
+        child_evidence_ids: ['evidence:2'],
         evidence: [
           {
             source: 'account.fetch_positions',
-            seq: 1,
-            ts_ms: 1_700_000_000_000,
+            seq: 2,
+            ts_ms: 1_700_000_001_000,
             request_call: 'reqPositionsAsync',
             response_callback: 'position',
           },
         ],
-      },
-    ];
-    const { el } = render({ rows: [], eventRows, sseStatus: 'projection' });
-    expect(el.textContent ?? '').toContain('endpoint_snapshot');
-    expect(el.textContent ?? '').toContain('reqPositionsAsync captured');
+      }),
+    ]);
+    fixture.detectChanges();
+
+    const refreshed = el.querySelector('[data-testid="broker-activity-event-row-evidence:2"]');
+    expect(refreshed).toBe(original);
   });
 
   it('renders the backend-authored narrative is NOT visible until drill-down (verbatim contract)', () => {

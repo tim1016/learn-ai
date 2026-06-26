@@ -60,6 +60,23 @@ class InvalidInstanceIdError(DeployError):
     """
 
 
+class StrategyInstanceIdAlreadyUsedError(DeployError):
+    """The bot name / strategy instance id has historical evidence already.
+
+    ``strategy_instance_id`` is the durable Bot Cockpit identity and broker
+    attribution namespace. A stopped or retired bot name cannot be reused for a
+    new run because old paths and ``order_ref`` evidence remain authoritative.
+    """
+
+    def __init__(self, strategy_instance_id: str, existing_run_id: str) -> None:
+        super().__init__(
+            f"strategy_instance_id {strategy_instance_id!r} already belongs to run "
+            f"{existing_run_id!r}"
+        )
+        self.strategy_instance_id = strategy_instance_id
+        self.existing_run_id = existing_run_id
+
+
 class SpecOrAuditMissingError(DeployError):
     """The strategy spec or QC audit-copy path does not exist on disk."""
 
@@ -232,6 +249,26 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
         )
 
 
+def _existing_run_for_strategy_instance(
+    run_root: Path, strategy_instance_id: str, *, allow_run_id: str
+) -> str | None:
+    if not run_root.is_dir():
+        return None
+    for run_dir in run_root.iterdir():
+        if not run_dir.is_dir() or run_dir.name == allow_run_id:
+            continue
+        ledger_path = run_dir / "run_ledger.json"
+        if not ledger_path.is_file():
+            continue
+        try:
+            ledger = read_ledger(ledger_path)
+        except (OSError, ValueError):
+            continue
+        if ledger.strategy_instance_id == strategy_instance_id:
+            return ledger.run_id
+    return None
+
+
 def git_head_sha(repo_root: Path) -> str:
     """Resolve git HEAD as the run's ``code_sha``.
 
@@ -324,6 +361,18 @@ def deploy_run(params: DeployParams) -> DeployResult:
         # not a plain missing file, but still a filesystem failure that must
         # stay inside the typed contract, not escape as a 500 traceback.
         raise DeployIOError(str(exc)) from exc
+
+    if ledger.strategy_instance_id:
+        existing_run_id = _existing_run_for_strategy_instance(
+            params.run_root,
+            ledger.strategy_instance_id,
+            allow_run_id=ledger.run_id,
+        )
+        if existing_run_id is not None:
+            raise StrategyInstanceIdAlreadyUsedError(
+                ledger.strategy_instance_id,
+                existing_run_id,
+            )
 
     run_dir = params.run_root / ledger.run_id
     ledger_path = run_dir / "run_ledger.json"

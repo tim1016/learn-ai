@@ -87,11 +87,6 @@ export class BrokerDeployFormComponent {
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
   readonly manualSpecPath = signal<boolean>(false);
-  // Seeded from a re-deploy deep-link (recover a poisoned/halted instance with a
-  // fresh run_id). Preferred over the broker-account prefill so the ledger's
-  // account survives even if the broker probe is down or resolves late.
-  private readonly seededAccountId = signal<string>('');
-  private readonly manualAccountId = signal<boolean>(false);
   readonly accountId = signal<string>('');
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
@@ -228,7 +223,7 @@ export class BrokerDeployFormComponent {
     const missing: string[] = [];
     if (this.strategyKey().trim() === '') missing.push('Strategy');
     if (this.specPath().trim() === '') missing.push('Strategy settings file');
-    if (this.accountId().trim() === '') missing.push('Brokerage account');
+    if (this.accountId().trim() === '') missing.push('Connected broker account');
     if (this.qcBacktestId().trim() === '') missing.push('Backtest ID');
     if (this.qcAuditCopyPath().trim() === '') missing.push('Algorithm audit copy');
     if (this.instanceId().trim() === '') missing.push('Deployment name');
@@ -313,11 +308,6 @@ export class BrokerDeployFormComponent {
       this.manualSpecPath.set(true);
       this.specPath.set(seedSpecPath);
     }
-    const seedAccount = qp.get('account_id');
-    if (seedAccount) {
-      this.seededAccountId.set(seedAccount);
-      this.accountId.set(seedAccount);
-    }
     const seedBacktestId = qp.get('qc_backtest_id');
     if (seedBacktestId) this.qcBacktestId.set(seedBacktestId);
     const seedAuditCopy = qp.get('qc_audit_copy_path');
@@ -338,11 +328,7 @@ export class BrokerDeployFormComponent {
       if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
     });
     effect(() => {
-      if (this.manualAccountId()) return;
-      const nextAccount = this.seededAccountId() || this.brokerAccountId();
-      if (nextAccount && this.accountId() !== nextAccount) {
-        this.accountId.set(nextAccount);
-      }
+      this.accountId.set(this.brokerAccountId());
     });
     // Reference parity must not silently downgrade — if the audit-copy choice
     // changes such that the gate is no longer proven_match, reset the preset to
@@ -427,6 +413,9 @@ export class BrokerDeployFormComponent {
     if (this.startNow() && this.instanceAlreadyRunning()) {
       return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
     }
+    if (!this.brokerAccountAvailable()) {
+      return 'Connected broker account unavailable. Connect the broker session before deploying.';
+    }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
     // button disables BEFORE submit() runs; throwing inside submit() would
@@ -454,7 +443,6 @@ export class BrokerDeployFormComponent {
       strategy_spec_path: this.specPath().trim(),
       qc_audit_copy_path: this.qcAuditCopyPath().trim(),
       qc_cloud_backtest_id: this.qcBacktestId().trim(),
-      account_id: this.accountId().trim(),
       start_date_ms: this.startDateMs,
       strategy_instance_id: this.instanceId().trim(),
       strategy_key: strategyKey,
@@ -555,12 +543,6 @@ export class BrokerDeployFormComponent {
       this.specPath.set(specPath);
     }
 
-    const accountId = this.renderedFieldValue('accountId');
-    if (this.shouldSyncRenderedValue(accountId, this.accountId(), includeEmpty, onlyEmptySignals)) {
-      this.manualAccountId.set(true);
-      this.accountId.set(accountId);
-    }
-
     const qcBacktestId = this.renderedFieldValue('qcBacktestId');
     if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty, onlyEmptySignals)) {
       this.qcBacktestId.set(qcBacktestId);
@@ -593,8 +575,7 @@ export class BrokerDeployFormComponent {
     this.manualSpecPath.set(true);
   }
   setAccountId(e: Event): void {
-    this.manualAccountId.set(true);
-    this.accountId.set(this.text(e));
+    void e;
   }
   setQcBacktestId(e: Event): void {
     this.qcBacktestId.set(this.text(e));

@@ -157,9 +157,12 @@ export interface ActivityOrderRow {
 
 export interface ActivityBrokerEventRow {
   id: string;
+  visible_row_id: string;
   ts_ms: number;
   row_type: string;
+  display_type: string;
   source: string;
+  source_label: string;
   symbol: string | null;
   side: 'BUY' | 'SELL' | null;
   quantity: number | null;
@@ -168,6 +171,12 @@ export interface ActivityBrokerEventRow {
   summary: string;
   verdict: string;
   replay_count: number;
+  fold_key: string | null;
+  fold_count: number;
+  cluster_key: string | null;
+  cluster_label: string | null;
+  child_evidence_ids: string[];
+  constituent_fill_ids: string[];
   evidence: ActivityEvidenceRef[];
 }
 

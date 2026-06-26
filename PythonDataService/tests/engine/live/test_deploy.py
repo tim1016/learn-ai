@@ -23,6 +23,7 @@ from app.engine.live.deploy import (
     RunAlreadyExistsError,
     SizingPolicyMissingError,
     SpecOrAuditMissingError,
+    StrategyInstanceIdAlreadyUsedError,
     UnknownLiveConfigKeyError,
     deploy_run,
 )
@@ -141,6 +142,32 @@ def test_deploy_run_accepts_valid_instance_id(
     assert result.created is True
     ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "deployment-validation-jun3"
+
+
+@requires_git
+def test_deploy_run_refuses_historical_strategy_instance_id_reuse(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+
+    first = deploy_run(
+        _params(repo, spec, qc, run_root, strategy_instance_id="spy-ema-paper")
+    )
+
+    with pytest.raises(StrategyInstanceIdAlreadyUsedError) as exc_info:
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                strategy_instance_id="spy-ema-paper",
+                start_date_ms=1700000001000,
+            )
+        )
+
+    assert exc_info.value.existing_run_id == first.run_id
 
 
 @requires_git

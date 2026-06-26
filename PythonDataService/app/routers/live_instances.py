@@ -103,6 +103,7 @@ from app.schemas.live_runs import (
     IntentActuation,
     LiveBinding,
     LiveInstanceActivityProjection,
+    LiveInstanceDeployRequest,
     LiveInstanceStatus,
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
@@ -114,6 +115,12 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SizingAuditRow,
 )
+from app.services.activity_projection_contract import (
+    activity_cluster_label,
+    activity_evidence_narrative,
+    fold_activity_event_rows,
+)
+from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -1017,8 +1024,39 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     return summaries
 
 
+async def _host_deploy_request_from_public(
+    body: LiveInstanceDeployRequest,
+) -> HostRunnerDeployRequest:
+    broker_account, broker_known = await _fetch_broker_connected_account()
+    if not broker_known or not broker_account:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                "Connected broker account unavailable. Connect the broker session "
+                "before deploying."
+            ),
+        )
+    client_account = body.client_supplied_account_id()
+    if client_account is not None and client_account != broker_account:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                "Deploy account mismatch: the connected broker account is "
+                f"{broker_account}, but the request contained {client_account}. "
+                "Refresh broker state and deploy again."
+            ),
+        )
+    payload = body.model_dump()
+    payload.pop("account_id", None)
+    return HostRunnerDeployRequest.model_validate(
+        {**payload, "account_id": broker_account}
+    )
+
+
 @router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
-async def deploy_instance(body: HostRunnerDeployRequest, response: Response) -> HostRunnerDeployResponse:
+async def deploy_instance(
+    body: LiveInstanceDeployRequest, response: Response
+) -> HostRunnerDeployResponse:
     """Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
 
     Deploy is a host-daemon operation: ``init-ledger`` runs a git clean-tree
@@ -1032,8 +1070,12 @@ async def deploy_instance(body: HostRunnerDeployRequest, response: Response) -> 
     ``created=false`` rather than erroring (the run already exists).
     """
     settings = get_settings()
+    daemon_request = await _host_deploy_request_from_public(body)
     try:
-        result = await host_daemon_client.deploy(settings.live_runner_daemon_url, body.model_dump())
+        result = await host_daemon_client.deploy(
+            settings.live_runner_daemon_url,
+            daemon_request.model_dump(),
+        )
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         _raise_outcome_unknown("deploy", exc)
     except host_daemon_client.HostDaemonError as exc:
@@ -2354,12 +2396,24 @@ def _build_activity_projection(
     broker_events: list[ActivityBrokerEventRow] = []
     for marker in fill_markers:
         selected_row = selected_fill_rows[marker.id]
+        source = (
+            "activity_repair_projection"
+            if selected_row.recovery_provenance == "reconstructed"
+            else "broker_activity_wal"
+        )
         broker_events.append(
             ActivityBrokerEventRow(
                 id=marker.id,
+                visible_row_id=f"fill:{marker.id}",
                 ts_ms=marker.exec_ts_ms,
                 row_type="fill",
-                source="broker_activity_wal",
+                display_type="Broker fill",
+                source=source,
+                source_label=(
+                    "Repaired trade evidence"
+                    if source == "activity_repair_projection"
+                    else "Broker activity stream"
+                ),
                 symbol=marker.symbol,
                 side=marker.side,
                 quantity=marker.quantity,
@@ -2371,6 +2425,8 @@ def _build_activity_projection(
                 ),
                 verdict=selected_row.verdict.value,
                 replay_count=marker.replay_count,
+                cluster_key=marker.order_key,
+                cluster_label=activity_cluster_label(selected_row),
                 evidence=marker.evidence,
             )
         )
@@ -2379,9 +2435,12 @@ def _build_activity_projection(
             broker_events.append(
                 ActivityBrokerEventRow(
                     id=f"pending:{row.seq}",
+                    visible_row_id=f"order_intent:{row.seq}",
                     ts_ms=int(row.ts_ms),
                     row_type="order_intent",
+                    display_type="Order intent",
                     source="broker_activity_wal",
+                    source_label="Broker activity stream",
                     symbol=row.symbol,
                     side=row.side,
                     quantity=float(row.quantity),
@@ -2397,9 +2456,12 @@ def _build_activity_projection(
             broker_events.append(
                 ActivityBrokerEventRow(
                     id=f"terminal:{row.seq}",
+                    visible_row_id=f"order_terminal:{row.seq}",
                     ts_ms=_activity_row_time_ms(row),
                     row_type="order_terminal",
+                    display_type="Order terminal state",
                     source="broker_activity_wal",
+                    source_label="Broker activity stream",
                     symbol=row.symbol,
                     side=row.side,
                     quantity=float(row.quantity),
@@ -2410,19 +2472,24 @@ def _build_activity_projection(
                 )
             )
     for ref in evidence_refs:
+        narrative = activity_evidence_narrative(ref)
         broker_events.append(
             ActivityBrokerEventRow(
                 id=f"evidence:{ref.seq}",
+                visible_row_id=f"evidence:{ref.seq}",
                 ts_ms=ref.ts_ms,
-                row_type="endpoint_snapshot",
+                row_type="broker_evidence",
+                display_type=narrative["display_type"],
                 source=ref.source,
-                status=ref.response_callback,
-                summary=f"{ref.request_call} captured by {ref.source}",
+                source_label=narrative["source_label"],
+                status=narrative["status"],
+                summary=narrative["summary"],
                 verdict="evidence",
+                fold_key=narrative["fold_key"],
                 evidence=[ref],
             )
         )
-    broker_events.sort(key=lambda row: row.ts_ms, reverse=True)
+    broker_events = fold_activity_event_rows(sorted(broker_events, key=lambda row: row.ts_ms, reverse=True))
 
     if not any(ref.request_call == "reqPositionsAsync" for ref in evidence_refs):
         warnings.append(
@@ -2632,20 +2699,38 @@ async def get_instance_activity(
         start_ms=start_ms,
         end_ms=end_ms,
     )
+    repair_projection = load_activity_repair_projection(
+        artifacts_root=artifacts_root,
+        strategy_instance_id=sid,
+        runs=runs,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        existing_rows=wal_rows,
+    )
     evidence_refs = _activity_evidence_refs_for_session(
         sid=sid,
         symbol=symbol,
         start_ms=start_ms,
         end_ms=end_ms,
     )
-    return _build_activity_projection(
+    projection = _build_activity_projection(
         sid=sid,
         day=day,
         symbol=symbol,
         resolution=resolution,
         bars=bars,
-        wal_rows=wal_rows,
+        wal_rows=[*wal_rows, *repair_projection.broker_rows],
         evidence_refs=evidence_refs,
+    )
+    return projection.model_copy(
+        update={
+            "broker_activity_rows": fold_activity_event_rows(
+                [
+                    *projection.broker_activity_rows,
+                    *repair_projection.closed_trade_rows,
+                ]
+            )
+        }
     )
 
 

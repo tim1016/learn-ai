@@ -159,5 +159,5 @@ export class BrokerActivityTableComponent {
 
   trackGroup = (_i: number, g: GroupedRows): string => g.key;
   trackRow = (_i: number, r: BrokerActivityRow): number => r.seq;
-  trackEventRow = (_i: number, r: ActivityBrokerEventRow): string => r.id;
+  trackEventRow = (_i: number, r: ActivityBrokerEventRow): string => r.visible_row_id;
 }

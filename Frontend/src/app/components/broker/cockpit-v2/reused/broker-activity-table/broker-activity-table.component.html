@@ -71,8 +71,15 @@
           @for (row of events; track trackEventRow($index, row)) {
             <tr [attr.data-testid]="'broker-activity-event-row-' + row.id">
               <td class="ts">{{ fmtTimestampNy(row.ts_ms) }}</td>
-              <td>{{ row.row_type }}</td>
-              <td>{{ row.source }}</td>
+              <td>
+                {{ row.display_type }}
+                @if (row.fold_count > 1) {
+                  <span class="count-badge" [attr.aria-label]="'Repeated ' + row.fold_count + ' times'">
+                    {{ row.fold_count }}x
+                  </span>
+                }
+              </td>
+              <td>{{ row.source_label }}</td>
               <td>{{ row.symbol ?? '—' }}</td>
               <td>{{ row.side ?? '—' }}</td>
               <td class="num">
@@ -92,8 +99,13 @@
               <td>{{ row.status ?? row.verdict }}</td>
               <td>
                 {{ row.summary }}
-                @if (row.replay_count > 1) {
-                  · seen {{ row.replay_count }}x
+                @if (row.cluster_label) {
+                  <span class="cluster-label">{{ row.cluster_label }}</span>
+                }
+                @if (row.constituent_fill_ids.length > 0) {
+                  <span class="cluster-label">
+                    {{ row.constituent_fill_ids.length }} fill(s)
+                  </span>
                 }
               </td>
               <td>{{ row.evidence.length }}</td>

@@ -148,4 +148,19 @@
       font-weight: 500;
     }
   }
+
+  .count-badge,
+  .cluster-label {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0.08rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 4px);
+    color: var(--text-muted);
+    background: var(--surface-elev1);
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
 }

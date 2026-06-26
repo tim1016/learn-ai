@@ -215,11 +215,11 @@ describe('BrokerDeployFormComponent', () => {
       strategy_spec_path: 'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
       qc_audit_copy_path: 'references/qc-shadow/A.py',
       qc_cloud_backtest_id: 'bt-1',
-      account_id: 'DU123',
       strategy_instance_id: 'spy-ema-paper-1',
       strategy_key: 'spy_ema_crossover',
       start: false,
     });
+    expect(req).not.toHaveProperty('account_id');
     expect(typeof req.start_date_ms).toBe('number');
     // Deploy-only: launch knobs are omitted so they aren't validated.
     expect(req.start_options).toBeUndefined();
@@ -541,7 +541,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     fieldControl(fixture, 'Strategy').value = 'deployment_validation';
-    fieldControl(fixture, 'Brokerage account').value = 'DU123';
+    fieldControl(fixture, 'Connected broker account').value = 'DU123';
     fieldControl(fixture, 'Backtest ID').value = 'bt-validated';
     fieldControl(fixture, 'Algorithm audit copy').value = DEPLOYMENT_VALIDATION_AUDIT_COPY;
     fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
@@ -583,7 +583,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('keeps deploy form validation usable when broker account prefill fails', async () => {
+  it('fails closed when the connected broker account is unavailable', async () => {
     const { fixture } = setup({
       accountPromise: Promise.reject(new Error('broker account unavailable')),
       qcEntries: [],
@@ -592,16 +592,15 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     changeSelect(fixture, 'Strategy', 'deployment_validation');
-    typeText(fixture, 'Brokerage account', 'DUM284968');
     typeText(fixture, 'Backtest ID', 'd2fe45a7142e88575f6fbd75229f8681');
     typeText(fixture, 'Deployment name', 'june25');
     await flush();
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Ready to deploy.',
+      'Connected broker account unavailable.',
     );
-    expect(deployButton(fixture).disabled).toBe(false);
+    expect(deployButton(fixture).disabled).toBe(true);
   });
 
   it('syncs visibly cleared controls so stale values cannot be submitted', async () => {
@@ -611,7 +610,6 @@ describe('BrokerDeployFormComponent', () => {
 
     fieldControl(fixture, 'Strategy').value = '';
     fieldControl(fixture, 'Strategy settings file').value = '';
-    fieldControl(fixture, 'Brokerage account').value = '';
     fieldControl(fixture, 'Backtest ID').value = '';
     fieldControl(fixture, 'Algorithm audit copy').value = '';
     fieldControl(fixture, 'Deployment name').value = '';
@@ -622,17 +620,17 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.strategyKey()).toBe('');
     expect(component.specPath()).toBe('');
-    expect(component.accountId()).toBe('');
+    expect(component.accountId()).toBe('DU123');
     expect(component.qcBacktestId()).toBe('');
     expect(component.qcAuditCopyPath()).toBe('');
     expect(component.instanceId()).toBe('');
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Missing: Strategy, Strategy settings file, Brokerage account, Backtest ID, Algorithm audit copy, Deployment name.',
+      'Missing: Strategy, Strategy settings file, Backtest ID, Algorithm audit copy, Deployment name.',
     );
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
-  it('does not overwrite a manually typed brokerage account when broker prefill resolves later', async () => {
+  it('ignores manual account edits and uses the connected broker account when it resolves', async () => {
     let resolveAccount: (value: { account_id: string }) => void = () => undefined;
     const accountPromise = new Promise<{ account_id: string }>((resolve) => {
       resolveAccount = resolve;
@@ -640,11 +638,11 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, component } = setup({ accountPromise });
     fixture.detectChanges();
 
-    typeText(fixture, 'Brokerage account', 'DU999');
+    typeText(fixture, 'Connected broker account', 'DU999');
     resolveAccount({ account_id: 'DU123' });
     await flush();
 
-    expect(component.accountId()).toBe('DU999');
+    expect(component.accountId()).toBe('DU123');
   });
 
   it('lists the missing required fields in the blocked reason', async () => {
@@ -815,8 +813,9 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.qcBacktestId()).toBe('bt-redeploy');
     expect(component.qcAuditCopyPath()).toBe('audit/copy.py');
     expect(component.instanceId()).toBe('recovered_inst');
-    // Seeded account survives even with the broker prefill returning null.
-    expect(component.accountId()).toBe('DU777');
+    // Account is no longer sourced from the redeploy URL; Deploy requires the
+    // currently connected broker session to provide it.
+    expect(component.accountId()).toBe('');
   });
 
   it('allows "Deploy & start" when the instance exists but is not live', async () => {

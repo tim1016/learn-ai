@@ -9,6 +9,7 @@ live-captured evidence.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
@@ -65,6 +66,15 @@ class BrokerActivityReconstructionResult:
     rows_written: int
     rows_skipped_existing: int
     target_wal_path: Path
+
+
+@dataclass(frozen=True)
+class BrokerActivityProjectionResult:
+    run_id: str
+    strategy_instance_id: str
+    source: ReconstructionSource
+    rows: tuple[BrokerActivityRow, ...]
+    rows_skipped_existing: int
 
 
 @dataclass(frozen=True)
@@ -135,6 +145,69 @@ def reconstruct_broker_activity_for_run(
         rows_written=rows_written,
         rows_skipped_existing=rows_skipped_existing,
         target_wal_path=target_wal_path,
+    )
+
+
+def project_broker_activity_for_run(
+    run_id: str,
+    *,
+    artifacts_root: Path,
+    existing_rows: list[BrokerActivityRow],
+    timing_policy: ReconciliationTimingPolicy | None = None,
+) -> BrokerActivityProjectionResult:
+    """Author repaired rows for ``run_id`` without mutating the broker WAL.
+
+    This is the Activity projection path from PRD #689. It reuses the same
+    trader-authored reconciliation logic as ``reconstruct_broker_activity_for_run``
+    but assigns stable synthetic row sequences and returns the rows to a derived
+    projection/cache. The canonical per-instance broker-activity WAL remains
+    owned by the live publisher.
+    """
+    run_dir = _resolve_run_dir(run_id, artifacts_root)
+    ledger = read_ledger(run_dir / "run_ledger.json")
+    if not ledger.strategy_instance_id:
+        raise ValueError(f"run {run_id!r} has no strategy_instance_id in run_ledger.json")
+
+    strategy_instance_id = ledger.strategy_instance_id
+    envelope = _read_envelope(artifacts_root, strategy_instance_id)
+    bot_order_namespace = _bot_order_namespace(strategy_instance_id, envelope)
+    submitted_orders = _submitted_orders(run_dir, envelope)
+    intent_by_id = _intent_by_id(run_dir, envelope)
+
+    source, source_events = _source_events(run_dir)
+    existing_keys = _existing_row_keys(existing_rows)
+    rows: list[BrokerActivityRow] = []
+    rows_skipped_existing = 0
+    for source_event in source_events:
+        event = _enrich_event_identity(source_event.event, submitted_orders)
+        if source == "legacy_execution_artifacts":
+            event = _enrich_legacy_fill_shape(event, intent_by_id)
+        key = _event_key(event)
+        if key in existing_keys:
+            rows_skipped_existing += 1
+            continue
+        row = _author_reconstructed_row_model(
+            seq=_stable_projection_seq(run_id, source, source_event),
+            event=event,
+            source_run_id=run_id,
+            source_seq=source_event.source_seq,
+            source=source,
+            bot_order_namespace=bot_order_namespace,
+            submitted_orders=submitted_orders,
+            intent_by_id=intent_by_id,
+            timing_policy=timing_policy or ReconciliationTimingPolicy(),
+        )
+        if row is None:
+            continue
+        existing_keys.add(key)
+        rows.append(row)
+
+    return BrokerActivityProjectionResult(
+        run_id=run_id,
+        strategy_instance_id=strategy_instance_id,
+        source=source,
+        rows=tuple(rows),
+        rows_skipped_existing=rows_skipped_existing,
     )
 
 
@@ -385,6 +458,35 @@ def _author_reconstructed_row(
     intent_by_id: dict[str, EngineIntent],
     timing_policy: ReconciliationTimingPolicy,
 ) -> BrokerActivityRow | None:
+    row = _author_reconstructed_row_model(
+        seq=wal.allocate_seq(),
+        event=event,
+        source_run_id=source_run_id,
+        source_seq=source_seq,
+        source=source,
+        bot_order_namespace=bot_order_namespace,
+        submitted_orders=submitted_orders,
+        intent_by_id=intent_by_id,
+        timing_policy=timing_policy,
+    )
+    if row is None:
+        return None
+    wal.append_row(row)
+    return row
+
+
+def _author_reconstructed_row_model(
+    *,
+    seq: int,
+    event: IbkrOrderEvent,
+    source_run_id: str,
+    source_seq: int | None,
+    source: ReconstructionSource,
+    bot_order_namespace: str,
+    submitted_orders: dict[str, dict[str, Any]],
+    intent_by_id: dict[str, EngineIntent],
+    timing_policy: ReconciliationTimingPolicy,
+) -> BrokerActivityRow | None:
     parsed_ref = parse_order_ref(event.order_ref)
     if parsed_ref is not None and parsed_ref[0] != bot_order_namespace:
         return None
@@ -402,7 +504,6 @@ def _author_reconstructed_row(
     ):
         return None
 
-    seq = wal.allocate_seq()
     ctx = ReconciliationContext(
         seq=seq,
         ts_ms=event.ts_ms,
@@ -430,8 +531,17 @@ def _author_reconstructed_row(
             ),
         }
     )
-    wal.append_row(repaired)
     return repaired
+
+
+def _stable_projection_seq(
+    run_id: str, source: ReconstructionSource, source_event: _SourceEvent
+) -> int:
+    key = _event_key(source_event.event)
+    digest = hashlib.sha256(
+        f"{run_id}|{source}|{source_event.source_seq}|{key[0]}|{key[1]}".encode()
+    ).hexdigest()
+    return int(digest[:12], 16)
 
 
 def _existing_row_keys(rows: list[BrokerActivityRow]) -> set[tuple[str, str]]:
@@ -502,6 +612,8 @@ def _as_str_or_none(value: object) -> str | None:
 
 
 __all__ = [
+    "BrokerActivityProjectionResult",
     "BrokerActivityReconstructionResult",
+    "project_broker_activity_for_run",
     "reconstruct_broker_activity_for_run",
 ]
