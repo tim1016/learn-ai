@@ -38,7 +38,7 @@
             <td class="mono">{{ fmtTimeNy(t.exit_time_ms) }}</td>
             <td class="mono num">{{ fmtPrice(t.entry_price) }}</td>
             <td class="mono num">{{ fmtPrice(t.exit_price) }}</td>
-            <td class="mono num">{{ t.qty ?? '—' }}</td>
+            <td class="mono num">{{ t.qty }}</td>
             <td class="mono num">{{ t.fees.toFixed(2) }}</td>
             <td class="mono num">{{ fmtSignedPnl(t.pnl_points) }}</td>
           </tr>
