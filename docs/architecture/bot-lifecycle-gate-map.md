@@ -1,0 +1,230 @@
+# Bot Lifecycle Gate Map
+
+**Status:** design map for review
+**Created:** 2026-06-27
+**Input:** `/Users/inkant/Downloads/bot-lifecycle-robust-design.codex.md`
+**Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/ibkr-integration-authority.md`
+
+This document makes the bot lifecycle gates visible as a chart and a set of tables.
+It intentionally separates:
+
+- **Current gates**: checks already enforced by code.
+- **Partial gates**: checks that exist, but not at the scope Claude's design requires.
+- **Proposed gates**: new account/fleet substrate from Claude's design.
+
+## Legend
+
+| Term | Meaning |
+|---|---|
+| Gate | A predicate that must pass before an action or transition can continue. |
+| Block | The action is refused, but the run/account is not necessarily contaminated. |
+| Poison | The run is permanently unsafe; `poisoned.flag` blocks restart and requires redeploy. |
+| Freeze | The account is unsafe for more deploys until operator recovery proves it clean. |
+| Instance scope | Applies to one `strategy_instance_id` or one `run_id`. |
+| Account scope | Applies to everything sharing one IBKR `account_id`. |
+
+## Lifecycle Chart
+
+```mermaid
+flowchart TD
+    deploy["Deploy / select strategy package"]
+    accountGate{"GATE.PREFLIGHT<br/>account clean enough to spawn?"}
+    runLedger["Run ledger created"]
+    startGate{"Start recheck<br/>poisoned? STOPPED? daemon state?"}
+    daemon["Host daemon spawns runner"]
+    morning{"Morning/run pre-flight<br/>clean tree, NTP, sizing, halt flag,<br/>unexpected position, all-in coexistence"}
+    process["Runner process starts"]
+    reconcile{"GATE.RECONCILE<br/>in-progress receipt, broker probe,<br/>classify broker artifacts"}
+    activate{"GATE.ACTIVATE<br/>fresh reconcile, desired RUNNING,<br/>broker connected, runtime config complete"}
+    active["ACTIVE loop<br/>bar processing + commands"]
+    submit{"PROC.SUBMIT gate<br/>lease/submission OK, paper safety,<br/>durable order_ref, WAL"}
+    place["IBKR placeOrder"]
+    resolve{"PROC.RESOLVE_SUBMIT<br/>timeout means lookup, not failure"}
+    paused["PAUSED / durable-only intent"]
+    poison["POISONED<br/>run-level poisoned.flag"]
+    freeze["UNRESOLVED_EXPOSURE<br/>account-level freeze"]
+    blocked["Blocked before spawn/start"]
+    watchdog{"Watchdog / lease"}
+    shutdown["Block submits -> pause -> flatten/cancel -> prove or quarantine -> exit"]
+
+    deploy --> accountGate
+    accountGate -->|pass| runLedger
+    accountGate -->|block| blocked
+    accountGate -->|unprovable exposure| freeze
+
+    runLedger --> startGate
+    startGate -->|pass| daemon
+    startGate -->|block| blocked
+    daemon --> morning
+    morning -->|pass| process
+    morning -->|block| blocked
+    process --> reconcile
+    reconcile -->|Continue / Adopt| activate
+    reconcile -->|Poison| poison
+    reconcile -->|unprovable account exposure, proposed| freeze
+    activate -->|pass| active
+    activate -->|desired PAUSED| paused
+
+    active --> submit
+    submit -->|clean ack| place
+    submit -->|ambiguous ack| resolve
+    submit -->|unsafe| poison
+    resolve -->|found| active
+    resolve -->|provably absent| submit
+    resolve -->|not provable| freeze
+
+    active --> watchdog
+    watchdog -->|lease fresh| active
+    watchdog -->|lease lost| shutdown
+    shutdown -->|account proven flat| poison
+    shutdown -->|not provable| freeze
+```
+
+Important reading of the chart:
+
+- `GATE.PREFLIGHT` in Claude's spec is **account-scoped and pre-spawn**. Today we have several pre-flight checks, but they are mostly run/instance-scoped.
+- `GATE.RECONCILE` is already a real cold-start gate.
+- `GATE.UNRESOLVED_EXPOSURE` is not a first-class artifact today. It is the biggest missing visual/gate concept.
+- `PROC.SUBMIT` has one low-level IBKR `placeOrder` call site today, but more than one production path can reach it through wrappers.
+
+## Gate Inventory
+
+| Gate | Scope | Current status | Enforced today | What it blocks or causes | Gap / design decision |
+|---|---:|---|---|---|---|
+| Broker enabled | Process | Implemented | `PythonDataService/app/routers/broker.py` | Broker connection lifecycle routes fail when `IBKR_BROKER_ENABLED=false`. | Not part of Claude's named gates, but it is an outer operational gate. |
+| Broker account sentinel | Account | Implemented, single-account only | `PythonDataService/app/broker/ibkr/client.py` | Connect refuses empty managed accounts, multiple managed accounts, or paper/live mismatch. | Multi-account FA/sub-account use is intentionally unsupported today. |
+| Paper order safety | Order | Implemented | `PythonDataService/app/broker/ibkr/orders.py::_enforce_paper_safety` | Refuses order before contract/order construction if readonly, wrong mode, live port, non-DU account, or missing `confirm_paper`. | Works for paper. Does not solve multi-account ownership. |
+| Start recheck | Run/instance | Implemented | `PythonDataService/app/routers/live_instances.py::_assert_start_allowed` | Blocks stale UI starts when run is poisoned, durable intent is `STOPPED`, host daemon is offline, or daemon says running/stopping. | Defers deeper start checks to daemon/runtime. |
+| Morning/run pre-flight | Run/account-symbol | Implemented, partial account scope | `PythonDataService/app/engine/live/pre_flight.py` | Blocks dirty source, NTP drift, missing/corrupt ledger, prior `halt.flag`, missing sizing, unexpected positions, all-in coexistence conflicts, bad prior artifacts. | Not the same as Claude's account-wide `GATE.PREFLIGHT`; no account registry or account freeze artifact. |
+| Account preflight classifier | Account | Proposed | none yet | Would block deploy/start before spawn when account has unowned open orders, unowned positions, unresolved exposure, or restart intensity freeze. | Needs `instance_registry`, account baseline, unresolved exposure flag, and shared classifier. |
+| Cold-start reconciliation | Run | Implemented | `PythonDataService/app/engine/live/reconciliation_orchestrator.py` | Writes `in_progress` receipt first; corrupt sidecar/WAL, broker probe failure, or classifier poison writes failed receipt and `poisoned.flag`; Continue/Adopt writes passed receipt. | Current classifier is "allowed namespaces" based, not registry-known sibling based. |
+| Ownership classifier | Run/account artifacts | Implemented, too local | `PythonDataService/app/engine/live/reconciliation_classifier.py` | Continue, Adopt, or Poison based on projection, broker snapshot, allowed namespaces, prior unresolved tail, emergency audit, baseline cutoff. | Claude wants "unaccounted = owned by no registry-known instance", not "not owned by me". Needs registry. |
+| Activate/readiness | Run | Implemented, partial | `PythonDataService/app/engine/live/readiness.py`, `PythonDataService/app/engine/live/run.py`, `PythonDataService/app/engine/live/live_engine.py` | Live readiness blocks/degrades on desired state, broker connection, poison sentinel, session window, order cap; start readiness derives durable start gates. | Claude's `GATE.ACTIVATE` also wants fresh receipt boot id and lease/fencing token as explicit pass conditions. |
+| Durable submit identity | Order | Implemented | `PythonDataService/app/engine/live/live_portfolio.py`, `PythonDataService/app/broker/ibkr/orders.py`, `PythonDataService/app/engine/live/order_identity.py` | Real broker submit requires IntentWal, namespace, deterministic `order_ref`, and matching namespace before `place_paper_order`. | Good foundation for R2/R3. R1 may simplify ownership by partitioning account. |
+| Submit uncertainty | Order | Implemented | `PythonDataService/app/engine/live/live_portfolio.py`, `PythonDataService/app/engine/live/submit_state_machine.py` | Clean ack records SUBMITTED; raised/timeout records ACK_FAILED_UNCERTAIN; probe PRESENT adopts, absent retries, not provable halts. | Claude wants not-provable to become account `UNRESOLVED_EXPOSURE`, not only a run halt. |
+| Reconnect recovery halt | Process/account | Implemented | `PythonDataService/app/broker/ibkr/orders.py::_check_reconnect_recovery_halt` | Refuses new order submits while broker-activity publisher is replaying executions after reconnect. | Good account-wide submission brake, but process-local. |
+| Operator action capability | Instance | Implemented | `PythonDataService/app/services/operator_capability.py` | Resume, Pause, Stop, Flatten-and-pause, Mark-poisoned all use one evaluator for status projection and mutation endpoints. | Does not cover Start; Start has its own recheck. |
+| Resume guards | Instance/run artifacts | Implemented | `PythonDataService/app/services/resume_guard_state.py` | Resume blocks on broker safety unsafe/unknown, submission capability blocked/unknown, reconciliation failed/stale/unavailable/unknown, unresolved uncertain intent, STOPPED, poisoned, already running. | Claude wants Resume to re-run reconciliation before ACTIVE; current guards fold artifact state. |
+| Deactivate gates | Instance | Implemented | desired-state endpoint and flatten-and-pause endpoint in `live_instances.py` | Pause/Stop are durable intent writes; flatten-and-pause writes PAUSED before FLATTEN_NOW. | Matches PRD direction. Emergency flatten is separate account-wide recovery. |
+| Watchdog lease loss | Daemon/process | Implemented, semantics differ from Claude target | `PythonDataService/app/engine/live/control_plane.py`, `PythonDataService/app/engine/live/watchdog_controller.py` | Daemon lease expiry/change triggers halt sequence: block submissions, persist PAUSED, flatten, disconnect, request exit; critical outcomes remain unresolved incidents. | Claude wants "disconnect last only after proof or quarantine" and account freeze when proof is impossible. Current executor still disconnects after flatten failure to finish halt. |
+| Fencing token | Account writer | Proposed | none as named token | Would make stale writers unable to submit after lease loss or ownership handoff. | Required for Claude `INV-1`/`INV-3` if a broker account is shared. |
+| Unresolved exposure freeze | Account | Proposed | none as account-scoped artifact | Would freeze all deploys/start into an account after unprovable submit/exposure until emergency flatten plus clean reconcile. | Needed to prevent "death begets death" cascades. |
+| Fleet reset baseline | Account | Partial concept, not first-class workflow | `ignore_unknown_namespaces_before_ms` exists in cold-start reconciliation; PRD mentions fleet-reset rule. | Lets old completed unknown executions be ignored under strict conditions. | Needs account-scoped `account_baseline` artifact and explicit operator workflow. |
+| Restart intensity | Account | Proposed | none | Would freeze auto redeploy/restart after MaxR failures in MaxT. | Suggested default in Claude input: 3 failures / 15 min, needs confirmation. |
+
+## Gate By Operator Action
+
+| Operator action | Gate sequence today | Blocks on | Current owner | Proposed change |
+|---|---|---|---|---|
+| Deploy bot | Deploy route and package/deploy guardrails; broker account evidence is derived from connected broker session per PRD. | Missing/ambiguous account, invalid package/settings, account proof unavailable. | Deploy/data-plane code and host daemon. | Add account-scoped `GATE.PREFLIGHT` before run creation or before spawn. |
+| Start bot process | Data-plane `_assert_start_allowed` then daemon/runtime pre-flight then cold-start reconciliation. | `poisoned.flag`, STOPPED, host offline, already running/stopping, run pre-flight failure, reconcile poison. | `live_instances.py`, daemon, `pre_flight.py`, `reconciliation_orchestrator.py`. | Make account preflight explicit before daemon spawn; show it as a gate group in cockpit. |
+| Enter ACTIVE bar loop | Runtime only after reconcile passed and engine constructs live runtime. | Broker/reconcile failure, poisoned run, invalid runtime config, paused desired state. | `run.py`, `live_engine.py`, `readiness.py`. | Add explicit `receipt.boot_id == current_boot_id` and lease/fencing token to `GATE.ACTIVATE`. |
+| Submit broker order | LivePortfolio WAL/id gate, broker safety verdict, submit state machine, `place_paper_order` paper safety. | Non-paper verdict, missing `order_ref`, reconnect recovery, disconnected broker, readonly, wrong mode/port/account, missing confirm, ambiguous submit not provable. | `live_portfolio.py`, `orders.py`. | Collapse all real broker submission into one named `PROC.SUBMIT` with submit lock + fencing token. |
+| Resume | Shared capability evaluator plus resume guard state. | Already running, STOPPED, poisoned, broker safety unsafe/unknown, submit capability blocked/unknown, reconciliation failed/stale/missing/unknown, unresolved uncertain intent, mutation conflict. | `operator_capability.py`, `resume_guard_state.py`, router revalidation. | Re-run reconcile before transition to ACTIVE; account freeze also blocks. |
+| Pause | Capability evaluator, then durable desired-state write, then optional live command. | Already paused, STOPPED, poisoned, mutation conflict. | `operator_capability.py`, desired-state endpoint. | Keep as safe durable write. |
+| Stop | Capability evaluator, then durable STOPPED write, then optional live command. | Already stopped, poisoned, mutation conflict. | `operator_capability.py`, desired-state endpoint. | Keep terminal: redeploy required to return. |
+| Flatten and pause | Capability evaluator, durable PAUSED write first, then FLATTEN_NOW command if live binding exists. | No live binding, no owned positions, mutation conflict. | `operator_capability.py`, `flatten_and_pause_instance`. | If no live binding and exposure exists, route operator to emergency flatten/account recovery. |
+| Emergency flatten | Account echo + confirm, daemon-mediated, independent of live binding. | Missing confirm, no run, daemon failure, account mismatch at CLI/broker path. | `live_instances.py`, `run.py`. | Clearing `UNRESOLVED_EXPOSURE` should require emergency flatten plus clean account reconcile. |
+| Mark poisoned | Capability evaluator then command channel. | No live binding, already poisoned, mutation conflict. | `operator_capability.py`, one-shot command endpoint. | Poison remains run-scoped; unresolved exposure remains account-scoped. |
+
+## Current Subgate Checklist
+
+### Broker / Order Safety
+
+| Subgate | Enforced in | Pass condition | Failure effect |
+|---|---|---|---|
+| `IBKR_BROKER_ENABLED` | `broker.py` | Broker feature enabled | Connection routes disabled. |
+| Managed account count | `IbkrClient.connect` | Exactly one account | Disconnect and refuse. |
+| Paper/live sentinel | `IbkrClient.connect`, `_enforce_paper_safety` | `IBKR_MODE=paper` with `DU...` account; live mode with non-DU | Disconnect/refuse. |
+| Readonly kill switch | `_enforce_paper_safety` | `IBKR_READONLY=false` for order placement | Order refused. |
+| Port-vs-mode | config and `_enforce_paper_safety` | Paper mode uses paper port | Order refused. |
+| Per-request confirmation | `_enforce_paper_safety` | `confirm_paper=true` | Order refused. |
+| Deterministic attribution | `LivePortfolio`, `place_paper_order` | `order_ref={namespace}:{intent_id}` present and namespace matches | Order refused or assertion before broker call. |
+
+### Start / Runtime Safety
+
+| Subgate | Enforced in | Pass condition | Failure effect |
+|---|---|---|---|
+| Poison sentinel | `_assert_start_allowed`, readiness | No `poisoned.flag` | Start refused / readiness blocked. |
+| Durable STOPPED | `_assert_start_allowed`, capability evaluator | Desired state not STOPPED | Start/resume refused; redeploy required. |
+| Daemon state | `_assert_start_allowed` | Host reachable and not running/stopping | Start refused. |
+| Clean tree | `pre_flight.py` | Scoped git tree clean | Pre-flight/start blocked. |
+| NTP offset | `pre_flight.py` | Clock drift within budget | Pre-flight/start blocked. |
+| Run state intact | `pre_flight.py` | `run_ledger.json` exists and parses | Pre-flight/start blocked. |
+| Prior halt flag | `pre_flight.py` | No `halt.flag` | Pre-flight/start blocked. |
+| Sizing policy present | `pre_flight.py`, `run.py` | `live_config.sizing` present | Start blocked; redeploy with sizing. |
+| Unexpected position | `pre_flight.py` | Only allowed managed/expected exposure | Start blocked. |
+| All-in coexistence | `pre_flight.py` | No same-symbol full-all-in conflict; broker positions reachable when all-in | Start blocked. |
+| Yesterday artifacts | `pre_flight.py` | Prior reconciliation artifacts exist and hashes match | Start blocked. |
+| Session window | `readiness.py`, live engine | In trading session and before force-flat | Readiness blocked; flat-only after force-flat. |
+| Daily order cap | `readiness.py`, live engine | Orders used below cap | Readiness blocked / runtime halt. |
+
+### Reconciliation / Ownership
+
+| Subgate | Enforced in | Pass condition | Failure effect |
+|---|---|---|---|
+| In-progress receipt first | `reconciliation_orchestrator.py` | `reconciliation_receipt.json` starts as `in_progress` | Crash cannot leave stale passed receipt. |
+| Sidecar readable | `reconciliation_orchestrator.py` | Live-state sidecar parses | Poison + failed receipt. |
+| WAL readable | `reconciliation_orchestrator.py` | Intent WAL parses | Poison + failed receipt. |
+| Broker probe | `reconciliation_orchestrator.py` | Probe succeeds | Poison + failed receipt. |
+| Namespace classifier | `reconciliation_classifier.py` | Artifacts are known/resolved or adoptable | Continue/Adopt; otherwise Poison. |
+| Adoption | `reconciliation_orchestrator.py` | Owned orphan can be recorded | Append `ADOPTED_BROKER_ORDER`, passed receipt. |
+
+## Missing Visual Concepts From Claude's Design
+
+These are the concepts that should become first-class if we implement Claude's robust design:
+
+| Missing concept | Why it matters | Suggested visual surface |
+|---|---|---|
+| `instance_registry` | Lets us distinguish "owned by a known sibling" from "owned by nobody". | Account detail table: namespace, instance, lifecycle, last run, account. |
+| `account_baseline` | Makes fleet reset explicit instead of hidden cutoff logic. | Account recovery panel: baseline timestamp, listed instance ids, what residue it authorizes. |
+| `unresolved_exposure.flag` | Stops a single unprovable submit/exposure from cascading into repeated poisoned bots. | Account banner and gate row: "Account frozen until emergency flatten + clean reconcile." |
+| `fencing_token` | Prevents stale writers from submitting after lease/control-plane ownership changes. | Control-plane row: current token, holder, boot id, lease age. |
+| Restart intensity window | Stops death-restart loops. | Fleet row: failures in last 15 minutes, threshold, frozen/unfrozen. |
+| Registry-aware classifier | Prevents sibling-owned executions from poisoning every other bot on the account. | Reconcile table grouped by self / sibling-known / unowned / baseline-ignored / poison. |
+
+## Review Update
+
+Claude's follow-up closes several gaps in this plan:
+
+| Gap | Resolution |
+|---|---|
+| R2 vs R3 ambiguity | The current runtime is R2: the daemon spawns one OS process per `strategy_instance_id`, and each child has its own in-process `asyncio.Lock` for submits. A shared function plus per-process locks is not R3. True R3 means one account-scoped broker-writer process owns the IBKR session and receives intents from runners. |
+| Existing submit lock scope | `LiveEngine._submit_lock` is process-local. It serializes bar-loop submits, flatten submits, and runtime reconcile inside one runner only. It is not a cross-process account lock. |
+| Confirmed live bug priority | Watchdog proof-before-disconnect is urgent and independent of account registry work. It should ship before account artifacts: block submits, persist PAUSED, attempt flatten/cancel while broker is still connected, prove or persist unresolved incident, then disconnect/exit. |
+| Classifier scope | Do not build a per-instance sibling-aware classifier as the final shape. The durable classifier should be account-scoped from the start: reconcile broker state against the union of registry-known instance intents. |
+| Registry criticality | `instance_registry` is safety-critical, not display metadata. It must be append-only and write-ahead before first submit; rebuilding from run dirs is not sufficient. |
+| Gate board drift risk | The gate board must report the exact predicate result produced by the enforcement callable. A parallel projection is explicitly out of scope. |
+| Recovery deadlock | `UNRESOLVED_EXPOSURE` needs an audited operator override for cases where broker reachability is the thing preventing automated proof. |
+| Start bypass | Start uses `_assert_start_allowed`, not `operator_capability.py`; account freeze/preflight must be wired into Start explicitly. |
+
+## Recommended Design Shape
+
+Use one manually reviewable "gate board" data model for the cockpit and docs:
+
+| Field | Meaning |
+|---|---|
+| `gate_id` | Stable id such as `broker.paper_safety`, `start.poison_sentinel`, `account.unresolved_exposure`. |
+| `scope` | `process`, `account`, `instance`, `run`, or `order`. |
+| `phase` | `deploy`, `start`, `preflight`, `reconcile`, `activate`, `submit`, `action`, `recovery`. |
+| `status` | `pass`, `block`, `poison`, `freeze`, `unknown`, or `not_applicable`. |
+| `source_of_truth` | File/artifact/service that authored the result. |
+| `enforcement_point` | The function/module that actually refuses or transitions. |
+| `blocks` | Human-readable action/transition blocked by the gate. |
+| `operator_next_step` | Flatten, reconnect broker, redeploy, reconcile, acknowledge baseline, etc. |
+
+The board should be composed backend-side. Angular should render it as a table/timeline, not infer gate meaning from raw states.
+
+## Revised Implementation Split
+
+This split supersedes the original V0-V4 table. It commits to R3 for any shared-account setup and moves the known watchdog exposure bug ahead of registry work.
+
+| Slice | Work | Acceptance |
+|---|---|---|
+| R0 process-fact lock-in | Document that current live runners are separate OS processes and existing submit locks are per-process. | PRD commits to AccountOwner for R3 instead of cross-process lock-only hardening. |
+| R1 watchdog proof-before-disconnect | Reorder lease-loss shutdown so broker disconnect happens only after exposure proof or after durable unresolved/quarantine evidence is written. | JUN26TSLA fixture ends in unresolved incident/freeze semantics instead of silent poison after unproven flatten. |
+| R2 single-source gate predicates | Introduce backend gate result objects emitted by the same callable that enforces each gate. | A gate board row cannot say pass while the mutation/start/submit path blocks. |
+| R3 account safety artifacts | Add append-only `instance_registry`, `account_baseline`, and `unresolved_exposure.flag` with audited operator override. | Start/deploy are blocked by account freeze; registry is written before first submit; override is explicit and durable. |
+| R4 account-scoped classifier | Refactor classification to reconcile account broker state against the union of registry-known intents. | Known live/dead sibling residue is classified by lifecycle, not blindly ignored; unowned open orders still fail closed. |
+| R5 AccountOwner broker-writer | Add one account-scoped writer process/service that owns the IBKR session and receives intents from runners. | No runner process calls `placeOrder`; submit serialization is in-process at AccountOwner; stale runner cannot place directly. |
+| R6 fleet supervisor | Add fleet reset workflow, restart intensity, post-reconnect ordering, and account gate board. | Repeated failures freeze redeploy; baseline is visible; reconnect drains replay before new intents; operator sees account-level gates. |
