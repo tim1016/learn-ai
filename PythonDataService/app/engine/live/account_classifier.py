@@ -142,6 +142,14 @@ def classify_account(
     if override_rejection is not None:
         return override_rejection
     active_override = operator_override
+    if active_override is not None and active_override.decision == "freeze":
+        return _decision(
+            "freeze",
+            "OPERATOR_OVERRIDE_FREEZE",
+            account_id=account_id,
+            now_ms=now_ms,
+            override=active_override,
+        )
     if broker.status == "retryable_unavailable":
         return _decision(
             "retry",
@@ -400,9 +408,14 @@ def _has_duplicate_active_namespace(
     bindings: tuple[AccountInstanceBinding, ...],
     account_id: str,
 ) -> bool:
-    namespaces: set[str] = set()
+    latest_by_instance: dict[str, AccountInstanceBinding] = {}
     for binding in bindings:
-        if binding.account_id == account_id and binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES:
+        if binding.account_id == account_id:
+            latest_by_instance[binding.strategy_instance_id] = binding
+
+    namespaces: set[str] = set()
+    for binding in latest_by_instance.values():
+        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES:
             if binding.bot_order_namespace in namespaces:
                 return True
             namespaces.add(binding.bot_order_namespace)

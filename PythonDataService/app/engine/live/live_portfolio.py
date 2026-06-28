@@ -449,6 +449,12 @@ class LivePortfolio:
         retain the pre-Phase-5B opt-in behaviour for backwards compatibility
         with the replay/test fixtures.
         """
+        if self.account_owner_submitter is not None and self.intent_wal is not None:
+            raise ValueError("AccountOwner mode and intent_wal are mutually exclusive durability lanes")
+        if self.account_owner_submitter is not None:
+            if not self.bot_order_namespace:
+                raise ValueError("AccountOwner mode requires a non-empty bot_order_namespace")
+            return
         if not getattr(self.broker, "requires_durable_submit", False):
             return
         if self.intent_wal is None:
@@ -754,7 +760,7 @@ class LivePortfolio:
 
         if self.account_freeze_provider is not None:
             freeze_evidence = self.account_freeze_provider()  # type: ignore[operator]
-            if freeze_evidence is not None:
+            if freeze_evidence is not None and not self._pending_orders_reduce_exposure_only():
                 self.pending_orders.clear()
                 self._intent_by_order_id.clear()
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
@@ -904,7 +910,7 @@ class LivePortfolio:
                     IbkrOrderAck(
                         account_id=self.account_id,
                         is_paper=True,
-                        order_id=int(getattr(result, "order_id")),
+                        order_id=int(result.order_id),
                         perm_id=_try_int(getattr(result, "perm_id", None)),
                         client_id=0,
                         con_id=0,
@@ -1149,3 +1155,18 @@ class LivePortfolio:
         the WAL retains the join.
         """
         return self._intent_by_order_id.get(order_id)
+
+    def _pending_orders_reduce_exposure_only(self) -> bool:
+        if not self.pending_orders:
+            return False
+        for order in self.pending_orders:
+            position = self.get_position(order.symbol)
+            if position.quantity == 0:
+                return False
+            if position.quantity > 0 and order.quantity >= 0:
+                return False
+            if position.quantity < 0 and order.quantity <= 0:
+                return False
+            if abs(order.quantity) > abs(position.quantity):
+                return False
+        return True

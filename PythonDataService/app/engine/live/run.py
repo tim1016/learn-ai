@@ -1344,6 +1344,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             extra={"step": "0"},
         )
 
+    launched_by_host_daemon = bool(_os.environ.get("LIVE_RUNNER_DAEMON_BOOT_ID"))
     if ledger.account_id and ledger.strategy_instance_id:
         try:
             from app.engine.live.account_artifacts import (
@@ -1355,23 +1356,24 @@ def cmd_start(args: argparse.Namespace) -> int:
             )
 
             recorded_at_ms = now_ms()
-            write_account_instance_binding(
-                _artifacts_root,
-                AccountInstanceBinding(
+            if not launched_by_host_daemon:
+                write_account_instance_binding(
+                    _artifacts_root,
+                    AccountInstanceBinding(
+                        account_id=ledger.account_id,
+                        strategy_instance_id=ledger.strategy_instance_id,
+                        run_id=ledger.run_id,
+                        bot_order_namespace=bot_order_namespace_for_instance(ledger.strategy_instance_id),
+                        lifecycle_state="ACTIVE",
+                        recorded_at_ms=recorded_at_ms,
+                        source="run.start",
+                    ),
+                )
+                evaluate_restart_intensity(
+                    _artifacts_root,
                     account_id=ledger.account_id,
-                    strategy_instance_id=ledger.strategy_instance_id,
-                    run_id=ledger.run_id,
-                    bot_order_namespace=bot_order_namespace_for_instance(ledger.strategy_instance_id),
-                    lifecycle_state="ACTIVE",
-                    recorded_at_ms=recorded_at_ms,
-                    source="run.start",
-                ),
-            )
-            evaluate_restart_intensity(
-                _artifacts_root,
-                account_id=ledger.account_id,
-                now_ms=recorded_at_ms,
-            )
+                    now_ms=recorded_at_ms,
+                )
             account_freeze = read_account_freeze(_artifacts_root, ledger.account_id)
             if account_freeze is not None:
                 print(

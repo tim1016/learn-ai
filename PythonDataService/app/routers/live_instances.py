@@ -318,12 +318,18 @@ def _resolve_account_freeze(
     for run in runs:
         try:
             ledger = _read_ledger(Path(run["run_dir"]))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "failed to read ledger while resolving account freeze",
+                extra={"run_dir": str(run.get("run_dir")), "exception": repr(exc)},
+            )
             continue
         account_id = ledger.get("account_id")
         if not isinstance(account_id, str) or not account_id:
             continue
-        return read_account_freeze(artifacts_root, account_id)
+        account_freeze = read_account_freeze(artifacts_root, account_id)
+        if account_freeze is not None:
+            return account_freeze
     return None
 
 

@@ -1,370 +1,269 @@
-# Bot Lifecycle and Account Ownership - Authority
+# Bot Lifecycle and Account Ownership — Authority
 
-> **Canonical implementation snapshot** for Bot Cockpit live-paper lifecycle
-> gates, account-scoped artifacts, broker submit ownership, and operator
-> affordances.
+> **Canonical reference** for what the live-paper bot lifecycle and broker-account ownership model ships today.
+> This is an implementation snapshot, not a future-design document. When this page disagrees with code, code wins and this page must be updated in the same PR.
 >
-> This document describes what ships in code today. It is not a PRD, design
-> proposal, or target architecture. When this page disagrees with code, code
-> wins and this page must be updated in the same PR.
+> **Current status:** R2 multi-runner runtime with AccountOwner submit-lane foundation. The long-lived AccountOwner R3 daemon process and IPC intake are designed in `docs/architecture/bot-lifecycle-account-owner-prd.md` but are not implemented yet.
 >
-> **Supporting design intent:** `docs/architecture/bot-lifecycle-account-owner-prd.md`
-> and `docs/architecture/bot-lifecycle-gate-map.md`. Those docs may describe
-> future R3 behavior that is not implemented yet.
+> **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Owner:** the engineer editing `PythonDataService/app/engine/live/*`,
-> `PythonDataService/app/routers/live_instances.py`, or
-> `PythonDataService/app/services/operator_surface.py`.
->
-> **Last reviewed:** 2026-06-28 (account artifact root, account registry,
-> unresolved exposure freeze, account classifier V1, AccountOwner submit lane
-> foundation, GateResult projection, and restart-intensity freeze).
+> **Last reviewed:** 2026-06-28 (GateResult contract, account freeze artifact, write-ahead account instance registry, account-scoped classifier V1, AccountOwner submit/generation/reconnect lane, recovery/override evidence, and restart-intensity freeze shipped).
 
 ---
 
-## Table of contents
+## 1. Scope and Authority
 
-- [1. Scope and authority](#1-scope-and-authority)
-- [2. Current architecture](#2-current-architecture)
-- [3. Shipped account artifacts](#3-shipped-account-artifacts)
-- [4. GateResult contract](#4-gateresult-contract)
-- [5. Account registry and restart intensity](#5-account-registry-and-restart-intensity)
-- [6. Account freeze enforcement](#6-account-freeze-enforcement)
-- [7. Account classifier V1](#7-account-classifier-v1)
-- [8. AccountOwner submit lane V1](#8-accountowner-submit-lane-v1)
-- [9. Operator surface and readiness](#9-operator-surface-and-readiness)
-- [10. What does not ship today](#10-what-does-not-ship-today)
-- [11. Code cross-reference](#11-code-cross-reference)
+This document answers: **what actually owns bot lifecycle, broker order submission, reconciliation, and operator gates today?**
 
----
+It does not answer:
 
-## 1. Scope and authority
+- The final AccountOwner implementation details. Those live in the PRD until shipped.
+- Alpha strategy behavior.
+- Live-money enablement. The lifecycle described here is paper trading only.
+- UI polish for the gate board. This document covers backend authority and artifacts.
 
-This document answers: **what actually owns live-paper bot lifecycle,
-account-level safety artifacts, broker submit gating, and operator-visible
-gate rows today?**
-
-In scope:
-
-- Account-scoped artifact files under `artifacts/accounts/<account_id>/`.
-- Account registry and restart-intensity freeze behavior.
-- Active account-freeze gates for deploy, start, resume, readiness, and submit.
-- Account classifier V1 over broker evidence, registry rows, durable intents,
-  optional baseline evidence, and optional audited override evidence.
-- AccountOwner submit-lane foundation as an in-process component.
-- GateResult rows added to readiness, operator surface actions, and Start
-  affordance projections.
-
-Out of scope:
-
-- Live-money trading. The live runtime remains paper-only.
-- Alpha strategy behavior, backtest math, and indicator correctness.
-- Final R3 AccountOwner daemon process, IPC queue, and production single-writer
-  broker ownership. Those are still migration targets.
-
-Authority precedence for this domain:
+Authority order:
 
 1. Code.
-2. This document.
-3. `docs/architecture/bot-lifecycle-account-owner-prd.md` and
-   `docs/architecture/bot-lifecycle-gate-map.md`.
-4. Model memory or stale handoff notes.
+2. This authority document.
+3. PRDs and ADRs.
+4. Model memory.
 
----
+Same-PR rule: any PR that changes lifecycle gates, broker submit ownership, watchdog shutdown, reconciliation classification, or AccountOwner artifacts must update this document.
 
-## 2. Current architecture
+## 2. Current Architecture
 
-Current production remains **R2 multi-runner runtime with account-scoped guard
-rails**.
+Today the host daemon spawns one OS process per `strategy_instance_id`. Each runner process may construct its own `IbkrClient`, run cold-start reconciliation, process bars, and submit broker orders through `LivePortfolio` and `place_paper_order`.
 
-The host daemon still spawns one OS subprocess per `strategy_instance_id`.
-Each runner may still construct its own broker client, run cold-start
-reconciliation, process bars, and submit through `LivePortfolio`. This is not
-the final R3 single account-writer architecture.
+```mermaid
+flowchart TD
+    ui["Bot Cockpit / FastAPI"]
+    daemon["Host daemon<br/>RunnerProcessManager"]
+    r1["Runner A process<br/>LiveEngine + LivePortfolio"]
+    r2["Runner B process<br/>LiveEngine + LivePortfolio"]
+    wal1["Run A artifacts<br/>intent_events.jsonl<br/>reconciliation_receipt.json"]
+    wal2["Run B artifacts<br/>intent_events.jsonl<br/>reconciliation_receipt.json"]
+    broker["IBKR Gateway / paper account"]
+    surface["Operator surface<br/>readiness + action capabilities"]
 
-What shipped in this slice is the account authority foundation:
-
-```text
-Bot Cockpit / FastAPI
-  -> host daemon deploy/start
-  -> runner process
-  -> LiveEngine
-  -> LivePortfolio
-  -> broker adapter / optional AccountOwner submitter
-
-Account-scoped side channel:
-  artifacts/accounts/<account_id>/
-    instance_registry.jsonl
-    unresolved_exposure.flag
-    owner_generation.json
-    account_events.jsonl
+    ui --> daemon
+    daemon --> r1
+    daemon --> r2
+    r1 --> wal1
+    r2 --> wal2
+    r1 --> broker
+    r2 --> broker
+    wal1 --> surface
+    wal2 --> surface
+    broker --> surface
 ```
 
-The account side channel is durable and enforcement-backed, but it does not yet
-replace the multi-process runner topology.
+This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` serializes work inside one runner only. It does not prevent a sibling runner or stale runner process from calling IBKR.
 
----
+## 3. Current Lifecycle
 
-## 3. Shipped account artifacts
-
-All paths below are rooted at the live artifacts parent, then
-`accounts/<account_id>/`. Account ids are validated by
-`account_artifacts_root(...)`.
-
-| Artifact | File | Authority |
+| Phase | Current authority | Code |
 |---|---|---|
-| Account freeze | `unresolved_exposure.flag` | `AccountFreezeEvidence`; active while `cleared_at_ms is None`. |
-| Account event log | `account_events.jsonl` | Append-only audit stream for freeze, registry, owner, recovery, override, submit, and restart-intensity events. |
-| Instance registry | `instance_registry.jsonl` | Append-only `AccountInstanceBinding` rows for account, strategy instance, run id, namespace, lifecycle state, timestamp, and source. |
-| Owner generation | `owner_generation.json` | `AccountOwnerGeneration` with generation, phase, timestamp, and source. |
+| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon writes run ledger. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py` |
+| Start recheck | Data plane blocks stale starts for poisoned runs, durable STOPPED, offline daemon, running/stopping daemon state. | `routers/live_instances.py::_assert_start_allowed` |
+| Host spawn | Host daemon starts `python -m app.engine.live.run start` as a subprocess keyed by `strategy_instance_id`. | `RunnerProcessManager.start` |
+| Run pre-flight | Runner validates run state, sizing, dirty tree policy, halt flags, unexpected positions, coexistence, and prior artifacts. | `engine/live/pre_flight.py`, `engine/live/run.py` |
+| Cold-start reconcile | Runner writes `reconciliation_receipt.json` as `in_progress`, probes broker, classifies broker state, then writes pass/fail. | `reconciliation_orchestrator.py`, `reconciliation_classifier.py` |
+| Activate | Live engine constructs portfolio/context, starts broker event stream, publishes runtime/readiness blocks, and enters bar loop. | `live_engine.py`, `readiness.py` |
+| Submit | Strategy queues orders; `LivePortfolio.submit_pending_orders` writes intent WAL events and calls broker adapter. | `live_portfolio.py`, `intent_wal.py`, `submit_state_machine.py` |
+| Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
+| Operator actions | Resume/Pause/Stop/Flatten-and-pause/Mark-poisoned use shared capability evaluator. Start has separate recheck. | `services/operator_capability.py`, `routers/live_instances.py` |
+| Watchdog lease loss | Child watchdog detects daemon lease loss and delegates typed halt sequence. | `child_watchdog.py`, `watchdog_controller.py` |
 
-Models live in `PythonDataService/app/engine/live/account_artifacts.py`.
-Writes are fsync-backed through the same file-lock helpers used by live state
-sidecars.
+## 4. Current Artifacts
 
-### Freeze clearing
-
-`clear_account_freeze(...)` accepts exactly one of:
-
-- `AccountRecoveryProof`: broker-backed proof with clean reconciliation and a
-  final passing `GateResult`;
-- `AccountAuditedOverride`: fresh operator override with approval metadata,
-  prior evidence, and next reconciliation step.
-
-Successful clearing leaves the freeze file in place as cleared evidence and
-appends an account event. A stale override or an override whose approved
-decision is `freeze` cannot clear the account.
-
----
-
-## 4. GateResult contract
-
-`GateResult` lives in `PythonDataService/app/schemas/live_runs.py`.
-
-```text
-gate_id: str
-status: pass | block | poison | freeze | unknown | not_applicable
-source: str
-operator_reason: str
-operator_next_step: str | None
-evidence_at_ms: int64 ms UTC
-```
-
-The status vocabulary is account/lifecycle oriented. Existing readiness gates
-still expose legacy `status` values (`pass`, `fail`, `unknown`) for backward
-compatibility; `fail` normalizes to `block` when projected into a `GateResult`.
-
-Current producers:
-
-| Producer | Gate ids / area |
-|---|---|
-| `AccountFreezeEvidence.to_gate_result()` | `account.unresolved_exposure` |
-| `evaluate_account_instance_binding(...)` | `account.instance_registry` |
-| `evaluate_restart_intensity(...)` | `account.restart_intensity` |
-| `AccountClassifierDecision.to_gate_result()` | `account.classifier` |
-| `AccountOwner.reconnect_gate_result()` | `account_owner.reconnect` |
-| `build_live_readiness(...)` / `build_start_readiness(...)` | Readiness rows with embedded `gate_result` |
-| `operator_surface.py` | Start/action/operator readiness projections |
-
-Important limitation: a full account-level gate board is not shipped yet.
-GateResult rows are attached to existing surfaces.
-
----
-
-## 5. Account registry and restart intensity
-
-### Registry binding
-
-`AccountInstanceBinding` records:
-
-- `account_id`
-- `strategy_instance_id`
-- `run_id`
-- `bot_order_namespace`
-- `lifecycle_state` (`DEPLOYED`, `ACTIVE`, `RETIRED`)
-- `recorded_at_ms`
-- `source`
-
-`bot_order_namespace_for_instance(strategy_instance_id)` returns
-`learn-ai/<strategy_instance_id>/v1`.
-
-`evaluate_account_instance_binding(...)` folds the registry by latest
-`strategy_instance_id`, then verifies that the current account, run id, active
-state, and namespace match. Duplicate active namespace ownership blocks with
-`ACCOUNT_REGISTRY_DUPLICATE_NAMESPACE`.
-
-Current registry writers:
-
-| Source | State | Where |
+| Artifact | Scope today | Authority |
 |---|---|---|
-| Host deploy | `DEPLOYED` | `RunnerProcessManager.deploy(...)` |
-| Host start | `ACTIVE` | `RunnerProcessManager.start(...)` |
-| Direct runner start | `ACTIVE` | `run.py cmd_start(...)` |
+| `run_ledger.json` | run | Deploy identity, account id, strategy/spec provenance, live config. |
+| `desired_state.json` | instance | Durable operator intent: `RUNNING`, `PAUSED`, `STOPPED`. |
+| `intent_events.jsonl` | run | Legacy/direct-submit append-only submit WAL. Source of truth for run-scoped intent lifecycle events when a runner submits directly; AccountOwner submit mode does not write this file. |
+| `live_state.json` | instance | Stable projection used by reconciliation/readiness. |
+| `reconciliation_receipt.json` | run | Cold-start/runtime reconcile outcome. |
+| `poisoned.flag` | run | Run-level permanent unsafe state. |
+| `control_plane_lease_lost.json` / incidents | run | Watchdog lease-loss evidence. |
+| `broker_callbacks.jsonl` | run | Raw broker callback evidence when attached. |
+| `fleet_baselines/<account_id>.json` | account-adjacent partial | Existing fleet-reset baseline used to ignore completed unknown historical executions under strict conditions. |
+| `accounts/<account_id>/instance_registry.jsonl` | account | Append-only write-ahead registry of allowed strategy instance id, run id, bot order namespace, lifecycle binding state, source, and `int64 ms UTC` timestamp. |
+| `accounts/<account_id>/unresolved_exposure.flag` | account | Durable account-level freeze evidence. Blocks deploy, start, router/operator-surface resume, and broker submit while active. |
+| `accounts/<account_id>/owner_generation.json` | account | Current AccountOwner fencing generation and phase (`accepting`, `reconnecting`, `draining`, `frozen`). |
+| `accounts/<account_id>/account_events.jsonl` | account | Append-only audit events for account freeze recorded/cleared transitions, recovery proofs, audited overrides, owner generation/reconnect, submit lane evidence, instance registry writes, and restart-intensity breaches. |
 
-The registry is append-only. It is not yet owned by a long-lived AccountOwner.
+## 5. Current Submit Authority
 
-### Restart intensity
+Submit safety currently has three layers:
 
-`evaluate_restart_intensity(...)` reads account events, counts
-`account_instance_binding_recorded` events whose `lifecycle_state` is `ACTIVE`,
-and freezes the account when the count reaches the policy threshold inside the
-active window.
+1. Legacy direct-submit mode refuses a real broker adapter without `IntentWal` and non-empty `bot_order_namespace`.
+2. AccountOwner submit mode refuses a configured run-scoped `IntentWal`; it requires an AccountOwner submitter plus account id, strategy instance id, run id, bot order namespace, owner generation provider, and trace id provider.
+3. `LivePortfolio.submit_pending_orders` refuses active account freezes and non-passing account registry bindings before any broker call or AccountOwner handoff.
+4. AccountOwner submit mode emits `AccountOwnerSubmitIntent` to the configured submitter, writes account-scoped submit evidence to `account_events.jsonl`, and does not call its broker adapter directly.
+5. Legacy direct-submit mode writes `PENDING_INTENT` before `broker.place_order`, then writes `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, `SUBMITTED_RECOVERED`, `INTENT_NOT_ACCEPTED`, or `SUBMIT_UNCERTAIN_HALTED`.
+6. `place_paper_order` requires `spec.order_ref` and enforces paper safety before `IB.placeOrder`.
 
-Default `RestartIntensityPolicy`:
+Current limitation: this is still enforced inside each runner process, not by a single-writer AccountOwner. Multiple runner processes cannot pass submit with an unregistered/stale account binding, but a sibling process still owns its own broker connection until AccountOwner ships.
 
-| Field | Default |
-|---|---|
-| `threshold` | `3` |
-| `window_ms` | `300000` |
-| `scope` | `account` |
-| `source` | `account_restart_intensity` |
+## 5.1 AccountOwner Submit Lane V1
 
-When breached, the evaluator emits `account.restart_intensity` with
-`status=freeze`, appends `account_restart_intensity_breached`, and writes
-`unresolved_exposure.flag` if no active freeze already exists.
+`engine/live/account_owner.py` ships the first async AccountOwner submit lane. It is not yet a daemon child process, but the lane itself is single-writer per `AccountOwner` instance via `asyncio.Lock`.
 
----
+Runner-side owner mode is available through:
 
-## 6. Account freeze enforcement
+- `LivePortfolio(account_owner_submitter=..., account_id=..., strategy_instance_id=..., run_id=..., bot_order_namespace=..., owner_generation_provider=..., trace_id_provider=...)`;
+- `LiveEngine(..., account_owner_submitter=..., owner_generation_provider=..., trace_id_provider=...)`, which passes those values to `LivePortfolio`.
 
-An active `unresolved_exposure.flag` blocks:
+`AccountOwnerSubmitIntent` carries trace id, account id, strategy instance id, run id, bot order namespace, intent id, order ref, intent kind, order spec, owner generation, and created-at timestamp as `int64 ms UTC`. Intake validates account id, account freeze, account registry binding, owner generation, and account classifier decision before writing `account_owner_submit_prepared` to account events and calling the broker. Terminal account events are `account_owner_submit_accepted`, `account_owner_submit_rejected`, or `account_owner_submit_uncertain`.
 
-| Boundary | Enforcement |
-|---|---|
-| Deploy | `routers/live_instances.py::deploy_instance` checks the broker account before forwarding to the daemon. |
-| Start precheck | `routers/live_instances.py::_assert_start_allowed` checks the run's account before forwarding Start. |
-| Host start | `RunnerProcessManager.start` writes/evaluates the account registry and rejects if an account freeze exists. |
-| Direct runner start | `run.py cmd_start` writes/evaluates the account registry and exits before engine construction if frozen. |
-| Resume | `set_instance_desired_state` rejects `resume` while account freeze evidence is active. |
-| Submit | `LivePortfolio.submit_pending_orders` checks `account_freeze_provider` before any broker call or AccountOwner handoff. |
-| Operator surface | `operator_surface.py` disables Start and Resume affordances and attaches the freeze `GateResult`. |
+Structured diagnostics include trace id, bot/instance id, account id, run id, intent id, order ref, owner generation, broker client id, order id, perm id, and exec id when available.
 
-This is defense in depth. The same artifact is the durable source, but each
-boundary still maps it locally to HTTP, CLI, or operator-surface shape.
+`AccountOwner.handle_reconnect(...)` ships the current generation/reconnect drain behavior inside the V1 lane. It persists `owner_generation.json`, moves phases through `reconnecting`, `draining`, `accepting`, or `frozen`, rejects new submit intents while non-accepting, rotates client ids on IBKR client-id-in-use code `326`, records reconnect drain outcomes for prepared-without-terminal account events via the supplied classifier, and resumes only after the supplied account classifier gate passes. `AccountOwner.reconnect_gate_result()` projects the current phase into `gate_id=account_owner.reconnect`.
 
----
+Current limitation: production still needs a long-lived AccountOwner process with a real broker session and IPC intake. V1 proves the serialized submit lane and runner no-direct-submit mode. Reconnect drain events are reconnect evidence, not submit terminal events; until a terminal `account_owner_submit_*` event exists, a later reconnect may still classify the prepared event again.
 
-## 7. Account classifier V1
+## 6. Current Reconciliation Authority
 
-`classify_account(...)` lives in
-`PythonDataService/app/engine/live/account_classifier.py`.
+`reconciliation_classifier.py` is pure and classifies broker artifacts against:
 
-Inputs:
+- folded run projection,
+- allowed namespaces for the current run,
+- prior unresolved tail,
+- emergency-flatten audit,
+- optional baseline cutoff for completed historical unknown executions.
 
-- `AccountBrokerEvidence`: broker status plus optional `BrokerSnapshot`.
-- `AccountInstanceBinding` registry rows.
-- `AccountDurableIntent` rows.
-- Optional `AccountBaselineEvidence`.
-- Optional `AccountOperatorOverride`.
-- `now_ms`.
+Outcomes today:
 
-Outputs:
+- `Continue`
+- `Adopt`
+- `Poison`
 
-`AccountClassifierDecision` with `outcome`, `reason`, account id, optional
-affected instance/run/namespace, affected order refs, baseline id, override id,
-and decision timestamp. `to_gate_result()` projects the decision to
-`gate_id=account.classifier`.
+Current limitation: classification is still centered on one run's `allowed_namespaces`. AccountOwner migration must classify against the account registry and the union of registry-known instance lifecycles.
 
-Decision map:
+## 6.1 Account Classifier V1
 
-| Outcome | Gate status | Meaning |
+`engine/live/account_classifier.py` is the shipped pure account-scoped classifier contract. It consumes:
+
+- broker evidence: status plus `BrokerSnapshot` open orders/executions;
+- account registry rows from `accounts/<account_id>/instance_registry.jsonl`;
+- durable submit intent evidence with account, instance, run, namespace, intent id, order ref, status, and timestamp;
+- optional fleet baseline evidence with `baseline_id`, cutoff timestamp, and source;
+- optional audited operator override evidence with override id, approved decision, reason, approver, `approved_at_ms`, `valid_until_ms`, prior evidence, affected identifiers, and next reconciliation step.
+
+It returns `AccountClassifierDecision` with `outcome`, `reason`, `account_id`, optional affected instance/run/namespace identifiers, affected order refs, optional `baseline_id`, optional `override_id`, and `decided_at_ms` as `int64 ms UTC`. Every decision projects to `GateResult` through `to_gate_result()`.
+
+| Decision | Gate status | Rule |
 |---|---|---|
-| `continue` | `pass` | Broker evidence matches active registry and durable intent evidence, or no exposure needs action. |
-| `ignore_baseline` | `pass` | Completed unknown historical execution is covered by baseline cutoff. |
-| `adopt` | `block` | Broker evidence belongs to a registered namespace but lacks durable intent evidence. |
-| `retry` | `unknown` | Broker evidence is retryably unavailable. |
-| `freeze` | `freeze` | Broker state is unprovable or registry/override evidence is inconsistent. |
-| `poison_run` | `poison` | Exposure has no order ref, an unparseable order ref, or an unknown namespace not covered by baseline. |
-| `unknown` | `freeze` | Broker state is unknown and cannot silently continue. |
+| `continue` | `pass` | Broker evidence matches active registry namespace and durable intent evidence, or there is no broker exposure to classify. |
+| `adopt` | `block` | Broker has an order/execution in an active registry namespace but no durable intent row for that exact order ref. |
+| `ignore_baseline` | `pass` | Unknown historical execution is completed and covered by the fleet baseline cutoff. |
+| `retry` | `unknown` | Broker snapshot is retryably unavailable; optional operator override id is carried separately from baseline id. |
+| `freeze` | `freeze` | Broker evidence is unprovable or registry namespace ownership is internally inconsistent. |
+| `poison_run` | `poison` | Broker exposure has no order ref, an unparseable ref, or an unknown namespace not covered by baseline. |
+| `unknown` | `freeze` | Broker state is unknown; this never silently continues. |
 
-Fresh audited overrides can authorize `continue` for selected unavailable
-broker states. Stale, account-mismatched, or contradicted overrides become
-freeze decisions.
+Fresh audited overrides may carry a `continue` decision for unprovable/unknown broker evidence. Stale overrides, account-mismatched overrides, and overrides contradicted by later broker evidence produce `freeze` decisions (`OPERATOR_OVERRIDE_STALE`, `OPERATOR_OVERRIDE_ACCOUNT_MISMATCH`, or `OPERATOR_OVERRIDE_CONTRADICTED`) rather than continuing.
 
----
+## 6.2 Account Recovery And Audited Override
 
-## 8. AccountOwner submit lane V1
+`engine/live/account_artifacts.py` is the shipped authority for clearing `accounts/<account_id>/unresolved_exposure.flag`. `clear_account_freeze(...)` accepts exactly one of:
 
-`AccountOwner` lives in `PythonDataService/app/engine/live/account_owner.py`.
+- `AccountRecoveryProof`: broker-backed recovery evidence with requested action, requester, broker evidence, reconciliation result, final `GateResult`, and `recorded_at_ms`.
+- `AccountAuditedOverride`: explicit operator override with approved decision, reason, approver, `approved_at_ms` and `valid_until_ms` as `int64 ms UTC`, prior evidence, affected account/run/instance identifiers, and next reconciliation step.
 
-What ships:
+Recovery proof clears only when `reconciliation_result=clean` and the final gate status is `pass`. Audited overrides clear only while fresh against the actual clear time: callers may pass `now_ms`, otherwise `clear_account_freeze(...)` uses the real current clock, and `cleared_at_ms` records that same clear time. Overrides cannot clear with an approved `freeze` decision. Every successful clear keeps the freeze file as cleared evidence, appends either `account_recovery_proof_recorded` or `account_audited_override_recorded`, then appends `account_freeze_cleared`.
 
-- `AccountOwnerSubmitIntent` typed intake object with trace id, account id,
-  strategy instance id, run id, namespace, intent id, order ref, intent kind,
-  order spec, owner generation, and `created_at_ms`.
-- An in-process `AccountOwner` with an `asyncio.Lock` to serialize submit calls
-  inside that instance.
-- Intake gates for account mismatch, active freeze, registry mismatch, owner
-  generation mismatch, account classifier non-pass result, and order-ref/spec
-  mismatch.
-- Account event writes for prepared, accepted, rejected, uncertain, reconnect
-  phase, and reconnect drain evidence.
-- `handle_reconnect(...)` phase transitions through `reconnecting`,
-  `draining`, `accepting`, or `frozen`.
-- Optional runner wiring through `LiveEngine(account_owner_submitter=...)` and
-  `LivePortfolio(account_owner_submitter=...)`.
+## 7. Current Watchdog Authority
 
-What does not ship:
+`ChildWatchdog` reads the daemon lease and detects:
 
-- A long-lived AccountOwner daemon process.
-- IPC intake from runners to a shared account owner.
-- Production single-writer enforcement across all runners.
-- AccountOwner-owned reuse of the full `IntentWal` submit state machine for
-  uncertain broker acks.
+- stale/missing lease,
+- daemon boot id mismatch.
 
-In default production wiring, runners still use the legacy direct-submit path
-unless `account_owner_submitter` is provided.
+Production delegates to `WatchdogHaltExecutor`, which currently:
 
----
+1. persists an initial incident,
+2. blocks submissions,
+3. persists `PAUSED`,
+4. attempts flatten with timeout,
+5. persists terminal flatten proof or unresolved exposure evidence before broker disconnect,
+6. disconnects broker,
+7. requests engine exit,
+8. leaves critical incidents unresolved.
 
-## 9. Operator surface and readiness
+Critical watchdog outcomes now include a canonical `GateResult` with
+`gate_id=watchdog.lease_loss` and `status=freeze`; safe outcomes emit
+`status=pass`. The watchdog evidence remains run-scoped incident evidence.
+When watchdog flattening is unsafe and account context is available, the
+halt executor writes account freeze evidence to
+`accounts/<account_id>/unresolved_exposure.flag`; the artifact is enforced by
+deploy/start/router resume/submit paths that consume account freeze state.
 
-`build_live_readiness(...)` can include the account instance registry gate in
-the engine-authored readiness vector. `build_start_readiness(...)` now adds
-embedded GateResult rows to backend-derived start readiness.
+## 8. Current Operator Gates
 
-`operator_surface.py` now projects:
+The current backend emits a canonical `GateResult` on these shipped gate
+surfaces:
 
-- Start capability `gate_results`, including account freeze.
-- Action capability `gate_results`, including account-freeze blocking for
-  Resume.
-- Readiness gates as `OperatorGate` rows with canonical `gate_result`.
+- raw `ReadinessGate` rows from `build_live_readiness` and `build_start_readiness`;
+- `OperatorGate` rows on `operator_surface.readiness_gates`;
+- `host_process.start_capability.gate_results`;
+- each `operator_surface.actions.<action>.gate_results` capability row.
 
-The cockpit should render these server-authored rows. It should not infer gate
-meaning from enum names or compose remediation text on its own.
+The shipped `GateResult.status` vocabulary is `pass`, `block`, `poison`,
+`freeze`, `unknown`, and `not_applicable`. Existing readiness rows still expose
+their legacy `status` values (`pass`, `fail`, `unknown`) for compatibility;
+`fail` normalizes to `block` in the canonical gate result.
 
----
+| Gate group | Current implementation | Drift risk |
+|---|---|---|
+| Start process | `_assert_start_allowed` plus daemon start checks; the operator surface exposes Start `GateResult` rows and blocks active account freeze artifacts. | Router recheck is still separate from `operator_capability.py`; account freeze is explicitly wired today. |
+| Resume/Pause/Stop/Flatten/Poison | `evaluate_action` used by status projection and mutation endpoints; the operator surface exposes per-action `GateResult` rows. Active account freeze artifacts block router/operator-surface Resume. | Strong pattern to reuse for gate board. Direct runner CLI resume does not read the account freeze artifact yet. |
+| Readiness | `build_live_readiness` and `build_start_readiness` emit raw readiness gates with canonical `GateResult`; operator surface projects those into `OperatorGate`. | Live readiness is engine-authored; backend-derived start readiness is separate and labelled. |
+| Resume guards | `resume_guard_state.py` folds broker safety, submission capability, reconciliation, and uncertain intent. | Instance/run scoped; does not know account freeze yet. |
+| Account instance registry | Host daemon deploy writes `DEPLOYED`; host daemon start and direct `run.py start` write `ACTIVE` for ledgers with a persisted `strategy_instance_id`; `LiveEngine` injects the registry gate into submit and readiness for those modern ledger identities. | Append-only registry is shipped, but it is not yet owned by AccountOwner. Legacy fallback identities are not entered into the account registry. |
+| Broker submit safety | `orders.py::_enforce_paper_safety`, reconnect recovery halt, required `order_ref`, `LivePortfolio.account_freeze_provider`, and `LivePortfolio.account_registry_gate_provider`. | Still process-local because there is no AccountOwner. |
 
-## 10. What does not ship today
+### Restart Intensity Gate
 
-- R3 AccountOwner as a durable account-scoped daemon.
-- IPC intent queue from runner processes to AccountOwner.
-- One broker session owned by AccountOwner for a shared account.
-- Account-level gate board as a standalone backend surface.
-- Account baseline file model beyond the classifier's optional
-  `AccountBaselineEvidence` input.
-- Automatic watchdog failure-to-flatten promotion into the account freeze
-  artifact. Watchdog evidence emits GateResult rows, but account freeze is a
-  separate artifact.
-- Retirement compaction or canonical deduplication of account registry rows.
+`evaluate_restart_intensity(...)` in `engine/live/account_artifacts.py` folds durable `account_instance_binding_recorded` events with `lifecycle_state=ACTIVE`. The default `RestartIntensityPolicy` is account-scoped with `threshold=3` and `window_ms=300000` (5 minutes). A breach occurs when observed starts are at or above the threshold inside the active window.
 
----
+The active window starts at `max(now_ms - window_ms, latest_restart_intensity_freeze_clear_ms)`, so a clean recovery proof starts a new window without deleting prior durable evidence. On breach the evaluator emits `gate_id=account.restart_intensity`, `status=freeze`, and an operator reason containing observed count, threshold, window, and window start/end. It also appends `account_restart_intensity_breached` with affected instance ids and writes the account freeze artifact. Host-daemon starts and direct `run.py start` evaluate this gate immediately after writing the ACTIVE account registry binding; the resulting account freeze blocks that start path and all later deploy/start/resume/submit paths that already consume `unresolved_exposure.flag`.
 
-## 11. Code cross-reference
+## 9. AccountOwner Migration Targets
 
-| Concern | File |
+When a slice ships, update this section from "target" to "shipped" with exact modules.
+
+| Target | Current status |
 |---|---|
-| Account artifacts, freeze, registry, restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
-| Account classifier V1 | `PythonDataService/app/engine/live/account_classifier.py` |
-| AccountOwner submit lane V1 | `PythonDataService/app/engine/live/account_owner.py` |
-| GateResult schema and operator DTOs | `PythonDataService/app/schemas/live_runs.py` |
-| Host daemon deploy/start registry writes | `PythonDataService/app/engine/live/host_daemon.py` |
-| Runner direct-start registry writes | `PythonDataService/app/engine/live/run.py` |
-| Live engine registry readiness gate wiring | `PythonDataService/app/engine/live/live_engine.py` |
-| Portfolio submit freeze/registry/AccountOwner hooks | `PythonDataService/app/engine/live/live_portfolio.py` |
-| Readiness GateResult embedding | `PythonDataService/app/engine/live/readiness.py` |
-| Public deploy/start/resume account-freeze checks | `PythonDataService/app/routers/live_instances.py` |
-| Operator surface GateResult projections | `PythonDataService/app/services/operator_surface.py` |
-| Existing submit state machine | `PythonDataService/app/engine/live/submit_state_machine.py` |
-| Supporting design intent | `docs/architecture/bot-lifecycle-account-owner-prd.md` |
-| Gate map design context | `docs/architecture/bot-lifecycle-gate-map.md` |
+| Account artifact root under `artifacts/accounts/<account_id>/` | Shipped in `engine/live/account_artifacts.py`. |
+| Append-only `instance_registry.jsonl` written before first submit intent | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, `engine/live/run.py`, `engine/live/live_engine.py`, `engine/live/live_portfolio.py`, and `engine/live/readiness.py` for ledgers with persisted `strategy_instance_id`. |
+| `unresolved_exposure.flag` blocking deploy/start/router resume/submit | Shipped in `engine/live/account_artifacts.py`, `routers/live_instances.py`, `services/operator_surface.py`, `engine/live/live_engine.py`, and `engine/live/live_portfolio.py`. Direct runner CLI resume remains a documented gap. |
+| Account-scoped classifier over registry-known owners | Shipped in `engine/live/account_classifier.py` as pure V1 classifier with GateResult projection. |
+| AccountOwner daemon child process | Not shipped. V1 submit lane exists in `engine/live/account_owner.py`, but no long-lived child process/IPC intake owns it yet. |
+| Runner no-broker-write mode | Shipped when `LivePortfolio.account_owner_submitter` / `LiveEngine.account_owner_submitter` is configured. |
+| AccountOwner generation/fencing token | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_owner.py`. |
+| Existing readiness, Start, and action capability rows generated from enforcement `GateResult` values | Shipped in `schemas/live_runs.py`, `engine/live/readiness.py`, and `services/operator_surface.py`. Account-level gate board rows are not shipped. |
+| Restart intensity fold over account events | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, and `engine/live/run.py`. |
+| Audited operator override for unreachable broker proof | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_classifier.py`. |
+
+## 10. Code Cross-Reference
+
+| Concern | Current files |
+|---|---|
+| Host runner process lifecycle | `PythonDataService/app/engine/live/host_daemon.py` |
+| Runner CLI and start orchestration | `PythonDataService/app/engine/live/run.py` |
+| Live bar loop and process-local submit lock | `PythonDataService/app/engine/live/live_engine.py` |
+| Portfolio submit WAL and order intent handling | `PythonDataService/app/engine/live/live_portfolio.py` |
+| Intent event schema and WAL | `PythonDataService/app/engine/live/intent_events.py`, `intent_wal.py`, `intent_ledger.py` |
+| Submit state machine | `PythonDataService/app/engine/live/submit_state_machine.py` |
+| IBKR connection | `PythonDataService/app/broker/ibkr/client.py` |
+| IBKR order placement | `PythonDataService/app/broker/ibkr/orders.py` |
+| Reconciliation | `PythonDataService/app/engine/live/reconciliation_orchestrator.py`, `reconciliation_classifier.py` |
+| Desired state | `PythonDataService/app/engine/live/desired_state.py` |
+| Operator action gates | `PythonDataService/app/services/operator_capability.py`, `resume_guard_state.py`, `operator_surface.py` |
+| Start/deploy/instance API | `PythonDataService/app/routers/live_instances.py` |
+| Watchdog lease loss | `PythonDataService/app/engine/live/child_watchdog.py`, `watchdog_controller.py` |
+| Account artifacts, recovery, override, and restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
+| Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
+| AccountOwner submit/reconnect lane | `PythonDataService/app/engine/live/account_owner.py` |

@@ -194,6 +194,23 @@ export type ActionPlanConsumption = 'ACTIVE' | 'DECLARATIVE_ONLY' | 'UNKNOWN';
 
 export type ActionEffect = 'DURABLE_ONLY' | 'LIVE_ACTUATION';
 
+export type GateResultStatus =
+  | 'pass'
+  | 'block'
+  | 'poison'
+  | 'freeze'
+  | 'unknown'
+  | 'not_applicable';
+
+export interface GateResult {
+  gate_id: string;
+  status: GateResultStatus;
+  source: string;
+  operator_reason: string;
+  operator_next_step: string | null;
+  evidence_at_ms: number;
+}
+
 export interface ActionCapability {
   enabled: boolean;
   effect: ActionEffect;
@@ -206,6 +223,7 @@ export interface ActionCapability {
    *  for the empty case so the optional shape is no longer needed
    *  (PRD #619-A §A6). */
   disabled_reasons: string[];
+  gate_results: GateResult[];
 }
 
 export type HostProcessStartDisabledReasonCode =
@@ -232,6 +250,7 @@ export interface HostProcessStartCapability {
   request: HostRunnerStartRequest | null;
   /** Closed reason code; present iff ``enabled`` is false. */
   disabled_reason_code: HostProcessStartDisabledReasonCode | null;
+  gate_results: GateResult[];
 }
 
 export interface OperatorSurfaceHostProcess {
@@ -345,6 +364,7 @@ export interface OperatorGate {
   status: string;
   severity: string;
   detail: string;
+  gate_result: GateResult;
   /** Either a structured suggested-action OR null + an explicit unavailable reason.
    *  Never null without a reason. */
   suggested_action: GateSuggestedAction | null;
