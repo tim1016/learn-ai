@@ -1702,6 +1702,99 @@ class OperatorSurface(BaseModel):
     broker_activity_health: BrokerActivityHealth | None = None
 
 
+LifecycleChartStatus = Literal[
+    "passed",
+    "active",
+    "blocked",
+    "poison",
+    "freeze",
+    "inactive",
+    "unknown",
+]
+
+LifecycleChartLane = Literal["bot", "account", "broker", "recovery"]
+LifecycleChartActionId = Literal[
+    "start_process",
+    "resume",
+    "pause",
+    "flatten_and_pause",
+    "stop",
+    "mark_poisoned",
+    "redeploy",
+]
+
+
+class LifecycleChartNode(BaseModel):
+    """One backend-authored node in the bot lifecycle overview chart.
+
+    The frontend may choose layout and styling, but it must not infer node
+    truth from raw status fields. ``status`` and ``evidence_summary`` are the
+    operator-facing facts authored by the backend.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    technical_label: str | None = None
+    lane: LifecycleChartLane
+    status: LifecycleChartStatus
+    expandable: bool = False
+    subgraph_id: str | None = None
+    evidence_summary: str | None = None
+
+
+class LifecycleChartEdge(BaseModel):
+    """One backend-authored transition in the bot lifecycle chart."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    source: str
+    target: str
+    status: LifecycleChartStatus
+    label: str | None = None
+    animated: bool = False
+
+
+class LifecycleChartAction(BaseModel):
+    """An action affordance associated with the current chart state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: LifecycleChartActionId
+    label: str
+    enabled: bool
+    reason: str | None = None
+    target_node_id: str | None = None
+    tone: Literal["primary", "secondary", "danger"] = "secondary"
+
+
+class LifecycleChartGraph(BaseModel):
+    """A lifecycle graph. The global graph may link to focused subgraphs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    graph_id: str
+    title: str
+    primary_node_id: str
+    nodes: list[LifecycleChartNode]
+    edges: list[LifecycleChartEdge]
+
+
+class BotLifecycleChartView(BaseModel):
+    """Backend-authored lifecycle overview for the bot control Overview tab."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chart_id: str
+    selected_bot_id: str
+    title: str
+    global_graph: LifecycleChartGraph
+    subgraphs: dict[str, LifecycleChartGraph] = Field(default_factory=dict)
+    actions: list[LifecycleChartAction] = Field(default_factory=list)
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -1767,6 +1860,10 @@ class LiveInstanceStatus(BaseModel):
     # present (never ``None``); per-section blocks are populated by the
     # cumulative Slice 1 cycles.
     operator_surface: OperatorSurface
+    # Server-authored lifecycle chart for the bot Overview tab. Angular
+    # renders this graph directly; it does not infer lifecycle, gate, or
+    # action truth from lower-level fields.
+    lifecycle_chart: BotLifecycleChartView
     fetched_at_ms: int
 
 

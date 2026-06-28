@@ -129,6 +129,7 @@ from app.services.activity_projection_contract import (
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
+from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -1103,6 +1104,45 @@ async def _resolve_instance_status_from_process(
         current_run_id,
         current_namespace,
     ) = _resolve_reconciliation_inputs(root, live_binding)
+    operator_surface = compute_operator_surface(
+        process=process,
+        last_exit=last_exit,
+        safety_verdict_final=safety_verdict_final,
+        broker_connection_state=broker_connection_state,
+        broker=broker_view,
+        readiness=readiness,
+        action_plan=action_plan,
+        start_defaults=start_defaults,
+        sizing=sizing,
+        instance_broker_self_consistent=None,
+        live_binding=live_binding,
+        poisoned=poisoned,
+        desired_state=desired,
+        guard_state=guard_state,
+        runtime_freshness=runtime_freshness,
+        control_plane_state=control_plane_state,
+        latest_mutation=latest_mutation,
+        broker_observation_consistency=broker_observation_consistency,
+        host_start_command=settings.live_runner_host_start_command,
+        start_run_id=_resolve_start_run_id(root, live_binding, runs),
+        account_freeze=account_freeze,
+        reconciliation_receipt=reconciliation_receipt,
+        current_wal_seq=current_wal_seq,
+        current_run_id=current_run_id,
+        current_namespace=current_namespace,
+        latest_broker_event_ms=None,
+        latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
+        reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
+        activity_publisher=get_publisher_registry().get(sid),
+        activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
+        now_ms=observed_at_ms,
+    )
+    redeploy_available = bool(
+        start_defaults is not None
+        and start_defaults.strategy_spec_path
+        and start_defaults.qc_audit_copy_path
+        and start_defaults.qc_cloud_backtest_id
+    )
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1122,38 +1162,12 @@ async def _resolve_instance_status_from_process(
         action_plan=action_plan,
         instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
         lineage=_resolve_lineage(root, live_binding, runs),
-        operator_surface=compute_operator_surface(
-            process=process,
-            last_exit=last_exit,
-            safety_verdict_final=safety_verdict_final,
-            broker_connection_state=broker_connection_state,
-            broker=broker_view,
-            readiness=readiness,
-            action_plan=action_plan,
-            start_defaults=start_defaults,
-            sizing=sizing,
-            instance_broker_self_consistent=None,
-            live_binding=live_binding,
-            poisoned=poisoned,
+        operator_surface=operator_surface,
+        lifecycle_chart=compose_bot_lifecycle_chart(
+            sid,
+            operator_surface,
             desired_state=desired,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-            control_plane_state=control_plane_state,
-            latest_mutation=latest_mutation,
-            broker_observation_consistency=broker_observation_consistency,
-            host_start_command=settings.live_runner_host_start_command,
-            start_run_id=_resolve_start_run_id(root, live_binding, runs),
-            account_freeze=account_freeze,
-            reconciliation_receipt=reconciliation_receipt,
-            current_wal_seq=current_wal_seq,
-            current_run_id=current_run_id,
-            current_namespace=current_namespace,
-            latest_broker_event_ms=None,
-            latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
-            reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
-            activity_publisher=get_publisher_registry().get(sid),
-            activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
-            now_ms=observed_at_ms,
+            redeploy_available=redeploy_available,
         ),
         fetched_at_ms=observed_at_ms,
     )

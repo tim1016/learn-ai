@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { FleetAccountSummary, LiveInstanceStatus } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { makeLifecycleChartFixture } from '../../../testing/live-instance-status-fixtures';
 import { BotControlPageComponent } from './bot-control-page.component';
 
 function makeStatus(options: {
@@ -123,6 +124,7 @@ function makeStatus(options: {
       broker_activity_health: null,
       incident_headline: null,
     },
+    lifecycle_chart: makeLifecycleChartFixture(),
     fetched_at_ms: 0,
   };
 }
@@ -199,6 +201,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
             issueInstanceCommand: vi.fn(),
@@ -241,6 +244,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus,
             getAccountSummary,
+            startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
             issueInstanceCommand: vi.fn(),
@@ -281,6 +285,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus,
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
             issueInstanceCommand: vi.fn(),
@@ -319,6 +324,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus({ markPoisonedEnabled: true })),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
             issueInstanceCommand,

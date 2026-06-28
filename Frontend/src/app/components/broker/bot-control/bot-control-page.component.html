@@ -98,6 +98,15 @@
       <button
         type="button"
         class="inner-tab"
+        [class.selected]="selectedTab() === 'overview'"
+        [attr.aria-current]="selectedTab() === 'overview' ? 'page' : null"
+        (click)="selectTab('overview')"
+      >
+        Overview
+      </button>
+      <button
+        type="button"
+        class="inner-tab"
         [class.selected]="selectedTab() === 'status'"
         [attr.aria-current]="selectedTab() === 'status' ? 'page' : null"
         (click)="selectTab('status')"
@@ -135,6 +144,13 @@
 
     <section class="active-panel" data-testid="bot-control-active-panel">
       @switch (selectedTab()) {
+        @case ('overview') {
+          <app-overview-tab
+            [status]="s"
+            [busyAction]="busyAction()"
+            (actionInvoked)="dispatchOverviewAction($event)"
+          />
+        }
         @case ('status') {
           <app-status-risk-tab
             [status]="s"
