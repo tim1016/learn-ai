@@ -43,7 +43,7 @@
             (click)="expandNode(node)"
             (keydown)="onNodeKeydown($event, node)"
           >
-            <handle type="target" position="left" />
+            <handle type="target" position="top" />
             <span class="node-lane">{{ node.lane }}</span>
             <strong>{{ node.label }}</strong>
             @if (node.technical_label) {
@@ -53,7 +53,7 @@
             @if (node.expandable) {
               <span class="node-expand">Open</span>
             }
-            <handle type="source" position="right" />
+            <handle type="source" position="bottom" />
           </article>
         </ng-template>
 

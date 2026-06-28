@@ -90,6 +90,27 @@ function makeStatus(): LiveInstanceStatus {
 }
 
 describe('OverviewTabComponent', () => {
+  it('keeps the global lifecycle on a vertical path with themed blocked edges', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+    TestBed.overrideComponent(OverviewTabComponent, {
+      set: { imports: OVERVIEW_TEST_IMPORTS },
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    fixture.componentRef.setInput('status', makeStatus());
+    fixture.detectChanges();
+
+    const points = new Map(fixture.componentInstance.nodes().map((node) => [node.id, node.point()]));
+    expect(points.get('deploy')?.x).toBe(points.get('preflight')?.x);
+    expect(points.get('deploy')?.y).toBeLessThan(points.get('preflight')?.y ?? 0);
+    expect(points.get('preflight')?.y).toBeLessThan(points.get('account_safety')?.y ?? 0);
+    expect(points.get('submit_order')?.x).toBeGreaterThan(points.get('active')?.x ?? 0);
+    expect(fixture.componentInstance.edgeColor('blocked')).toBe('var(--warn)');
+  });
+
   it('expands an expandable backend-authored subgraph and collapses to global', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],

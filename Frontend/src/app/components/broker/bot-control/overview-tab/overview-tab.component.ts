@@ -25,15 +25,15 @@ const NODE_WIDTH = 190;
 const NODE_HEIGHT = 96;
 
 const GLOBAL_LAYOUT: Record<string, Point> = {
-  deploy: { x: 20, y: 112 },
-  preflight: { x: 270, y: 112 },
-  account_safety: { x: 520, y: 28 },
-  reconcile: { x: 770, y: 112 },
-  activate: { x: 1020, y: 112 },
-  active: { x: 1270, y: 112 },
-  submit_order: { x: 1520, y: 28 },
-  broker_writer: { x: 1770, y: 28 },
-  recovery: { x: 1520, y: 196 },
+  deploy: { x: 40, y: 36 },
+  preflight: { x: 40, y: 184 },
+  account_safety: { x: 40, y: 332 },
+  reconcile: { x: 40, y: 480 },
+  activate: { x: 40, y: 628 },
+  active: { x: 40, y: 776 },
+  submit_order: { x: 300, y: 776 },
+  broker_writer: { x: 300, y: 924 },
+  recovery: { x: 40, y: 924 },
 };
 
 @Component({
@@ -149,19 +149,19 @@ export class OverviewTabComponent {
   edgeColor(status: LifecycleChartStatus): string {
     switch (status) {
       case 'passed':
-        return '#2f8f63';
+        return 'var(--bull)';
       case 'active':
-        return '#2563eb';
+        return 'var(--accent)';
       case 'blocked':
-        return '#b7791f';
+        return 'var(--warn)';
       case 'poison':
-        return '#b91c1c';
+        return 'var(--bear)';
       case 'freeze':
-        return '#7c3aed';
+        return 'var(--info)';
       case 'unknown':
-        return '#64748b';
+        return 'var(--text-muted)';
       case 'inactive':
-        return '#cbd5e1';
+        return 'var(--border-light)';
     }
   }
 
@@ -172,15 +172,15 @@ export class OverviewTabComponent {
 
   private focusedPoint(index: number): Point {
     return {
-      x: 40 + index * 260,
-      y: index % 2 === 0 ? 80 : 170,
+      x: 80,
+      y: 40 + index * 148,
     };
   }
 
   private fallbackPoint(index: number): Point {
     return {
-      x: 40 + (index % 4) * 250,
-      y: 60 + Math.floor(index / 4) * 150,
+      x: 80,
+      y: 40 + index * 148,
     };
   }
 
