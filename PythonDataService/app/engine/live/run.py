@@ -1584,6 +1584,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.engine.live.account_artifacts import (
             read_account_events,
             read_account_instance_registry,
+            read_account_owner_generation,
         )
         from app.engine.live.account_classifier import (
             AccountBrokerEvidence,
@@ -1592,7 +1593,15 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.engine.live.account_owner import AccountOwner
         from app.engine.live.fleet_reset_baseline import read_applicable_baseline
 
+        persisted_generation = read_account_owner_generation(_artifacts_root, ledger.account_id)
+        account_owner_generation = persisted_generation.generation if persisted_generation is not None else 0
+
         def _account_owner_generation_provider() -> int:
+            return account_owner_generation
+
+        def _advance_account_owner_generation() -> int:
+            nonlocal account_owner_generation
+            account_owner_generation += 1
             return account_owner_generation
 
         async def _classify_account_for_submit(_intent):
@@ -1624,6 +1633,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             account_id=ledger.account_id,
             broker=broker,
             owner_generation_provider=_account_owner_generation_provider,
+            owner_generation_advancer=_advance_account_owner_generation,
             classifier=_classify_account_for_submit,
         )
 

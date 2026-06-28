@@ -95,12 +95,14 @@ class AccountOwner:
         account_id: str,
         broker,
         owner_generation_provider: Callable[[], int],
+        owner_generation_advancer: Callable[[], int] | None = None,
         classifier: Callable[[AccountOwnerSubmitIntent], AccountClassifierDecision],
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
         self._broker = broker
         self._owner_generation_provider = owner_generation_provider
+        self._owner_generation_advancer = owner_generation_advancer
         self._classifier = classifier
         self._lock = asyncio.Lock()
         self._accepting = True
@@ -155,6 +157,8 @@ class AccountOwner:
         client_id_range: tuple[int, ...],
         backoff: Callable[[int], object] | None = None,
     ) -> None:
+        if self._owner_generation_advancer is not None:
+            self._owner_generation_advancer()
         self._set_phase("reconnecting")
         async with self._lock:
             await self._handle_reconnect_locked(
