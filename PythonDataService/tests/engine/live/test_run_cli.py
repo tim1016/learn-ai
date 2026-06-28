@@ -1409,6 +1409,8 @@ def test_account_durable_intents_project_account_owner_events() -> None:
                     "run_id": "run-alpha",
                     "intent_id": "intent-1",
                     "order_ref": "learn-ai/spy_ema_paper/v1:intent-1",
+                    "perm_id": "90044",
+                    "exec_id": "exec-90044",
                 },
             },
             {
@@ -1429,6 +1431,8 @@ def test_account_durable_intents_project_account_owner_events() -> None:
     assert len(intents) == 1
     assert intents[0].order_ref == "learn-ai/spy_ema_paper/v1:intent-1"
     assert intents[0].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
+    assert intents[0].perm_id == 90044
+    assert intents[0].exec_id == "exec-90044"
 
 
 def test_cmd_start_wires_account_owner_submitter_for_real_client(

@@ -871,7 +871,7 @@ class LivePortfolio:
                 )
 
             if self.account_owner_submitter is not None:
-                from app.engine.live.account_owner import AccountOwnerSubmitIntent
+                from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected
                 from app.utils.timestamps import now_ms_utc
 
                 if not self.account_id or not self.strategy_instance_id or not self.run_id:
@@ -887,21 +887,30 @@ class LivePortfolio:
                     else intent_id
                 )
                 owner_generation = self.owner_generation_provider()  # type: ignore[operator]
-                result = await self.account_owner_submitter(  # type: ignore[operator]
-                    AccountOwnerSubmitIntent(
-                        trace_id=str(trace_id),
-                        account_id=self.account_id,
-                        strategy_instance_id=self.strategy_instance_id,
-                        run_id=self.run_id,
-                        bot_order_namespace=self.bot_order_namespace,
+                try:
+                    result = await self.account_owner_submitter(  # type: ignore[operator]
+                        AccountOwnerSubmitIntent(
+                            trace_id=str(trace_id),
+                            account_id=self.account_id,
+                            strategy_instance_id=self.strategy_instance_id,
+                            run_id=self.run_id,
+                            bot_order_namespace=self.bot_order_namespace,
+                            intent_id=intent_id,
+                            order_ref=order_ref,
+                            intent_kind="STRATEGY",
+                            order_spec=spec.model_dump(),
+                            owner_generation=int(owner_generation),
+                            created_at_ms=now_ms_utc(),
+                        )
+                    )
+                except AccountOwnerSubmitRejected as exc:
+                    raise SubmitUncertainHaltError(
                         intent_id=intent_id,
                         order_ref=order_ref,
-                        intent_kind="STRATEGY",
-                        order_spec=spec.model_dump(),
-                        owner_generation=int(owner_generation),
-                        created_at_ms=now_ms_utc(),
-                    )
-                )
+                        probe_result="rejected",
+                        retry_count=0,
+                        reason=exc.reason,
+                    ) from exc
                 if getattr(result, "status", None) != "accepted":
                     reason = str(getattr(result, "reason", None) or "AccountOwner submit was not accepted")
                     raise SubmitUncertainHaltError(

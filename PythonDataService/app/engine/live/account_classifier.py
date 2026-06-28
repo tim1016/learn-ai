@@ -55,6 +55,8 @@ class AccountDurableIntent:
     order_ref: str
     status: str
     recorded_at_ms: int
+    perm_id: int | None = None
+    exec_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.live.account_classifier import AccountDurableIntent
 from app.engine.live.halt import POISONED_FLAG_FILENAME, read_poisoned_flag
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
@@ -33,6 +34,7 @@ from app.engine.live.order_identity import (
 )
 from app.engine.live.reconciliation_classifier import (
     Adopt,
+    BrokerExecutionView,
     BrokerOrderView,
     BrokerSnapshot,
     Continue,
@@ -193,6 +195,51 @@ async def test_foreign_perm_id_poisons(tmp_path: Path) -> None:
     assert halt is not None
     assert halt.details["reason"] == "foreign_perm_id"
     assert halt.details["source"] == "reconciliation_orchestrator"
+
+
+@pytest.mark.asyncio
+async def test_account_owner_durable_intent_allows_missing_order_ref_by_perm_id(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo = _make_envelope(run_dir)
+
+    async def probe() -> BrokerSnapshot:
+        return BrokerSnapshot(
+            executions=(
+                BrokerExecutionView(
+                    order_ref=None,
+                    perm_id=90044,
+                    exec_id="exec-90044",
+                    exec_time_ms=1_700_000_020_000,
+                ),
+            )
+        )
+
+    result = await reconcile(
+        run_dir=run_dir,
+        sidecar=repo,
+        broker_probe=probe,
+        allowed_namespaces=ALLOWED,
+        now_ms=_clock(),
+        account_durable_intents=(
+            AccountDurableIntent(
+                account_id="DU123",
+                strategy_instance_id=SID,
+                run_id=RUN_ID,
+                bot_order_namespace=NS,
+                intent_id="intent-owner-1",
+                order_ref=build_order_ref(NS, "intent-owner-1"),
+                status="account_owner_submit_accepted",
+                recorded_at_ms=1_700_000_010_000,
+                perm_id=90044,
+                exec_id="exec-90044",
+            ),
+        ),
+    )
+
+    assert isinstance(result.verdict, Continue)
+    assert result.receipt.status == "passed"
+    assert not (run_dir / POISONED_FLAG_FILENAME).exists()
 
 
 @pytest.mark.asyncio

@@ -995,6 +995,13 @@ def _build_broker_snapshot_from_ibkr(open_orders: list, executions: list) -> obj
     return BrokerSnapshot(open_orders=order_views, executions=exec_views)
 
 
+def _try_int(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _account_durable_intents_from_events(events: list[dict], *, account_id: str) -> tuple[object, ...]:
     """Project AccountOwner events into the classifier's durable-intent input."""
     from app.engine.live.account_classifier import AccountDurableIntent
@@ -1031,8 +1038,22 @@ def _account_durable_intents_from_events(events: list[dict], *, account_id: str)
             order_ref=order_ref,
             status=str(event.get("event_type")),
             recorded_at_ms=recorded_at_ms,
+            perm_id=_try_int(diagnostics.get("perm_id")),
+            exec_id=str(diagnostics["exec_id"]) if diagnostics.get("exec_id") else None,
         )
     return tuple(intents.values())
+
+
+def _account_baseline_evidence_from_fleet_baseline(baseline) -> object | None:
+    if baseline is None:
+        return None
+    from app.engine.live.account_classifier import AccountBaselineEvidence
+
+    return AccountBaselineEvidence(
+        baseline_id=f"fleet-reset:{baseline.account_id}:{baseline.baseline_at_ms}",
+        cutoff_ms=int(baseline.baseline_at_ms),
+        source="fleet_reset_baseline",
+    )
 
 
 def _resolve_prior_run_dir(*, current_run_dir: Path, strategy_instance_id: str, current_created_ms: int) -> Path | None:
@@ -1569,6 +1590,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             classify_account,
         )
         from app.engine.live.account_owner import AccountOwner
+        from app.engine.live.fleet_reset_baseline import read_applicable_baseline
 
         def _account_owner_generation_provider() -> int:
             return account_owner_generation
@@ -1576,6 +1598,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         async def _classify_account_for_submit(_intent):
             open_orders = await _owner_list_open_orders(client)
             executions = await _owner_executions_for_reconnect_recovery(client)
+            baseline = read_applicable_baseline(
+                live_runs_root=args.run_dir.parent,
+                account_id=ledger.account_id,
+                strategy_instance_id=strategy_instance_id,
+            )
             return classify_account(
                 account_id=ledger.account_id,
                 broker=AccountBrokerEvidence(
@@ -1587,7 +1614,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                     read_account_events(_artifacts_root, ledger.account_id),
                     account_id=ledger.account_id,
                 ),
-                baseline=None,
+                baseline=_account_baseline_evidence_from_fleet_baseline(baseline),
                 operator_override=None,
                 now_ms=now_ms(),
             )
@@ -1842,6 +1869,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                     executions_for_reconnect_recovery,
                     list_open_orders,
                 )
+                from app.engine.live.account_artifacts import read_account_events
                 from app.engine.live.live_state_sidecar import (
                     LiveStateSidecarRepo,
                     stable_live_state_path,
@@ -1926,6 +1954,10 @@ def cmd_start(args: argparse.Namespace) -> int:
                         current_namespace=_bot_order_namespace,
                         ignore_unknown_namespaces_before_ms=(
                             _baseline.baseline_at_ms if _baseline is not None else None
+                        ),
+                        account_durable_intents=_account_durable_intents_from_events(
+                            read_account_events(_artifacts_root, ledger.account_id),
+                            account_id=ledger.account_id,
                         ),
                     )
                 except Exception as exc:
