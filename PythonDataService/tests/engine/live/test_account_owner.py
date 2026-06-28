@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
@@ -308,6 +309,27 @@ async def test_account_owner_reconnect_rotates_on_client_id_in_use(tmp_path: Pat
 
     assert attempts == [10, 11]
     assert backoffs == [1]
+
+
+@pytest.mark.asyncio
+async def test_account_owner_reconnect_rotates_on_production_client_id_error(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker)
+    attempts: list[int] = []
+
+    async def reconnect(client_id: int) -> None:
+        attempts.append(client_id)
+        if len(attempts) == 1:
+            raise IbkrClientIdInUseError("client id already in use")
+
+    await owner.handle_reconnect(
+        reconnect=reconnect,
+        classify_inflight=lambda _event: "accepted",
+        reconcile=lambda: _continue_decision(),
+        client_id_range=(10, 11),
+    )
+
+    assert attempts == [10, 11]
 
 
 @pytest.mark.asyncio

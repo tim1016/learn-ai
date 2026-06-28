@@ -16,7 +16,13 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
-from app.engine.live.run import _build_live_state_writer, _read_owned_perm_ids, build_parser, main
+from app.engine.live.run import (
+    _account_durable_intents_from_events,
+    _build_live_state_writer,
+    _read_owned_perm_ids,
+    build_parser,
+    main,
+)
 
 requires_git = pytest.mark.skipif(
     shutil.which("git") is None,
@@ -1389,6 +1395,163 @@ def test_deployment_validation_completes_clean_session_offline(tmp_path: Path) -
     # Exactly one entry + one exit fill recorded in the executions artifact.
     execs = pd.read_parquet(run_dir / "executions.parquet")
     assert len(execs) == 2
+
+
+def test_account_durable_intents_project_account_owner_events() -> None:
+    intents = _account_durable_intents_from_events(
+        [
+            {
+                "event_type": "account_owner_submit_prepared",
+                "created_at_ms": 1_700_000_010_000,
+                "diagnostics": {
+                    "account_id": "DU123",
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-alpha",
+                    "intent_id": "intent-1",
+                    "order_ref": "learn-ai/spy_ema_paper/v1:intent-1",
+                },
+            },
+            {
+                "event_type": "account_owner_submit_rejected",
+                "created_at_ms": 1_700_000_020_000,
+                "diagnostics": {
+                    "account_id": "DU123",
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-alpha",
+                    "intent_id": "intent-2",
+                    "order_ref": "learn-ai/spy_ema_paper/v1:intent-2",
+                },
+            },
+        ],
+        account_id="DU123",
+    )
+
+    assert len(intents) == 1
+    assert intents[0].order_ref == "learn-ai/spy_ema_paper/v1:intent-1"
+    assert intents[0].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
+
+
+def test_cmd_start_wires_account_owner_submitter_for_real_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import argparse as _argparse
+    import types
+    from collections.abc import AsyncIterator
+
+    from app.broker.ibkr import orders as orders_mod
+    from app.engine.live import engine_runtime_publisher as publisher_mod
+    from app.engine.live import live_engine as live_engine_mod
+    from app.engine.live import reconciliation_orchestrator as recon_mod
+    from app.engine.live.reconciliation_classifier import Continue
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _Settings:
+        mode = "paper"
+        readonly = False
+        port = 7497
+        client_id = 12
+
+    class _Client:
+        settings = _Settings()
+        connected_account = "DU123"
+        connection_state = "connected"
+
+        async def connect(self) -> None:
+            return None
+
+        async def disconnect(self) -> None:
+            return None
+
+        def is_connected(self) -> bool:
+            return True
+
+    class _Publisher:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    captured: dict[str, object] = {}
+
+    class _LiveEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured["kwargs"] = kwargs
+
+        async def run(self, strategy: object, *, bars: object, shutdown_event: object) -> None:
+            return None
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    async def _empty_open_orders(_client: object) -> list:
+        return []
+
+    async def _empty_executions(_client: object) -> list:
+        return []
+
+    async def _reconcile(**_kwargs: object) -> object:
+        return types.SimpleNamespace(verdict=Continue())
+
+    monkeypatch.setattr(live_engine_mod, "LiveEngine", _LiveEngine)
+    monkeypatch.setattr(publisher_mod, "EngineRuntimePublisher", _Publisher)
+    monkeypatch.setattr(orders_mod, "list_open_orders", _empty_open_orders)
+    monkeypatch.setattr(orders_mod, "executions_for_reconnect_recovery", _empty_executions)
+    monkeypatch.setattr(recon_mod, "reconcile", _reconcile)
+
+    strategy_spec = (
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "engine"
+        / "strategy"
+        / "spec"
+        / "fixtures"
+        / "deployment_validation.spec.json"
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-owner-wiring",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+        strategy_instance_id="spy_ema_paper",
+        strategy_key="deployment_validation",
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=artifacts_root,
+            broker=FakeBroker(),
+            bars=_empty_bars(),
+            client=_Client(),
+        )
+    )
+
+    assert rc == 0
+    kwargs = captured["kwargs"]
+    assert callable(kwargs["account_owner_submitter"])
+    assert callable(kwargs["owner_generation_provider"])
 
 
 def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> None:

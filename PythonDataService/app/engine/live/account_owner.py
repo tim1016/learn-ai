@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountOwnerGeneration,
@@ -179,13 +180,14 @@ class AccountOwner:
                 await _maybe_await(reconnect(client_id))
                 connected = True
                 break
-            except ClientIdInUseError:
+            except (ClientIdInUseError, IbkrClientIdInUseError) as exc:
+                client_id_value = getattr(exc, "client_id", client_id)
                 append_account_event(
                     self._artifacts_root,
                     self._account_id,
                     {
                         "event_type": "account_owner_client_id_in_use",
-                        "client_id": client_id,
+                        "client_id": client_id_value,
                         "attempt": attempt,
                         "code": ClientIdInUseError.code,
                     },
@@ -279,7 +281,7 @@ class AccountOwner:
                 diagnostics | {"current_owner_generation": current_generation},
             )
 
-        classifier_decision = self._classifier(intent)
+        classifier_decision = await _maybe_await(self._classifier(intent))
         classifier_gate = classifier_decision.to_gate_result()
         if classifier_gate.status != "pass":
             self._reject(intent, classifier_decision.reason, diagnostics)

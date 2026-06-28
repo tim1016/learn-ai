@@ -903,8 +903,13 @@ class LivePortfolio:
                     )
                 )
                 if getattr(result, "status", None) != "accepted":
-                    raise RuntimeError(
-                        f"AccountOwner submit did not accept intent {intent_id}: {getattr(result, 'reason', None)!r}"
+                    reason = str(getattr(result, "reason", None) or "AccountOwner submit was not accepted")
+                    raise SubmitUncertainHaltError(
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        probe_result=str(getattr(result, "status", None) or "unknown"),
+                        retry_count=0,
+                        reason=reason,
                     )
                 acks.append(
                     IbkrOrderAck(

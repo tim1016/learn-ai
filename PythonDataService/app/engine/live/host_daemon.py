@@ -447,6 +447,12 @@ class RunnerProcessManager:
                 )
             except OSError as exc:
                 log_handle.close()
+                self._write_account_registry_binding(
+                    run_dir,
+                    run_id=run_id,
+                    lifecycle_state="RETIRED",
+                    source="host_daemon.start_failed",
+                )
                 raise HostRunnerError(
                     status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}"
                 ) from exc

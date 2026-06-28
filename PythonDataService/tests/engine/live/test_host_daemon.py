@@ -27,6 +27,7 @@ from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerProcessState,
     HostRunnerProcessStatus,
+    HostRunnerStartRequest,
 )
 
 RUN_ID = "run-daemon-" + "a" * 53
@@ -346,6 +347,37 @@ async def test_start_writes_account_registry_before_spawn(
         response = await client.post(f"/runs/{RUN_ID}/start", json={})
 
     assert response.status_code == 200
+
+
+async def test_start_retires_account_registry_binding_when_spawn_fails(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.host_daemon import HostRunnerError
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(HostRunnerError):
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
+    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
+    assert bindings[-1].source == "host_daemon.start_failed"
 
 
 async def test_start_blocks_when_restart_intensity_freezes_account(
