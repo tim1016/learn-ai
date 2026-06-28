@@ -109,6 +109,72 @@ export interface InstanceStartDefaults {
   account_id?: string;
 }
 
+export type LifecycleChartStatus =
+  | 'passed'
+  | 'active'
+  | 'blocked'
+  | 'poison'
+  | 'freeze'
+  | 'inactive'
+  | 'unknown';
+
+export type LifecycleChartLane = 'bot' | 'account' | 'broker' | 'recovery';
+
+export interface LifecycleChartNode {
+  id: string;
+  label: string;
+  technical_label: string | null;
+  lane: LifecycleChartLane;
+  status: LifecycleChartStatus;
+  expandable: boolean;
+  subgraph_id: string | null;
+  evidence_summary: string | null;
+}
+
+export interface LifecycleChartEdge {
+  id: string;
+  source: string;
+  target: string;
+  status: LifecycleChartStatus;
+  label: string | null;
+  animated: boolean;
+}
+
+export type LifecycleChartActionId =
+  | 'start_process'
+  | 'resume'
+  | 'pause'
+  | 'flatten_and_pause'
+  | 'stop'
+  | 'mark_poisoned'
+  | 'redeploy';
+
+export interface LifecycleChartAction {
+  id: LifecycleChartActionId;
+  label: string;
+  enabled: boolean;
+  reason: string | null;
+  target_node_id: string | null;
+  tone: 'primary' | 'secondary' | 'danger';
+}
+
+export interface LifecycleChartGraph {
+  graph_id: string;
+  title: string;
+  primary_node_id: string;
+  nodes: LifecycleChartNode[];
+  edges: LifecycleChartEdge[];
+}
+
+export interface BotLifecycleChartView {
+  chart_id: string;
+  selected_bot_id: string;
+  title: string;
+  global_graph: LifecycleChartGraph;
+  subgraphs: Record<string, LifecycleChartGraph>;
+  actions: LifecycleChartAction[];
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;
@@ -156,6 +222,9 @@ export interface LiveInstanceStatus {
    * null per the documented semantics.  Frontend renders these fields;
    * it does NOT derive verdicts from raw fields. */
   operator_surface: OperatorSurface;
+  /** Backend-authored chart contract for the Overview tab. The frontend
+   * renders nodes, edges, statuses, and action enablement verbatim. */
+  lifecycle_chart: BotLifecycleChartView;
   fetched_at_ms: number;
 }
 
@@ -231,7 +300,8 @@ export type HostProcessStartDisabledReasonCode =
   | 'STOPPING'
   | 'HOST_SERVICE_OFFLINE'
   | 'STOPPED_REQUIRES_REDEPLOY'
-  | 'START_SETTINGS_INCOMPLETE';
+  | 'START_SETTINGS_INCOMPLETE'
+  | 'ACCOUNT_FROZEN';
 
 /** Server-authored per-instance Start-bot-process affordance
  *  (ADR-0006 §1 / ADR-0007 / ADR 0013 amendment 2026-06-22).

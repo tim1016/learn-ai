@@ -8,6 +8,7 @@ import type {
   PriorRunClassification,
 } from '../../../../../api/live-instances.types';
 import { LiveRunsService } from '../../../../../services/live-runs.service';
+import { canStartHostProcess, startHostProcessFromCapability } from '../../lib/start-host-process';
 
 const HEADING_BY_STATE: Record<HostProcessState, string> = {
   RUNNING: '',
@@ -45,6 +46,8 @@ const START_DISABLED_COPY: Record<HostProcessStartDisabledReasonCode, string> = 
     'This run is permanently stopped. Redeploy the bot to trade again.',
   START_SETTINGS_INCOMPLETE:
     "This bot's saved start settings are incomplete. Review Configuration and redeploy.",
+  ACCOUNT_FROZEN:
+    'The account is frozen by a backend safety gate. Clear the freeze evidence before starting this bot.',
 };
 
 /**
@@ -126,13 +129,11 @@ export class HostProcessNoticeComponent {
 
   async startBotProcess(): Promise<void> {
     const cap = this.startCapability();
-    if (!cap.enabled || !cap.run_id || !cap.request || this.startInFlight()) {
-      return;
-    }
+    if (this.startInFlight() || !canStartHostProcess(cap)) return;
     this.startInFlight.set(true);
     this.startError.set(null);
     try {
-      await this.liveRuns.startHostRunner(cap.run_id, cap.request);
+      await startHostProcessFromCapability(this.liveRuns, cap);
       // The next poll surfaces the new RUNNING state; no manual refresh.
     } catch (err: unknown) {
       this.startError.set(this._formatStartError(err));

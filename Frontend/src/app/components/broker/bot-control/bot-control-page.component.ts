@@ -12,6 +12,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 
 import type {
   FleetAccountSummary,
+  LifecycleChartActionId,
   LiveInstanceStatus,
   OperatorNotice,
   OperatorSurfaceControlPlane,
@@ -25,12 +26,14 @@ import { StatusRiskTabComponent } from '../cockpit-v2/tabs/status-risk-tab.compo
 import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
 import type { InnerTab } from '../cockpit-v2/lib/instance-tab-state';
 import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
+import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-v2/lib/start-host-process';
+import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 
 const POLL_INTERVAL_MS = 4_000;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
 
-type BotControlTab = InnerTab;
+type BotControlTab = 'overview' | InnerTab;
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
 
 interface ControlPlaneBanner {
@@ -47,6 +50,7 @@ interface ControlPlaneBanner {
     CommonModule,
     OperatorNoticeComponent,
     StatusRiskTabComponent,
+    OverviewTabComponent,
     ActivityTabComponent,
     AuditTabComponent,
     ConfigurationTabComponent,
@@ -69,7 +73,7 @@ export class BotControlPageComponent {
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
   readonly accountSummary = signal<FleetAccountSummary | null>(null);
-  readonly selectedTab = signal<BotControlTab>('status');
+  readonly selectedTab = signal<BotControlTab>('overview');
   readonly statusError = signal<string | null>(null);
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
@@ -136,6 +140,22 @@ export class BotControlPageComponent {
     await this.setIntent('resume', 'Resume');
   }
 
+  async dispatchStartProcess(): Promise<void> {
+    const id = this.instanceId();
+    const cap = this.status()?.operator_surface.host_process.start_capability;
+    if (!id || this.busyAction() || !cap || !canStartHostProcess(cap)) return;
+    this.busyAction.set('start_process');
+    this.mutationError.set(null);
+    try {
+      const started = await startHostProcessFromCapability(this.liveRuns, cap);
+      if (started) await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
   async dispatchPause(): Promise<void> {
     await this.setIntent('pause', 'Pause');
   }
@@ -169,6 +189,32 @@ export class BotControlPageComponent {
 
   onGateOpenRunbook(slug: string): void {
     window.open(`/runbooks/${encodeURIComponent(slug)}`, '_blank', 'noopener');
+  }
+
+  dispatchOverviewAction(action: LifecycleChartActionId): void {
+    switch (action) {
+      case 'start_process':
+        void this.dispatchStartProcess();
+        break;
+      case 'resume':
+        void this.dispatchResume();
+        break;
+      case 'pause':
+        void this.dispatchPause();
+        break;
+      case 'flatten_and_pause':
+        void this.dispatchFlattenAndPause();
+        break;
+      case 'stop':
+        void this.dispatchStop();
+        break;
+      case 'mark_poisoned':
+        this.openTypedHalt();
+        break;
+      case 'redeploy':
+        this.onGateRedeploy();
+        break;
+    }
   }
 
   openTypedHalt(): void {

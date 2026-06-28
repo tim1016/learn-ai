@@ -4,6 +4,7 @@ import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { GateResult, LiveInstanceStatus } from '../../../../api/live-instances.types';
+import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
 import { ConfigurationTabComponent } from './configuration-tab.component';
 
 function gateResult(gateId: string, status: GateResult['status']): GateResult {
@@ -142,6 +143,7 @@ function status(): LiveInstanceStatus {
       broker_activity_health: null,
       incident_headline: null,
     },
+    lifecycle_chart: makeLifecycleChartFixture(),
     fetched_at_ms: 1_700_000_000_000,
   };
 }
