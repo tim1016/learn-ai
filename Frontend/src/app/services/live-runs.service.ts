@@ -26,6 +26,7 @@ import type {
 import type {
   FleetAccountSummary,
   FleetContamination,
+  BotCatalogResponse,
   InstanceDesiredStateRequest,
   LiveInstanceStatus,
   LiveInstanceSummary,
@@ -145,6 +146,10 @@ export class LiveRunsService {
   /** Account fleet overview: every known strategy instance, live or not. */
   getInstances(): Promise<LiveInstanceSummary[]> {
     return firstValueFrom(this.http.get<LiveInstanceSummary[]>(this.instancesBase));
+  }
+
+  getBotCatalog(): Promise<BotCatalogResponse> {
+    return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
   }
 
   /** Instance control-room status: live binding (registry) + evidence + intent. */

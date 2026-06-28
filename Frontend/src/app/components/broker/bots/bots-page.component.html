@@ -1,0 +1,239 @@
+<section class="bots-page" aria-labelledby="bots-title">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Broker fleet</p>
+      <h1 id="bots-title">Bots</h1>
+    </div>
+    <button
+      pButton
+      type="button"
+      severity="secondary"
+      icon="pi pi-refresh"
+      [loading]="isLoading()"
+      (click)="refresh()"
+    >
+      <span class="p-button-label">Refresh</span>
+    </button>
+  </header>
+
+  <section class="filters" aria-label="Bot filters">
+    <label class="filter-field">
+      <span>Name</span>
+      <input
+        pInputText
+        type="search"
+        placeholder="Search bot name"
+        [ngModel]="nameQuery()"
+        (ngModelChange)="nameQuery.set($event)"
+      />
+    </label>
+    <label class="filter-field">
+      <span>Symbol</span>
+      <input
+        pInputText
+        type="search"
+        placeholder="SPY, AAPL..."
+        [ngModel]="symbolQuery()"
+        (ngModelChange)="symbolQuery.set($event)"
+      />
+    </label>
+
+    <div class="segmented" aria-label="Error filter">
+      <button
+        type="button"
+        [class.active]="errorFilter() === 'all'"
+        (click)="setErrorFilter('all')"
+      >
+        All
+      </button>
+      <button
+        type="button"
+        [class.active]="errorFilter() === 'has-errors'"
+        (click)="setErrorFilter('has-errors')"
+      >
+        Has errors
+      </button>
+      <button
+        type="button"
+        [class.active]="errorFilter() === 'no-errors'"
+        (click)="setErrorFilter('no-errors')"
+      >
+        No errors
+      </button>
+    </div>
+
+    <div class="segmented" aria-label="Trading mode filter">
+      <button
+        type="button"
+        [class.active]="tradingModeFilter() === 'all'"
+        (click)="setTradingModeFilter('all')"
+      >
+        All modes
+      </button>
+      <button
+        type="button"
+        [class.active]="tradingModeFilter() === 'paper'"
+        (click)="setTradingModeFilter('paper')"
+      >
+        Paper
+      </button>
+      <button
+        type="button"
+        [class.active]="tradingModeFilter() === 'live'"
+        (click)="setTradingModeFilter('live')"
+      >
+        Live
+      </button>
+    </div>
+  </section>
+
+  @if (errorMessage(); as message) {
+    <p class="load-error" role="alert">{{ message }}</p>
+  }
+
+  <div class="result-summary" aria-live="polite">
+    {{ visibleBots().length }} bots
+  </div>
+
+  <p-dataview
+    class="bot-dataview"
+    layout="grid"
+    [value]="visibleBots()"
+    [paginator]="visibleBots().length > 9"
+    [rows]="9"
+    emptyMessage="No bots match these filters."
+  >
+    <ng-template #grid let-cards>
+      <div class="bot-grid">
+        @for (bot of cards; track bot.strategy_instance_id) {
+          <article
+            class="bot-card"
+            [class.needs-attention]="bot.needs_attention"
+            [attr.aria-labelledby]="'bot-' + bot.strategy_instance_id"
+          >
+            <div class="card-topline">
+              <div>
+                <h2 [id]="'bot-' + bot.strategy_instance_id">{{ bot.name }}</h2>
+                @if (bot.symbols.length > 0) {
+                  <p class="symbol-line">{{ bot.symbols.join(', ') }}</p>
+                }
+              </div>
+              <p-tag
+                [severity]="tagSeverity(bot.status_tone)"
+                [value]="bot.status_label"
+              />
+            </div>
+
+            <dl class="primary-meta">
+              <div>
+                <dt>Assets</dt>
+                <dd>{{ formatSymbols(bot.symbols) }}</dd>
+              </div>
+              <div>
+                <dt>Engine</dt>
+                <dd>{{ bot.engine ?? '—' }}</dd>
+              </div>
+              <div>
+                <dt>Engine asset class</dt>
+                <dd>{{ bot.engine_asset_class ?? '—' }}</dd>
+              </div>
+              <div>
+                <dt>Last run result</dt>
+                <dd>{{ bot.last_run_result }}</dd>
+              </div>
+            </dl>
+
+            <div class="metric-grid" aria-label="Bot metrics">
+              <div>
+                <span>Realized P&L</span>
+                <strong>{{ formatMoney(bot.metrics.pnl.realized) }}</strong>
+              </div>
+              <div>
+                <span>Unrealized P&L</span>
+                <strong>{{ formatMoney(bot.metrics.pnl.unrealized) }}</strong>
+              </div>
+              <div>
+                <span>Total P&L</span>
+                <strong>{{ formatMoney(bot.metrics.pnl.total) }}</strong>
+              </div>
+              <div>
+                <span>Trades</span>
+                <strong>{{ formatCount(bot.metrics.trade_count) }}</strong>
+              </div>
+              <div>
+                <span>Exposure</span>
+                <strong>{{ bot.metrics.current_exposure }}</strong>
+              </div>
+              <div>
+                <span>Open positions</span>
+                <strong>{{ formatCount(bot.metrics.open_positions) }}</strong>
+              </div>
+              <div>
+                <span>Errors</span>
+                <strong>{{ formatCount(bot.metrics.error_count) }}</strong>
+              </div>
+            </div>
+
+            @if (isExpanded(bot.strategy_instance_id)) {
+              <section class="expanded" aria-label="More bot metadata">
+                <dl>
+                  <div>
+                    <dt>Created</dt>
+                    <dd>{{ formatTimestamp(bot.created_at_ms) }}</dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{{ formatTimestamp(bot.updated_at_ms) }}</dd>
+                  </div>
+                  <div>
+                    <dt>Last run time</dt>
+                    <dd>{{ formatTimestamp(bot.last_run_at_ms) }}</dd>
+                  </div>
+                  <div>
+                    <dt>Process</dt>
+                    <dd>{{ bot.process_state }}</dd>
+                  </div>
+                  <div>
+                    <dt>Desired state</dt>
+                    <dd>{{ bot.desired_state ?? '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>Readiness</dt>
+                    <dd>{{ bot.readiness_verdict }}</dd>
+                  </div>
+                  <div>
+                    <dt>Trading mode</dt>
+                    <dd>{{ bot.trading_mode }}</dd>
+                  </div>
+                </dl>
+              </section>
+            }
+
+            <footer class="card-actions">
+              <button
+                pButton
+                type="button"
+                severity="secondary"
+                [outlined]="true"
+                [icon]="isExpanded(bot.strategy_instance_id) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                (click)="toggleExpanded(bot.strategy_instance_id)"
+              >
+                <span class="p-button-label">
+                  {{ isExpanded(bot.strategy_instance_id) ? 'Show less' : 'View more' }}
+                </span>
+              </button>
+              <button
+                pButton
+                type="button"
+                icon="pi pi-external-link"
+                (click)="openCockpit(bot.strategy_instance_id)"
+              >
+                <span class="p-button-label">Open cockpit</span>
+              </button>
+            </footer>
+          </article>
+        }
+      </div>
+    </ng-template>
+  </p-dataview>
+</section>

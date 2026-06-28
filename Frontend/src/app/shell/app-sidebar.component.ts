@@ -86,6 +86,7 @@ const NAV: NavGroup[] = [
       { label: 'Account Monitor', route: '/broker/account-monitor' },
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },
+      { label: 'Bots', route: '/broker/bots' },
       { label: 'Bot Control Panel', route: '/broker/paper-run' },
     ],
   },

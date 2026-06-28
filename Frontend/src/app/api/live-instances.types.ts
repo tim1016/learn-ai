@@ -734,6 +734,48 @@ export interface LiveInstanceSummary {
   readiness_as_of_ms?: number | null;
 }
 
+export type BotCatalogTone = 'positive' | 'warning' | 'danger' | 'neutral';
+export type BotCatalogTradingMode = 'paper' | 'live' | 'unknown';
+
+export interface BotCatalogPnl {
+  realized: number | null;
+  unrealized: number | null;
+  total: number | null;
+}
+
+export interface BotCatalogMetrics {
+  pnl: BotCatalogPnl;
+  trade_count: number | null;
+  current_exposure: string;
+  open_positions: number | null;
+  error_count: number;
+}
+
+export interface BotCatalogRow {
+  strategy_instance_id: string;
+  name: string;
+  description: string | null;
+  status_label: string;
+  status_tone: BotCatalogTone;
+  needs_attention: boolean;
+  trading_mode: BotCatalogTradingMode;
+  symbols: string[];
+  engine: string | null;
+  engine_asset_class: string | null;
+  created_at_ms: number | null;
+  updated_at_ms: number | null;
+  last_run_at_ms: number | null;
+  last_run_result: string;
+  process_state: string;
+  desired_state: string | null;
+  readiness_verdict: ReadinessVerdictEnum;
+  metrics: BotCatalogMetrics;
+}
+
+export interface BotCatalogResponse {
+  bots: BotCatalogRow[];
+}
+
 // --- Single operator intent knob (ADR 0004) ---
 
 export type DesiredStateAction = 'pause' | 'resume' | 'stop';

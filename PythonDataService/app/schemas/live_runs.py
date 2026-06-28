@@ -2004,6 +2004,66 @@ class LiveInstanceSummary(BaseModel):
     readiness_as_of_ms: int | None = None
 
 
+class BotCatalogPnl(BaseModel):
+    """Backend-authored P&L fields for the bot catalog card.
+
+    ``None`` is the honest value when the current data sources cannot provide
+    a component; the frontend renders absence rather than recomputing money.
+    """
+
+    realized: float | None = None
+    unrealized: float | None = None
+    total: float | None = None
+
+
+class BotCatalogMetrics(BaseModel):
+    """Metrics rendered by the bot catalog card.
+
+    Financial and execution counts are authored server-side so Angular does
+    not infer operational or numerical facts from low-level cockpit evidence.
+    """
+
+    pnl: BotCatalogPnl = Field(default_factory=BotCatalogPnl)
+    trade_count: int | None = None
+    current_exposure: str
+    open_positions: int | None = None
+    error_count: int
+
+
+class BotCatalogRow(BaseModel):
+    """One server-composed bot catalog card.
+
+    This is the DataView/listing counterpart to ``LiveInstanceStatus``: it
+    carries only display/filter fields the catalog needs, already composed in
+    operator language by the backend.
+    """
+
+    strategy_instance_id: str
+    name: str
+    description: str | None = None
+    status_label: str
+    status_tone: Literal["positive", "warning", "danger", "neutral"] = "neutral"
+    needs_attention: bool
+    trading_mode: Literal["paper", "live", "unknown"] = "unknown"
+    symbols: list[str] = Field(default_factory=list)
+    engine: str | None = None
+    engine_asset_class: str | None = None
+    created_at_ms: int | None = None
+    updated_at_ms: int | None = None
+    last_run_at_ms: int | None = None
+    last_run_result: str
+    process_state: str
+    desired_state: str | None = None
+    readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"
+    metrics: BotCatalogMetrics
+
+
+class BotCatalogResponse(BaseModel):
+    """Fleet-wide bot catalog projection."""
+
+    bots: list[BotCatalogRow] = Field(default_factory=list)
+
+
 class FleetExplainedBucket(BaseModel):
     """One instance's contribution to the account's explained position (#399)."""
 
