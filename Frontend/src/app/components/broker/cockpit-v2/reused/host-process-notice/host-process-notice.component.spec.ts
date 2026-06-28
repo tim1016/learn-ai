@@ -4,6 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  GateResult,
   HostProcessStartCapability,
   HostProcessState,
   OperatorSurfaceHostProcess,
@@ -11,6 +12,17 @@ import type {
 import type { HostRunnerActionResponse } from '../../../../../api/live-runs.types';
 import { LiveRunsService } from '../../../../../services/live-runs.service';
 import { HostProcessNoticeComponent } from './host-process-notice.component';
+
+function gateResult(status: GateResult['status']): GateResult {
+  return {
+    gate_id: 'host_process.start',
+    status,
+    source: 'fixture',
+    operator_reason: status === 'pass' ? 'GATE_PASSING' : 'START_DISABLED',
+    operator_next_step: status === 'pass' ? null : 'Review the disabled reason.',
+    evidence_at_ms: 0,
+  };
+}
 
 const ENABLED_CAP: HostProcessStartCapability = {
   enabled: true,
@@ -23,6 +35,7 @@ const ENABLED_CAP: HostProcessStartCapability = {
     ibkr_host: '127.0.0.1',
   },
   disabled_reason_code: null,
+  gate_results: [gateResult('pass')],
 };
 
 const DISABLED_CAP_INCOMPLETE: HostProcessStartCapability = {
@@ -30,6 +43,7 @@ const DISABLED_CAP_INCOMPLETE: HostProcessStartCapability = {
   run_id: null,
   request: null,
   disabled_reason_code: 'START_SETTINGS_INCOMPLETE',
+  gate_results: [gateResult('block')],
 };
 
 function host(overrides: Partial<OperatorSurfaceHostProcess> = {}): OperatorSurfaceHostProcess {
@@ -96,6 +110,7 @@ describe('HostProcessNoticeComponent', () => {
           run_id: null,
           request: null,
           disabled_reason_code: 'ALREADY_RUNNING',
+          gate_results: [gateResult('block')],
         },
       }),
     });
@@ -181,7 +196,13 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
   ] as const)('maps disabled_reason_code %s to trader copy', (code, fragment) => {
     const { el } = render({
       hostProcess: host({
-        start_capability: { enabled: false, run_id: null, request: null, disabled_reason_code: code },
+        start_capability: {
+          enabled: false,
+          run_id: null,
+          request: null,
+          disabled_reason_code: code,
+          gate_results: [gateResult('block')],
+        },
       }),
     });
     const reason = el.querySelector('[data-testid="host-process-start-disabled-reason"]');
