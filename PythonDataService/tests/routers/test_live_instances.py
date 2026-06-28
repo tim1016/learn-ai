@@ -1356,6 +1356,82 @@ async def test_list_instances_merges_daemon_and_disk(app_with_root, monkeypatch:
     assert rows["spy_vwap_shadow"]["latest_run_id"] == "run-vwap-1"
 
 
+async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_live_state(root, "spy_ema_paper", "run-ema-1", {"SPY": 5})
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-ema-1",
+                    "run_dir": str(root / "run-ema-1"),
+                    "process": {"state": "running", "run_id": "run-ema-1"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"bots"}
+    row = body["bots"][0]
+    assert row["strategy_instance_id"] == "spy_ema_paper"
+    assert row["name"] == "spy_ema_paper"
+    assert row["trading_mode"] == "paper"
+    assert row["symbols"] == ["SPY"]
+    assert row["metrics"]["current_exposure"] == "SPY 5"
+    assert row["metrics"]["open_positions"] == 1
+    assert row["metrics"]["pnl"] == {"realized": None, "unrealized": None, "total": None}
+    assert isinstance(row["status_label"], str)
+    assert row["status_tone"] in {"positive", "warning", "danger", "neutral"}
+
+
+async def test_bot_catalog_does_not_fallback_unknown_symbol_to_instance_id(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    row = response.json()["bots"][0]
+    assert row["strategy_instance_id"] == "spy_vwap_shadow"
+    assert row["symbols"] == []
+
+
+async def test_bot_catalog_trading_mode_comes_from_configured_mode(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live-mode", "spy_live_mode", 100)
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
+        fleet_dirty_blocks_starts=False,
+        mode="live",
+        readonly=False,
+    )
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert response.json()["bots"][0]["trading_mode"] == "live"
+
+
 async def test_instance_status_rejects_invalid_id(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process=None)

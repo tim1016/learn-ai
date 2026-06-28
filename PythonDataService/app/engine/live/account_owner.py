@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountOwnerGeneration,
@@ -94,12 +95,14 @@ class AccountOwner:
         account_id: str,
         broker,
         owner_generation_provider: Callable[[], int],
+        owner_generation_advancer: Callable[[], int] | None = None,
         classifier: Callable[[AccountOwnerSubmitIntent], AccountClassifierDecision],
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
         self._broker = broker
         self._owner_generation_provider = owner_generation_provider
+        self._owner_generation_advancer = owner_generation_advancer
         self._classifier = classifier
         self._lock = asyncio.Lock()
         self._accepting = True
@@ -154,6 +157,8 @@ class AccountOwner:
         client_id_range: tuple[int, ...],
         backoff: Callable[[int], object] | None = None,
     ) -> None:
+        if self._owner_generation_advancer is not None:
+            self._owner_generation_advancer()
         self._set_phase("reconnecting")
         async with self._lock:
             await self._handle_reconnect_locked(
@@ -179,13 +184,14 @@ class AccountOwner:
                 await _maybe_await(reconnect(client_id))
                 connected = True
                 break
-            except ClientIdInUseError:
+            except (ClientIdInUseError, IbkrClientIdInUseError) as exc:
+                client_id_value = getattr(exc, "client_id", client_id)
                 append_account_event(
                     self._artifacts_root,
                     self._account_id,
                     {
                         "event_type": "account_owner_client_id_in_use",
-                        "client_id": client_id,
+                        "client_id": client_id_value,
                         "attempt": attempt,
                         "code": ClientIdInUseError.code,
                     },
@@ -279,7 +285,7 @@ class AccountOwner:
                 diagnostics | {"current_owner_generation": current_generation},
             )
 
-        classifier_decision = self._classifier(intent)
+        classifier_decision = await _maybe_await(self._classifier(intent))
         classifier_gate = classifier_decision.to_gate_result()
         if classifier_gate.status != "pass":
             self._reject(intent, classifier_decision.reason, diagnostics)

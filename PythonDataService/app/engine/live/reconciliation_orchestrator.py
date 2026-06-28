@@ -20,16 +20,17 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from app.engine.live.halt import (
     PoisonedHaltReason,
     PoisonedHaltTrigger,
     write_poisoned_flag,
 )
-from app.engine.live.intent_events import IntentEvent, IntentEventType
-from app.engine.live.intent_ledger import fold, projection_from_envelope
+from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
+from app.engine.live.intent_ledger import LedgerView, SubmittedOrderView, fold, projection_from_envelope
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarCorruptError,
@@ -77,6 +78,7 @@ async def reconcile(
     current_strategy_instance_id: str | None = None,
     current_namespace: str | None = None,
     ignore_unknown_namespaces_before_ms: int | None = None,
+    account_durable_intents: tuple[object, ...] = (),
 ) -> ReconciliationResult:
     """Run the cold-start reconciliation procedure and persist a receipt.
 
@@ -175,6 +177,7 @@ async def reconcile(
         ledger_view = fold(LedgerProjection(), wal_events)
     else:
         ledger_view = fold(projection_from_envelope(envelope), wal_events)
+    ledger_view = _with_account_durable_intents(ledger_view, account_durable_intents)
 
     # Step 4: prior-run unresolved tail. Corruption here is informational —
     # treat as empty so a single broken prior-run WAL doesn't gate this boot.
@@ -331,6 +334,80 @@ def _read_run_id_from_dir(run_dir: Path) -> str:
     parses back; the operator can still correlate it against the dir.
     """
     return run_dir.name
+
+
+def _with_account_durable_intents(
+    ledger_view: LedgerView,
+    account_durable_intents: tuple[object, ...],
+) -> LedgerView:
+    if not account_durable_intents:
+        return ledger_view
+    from app.engine.live.intent_events import IntentEventType
+
+    orders = dict(ledger_view.submitted_orders)
+    known_perm_ids = set(ledger_view.known_perm_ids)
+    known_exec_ids = set(ledger_view.known_exec_ids)
+    unresolved = set(ledger_view.unresolved_intent_ids)
+
+    for durable in account_durable_intents:
+        intent_id = getattr(durable, "intent_id", None)
+        order_ref = getattr(durable, "order_ref", None)
+        namespace = getattr(durable, "bot_order_namespace", None)
+        if not isinstance(intent_id, str) or not intent_id:
+            continue
+        if not isinstance(order_ref, str) or not order_ref:
+            continue
+        if not isinstance(namespace, str) or not namespace:
+            continue
+        status = _intent_event_type_for_account_durable_status(str(getattr(durable, "status", "")))
+        existing = orders.get(intent_id)
+        perm_id = getattr(durable, "perm_id", None)
+        exec_id = getattr(durable, "exec_id", None)
+        existing_exec_ids = existing.exec_ids if existing is not None else ()
+        exec_ids = existing_exec_ids
+        if exec_id:
+            exec_id_value = str(exec_id)
+            if exec_id_value not in exec_ids:
+                exec_ids = (*exec_ids, exec_id_value)
+        orders[intent_id] = SubmittedOrderView(
+            intent_id=intent_id,
+            bot_order_namespace=namespace,
+            order_ref=order_ref,
+            status=status,
+            intent_kind=existing.intent_kind if existing is not None else IntentKind.STRATEGY,
+            order_id=existing.order_id if existing is not None else None,
+            perm_id=perm_id if perm_id is not None else (existing.perm_id if existing is not None else None),
+            exec_ids=exec_ids,
+            sizing_resolution=existing.sizing_resolution if existing is not None else None,
+            order_spec=existing.order_spec if existing is not None else None,
+            classification=existing.classification if existing is not None else None,
+        )
+        if perm_id is not None:
+            known_perm_ids.add(int(perm_id))
+        if exec_id:
+            known_exec_ids.add(str(exec_id))
+        if status in {IntentEventType.PENDING_INTENT, IntentEventType.ACK_FAILED_UNCERTAIN}:
+            unresolved.add(intent_id)
+        else:
+            unresolved.discard(intent_id)
+
+    return replace(
+        ledger_view,
+        submitted_orders=MappingProxyType(orders),
+        known_perm_ids=frozenset(known_perm_ids),
+        known_exec_ids=frozenset(known_exec_ids),
+        unresolved_intent_ids=frozenset(unresolved),
+    )
+
+
+def _intent_event_type_for_account_durable_status(status: str):
+    from app.engine.live.intent_events import IntentEventType
+
+    if status == "account_owner_submit_accepted":
+        return IntentEventType.SUBMITTED
+    if status == "account_owner_submit_uncertain":
+        return IntentEventType.ACK_FAILED_UNCERTAIN
+    return IntentEventType.PENDING_INTENT
 
 
 __all__ = ["ReconciliationResult", "reconcile"]

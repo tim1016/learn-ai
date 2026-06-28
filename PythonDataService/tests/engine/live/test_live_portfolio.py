@@ -12,11 +12,12 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import AccountFreezeEvidence
-from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitResult
+from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected, AccountOwnerSubmitResult
 from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
     AccountRegistryBlockError,
     LivePortfolio,
+    SubmitUncertainHaltError,
 )
 from app.schemas.live_runs import GateResult
 from tests.engine.live.fixtures.fake_broker import FakeBroker
@@ -403,4 +404,70 @@ async def test_submit_pending_orders_routes_to_account_owner_when_enabled() -> N
     assert captured[0].owner_generation == 3
     assert captured[0].order_spec["symbol"] == "SPY"
     assert acks[0].order_id == 44
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_account_owner_uncertain_submit_raises_typed_halt() -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
+        return AccountOwnerSubmitResult(
+            status="uncertain",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            reason="BROKER_SUBMIT_UNCERTAIN:TimeoutError",
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(SubmitUncertainHaltError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.probe_result == "uncertain"
+    assert exc.value.reason == "BROKER_SUBMIT_UNCERTAIN:TimeoutError"
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_account_owner_rejected_submit_raises_typed_halt_without_broker_flatten() -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
+        raise AccountOwnerSubmitRejected(reason="BROKER_STATE_UNPROVABLE", diagnostics={})
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(SubmitUncertainHaltError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.probe_result == "rejected"
+    assert exc.value.reason == "BROKER_STATE_UNPROVABLE"
     assert broker.orders == []

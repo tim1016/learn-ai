@@ -447,6 +447,18 @@ class RunnerProcessManager:
                 )
             except OSError as exc:
                 log_handle.close()
+                try:
+                    self._write_account_registry_binding(
+                        run_dir,
+                        run_id=run_id,
+                        lifecycle_state="RETIRED",
+                        source="host_daemon.start_failed",
+                    )
+                except HostRunnerError:
+                    logger.exception(
+                        "Failed to retire account registry binding after host runner spawn failure",
+                        extra={"run_id": run_id, "strategy_instance_id": key},
+                    )
                 raise HostRunnerError(
                     status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}"
                 ) from exc

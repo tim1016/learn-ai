@@ -995,6 +995,67 @@ def _build_broker_snapshot_from_ibkr(open_orders: list, executions: list) -> obj
     return BrokerSnapshot(open_orders=order_views, executions=exec_views)
 
 
+def _try_int(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _account_durable_intents_from_events(events: list[dict], *, account_id: str) -> tuple[object, ...]:
+    """Project AccountOwner events into the classifier's durable-intent input."""
+    from app.engine.live.account_classifier import AccountDurableIntent
+
+    intents: dict[str, AccountDurableIntent] = {}
+    durable_event_types = {
+        "account_owner_submit_prepared",
+        "account_owner_submit_accepted",
+        "account_owner_submit_uncertain",
+    }
+    for event in events:
+        if event.get("event_type") not in durable_event_types:
+            continue
+        diagnostics = event.get("diagnostics") or {}
+        if not isinstance(diagnostics, dict):
+            continue
+        order_ref = diagnostics.get("order_ref")
+        intent_id = diagnostics.get("intent_id")
+        strategy_instance_id = diagnostics.get("strategy_instance_id")
+        run_id = diagnostics.get("run_id")
+        if not all(isinstance(value, str) and value for value in (order_ref, intent_id, strategy_instance_id, run_id)):
+            continue
+        try:
+            namespace = str(order_ref).rsplit(":", 1)[0]
+            recorded_at_ms = int(event.get("created_at_ms") or 0)
+        except (TypeError, ValueError):
+            recorded_at_ms = 0
+        intents[order_ref] = AccountDurableIntent(
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            bot_order_namespace=namespace,
+            intent_id=intent_id,
+            order_ref=order_ref,
+            status=str(event.get("event_type")),
+            recorded_at_ms=recorded_at_ms,
+            perm_id=_try_int(diagnostics.get("perm_id")),
+            exec_id=str(diagnostics["exec_id"]) if diagnostics.get("exec_id") else None,
+        )
+    return tuple(intents.values())
+
+
+def _account_baseline_evidence_from_fleet_baseline(baseline) -> object | None:
+    if baseline is None:
+        return None
+    from app.engine.live.account_classifier import AccountBaselineEvidence
+
+    return AccountBaselineEvidence(
+        baseline_id=f"fleet-reset:{baseline.account_id}:{baseline.baseline_at_ms}",
+        cutoff_ms=int(baseline.baseline_at_ms),
+        source="fleet_reset_baseline",
+    )
+
+
 def _resolve_prior_run_dir(*, current_run_dir: Path, strategy_instance_id: str, current_created_ms: int) -> Path | None:
     """Find the most-recent prior run dir for the same ``strategy_instance_id``.
 
@@ -1510,6 +1571,72 @@ def cmd_start(args: argparse.Namespace) -> int:
         run_dir=args.run_dir,
         now_ms=lambda: int(time.time() * 1000),
     )
+
+    account_owner = None
+    account_owner_generation = 0
+    if client is not None and ledger.account_id and ledger.strategy_instance_id:
+        from app.broker.ibkr.orders import (
+            executions_for_reconnect_recovery as _owner_executions_for_reconnect_recovery,
+        )
+        from app.broker.ibkr.orders import (
+            list_open_orders as _owner_list_open_orders,
+        )
+        from app.engine.live.account_artifacts import (
+            read_account_events,
+            read_account_instance_registry,
+            read_account_owner_generation,
+        )
+        from app.engine.live.account_classifier import (
+            AccountBrokerEvidence,
+            classify_account,
+        )
+        from app.engine.live.account_owner import AccountOwner
+        from app.engine.live.fleet_reset_baseline import read_applicable_baseline
+
+        persisted_generation = read_account_owner_generation(_artifacts_root, ledger.account_id)
+        account_owner_generation = persisted_generation.generation if persisted_generation is not None else 0
+
+        def _account_owner_generation_provider() -> int:
+            return account_owner_generation
+
+        def _advance_account_owner_generation() -> int:
+            nonlocal account_owner_generation
+            account_owner_generation += 1
+            return account_owner_generation
+
+        async def _classify_account_for_submit(_intent):
+            open_orders = await _owner_list_open_orders(client)
+            executions = await _owner_executions_for_reconnect_recovery(client)
+            baseline = read_applicable_baseline(
+                live_runs_root=args.run_dir.parent,
+                account_id=ledger.account_id,
+                strategy_instance_id=strategy_instance_id,
+            )
+            return classify_account(
+                account_id=ledger.account_id,
+                broker=AccountBrokerEvidence(
+                    status="available",
+                    snapshot=_build_broker_snapshot_from_ibkr(open_orders, executions),
+                ),
+                registry_bindings=tuple(read_account_instance_registry(_artifacts_root, ledger.account_id)),
+                durable_intents=_account_durable_intents_from_events(
+                    read_account_events(_artifacts_root, ledger.account_id),
+                    account_id=ledger.account_id,
+                ),
+                baseline=_account_baseline_evidence_from_fleet_baseline(baseline),
+                operator_override=None,
+                now_ms=now_ms(),
+            )
+
+        account_owner = AccountOwner(
+            artifacts_root=_artifacts_root,
+            account_id=ledger.account_id,
+            broker=broker,
+            owner_generation_provider=_account_owner_generation_provider,
+            owner_generation_advancer=_advance_account_owner_generation,
+            classifier=_classify_account_for_submit,
+        )
+
     engine = LiveEngine(
         client,
         live_config,
@@ -1545,6 +1672,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         artifacts_root_for_lease=_artifacts_root,
         watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
+        account_owner_submitter=account_owner.submit if account_owner is not None else None,
+        owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
     )
 
     # PRD #619-A — capture the durable child/run evidence the Resume
@@ -1750,6 +1879,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                     executions_for_reconnect_recovery,
                     list_open_orders,
                 )
+                from app.engine.live.account_artifacts import read_account_events
                 from app.engine.live.live_state_sidecar import (
                     LiveStateSidecarRepo,
                     stable_live_state_path,
@@ -1834,6 +1964,10 @@ def cmd_start(args: argparse.Namespace) -> int:
                         current_namespace=_bot_order_namespace,
                         ignore_unknown_namespaces_before_ms=(
                             _baseline.baseline_at_ms if _baseline is not None else None
+                        ),
+                        account_durable_intents=_account_durable_intents_from_events(
+                            read_account_events(_artifacts_root, ledger.account_id),
+                            account_id=ledger.account_id,
                         ),
                     )
                 except Exception as exc:

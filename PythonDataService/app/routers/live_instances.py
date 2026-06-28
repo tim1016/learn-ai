@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
-from app.broker.ibkr.config import get_settings
+from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_freeze
@@ -78,6 +78,7 @@ from app.schemas.live_runs import (
     ActivityPositionSnapshot,
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
+    BotCatalogResponse,
     BrokerObservationConsistency,
     ChartSnapshotResponse,
     ChartSnapshotRun,
@@ -127,6 +128,7 @@ from app.services.activity_projection_contract import (
     fold_activity_event_rows,
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
+from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -1046,6 +1048,146 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     return summaries
 
 
+def _daemon_process_from_instance(managed: dict | None) -> dict | None:
+    if managed is None:
+        return None
+    process = dict(managed.get("process") or {})
+    if not process.get("run_id") and managed.get("run_id"):
+        process["run_id"] = managed.get("run_id")
+    return process
+
+
+async def _resolve_instance_status_from_process(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+    daemon_process: dict | None,
+) -> LiveInstanceStatus:
+    process, live_binding = _interpret_daemon_process(daemon_process, root)
+
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    account_freeze = _resolve_account_freeze(root.parent, runs)
+    evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
+    desired = _resolve_desired_state(root, sid)
+    latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
+    last_exit = _instance_last_exit(runs)
+    readiness = _resolve_readiness(root, live_binding, runs, desired.state)
+    raw_mode = getattr(settings, "mode", None)
+    configured_mode = raw_mode if raw_mode in ("paper", "live") else None
+    safety_verdict_final = _resolve_safety_verdict_final(configured_mode)
+    broker_connection_state = _broker_connection_state_from_readiness(readiness)
+    broker_view = _instance_broker(root, sid)
+    start_defaults = _start_defaults(root, live_binding, runs, readonly_default=_resolve_readonly_default(settings))
+    sizing = _sizing(root, live_binding, runs, sid)
+    action_plan = _resolve_action_plan(root, live_binding, runs)
+    poisoned = bool(last_exit and last_exit.halt_trigger is not None)
+    daemon_monitor = get_daemon_connectivity_monitor()
+    control_plane_state = daemon_monitor.state if daemon_monitor is not None else None
+    guard_state = _resolve_resume_guard_state_for(root, live_binding, runs)
+    observed_at_ms = _now_ms()
+    runtime_freshness = _resolve_runtime_freshness(
+        root,
+        live_binding,
+        now_ms=observed_at_ms,
+    )
+    latest_mutation = _resolve_latest_mutation(root, sid)
+    broker_observation_consistency = _resolve_broker_observation_consistency(
+        root,
+        live_binding,
+        configured_mode=configured_mode,
+        now_ms=observed_at_ms,
+    )
+    (
+        reconciliation_receipt,
+        current_wal_seq,
+        current_run_id,
+        current_namespace,
+    ) = _resolve_reconciliation_inputs(root, live_binding)
+
+    return LiveInstanceStatus(
+        strategy_instance_id=sid,
+        process=process,
+        live_binding=live_binding,
+        evidence_binding=evidence,
+        desired_state=desired,
+        readiness=readiness,
+        latest_decision=latest_decision,
+        decision_columns=decision_columns,
+        broker=broker_view,
+        start_defaults=start_defaults,
+        provenance=_provenance(root, live_binding, runs),
+        sizing=sizing,
+        last_exit=last_exit,
+        symbol=_resolve_symbol(root, live_binding, runs),
+        action_plan=action_plan,
+        instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
+        lineage=_resolve_lineage(root, live_binding, runs),
+        operator_surface=compute_operator_surface(
+            process=process,
+            last_exit=last_exit,
+            safety_verdict_final=safety_verdict_final,
+            broker_connection_state=broker_connection_state,
+            broker=broker_view,
+            readiness=readiness,
+            action_plan=action_plan,
+            start_defaults=start_defaults,
+            sizing=sizing,
+            instance_broker_self_consistent=None,
+            live_binding=live_binding,
+            poisoned=poisoned,
+            desired_state=desired,
+            guard_state=guard_state,
+            runtime_freshness=runtime_freshness,
+            control_plane_state=control_plane_state,
+            latest_mutation=latest_mutation,
+            broker_observation_consistency=broker_observation_consistency,
+            host_start_command=settings.live_runner_host_start_command,
+            start_run_id=_resolve_start_run_id(root, live_binding, runs),
+            account_freeze=account_freeze,
+            reconciliation_receipt=reconciliation_receipt,
+            current_wal_seq=current_wal_seq,
+            current_run_id=current_run_id,
+            current_namespace=current_namespace,
+            latest_broker_event_ms=None,
+            latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
+            reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
+            activity_publisher=get_publisher_registry().get(sid),
+            activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
+            now_ms=observed_at_ms,
+        ),
+        fetched_at_ms=observed_at_ms,
+    )
+
+
+@router.get("/catalog", response_model=BotCatalogResponse)
+async def list_bot_catalog() -> BotCatalogResponse:
+    """Server-authored bot catalog cards for the frontend DataView."""
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    by_instance = _scan_runs_by_instance(root)
+
+    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    daemon_by_sid: dict[str, dict] = {}
+    if daemon:
+        for inst in daemon.get("instances", []):
+            sid = inst.get("strategy_instance_id")
+            if sid:
+                daemon_by_sid[sid] = inst
+
+    rows = []
+    trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
+    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+        status_view = await _resolve_instance_status_from_process(
+            sid,
+            root,
+            settings,
+            _daemon_process_from_instance(daemon_by_sid.get(sid)),
+        )
+        rows.append(compose_bot_catalog_row(status_view, trading_mode))
+    rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
+    return BotCatalogResponse(bots=rows)
+
+
 async def _host_deploy_request_from_public(
     body: LiveInstanceDeployRequest,
 ) -> HostRunnerDeployRequest:
@@ -1772,113 +1914,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     root = Path(settings.live_runs_root)
 
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    process, live_binding = _interpret_daemon_process(daemon, root)
-
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    account_freeze = _resolve_account_freeze(root.parent, runs)
-    evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
-    desired = _resolve_desired_state(root, sid)
-    latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
-    last_exit = _instance_last_exit(runs)
-    readiness = _resolve_readiness(root, live_binding, runs, desired.state)
-    _raw_mode = getattr(settings, "mode", None)
-    configured_mode = _raw_mode if _raw_mode in ("paper", "live") else None
-    safety_verdict_final = _resolve_safety_verdict_final(configured_mode)
-    broker_connection_state = _broker_connection_state_from_readiness(readiness)
-    broker_view = _instance_broker(root, sid)
-    start_defaults = _start_defaults(root, live_binding, runs, readonly_default=_resolve_readonly_default(settings))
-    sizing = _sizing(root, live_binding, runs, sid)
-    action_plan = _resolve_action_plan(root, live_binding, runs)
-    poisoned = bool(last_exit and last_exit.halt_trigger is not None)
-    # PRD #619-C3 — daemon connectivity monitor state (619-C2) surfaces
-    # via operator_surface.control_plane. ``None`` when the lifespan has
-    # not installed a monitor (test mode, no daemon URL configured).
-    _daemon_monitor = get_daemon_connectivity_monitor()
-    control_plane_state = _daemon_monitor.state if _daemon_monitor is not None else None
-    guard_state = _resolve_resume_guard_state_for(root, live_binding, runs)
-    observed_at_ms = _now_ms()
-    runtime_freshness = _resolve_runtime_freshness(
-        root,
-        live_binding,
-        now_ms=observed_at_ms,
-    )
-    latest_mutation = _resolve_latest_mutation(root, sid)
-    broker_observation_consistency = _resolve_broker_observation_consistency(
-        root,
-        live_binding,
-        configured_mode=configured_mode,
-        now_ms=observed_at_ms,
-    )
-    (
-        reconciliation_receipt,
-        current_wal_seq,
-        current_run_id,
-        current_namespace,
-    ) = _resolve_reconciliation_inputs(root, live_binding)
-
-    return LiveInstanceStatus(
-        strategy_instance_id=sid,
-        process=process,
-        live_binding=live_binding,
-        evidence_binding=evidence,
-        desired_state=desired,
-        readiness=readiness,
-        latest_decision=latest_decision,
-        decision_columns=decision_columns,
-        broker=broker_view,
-        start_defaults=start_defaults,
-        provenance=_provenance(root, live_binding, runs),
-        sizing=sizing,
-        last_exit=last_exit,
-        symbol=_resolve_symbol(root, live_binding, runs),
-        action_plan=action_plan,
-        instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
-        lineage=_resolve_lineage(root, live_binding, runs),
-        operator_surface=compute_operator_surface(
-            process=process,
-            last_exit=last_exit,
-            safety_verdict_final=safety_verdict_final,
-            broker_connection_state=broker_connection_state,
-            broker=broker_view,
-            readiness=readiness,
-            action_plan=action_plan,
-            start_defaults=start_defaults,
-            sizing=sizing,
-            instance_broker_self_consistent=None,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            desired_state=desired,
-            guard_state=guard_state,
-            runtime_freshness=runtime_freshness,
-            control_plane_state=control_plane_state,
-            latest_mutation=latest_mutation,
-            broker_observation_consistency=broker_observation_consistency,
-            host_start_command=settings.live_runner_host_start_command,
-            start_run_id=_resolve_start_run_id(root, live_binding, runs),
-            account_freeze=account_freeze,
-            reconciliation_receipt=reconciliation_receipt,
-            current_wal_seq=current_wal_seq,
-            current_run_id=current_run_id,
-            current_namespace=current_namespace,
-            # ``broker_observation_consistency.compared_at_ms`` is the time
-            # of THIS status comparison, not the timestamp of the latest
-            # broker event. Using it would flip a fresh CLEAN/ADOPTED receipt
-            # to STALE on every poll. Until a real per-instance "latest
-            # broker activity ts" source is plumbed, leave the broker-event
-            # staleness signal unset — WAL-seq, run_id/namespace, mutation,
-            # and TTL still drive STALE correctly.
-            latest_broker_event_ms=None,
-            latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
-            reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
-            # PR 5 — broker-activity health. Plumbed directly from the
-            # module-level singleton registry; the router does not cache
-            # these values — the registry is the authoritative live state.
-            activity_publisher=get_publisher_registry().get(sid),
-            activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
-            now_ms=observed_at_ms,
-        ),
-        fetched_at_ms=observed_at_ms,
-    )
+    return await _resolve_instance_status_from_process(sid, root, settings, daemon)
 
 
 def _resolve_safety_verdict_final(

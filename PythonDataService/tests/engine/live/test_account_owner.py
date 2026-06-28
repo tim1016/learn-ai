@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
@@ -118,13 +119,21 @@ class _Broker:
         )
 
 
-def _owner(tmp_path: Path, broker: _Broker, *, classifier=None, generation: int = GENERATION) -> AccountOwner:
+def _owner(
+    tmp_path: Path,
+    broker: _Broker,
+    *,
+    classifier=None,
+    generation: int = GENERATION,
+    owner_generation_advancer=None,
+) -> AccountOwner:
     write_account_instance_binding(tmp_path, _binding())
     return AccountOwner(
         artifacts_root=tmp_path,
         account_id=ACCOUNT,
         broker=broker,
         owner_generation_provider=lambda: generation,
+        owner_generation_advancer=owner_generation_advancer,
         classifier=classifier or (lambda _intent: _continue_decision()),
     )
 
@@ -308,6 +317,65 @@ async def test_account_owner_reconnect_rotates_on_client_id_in_use(tmp_path: Pat
 
     assert attempts == [10, 11]
     assert backoffs == [1]
+
+
+@pytest.mark.asyncio
+async def test_account_owner_reconnect_advances_generation_and_rejects_stale_intent(tmp_path: Path) -> None:
+    broker = _Broker()
+    generation = {"value": GENERATION}
+
+    def provider() -> int:
+        return generation["value"]
+
+    def advancer() -> int:
+        generation["value"] += 1
+        return generation["value"]
+
+    write_account_instance_binding(tmp_path, _binding())
+    owner = AccountOwner(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        owner_generation_provider=provider,
+        owner_generation_advancer=advancer,
+        classifier=lambda _intent: _continue_decision(),
+    )
+
+    stale = _intent(generation=GENERATION)
+    await owner.handle_reconnect(
+        reconnect=lambda _client_id: None,
+        classify_inflight=lambda _event: "accepted",
+        reconcile=lambda: _continue_decision(),
+        client_id_range=(10,),
+    )
+
+    loaded = read_account_owner_generation(tmp_path, ACCOUNT)
+    assert loaded is not None
+    assert loaded.generation == GENERATION + 1
+    with pytest.raises(AccountOwnerSubmitRejected) as exc:
+        await owner.submit(stale)
+    assert exc.value.reason == "OWNER_GENERATION_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_account_owner_reconnect_rotates_on_production_client_id_error(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker)
+    attempts: list[int] = []
+
+    async def reconnect(client_id: int) -> None:
+        attempts.append(client_id)
+        if len(attempts) == 1:
+            raise IbkrClientIdInUseError("client id already in use")
+
+    await owner.handle_reconnect(
+        reconnect=reconnect,
+        classify_inflight=lambda _event: "accepted",
+        reconcile=lambda: _continue_decision(),
+        client_id_range=(10, 11),
+    )
+
+    assert attempts == [10, 11]
 
 
 @pytest.mark.asyncio
