@@ -3,7 +3,6 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal, ty
 import { createEdges, createNodes, type Edge, type Node, Vflow } from 'ngx-vflow';
 
 import type {
-  LifecycleChartAction,
   LifecycleChartActionId,
   LifecycleChartEdge,
   LifecycleChartGraph,
@@ -11,6 +10,7 @@ import type {
   LifecycleChartStatus,
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
+import { OverviewActionsComponent } from './overview-actions.component';
 
 interface Point {
   readonly x: number;
@@ -19,6 +19,11 @@ interface Point {
 
 interface VflowDataContext<T> {
   readonly data: Signal<T>;
+}
+
+interface ExpandedGraphSelection {
+  readonly chartKey: string;
+  readonly graphId: string;
 }
 
 const NODE_WIDTH = 190;
@@ -38,7 +43,7 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule, Vflow],
+  imports: [CommonModule, Vflow, OverviewActionsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -48,12 +53,19 @@ export class OverviewTabComponent {
   readonly busyAction = input<string | null>(null);
   readonly actionInvoked = output<LifecycleChartActionId>();
 
-  readonly expandedGraphId = signal<string | null>(null);
+  readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly chart = computed(() => this.status().lifecycle_chart);
+  readonly chartKey = computed(() => {
+    const status = this.status();
+    const chart = status.lifecycle_chart;
+    return `${status.strategy_instance_id}:${chart.chart_id}:${chart.selected_bot_id}`;
+  });
   readonly currentGraph = computed(() => {
     const chart = this.chart();
-    const expanded = this.expandedGraphId();
-    if (expanded && chart.subgraphs[expanded]) return chart.subgraphs[expanded];
+    const expanded = this.expandedGraphSelection();
+    if (expanded?.chartKey === this.chartKey() && chart.subgraphs[expanded.graphId]) {
+      return chart.subgraphs[expanded.graphId];
+    }
     return chart.global_graph;
   });
   readonly isExpanded = computed(() => this.currentGraph().graph_id !== 'global');
@@ -100,23 +112,21 @@ export class OverviewTabComponent {
   });
 
   collapse(): void {
-    this.expandedGraphId.set(null);
+    this.expandedGraphSelection.set(null);
   }
 
   expandNode(node: LifecycleChartNode): void {
     if (!node.expandable || !node.subgraph_id || !this.chart().subgraphs[node.subgraph_id]) return;
-    this.expandedGraphId.set(node.subgraph_id);
+    this.expandedGraphSelection.set({
+      chartKey: this.chartKey(),
+      graphId: node.subgraph_id,
+    });
   }
 
   onNodeKeydown(event: KeyboardEvent, node: LifecycleChartNode): void {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
     this.expandNode(node);
-  }
-
-  invokeAction(action: LifecycleChartAction): void {
-    if (!action.enabled || this.busyAction() !== null) return;
-    this.actionInvoked.emit(action.id);
   }
 
   nodeData(ctx: VflowDataContext<LifecycleChartNode>): LifecycleChartNode {

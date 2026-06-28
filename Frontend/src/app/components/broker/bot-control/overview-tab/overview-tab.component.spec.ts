@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
+import { OverviewActionsComponent } from './overview-actions.component';
 import { OverviewTabComponent } from './overview-tab.component';
 
 @Component({
@@ -62,11 +63,12 @@ const OVERVIEW_TEST_IMPORTS = [
   NodeHtmlStubDirective,
   EdgeStubDirective,
   CustomTemplateEdgeStubDirective,
+  OverviewActionsComponent,
 ];
 
-function makeStatus(): LiveInstanceStatus {
+function makeStatus(id = 'sid-x'): LiveInstanceStatus {
   return {
-    strategy_instance_id: 'sid-x',
+    strategy_instance_id: id,
     process: { state: 'idle', pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,
     evidence_binding: null,
@@ -84,9 +86,15 @@ function makeStatus(): LiveInstanceStatus {
     instrument_surface: null,
     lineage: null,
     operator_surface: {} as LiveInstanceStatus['operator_surface'],
-    lifecycle_chart: makeLifecycleChartFixture(),
+    lifecycle_chart: makeLifecycleChartFixture({
+      selected_bot_id: id,
+    }),
     fetched_at_ms: 0,
   };
+}
+
+function renderedText(fixture: { nativeElement: HTMLElement }): string {
+  return fixture.nativeElement.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
 describe('OverviewTabComponent', () => {
@@ -123,15 +131,39 @@ describe('OverviewTabComponent', () => {
     const fixture = TestBed.createComponent(OverviewTabComponent);
     fixture.componentRef.setInput('status', makeStatus());
     fixture.detectChanges();
+    expect(renderedText(fixture)).toContain('Bot lifecycle overview');
 
     const node = fixture.componentInstance.chart().global_graph.nodes[0];
     fixture.componentInstance.expandNode(node);
     fixture.detectChanges();
-    expect(fixture.componentInstance.currentGraph().graph_id).toBe('deploy');
+    expect(renderedText(fixture)).toContain('Deploy and start internals');
+    expect(renderedText(fixture)).toContain('Host state');
 
     fixture.componentInstance.collapse();
     fixture.detectChanges();
-    expect(fixture.componentInstance.currentGraph().graph_id).toBe('global');
+    expect(renderedText(fixture)).toContain('Bot lifecycle overview');
+  });
+
+  it('returns to the global graph when the bot identity changes', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+    TestBed.overrideComponent(OverviewTabComponent, {
+      set: { imports: OVERVIEW_TEST_IMPORTS },
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    fixture.componentRef.setInput('status', makeStatus('sid-x'));
+    fixture.detectChanges();
+
+    fixture.componentInstance.expandNode(fixture.componentInstance.chart().global_graph.nodes[0]);
+    fixture.detectChanges();
+    expect(renderedText(fixture)).toContain('Deploy and start internals');
+
+    fixture.componentRef.setInput('status', makeStatus('sid-y'));
+    fixture.detectChanges();
+    expect(renderedText(fixture)).toContain('Bot lifecycle overview');
   });
 
   it('emits the backend-authored action id when an enabled action is clicked', () => {

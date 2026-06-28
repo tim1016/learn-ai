@@ -1,0 +1,28 @@
+<aside class="action-panel" aria-label="Available lifecycle actions">
+  <header>
+    <p class="eyebrow">Actions</p>
+    <h3>What you can do now</h3>
+  </header>
+
+  <div class="action-list">
+    @for (action of actions(); track action.id) {
+      <button
+        type="button"
+        class="chart-action"
+        [class.tone-primary]="action.tone === 'primary'"
+        [class.tone-danger]="action.tone === 'danger'"
+        [disabled]="!action.enabled || busyAction() !== null"
+        (click)="invokeAction(action)"
+      >
+        <span>{{ action.label }}</span>
+        @if (action.enabled) {
+          <small>Available</small>
+        } @else if (action.reason) {
+          <small>{{ action.reason }}</small>
+        } @else {
+          <small>Unavailable</small>
+        }
+      </button>
+    }
+  </div>
+</aside>

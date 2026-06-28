@@ -338,7 +338,7 @@ def _build_graph(
         if node.id in expandable:
             node.expandable = True
             node.subgraph_id = node.id
-    primary_node_id = facts.primary_node_id if graph_def.primary_node_id is None else graph_def.primary_node_id
+    primary_node_id = _graph_primary_node_id(graph_def, facts, nodes)
     edges = _build_edges(graph_def, facts, nodes)
     return LifecycleChartGraph(
         graph_id=graph_def.graph_id,
@@ -382,7 +382,7 @@ def _build_edges(
     if graph_def.edges:
         return [_edge_from_def(edge_def, facts) for edge_def in graph_def.edges]
     return [
-        _edge(source.id, target.id, target.status if target.status != "inactive" else "inactive")
+        _edge(source.id, target.id, _linear_edge_status(source.status, target.status))
         for source, target in pairwise(nodes)
     ]
 
@@ -420,6 +420,34 @@ def _edge(
         label=label,
         animated=status not in {"inactive", "unknown"},
     )
+
+
+def _graph_primary_node_id(
+    graph_def: GraphDef,
+    facts: LifecycleFacts,
+    nodes: list[LifecycleChartNode],
+) -> str:
+    if graph_def.primary_node_id is None:
+        return facts.primary_node_id
+    for status in _BLOCKING_PRIORITY:
+        for node in nodes:
+            if node.status == status:
+                return node.id
+    for node in nodes:
+        if node.status == "active":
+            return node.id
+    if any(node.id == graph_def.primary_node_id for node in nodes):
+        return graph_def.primary_node_id
+    return nodes[0].id if nodes else graph_def.primary_node_id
+
+
+def _linear_edge_status(
+    source_status: LifecycleChartStatus,
+    target_status: LifecycleChartStatus,
+) -> LifecycleChartStatus:
+    if source_status in _BLOCKING_PRIORITY:
+        return source_status
+    return target_status if target_status != "inactive" else "inactive"
 
 
 def _fact_id(node_def: NodeDef) -> str:
@@ -524,6 +552,8 @@ def _deploy_status(surface: OperatorSurface) -> LifecycleChartStatus:
 
 def _preflight_status(surface: OperatorSurface) -> LifecycleChartStatus:
     statuses = [_configuration_status(surface)]
+    if not surface.readiness_gates:
+        statuses.append("unknown")
     statuses.extend(_operator_gate_status(gate) for gate in surface.readiness_gates)
     return _worst_status(statuses, default="unknown")
 

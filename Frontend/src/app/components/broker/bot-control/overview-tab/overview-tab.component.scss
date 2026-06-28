@@ -71,7 +71,7 @@
   background: var(--bg-canvas);
 }
 
-vflow {
+.flow-canvas {
   display: block;
   width: 100%;
   height: 100%;
@@ -117,7 +117,7 @@ vflow {
     text-overflow: ellipsis;
   }
 
-  handle {
+  .flow-handle {
     opacity: 0;
   }
 }
@@ -264,78 +264,6 @@ vflow {
   animation: flow-dash 1.3s linear infinite;
 }
 
-.action-panel {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 1rem;
-  background: var(--bg-surface);
-  border-left: 1px solid var(--border);
-  color: var(--text-primary);
-
-  h3 {
-    margin: 0;
-    font-size: var(--fs-base);
-    letter-spacing: 0;
-  }
-}
-
-.action-list {
-  display: grid;
-  gap: 0.6rem;
-  margin-top: 0.85rem;
-}
-
-.chart-action {
-  display: grid;
-  gap: 0.2rem;
-  min-height: 54px;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-
-  span,
-  small {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  small {
-    color: var(--text-secondary);
-    font-size: var(--fs-xs);
-  }
-
-  &:disabled {
-    cursor: not-allowed;
-    background: var(--bg-sunken);
-    color: var(--text-muted);
-
-    small {
-      color: var(--text-muted);
-    }
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-}
-
-.tone-primary:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent-faint);
-}
-
-.tone-danger:not(:disabled) {
-  border-color: var(--bear);
-  background: var(--bear-soft);
-}
-
 @keyframes flow-dash {
   to {
     stroke-dashoffset: -18;
@@ -353,7 +281,7 @@ vflow {
     border-bottom: 1px solid var(--border);
   }
 
-  vflow {
+  .flow-canvas {
     min-height: 1060px;
   }
 }

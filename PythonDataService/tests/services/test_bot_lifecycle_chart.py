@@ -4,12 +4,15 @@ from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.schemas.live_runs import (
     BotLifecycleChartView,
     DesiredStateView,
+    GateResult,
     InstanceBrokerView,
     InstanceProcessView,
     InstanceSizing,
     InstanceStartDefaults,
     LiveBinding,
     OperatorSurface,
+    ReadinessGate,
+    ReadinessVector,
     ReconciliationReceipt,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
@@ -53,6 +56,32 @@ def _sizing() -> InstanceSizing:
     )
 
 
+def _readiness() -> ReadinessVector:
+    return ReadinessVector(
+        kind="live_readiness",
+        as_of_ms=_NOW_MS,
+        source="engine",
+        verdict="READY",
+        summary="Ready",
+        gates=[
+            ReadinessGate(
+                name="engine_ready",
+                status="pass",
+                severity="hard",
+                detail="Engine readiness is passing.",
+                gate_result=GateResult(
+                    gate_id="engine_ready",
+                    status="pass",
+                    source="test",
+                    operator_reason="Engine readiness is passing.",
+                    operator_next_step=None,
+                    evidence_at_ms=_NOW_MS,
+                ),
+            )
+        ],
+    )
+
+
 def _receipt(status: str = "passed") -> ReconciliationReceipt:
     return ReconciliationReceipt(
         status=status,  # type: ignore[arg-type]
@@ -81,6 +110,7 @@ def _surface(**overrides: object) -> OperatorSurface:
         ),
         "start_defaults": _start_defaults(),
         "sizing": _sizing(),
+        "readiness": _readiness(),
         "instance_broker_self_consistent": True,
         "live_binding": LiveBinding(run_id=_RUN_ID),
         "desired_state": _desired("RUNNING"),
@@ -103,6 +133,11 @@ def _edge_status(chart: BotLifecycleChartView, edge_id: str) -> str:
     return edge.status
 
 
+def _subgraph_edge_status(chart: BotLifecycleChartView, graph_id: str, edge_id: str) -> str:
+    edge = next(edge for edge in chart.subgraphs[graph_id].edges if edge.id == edge_id)
+    return edge.status
+
+
 def _node_status(chart: BotLifecycleChartView, node_id: str) -> str:
     node = next(node for node in chart.global_graph.nodes if node.id == node_id)
     return node.status
@@ -117,6 +152,15 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert _edge_status(chart, "deploy_to_preflight") == "passed"
     assert _edge_status(chart, "activate_to_active") == "active"
     assert chart.subgraphs["submit_order"].nodes[2].technical_label == "placeOrder boundary"
+
+
+def test_chart_missing_readiness_keeps_preflight_unknown() -> None:
+    surface = _surface(readiness=None)
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+
+    assert chart.global_graph.primary_node_id == "preflight"
+    assert _node_status(chart, "preflight") == "unknown"
+    assert chart.subgraphs["preflight"].primary_node_id == "readiness_1"
 
 
 def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
@@ -140,6 +184,19 @@ def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
     assert start.reason == "ACCOUNT_FROZEN"
     assert resume.enabled is False
     assert resume.reason == "ACCOUNT_FROZEN"
+
+
+def test_account_safety_focuses_broker_connection_blocker() -> None:
+    surface = _surface(broker_connection_state="disconnected")
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+
+    assert chart.global_graph.primary_node_id == "account_safety"
+    assert chart.subgraphs["account_safety"].primary_node_id == "broker_connection"
+    assert _subgraph_edge_status(
+        chart,
+        "account_safety",
+        "broker_connection_to_risk_posture",
+    ) == "blocked"
 
 
 def test_chart_failed_reconciliation_blocks_at_reconciliation_edge() -> None:

@@ -17,6 +17,7 @@
   <div class="overview-layout">
     <section class="flow-panel" aria-label="Lifecycle flowchart">
       <vflow
+        class="flow-canvas"
         view="auto"
         background="dots"
         [minZoom]="0.45"
@@ -28,22 +29,15 @@
         <ng-template let-ctx nodeHtml>
           @let node = nodeData(ctx);
           <article
-            class="flow-node"
+            [class]="'flow-node status-' + node.status"
             [class.expandable]="node.expandable"
-            [class.status-passed]="node.status === 'passed'"
-            [class.status-active]="node.status === 'active'"
-            [class.status-blocked]="node.status === 'blocked'"
-            [class.status-poison]="node.status === 'poison'"
-            [class.status-freeze]="node.status === 'freeze'"
-            [class.status-inactive]="node.status === 'inactive'"
-            [class.status-unknown]="node.status === 'unknown'"
             [attr.role]="node.expandable ? 'button' : null"
             [attr.tabindex]="node.expandable ? 0 : null"
             [attr.aria-label]="node.expandable ? 'Expand ' + node.label : node.label"
             (click)="expandNode(node)"
             (keydown)="onNodeKeydown($event, node)"
           >
-            <handle type="target" position="top" />
+            <handle class="flow-handle" type="target" position="top" />
             <span class="node-lane">{{ node.lane }}</span>
             <strong>{{ node.label }}</strong>
             @if (node.technical_label) {
@@ -53,7 +47,7 @@
             @if (node.expandable) {
               <span class="node-expand">Open</span>
             }
-            <handle type="source" position="bottom" />
+            <handle class="flow-handle" type="source" position="bottom" />
           </article>
         </ng-template>
 
@@ -63,14 +57,7 @@
             <svg:path
               [attr.d]="ctx.path()"
               [attr.marker-end]="ctx.markerEnd()"
-              class="flow-edge"
-              [class.edge-passed]="edge.status === 'passed'"
-              [class.edge-active]="edge.status === 'active'"
-              [class.edge-blocked]="edge.status === 'blocked'"
-              [class.edge-poison]="edge.status === 'poison'"
-              [class.edge-freeze]="edge.status === 'freeze'"
-              [class.edge-inactive]="edge.status === 'inactive'"
-              [class.edge-unknown]="edge.status === 'unknown'"
+              [class]="'flow-edge edge-' + edge.status"
               [class.edge-animated]="edge.animated"
             />
           </svg:g>
@@ -78,32 +65,10 @@
       </vflow>
     </section>
 
-    <aside class="action-panel" aria-label="Available lifecycle actions">
-      <header>
-        <p class="eyebrow">Actions</p>
-        <h3>What you can do now</h3>
-      </header>
-      <div class="action-list">
-        @for (action of chart().actions; track action.id) {
-          <button
-            type="button"
-            class="chart-action"
-            [class.tone-primary]="action.tone === 'primary'"
-            [class.tone-danger]="action.tone === 'danger'"
-            [disabled]="!action.enabled || busyAction() !== null"
-            (click)="invokeAction(action)"
-          >
-            <span>{{ action.label }}</span>
-            @if (action.enabled) {
-              <small>Available</small>
-            } @else if (action.reason) {
-              <small>{{ action.reason }}</small>
-            } @else {
-              <small>Unavailable</small>
-            }
-          </button>
-        }
-      </div>
-    </aside>
+    <app-overview-actions
+      [actions]="chart().actions"
+      [busyAction]="busyAction()"
+      (actionInvoked)="actionInvoked.emit($event)"
+    />
   </div>
 </section>

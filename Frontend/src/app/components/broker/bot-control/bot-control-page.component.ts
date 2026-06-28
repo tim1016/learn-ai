@@ -147,8 +147,8 @@ export class BotControlPageComponent {
     this.busyAction.set('start_process');
     this.mutationError.set(null);
     try {
-      const started = await startHostProcessFromCapability(this.liveRuns, cap);
-      if (started) await this.refreshStatus(id);
+      await startHostProcessFromCapability(this.liveRuns, cap);
+      await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.humanError(err));
     } finally {
@@ -214,6 +214,10 @@ export class BotControlPageComponent {
       case 'redeploy':
         this.onGateRedeploy();
         break;
+      default: {
+        const unreachable: never = action;
+        this.mutationError.set(`Unsupported lifecycle action: ${String(unreachable)}`);
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 import type { HostProcessStartCapability } from '../../../../api/live-instances.types';
 import { LiveRunsService } from '../../../../services/live-runs.service';
 
-type StartableHostProcessCapability = HostProcessStartCapability & {
+export type StartableHostProcessCapability = HostProcessStartCapability & {
   enabled: true;
   run_id: string;
   request: NonNullable<HostProcessStartCapability['request']>;
@@ -15,9 +15,7 @@ export function canStartHostProcess(
 
 export async function startHostProcessFromCapability(
   liveRuns: LiveRunsService,
-  capability: HostProcessStartCapability,
-): Promise<boolean> {
-  if (!canStartHostProcess(capability)) return false;
+  capability: StartableHostProcessCapability,
+): Promise<void> {
   await liveRuns.startHostRunner(capability.run_id, capability.request);
-  return true;
 }
