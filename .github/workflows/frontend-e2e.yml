@@ -20,9 +20,6 @@ permissions:
 
 on:
   pull_request:
-    branches:
-      - master
-      - 'codex/**'
   push:
     branches: [master]
     paths:
