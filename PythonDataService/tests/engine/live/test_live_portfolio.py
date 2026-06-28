@@ -304,6 +304,38 @@ async def test_submit_pending_orders_blocks_when_account_is_frozen() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_pending_orders_allows_reduce_only_liquidation_when_account_is_frozen() -> None:
+    broker = FakeBroker()
+    freeze = AccountFreezeEvidence(
+        account_id="DU123",
+        reason="watchdog.flatten_failed",
+        source="watchdog_halt_executor",
+        recorded_at_ms=1_700_000_000_000,
+        operator_next_step="CHECK_IBKR",
+    )
+    portfolio = LivePortfolio(broker, account_freeze_provider=lambda: freeze)
+    portfolio.get_position("SPY").quantity = Decimal("10")
+    portfolio.liquidate("SPY", datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert broker.orders[0].symbol == "SPY"
+    assert broker.orders[0].action == "SELL"
+    assert broker.orders[0].quantity == 10
+
+
+def test_account_owner_mode_rejects_run_scoped_intent_wal() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        LivePortfolio(
+            FakeBroker(),
+            intent_wal=object(),  # type: ignore[arg-type]
+            account_owner_submitter=object(),
+            bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        )
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_blocks_when_account_registry_rejects() -> None:
     broker = FakeBroker()
     gate = GateResult(

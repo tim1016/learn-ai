@@ -12,6 +12,7 @@ import type {
   ActionCapability,
   FleetAccountSummary,
   FleetContamination,
+  GateResult,
   GateSuggestedAction,
   LiveInstanceSummary,
   OperatorGate,
@@ -19,6 +20,20 @@ import type {
   OperatorSurface,
   OperatorSurfaceRuntimeFreshness,
 } from '../app/api/live-instances.types';
+
+const _gateResult = (
+  gate_id: string,
+  status: GateResult['status'],
+  operator_reason: string,
+  operator_next_step: string | null,
+): GateResult => ({
+  gate_id,
+  status,
+  source: 'fixture',
+  operator_reason,
+  operator_next_step,
+  evidence_at_ms: 0,
+});
 
 const _capability = (
   enabled: boolean,
@@ -30,6 +45,14 @@ const _capability = (
   effect,
   disabled_reason_code: code,
   disabled_reasons: reasons,
+  gate_results: [
+    _gateResult(
+      `action.${effect.toLowerCase()}`,
+      enabled ? 'pass' : 'block',
+      code ?? 'GATE_PASSING',
+      code ?? 'GATE_PASSING',
+    ),
+  ],
 });
 
 /**
@@ -50,6 +73,14 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
       run_id: null,
       request: null,
       disabled_reason_code: 'START_SETTINGS_INCOMPLETE',
+      gate_results: [
+        _gateResult(
+          'host_process.start',
+          'block',
+          'START_SETTINGS_INCOMPLETE',
+          'START_SETTINGS_INCOMPLETE',
+        ),
+      ],
     },
   },
   prior_run: { classification: 'UNKNOWN' },
@@ -180,6 +211,7 @@ export const OPERATOR_GATE_PASSING: OperatorGate = {
   status: 'pass',
   severity: 'hard',
   detail: 'connected',
+  gate_result: _gateResult('broker_connection', 'pass', 'connected', 'GATE_PASSING'),
   suggested_action: null,
   suggested_action_unavailable_reason: 'GATE_PASSING',
 };
@@ -189,6 +221,7 @@ export const OPERATOR_GATE_FAILING_REDEPLOY: OperatorGate = {
   status: 'fail',
   severity: 'hard',
   detail: 'poisoned.flag present',
+  gate_result: _gateResult('poison_sentinel', 'block', 'poisoned.flag present', 'redeploy'),
   suggested_action: SUGGESTED_REDEPLOY,
   suggested_action_unavailable_reason: null,
 };
@@ -198,6 +231,7 @@ export const OPERATOR_GATE_FAILING_NO_INLINE_REMEDIATION: OperatorGate = {
   status: 'fail',
   severity: 'hard',
   detail: '50 / 50 orders used',
+  gate_result: _gateResult('daily_order_cap', 'block', '50 / 50 orders used', 'NO_INLINE_REMEDIATION'),
   suggested_action: null,
   suggested_action_unavailable_reason: 'NO_INLINE_REMEDIATION',
 };
@@ -207,6 +241,7 @@ export const OPERATOR_GATE_UNKNOWN_NAME: OperatorGate = {
   status: 'fail',
   severity: 'hard',
   detail: '',
+  gate_result: _gateResult('totally_invented_gate', 'block', '', 'UNKNOWN_GATE_NAME'),
   suggested_action: null,
   suggested_action_unavailable_reason: 'UNKNOWN_GATE_NAME',
 };

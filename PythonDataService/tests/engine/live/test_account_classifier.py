@@ -158,6 +158,34 @@ def test_account_classifier_retry_records_operator_override_separately_from_base
     assert decision.to_gate_result().status == "unknown"
 
 
+def test_account_classifier_honors_explicit_freeze_override_before_broker_snapshot() -> None:
+    override = AccountOperatorOverride(
+        override_id="override-freeze",
+        decision="freeze",
+        reason="operator froze account after manual review",
+        approved_at_ms=1_700_000_050_000,
+        approved_by="operator",
+        account_id=ACCOUNT,
+        valid_until_ms=1_700_000_150_000,
+        prior_evidence={"manual_review": "unsafe"},
+        next_reconciliation_step="CHECK_IBKR",
+    )
+
+    decision = classify_account(
+        account_id=ACCOUNT,
+        broker=AccountBrokerEvidence(snapshot=BrokerSnapshot()),
+        registry_bindings=(_binding(),),
+        durable_intents=(),
+        baseline=None,
+        operator_override=override,
+        now_ms=NOW_MS,
+    )
+
+    assert decision.outcome == "freeze"
+    assert decision.reason == "OPERATOR_OVERRIDE_FREEZE"
+    assert decision.override_id == "override-freeze"
+
+
 def test_account_classifier_allows_fresh_audited_continue_override_for_unprovable_broker() -> None:
     override = AccountOperatorOverride(
         override_id="override-continue",
@@ -267,6 +295,24 @@ def test_account_classifier_freezes_unprovable_broker_state() -> None:
     assert decision.outcome == "freeze"
     assert decision.reason == "BROKER_STATE_UNPROVABLE"
     assert decision.to_gate_result().status == "freeze"
+
+
+def test_account_classifier_duplicate_namespace_uses_latest_binding_per_instance() -> None:
+    deployed = _binding().model_copy(update={"lifecycle_state": "DEPLOYED", "recorded_at_ms": NOW_MS - 1000})
+    active = _binding().model_copy(update={"lifecycle_state": "ACTIVE", "recorded_at_ms": NOW_MS})
+
+    decision = classify_account(
+        account_id=ACCOUNT,
+        broker=AccountBrokerEvidence(snapshot=BrokerSnapshot()),
+        registry_bindings=(deployed, active),
+        durable_intents=(),
+        baseline=None,
+        operator_override=None,
+        now_ms=NOW_MS,
+    )
+
+    assert decision.outcome == "continue"
+    assert decision.reason == "ACCOUNT_STATE_MATCHES_REGISTRY"
 
 
 def test_account_classifier_poisons_run_for_no_order_ref() -> None:

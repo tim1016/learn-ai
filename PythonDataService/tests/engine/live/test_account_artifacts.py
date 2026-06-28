@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.live import account_artifacts
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
     AccountAuditedOverride,
@@ -178,6 +179,39 @@ def test_account_freeze_rejects_stale_audited_override(tmp_path: Path) -> None:
         clear_account_freeze(tmp_path, audited_override=override, now_ms=1_700_000_020_001)
 
     assert read_account_freeze(tmp_path, "DU123456") is not None
+
+
+def test_account_freeze_uses_actual_clear_time_when_override_now_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    override = AccountAuditedOverride(
+        account_id="DU123456",
+        override_id="override-1",
+        approved_decision="continue",
+        reason="manual review",
+        approved_by="operator",
+        approved_at_ms=1_700_000_010_000,
+        valid_until_ms=1_700_000_020_000,
+        prior_evidence={"freeze_reason": "watchdog.flatten_failed"},
+        next_reconciliation_step="RECHECK_BROKER_ON_RECONNECT",
+    )
+    monkeypatch.setattr(account_artifacts.time, "time_ns", lambda: 1_700_000_015_000_000_000)
+
+    clear_account_freeze(tmp_path, audited_override=override)
+
+    events = read_account_events(tmp_path, "DU123456")
+    assert events[-1]["cleared_at_ms"] == 1_700_000_015_000
 
 
 def _binding(

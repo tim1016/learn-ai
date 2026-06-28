@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests._fixtures.daemon_transport import as_typed_get
 
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
@@ -33,7 +34,6 @@ from app.engine.live.engine_runtime import (
     write_engine_runtime_snapshot,
 )
 from app.routers import live_instances
-from tests._fixtures.daemon_transport import as_typed_get
 
 
 def _write_ledger(

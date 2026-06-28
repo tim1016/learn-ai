@@ -836,8 +836,9 @@ class LiveEngine:
             from app.engine.live.account_artifacts import bot_order_namespace_for_instance
             from app.engine.live.intent_wal import IntentWal as _IntentWal
 
-            intent_wal_for_portfolio = _IntentWal(self._intent_wal_path)
             bot_order_namespace_for_portfolio = bot_order_namespace_for_instance(self._strategy_instance_id)
+            if self._account_owner_submitter is None:
+                intent_wal_for_portfolio = _IntentWal(self._intent_wal_path)
         account_freeze_provider = None
         if self._artifacts_root is not None and self._account_id:
             from app.engine.live.account_artifacts import read_account_freeze
@@ -2785,6 +2786,8 @@ class LiveEngine:
                 _ControllerAdapter(),
                 incident_store,
                 timeouts=WatchdogTimeouts(),
+                artifacts_root=self._artifacts_root,
+                account_id=self._account_id,
             )
 
         watchdog = self._watchdog_factory(  # type: ignore[misc]
