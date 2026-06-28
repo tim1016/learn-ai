@@ -20,9 +20,9 @@ permissions:
 
 on:
   pull_request:
-    paths:
-      - 'Frontend/**'
-      - '.github/workflows/frontend-e2e.yml'
+    branches:
+      - master
+      - 'codex/**'
   push:
     branches: [master]
     paths:
