@@ -2,8 +2,9 @@
 
 **Status:** design map for review
 **Created:** 2026-06-27
+**Deepened codebase review:** 2026-06-28
 **Input:** `/Users/inkant/Downloads/bot-lifecycle-robust-design.codex.md`
-**Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/ibkr-integration-authority.md`
+**Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/bot-lifecycle-account-owner-authority.md`, `docs/ibkr-integration-authority.md`
 
 This document makes the bot lifecycle gates visible as a chart and a set of tables.
 It intentionally separates:
@@ -86,6 +87,31 @@ Important reading of the chart:
 - `GATE.RECONCILE` is already a real cold-start gate.
 - `GATE.UNRESOLVED_EXPOSURE` is not a first-class artifact today. It is the biggest missing visual/gate concept.
 - `PROC.SUBMIT` has one low-level IBKR `placeOrder` call site today, but more than one production path can reach it through wrappers.
+
+## Visualization Layers
+
+A single flow chart is useful for orientation but too dense for implementation and operator feedback. The AccountOwner PRD therefore splits the visuals into five layers:
+
+| Layer | Purpose | Primary audience |
+|---|---|---|
+| Lifecycle overview | Shows deploy/start/reconcile/activate/submit/recovery as one account-scoped flow. | Operator, reviewer. |
+| Runner-to-AccountOwner sequence | Shows when the runner writes durable intent, when AccountOwner writes artifacts, and when IBKR is called. | Engineer implementing R3. |
+| Account classifier flow | Shows how broker snapshots, registry, intents, baseline, and override produce continue/adopt/freeze/poison/ignore outcomes. | Engineer and incident reviewer. |
+| Watchdog proof-before-disconnect | Shows the JUN26TSLA fix path and where unresolved evidence is persisted. | Engineer and operator. |
+| Gate-board feedback | Shows that the UI row and the enforcing mutation consume the same `GateResult`. | Frontend/backend integration. |
+
+The UI can later render these concepts however it wants, but the backend model should be able to point every blocked action to one layer, one node, and one gate id.
+
+```mermaid
+flowchart LR
+    error["Observed error or blocked action"]
+    gate["GateResult<br/>gate_id + phase + scope"]
+    layer["Diagram layer<br/>lifecycle / submit / classifier / watchdog"]
+    node["Specific node<br/>for operator explanation"]
+    next["operator_next_step"]
+
+    error --> gate --> layer --> node --> next
+```
 
 ## Gate Inventory
 
