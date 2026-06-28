@@ -1837,6 +1837,7 @@ class ActivityFillMarker(BaseModel):
     side: Literal["BUY", "SELL"]
     quantity: float
     price: float
+    chart_ts_ms: int
     exec_ts_ms: int
     position_effect: str
     replay_count: int = 1
@@ -1878,6 +1879,7 @@ class ActivityOrderRow(BaseModel):
     order_type: str
     status: str
     group: Literal["active", "resolved", "engine_pending"]
+    chart_ts_ms: int
     submitted_ts_ms: int
     last_update_ts_ms: int
     filled_quantity: float = 0.0
@@ -2042,6 +2044,7 @@ class BotCatalogRow(BaseModel):
     name: str
     description: str | None = None
     status_label: str
+    status_detail: str | None = None
     status_tone: Literal["positive", "warning", "danger", "neutral"] = "neutral"
     needs_attention: bool
     trading_mode: Literal["paper", "live", "unknown"] = "unknown"
@@ -2051,7 +2054,9 @@ class BotCatalogRow(BaseModel):
     created_at_ms: int | None = None
     updated_at_ms: int | None = None
     last_run_at_ms: int | None = None
+    last_run_label: str
     last_run_result: str
+    last_run_detail: str | None = None
     process_state: str
     desired_state: str | None = None
     readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"

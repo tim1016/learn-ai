@@ -31,7 +31,7 @@
         title="Deploy a new strategy instance"
       >Deploy new strategy</a>
       <div class="clock-pill" data-testid="clock-pill">
-        <span class="local-clock">Local time: {{ formatClock(clockPill().serverNowMs) }} ET</span>
+        <span class="local-clock">Local time: {{ formatClock(clockPill().serverNowMs) }}</span>
         @if (status()?.operator_surface?.trading_session?.phase; as phase) {
           <span class="session" data-testid="session-phase">Session: {{ phase }}</span>
         }

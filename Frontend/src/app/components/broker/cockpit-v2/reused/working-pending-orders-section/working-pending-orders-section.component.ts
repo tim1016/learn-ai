@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { fmtNumber, fmtTimestampNy } from '../../../format';
+import { fmtNumber, fmtTimestampLocal } from '../../../format';
 
 import type { ActivityOrderRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 
@@ -9,8 +9,7 @@ type OrderGroup = 'active' | 'engine_pending' | 'resolved';
 
 interface OrderDisplay {
   row: ActivityOrderRow;
-  submittedTs: string;
-  updatedTs: string;
+  chartTs: string;
 }
 
 /**
@@ -35,10 +34,9 @@ export class WorkingPendingOrdersSectionComponent {
     this.orders()
       .map((row) => ({
         row,
-        submittedTs: fmtTimestampNy(row.submitted_ts_ms),
-        updatedTs: fmtTimestampNy(row.last_update_ts_ms),
+        chartTs: fmtTimestampLocal(row.chart_ts_ms),
       }))
-      .sort((a, b) => b.row.last_update_ts_ms - a.row.last_update_ts_ms),
+      .sort((a, b) => b.row.chart_ts_ms - a.row.chart_ts_ms),
   );
 
   readonly hasOrders = computed<boolean>(() => this.displayRows().length > 0);

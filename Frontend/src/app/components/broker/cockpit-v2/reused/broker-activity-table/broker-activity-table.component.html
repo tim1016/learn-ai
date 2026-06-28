@@ -78,7 +78,7 @@
                 (keydown.enter)="toggleEvent(row)"
                 tabindex="0"
               >
-              <td class="ts">{{ fmtTimestampNy(row.ts_ms) }}</td>
+              <td class="ts">{{ fmtTimestampLocal(row.ts_ms) }}</td>
               <td>
                 {{ row.display_type }}
                 @if (row.fold_count > 1) {
@@ -134,7 +134,7 @@
                             <li>
                               <div class="event-detail-line">
                                 <span class="seq">#{{ ref.seq }}</span>
-                                <span>{{ fmtTimestampNy(ref.ts_ms) }}</span>
+                                <span>{{ fmtTimestampLocal(ref.ts_ms) }}</span>
                                 <code>{{ ref.request_call }}</code>
                                 @if (ref.response_callback) {
                                   <span>→</span>
@@ -204,7 +204,7 @@
                 (keydown.enter)="toggleRow(row.seq)"
                 tabindex="0"
               >
-                <td class="ts">{{ fmtTimestampNy(row.exec_ts_ms ?? row.ts_ms) }}</td>
+                <td class="ts">{{ fmtTimestampLocal(row.ts_ms) }}</td>
                 <td>{{ row.symbol }}</td>
                 <td>{{ row.side }}</td>
                 <td class="num">{{ fmtNumber(row.quantity, 0) }}</td>

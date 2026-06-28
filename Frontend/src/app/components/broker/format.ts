@@ -92,6 +92,22 @@ export function fmtNumber(
   return formatter.format(value);
 }
 
+/** Format an `int64 ms UTC` timestamp in the viewer's browser-local timezone. */
+export function fmtTimestampLocal(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—';
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZoneName: 'short',
+  });
+  return formatter.format(new Date(ms));
+}
+
 /** Format an `int64 ms UTC` timestamp as a New York wall-clock string for display. */
 export function fmtTimestampNy(ms: number | null | undefined): string {
   if (ms == null) return '—';

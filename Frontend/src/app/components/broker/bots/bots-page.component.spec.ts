@@ -19,6 +19,7 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
     name: 'old-spy',
     description: null,
     status_label: 'Ready for paper trading',
+    status_detail: 'All readiness checks are passing.',
     status_tone: 'positive',
     needs_attention: false,
     trading_mode: 'paper',
@@ -28,7 +29,9 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
     created_at_ms: OLD_CREATED,
     updated_at_ms: 1_700_000_000_100,
     last_run_at_ms: 1_700_000_000_200,
+    last_run_label: 'Clean',
     last_run_result: 'CLEAN',
+    last_run_detail: 'Previous run exited normally.',
     process_state: 'RUNNING',
     desired_state: 'PAUSED',
     readiness_verdict: 'READY',
@@ -62,8 +65,12 @@ async function setup() {
         symbols: ['AAPL'],
         created_at_ms: NEW_CREATED,
         needs_attention: true,
-        status_label: 'Blocked by readiness gate',
+        status_label: 'Degraded',
+        status_detail: 'Desired state has no durable intent.',
         status_tone: 'danger',
+        last_run_label: 'Exited with error',
+        last_run_result: 'EXITED_WITH_ERROR',
+        last_run_detail: 'Previous run exited with an error: runtime exception. Exit code 1.',
         metrics: {
           pnl: { realized: null, unrealized: -4, total: null },
           trade_count: null,
@@ -131,21 +138,39 @@ describe('BotsPageComponent', () => {
   it('expands card metadata inline', async () => {
     const { fixture } = await setup();
     expect(fixture.nativeElement.querySelector('.expanded')).toBeNull();
+    const collapsedText = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(collapsedText).toContain('Degraded');
+    expect(collapsedText).toContain('Exited with error');
+    expect(collapsedText).not.toContain('Realized P&L');
+    expect(collapsedText).not.toContain('Desired state has no durable intent.');
+    expect(collapsedText).not.toContain('Previous run exited with an error');
 
     fixture.componentInstance.toggleExpanded('new-aapl');
     fixture.detectChanges();
 
     const expanded = fixture.nativeElement.querySelector('.expanded') as HTMLElement | null;
+    expect(expanded?.textContent).toContain('Realized P&L');
+    expect(expanded?.textContent).toContain('Errors');
     expect(expanded?.textContent).toContain('Created');
     expect(expanded?.textContent).toContain('Trading mode');
+    expect(expanded?.textContent).toContain('Desired state has no durable intent.');
+    expect(expanded?.textContent).toContain('Previous run exited with an error');
   });
 
-  it('navigates to the existing instance cockpit', async () => {
+  it('navigates to the bot control page', async () => {
     const { fixture, router } = await setup();
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
-    await fixture.componentInstance.openCockpit('new-aapl');
+    const cards = Array.from(
+      fixture.nativeElement.querySelectorAll('.bot-card'),
+    ) as HTMLElement[];
+    const targetCard = cards.find((card) => card.textContent?.includes('new-aapl'));
+    const visitButton = Array.from(targetCard?.querySelectorAll('button') ?? [])
+      .find((button) => button.textContent?.includes('Visit bot'));
+    expect(visitButton).toBeDefined();
+    visitButton?.click();
+    await settle(fixture);
 
-    expect(navigate).toHaveBeenCalledWith(['/broker/instances', 'new-aapl']);
+    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'new-aapl']);
   });
 });

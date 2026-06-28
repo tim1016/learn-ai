@@ -47,6 +47,7 @@ import {
   reduceOnTabSelected,
   reduceOnVerdictObserved,
 } from './lib/instance-tab-state';
+import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { AuditTabComponent } from './tabs/audit-tab.component';
 import { ConfigurationTabComponent } from './tabs/configuration-tab.component';
@@ -614,7 +615,9 @@ export class CockpitShellComponent {
   onGateRedeploy(): void {
     const s = this.status();
     if (!s) return;
-    void this._router.navigate(['/broker/deploy'], { queryParams: this._redeployQueryParams(s) });
+    void this._router.navigate(['/broker/deploy'], {
+      queryParams: redeployQueryParamsForStatus(s),
+    });
   }
 
   onGateOpenRunbook(slug: string): void {
@@ -624,7 +627,7 @@ export class CockpitShellComponent {
   redeployQueryParams(): Record<string, string> {
     const s = this.status();
     if (!s) return {};
-    return this._redeployQueryParams(s);
+    return redeployQueryParamsForStatus(s);
   }
 
   // ── presentation helpers ────────────────────────────────────────────
@@ -770,21 +773,6 @@ export class CockpitShellComponent {
     } finally {
       this.busyAction.set(null);
     }
-  }
-
-  private _redeployQueryParams(s: LiveInstanceStatus): Record<string, string> {
-    const params: Record<string, string> = {};
-    if (s.provenance) {
-      if (s.provenance.strategy_spec_path) params['spec'] = s.provenance.strategy_spec_path;
-      if (s.provenance.qc_audit_copy_path) params['audit'] = s.provenance.qc_audit_copy_path;
-      if (s.provenance.qc_cloud_backtest_id)
-        params['backtest_id'] = s.provenance.qc_cloud_backtest_id;
-      if (s.provenance.account_id) params['account'] = s.provenance.account_id;
-      params['parent_run_id'] = s.provenance.run_id;
-      params['strategy_instance_id'] = s.strategy_instance_id;
-    }
-    if (s.start_defaults?.strategy) params['strategy'] = s.start_defaults.strategy;
-    return params;
   }
 
   private _humanError(err: unknown): string {

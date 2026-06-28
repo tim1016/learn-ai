@@ -37,7 +37,7 @@
   <table>
     <thead>
       <tr>
-        <th scope="col">LAST UPDATE</th>
+        <th scope="col">TIME</th>
         <th scope="col">SYMBOL</th>
         <th scope="col">SIDE</th>
         <th scope="col" class="num">ORDER QTY</th>
@@ -51,7 +51,7 @@
     <tbody>
       @for (p of rows; track trackRow($index, p)) {
         <tr [attr.data-testid]="'orders-today-row-' + p.row.order_key">
-          <td class="ts">{{ p.updatedTs }}</td>
+          <td class="ts">{{ p.chartTs }}</td>
           <td>{{ p.row.symbol }}</td>
           <td>{{ p.row.side }}</td>
           <td class="num">{{ fmtNumber(p.row.quantity, 0) }}</td>

@@ -1,0 +1,277 @@
+import { CommonModule } from '@angular/common';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router } from '@angular/router';
+
+import type {
+  FleetAccountSummary,
+  LiveInstanceStatus,
+  OperatorNotice,
+  OperatorSurfaceControlPlane,
+} from '../../../api/live-instances.types';
+import { LiveRunsService } from '../../../services/live-runs.service';
+import { OperatorNoticeComponent } from '../../operator-notice/operator-notice.component';
+import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
+import { AuditTabComponent } from '../cockpit-v2/tabs/audit-tab.component';
+import { ConfigurationTabComponent } from '../cockpit-v2/tabs/configuration-tab.component';
+import { StatusRiskTabComponent } from '../cockpit-v2/tabs/status-risk-tab.component';
+import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
+import type { InnerTab } from '../cockpit-v2/lib/instance-tab-state';
+import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
+
+const POLL_INTERVAL_MS = 4_000;
+const POISONED_CONFIRM_MESSAGE =
+  'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
+
+type BotControlTab = InnerTab;
+type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
+
+interface ControlPlaneBanner {
+  readonly state: OperatorSurfaceControlPlane['state'];
+  readonly label: 'ATTENTION' | 'LAST-KNOWN';
+  readonly demoted: boolean;
+  readonly notice: string | null;
+  readonly attemptText: string | null;
+}
+
+@Component({
+  selector: 'app-bot-control-page',
+  imports: [
+    CommonModule,
+    OperatorNoticeComponent,
+    StatusRiskTabComponent,
+    ActivityTabComponent,
+    AuditTabComponent,
+    ConfigurationTabComponent,
+    TypedHaltConfirmComponent,
+  ],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  templateUrl: './bot-control-page.component.html',
+  styleUrl: './bot-control-page.component.scss',
+})
+export class BotControlPageComponent {
+  private readonly liveRuns = inject(LiveRunsService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollToken = 0;
+  private statusRequestSeq = 0;
+  private destroyed = false;
+
+  readonly instanceId = signal<string | null>(null);
+  readonly status = signal<LiveInstanceStatus | null>(null);
+  readonly accountSummary = signal<FleetAccountSummary | null>(null);
+  readonly selectedTab = signal<BotControlTab>('status');
+  readonly statusError = signal<string | null>(null);
+  readonly accountSummaryError = signal<string | null>(null);
+  readonly mutationError = signal<string | null>(null);
+  readonly busyAction = signal<string | null>(null);
+  readonly typedHaltOpen = signal<boolean>(false);
+  readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
+
+  readonly errorMessage = computed<string | null>(
+    () => this.mutationError() ?? this.statusError() ?? this.accountSummaryError(),
+  );
+
+  readonly brokerEvidenceNotice = computed<OperatorNotice | null>(
+    () => this.accountSummary()?.notice ?? null,
+  );
+
+  readonly hostRunnerNotice = computed(() => {
+    const hostProcess = this.status()?.operator_surface.host_process ?? null;
+    if (hostProcess?.state !== 'UNREACHABLE') return null;
+    return {
+      title: 'Host runner unreachable',
+      message: hostProcess.notice ?? 'The host runner cannot be reached for this bot.',
+      command: hostProcess.copyable_command,
+    };
+  });
+
+  readonly controlPlaneBanner = computed<ControlPlaneBanner | null>(() => {
+    const cp = this.status()?.operator_surface.control_plane ?? null;
+    if (cp === null || cp.state === 'CONNECTED') return null;
+    const demoted = cp.state !== 'RETRYING';
+    return {
+      state: cp.state,
+      label: demoted ? 'LAST-KNOWN' : 'ATTENTION',
+      demoted,
+      notice: cp.notice,
+      attemptText: cp.state === 'RETRYING' && cp.attempt > 0
+        ? `retrying · attempt ${cp.attempt}`
+        : null,
+    };
+  });
+
+  constructor() {
+    this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
+      const id = params.get('id');
+      const token = ++this.pollToken;
+      this.clearPollTimer();
+      this.instanceId.set(id);
+      this.status.set(null);
+      if (id) {
+        void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
+      }
+    });
+    this.destroyRef.onDestroy(() => {
+      this.destroyed = true;
+      this.pollToken += 1;
+      this.clearPollTimer();
+    });
+  }
+
+  selectTab(tab: BotControlTab): void {
+    this.selectedTab.set(tab);
+  }
+
+  async dispatchResume(): Promise<void> {
+    await this.setIntent('resume', 'Resume');
+  }
+
+  async dispatchPause(): Promise<void> {
+    await this.setIntent('pause', 'Pause');
+  }
+
+  async dispatchStop(): Promise<void> {
+    await this.setIntent('stop', 'Stop');
+  }
+
+  async dispatchFlattenAndPause(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('flatten_and_pause');
+    this.mutationError.set(null);
+    try {
+      await this.liveRuns.flattenAndPause(id, {
+        action: 'pause',
+        reason: 'Flatten and pause',
+        updated_by: 'operator',
+      });
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  onGateRedeploy(): void {
+    void this.router.navigate(['/broker/deploy'], { queryParams: this.redeployQueryParams() });
+  }
+
+  onGateOpenRunbook(slug: string): void {
+    window.open(`/runbooks/${encodeURIComponent(slug)}`, '_blank', 'noopener');
+  }
+
+  openTypedHalt(): void {
+    if (this.isActionDisabled('mark_poisoned')) return;
+    this.typedHaltOpen.set(true);
+  }
+
+  closeTypedHalt(): void {
+    this.typedHaltOpen.set(false);
+  }
+
+  async confirmTypedHalt(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('mark_poisoned');
+    this.mutationError.set(null);
+    this.typedHaltOpen.set(false);
+    try {
+      await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  redeployQueryParams(): Record<string, string> {
+    const s = this.status();
+    if (!s) return {};
+    return redeployQueryParamsForStatus(s);
+  }
+
+  isActionDisabled(action: BotControlAction): boolean {
+    const status = this.status();
+    if (status === null || this.busyAction() !== null) return true;
+    return !status.operator_surface.actions[action].enabled;
+  }
+
+  private async refresh(id: string): Promise<void> {
+    await Promise.allSettled([this.refreshStatus(id), this.refreshAccountSummary()]);
+  }
+
+  private async refreshStatus(id: string): Promise<void> {
+    const seq = ++this.statusRequestSeq;
+    try {
+      const status = await this.liveRuns.getInstanceStatus(id);
+      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
+      this.status.set(status);
+      this.statusError.set(null);
+    } catch (err) {
+      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
+      this.statusError.set(this.humanError(err));
+    }
+  }
+
+  private async refreshAccountSummary(): Promise<void> {
+    try {
+      this.accountSummary.set(await this.liveRuns.getAccountSummary());
+      this.accountSummaryError.set(null);
+    } catch (err) {
+      this.accountSummaryError.set(this.humanError(err));
+    }
+  }
+
+  private async setIntent(
+    action: 'resume' | 'pause' | 'stop',
+    label: string,
+  ): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set(action);
+    this.mutationError.set(null);
+    try {
+      await this.liveRuns.setInstanceDesiredState(id, {
+        action,
+        reason: label,
+        updated_by: 'operator',
+      });
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  private humanError(err: unknown): string {
+    if (err instanceof Error && err.message) return err.message;
+    return 'Could not load bot control data.';
+  }
+
+  private scheduleNextPoll(id: string, token: number): void {
+    if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = null;
+      void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
+    }, POLL_INTERVAL_MS);
+  }
+
+  private clearPollTimer(): void {
+    if (this.pollTimer === null) return;
+    clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+  }
+}

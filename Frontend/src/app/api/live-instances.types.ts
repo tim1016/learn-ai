@@ -756,6 +756,7 @@ export interface BotCatalogRow {
   name: string;
   description: string | null;
   status_label: string;
+  status_detail: string | null;
   status_tone: BotCatalogTone;
   needs_attention: boolean;
   trading_mode: BotCatalogTradingMode;
@@ -765,7 +766,9 @@ export interface BotCatalogRow {
   created_at_ms: number | null;
   updated_at_ms: number | null;
   last_run_at_ms: number | null;
+  last_run_label: string;
   last_run_result: string;
+  last_run_detail: string | null;
   process_state: string;
   desired_state: string | null;
   readiness_verdict: ReadinessVerdictEnum;

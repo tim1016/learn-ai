@@ -571,10 +571,16 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     assert body["fill_markers"][1]["replay_count"] == 2
     assert body["fill_markers"][0]["position_effect"] == "Open long"
     assert body["fill_markers"][1]["position_effect"] == "Close long"
+    assert body["fill_markers"][0]["chart_ts_ms"] == base_ms
+    assert body["fill_markers"][0]["exec_ts_ms"] == base_ms
     assert {o["group"] for o in body["orders_today"]} == {"engine_pending", "resolved"}
+    resolved_orders = [o for o in body["orders_today"] if o["group"] == "resolved"]
+    assert {o["chart_ts_ms"] for o in resolved_orders} == {base_ms, base_ms + 60_000}
     assert any(w["code"] == "broker_replay_collapsed" for w in body["reconciliation_warnings"])
     fill_event_ids = [row["id"] for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert fill_event_ids.count("exec:exec-sell") == 1
+    fill_events = [row for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
+    assert {row["ts_ms"] for row in fill_events} == {base_ms, base_ms + 60_000}
 
 
 async def test_activity_projection_preserves_backend_fill_verdict(
@@ -838,8 +844,10 @@ async def test_activity_projection_repairs_execution_artifact_without_wal_mutati
     body = response.json()
     assert body["session_date"] == "2026-06-25"
     assert [row["id"] for row in body["fill_markers"]] == ["exec:exec-repair-1"]
+    assert body["fill_markers"][0]["chart_ts_ms"] == fill_ms
     fill_rows = [row for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert len(fill_rows) == 1
+    assert fill_rows[0]["ts_ms"] == fill_ms
     assert fill_rows[0]["source"] == "activity_repair_projection"
     assert fill_rows[0]["display_type"] == "Broker fill"
     assert fill_rows[0]["visible_row_id"] == "fill:exec:exec-repair-1"
@@ -1390,7 +1398,31 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert row["metrics"]["open_positions"] == 1
     assert row["metrics"]["pnl"] == {"realized": None, "unrealized": None, "total": None}
     assert isinstance(row["status_label"], str)
+    assert isinstance(row["status_detail"], str)
     assert row["status_tone"] in {"positive", "warning", "danger", "neutral"}
+    assert row["last_run_label"] == "No result yet"
+    assert row["last_run_result"] == "UNKNOWN"
+    assert row["last_run_detail"] == "No completed run has been recorded for this bot."
+
+
+async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-error", "spy_error_bot", 100)
+    _write_run_status(root, "run-error", ended_at_ms=200, exit_code=3, exit_reason="exception")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    row = response.json()["bots"][0]
+    assert row["status_label"] in {"Blocked", "Degraded", "Unknown", "Ready"}
+    assert row["status_label"] != row["status_detail"]
+    assert row["last_run_label"] == "Exited with error"
+    assert row["last_run_result"] == "EXITED_WITH_ERROR"
+    assert row["last_run_detail"] == "Previous run exited with an error: runtime exception. Exit code 3."
 
 
 async def test_bot_catalog_does_not_fallback_unknown_symbol_to_instance_id(

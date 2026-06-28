@@ -66,6 +66,36 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+.bots-page .filter-field .p-inputtext {
+  border-color: var(--border-light);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+
+  &::placeholder {
+    color: var(--text-muted);
+  }
+
+  &:enabled:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+}
+
+.bots-page .bot-dataview {
+  .p-dataview,
+  .p-dataview-content,
+  .p-dataview-emptymessage {
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+  }
+
+  .p-paginator {
+    border-color: var(--border-light);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
+}
+
 /* Inline code uses the mono stack but stays a "chip" — small bg, padding,
    rounded. Scoped to <code> only; .mono is the bare utility. */
 code {

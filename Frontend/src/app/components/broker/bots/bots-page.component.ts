@@ -19,7 +19,7 @@ import type {
   BotCatalogTone,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import { fmtInteger, fmtSignedCurrency, fmtTimestampNy } from '../format';
+import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 
 type ErrorFilter = 'all' | 'has-errors' | 'no-errors';
 type TradingModeFilter = 'all' | BotCatalogTradingMode;
@@ -106,8 +106,8 @@ export class BotsPageComponent {
     return this.expanded()[id] === true;
   }
 
-  async openCockpit(id: string): Promise<void> {
-    await this.router.navigate(['/broker/instances', id]);
+  async openBot(id: string): Promise<void> {
+    await this.router.navigate(['/broker/bots', id]);
   }
 
   tagSeverity(tone: BotCatalogTone): TagSeverity {
@@ -132,7 +132,7 @@ export class BotsPageComponent {
   }
 
   formatTimestamp(value: number | null): string {
-    return fmtTimestampNy(value);
+    return fmtTimestampLocal(value);
   }
 
   formatSymbols(symbols: string[]): string {

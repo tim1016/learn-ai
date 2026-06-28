@@ -8,7 +8,7 @@ import {
 import { TagModule } from 'primeng/tag';
 
 import type { BrokerActivityHealth } from '../../../../../api/live-instances.types';
-import { fmtCurrency, fmtNumber, fmtTimestampNy } from '../../../format';
+import { fmtCurrency, fmtNumber, fmtTimestampLocal } from '../../../format';
 import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 
 import { BrokerActivityRowDetailComponent } from '../broker-activity-row-detail/broker-activity-row-detail.component';
@@ -73,7 +73,7 @@ export class BrokerActivityTableComponent {
    * their parent order. Rows without a perm_id (foreign execs, unmatched)
    * get their own single-row group keyed by ``exec_id`` or ``seq``.
    *
-   * Display order: newest group first (by max exec_ts_ms in the group);
+   * Display order: newest group first (by max rendered timestamp in the group);
    * within a group, newest fill first.
    */
   readonly groupedRows = computed<GroupedRows[]>(() => {
@@ -89,14 +89,14 @@ export class BrokerActivityTableComponent {
     }
     const result: GroupedRows[] = [];
     for (const [key, rows] of groups) {
-      rows.sort((a, b) => (b.exec_ts_ms ?? b.ts_ms) - (a.exec_ts_ms ?? a.ts_ms));
+      rows.sort((a, b) => b.ts_ms - a.ts_ms);
       const label =
         rows[0].perm_id !== null ? `Order #${rows[0].perm_id}` : 'Unmatched';
       result.push({ key, label, rows });
     }
     result.sort((a, b) => {
-      const aMax = Math.max(...a.rows.map((r) => r.exec_ts_ms ?? r.ts_ms));
-      const bMax = Math.max(...b.rows.map((r) => r.exec_ts_ms ?? r.ts_ms));
+      const aMax = Math.max(...a.rows.map((r) => r.ts_ms));
+      const bMax = Math.max(...b.rows.map((r) => r.ts_ms));
       return bMax - aMax;
     });
     return result;
@@ -176,7 +176,7 @@ export class BrokerActivityTableComponent {
   /** Render-only formatting wrappers used by the template. */
   readonly fmtCurrency = fmtCurrency;
   readonly fmtNumber = fmtNumber;
-  readonly fmtTimestampNy = fmtTimestampNy;
+  readonly fmtTimestampLocal = fmtTimestampLocal;
 
   formatLag(ms: number | null | undefined): string {
     if (ms === null || ms === undefined) return '—';

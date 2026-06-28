@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { fmtCurrency, fmtNumber, fmtTimestampNy } from '../../../format';
+import { fmtCurrency, fmtNumber } from '../../../format';
 
 import type { BrokerActivityRow } from '../broker-activity-table/broker-activity.types';
 
@@ -44,7 +44,6 @@ export class BrokerActivityRowDetailComponent {
 
   readonly fmtCurrency = fmtCurrency;
   readonly fmtNumber = fmtNumber;
-  readonly fmtTimestampNy = fmtTimestampNy;
 
   formatLagMs(ms: number | null | undefined): string {
     if (ms === null || ms === undefined) return '—';

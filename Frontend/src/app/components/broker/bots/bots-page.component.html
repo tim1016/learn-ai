@@ -139,43 +139,42 @@
               </div>
               <div>
                 <dt>Last run result</dt>
-                <dd>{{ bot.last_run_result }}</dd>
+                <dd>{{ bot.last_run_label }}</dd>
               </div>
             </dl>
 
-            <div class="metric-grid" aria-label="Bot metrics">
-              <div>
-                <span>Realized P&L</span>
-                <strong>{{ formatMoney(bot.metrics.pnl.realized) }}</strong>
-              </div>
-              <div>
-                <span>Unrealized P&L</span>
-                <strong>{{ formatMoney(bot.metrics.pnl.unrealized) }}</strong>
-              </div>
-              <div>
-                <span>Total P&L</span>
-                <strong>{{ formatMoney(bot.metrics.pnl.total) }}</strong>
-              </div>
-              <div>
-                <span>Trades</span>
-                <strong>{{ formatCount(bot.metrics.trade_count) }}</strong>
-              </div>
-              <div>
-                <span>Exposure</span>
-                <strong>{{ bot.metrics.current_exposure }}</strong>
-              </div>
-              <div>
-                <span>Open positions</span>
-                <strong>{{ formatCount(bot.metrics.open_positions) }}</strong>
-              </div>
-              <div>
-                <span>Errors</span>
-                <strong>{{ formatCount(bot.metrics.error_count) }}</strong>
-              </div>
-            </div>
-
             @if (isExpanded(bot.strategy_instance_id)) {
               <section class="expanded" aria-label="More bot metadata">
+                <div class="metric-grid" aria-label="Bot metrics">
+                  <div>
+                    <span>Realized P&L</span>
+                    <strong>{{ formatMoney(bot.metrics.pnl.realized) }}</strong>
+                  </div>
+                  <div>
+                    <span>Unrealized P&L</span>
+                    <strong>{{ formatMoney(bot.metrics.pnl.unrealized) }}</strong>
+                  </div>
+                  <div>
+                    <span>Total P&L</span>
+                    <strong>{{ formatMoney(bot.metrics.pnl.total) }}</strong>
+                  </div>
+                  <div>
+                    <span>Trades</span>
+                    <strong>{{ formatCount(bot.metrics.trade_count) }}</strong>
+                  </div>
+                  <div>
+                    <span>Exposure</span>
+                    <strong>{{ bot.metrics.current_exposure }}</strong>
+                  </div>
+                  <div>
+                    <span>Open positions</span>
+                    <strong>{{ formatCount(bot.metrics.open_positions) }}</strong>
+                  </div>
+                  <div>
+                    <span>Errors</span>
+                    <strong>{{ formatCount(bot.metrics.error_count) }}</strong>
+                  </div>
+                </div>
                 <dl>
                   <div>
                     <dt>Created</dt>
@@ -190,6 +189,10 @@
                     <dd>{{ formatTimestamp(bot.last_run_at_ms) }}</dd>
                   </div>
                   <div>
+                    <dt>Last run detail</dt>
+                    <dd>{{ bot.last_run_detail ?? bot.last_run_result }}</dd>
+                  </div>
+                  <div>
                     <dt>Process</dt>
                     <dd>{{ bot.process_state }}</dd>
                   </div>
@@ -200,6 +203,10 @@
                   <div>
                     <dt>Readiness</dt>
                     <dd>{{ bot.readiness_verdict }}</dd>
+                  </div>
+                  <div>
+                    <dt>Readiness detail</dt>
+                    <dd>{{ bot.status_detail ?? '—' }}</dd>
                   </div>
                   <div>
                     <dt>Trading mode</dt>
@@ -226,9 +233,9 @@
                 pButton
                 type="button"
                 icon="pi pi-external-link"
-                (click)="openCockpit(bot.strategy_instance_id)"
+                (click)="openBot(bot.strategy_instance_id)"
               >
-                <span class="p-button-label">Open cockpit</span>
+                <span class="p-button-label">Visit bot</span>
               </button>
             </footer>
           </article>

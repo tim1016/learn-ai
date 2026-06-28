@@ -2360,6 +2360,7 @@ def _build_activity_projection(
             side=row.side,
             quantity=float(row.quantity),
             price=float(row.price),
+            chart_ts_ms=int(row.ts_ms),
             exec_ts_ms=int(row.exec_ts_ms),
             position_effect=effect,
             replay_count=len(fill_rows),
@@ -2385,7 +2386,7 @@ def _build_activity_projection(
             annotations.append(
                 ActivityPositionAnnotation(
                     id=f"{lifecycle_label.lower()}:{fill_key}",
-                    ts_ms=int(row.exec_ts_ms),
+                    ts_ms=int(row.ts_ms),
                     symbol=row.symbol,
                     label=lifecycle_label,
                     net_position=next_position,
@@ -2436,6 +2437,7 @@ def _build_activity_projection(
                 order_type=first.order_type,
                 status=status_label,
                 group=group,
+                chart_ts_ms=int(first.ts_ms),
                 submitted_ts_ms=int(first.ts_ms),
                 last_update_ts_ms=_activity_row_time_ms(latest),
                 filled_quantity=filled_quantity,
@@ -2462,7 +2464,7 @@ def _build_activity_projection(
             ActivityBrokerEventRow(
                 id=marker.id,
                 visible_row_id=f"fill:{marker.id}",
-                ts_ms=marker.exec_ts_ms,
+                ts_ms=marker.chart_ts_ms,
                 row_type="fill",
                 display_type="Broker fill",
                 source=source,
