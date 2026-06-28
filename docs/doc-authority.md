@@ -28,6 +28,7 @@
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
+| `docs/bot-lifecycle-account-owner-authority.md` | Bot lifecycle and account ownership implementation snapshot | `docs/architecture/bot-lifecycle-account-owner-prd.md` for implementation authority | 2026-06-28 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
@@ -45,6 +46,8 @@
 |---|---|---|
 | `docs/arch-overview.md` | System architecture overview | Review on next arch change |
 | `docs/architecture/backtesting-engine-grounding-2026-04-26.md` | Engine diagnostic | Cited by `numerical-authority-migration-plan.md` |
+| `docs/architecture/bot-lifecycle-account-owner-prd.md` | Bot lifecycle and AccountOwner target design | Design intent only; implementation authority is `docs/bot-lifecycle-account-owner-authority.md` |
+| `docs/architecture/bot-lifecycle-gate-map.md` | Bot lifecycle gate map | Design context for gate-board work; not an implementation snapshot |
 | `docs/architecture/build-alpha-style-features-1-8-research-spec.md` | Alpha-style features | Features 6-8 may be unshipped — keep for traceability |
 | `docs/architecture/edge-feature-design.md` | Edge feature engineering spec | Actionable engineering spec |
 | `docs/architecture/edge-functionality-testing.md` | Edge testing guide | Engineering-focused |
