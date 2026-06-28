@@ -756,8 +756,7 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
         symbol_from_action = stock_symbol_from_action_plan(payload.get("action"))
         if symbol_from_action is None:
             raise ValueError(
-                "live_config.action must declare exactly one long stock leg "
-                "when live_config.symbol is absent"
+                "live_config.action must declare exactly one long stock leg when live_config.symbol is absent"
             )
         kwargs["symbol"] = symbol_from_action
     if "force_flat_at" in payload:
@@ -800,9 +799,7 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
         if raw is None:
             kwargs["reconciliation_timing_policy"] = None
         else:
-            kwargs["reconciliation_timing_policy"] = (
-                ReconciliationTimingPolicy.model_validate(raw).model_dump()
-            )
+            kwargs["reconciliation_timing_policy"] = ReconciliationTimingPolicy.model_validate(raw).model_dump()
 
     return LiveConfig(**kwargs)
 
@@ -949,9 +946,7 @@ def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
     return {int(perm_id) for perm_id in envelope.known_perm_ids}
 
 
-def _build_broker_snapshot_from_ibkr(
-    open_orders: list, executions: list
-) -> object:
+def _build_broker_snapshot_from_ibkr(open_orders: list, executions: list) -> object:
     """Map ``IbkrOpenOrder`` + ``IbkrOrderEvent`` into the classifier's pure
     ``BrokerSnapshot`` shape (ADR-0008 §5).
 
@@ -990,8 +985,7 @@ def _build_broker_snapshot_from_ibkr(
             exec_id=getattr(e, "exec_id", None),
             symbol=getattr(e, "symbol", None),
             quantity=(
-                float(getattr(e, "fill_quantity", 0.0) or 0.0)
-                * (-1.0 if getattr(e, "side", None) == "SELL" else 1.0)
+                float(getattr(e, "fill_quantity", 0.0) or 0.0) * (-1.0 if getattr(e, "side", None) == "SELL" else 1.0)
             ),
             exec_time_ms=getattr(e, "exec_time_ms", None),
         )
@@ -1001,9 +995,7 @@ def _build_broker_snapshot_from_ibkr(
     return BrokerSnapshot(open_orders=order_views, executions=exec_views)
 
 
-def _resolve_prior_run_dir(
-    *, current_run_dir: Path, strategy_instance_id: str, current_created_ms: int
-) -> Path | None:
+def _resolve_prior_run_dir(*, current_run_dir: Path, strategy_instance_id: str, current_created_ms: int) -> Path | None:
     """Find the most-recent prior run dir for the same ``strategy_instance_id``.
 
     Scans siblings under ``current_run_dir.parent`` (the run root) for
@@ -1258,17 +1250,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        param_kwargs = (
-            {"symbol": live_config.symbol}
-            if "symbol" in registration.param_schema.model_fields
-            else {}
-        )
+        param_kwargs = {"symbol": live_config.symbol} if "symbol" in registration.param_schema.model_fields else {}
         strategy_params = registration.param_schema(**param_kwargs)
         strategy = registration.build(strategy_params)
     except Exception as exc:
         print(
-            f"[START] could not build strategy {args.strategy!r} "
-            f"for symbol {live_config.symbol!r}: {exc}",
+            f"[START] could not build strategy {args.strategy!r} for symbol {live_config.symbol!r}: {exc}",
             file=sys.stderr,
         )
         return 2
@@ -1356,6 +1343,50 @@ def cmd_start(args: argparse.Namespace) -> int:
             strategy_instance_id,
             extra={"step": "0"},
         )
+
+    launched_by_host_daemon = bool(_os.environ.get("LIVE_RUNNER_DAEMON_BOOT_ID"))
+    if ledger.account_id and ledger.strategy_instance_id:
+        try:
+            from app.engine.live.account_artifacts import (
+                AccountInstanceBinding,
+                bot_order_namespace_for_instance,
+                evaluate_restart_intensity,
+                read_account_freeze,
+                write_account_instance_binding,
+            )
+
+            recorded_at_ms = now_ms()
+            if not launched_by_host_daemon:
+                write_account_instance_binding(
+                    _artifacts_root,
+                    AccountInstanceBinding(
+                        account_id=ledger.account_id,
+                        strategy_instance_id=ledger.strategy_instance_id,
+                        run_id=ledger.run_id,
+                        bot_order_namespace=bot_order_namespace_for_instance(ledger.strategy_instance_id),
+                        lifecycle_state="ACTIVE",
+                        recorded_at_ms=recorded_at_ms,
+                        source="run.start",
+                    ),
+                )
+                evaluate_restart_intensity(
+                    _artifacts_root,
+                    account_id=ledger.account_id,
+                    now_ms=recorded_at_ms,
+                )
+            account_freeze = read_account_freeze(_artifacts_root, ledger.account_id)
+            if account_freeze is not None:
+                print(
+                    f"[START] account {ledger.account_id} is frozen: {account_freeze.reason}",
+                    file=sys.stderr,
+                )
+                return 1
+        except (OSError, ValueError) as exc:
+            print(
+                f"[START] could not write account instance registry for {strategy_instance_id}: {exc}",
+                file=sys.stderr,
+            )
+            return 3
 
     def _write_desired_state(state: DesiredState, reason: str) -> None:
         desired_repo.set(state, updated_by="engine", reason=reason, now_ms=now_ms())
@@ -1448,9 +1479,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # that pass ``broker=`` directly without a client (no real IBKR
     # session) leave the provider unset — the engine treats ``None`` as
     # "no observer wired" and skips the gate.
-    verdict_provider = (
-        make_live_engine_verdict_provider(client) if client is not None else None
-    )
+    verdict_provider = make_live_engine_verdict_provider(client) if client is not None else None
 
     # PRD #619-B B3 — engine_runtime.json producer wiring. The
     # aggregator + publisher live for the lifetime of one engine.run().
@@ -1515,6 +1544,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         runtime_aggregator=_runtime_aggregator,
         artifacts_root_for_lease=_artifacts_root,
         watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
+        account_registry_gate_enabled=bool(ledger.strategy_instance_id),
     )
 
     # PRD #619-A — capture the durable child/run evidence the Resume
@@ -1767,9 +1797,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                     )
                     return 3
 
-                _broker_snapshot = _build_broker_snapshot_from_ibkr(
-                    _open_orders, _executions
-                )
+                _broker_snapshot = _build_broker_snapshot_from_ibkr(_open_orders, _executions)
 
                 _prior_run_dir = _resolve_prior_run_dir(
                     current_run_dir=args.run_dir,
@@ -2036,10 +2064,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                                 run_dir=args.run_dir,
                                 broker=broker_for_flatten,
                                 occurred_at_ms=int(time.time() * 1000),
-                                error_summary=(
-                                    "Recovery flatten place_order failed for "
-                                    f"{', '.join(failed_symbols)}"
-                                ),
+                                error_summary=(f"Recovery flatten place_order failed for {', '.join(failed_symbols)}"),
                             )
                         if is_readonly:
                             print(

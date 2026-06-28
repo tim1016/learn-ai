@@ -34,6 +34,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Protocol
 
 from app.operator.incidents.store import IncidentStore
@@ -112,6 +113,51 @@ class _StepEvidence:
     per_step_errors: list[str] = field(default_factory=list)
 
 
+def _watchdog_gate_status(flatten_outcome: str | None) -> str:
+    if flatten_outcome in {"completed", "not_needed"}:
+        return "pass"
+    if flatten_outcome in {"failed", "timed_out", "broker_disconnected_before_flatten"}:
+        return "freeze"
+    return "unknown"
+
+
+def _watchdog_gate_next_step(flatten_outcome: str | None) -> str:
+    if flatten_outcome in {"completed", "not_needed"}:
+        return "GATE_PASSING"
+    return "CHECK_IBKR"
+
+
+def _incident_evidence(
+    reason: LeaseLossReason,
+    ev: _StepEvidence,
+    *,
+    terminal_notice_code: str,
+    evidence_at_ms: int,
+) -> dict[str, object]:
+    return {
+        "reason": reason,
+        "block_submissions_ok": ev.block_submissions_ok,
+        "persist_paused_ok": ev.persist_paused_ok,
+        "flatten_outcome": ev.flatten_outcome,
+        "flatten_ms": ev.flatten_ms,
+        "flatten_error": ev.flatten_error,
+        "disconnect_outcome": ev.disconnect_outcome,
+        "disconnect_ms": ev.disconnect_ms,
+        "disconnect_error": ev.disconnect_error,
+        "per_step_errors": ev.per_step_errors,
+        "gate_results": [
+            {
+                "gate_id": "watchdog.lease_loss",
+                "status": _watchdog_gate_status(ev.flatten_outcome),
+                "source": "watchdog_halt_executor",
+                "operator_reason": terminal_notice_code,
+                "operator_next_step": _watchdog_gate_next_step(ev.flatten_outcome),
+                "evidence_at_ms": evidence_at_ms,
+            }
+        ],
+    }
+
+
 class WatchdogHaltExecutor:
     """Runs the 5-step halt sequence and writes a typed ``OperatorIncident``.
 
@@ -131,12 +177,16 @@ class WatchdogHaltExecutor:
         timeouts: WatchdogTimeouts | None = None,
         clock_ms: Callable[[], int] | None = None,
         log: logging.Logger | None = None,
+        artifacts_root: Path | None = None,
+        account_id: str | None = None,
     ) -> None:
         self._controller = controller
         self._store = incident_store
         self._timeouts = timeouts or WatchdogTimeouts()
         self._clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
         self._log = log or logger
+        self._artifacts_root = artifacts_root
+        self._account_id = account_id
 
     async def execute(self, reason: LeaseLossReason) -> OperatorIncident:
         """Run the 5 steps in order; persist a typed incident.
@@ -196,6 +246,48 @@ class WatchdogHaltExecutor:
         # Step 3 — flatten, with timeout.
         flatten_outcome = await self._run_flatten(reason, ev)
 
+        # Persist flatten proof / unresolved exposure evidence BEFORE broker
+        # disconnect. If the process dies during broker teardown, the operator
+        # must still see the terminal flatten outcome, not only the pessimistic
+        # in-progress scaffold.
+        flatten_recorded_at_ms = self._clock_ms()
+        terminal_notice = _select_terminal_notice(
+            flatten_outcome=flatten_outcome,
+            flatten_ms=ev.flatten_ms,
+            flatten_timeout_ms=self._timeouts.flatten_timeout_ms,
+            flatten_error=ev.flatten_error,
+            occurred_at_ms=flatten_recorded_at_ms,
+        )
+        is_safe = terminal_notice.code in _SAFE_OUTCOME_CODES
+        pre_disconnect_incident = initial.model_copy(
+            update={
+                "notice": terminal_notice,
+                "evidence": _incident_evidence(
+                    reason,
+                    ev,
+                    terminal_notice_code=terminal_notice.code,
+                    evidence_at_ms=flatten_recorded_at_ms,
+                ),
+                "resolved_at_ms": flatten_recorded_at_ms if is_safe else None,
+            }
+        )
+        try:
+            self._store.append(pre_disconnect_incident)
+        except Exception as exc:
+            self._log.critical(
+                "[WATCHDOG] failed to persist pre-disconnect flatten evidence",
+                extra={
+                    "incident_id": pre_disconnect_incident.incident_id,
+                    "incident_payload": pre_disconnect_incident.model_dump_json(),
+                    "exception": repr(exc),
+                },
+            )
+        if not is_safe:
+            self._write_account_freeze_for_unsafe_outcome(
+                reason=terminal_notice.code,
+                recorded_at_ms=flatten_recorded_at_ms,
+            )
+
         # Step 4 — disconnect broker, with timeout.
         await self._run_disconnect(ev)
 
@@ -208,37 +300,21 @@ class WatchdogHaltExecutor:
             ev.per_step_errors.append(msg)
             self._log.critical("[WATCHDOG] %s", msg, exc_info=True)
 
-        # Build terminal notice from outcome.
         completed_at_ms = self._clock_ms()
-        terminal_notice = _select_terminal_notice(
-            flatten_outcome=flatten_outcome,
-            flatten_ms=ev.flatten_ms,
-            flatten_timeout_ms=self._timeouts.flatten_timeout_ms,
-            flatten_error=ev.flatten_error,
-            occurred_at_ms=completed_at_ms,
-        )
 
         # Decide whether this is a safe outcome that can be auto-resolved.
-        is_safe = terminal_notice.code in _SAFE_OUTCOME_CODES
         resolved_at_ms = completed_at_ms if is_safe else None
 
         # Amend the incident with the terminal notice + evidence.
-        evidence: dict[str, object] = {
-            "reason": reason,
-            "block_submissions_ok": ev.block_submissions_ok,
-            "persist_paused_ok": ev.persist_paused_ok,
-            "flatten_outcome": ev.flatten_outcome,
-            "flatten_ms": ev.flatten_ms,
-            "flatten_error": ev.flatten_error,
-            "disconnect_outcome": ev.disconnect_outcome,
-            "disconnect_ms": ev.disconnect_ms,
-            "disconnect_error": ev.disconnect_error,
-            "per_step_errors": ev.per_step_errors,
-        }
         final_incident = initial.model_copy(
             update={
                 "notice": terminal_notice,
-                "evidence": evidence,
+                "evidence": _incident_evidence(
+                    reason,
+                    ev,
+                    terminal_notice_code=terminal_notice.code,
+                    evidence_at_ms=completed_at_ms,
+                ),
                 "resolved_at_ms": resolved_at_ms,
             }
         )
@@ -274,6 +350,32 @@ class WatchdogHaltExecutor:
             is_safe,
         )
         return final_incident
+
+    def _write_account_freeze_for_unsafe_outcome(self, *, reason: str, recorded_at_ms: int) -> None:
+        if self._artifacts_root is None or not self._account_id:
+            return
+        try:
+            from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
+
+            write_account_freeze(
+                self._artifacts_root,
+                AccountFreezeEvidence(
+                    account_id=self._account_id,
+                    reason=reason,
+                    source="watchdog_halt_executor",
+                    recorded_at_ms=recorded_at_ms,
+                    operator_next_step="CHECK_IBKR",
+                ),
+            )
+        except Exception as exc:
+            self._log.critical(
+                "[WATCHDOG] failed to persist account freeze for unsafe halt outcome",
+                extra={
+                    "account_id": self._account_id,
+                    "reason": reason,
+                    "exception": repr(exc),
+                },
+            )
 
     # ------------------------------------------------------------------
     # Step helpers

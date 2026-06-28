@@ -415,18 +415,14 @@ async def _watchdog_flatten_now(engine_ref: _WatchdogEngineRef) -> str:
         return "not_needed"
 
     engine_ref._flatten_now_requested = True
-    logger.info(
-        "[WATCHDOG] flatten_now: set _flatten_now_requested; "
-        "polling for bar-loop confirmation (100ms cadence)"
-    )
+    logger.info("[WATCHDOG] flatten_now: set _flatten_now_requested; polling for bar-loop confirmation (100ms cadence)")
 
     while engine_ref._flatten_now_requested:
         await asyncio.sleep(0.1)
 
     if engine_ref._has_open_positions():
         logger.critical(
-            "[WATCHDOG] flatten_now: bar loop cleared flag but "
-            "positions remain — possible partial fill or rejection"
+            "[WATCHDOG] flatten_now: bar loop cleared flag but positions remain — possible partial fill or rejection"
         )
         return "failed"
 
@@ -529,6 +525,13 @@ class LiveEngine:
         # engine owns the lifecycle; the factory owns the configuration
         # (cadence, threshold, expected_daemon_boot_id from env).
         watchdog_factory: object = None,
+        # AccountOwner submit mode. When wired, the portfolio emits
+        # AccountOwnerSubmitIntent objects to this callable instead of calling
+        # the broker adapter directly.
+        account_owner_submitter: object = None,
+        account_registry_gate_enabled: bool = True,
+        owner_generation_provider: object = None,
+        trace_id_provider: object = None,
         # Phase 5C / VCR-0002 — managed cancel/flatten paths await per-order
         # cancel confirms with this timeout. Tests pass a short value
         # (e.g. 0.05s) to exercise the timeout path without waiting 5s.
@@ -584,8 +587,7 @@ class LiveEngine:
         # legacy_sizing_only_cutoff_ms fold boundary. Falls back to wall-clock
         # when the caller doesn't supply session_start_ms (live tests, replays).
         self._engine_started_at_ms: int = (
-            session_start_ms if session_start_ms is not None
-            else time.time_ns() // 1_000_000
+            session_start_ms if session_start_ms is not None else time.time_ns() // 1_000_000
         )
         self._code_sha = code_sha
         self._strategy_spec_sha = strategy_spec_sha
@@ -638,9 +640,7 @@ class LiveEngine:
             if broker_callbacks_wal_path is not None
             else broker_callbacks_wal_path_from_output(output_dir)
         )
-        self._broker_callbacks_wal = (
-            BrokerCallbackWal(callback_wal_path) if callback_wal_path is not None else None
-        )
+        self._broker_callbacks_wal = BrokerCallbackWal(callback_wal_path) if callback_wal_path is not None else None
         self._broker_callbacks_wal_attached_to_stream = False
         if self._broker_callbacks_wal is not None and isinstance(self._broker, IbkrBrokerAdapter):
             self._broker.set_broker_callback_sink(self._append_raw_broker_callback)
@@ -654,6 +654,10 @@ class LiveEngine:
         self._runtime_aggregator = runtime_aggregator
         self._artifacts_root_for_lease = artifacts_root_for_lease
         self._watchdog_factory = watchdog_factory
+        self._account_owner_submitter = account_owner_submitter
+        self._account_registry_gate_enabled = account_registry_gate_enabled
+        self._owner_generation_provider = owner_generation_provider
+        self._trace_id_provider = trace_id_provider
         # PRD #619-B B5 follow-up — submissions-blocked flag set by the
         # watchdog's step 1 ``block_submissions`` callback. The bar loop
         # checks this alongside ``self._paused`` and clears any pending
@@ -702,9 +706,7 @@ class LiveEngine:
                 ownership_query=IbkrBrokerOwnershipQuery(self._client),
             )
         # The strategy-specific decision columns = resolved minus the core.
-        self._strategy_decision_columns = tuple(
-            c for c in decision_columns if c not in CORE_DECISION_COLUMNS
-        )
+        self._strategy_decision_columns = tuple(c for c in decision_columns if c not in CORE_DECISION_COLUMNS)
 
     @property
     def engine_started_at_ms(self) -> int:
@@ -831,23 +833,41 @@ class LiveEngine:
         intent_wal_for_portfolio = None
         bot_order_namespace_for_portfolio = ""
         if self._intent_wal_path is not None and self._strategy_instance_id:
+            from app.engine.live.account_artifacts import bot_order_namespace_for_instance
             from app.engine.live.intent_wal import IntentWal as _IntentWal
 
-            intent_wal_for_portfolio = _IntentWal(self._intent_wal_path)
-            bot_order_namespace_for_portfolio = (
-                f"learn-ai/{self._strategy_instance_id}/v1"
-            )
+            bot_order_namespace_for_portfolio = bot_order_namespace_for_instance(self._strategy_instance_id)
+            if self._account_owner_submitter is None:
+                intent_wal_for_portfolio = _IntentWal(self._intent_wal_path)
+        account_freeze_provider = None
+        if self._artifacts_root is not None and self._account_id:
+            from app.engine.live.account_artifacts import read_account_freeze
+
+            def account_freeze_provider():
+                return read_account_freeze(
+                    self._artifacts_root,
+                    self._account_id,
+                )
+
         portfolio = LivePortfolio(
             self._broker,
             intent_wal=intent_wal_for_portfolio,
             bot_order_namespace=bot_order_namespace_for_portfolio,
+            account_freeze_provider=account_freeze_provider,
+            account_registry_gate_provider=(
+                self._account_registry_gate_result if self._account_registry_gate_enabled else None
+            ),
+            account_owner_submitter=self._account_owner_submitter,
+            account_id=self._account_id,
+            strategy_instance_id=self._strategy_instance_id,
+            run_id=self._run_id,
+            owner_generation_provider=self._owner_generation_provider,
+            trace_id_provider=self._trace_id_provider,
         )
         if self._config.sizing is not None:
             portfolio.order_sizer = OrderSizer(
                 self._config.sizing,
-                portfolio_value_provider=WholeAccountPortfolioValueProvider(
-                    portfolio.total_value
-                ),
+                portfolio_value_provider=WholeAccountPortfolioValueProvider(portfolio.total_value),
             )
         portfolio.registered_sizing_surface = self._sizing_surface
         await portfolio.refresh_from_broker()
@@ -941,11 +961,7 @@ class LiveEngine:
         # watchdog fires its 5-step contract, ``_submissions_blocked``
         # flips True (step 1), durable PAUSED + incident lands (step 2),
         # then disconnect + shutdown_event.set() drain the bar loop.
-        if (
-            self._watchdog_factory is not None
-            and self._runtime_aggregator is not None
-            and shutdown_event is not None
-        ):
+        if self._watchdog_factory is not None and self._runtime_aggregator is not None and shutdown_event is not None:
             # Expose portfolio to the watchdog adapter before the watchdog
             # starts so flatten_now can read live position state.
             self._run_portfolio = portfolio
@@ -1023,9 +1039,7 @@ class LiveEngine:
                 # the operator explicitly resumes.
                 if self._flatten_now_requested:
                     self._flatten_now_requested = False
-                    ctx.log(
-                        f"[FLATTEN_NOW] {minute_bar.time}: cancelling owned opens + liquidating"
-                    )
+                    ctx.log(f"[FLATTEN_NOW] {minute_bar.time}: cancelling owned opens + liquidating")
                     flat_acks = await self._flatten(portfolio, ctx, bar_time=minute_bar.time)
                     submitted_order_ids.extend(ack.order_id for ack in flat_acks)
                 # Reset per-day order counter on session-date boundary.
@@ -1221,11 +1235,7 @@ class LiveEngine:
                 if self._paused or self._submissions_blocked:
                     # PR 3 / operator-notice — emit before clear so the
                     # append → fsync → clear ordering is satisfied.
-                    _drop_reason = (
-                        "control_plane_lease_lost"
-                        if self._submissions_blocked
-                        else "operator_paused"
-                    )
+                    _drop_reason = "control_plane_lease_lost" if self._submissions_blocked else "operator_paused"
                     _emit_drop_events_for_pending(
                         portfolio,
                         drop_reason=_drop_reason,
@@ -1286,9 +1296,7 @@ class LiveEngine:
                 # resume — and so the recorded cursor never runs ahead of the
                 # durable parquet rows. Cheap no-op when no writer was
                 # configured.
-                self._persist_live_state(
-                    portfolio, int(minute_bar.end_time.timestamp() * 1000), writers
-                )
+                self._persist_live_state(portfolio, int(minute_bar.end_time.timestamp() * 1000), writers)
 
                 # Engine-authored readiness (ADR 0005): emit the consolidated
                 # "can act on the next bar?" vector from the in-loop guard values
@@ -1381,9 +1389,7 @@ class LiveEngine:
                 # mid-run per-bar writes; helper flushes artifacts first so the
                 # cursor stays consistent with on-disk rows, and handles the
                 # no-op case.
-                self._persist_live_state(
-                    portfolio, int(last_bar.end_time.timestamp() * 1000), writers
-                )
+                self._persist_live_state(portfolio, int(last_bar.end_time.timestamp() * 1000), writers)
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
             if writers is not None:
@@ -1442,9 +1448,7 @@ class LiveEngine:
         snap = strategy.last_decision_snapshot
         if snap is None or snap.bar_close_ms == last_written_ms:
             return last_written_ms
-        indicator_values = {
-            name: getattr(snap, name) for name in self._strategy_decision_columns
-        }
+        indicator_values = {name: getattr(snap, name) for name in self._strategy_decision_columns}
         writers.decisions.append_row(
             DecisionRow(
                 bar_close_ms=snap.bar_close_ms,
@@ -1488,9 +1492,7 @@ class LiveEngine:
                 exec_id=event.exec_id if event.exec_id is not None else f"engine-{event.order_id}",
                 perm_id=int(event.order_id),
                 client_order_id=(
-                    event.client_order_id
-                    if event.client_order_id is not None
-                    else f"live-{event.order_id}"
+                    event.client_order_id if event.client_order_id is not None else f"live-{event.order_id}"
                 ),
                 account_id=self._account_id,
                 symbol=event.symbol,
@@ -1531,6 +1533,7 @@ class LiveEngine:
         if self._output_dir is None:
             return
         poisoned = (self._output_dir / "poisoned.flag").exists()
+        account_registry_gate = self._account_registry_gate_result()
         vector = build_live_readiness(
             as_of_ms=as_of_ms,
             paused=self._paused,
@@ -1543,11 +1546,36 @@ class LiveEngine:
             poisoned=poisoned,
             bar_source=self._bar_source,
             expected_bar_source=self._bar_source,
+            account_registry_gate_result=(
+                account_registry_gate.model_dump(mode="json") if account_registry_gate is not None else None
+            ),
         )
         try:
             write_readiness(self._output_dir, vector)
         except OSError:
             logger.warning("readiness sidecar write failed", exc_info=True)
+
+    def _account_registry_gate_result(self):
+        if (
+            not self._account_registry_gate_enabled
+            or self._artifacts_root is None
+            or not self._account_id
+            or not self._run_id
+            or not self._strategy_instance_id
+        ):
+            return None
+        from app.engine.live.account_artifacts import (
+            bot_order_namespace_for_instance,
+            evaluate_account_instance_binding,
+        )
+
+        return evaluate_account_instance_binding(
+            self._artifacts_root,
+            account_id=self._account_id,
+            strategy_instance_id=self._strategy_instance_id,
+            run_id=self._run_id,
+            bot_order_namespace=bot_order_namespace_for_instance(self._strategy_instance_id),
+        )
 
     def _persist_live_state(
         self,
@@ -1584,8 +1612,7 @@ class LiveEngine:
                 writers.flush_all()
             except Exception:
                 logger.exception(
-                    "artifact flush before live-state sidecar write failed; "
-                    "skipping cursor advance this bar"
+                    "artifact flush before live-state sidecar write failed; skipping cursor advance this bar"
                 )
                 return
         try:
@@ -1844,9 +1871,7 @@ class LiveEngine:
                 # submit site between this ack and the task acquiring the
                 # lock still sees the barrier.
                 self._inhibit_submits = True
-                self._reconcile_task = asyncio.create_task(
-                    self._run_runtime_reconcile(cmd, shutdown_event, request_id)
-                )
+                self._reconcile_task = asyncio.create_task(self._run_runtime_reconcile(cmd, shutdown_event, request_id))
                 return {
                     "status": "accepted",
                     "request_id": request_id,
@@ -1873,9 +1898,7 @@ class LiveEngine:
         from app.engine.live.run import _build_broker_snapshot_from_ibkr
 
         if self._client is None:
-            raise RuntimeError(
-                "runtime reconcile requires a real IbkrClient to probe the broker"
-            )
+            raise RuntimeError("runtime reconcile requires a real IbkrClient to probe the broker")
         open_orders = await list_open_orders(self._client)
         executions = await executions_for_reconnect_recovery(self._client)
         return _build_broker_snapshot_from_ibkr(open_orders, executions)
@@ -1923,11 +1946,7 @@ class LiveEngine:
                 Poison,
             )
 
-            if (
-                self._output_dir is None
-                or self._artifacts_root is None
-                or not self._strategy_instance_id
-            ):
+            if self._output_dir is None or self._artifacts_root is None or not self._strategy_instance_id:
                 # Replay / test paths without a real broker can't reconcile.
                 # Surface this honestly rather than pretending the verb did
                 # anything; leave the barrier set so the operator notices.
@@ -1974,9 +1993,7 @@ class LiveEngine:
                     verdict_payload.update(
                         {
                             "verdict": "adopted",
-                            "adopted_intent_ids": [
-                                o.intent_id for o in verdict.orphans
-                            ],
+                            "adopted_intent_ids": [o.intent_id for o in verdict.orphans],
                         }
                     )
                 elif isinstance(verdict, Adopt) and verdict.pause:
@@ -1991,18 +2008,14 @@ class LiveEngine:
                     verdict_payload.update(
                         {
                             "verdict": "adopted_paused",
-                            "adopted_intent_ids": [
-                                o.intent_id for o in verdict.orphans
-                            ],
+                            "adopted_intent_ids": [o.intent_id for o in verdict.orphans],
                         }
                     )
                 elif isinstance(verdict, Poison):
                     # Orchestrator already wrote poisoned.flag + failed
                     # receipt; halt the engine fail-closed.
                     shutdown_event.set()
-                    verdict_payload.update(
-                        {"verdict": "poison", "reason": verdict.reason}
-                    )
+                    verdict_payload.update({"verdict": "poison", "reason": verdict.reason})
                 else:
                     verdict_payload.update(
                         {
@@ -2011,9 +2024,7 @@ class LiveEngine:
                         }
                     )
         except Exception as exc:
-            logger.exception(
-                "runtime reconcile task failed for request_id=%s", request_id
-            )
+            logger.exception("runtime reconcile task failed for request_id=%s", request_id)
             verdict_payload.update({"verdict": "error", "detail": repr(exc)})
         finally:
             # Always overwrite the ack with the completion outcome so the
@@ -2132,12 +2143,8 @@ class LiveEngine:
                             encoding="utf-8",
                         )
                     except OSError:
-                        logger.exception(
-                            "halt.flag write failed for cancel-confirm timeout"
-                        )
-                raise CancelConfirmTimeoutHaltError(
-                    timeout_s=self._cancel_confirm_timeout_s
-                ) from exc
+                        logger.exception("halt.flag write failed for cancel-confirm timeout")
+                raise CancelConfirmTimeoutHaltError(timeout_s=self._cancel_confirm_timeout_s) from exc
             except Exception:
                 # Other broker exceptions (network blip, transient) — preserve
                 # the prior tolerant behavior so the operator-issued flatten
@@ -2440,17 +2447,14 @@ class LiveEngine:
                         encoding="utf-8",
                     )
                 except OSError:
-                    logger.exception(
-                        "halt.flag write failed for reconnect-mismatch halt"
-                    )
+                    logger.exception("halt.flag write failed for reconnect-mismatch halt")
             raise ReconnectAccountMismatchHaltError(
                 ledger_account_id=self._account_id,
                 connected_account=connected_account or "",
                 connection_epoch=self._connection_epoch,
             ) from None
         logger.info(
-            "Broker reconnect re-validated identity match at epoch=%d "
-            "(ledger=%s, connected=%s)",
+            "Broker reconnect re-validated identity match at epoch=%d (ledger=%s, connected=%s)",
             self._connection_epoch,
             self._account_id,
             connected_account,
@@ -2505,9 +2509,7 @@ class LiveEngine:
                     encoding="utf-8",
                 )
             except OSError:
-                logger.exception(
-                    "halt.flag write failed for verdict transition halt"
-                )
+                logger.exception("halt.flag write failed for verdict transition halt")
         raise BrokerSafetyVerdictTransitionHaltError(verdict=str(verdict_value))
 
     async def _publish_broker_block(self, verdict_value: object) -> None:
@@ -2673,9 +2675,7 @@ class LiveEngine:
         BROKER_PROBE_INTERVAL_S = 10.0
         while True:
             try:
-                await asyncio.wait_for(
-                    shutdown_event.wait(), timeout=BROKER_PROBE_INTERVAL_S
-                )
+                await asyncio.wait_for(shutdown_event.wait(), timeout=BROKER_PROBE_INTERVAL_S)
             except TimeoutError:
                 # Timeout is the canonical signal that the interval
                 # elapsed without a shutdown — the next iteration's
@@ -2723,6 +2723,7 @@ class LiveEngine:
         The callbacks below implement the ``WatchdogShutdownController``
         protocol that the executor calls.
         """
+
         def _block_submissions() -> None:
             self._submissions_blocked = True
 
@@ -2785,6 +2786,8 @@ class LiveEngine:
                 _ControllerAdapter(),
                 incident_store,
                 timeouts=WatchdogTimeouts(),
+                artifacts_root=self._artifacts_root,
+                account_id=self._account_id,
             )
 
         watchdog = self._watchdog_factory(  # type: ignore[misc]
@@ -2819,9 +2822,9 @@ class LiveEngine:
         try:
             self._output_dir.mkdir(parents=True, exist_ok=True)
             snapshot = {
-                "verdict": verdict_value if isinstance(verdict_value, str) else (
-                    None if verdict_value is None else str(verdict_value)
-                ),
+                "verdict": verdict_value
+                if isinstance(verdict_value, str)
+                else (None if verdict_value is None else str(verdict_value)),
                 "observed_at_ms_utc": int(datetime.now(UTC).timestamp() * 1000),
             }
             tmp_path = self._output_dir / "verdict_snapshot.json.tmp"
@@ -2833,9 +2836,7 @@ class LiveEngine:
         except OSError:
             logger.exception("verdict_snapshot.json write failed")
 
-    def _resolve_meta_via_intent_wal(
-        self, fill: IbkrOrderEvent
-    ) -> _OrderMeta | None:
+    def _resolve_meta_via_intent_wal(self, fill: IbkrOrderEvent) -> _OrderMeta | None:
         """Phase 5E / VCR-0012 — cross-restart fill classifier.
 
         Folds the intent WAL once per orphan fill and looks up a
@@ -2882,11 +2883,7 @@ class LiveEngine:
         symbol_obj = spec.get("symbol")
         action_obj = spec.get("action")
         quantity_obj = spec.get("quantity")
-        if (
-            not isinstance(symbol_obj, str)
-            or not isinstance(action_obj, str)
-            or quantity_obj is None
-        ):
+        if not isinstance(symbol_obj, str) or not isinstance(action_obj, str) or quantity_obj is None:
             return None
         try:
             magnitude = abs(int(float(quantity_obj)))
@@ -2922,8 +2919,7 @@ class LiveEngine:
             recovered = self._resolve_meta_via_intent_wal(fill)
             if recovered is not None:
                 logger.info(
-                    "Cross-restart fill classified bot-owned by perm_id=%s "
-                    "(order_id=%s, symbol=%s)",
+                    "Cross-restart fill classified bot-owned by perm_id=%s (order_id=%s, symbol=%s)",
                     fill.perm_id,
                     fill.order_id,
                     recovered.symbol,

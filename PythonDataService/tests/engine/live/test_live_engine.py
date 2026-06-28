@@ -10,8 +10,10 @@ import pytest
 
 from app.broker.ibkr.models import IbkrPosition, IbkrPositionsSnapshot
 from app.engine.data.trade_bar import TradeBar
+from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine
+from app.engine.live.live_portfolio import AccountFreezeBlockError, AccountRegistryBlockError
 from app.engine.strategy.base import Strategy
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
@@ -96,6 +98,56 @@ async def test_live_engine_dispatches_minute_bar_hook_before_consolidators() -> 
     assert len(result.order_events) == 1
     assert result.order_events[0].time == bars[1].time
     assert result.open_positions == {"SPY": 200}
+
+
+@pytest.mark.asyncio
+async def test_live_engine_blocks_submit_when_account_artifact_is_frozen(tmp_path) -> None:
+    broker = FakeBroker()
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        artifacts_root=tmp_path,
+        account_id="DU123",
+    )
+
+    with pytest.raises(AccountFreezeBlockError):
+        await engine.run(MinuteHookEntryStrategy(), iter_bars([_bar(m, "500", "500") for m in range(30, 33)]))
+
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_live_engine_blocks_submit_when_account_registry_is_missing(tmp_path) -> None:
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        artifacts_root=tmp_path,
+        account_id="DU123",
+        run_id="run-alpha",
+        strategy_instance_id="spy_ema_paper",
+    )
+
+    with pytest.raises(AccountRegistryBlockError) as exc:
+        await engine.run(
+            MinuteHookEntryStrategy(),
+            iter_bars([_bar(m, "500", "500") for m in range(30, 33)]),
+        )
+
+    assert exc.value.gate_result.operator_reason == "ACCOUNT_REGISTRY_UNKNOWN_INSTANCE"
+    assert broker.orders == []
 
 
 class HoldsExistingStrategy(Strategy):

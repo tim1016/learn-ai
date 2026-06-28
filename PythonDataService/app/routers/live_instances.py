@@ -28,6 +28,7 @@ from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
+from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_freeze
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
@@ -310,6 +311,28 @@ def _resolve_readiness(
     )
 
 
+def _resolve_account_freeze(
+    artifacts_root: Path,
+    runs: list[dict],
+) -> AccountFreezeEvidence | None:
+    for run in runs:
+        try:
+            ledger = _read_ledger(Path(run["run_dir"]))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "failed to read ledger while resolving account freeze",
+                extra={"run_dir": str(run.get("run_dir")), "exception": repr(exc)},
+            )
+            continue
+        account_id = ledger.get("account_id")
+        if not isinstance(account_id, str) or not account_id:
+            continue
+        account_freeze = read_account_freeze(artifacts_root, account_id)
+        if account_freeze is not None:
+            return account_freeze
+    return None
+
+
 def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> tuple[dict | None, list[dict]]:
     """Latest decision row + spec-derived column descriptors for the instance.
 
@@ -383,9 +406,7 @@ def _mutation_attempt_root(live_runs_root: Path) -> Path:
     return live_runs_root.parent / "mutation_attempts"
 
 
-def _resolve_reconciliation_inputs(
-    root: Path, live_binding: LiveBinding | None
-):
+def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None):
     """Read the cold-start reconciliation receipt + current freshness inputs
     for the operator-surface projection (ADR-0008 §5 / PR 1).
 
@@ -424,9 +445,7 @@ def _resolve_reconciliation_inputs(
     return receipt, current_wal_seq, current_run_id, current_namespace
 
 
-def _resolve_latest_mutation(
-    live_runs_root: Path, strategy_instance_id: str
-) -> MutationAttempt | None:
+def _resolve_latest_mutation(live_runs_root: Path, strategy_instance_id: str) -> MutationAttempt | None:
     """Read the most recent ``MutationAttempt`` for the instance.
 
     Returns ``None`` when no attempts have been persisted (typical for
@@ -436,9 +455,7 @@ def _resolve_latest_mutation(
     action-conflict matrix treats absence and corruption identically:
     no prior unresolved mutation to consider.
     """
-    return MutationAttemptRepo(_mutation_attempt_root(live_runs_root)).latest_for(
-        strategy_instance_id
-    )
+    return MutationAttemptRepo(_mutation_attempt_root(live_runs_root)).latest_for(strategy_instance_id)
 
 
 def _resolve_runtime_freshness(
@@ -464,9 +481,7 @@ def _resolve_runtime_freshness(
         return unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
     snapshot = read_engine_runtime_snapshot(path)
     if snapshot is None:
-        return unavailable_runtime_freshness(
-            "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE"
-        )
+        return unavailable_runtime_freshness("ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE")
     return evaluate_runtime_freshness(
         snapshot,
         now_ms=now_ms,
@@ -511,9 +526,7 @@ def _resolve_broker_observation_consistency(
     )
 
 
-def _resolve_start_run_id(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> str | None:
+def _resolve_start_run_id(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
     """Run_id the per-instance Start affordance will POST against.
 
     The cockpit's Start button targets ``POST /runs/{run_id}/start``. The
@@ -1040,10 +1053,7 @@ async def _host_deploy_request_from_public(
     if not broker_known or not broker_account:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            detail=(
-                "Connected broker account unavailable. Connect the broker session "
-                "before deploying."
-            ),
+            detail=("Connected broker account unavailable. Connect the broker session before deploying."),
         )
     client_account = body.client_supplied_account_id()
     if client_account is not None and client_account != broker_account:
@@ -1057,15 +1067,11 @@ async def _host_deploy_request_from_public(
         )
     payload = body.model_dump()
     payload.pop("account_id", None)
-    return HostRunnerDeployRequest.model_validate(
-        {**payload, "account_id": broker_account}
-    )
+    return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
 
 
 @router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
-async def deploy_instance(
-    body: LiveInstanceDeployRequest, response: Response
-) -> HostRunnerDeployResponse:
+async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -> HostRunnerDeployResponse:
     """Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
 
     Deploy is a host-daemon operation: ``init-ledger`` runs a git clean-tree
@@ -1080,6 +1086,19 @@ async def deploy_instance(
     """
     settings = get_settings()
     daemon_request = await _host_deploy_request_from_public(body)
+    account_freeze = read_account_freeze(
+        Path(settings.live_runs_root).parent,
+        daemon_request.account_id,
+    )
+    if account_freeze is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_FROZEN",
+                "message": "This broker account is frozen until unresolved exposure is reconciled.",
+                "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
+            },
+        )
     try:
         result = await host_daemon_client.deploy(
             settings.live_runner_daemon_url,
@@ -1174,6 +1193,20 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
     if sid is None or run_dir is None:
         return  # unknown run_id — daemon will 404; not our gate
 
+    account_freeze = _resolve_account_freeze(
+        root.parent,
+        [{"run_dir": str(run_dir)}],
+    )
+    if account_freeze is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_FROZEN",
+                "message": "This broker account is frozen until unresolved exposure is reconciled.",
+                "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
+            },
+        )
+
     if (run_dir / "poisoned.flag").exists():
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -1192,9 +1225,7 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
             },
         )
 
-    _result, daemon = await host_daemon_client.fetch_instance_process(
-        settings.live_runner_daemon_url, sid
-    )
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     if daemon is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -1588,9 +1619,7 @@ async def renew_daemon_lease() -> HostRunnerHealth:
     """
     settings = get_settings()
     try:
-        result = await host_daemon_client.renew_control_plane_lease(
-            settings.live_runner_daemon_url
-        )
+        result = await host_daemon_client.renew_control_plane_lease(settings.live_runner_daemon_url)
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         _raise_outcome_unknown("renew_daemon_lease", exc)
     except host_daemon_client.HostDaemonError as exc:
@@ -1746,6 +1775,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     process, live_binding = _interpret_daemon_process(daemon, root)
 
     runs = _scan_runs_by_instance(root).get(sid, [])
+    account_freeze = _resolve_account_freeze(root.parent, runs)
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
     desired = _resolve_desired_state(root, sid)
     latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
@@ -1825,6 +1855,7 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             broker_observation_consistency=broker_observation_consistency,
             host_start_command=settings.live_runner_host_start_command,
             start_run_id=_resolve_start_run_id(root, live_binding, runs),
+            account_freeze=account_freeze,
             reconciliation_receipt=reconciliation_receipt,
             current_wal_seq=current_wal_seq,
             current_run_id=current_run_id,
@@ -1837,14 +1868,8 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
             # staleness signal unset — WAL-seq, run_id/namespace, mutation,
             # and TTL still drive STALE correctly.
             latest_broker_event_ms=None,
-            latest_mutation_ms=(
-                latest_mutation.last_transition_at_ms
-                if latest_mutation is not None
-                else None
-            ),
-            reconciliation_ttl_ms=getattr(
-                settings, "reconciliation_receipt_ttl_ms", None
-            ),
+            latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
+            reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
             # PR 5 — broker-activity health. Plumbed directly from the
             # module-level singleton registry; the router does not cache
             # these values — the registry is the authoritative live state.
@@ -1932,9 +1957,7 @@ async def _load_instance_context_for_router(sid: str) -> InstanceContext:
         # operator-surface ``control_plane`` section (C3) surfaces the
         # typed kind via the connectivity monitor's accumulated state, so
         # this per-call result is discarded here.
-        _result, daemon = await host_daemon_client.fetch_instance_process(
-            settings.live_runner_daemon_url, _sid
-        )
+        _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, _sid)
         return daemon
 
     return await load_instance_context(
@@ -1946,15 +1969,11 @@ async def _load_instance_context_for_router(sid: str) -> InstanceContext:
         resolve_desired_state=lambda _sid: _resolve_desired_state(root, _sid),
         instance_last_exit=_instance_last_exit,
         instance_broker=lambda _sid: _instance_broker(root, _sid),
-        resolve_guard_state_for=lambda live_binding, runs: _resolve_resume_guard_state_for(
-            root, live_binding, runs
-        ),
-        resolve_runtime_freshness_for=lambda live_binding, _runs, observed_at_ms: (
-            _resolve_runtime_freshness(
-                root,
-                live_binding,
-                now_ms=observed_at_ms,
-            )
+        resolve_guard_state_for=lambda live_binding, runs: _resolve_resume_guard_state_for(root, live_binding, runs),
+        resolve_runtime_freshness_for=lambda live_binding, _runs, observed_at_ms: _resolve_runtime_freshness(
+            root,
+            live_binding,
+            now_ms=observed_at_ms,
         ),
         resolve_latest_mutation_for=lambda _sid: _resolve_latest_mutation(root, _sid),
     )
@@ -2248,9 +2267,7 @@ def _position_effect_for_fill(
     return "Reverse", next_position, "REVERSE"
 
 
-def _read_activity_wal_rows(
-    *, artifacts_root: Path, sid: str, start_ms: int, end_ms: int
-) -> list:
+def _read_activity_wal_rows(*, artifacts_root: Path, sid: str, start_ms: int, end_ms: int) -> list:
     wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
     rows = wal.read_all()
     return [row for row in rows if start_ms <= _activity_row_time_ms(row) < end_ms]
@@ -2352,10 +2369,7 @@ def _build_activity_projection(
             for row in ordered
             if row.verdict != "engine_only_pending" and row.price is not None and row.exec_ts_ms is not None
         ]
-        unique_fill_rows = {
-            _activity_fill_key(row): row
-            for row in fill_rows
-        }
+        unique_fill_rows = {_activity_fill_key(row): row for row in fill_rows}
         filled_quantity = sum(float(row.quantity) for row in unique_fill_rows.values())
         avg_fill = (
             sum(float(row.price) * float(row.quantity) for row in unique_fill_rows.values()) / filled_quantity
@@ -2390,9 +2404,7 @@ def _build_activity_projection(
                 last_update_ts_ms=_activity_row_time_ms(latest),
                 filled_quantity=filled_quantity,
                 avg_fill_price=avg_fill,
-                position_effect=(
-                    next((m.position_effect for m in fill_markers if m.order_key == order_key), None)
-                ),
+                position_effect=(next((m.position_effect for m in fill_markers if m.order_key == order_key), None)),
                 replay_count=max(1, len(fill_rows) - len(unique_fill_rows) + 1),
                 evidence=matching_evidence_refs(
                     first,
@@ -2419,9 +2431,7 @@ def _build_activity_projection(
                 display_type="Broker fill",
                 source=source,
                 source_label=(
-                    "Repaired trade evidence"
-                    if source == "activity_repair_projection"
-                    else "Broker activity stream"
+                    "Repaired trade evidence" if source == "activity_repair_projection" else "Broker activity stream"
                 ),
                 symbol=marker.symbol,
                 side=marker.side,
@@ -2429,8 +2439,7 @@ def _build_activity_projection(
                 price=marker.price,
                 status=marker.position_effect,
                 summary=(
-                    f"{marker.side} {marker.quantity:g} {marker.symbol} @ "
-                    f"{marker.price:.2f} · {marker.position_effect}"
+                    f"{marker.side} {marker.quantity:g} {marker.symbol} @ {marker.price:.2f} · {marker.position_effect}"
                 ),
                 verdict=selected_row.verdict.value,
                 replay_count=marker.replay_count,
@@ -2463,9 +2472,7 @@ def _build_activity_projection(
                     ),
                 )
             )
-        elif row.price is None and any(
-            code.value in {"cancellation", "rejection"} for code in row.reason_codes
-        ):
+        elif row.price is None and any(code.value in {"cancellation", "rejection"} for code in row.reason_codes):
             broker_events.append(
                 ActivityBrokerEventRow(
                     id=f"terminal:{row.seq}",
@@ -2864,6 +2871,17 @@ async def set_instance_desired_state(
     # consume the same composition.
     ctx = await _load_instance_context_for_router(sid)
     action_name = body.action.value  # "pause" | "resume" | "stop"
+    account_freeze = _resolve_account_freeze(root.parent, ctx.runs)
+    if action_name == "resume" and account_freeze is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "disabled_reason_code": "ACCOUNT_FROZEN",
+                "disabled_reasons": ["ACCOUNT_FROZEN"],
+                "gate_results": [account_freeze.to_gate_result().model_dump(mode="json")],
+                "guard_state": ctx.guard_state.model_dump(mode="json"),
+            },
+        )
     gate = evaluate_action(
         action_name,  # type: ignore[arg-type]
         process=ctx.process,
@@ -3095,19 +3113,14 @@ async def reconcile_instance(strategy_instance_id: str) -> ReconcileAckResponse:
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    _result, daemon = await host_daemon_client.fetch_instance_process(
-        settings.live_runner_daemon_url, sid
-    )
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     if live_binding is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={
                 "reason_code": "NO_LIVE_BINDING",
-                "message": (
-                    "No bot process is running for this instance — "
-                    "reconciliation requires a live engine."
-                ),
+                "message": ("No bot process is running for this instance — reconciliation requires a live engine."),
             },
         )
     live_run_dir = _visible_live_run_dir(root, live_binding)
@@ -3121,9 +3134,7 @@ async def reconcile_instance(strategy_instance_id: str) -> ReconcileAckResponse:
         )
 
     try:
-        CommandChannel(live_run_dir / "commands").write_from_operator(
-            CommandVerb.RECONCILE
-        )
+        CommandChannel(live_run_dir / "commands").write_from_operator(CommandVerb.RECONCILE)
     except OSError as exc:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3193,16 +3204,13 @@ async def reconcile_instance_mutation(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={
-                "error": "mutation_attempt is still in flight; wait for "
-                "the response before reconciling",
+                "error": "mutation_attempt is still in flight; wait for the response before reconciling",
                 "mutation_attempt_id": attempt.mutation_attempt_id,
                 "dispatch_state": attempt.dispatch_state,
             },
         )
 
-    evidence = await _assemble_reconciliation_evidence(
-        sid, root, daemon_url=settings.live_runner_daemon_url
-    )
+    evidence = await _assemble_reconciliation_evidence(sid, root, daemon_url=settings.live_runner_daemon_url)
     outcome = reconcile_mutation_effect(attempt, evidence)
     transitioned_at_ms = _now_ms()
     advanced = transition_attempt(
@@ -3222,9 +3230,7 @@ async def reconcile_instance_mutation(
     )
 
 
-async def _assemble_reconciliation_evidence(
-    sid: str, root: Path, *, daemon_url: str
-) -> ReconciliationEvidence:
+async def _assemble_reconciliation_evidence(sid: str, root: Path, *, daemon_url: str) -> ReconciliationEvidence:
     """Read every evidence source the Reconcile classifier consumes.
 
     Each read is fail-soft: missing daemon / runtime / desired-state
@@ -3234,9 +3240,7 @@ async def _assemble_reconciliation_evidence(
     the instance as ``unreachable``".
     """
     observed_at_ms = _now_ms()
-    result, daemon = await host_daemon_client.fetch_instance_process(
-        daemon_url, sid
-    )
+    result, daemon = await host_daemon_client.fetch_instance_process(daemon_url, sid)
     daemon_reachable = result.kind == "CONNECTED"
     process_state = None
     bound_run_id = None
@@ -3341,9 +3345,7 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
     # actuation here still needs ``run_dir`` (filesystem confine), so
     # we resolve it after the gate from the same observation.
     ctx = await _load_instance_context_for_router(sid)
-    run_dir = (
-        _visible_live_run_dir(root, ctx.live_binding) if ctx.live_binding is not None else None
-    )
+    run_dir = _visible_live_run_dir(root, ctx.live_binding) if ctx.live_binding is not None else None
 
     # PRD #607 / Slice 1 (#608) — shared-capability gate for the cockpit
     # actions that flow through this endpoint.  Currently only

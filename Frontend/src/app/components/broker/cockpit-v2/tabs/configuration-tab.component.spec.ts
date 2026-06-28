@@ -3,8 +3,19 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
+import type { GateResult, LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { ConfigurationTabComponent } from './configuration-tab.component';
+
+function gateResult(gateId: string, status: GateResult['status']): GateResult {
+  return {
+    gate_id: gateId,
+    status,
+    source: 'fixture',
+    operator_reason: status === 'pass' ? 'GATE_PASSING' : 'GATE_BLOCKING',
+    operator_next_step: status === 'pass' ? null : 'Review the blocking gate.',
+    evidence_at_ms: 0,
+  };
+}
 
 function status(): LiveInstanceStatus {
   return {
@@ -65,6 +76,7 @@ function status(): LiveInstanceStatus {
           run_id: null,
           request: null,
           disabled_reason_code: 'STOPPED_REQUIRES_REDEPLOY',
+          gate_results: [gateResult('host_process.start', 'block')],
         },
       },
       prior_run: { classification: 'UNKNOWN' },
@@ -84,30 +96,35 @@ function status(): LiveInstanceStatus {
           effect: 'DURABLE_ONLY',
           disabled_reason_code: 'REDEPLOY_REQUIRED',
           disabled_reasons: ['REDEPLOY_REQUIRED'],
+          gate_results: [gateResult('action.resume', 'block')],
         },
         pause: {
           enabled: true,
           effect: 'DURABLE_ONLY',
           disabled_reason_code: null,
           disabled_reasons: [],
+          gate_results: [gateResult('action.pause', 'pass')],
         },
         stop: {
           enabled: true,
           effect: 'DURABLE_ONLY',
           disabled_reason_code: null,
           disabled_reasons: [],
+          gate_results: [gateResult('action.stop', 'pass')],
         },
         flatten_and_pause: {
           enabled: false,
           effect: 'DURABLE_ONLY',
           disabled_reason_code: 'NO_OWNED_POSITIONS',
           disabled_reasons: ['NO_OWNED_POSITIONS'],
+          gate_results: [gateResult('action.flatten_and_pause', 'block')],
         },
         mark_poisoned: {
           enabled: true,
           effect: 'DURABLE_ONLY',
           disabled_reason_code: null,
           disabled_reasons: [],
+          gate_results: [gateResult('action.mark_poisoned', 'pass')],
         },
       },
       trading_session: {
