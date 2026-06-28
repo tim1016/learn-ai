@@ -81,7 +81,7 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 |---|---|---|
 | `run_ledger.json` | run | Deploy identity, account id, strategy/spec provenance, live config. |
 | `desired_state.json` | instance | Durable operator intent: `RUNNING`, `PAUSED`, `STOPPED`. |
-| `intent_events.jsonl` | run | Append-only submit WAL. Source of truth for intent lifecycle events. |
+| `intent_events.jsonl` | run | Legacy/direct-submit append-only submit WAL. Source of truth for run-scoped intent lifecycle events when a runner submits directly; AccountOwner submit mode does not write this file. |
 | `live_state.json` | instance | Stable projection used by reconciliation/readiness. |
 | `reconciliation_receipt.json` | run | Cold-start/runtime reconcile outcome. |
 | `poisoned.flag` | run | Run-level permanent unsafe state. |
@@ -89,7 +89,7 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 | `broker_callbacks.jsonl` | run | Raw broker callback evidence when attached. |
 | `fleet_baselines/<account_id>.json` | account-adjacent partial | Existing fleet-reset baseline used to ignore completed unknown historical executions under strict conditions. |
 | `accounts/<account_id>/instance_registry.jsonl` | account | Append-only write-ahead registry of allowed strategy instance id, run id, bot order namespace, lifecycle binding state, source, and `int64 ms UTC` timestamp. |
-| `accounts/<account_id>/unresolved_exposure.flag` | account | Durable account-level freeze evidence. Blocks deploy, start, resume, and broker submit while active. |
+| `accounts/<account_id>/unresolved_exposure.flag` | account | Durable account-level freeze evidence. Blocks deploy, start, router/operator-surface resume, and broker submit while active. |
 | `accounts/<account_id>/owner_generation.json` | account | Current AccountOwner fencing generation and phase (`accepting`, `reconnecting`, `draining`, `frozen`). |
 | `accounts/<account_id>/account_events.jsonl` | account | Append-only audit events for account freeze recorded/cleared transitions, recovery proofs, audited overrides, owner generation/reconnect, submit lane evidence, instance registry writes, and restart-intensity breaches. |
 
@@ -97,11 +97,12 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 
 Submit safety currently has three layers:
 
-1. `LivePortfolio.__post_init__` refuses a real broker adapter without `IntentWal` and non-empty `bot_order_namespace`.
-2. When AccountOwner mode is enabled, `LivePortfolio.submit_pending_orders` emits `AccountOwnerSubmitIntent` to the configured submitter and does not call its broker adapter directly.
+1. Legacy direct-submit mode refuses a real broker adapter without `IntentWal` and non-empty `bot_order_namespace`.
+2. AccountOwner submit mode refuses a configured run-scoped `IntentWal`; it requires an AccountOwner submitter plus account id, strategy instance id, run id, bot order namespace, owner generation provider, and trace id provider.
 3. `LivePortfolio.submit_pending_orders` refuses active account freezes and non-passing account registry bindings before any broker call or AccountOwner handoff.
-4. Legacy direct-submit mode writes `PENDING_INTENT` before `broker.place_order`, then writes `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, `SUBMITTED_RECOVERED`, `INTENT_NOT_ACCEPTED`, or `SUBMIT_UNCERTAIN_HALTED`.
-5. `place_paper_order` requires `spec.order_ref` and enforces paper safety before `IB.placeOrder`.
+4. AccountOwner submit mode emits `AccountOwnerSubmitIntent` to the configured submitter, writes account-scoped submit evidence to `account_events.jsonl`, and does not call its broker adapter directly.
+5. Legacy direct-submit mode writes `PENDING_INTENT` before `broker.place_order`, then writes `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, `SUBMITTED_RECOVERED`, `INTENT_NOT_ACCEPTED`, or `SUBMIT_UNCERTAIN_HALTED`.
+6. `place_paper_order` requires `spec.order_ref` and enforces paper safety before `IB.placeOrder`.
 
 Current limitation: this is still enforced inside each runner process, not by a single-writer AccountOwner. Multiple runner processes cannot pass submit with an unregistered/stale account binding, but a sibling process still owns its own broker connection until AccountOwner ships.
 
@@ -118,9 +119,9 @@ Runner-side owner mode is available through:
 
 Structured diagnostics include trace id, bot/instance id, account id, run id, intent id, order ref, owner generation, broker client id, order id, perm id, and exec id when available.
 
-`AccountOwner.handle_reconnect(...)` ships the current generation/reconnect drain behavior inside the V1 lane. It persists `owner_generation.json`, moves phases through `reconnecting`, `draining`, `accepting`, or `frozen`, rejects new submit intents while non-accepting, rotates client ids on IBKR client-id-in-use code `326`, drains prepared-without-terminal account events as accepted/rejected/uncertain via the supplied classifier, and resumes only after the supplied account classifier gate passes. `AccountOwner.reconnect_gate_result()` projects the current phase into `gate_id=account_owner.reconnect`.
+`AccountOwner.handle_reconnect(...)` ships the current generation/reconnect drain behavior inside the V1 lane. It persists `owner_generation.json`, moves phases through `reconnecting`, `draining`, `accepting`, or `frozen`, rejects new submit intents while non-accepting, rotates client ids on IBKR client-id-in-use code `326`, records reconnect drain outcomes for prepared-without-terminal account events via the supplied classifier, and resumes only after the supplied account classifier gate passes. `AccountOwner.reconnect_gate_result()` projects the current phase into `gate_id=account_owner.reconnect`.
 
-Current limitation: production still needs a long-lived AccountOwner process with a real broker session and IPC intake. V1 proves the serialized submit lane and runner no-direct-submit mode.
+Current limitation: production still needs a long-lived AccountOwner process with a real broker session and IPC intake. V1 proves the serialized submit lane and runner no-direct-submit mode. Reconnect drain events are reconnect evidence, not submit terminal events; until a terminal `account_owner_submit_*` event exists, a later reconnect may still classify the prepared event again.
 
 ## 6. Current Reconciliation Authority
 
@@ -148,7 +149,7 @@ Current limitation: classification is still centered on one run's `allowed_names
 - account registry rows from `accounts/<account_id>/instance_registry.jsonl`;
 - durable submit intent evidence with account, instance, run, namespace, intent id, order ref, status, and timestamp;
 - optional fleet baseline evidence with `baseline_id`, cutoff timestamp, and source;
-- optional audited operator override evidence with override id, approved decision, reason, approver, timestamp, expiry, prior evidence, affected identifiers, and next reconciliation step.
+- optional audited operator override evidence with override id, approved decision, reason, approver, `approved_at_ms`, `valid_until_ms`, prior evidence, affected identifiers, and next reconciliation step.
 
 It returns `AccountClassifierDecision` with `outcome`, `reason`, `account_id`, optional affected instance/run/namespace identifiers, affected order refs, optional `baseline_id`, optional `override_id`, and `decided_at_ms` as `int64 ms UTC`. Every decision projects to `GateResult` through `to_gate_result()`.
 
@@ -169,9 +170,9 @@ Fresh audited overrides may carry a `continue` decision for unprovable/unknown b
 `engine/live/account_artifacts.py` is the shipped authority for clearing `accounts/<account_id>/unresolved_exposure.flag`. `clear_account_freeze(...)` accepts exactly one of:
 
 - `AccountRecoveryProof`: broker-backed recovery evidence with requested action, requester, broker evidence, reconciliation result, final `GateResult`, and `recorded_at_ms`.
-- `AccountAuditedOverride`: explicit operator override with approved decision, reason, approver, approval/expiry timestamps, prior evidence, affected account/run/instance identifiers, and next reconciliation step.
+- `AccountAuditedOverride`: explicit operator override with approved decision, reason, approver, `approved_at_ms` and `valid_until_ms` as `int64 ms UTC`, prior evidence, affected account/run/instance identifiers, and next reconciliation step.
 
-Recovery proof clears only when `reconciliation_result=clean` and the final gate status is `pass`. Audited overrides clear only while fresh and cannot clear with an approved `freeze` decision. Every successful clear keeps the freeze file as cleared evidence, appends either `account_recovery_proof_recorded` or `account_audited_override_recorded`, then appends `account_freeze_cleared`.
+Recovery proof clears only when `reconciliation_result=clean` and the final gate status is `pass`. Audited overrides clear only while fresh against the actual clear time: callers may pass `now_ms`, otherwise `clear_account_freeze(...)` uses the real current clock, and `cleared_at_ms` records that same clear time. Overrides cannot clear with an approved `freeze` decision. Every successful clear keeps the freeze file as cleared evidence, appends either `account_recovery_proof_recorded` or `account_audited_override_recorded`, then appends `account_freeze_cleared`.
 
 ## 7. Current Watchdog Authority
 
@@ -194,12 +195,10 @@ Production delegates to `WatchdogHaltExecutor`, which currently:
 Critical watchdog outcomes now include a canonical `GateResult` with
 `gate_id=watchdog.lease_loss` and `status=freeze`; safe outcomes emit
 `status=pass`. The watchdog evidence remains run-scoped incident evidence.
-Account freeze evidence is represented separately by
-`accounts/<account_id>/unresolved_exposure.flag`.
-
-Current limitation: watchdog failure-to-flatten evidence does not yet
-automatically write the account-scoped freeze artifact. The artifact exists and
-is enforced once written.
+When watchdog flattening is unsafe and account context is available, the
+halt executor writes account freeze evidence to
+`accounts/<account_id>/unresolved_exposure.flag`; the artifact is enforced by
+deploy/start/router resume/submit paths that consume account freeze state.
 
 ## 8. Current Operator Gates
 
@@ -219,7 +218,7 @@ their legacy `status` values (`pass`, `fail`, `unknown`) for compatibility;
 | Gate group | Current implementation | Drift risk |
 |---|---|---|
 | Start process | `_assert_start_allowed` plus daemon start checks; the operator surface exposes Start `GateResult` rows and blocks active account freeze artifacts. | Router recheck is still separate from `operator_capability.py`; account freeze is explicitly wired today. |
-| Resume/Pause/Stop/Flatten/Poison | `evaluate_action` used by status projection and mutation endpoints; the operator surface exposes per-action `GateResult` rows. Active account freeze artifacts block Resume. | Strong pattern to reuse for gate board. |
+| Resume/Pause/Stop/Flatten/Poison | `evaluate_action` used by status projection and mutation endpoints; the operator surface exposes per-action `GateResult` rows. Active account freeze artifacts block router/operator-surface Resume. | Strong pattern to reuse for gate board. Direct runner CLI resume does not read the account freeze artifact yet. |
 | Readiness | `build_live_readiness` and `build_start_readiness` emit raw readiness gates with canonical `GateResult`; operator surface projects those into `OperatorGate`. | Live readiness is engine-authored; backend-derived start readiness is separate and labelled. |
 | Resume guards | `resume_guard_state.py` folds broker safety, submission capability, reconciliation, and uncertain intent. | Instance/run scoped; does not know account freeze yet. |
 | Account instance registry | Host daemon deploy writes `DEPLOYED`; host daemon start and direct `run.py start` write `ACTIVE` for ledgers with a persisted `strategy_instance_id`; `LiveEngine` injects the registry gate into submit and readiness for those modern ledger identities. | Append-only registry is shipped, but it is not yet owned by AccountOwner. Legacy fallback identities are not entered into the account registry. |
@@ -239,7 +238,7 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 |---|---|
 | Account artifact root under `artifacts/accounts/<account_id>/` | Shipped in `engine/live/account_artifacts.py`. |
 | Append-only `instance_registry.jsonl` written before first submit intent | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, `engine/live/run.py`, `engine/live/live_engine.py`, `engine/live/live_portfolio.py`, and `engine/live/readiness.py` for ledgers with persisted `strategy_instance_id`. |
-| `unresolved_exposure.flag` blocking deploy/start/resume/submit | Shipped in `engine/live/account_artifacts.py`, `routers/live_instances.py`, `services/operator_surface.py`, `engine/live/live_engine.py`, and `engine/live/live_portfolio.py`. |
+| `unresolved_exposure.flag` blocking deploy/start/router resume/submit | Shipped in `engine/live/account_artifacts.py`, `routers/live_instances.py`, `services/operator_surface.py`, `engine/live/live_engine.py`, and `engine/live/live_portfolio.py`. Direct runner CLI resume remains a documented gap. |
 | Account-scoped classifier over registry-known owners | Shipped in `engine/live/account_classifier.py` as pure V1 classifier with GateResult projection. |
 | AccountOwner daemon child process | Not shipped. V1 submit lane exists in `engine/live/account_owner.py`, but no long-lived child process/IPC intake owns it yet. |
 | Runner no-broker-write mode | Shipped when `LivePortfolio.account_owner_submitter` / `LiveEngine.account_owner_submitter` is configured. |
