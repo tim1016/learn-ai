@@ -14,6 +14,7 @@ function order(overrides: Partial<ActivityOrderRow> = {}): ActivityOrderRow {
     order_type: 'MKT',
     status: 'filled',
     group: 'resolved',
+    chart_ts_ms: 1_700_000_000_000,
     submitted_ts_ms: 1_700_000_000_000,
     last_update_ts_ms: 1_700_000_060_000,
     filled_quantity: 1,
@@ -75,5 +76,27 @@ describe('WorkingPendingOrdersSectionComponent', () => {
     const text = el.textContent ?? '';
     expect(text).toContain('Close long');
     expect(text).toContain('seen 3x');
+  });
+
+  it('orders and displays rows by chart time instead of broker update time', () => {
+    const el = render([
+      order({
+        order_key: 'later-chart',
+        symbol: 'LATE',
+        chart_ts_ms: 1_700_000_060_000,
+        last_update_ts_ms: 1_700_000_060_000,
+      }),
+      order({
+        order_key: 'earlier-chart-late-broker',
+        symbol: 'EARLY',
+        chart_ts_ms: 1_700_000_000_000,
+        last_update_ts_ms: 1_700_000_600_000,
+      }),
+    ]);
+
+    const rows = Array.from(el.querySelectorAll('tbody tr'));
+    expect(rows[0].textContent ?? '').toContain('LATE');
+    expect(rows[1].textContent ?? '').toContain('EARLY');
+    expect(el.textContent ?? '').not.toContain('ET');
   });
 });

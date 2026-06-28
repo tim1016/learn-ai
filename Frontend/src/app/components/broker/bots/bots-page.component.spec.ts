@@ -157,12 +157,12 @@ describe('BotsPageComponent', () => {
     expect(expanded?.textContent).toContain('Previous run exited with an error');
   });
 
-  it('navigates to the existing instance cockpit', async () => {
+  it('navigates to the bot control page', async () => {
     const { fixture, router } = await setup();
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
-    await fixture.componentInstance.openCockpit('new-aapl');
+    await fixture.componentInstance.openBot('new-aapl');
 
-    expect(navigate).toHaveBeenCalledWith(['/broker/instances', 'new-aapl']);
+    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'new-aapl']);
   });
 });

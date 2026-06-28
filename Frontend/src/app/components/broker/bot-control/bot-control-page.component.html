@@ -1,0 +1,143 @@
+<section class="bot-control-page" aria-labelledby="bot-control-title">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Bot control</p>
+      <h1 id="bot-control-title">{{ instanceId() ?? 'Bot' }}</h1>
+    </div>
+  </header>
+
+  @if (errorMessage(); as message) {
+    <p class="error-banner" role="alert">{{ message }}</p>
+  }
+
+  <section class="top-banners" aria-label="Bot warnings">
+    @if (brokerEvidenceNotice(); as notice) {
+      <app-operator-notice
+        class="top-banner broker-evidence"
+        [notice]="notice"
+        data-testid="bot-control-broker-evidence-banner"
+      />
+    }
+
+    @if (hostRunnerNotice(); as notice) {
+      <aside
+        class="top-banner host-runner"
+        role="alert"
+        data-testid="bot-control-host-runner-banner"
+      >
+        <header>
+          <span class="tier-pill">critical</span>
+          <h2>{{ notice.title }}</h2>
+        </header>
+        <p>{{ notice.message }}</p>
+        @if (notice.command) {
+          <details>
+            <summary>Host command</summary>
+            <pre><code>{{ notice.command }}</code></pre>
+          </details>
+        }
+      </aside>
+    }
+  </section>
+
+  @if (controlPlaneBanner(); as banner) {
+    <aside
+      class="control-plane-banner"
+      [class.demoted]="banner.demoted"
+      role="status"
+      data-testid="bot-control-plane-banner"
+    >
+      <strong>CONTROL PLANE · {{ banner.label }}</strong>
+      @if (banner.notice) {
+        <span>{{ banner.notice }}</span>
+      }
+      @if (banner.attemptText) {
+        <span class="attempt">{{ banner.attemptText }}</span>
+      }
+    </aside>
+  }
+
+  @if (status(); as s) {
+    <nav
+      class="inner-tabs"
+      role="tablist"
+      aria-label="Bot control views"
+      data-testid="bot-control-tabs"
+    >
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'status'"
+        [attr.aria-selected]="selectedTab() === 'status'"
+        (click)="selectTab('status')"
+      >
+        Status &amp; Risk
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'activity'"
+        [attr.aria-selected]="selectedTab() === 'activity'"
+        (click)="selectTab('activity')"
+      >
+        Activity
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'audit'"
+        [attr.aria-selected]="selectedTab() === 'audit'"
+        (click)="selectTab('audit')"
+      >
+        Audit
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="inner-tab"
+        [class.selected]="selectedTab() === 'configuration'"
+        [attr.aria-selected]="selectedTab() === 'configuration'"
+        (click)="selectTab('configuration')"
+      >
+        Configuration
+      </button>
+    </nav>
+
+    <section class="active-panel" data-testid="bot-control-active-panel">
+      @switch (selectedTab()) {
+        @case ('status') {
+          <app-status-risk-tab
+            [status]="s"
+            (invokeResume)="dispatchResume()"
+            (invokePause)="dispatchPause()"
+            (invokeFlattenAndPause)="dispatchFlattenAndPause()"
+            (focusTab)="selectTab($event)"
+            (redeploy)="onGateRedeploy()"
+            (openRunbook)="onGateOpenRunbook($event)"
+          />
+        }
+        @case ('activity') {
+          <app-activity-tab [status]="s" />
+        }
+        @case ('audit') {
+          <app-audit-tab
+            [status]="s"
+            [busyAction]="busyAction()"
+            (markPoisonedRequested)="markPoisoned()"
+          />
+        }
+        @case ('configuration') {
+          <app-configuration-tab
+            [status]="s"
+            [redeployQueryParams]="redeployQueryParams()"
+          />
+        }
+      }
+    </section>
+  } @else if (!errorMessage()) {
+    <p class="loading">Loading bot control…</p>
+  }
+</section>

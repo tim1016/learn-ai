@@ -33,6 +33,7 @@ import {
 import { firstValueFrom } from 'rxjs';
 import type {
   ActiveDateEntry,
+  ActivityFillMarker,
   ChartSnapshotResponse,
   ChartSnapshotRun,
   IbkrMinuteBar,
@@ -98,8 +99,21 @@ export function markerTimeForEventMs(
   eventMs: number,
   bars: readonly IbkrMinuteBar[],
 ): UTCTimestamp {
-  const bar = bars.find((b) => b.start_ms <= eventMs && eventMs <= b.end_ms);
-  return ((bar?.start_ms ?? eventMs) / 1000) as UTCTimestamp;
+  if (bars.length === 0) return (eventMs / 1000) as UTCTimestamp;
+  let nearest = bars[0];
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const bar of bars) {
+    if (bar.start_ms <= eventMs && eventMs <= bar.end_ms) {
+      return (bar.start_ms / 1000) as UTCTimestamp;
+    }
+    const distance =
+      eventMs < bar.start_ms ? bar.start_ms - eventMs : eventMs - bar.end_ms;
+    if (distance < nearestDistance) {
+      nearest = bar;
+      nearestDistance = distance;
+    }
+  }
+  return (nearest.start_ms / 1000) as UTCTimestamp;
 }
 
 export function filterActivityItemsForSymbol<T extends { symbol: string }>(
@@ -109,6 +123,13 @@ export function filterActivityItemsForSymbol<T extends { symbol: string }>(
   const chartSymbol = activitySymbol.trim().toUpperCase();
   if (!chartSymbol) return items;
   return items.filter((item) => item.symbol.toUpperCase() === chartSymbol);
+}
+
+export function markerTimeForActivityFill(
+  marker: ActivityFillMarker,
+  bars: readonly IbkrMinuteBar[],
+): UTCTimestamp {
+  return markerTimeForEventMs(marker.chart_ts_ms, bars);
 }
 
 export type ChartResolution = '1m' | '5s';
@@ -286,12 +307,6 @@ export class BotTradeChartCardComponent {
     const activity = this.activity();
     if (!activity) return null;
     return filterActivityItemsForSymbol(activity.symbol, activity.fill_markers);
-  });
-
-  protected readonly activityPositionAnnotations = computed(() => {
-    const activity = this.activity();
-    if (!activity) return null;
-    return filterActivityItemsForSymbol(activity.symbol, activity.position_annotations);
   });
 
   constructor() {
@@ -495,7 +510,7 @@ export class BotTradeChartCardComponent {
       this.activityFillMarkers()?.forEach((marker) => {
         const isBuy = marker.side === 'BUY';
         out.push({
-          time: markerTimeForEventMs(marker.exec_ts_ms, bars),
+          time: markerTimeForActivityFill(marker, bars),
           position: isBuy ? 'belowBar' : 'aboveBar',
           color: isBuy ? '#60a5fa' : '#f97316',
           shape: isBuy ? 'arrowUp' : 'arrowDown',
@@ -503,15 +518,6 @@ export class BotTradeChartCardComponent {
             `${marker.side} ${marker.quantity}` +
             ` · ${marker.position_effect}` +
             (marker.replay_count > 1 ? ` · seen ${marker.replay_count}x` : ''),
-        });
-      });
-      this.activityPositionAnnotations()?.forEach((annotation) => {
-        out.push({
-          time: markerTimeForEventMs(annotation.ts_ms, bars),
-          position: annotation.label === 'OPEN' ? 'belowBar' : 'aboveBar',
-          color: annotation.uncertain ? '#fbbf24' : '#e2e8f0',
-          shape: 'circle',
-          text: annotation.uncertain ? 'POSITION UNCERTAIN' : annotation.label,
         });
       });
       out.sort((a, b) => (a.time as number) - (b.time as number));

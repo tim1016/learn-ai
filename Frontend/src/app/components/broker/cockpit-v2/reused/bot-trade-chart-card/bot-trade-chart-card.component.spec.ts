@@ -4,13 +4,26 @@ import {
   filterActivityItemsForSymbol,
   isAtLiveEdge,
   localDateString,
+  markerTimeForActivityFill,
   markerTimeForEventMs,
 } from './bot-trade-chart-card.component';
-import type { IbkrMinuteBar } from './bot-trade-chart-card.types';
+import type { ActivityFillMarker, IbkrMinuteBar } from './bot-trade-chart-card.types';
 
 const range = (from: number, to: number): LogicalRange => ({
   from: from as Logical,
   to: to as Logical,
+});
+
+const bar = (startMs: number): IbkrMinuteBar => ({
+  symbol: 'SPY',
+  start_ms: startMs,
+  end_ms: startMs + 60_000,
+  open: '100',
+  high: '101',
+  low: '99',
+  close: '100.5',
+  volume: 100,
+  fetched_at_ms: startMs + 60_000,
 });
 
 describe('isAtLiveEdge', () => {
@@ -47,18 +60,6 @@ describe('isAtLiveEdge', () => {
 });
 
 describe('markerTimeForEventMs', () => {
-  const bar = (startMs: number): IbkrMinuteBar => ({
-    symbol: 'SPY',
-    start_ms: startMs,
-    end_ms: startMs + 60_000,
-    open: '100',
-    high: '101',
-    low: '99',
-    close: '100.5',
-    volume: 100,
-    fetched_at_ms: startMs + 60_000,
-  });
-
   it('snaps a bar-close trade timestamp to the candle start time', () => {
     const bars = [bar(1_800_000), bar(1_860_000)];
 
@@ -71,8 +72,13 @@ describe('markerTimeForEventMs', () => {
     expect(markerTimeForEventMs(1_875_000, bars)).toBe(1_860);
   });
 
-  it('preserves the original event timestamp when no candle contains it', () => {
-    expect(markerTimeForEventMs(1_700_000, [bar(1_800_000)])).toBe(1_700);
+  it('snaps out-of-range event timestamps to the nearest displayed candle', () => {
+    expect(markerTimeForEventMs(1_700_000, [bar(1_800_000)])).toBe(1_800);
+    expect(markerTimeForEventMs(1_950_000, [bar(1_800_000), bar(1_860_000)])).toBe(1_860);
+  });
+
+  it('preserves the event timestamp when no candles are available', () => {
+    expect(markerTimeForEventMs(1_700_000, [])).toBe(1_700);
   });
 });
 
@@ -94,6 +100,28 @@ describe('filterActivityItemsForSymbol', () => {
     const items = [{ id: 'tsla-open', symbol: 'TSLA' }];
 
     expect(filterActivityItemsForSymbol(' ', items)).toBe(items);
+  });
+});
+
+describe('markerTimeForActivityFill', () => {
+  it('uses the chart timestamp instead of the broker execution timestamp', () => {
+    const bars = [bar(1_800_000), bar(1_860_000)];
+    const marker: ActivityFillMarker = {
+      id: 'exec-late',
+      row_seq: 1,
+      order_key: 'perm:1',
+      symbol: 'SPY',
+      side: 'BUY',
+      quantity: 1,
+      price: 100,
+      chart_ts_ms: 1_875_000,
+      exec_ts_ms: 8_000_000,
+      position_effect: 'Open long',
+      replay_count: 1,
+      evidence: [],
+    };
+
+    expect(markerTimeForActivityFill(marker, bars)).toBe(1_860);
   });
 });
 

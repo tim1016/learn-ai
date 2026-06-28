@@ -234,6 +234,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "broker/bots/:id",
+    loadComponent: () =>
+      import(
+        "./components/broker/bot-control/bot-control-page.component"
+      ).then((m) => m.BotControlPageComponent),
+  },
+  {
     // Deep-linkable per-bot URL (#565 PR 3). The component resolves
     // ``:id`` against the loaded fleet on every tick; bad / deleted /
     // missing ids fall back to the same component-resolved default

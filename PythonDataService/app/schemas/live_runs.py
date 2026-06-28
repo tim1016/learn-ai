@@ -1837,6 +1837,7 @@ class ActivityFillMarker(BaseModel):
     side: Literal["BUY", "SELL"]
     quantity: float
     price: float
+    chart_ts_ms: int
     exec_ts_ms: int
     position_effect: str
     replay_count: int = 1
@@ -1878,6 +1879,7 @@ class ActivityOrderRow(BaseModel):
     order_type: str
     status: str
     group: Literal["active", "resolved", "engine_pending"]
+    chart_ts_ms: int
     submitted_ts_ms: int
     last_update_ts_ms: int
     filled_quantity: float = 0.0

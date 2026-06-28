@@ -106,8 +106,8 @@ export class BotsPageComponent {
     return this.expanded()[id] === true;
   }
 
-  async openCockpit(id: string): Promise<void> {
-    await this.router.navigate(['/broker/instances', id]);
+  async openBot(id: string): Promise<void> {
+    await this.router.navigate(['/broker/bots', id]);
   }
 
   tagSeverity(tone: BotCatalogTone): TagSeverity {

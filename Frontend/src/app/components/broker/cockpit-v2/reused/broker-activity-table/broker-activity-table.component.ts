@@ -8,7 +8,7 @@ import {
 import { TagModule } from 'primeng/tag';
 
 import type { BrokerActivityHealth } from '../../../../../api/live-instances.types';
-import { fmtCurrency, fmtNumber, fmtTimestampNy } from '../../../format';
+import { fmtCurrency, fmtNumber, fmtTimestampLocal } from '../../../format';
 import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 
 import { BrokerActivityRowDetailComponent } from '../broker-activity-row-detail/broker-activity-row-detail.component';
@@ -176,7 +176,7 @@ export class BrokerActivityTableComponent {
   /** Render-only formatting wrappers used by the template. */
   readonly fmtCurrency = fmtCurrency;
   readonly fmtNumber = fmtNumber;
-  readonly fmtTimestampNy = fmtTimestampNy;
+  readonly fmtTimestampLocal = fmtTimestampLocal;
 
   formatLag(ms: number | null | undefined): string {
     if (ms === null || ms === undefined) return '—';

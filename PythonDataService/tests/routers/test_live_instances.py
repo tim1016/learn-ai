@@ -571,10 +571,16 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     assert body["fill_markers"][1]["replay_count"] == 2
     assert body["fill_markers"][0]["position_effect"] == "Open long"
     assert body["fill_markers"][1]["position_effect"] == "Close long"
+    assert body["fill_markers"][0]["chart_ts_ms"] == base_ms
+    assert body["fill_markers"][0]["exec_ts_ms"] == base_ms
     assert {o["group"] for o in body["orders_today"]} == {"engine_pending", "resolved"}
+    resolved_orders = [o for o in body["orders_today"] if o["group"] == "resolved"]
+    assert {o["chart_ts_ms"] for o in resolved_orders} == {base_ms, base_ms + 60_000}
     assert any(w["code"] == "broker_replay_collapsed" for w in body["reconciliation_warnings"])
     fill_event_ids = [row["id"] for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert fill_event_ids.count("exec:exec-sell") == 1
+    fill_events = [row for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
+    assert {row["ts_ms"] for row in fill_events} == {base_ms, base_ms + 60_000}
 
 
 async def test_activity_projection_preserves_backend_fill_verdict(
@@ -838,8 +844,10 @@ async def test_activity_projection_repairs_execution_artifact_without_wal_mutati
     body = response.json()
     assert body["session_date"] == "2026-06-25"
     assert [row["id"] for row in body["fill_markers"]] == ["exec:exec-repair-1"]
+    assert body["fill_markers"][0]["chart_ts_ms"] == fill_ms
     fill_rows = [row for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert len(fill_rows) == 1
+    assert fill_rows[0]["ts_ms"] == fill_ms
     assert fill_rows[0]["source"] == "activity_repair_projection"
     assert fill_rows[0]["display_type"] == "Broker fill"
     assert fill_rows[0]["visible_row_id"] == "fill:exec:exec-repair-1"

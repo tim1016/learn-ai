@@ -116,6 +116,7 @@ export interface ActivityFillMarker {
   side: 'BUY' | 'SELL';
   quantity: number;
   price: number;
+  chart_ts_ms: number;
   exec_ts_ms: number;
   position_effect: string;
   replay_count: number;
@@ -151,6 +152,7 @@ export interface ActivityOrderRow {
   order_type: string;
   status: string;
   group: 'active' | 'resolved' | 'engine_pending';
+  chart_ts_ms: number;
   submitted_ts_ms: number;
   last_update_ts_ms: number;
   filled_quantity: number;
