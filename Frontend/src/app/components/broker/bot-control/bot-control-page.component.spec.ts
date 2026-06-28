@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { FleetAccountSummary, LiveInstanceStatus } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import { makeLifecycleChartFixture } from '../../../testing/live-instance-status-fixtures';
 import { BotControlPageComponent } from './bot-control-page.component';
 
@@ -186,7 +187,7 @@ describe('BotControlPageComponent', () => {
     vi.useRealTimers();
   });
 
-  it('renders broker evidence, host runner, and control-plane banners before the bot tabs', async () => {
+  it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     TestBed.configureTestingModule({
       providers: [
@@ -217,14 +218,53 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('[data-testid="bot-control-broker-evidence-banner"]')?.textContent)
-      .toContain('Broker evidence is unavailable');
-    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')?.textContent)
-      .toContain('Host runner unreachable');
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')?.textContent)
-      .toContain('CONTROL PLANE · LAST-KNOWN');
+    const brokerPanel = el.querySelector('[data-testid="bot-control-broker-evidence-banner"]');
+    const controlPanel = el.querySelector('[data-testid="bot-control-plane-banner"]');
+    expect(brokerPanel?.querySelector('summary')?.textContent)
+      .toContain('Warning, broker evidence unavailable.');
+    expect(controlPanel?.querySelector('summary')?.textContent)
+      .toContain('Control plane, last known.');
+    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')?.textContent)
       .toContain('Status & Risk');
+  });
+
+  it('publishes the active bot host-runner warning to the sidebar notice service', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const sidebarNotice = TestBed.inject(ActiveBotSidebarNoticeService).activeNotice();
+    expect(sidebarNotice).toEqual({
+      instanceId: 'sid-x',
+      message: 'Start the host runner before trading this bot.',
+      command: 'make broker-runner',
+    });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
   });
 
   it('refreshes broker evidence on the serialized poll loop', async () => {
@@ -303,9 +343,8 @@ describe('BotControlPageComponent', () => {
     first.resolve(makeStatus({ id: 'bot-a', hostNotice: 'A runner is unreachable.' }));
     await flush(fixture);
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('B runner is unreachable.');
-    expect(text).not.toContain('A runner is unreachable.');
+    const sidebarNotice = TestBed.inject(ActiveBotSidebarNoticeService).activeNotice();
+    expect(sidebarNotice?.message).toBe('B runner is unreachable.');
   });
 
   it('requires typed HALT before marking a run poisoned', async () => {

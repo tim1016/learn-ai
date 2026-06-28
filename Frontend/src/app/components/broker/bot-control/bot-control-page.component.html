@@ -46,51 +46,59 @@
     <p class="error-banner" role="alert">{{ message }}</p>
   }
 
-  <section class="top-banners" aria-label="Bot warnings">
-    @if (brokerEvidenceNotice(); as notice) {
-      <app-operator-notice
-        class="top-banner broker-evidence"
-        [notice]="notice"
-        data-testid="bot-control-broker-evidence-banner"
-      />
-    }
-
-    @if (hostRunnerNotice(); as notice) {
-      <aside
-        class="top-banner host-runner"
-        role="alert"
-        data-testid="bot-control-host-runner-banner"
-      >
-        <header>
-          <span class="tier-pill">critical</span>
-          <h2>{{ notice.title }}</h2>
-        </header>
-        <p>{{ notice.message }}</p>
-        @if (notice.command) {
-          <details>
-            <summary>Host command</summary>
-            <pre><code>{{ notice.command }}</code></pre>
-          </details>
-        }
-      </aside>
-    }
-  </section>
-
-  @if (controlPlaneBanner(); as banner) {
-    <aside
-      class="control-plane-banner"
-      [class.demoted]="banner.demoted"
-      role="status"
-      data-testid="bot-control-plane-banner"
-    >
-      <strong>CONTROL PLANE · {{ banner.label }}</strong>
-      @if (banner.notice) {
-        <span>{{ banner.notice }}</span>
+  @if (hasTopWarnings()) {
+    <section class="top-banners" aria-label="Bot warnings">
+      @if (brokerEvidenceNotice(); as notice) {
+        <details
+          class="top-banner warning-panel broker-evidence"
+          data-testid="bot-control-broker-evidence-banner"
+        >
+          <summary>
+            <span>Warning, broker evidence unavailable.</span>
+          </summary>
+          <div class="warning-panel-detail">
+            <p>{{ notice.message }}</p>
+            <div class="warning-actions">
+              <a class="warning-link" [routerLink]="['/broker/account-monitor']">Open Account Monitor</a>
+              @if (notice.runbook_slug) {
+                <a class="warning-link" [href]="'/runbooks/' + notice.runbook_slug" target="_blank" rel="noopener">
+                  Open runbook
+                </a>
+              }
+            </div>
+          </div>
+        </details>
       }
-      @if (banner.attemptText) {
-        <span class="attempt">{{ banner.attemptText }}</span>
+
+      @if (controlPlaneBanner(); as banner) {
+        <details
+          class="top-banner warning-panel control-plane"
+          [class.demoted]="banner.demoted"
+          data-testid="bot-control-plane-banner"
+        >
+          <summary>
+            <span>Control plane, {{ banner.shortLabel }}.</span>
+          </summary>
+          <div class="warning-panel-detail">
+            @if (banner.notice) {
+              <p>{{ banner.notice }}</p>
+            }
+            @if (banner.attemptText) {
+              <p class="warning-meta">{{ banner.attemptText }}</p>
+            }
+            <p class="warning-meta">State: {{ banner.state }}</p>
+            <div class="warning-actions">
+              <a class="warning-link" [routerLink]="['/broker']">Open Broker Status</a>
+              @if (banner.runbookSlug) {
+                <a class="warning-link" [href]="'/runbooks/' + banner.runbookSlug" target="_blank" rel="noopener">
+                  Open runbook
+                </a>
+              }
+            </div>
+          </div>
+        </details>
       }
-    </aside>
+    </section>
   }
 
   @if (status(); as s) {

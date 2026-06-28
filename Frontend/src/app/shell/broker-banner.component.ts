@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { BrokerHealthService } from '../services/broker-health.service';
+import { ActiveBotSidebarNoticeService } from './active-bot-sidebar-notice.service';
 
 /**
  * Sidebar broker connection control.
@@ -13,6 +14,18 @@ import { BrokerHealthService } from '../services/broker-health.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './broker-banner.component.scss',
   template: `
+    @if (activeBotNotice(); as notice) {
+      <details class="host-runner-sidebar-notice" data-testid="sidebar-host-runner-notice">
+        <summary>Warning, host runner unreachable.</summary>
+        <div class="host-runner-sidebar-detail">
+          <p>{{ notice.message }}</p>
+          @if (notice.command) {
+            <pre><code>{{ notice.command }}</code></pre>
+          }
+        </div>
+      </details>
+    }
+
     @let state = banner();
     @let action = lifecycleAction();
     @if (state) {
@@ -55,7 +68,9 @@ import { BrokerHealthService } from '../services/broker-health.service';
 })
 export class BrokerBannerComponent {
   private readonly healthService = inject(BrokerHealthService);
+  private readonly activeBotNoticeService = inject(ActiveBotSidebarNoticeService);
   readonly lifecycleAction = this.healthService.lifecycleAction;
+  readonly activeBotNotice = this.activeBotNoticeService.activeNotice;
 
   toggleConnection(): Promise<void> {
     const state = this.banner();

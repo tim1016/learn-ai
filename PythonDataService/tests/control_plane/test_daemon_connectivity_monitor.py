@@ -202,7 +202,7 @@ def test_consecutive_connected_probes_preserve_last_transition() -> None:
     assert s1.last_transition_ms == START_MS + 100
 
 
-def test_unreachable_folds_into_retrying_under_budget() -> None:
+def test_unreachable_folds_into_retrying_until_budget_is_met() -> None:
     s = initial_state(now_ms=START_MS)
 
     s = _fold(s, _unreachable(detail="d1", error_category="connect_error"))
@@ -218,18 +218,17 @@ def test_unreachable_folds_into_retrying_under_budget() -> None:
 
     s = _fold(s, _unreachable())
     assert s.attempt == 3
-    assert s.kind == "RETRYING"
+    assert s.kind == "UNREACHABLE"
 
 
 def test_unreachable_past_budget_emits_terminal_unreachable() -> None:
     s = initial_state(now_ms=START_MS)
 
     s = _fold(s, _unreachable(), retry_budget=2)  # attempt=1, RETRYING
-    s = _fold(s, _unreachable(), retry_budget=2)  # attempt=2, RETRYING (at budget)
-    s = _fold(s, _unreachable(), retry_budget=2)  # exceeds budget
+    s = _fold(s, _unreachable(), retry_budget=2)  # attempt=2, terminal
 
     assert s.kind == "UNREACHABLE"
-    assert s.attempt == 2  # pinned at budget, not 3
+    assert s.attempt == 2
     assert s.next_probe_in_ms == DEFAULT_PROBE_CADENCE_MS
 
     # Further UNREACHABLE outcomes do not bump attempt past the cap.
