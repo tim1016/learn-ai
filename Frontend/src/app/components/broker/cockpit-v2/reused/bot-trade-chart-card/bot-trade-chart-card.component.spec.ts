@@ -60,10 +60,10 @@ describe('isAtLiveEdge', () => {
 });
 
 describe('markerTimeForEventMs', () => {
-  it('snaps a bar-close trade timestamp to the candle start time', () => {
+  it('treats candle end as exclusive and assigns exact boundary timestamps to the next candle', () => {
     const bars = [bar(1_800_000), bar(1_860_000)];
 
-    expect(markerTimeForEventMs(1_860_000, bars)).toBe(1_800);
+    expect(markerTimeForEventMs(1_860_000, bars)).toBe(1_860);
   });
 
   it('snaps an intra-bar execution timestamp to its containing candle', () => {

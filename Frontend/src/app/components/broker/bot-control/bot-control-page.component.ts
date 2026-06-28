@@ -22,12 +22,16 @@ import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component'
 import { AuditTabComponent } from '../cockpit-v2/tabs/audit-tab.component';
 import { ConfigurationTabComponent } from '../cockpit-v2/tabs/configuration-tab.component';
 import { StatusRiskTabComponent } from '../cockpit-v2/tabs/status-risk-tab.component';
+import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
 import type { InnerTab } from '../cockpit-v2/lib/instance-tab-state';
 import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
 
 const POLL_INTERVAL_MS = 4_000;
+const POISONED_CONFIRM_MESSAGE =
+  'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
 
 type BotControlTab = InnerTab;
+type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
 
 interface ControlPlaneBanner {
   readonly state: OperatorSurfaceControlPlane['state'];
@@ -46,6 +50,7 @@ interface ControlPlaneBanner {
     ActivityTabComponent,
     AuditTabComponent,
     ConfigurationTabComponent,
+    TypedHaltConfirmComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -56,6 +61,10 @@ export class BotControlPageComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollToken = 0;
+  private statusRequestSeq = 0;
+  private destroyed = false;
 
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
@@ -65,6 +74,8 @@ export class BotControlPageComponent {
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
   readonly busyAction = signal<string | null>(null);
+  readonly typedHaltOpen = signal<boolean>(false);
+  readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError() ?? this.accountSummaryError(),
@@ -102,16 +113,19 @@ export class BotControlPageComponent {
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
       const id = params.get('id');
+      const token = ++this.pollToken;
+      this.clearPollTimer();
       this.instanceId.set(id);
       this.status.set(null);
-      if (id) void this.refresh(id);
+      if (id) {
+        void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
+      }
     });
-
-    const poll = setInterval(() => {
-      const id = this.instanceId();
-      if (id) void this.refreshStatus(id);
-    }, POLL_INTERVAL_MS);
-    this.destroyRef.onDestroy(() => clearInterval(poll));
+    this.destroyRef.onDestroy(() => {
+      this.destroyed = true;
+      this.pollToken += 1;
+      this.clearPollTimer();
+    });
   }
 
   selectTab(tab: BotControlTab): void {
@@ -124,6 +138,10 @@ export class BotControlPageComponent {
 
   async dispatchPause(): Promise<void> {
     await this.setIntent('pause', 'Pause');
+  }
+
+  async dispatchStop(): Promise<void> {
+    await this.setIntent('stop', 'Stop');
   }
 
   async dispatchFlattenAndPause(): Promise<void> {
@@ -153,15 +171,21 @@ export class BotControlPageComponent {
     window.open(`/runbooks/${encodeURIComponent(slug)}`, '_blank', 'noopener');
   }
 
-  async markPoisoned(): Promise<void> {
+  openTypedHalt(): void {
+    if (this.isActionDisabled('mark_poisoned')) return;
+    this.typedHaltOpen.set(true);
+  }
+
+  closeTypedHalt(): void {
+    this.typedHaltOpen.set(false);
+  }
+
+  async confirmTypedHalt(): Promise<void> {
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
-    const confirmed = window.confirm(
-      'Mark this run POISONED?\n\nThe bot will halt and this run will refuse future starts.',
-    );
-    if (!confirmed) return;
     this.busyAction.set('mark_poisoned');
     this.mutationError.set(null);
+    this.typedHaltOpen.set(false);
     try {
       await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
       await this.refreshStatus(id);
@@ -178,15 +202,25 @@ export class BotControlPageComponent {
     return redeployQueryParamsForStatus(s);
   }
 
+  isActionDisabled(action: BotControlAction): boolean {
+    const status = this.status();
+    if (status === null || this.busyAction() !== null) return true;
+    return !status.operator_surface.actions[action].enabled;
+  }
+
   private async refresh(id: string): Promise<void> {
     await Promise.allSettled([this.refreshStatus(id), this.refreshAccountSummary()]);
   }
 
   private async refreshStatus(id: string): Promise<void> {
+    const seq = ++this.statusRequestSeq;
     try {
-      this.status.set(await this.liveRuns.getInstanceStatus(id));
+      const status = await this.liveRuns.getInstanceStatus(id);
+      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
+      this.status.set(status);
       this.statusError.set(null);
     } catch (err) {
+      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.statusError.set(this.humanError(err));
     }
   }
@@ -225,5 +259,19 @@ export class BotControlPageComponent {
   private humanError(err: unknown): string {
     if (err instanceof Error && err.message) return err.message;
     return 'Could not load bot control data.';
+  }
+
+  private scheduleNextPoll(id: string, token: number): void {
+    if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = null;
+      void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
+    }, POLL_INTERVAL_MS);
+  }
+
+  private clearPollTimer(): void {
+    if (this.pollTimer === null) return;
+    clearTimeout(this.pollTimer);
+    this.pollTimer = null;
   }
 }

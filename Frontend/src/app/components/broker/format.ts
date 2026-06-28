@@ -94,7 +94,7 @@ export function fmtNumber(
 
 /** Format an `int64 ms UTC` timestamp in the viewer's browser-local timezone. */
 export function fmtTimestampLocal(ms: number | null | undefined): string {
-  if (ms == null) return '—';
+  if (ms === null || ms === undefined) return '—';
   const formatter = new Intl.DateTimeFormat(undefined, {
     year: 'numeric',
     month: '2-digit',

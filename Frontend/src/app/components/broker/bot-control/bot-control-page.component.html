@@ -4,6 +4,42 @@
       <p class="eyebrow">Bot control</p>
       <h1 id="bot-control-title">{{ instanceId() ?? 'Bot' }}</h1>
     </div>
+    @if (status()) {
+      <div class="control-actions" aria-label="Bot controls">
+        <button
+          type="button"
+          class="action-button"
+          [disabled]="isActionDisabled('resume')"
+          (click)="dispatchResume()"
+        >
+          Resume
+        </button>
+        <button
+          type="button"
+          class="action-button"
+          [disabled]="isActionDisabled('pause')"
+          (click)="dispatchPause()"
+        >
+          Pause
+        </button>
+        <button
+          type="button"
+          class="action-button"
+          [disabled]="isActionDisabled('flatten_and_pause')"
+          (click)="dispatchFlattenAndPause()"
+        >
+          Flatten &amp; pause
+        </button>
+        <button
+          type="button"
+          class="action-button"
+          [disabled]="isActionDisabled('stop')"
+          (click)="dispatchStop()"
+        >
+          Stop
+        </button>
+      </div>
+    }
   </header>
 
   @if (errorMessage(); as message) {
@@ -58,48 +94,39 @@
   }
 
   @if (status(); as s) {
-    <nav
-      class="inner-tabs"
-      role="tablist"
-      aria-label="Bot control views"
-      data-testid="bot-control-tabs"
-    >
+    <nav class="inner-tabs" aria-label="Bot control views" data-testid="bot-control-tabs">
       <button
         type="button"
-        role="tab"
         class="inner-tab"
         [class.selected]="selectedTab() === 'status'"
-        [attr.aria-selected]="selectedTab() === 'status'"
+        [attr.aria-current]="selectedTab() === 'status' ? 'page' : null"
         (click)="selectTab('status')"
       >
         Status &amp; Risk
       </button>
       <button
         type="button"
-        role="tab"
         class="inner-tab"
         [class.selected]="selectedTab() === 'activity'"
-        [attr.aria-selected]="selectedTab() === 'activity'"
+        [attr.aria-current]="selectedTab() === 'activity' ? 'page' : null"
         (click)="selectTab('activity')"
       >
         Activity
       </button>
       <button
         type="button"
-        role="tab"
         class="inner-tab"
         [class.selected]="selectedTab() === 'audit'"
-        [attr.aria-selected]="selectedTab() === 'audit'"
+        [attr.aria-current]="selectedTab() === 'audit' ? 'page' : null"
         (click)="selectTab('audit')"
       >
         Audit
       </button>
       <button
         type="button"
-        role="tab"
         class="inner-tab"
         [class.selected]="selectedTab() === 'configuration'"
-        [attr.aria-selected]="selectedTab() === 'configuration'"
+        [attr.aria-current]="selectedTab() === 'configuration' ? 'page' : null"
         (click)="selectTab('configuration')"
       >
         Configuration
@@ -126,7 +153,7 @@
           <app-audit-tab
             [status]="s"
             [busyAction]="busyAction()"
-            (markPoisonedRequested)="markPoisoned()"
+            (markPoisonedRequested)="openTypedHalt()"
           />
         }
         @case ('configuration') {
@@ -140,4 +167,12 @@
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control…</p>
   }
+
+  <app-typed-halt-confirm
+    [open]="typedHaltOpen()"
+    heading="Mark this run POISONED"
+    [message]="poisonedConfirmMessage"
+    (confirmed)="confirmTypedHalt()"
+    (cancelled)="closeTypedHalt()"
+  />
 </section>

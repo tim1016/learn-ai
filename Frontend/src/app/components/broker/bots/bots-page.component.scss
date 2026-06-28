@@ -62,21 +62,6 @@ h1 {
   width: 100%;
 }
 
-:host ::ng-deep .filter-field .p-inputtext {
-  border-color: var(--border-light);
-  background: var(--bg-sunken);
-  color: var(--text-primary);
-
-  &::placeholder {
-    color: var(--text-muted);
-  }
-
-  &:enabled:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
-  }
-}
-
 .segmented {
   display: inline-flex;
   align-self: end;
@@ -125,21 +110,6 @@ h1 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
-}
-
-:host ::ng-deep .bot-dataview {
-  .p-dataview,
-  .p-dataview-content,
-  .p-dataview-emptymessage {
-    background: var(--bg-canvas);
-    color: var(--text-primary);
-  }
-
-  .p-paginator {
-    border-color: var(--border-light);
-    background: var(--bg-surface);
-    color: var(--text-primary);
-  }
 }
 
 .bot-card {

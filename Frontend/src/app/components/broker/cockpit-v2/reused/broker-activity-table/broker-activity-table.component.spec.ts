@@ -320,6 +320,31 @@ describe('BrokerActivityTableComponent', () => {
     expect(labels).toContain('Order #200');
   });
 
+  it('sorts grouped rows by the same timestamp rendered in the table', () => {
+    const { el } = render({
+      rows: [
+        row({
+          seq: 1,
+          symbol: 'EARLY',
+          ts_ms: 1_700_000_000_000,
+          exec_ts_ms: 1_700_000_600_000,
+          perm_id: 100,
+        }),
+        row({
+          seq: 2,
+          symbol: 'LATE',
+          ts_ms: 1_700_000_060_000,
+          exec_ts_ms: 1_700_000_060_000,
+          perm_id: 100,
+        }),
+      ],
+    });
+
+    const rows = Array.from(el.querySelectorAll('tr.data-row'));
+    expect(rows[0].textContent ?? '').toContain('LATE');
+    expect(rows[1].textContent ?? '').toContain('EARLY');
+  });
+
   it('renders unmatched rows (no perm_id) in their own group', () => {
     const { el } = render({
       rows: [row({ perm_id: null, exec_id: 'foreign-exec', symbol: 'TSLA' })],

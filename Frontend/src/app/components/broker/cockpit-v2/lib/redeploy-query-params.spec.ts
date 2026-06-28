@@ -19,13 +19,12 @@ describe('redeployQueryParamsForStatus', () => {
     } as LiveInstanceStatus;
 
     expect(redeployQueryParamsForStatus(status)).toEqual({
-      spec: 'specs/dia.json',
-      audit: 'audits/dia.json',
-      backtest_id: 'bt-123',
-      account: 'DU123',
+      spec_path: 'specs/dia.json',
+      qc_audit_copy_path: 'audits/dia.json',
+      qc_backtest_id: 'bt-123',
       parent_run_id: 'parent-run',
-      strategy_instance_id: 'DEPVAL-DIA-20260626',
-      strategy: 'deployment_validation',
+      instance_id: 'DEPVAL-DIA-20260626',
+      strategy_key: 'deployment_validation',
     });
   });
 

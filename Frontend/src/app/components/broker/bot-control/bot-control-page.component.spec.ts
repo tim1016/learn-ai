@@ -1,16 +1,20 @@
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { of, Subject } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { FleetAccountSummary, LiveInstanceStatus } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BotControlPageComponent } from './bot-control-page.component';
 
-function makeStatus(): LiveInstanceStatus {
+function makeStatus(options: {
+  id?: string;
+  hostNotice?: string;
+  markPoisonedEnabled?: boolean;
+} = {}): LiveInstanceStatus {
   return {
-    strategy_instance_id: 'sid-x',
+    strategy_instance_id: options.id ?? 'sid-x',
     process: { state: 'exited', pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,
     evidence_binding: null,
@@ -38,7 +42,7 @@ function makeStatus(): LiveInstanceStatus {
       schema_version: 1,
       host_process: {
         state: 'UNREACHABLE',
-        notice: 'Start the host runner before trading this bot.',
+        notice: options.hostNotice ?? 'Start the host runner before trading this bot.',
         copyable_command: 'make broker-runner',
         start_capability: {
           enabled: false,
@@ -89,10 +93,10 @@ function makeStatus(): LiveInstanceStatus {
           gate_results: [],
         },
         mark_poisoned: {
-          enabled: false,
+          enabled: options.markPoisonedEnabled ?? false,
           effect: 'LIVE_ACTUATION',
-          disabled_reason_code: 'NO_LIVE_BINDING',
-          disabled_reasons: ['NO_LIVE_BINDING'],
+          disabled_reason_code: options.markPoisonedEnabled ? null : 'NO_LIVE_BINDING',
+          disabled_reasons: options.markPoisonedEnabled ? [] : ['NO_LIVE_BINDING'],
           gate_results: [],
         },
       },
@@ -155,6 +159,26 @@ function makeAccountSummary(): FleetAccountSummary {
   };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flush(fixture: { whenStable: () => Promise<unknown>; detectChanges: () => void }): Promise<void> {
+  await fixture.whenStable();
+  await Promise.resolve();
+  fixture.detectChanges();
+}
+
 describe('BotControlPageComponent', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -198,5 +222,127 @@ describe('BotControlPageComponent', () => {
       .toContain('CONTROL PLANE · LAST-KNOWN');
     expect(el.querySelector('[data-testid="bot-control-tabs"]')?.textContent)
       .toContain('Status & Risk');
+  });
+
+  it('refreshes broker evidence on the serialized poll loop', async () => {
+    vi.useFakeTimers();
+    const getInstanceStatus = vi.fn().mockResolvedValue(makeStatus());
+    const getAccountSummary = vi.fn().mockResolvedValue(makeAccountSummary());
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus,
+            getAccountSummary,
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+    expect(getAccountSummary).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await flush(fixture);
+
+    expect(getInstanceStatus).toHaveBeenCalledTimes(2);
+    expect(getAccountSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores stale status responses after the route changes to another bot', async () => {
+    const paramMap = new Subject<ReturnType<typeof convertToParamMap>>();
+    const first = deferred<LiveInstanceStatus>();
+    const second = deferred<LiveInstanceStatus>();
+    const getInstanceStatus = vi
+      .fn()
+      .mockImplementation((id: string) => id === 'bot-a' ? first.promise : second.promise);
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus,
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    paramMap.next(convertToParamMap({ id: 'bot-a' }));
+    paramMap.next(convertToParamMap({ id: 'bot-b' }));
+    second.resolve(makeStatus({ id: 'bot-b', hostNotice: 'B runner is unreachable.' }));
+    await flush(fixture);
+    first.resolve(makeStatus({ id: 'bot-a', hostNotice: 'A runner is unreachable.' }));
+    await flush(fixture);
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('B runner is unreachable.');
+    expect(text).not.toContain('A runner is unreachable.');
+  });
+
+  it('requires typed HALT before marking a run poisoned', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const issueInstanceCommand = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus({ markPoisonedEnabled: true })),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+    const el = fixture.nativeElement as HTMLElement;
+    fixture.componentInstance.openTypedHalt();
+    fixture.detectChanges();
+
+    const submit = el.querySelector('[data-testid="typed-halt-confirm-submit"]') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    const input = el.querySelector('[data-testid="typed-halt-confirm-input"]') as HTMLInputElement;
+    input.value = 'HALT';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    submit.click();
+    await flush(fixture);
+
+    expect(issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
   });
 });

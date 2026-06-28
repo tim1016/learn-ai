@@ -161,7 +161,15 @@ describe('BotsPageComponent', () => {
     const { fixture, router } = await setup();
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
-    await fixture.componentInstance.openBot('new-aapl');
+    const cards = Array.from(
+      fixture.nativeElement.querySelectorAll('.bot-card'),
+    ) as HTMLElement[];
+    const targetCard = cards.find((card) => card.textContent?.includes('new-aapl'));
+    const visitButton = Array.from(targetCard?.querySelectorAll('button') ?? [])
+      .find((button) => button.textContent?.includes('Visit bot'));
+    expect(visitButton).toBeDefined();
+    visitButton?.click();
+    await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'new-aapl']);
   });

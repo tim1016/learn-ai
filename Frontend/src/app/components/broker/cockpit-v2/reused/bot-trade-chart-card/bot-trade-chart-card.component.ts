@@ -103,7 +103,7 @@ export function markerTimeForEventMs(
   let nearest = bars[0];
   let nearestDistance = Number.POSITIVE_INFINITY;
   for (const bar of bars) {
-    if (bar.start_ms <= eventMs && eventMs <= bar.end_ms) {
+    if (bar.start_ms <= eventMs && eventMs < bar.end_ms) {
       return (bar.start_ms / 1000) as UTCTimestamp;
     }
     const distance =
