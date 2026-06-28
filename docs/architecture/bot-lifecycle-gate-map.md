@@ -3,8 +3,8 @@
 **Status:** design map for review
 **Created:** 2026-06-27
 **Deepened codebase review:** 2026-06-28
-**Input:** `/Users/inkant/Downloads/bot-lifecycle-robust-design.codex.md`
-**Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/bot-lifecycle-account-owner-authority.md`, `docs/ibkr-integration-authority.md`
+**Input:** codebase review plus design notes summarized in "Design Source Summary" below.
+**Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/ibkr-integration-authority.md`
 
 This document makes the bot lifecycle gates visible as a chart and a set of tables.
 It intentionally separates:
@@ -12,6 +12,10 @@ It intentionally separates:
 - **Current gates**: checks already enforced by code.
 - **Partial gates**: checks that exist, but not at the scope Claude's design requires.
 - **Proposed gates**: new account/fleet substrate from Claude's design.
+
+## Design Source Summary
+
+The external design input proposed an account-scoped lifecycle model with a single broker writer, write-ahead account registry, account freeze artifact, explicit operator baseline/override flow, proof-before-disconnect watchdog shutdown, and a gate board whose rows are authored by the same predicates that enforce deploy/start/resume/submit transitions. This repo map translates those ideas into the current `PythonDataService/app/engine/live/*`, broker, router, and operator-surface code paths.
 
 ## Legend
 

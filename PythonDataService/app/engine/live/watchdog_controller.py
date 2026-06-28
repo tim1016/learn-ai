@@ -34,6 +34,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Protocol
 
 from app.operator.incidents.store import IncidentStore
@@ -176,12 +177,16 @@ class WatchdogHaltExecutor:
         timeouts: WatchdogTimeouts | None = None,
         clock_ms: Callable[[], int] | None = None,
         log: logging.Logger | None = None,
+        artifacts_root: Path | None = None,
+        account_id: str | None = None,
     ) -> None:
         self._controller = controller
         self._store = incident_store
         self._timeouts = timeouts or WatchdogTimeouts()
         self._clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
         self._log = log or logger
+        self._artifacts_root = artifacts_root
+        self._account_id = account_id
 
     async def execute(self, reason: LeaseLossReason) -> OperatorIncident:
         """Run the 5 steps in order; persist a typed incident.
@@ -277,6 +282,11 @@ class WatchdogHaltExecutor:
                     "exception": repr(exc),
                 },
             )
+        if not is_safe:
+            self._write_account_freeze_for_unsafe_outcome(
+                reason=terminal_notice.code,
+                recorded_at_ms=flatten_recorded_at_ms,
+            )
 
         # Step 4 — disconnect broker, with timeout.
         await self._run_disconnect(ev)
@@ -340,6 +350,32 @@ class WatchdogHaltExecutor:
             is_safe,
         )
         return final_incident
+
+    def _write_account_freeze_for_unsafe_outcome(self, *, reason: str, recorded_at_ms: int) -> None:
+        if self._artifacts_root is None or not self._account_id:
+            return
+        try:
+            from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
+
+            write_account_freeze(
+                self._artifacts_root,
+                AccountFreezeEvidence(
+                    account_id=self._account_id,
+                    reason=reason,
+                    source="watchdog_halt_executor",
+                    recorded_at_ms=recorded_at_ms,
+                    operator_next_step="CHECK_IBKR",
+                ),
+            )
+        except Exception as exc:
+            self._log.critical(
+                "[WATCHDOG] failed to persist account freeze for unsafe halt outcome",
+                extra={
+                    "account_id": self._account_id,
+                    "reason": reason,
+                    "exception": repr(exc),
+                },
+            )
 
     # ------------------------------------------------------------------
     # Step helpers

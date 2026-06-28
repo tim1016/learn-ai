@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -205,12 +206,12 @@ def clear_account_freeze(
         )
     else:
         assert audited_override is not None
-        effective_now_ms = audited_override.approved_at_ms if now_ms is None else now_ms
+        effective_now_ms = time.time_ns() // 1_000_000 if now_ms is None else now_ms
         if audited_override.valid_until_ms < effective_now_ms:
             raise AccountArtifactError("audited override is stale")
         if audited_override.approved_decision == "freeze":
             raise AccountArtifactError("freeze override cannot clear an account freeze")
-        cleared_at_ms = audited_override.approved_at_ms
+        cleared_at_ms = effective_now_ms
         cleared_reason = f"override:{audited_override.override_id}:{audited_override.approved_decision}"
         cleared_source = "account_audited_override"
         _append_account_event(

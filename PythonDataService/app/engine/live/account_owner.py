@@ -155,6 +155,24 @@ class AccountOwner:
         backoff: Callable[[int], object] | None = None,
     ) -> None:
         self._set_phase("reconnecting")
+        async with self._lock:
+            await self._handle_reconnect_locked(
+                reconnect=reconnect,
+                classify_inflight=classify_inflight,
+                reconcile=reconcile,
+                client_id_range=client_id_range,
+                backoff=backoff,
+            )
+
+    async def _handle_reconnect_locked(
+        self,
+        *,
+        reconnect: Callable[[int], object],
+        classify_inflight: Callable[[dict], object],
+        reconcile: Callable[[], object],
+        client_id_range: tuple[int, ...],
+        backoff: Callable[[int], object] | None,
+    ) -> None:
         connected = False
         for attempt, client_id in enumerate(client_id_range, start=1):
             try:

@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.live.account_artifacts import read_account_freeze
 from app.engine.live.watchdog_controller import (
     BrokerDisconnectOutcome,
     FlattenOutcome,
@@ -127,6 +128,8 @@ def _make_executor(
     controller: _FakeController,
     *,
     timeouts: WatchdogTimeouts = _FAST_TIMEOUTS,
+    artifacts_root: Path | None = None,
+    account_id: str | None = None,
 ) -> WatchdogHaltExecutor:
     store = IncidentStore(tmp_path)
     # Monotonic clock so latency assertions don't flake on very fast CI.
@@ -136,7 +139,14 @@ def _make_executor(
         _tick[0] += 1
         return _tick[0]
 
-    return WatchdogHaltExecutor(controller, store, timeouts=timeouts, clock_ms=_clock_ms)
+    return WatchdogHaltExecutor(
+        controller,
+        store,
+        timeouts=timeouts,
+        clock_ms=_clock_ms,
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +260,26 @@ async def test_flatten_failed_records_critical_and_continues(tmp_path: Path) -> 
     assert gate["operator_reason"] == "watchdog.flatten_failed"
     assert gate["operator_next_step"] == "CHECK_IBKR"
     assert isinstance(gate["evidence_at_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_unsafe_watchdog_outcome_writes_account_freeze(tmp_path: Path) -> None:
+    rec = _OrderingRecorder()
+    controller = _FakeController(recorder=rec, flatten_outcome="failed")
+    executor = _make_executor(
+        tmp_path,
+        controller,
+        artifacts_root=tmp_path,
+        account_id="DU123456",
+    )
+
+    await executor.execute("LEASE_EXPIRED")
+
+    freeze = read_account_freeze(tmp_path, "DU123456")
+    assert freeze is not None
+    assert freeze.reason == "watchdog.flatten_failed"
+    assert freeze.source == "watchdog_halt_executor"
+    assert freeze.operator_next_step == "CHECK_IBKR"
 
 
 @pytest.mark.asyncio

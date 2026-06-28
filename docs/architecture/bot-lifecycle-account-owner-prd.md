@@ -5,8 +5,8 @@
 **Deepened codebase review:** 2026-06-28
 **Owner:** Inkant
 **Primary objective:** Stop multi-bot lifecycle cascades by making broker-account ownership explicit, account-scoped, and visualizable.
-**Inputs:** `docs/architecture/bot-lifecycle-gate-map.md`, `/Users/inkant/.codex/attachments/d5d3b0b8-5087-4c49-9f1f-822b05a7ac02/pasted-text.txt`, code review of `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, and `PythonDataService/app/services/operator_*.py`.
-**Implementation authority:** `docs/bot-lifecycle-account-owner-authority.md` tracks shipped behavior; this PRD tracks target behavior.
+**Inputs:** `docs/architecture/bot-lifecycle-gate-map.md`, the design-source summary in that gate map, code review of `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, and `PythonDataService/app/services/operator_*.py`.
+**Implementation authority:** shipped behavior remains the code under review plus existing authority docs; the dedicated AccountOwner authority document is introduced by the authority-docs slice, while this PRD tracks target behavior.
 
 ## Problem Statement
 
@@ -50,8 +50,8 @@ The operator needs one mental model, but the implementation should be visualized
 flowchart TD
     operator["Operator action<br/>deploy / start / resume"]
     preflight{"GATE.PREFLIGHT<br/>account clean enough?"}
-    registry["Append account registry event<br/>instance + namespace + run binding"]
     ledger["Run ledger / desired state<br/>created or selected"]
+    registry["Append account registry event<br/>instance + namespace + run binding"]
     reconcile{"GATE.RECONCILE<br/>AccountOwner classifies broker account"}
     activate{"GATE.ACTIVATE<br/>fresh reconcile + desired RUNNING<br/>+ owner generation valid"}
     runner["Runner ACTIVE<br/>strategy + bars + decisions only"]
@@ -67,7 +67,7 @@ flowchart TD
     blocked["Blocked before broker side effect"]
 
     operator --> preflight
-    preflight -->|pass| registry --> ledger --> reconcile
+    preflight -->|pass| ledger --> registry --> reconcile
     preflight -->|block / unknown| blocked
     preflight -->|unproven exposure| freeze
     reconcile -->|clean / adopted| activate
@@ -227,9 +227,9 @@ Hard rule: every gate row must come from the enforcement predicate or a value ob
 | Artifact | Scope | Semantics |
 |---|---|---|
 | `instance_registry.jsonl` | Account | Append-only, write-ahead registry of every `strategy_instance_id`, namespace, lifecycle, and first/last run bound to this account. Written before first submit. Never reconstructed solely from run dirs. |
-| `account_baseline.json` | Account | Explicit fleet reset: operator verified flat/no open orders, timestamp, listed instance ids, and residue class allowed. Never authorizes ignoring open orders. |
+| `account_baseline.json` | Account | Explicit fleet reset: operator verified flat/no open orders, with `baseline_at_ms` and `verified_at_ms` as `int64 ms UTC`, listed instance ids, and residue class allowed. Never authorizes ignoring open orders. |
 | `unresolved_exposure.flag` | Account | Freezes deploy/start/submit for the account when exposure or submit state is not provable. |
-| `operator_override.jsonl` | Account | Audited override when broker is unreachable but operator manually confirms flat in TWS/Client Portal and acknowledges risk. |
+| `operator_override.jsonl` | Account | Audited override when broker is unreachable but operator manually confirms flat in TWS/Client Portal and acknowledges risk. All persisted times are `int64 ms UTC` fields such as `approved_at_ms`, `valid_until_ms`, and `cleared_at_ms`; ISO strings and native datetimes are not storage formats. |
 | `account_events.jsonl` | Account | Restart intensity, AccountOwner lifecycle, freeze/unfreeze, reconnect drain, baseline, and override events. |
 
 Recommended root:
@@ -506,7 +506,7 @@ Audited operator override path:
 
 1. Broker remains unreachable or unprovable.
 2. Operator confirms flat/no open orders in TWS or Client Portal.
-3. Operator enters acknowledgement with account id, timestamp, reason, and evidence note.
+3. Operator enters acknowledgement with account id, `approved_at_ms` (`int64 ms UTC`), reason, and evidence note.
 4. System appends `operator_override.jsonl`.
 5. Account may unfreeze, but next successful broker reconnect must run account reconciliation before new submit.
 
@@ -529,7 +529,7 @@ Audited operator override path:
 | P2 gate result value objects | Introduce `GateResult`-style backend values at the existing enforcement points: start, action capability, readiness, reconciliation, submit, watchdog. | A gate board row cannot say pass while the mutation/start/submit path blocks in the same fixture. |
 | P3 account artifacts | Add account root, append-only registry, baseline, unresolved exposure flag, override log, account events, and owner generation. | Start/deploy refuse when freeze exists; registry is written before first submit intent; account artifacts are not reconstructed solely from run dirs. |
 | P4 account classifier | Refactor classification around account-level registry + union of intents. | Sibling-known live/dead residue is classified by lifecycle; completed baseline-authorized residue is visible; unowned open orders and unowned live positions freeze. |
-| P5 AccountOwner MVP | Add daemon-owned account writer process and artifact-backed intent queue; route runner submit intents through it. | In shared-account mode, runner paths cannot reach `place_paper_order`; AccountOwner serializes submit/reconcile/reconnect ordering and publishes gate rows. |
+| P5 AccountOwner MVP | Add daemon-owned account writer process and artifact-backed intent queue; route runner submit intents through it. | In shared-account mode, no runner, REST route, operator-surface path, emergency CLI, or other non-AccountOwner code path can place or cancel broker orders; AccountOwner serializes submit/reconcile/reconnect ordering and publishes gate rows. |
 | P6 runner no-broker-write mode | Remove runner-owned order-capable IBKR access in shared-account mode; keep strategy/bar work and command handling in runners. | Runner can become ACTIVE, emit decisions, and write durable intents while AccountOwner owns all broker writes; any runner market-data feed cannot place/cancel orders. |
 | P7 fleet governance | Add restart intensity, explicit fleet baseline workflow, post-reconnect choreography, and override UX contract. | Repeated failures freeze redeploy; baseline and reconnect drain are visible on gate board; override forces reconcile on next broker reconnect. |
 | P8 authority update | Update `docs/bot-lifecycle-account-owner-authority.md` in the same PR as each shipped slice. | Authority doc reflects the shipped behavior exactly; aspirational PRD text stays separate. |
@@ -541,11 +541,11 @@ Audited operator override path:
 | `test_current_runner_process_model_documented` | Host daemon starts one subprocess per instance; submit lock remains per-process until AccountOwner migration. |
 | `test_watchdog_disconnect_after_proof_or_unresolved` | Disconnect is not called before proof or durable unresolved incident. |
 | `test_gate_board_uses_enforcement_result` | A gate displayed as pass cannot block the corresponding mutation in the same fixture. |
-| `test_registry_write_ahead_before_submit` | Submit intent is refused if registry entry is missing. |
+| `test_registry_write_ahead_before_submit` | Run id is allocated/selected before the account registry row is appended, and submit intent is refused if registry entry is missing. |
 | `test_unresolved_exposure_blocks_start` | Start and deploy are refused while `unresolved_exposure.flag` exists. |
-| `test_operator_override_unfreezes_with_audit` | Override requires account id, reason, timestamp, and evidence note; next reconnect forces reconcile. |
+| `test_operator_override_unfreezes_with_audit` | Override requires account id, reason, `approved_at_ms` (`int64 ms UTC`), and evidence note; next reconnect forces reconcile. |
 | `test_account_classifier_dead_sibling_residue_freezes` | Registry-known but dead/poisoned residue is not ignored. |
-| `test_account_owner_only_writer` | In shared-account mode, runner paths cannot reach `place_paper_order`; AccountOwner is the only broker writer. |
+| `test_account_owner_only_writer` | In shared-account mode, runner, REST, operator surface, emergency CLI, and recovery paths cannot place/cancel broker orders directly; AccountOwner is the only broker writer. |
 | `test_post_reconnect_ordering` | New submit is blocked until replay drain and account reconcile complete. |
 | `test_restart_intensity_freeze` | More than configured failures inside window freezes auto redeploy. |
 | `test_account_owner_generation_fences_stale_intent` | A runner intent carrying an old owner generation is blocked before broker submit and emits a gate row. |

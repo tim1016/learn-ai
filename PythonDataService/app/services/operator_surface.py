@@ -47,8 +47,8 @@ from app.schemas.live_runs import (
     OpenRunbookAction,
     OperatorGate,
     OperatorSurface,
-    OperatorSurfaceActions,
     OperatorSurfaceActionPlan,
+    OperatorSurfaceActions,
     OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
     OperatorSurfaceControlPlane,
@@ -683,20 +683,21 @@ def project_readiness_gates(readiness: ReadinessVector | None) -> list[OperatorG
     for gate in readiness.gates:
         action, unavailable = _action_for_gate(gate)
         next_step = getattr(action, "kind", None) if action is not None else unavailable
+        gate_result = gate.gate_result or GateResult(
+            gate_id=gate.name,
+            status=_gate_result_status(gate.status),  # type: ignore[arg-type]
+            source=readiness.source,
+            operator_reason=gate.detail,
+            operator_next_step=next_step,
+            evidence_at_ms=readiness.as_of_ms,
+        )
         out.append(
             OperatorGate(
                 name=gate.name,
                 status=gate.status,
                 severity=gate.severity,
                 detail=gate.detail,
-                gate_result=GateResult(
-                    gate_id=gate.name,
-                    status=_gate_result_status(gate.status),  # type: ignore[arg-type]
-                    source=readiness.source,
-                    operator_reason=gate.detail,
-                    operator_next_step=next_step,
-                    evidence_at_ms=readiness.as_of_ms,
-                ),
+                gate_result=gate_result,
                 suggested_action=action,  # type: ignore[arg-type]
                 suggested_action_unavailable_reason=unavailable,
             )
