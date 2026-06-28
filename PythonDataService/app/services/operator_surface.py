@@ -22,15 +22,18 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
+from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
 from app.schemas.live_runs import (
+    ActionCapability,
     BrokerActivityHealth,
     BrokerObservationConsistency,
     DesiredStateView,
     FocusAction,
+    GateResult,
     HostProcessStartCapability,
     HostProcessStartDisabledReasonCode,
     HostRunnerStartRequest,
@@ -44,6 +47,7 @@ from app.schemas.live_runs import (
     OpenRunbookAction,
     OperatorGate,
     OperatorSurface,
+    OperatorSurfaceActions,
     OperatorSurfaceActionPlan,
     OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
@@ -101,13 +105,9 @@ _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
     "EXITED": "The previous bot process ended. Start this bot's process to resume trading.",
     "IDLE": "The host is reachable but this bot has no active process. Start it to resume trading.",
     "WAITING_FOR_HOST": (
-        "Trading was requested, but this bot's process has not started yet. "
-        "Start it to begin trading."
+        "Trading was requested, but this bot's process has not started yet. Start it to begin trading."
     ),
-    "UNREACHABLE": (
-        "The bot service is offline. The cockpit cannot confirm any "
-        "process state until it is reachable."
-    ),
+    "UNREACHABLE": ("The bot service is offline. The cockpit cannot confirm any process state until it is reachable."),
 }
 
 
@@ -120,6 +120,8 @@ def _project_host_start_capability(
     start_run_id: str | None,
     start_defaults: InstanceStartDefaults | None,
     poisoned: bool,
+    now_ms: int,
+    account_freeze: AccountFreezeEvidence | None = None,
 ) -> HostProcessStartCapability:
     """Project the per-instance Start-bot-process affordance.
 
@@ -130,6 +132,12 @@ def _project_host_start_capability(
     """
 
     reason: HostProcessStartDisabledReasonCode | None = None
+    if account_freeze is not None:
+        return HostProcessStartCapability(
+            enabled=False,
+            disabled_reason_code="ACCOUNT_FROZEN",
+            gate_results=[account_freeze.to_gate_result()],
+        )
     # Permanent-retirement gates outrank every per-state guard.
     if poisoned or (desired_state is not None and desired_state.state == "STOPPED"):
         reason = "STOPPED_REQUIRES_REDEPLOY"
@@ -145,8 +153,33 @@ def _project_host_start_capability(
     elif not start_run_id or start_defaults is None or not start_defaults.strategy:
         reason = "START_SETTINGS_INCOMPLETE"
 
+    def _start_gate(
+        *,
+        status: str,
+        operator_reason: str,
+        operator_next_step: str | None,
+    ) -> GateResult:
+        return GateResult(
+            gate_id="start.daemon_state",
+            status=status,  # type: ignore[arg-type]
+            source="operator_surface",
+            operator_reason=operator_reason,
+            operator_next_step=operator_next_step,
+            evidence_at_ms=now_ms,
+        )
+
     if reason is not None:
-        return HostProcessStartCapability(enabled=False, disabled_reason_code=reason)
+        return HostProcessStartCapability(
+            enabled=False,
+            disabled_reason_code=reason,
+            gate_results=[
+                _start_gate(
+                    status="block",
+                    operator_reason=reason,
+                    operator_next_step=reason,
+                )
+            ],
+        )
 
     assert start_run_id is not None and start_defaults is not None  # narrowed above
     # Fail closed if the saved start settings cannot build a valid request
@@ -164,9 +197,28 @@ def _project_host_start_capability(
         )
     except ValidationError:
         return HostProcessStartCapability(
-            enabled=False, disabled_reason_code="START_SETTINGS_INCOMPLETE"
+            enabled=False,
+            disabled_reason_code="START_SETTINGS_INCOMPLETE",
+            gate_results=[
+                _start_gate(
+                    status="block",
+                    operator_reason="START_SETTINGS_INCOMPLETE",
+                    operator_next_step="START_SETTINGS_INCOMPLETE",
+                )
+            ],
         )
-    return HostProcessStartCapability(enabled=True, run_id=start_run_id, request=request)
+    return HostProcessStartCapability(
+        enabled=True,
+        run_id=start_run_id,
+        request=request,
+        gate_results=[
+            _start_gate(
+                status="pass",
+                operator_reason="Start settings complete and daemon state is startable.",
+                operator_next_step=None,
+            )
+        ],
+    )
 
 
 def _project_host_process(
@@ -176,6 +228,8 @@ def _project_host_process(
     start_defaults: InstanceStartDefaults | None = None,
     poisoned: bool = False,
     host_start_command: str | None = None,
+    now_ms: int = 0,
+    account_freeze: AccountFreezeEvidence | None = None,
 ) -> OperatorSurfaceHostProcess:
     state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
     # WAITING_FOR_HOST: daemon reachable + no tracked subprocess + the
@@ -188,13 +242,15 @@ def _project_host_process(
     # EXITED / IDLE / WAITING_FOR_HOST cases use ``start_capability``
     # below — restarting the host daemon does NOT restart an exited
     # per-bot subprocess.
-    copyable_command = (
-        host_start_command
-        if state == "UNREACHABLE" and host_start_command
-        else None
-    )
+    copyable_command = host_start_command if state == "UNREACHABLE" and host_start_command else None
     start_capability = _project_host_start_capability(
-        state, desired_state, start_run_id, start_defaults, poisoned
+        state,
+        desired_state,
+        start_run_id,
+        start_defaults,
+        poisoned,
+        now_ms,
+        account_freeze,
     )
     return OperatorSurfaceHostProcess(
         state=state,
@@ -324,6 +380,76 @@ def _project_action_plan(action_plan: dict | None) -> OperatorSurfaceActionPlan:
     if action_plan is None:
         return OperatorSurfaceActionPlan(consumption="UNKNOWN", anomaly_verdict="UNKNOWN")
     return OperatorSurfaceActionPlan(consumption="DECLARATIVE_ONLY", anomaly_verdict="READY")
+
+
+def _action_gate_result(
+    action_name: str,
+    capability: ActionCapability,
+    *,
+    now_ms: int,
+) -> GateResult:
+    reason = capability.disabled_reason_code or "ACTION_ENABLED"
+    return GateResult(
+        gate_id=f"action.{action_name}",
+        status="pass" if capability.enabled else "block",
+        source="operator_surface",
+        operator_reason=reason,
+        operator_next_step=None if capability.enabled else reason,
+        evidence_at_ms=now_ms,
+    )
+
+
+def _attach_action_gate_results(
+    actions: OperatorSurfaceActions,
+    *,
+    now_ms: int,
+    account_freeze: AccountFreezeEvidence | None = None,
+) -> OperatorSurfaceActions:
+    resume = actions.resume
+    if account_freeze is not None:
+        resume = resume.model_copy(
+            update={
+                "enabled": False,
+                "disabled_reason_code": "ACCOUNT_FROZEN",
+                "disabled_reasons": ["ACCOUNT_FROZEN"],
+                "gate_results": [account_freeze.to_gate_result()],
+            }
+        )
+    else:
+        resume = resume.model_copy(
+            update={"gate_results": [_action_gate_result("resume", actions.resume, now_ms=now_ms)]}
+        )
+    return OperatorSurfaceActions(
+        resume=resume,
+        pause=actions.pause.model_copy(
+            update={"gate_results": [_action_gate_result("pause", actions.pause, now_ms=now_ms)]}
+        ),
+        stop=actions.stop.model_copy(
+            update={"gate_results": [_action_gate_result("stop", actions.stop, now_ms=now_ms)]}
+        ),
+        flatten_and_pause=actions.flatten_and_pause.model_copy(
+            update={
+                "gate_results": [
+                    _action_gate_result(
+                        "flatten_and_pause",
+                        actions.flatten_and_pause,
+                        now_ms=now_ms,
+                    )
+                ]
+            }
+        ),
+        mark_poisoned=actions.mark_poisoned.model_copy(
+            update={
+                "gate_results": [
+                    _action_gate_result(
+                        "mark_poisoned",
+                        actions.mark_poisoned,
+                        now_ms=now_ms,
+                    )
+                ]
+            }
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -476,9 +602,7 @@ _INVOKE_RESUME = InvokeCapabilityAction(kind="invoke_capability", capability="re
 _FOCUS_FLATTEN = FocusAction(kind="focus_action", tab="status", action="flatten_and_pause")
 _FOCUS_MARK_POISONED = FocusAction(kind="focus_action", tab="audit", action="mark_poisoned")
 _REDEPLOY = RedeployAction(kind="redeploy")
-_OPEN_BROKER_RECONNECT_RUNBOOK = OpenRunbookAction(
-    kind="open_runbook", slug="broker-reconnect"
-)
+_OPEN_BROKER_RECONNECT_RUNBOOK = OpenRunbookAction(kind="open_runbook", slug="broker-reconnect")
 
 
 # PRD #619-A §A6 — replace the inlined if/elif chain in ``_action_for_gate``
@@ -530,6 +654,16 @@ def _action_for_gate(
     return _GATE_ACTION_TABLE.get(gate.name, (None, "UNKNOWN_GATE_NAME"))
 
 
+def _gate_result_status(status: str) -> str:
+    if status == "pass":
+        return "pass"
+    if status == "fail":
+        return "block"
+    if status == "unknown":
+        return "unknown"
+    return "unknown"
+
+
 def project_readiness_gates(readiness: ReadinessVector | None) -> list[OperatorGate]:
     """Project engine readiness gates into operator-facing gates with
     structured remediation metadata.
@@ -548,12 +682,21 @@ def project_readiness_gates(readiness: ReadinessVector | None) -> list[OperatorG
     out: list[OperatorGate] = []
     for gate in readiness.gates:
         action, unavailable = _action_for_gate(gate)
+        next_step = getattr(action, "kind", None) if action is not None else unavailable
         out.append(
             OperatorGate(
                 name=gate.name,
                 status=gate.status,
                 severity=gate.severity,
                 detail=gate.detail,
+                gate_result=GateResult(
+                    gate_id=gate.name,
+                    status=_gate_result_status(gate.status),  # type: ignore[arg-type]
+                    source=readiness.source,
+                    operator_reason=gate.detail,
+                    operator_next_step=next_step,
+                    evidence_at_ms=readiness.as_of_ms,
+                ),
                 suggested_action=action,  # type: ignore[arg-type]
                 suggested_action_unavailable_reason=unavailable,
             )
@@ -600,8 +743,7 @@ _CONTROL_PLANE_NOTICE_TABLE: dict[DaemonResultKind, tuple[str | None, str | None
         "daemon-retrying",
     ),
     "UNREACHABLE": (
-        "Host daemon is unreachable. Verify the launcher process is running "
-        "and that the daemon URL is correct.",
+        "Host daemon is unreachable. Verify the launcher process is running and that the daemon URL is correct.",
         "daemon-unreachable",
     ),
     "AUTH_FAILED": (
@@ -610,8 +752,7 @@ _CONTROL_PLANE_NOTICE_TABLE: dict[DaemonResultKind, tuple[str | None, str | None
         "daemon-auth-failed",
     ),
     "PROTOCOL_ERROR": (
-        "Host daemon returned a malformed or error response. It may be "
-        "mid-restart — check the daemon logs.",
+        "Host daemon returned a malformed or error response. It may be mid-restart — check the daemon logs.",
         "daemon-protocol-error",
     ),
     "INCOMPATIBLE_CONTRACT": (
@@ -635,9 +776,7 @@ def _project_control_plane(
     """
     if state is None:
         return None
-    notice, runbook_slug = _CONTROL_PLANE_NOTICE_TABLE.get(
-        state.kind, (None, None)
-    )
+    notice, runbook_slug = _CONTROL_PLANE_NOTICE_TABLE.get(state.kind, (None, None))
     return OperatorSurfaceControlPlane(
         state=state.kind,
         last_transition_ms=state.last_transition_ms,
@@ -683,9 +822,7 @@ def _project_reconciliation(
     if receipt is None:
         return OperatorSurfaceReconciliation(state="NOT_AVAILABLE")
     if receipt.status == "in_progress":
-        return OperatorSurfaceReconciliation(
-            state="IN_PROGRESS", last_reconcile_ms=receipt.last_reconcile_ms
-        )
+        return OperatorSurfaceReconciliation(state="IN_PROGRESS", last_reconcile_ms=receipt.last_reconcile_ms)
     if receipt.status == "failed":
         return OperatorSurfaceReconciliation(
             state="FAILED",
@@ -724,11 +861,7 @@ def _project_reconciliation(
             adopted_intent_ids=receipt.adopted_intent_ids,
             last_reconcile_ms=receipt.last_reconcile_ms,
         )
-    if (
-        ttl_ms is not None
-        and receipt.last_reconcile_ms is not None
-        and (now_ms - receipt.last_reconcile_ms) > ttl_ms
-    ):
+    if ttl_ms is not None and receipt.last_reconcile_ms is not None and (now_ms - receipt.last_reconcile_ms) > ttl_ms:
         return OperatorSurfaceReconciliation(
             state="STALE",
             adopted_intent_ids=receipt.adopted_intent_ids,
@@ -770,6 +903,7 @@ def compute_operator_surface(
     broker_observation_consistency: BrokerObservationConsistency | None = None,
     host_start_command: str | None = None,
     start_run_id: str | None = None,
+    account_freeze: AccountFreezeEvidence | None = None,
     # ADR-0008 §5 / PR 1 — cold-start reconciliation projection inputs.
     # All optional: when no live binding is resolved, the router passes
     # ``reconciliation_receipt=None`` and the projection turns into
@@ -828,6 +962,8 @@ def compute_operator_surface(
             start_defaults=start_defaults,
             poisoned=poisoned,
             host_start_command=host_start_command,
+            now_ms=now_ms,
+            account_freeze=account_freeze,
         ),
         prior_run=_project_prior_run(last_exit),
         broker=_project_broker(safety_verdict_final, broker_connection_state),
@@ -835,15 +971,19 @@ def compute_operator_surface(
         current_risk=_project_current_risk(broker),
         daily_order_cap=_project_daily_order_cap(readiness),
         action_plan=_project_action_plan(action_plan),
-        actions=evaluate_all_actions(
-            process=process,
-            live_binding=live_binding,
-            poisoned=poisoned,
-            owned_positions_empty=owned_positions_empty,
-            desired_state=desired_state,
-            guard_state=resolved_guards,
-            runtime_freshness=runtime_freshness,
-            latest_mutation=latest_mutation,
+        actions=_attach_action_gate_results(
+            evaluate_all_actions(
+                process=process,
+                live_binding=live_binding,
+                poisoned=poisoned,
+                owned_positions_empty=owned_positions_empty,
+                desired_state=desired_state,
+                guard_state=resolved_guards,
+                runtime_freshness=runtime_freshness,
+                latest_mutation=latest_mutation,
+            ),
+            now_ms=now_ms,
+            account_freeze=account_freeze,
         ),
         trading_session=_project_trading_session(now_ms=now_ms),
         readiness_gates=project_readiness_gates(readiness),

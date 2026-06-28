@@ -112,6 +112,51 @@ class _StepEvidence:
     per_step_errors: list[str] = field(default_factory=list)
 
 
+def _watchdog_gate_status(flatten_outcome: str | None) -> str:
+    if flatten_outcome in {"completed", "not_needed"}:
+        return "pass"
+    if flatten_outcome in {"failed", "timed_out", "broker_disconnected_before_flatten"}:
+        return "freeze"
+    return "unknown"
+
+
+def _watchdog_gate_next_step(flatten_outcome: str | None) -> str:
+    if flatten_outcome in {"completed", "not_needed"}:
+        return "GATE_PASSING"
+    return "CHECK_IBKR"
+
+
+def _incident_evidence(
+    reason: LeaseLossReason,
+    ev: _StepEvidence,
+    *,
+    terminal_notice_code: str,
+    evidence_at_ms: int,
+) -> dict[str, object]:
+    return {
+        "reason": reason,
+        "block_submissions_ok": ev.block_submissions_ok,
+        "persist_paused_ok": ev.persist_paused_ok,
+        "flatten_outcome": ev.flatten_outcome,
+        "flatten_ms": ev.flatten_ms,
+        "flatten_error": ev.flatten_error,
+        "disconnect_outcome": ev.disconnect_outcome,
+        "disconnect_ms": ev.disconnect_ms,
+        "disconnect_error": ev.disconnect_error,
+        "per_step_errors": ev.per_step_errors,
+        "gate_results": [
+            {
+                "gate_id": "watchdog.lease_loss",
+                "status": _watchdog_gate_status(ev.flatten_outcome),
+                "source": "watchdog_halt_executor",
+                "operator_reason": terminal_notice_code,
+                "operator_next_step": _watchdog_gate_next_step(ev.flatten_outcome),
+                "evidence_at_ms": evidence_at_ms,
+            }
+        ],
+    }
+
+
 class WatchdogHaltExecutor:
     """Runs the 5-step halt sequence and writes a typed ``OperatorIncident``.
 
@@ -196,6 +241,43 @@ class WatchdogHaltExecutor:
         # Step 3 — flatten, with timeout.
         flatten_outcome = await self._run_flatten(reason, ev)
 
+        # Persist flatten proof / unresolved exposure evidence BEFORE broker
+        # disconnect. If the process dies during broker teardown, the operator
+        # must still see the terminal flatten outcome, not only the pessimistic
+        # in-progress scaffold.
+        flatten_recorded_at_ms = self._clock_ms()
+        terminal_notice = _select_terminal_notice(
+            flatten_outcome=flatten_outcome,
+            flatten_ms=ev.flatten_ms,
+            flatten_timeout_ms=self._timeouts.flatten_timeout_ms,
+            flatten_error=ev.flatten_error,
+            occurred_at_ms=flatten_recorded_at_ms,
+        )
+        is_safe = terminal_notice.code in _SAFE_OUTCOME_CODES
+        pre_disconnect_incident = initial.model_copy(
+            update={
+                "notice": terminal_notice,
+                "evidence": _incident_evidence(
+                    reason,
+                    ev,
+                    terminal_notice_code=terminal_notice.code,
+                    evidence_at_ms=flatten_recorded_at_ms,
+                ),
+                "resolved_at_ms": flatten_recorded_at_ms if is_safe else None,
+            }
+        )
+        try:
+            self._store.append(pre_disconnect_incident)
+        except Exception as exc:
+            self._log.critical(
+                "[WATCHDOG] failed to persist pre-disconnect flatten evidence",
+                extra={
+                    "incident_id": pre_disconnect_incident.incident_id,
+                    "incident_payload": pre_disconnect_incident.model_dump_json(),
+                    "exception": repr(exc),
+                },
+            )
+
         # Step 4 — disconnect broker, with timeout.
         await self._run_disconnect(ev)
 
@@ -208,37 +290,21 @@ class WatchdogHaltExecutor:
             ev.per_step_errors.append(msg)
             self._log.critical("[WATCHDOG] %s", msg, exc_info=True)
 
-        # Build terminal notice from outcome.
         completed_at_ms = self._clock_ms()
-        terminal_notice = _select_terminal_notice(
-            flatten_outcome=flatten_outcome,
-            flatten_ms=ev.flatten_ms,
-            flatten_timeout_ms=self._timeouts.flatten_timeout_ms,
-            flatten_error=ev.flatten_error,
-            occurred_at_ms=completed_at_ms,
-        )
 
         # Decide whether this is a safe outcome that can be auto-resolved.
-        is_safe = terminal_notice.code in _SAFE_OUTCOME_CODES
         resolved_at_ms = completed_at_ms if is_safe else None
 
         # Amend the incident with the terminal notice + evidence.
-        evidence: dict[str, object] = {
-            "reason": reason,
-            "block_submissions_ok": ev.block_submissions_ok,
-            "persist_paused_ok": ev.persist_paused_ok,
-            "flatten_outcome": ev.flatten_outcome,
-            "flatten_ms": ev.flatten_ms,
-            "flatten_error": ev.flatten_error,
-            "disconnect_outcome": ev.disconnect_outcome,
-            "disconnect_ms": ev.disconnect_ms,
-            "disconnect_error": ev.disconnect_error,
-            "per_step_errors": ev.per_step_errors,
-        }
         final_incident = initial.model_copy(
             update={
                 "notice": terminal_notice,
-                "evidence": evidence,
+                "evidence": _incident_evidence(
+                    reason,
+                    ev,
+                    terminal_notice_code=terminal_notice.code,
+                    evidence_at_ms=completed_at_ms,
+                ),
                 "resolved_at_ms": resolved_at_ms,
             }
         )

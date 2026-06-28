@@ -58,6 +58,24 @@ def test_live_readiness_order_cap_reached_blocks() -> None:
     assert any(g["name"] == "orders_cap" and g["status"] == "fail" for g in v["gates"])
 
 
+def test_live_readiness_account_registry_gate_blocks_with_canonical_result() -> None:
+    gate_result = {
+        "gate_id": "account.instance_registry",
+        "status": "block",
+        "source": "account_instance_registry",
+        "operator_reason": "ACCOUNT_REGISTRY_STALE_RUN",
+        "operator_next_step": "STOP_STALE_RUNNER",
+        "evidence_at_ms": 1_700_000_000_000,
+    }
+
+    v = _live(account_registry_gate_result=gate_result)
+
+    assert v["verdict"] == "BLOCKED"
+    registry_gate = next(g for g in v["gates"] if g["name"] == "account_instance_registry")
+    assert registry_gate["status"] == "fail"
+    assert registry_gate["gate_result"] == gate_result
+
+
 def test_live_readiness_force_flat_blocks() -> None:
     assert _live(force_flat_active=True)["verdict"] == "BLOCKED"
 
@@ -94,31 +112,32 @@ def test_live_readiness_emits_structured_fields_even_when_cap_is_none() -> None:
 
 
 def test_start_readiness_stopped_blocks() -> None:
-    v = build_start_readiness(
-        as_of_ms=1, desired_state="STOPPED", poisoned=False, halted=False, reconcile_passed=True
-    )
+    v = build_start_readiness(as_of_ms=1, desired_state="STOPPED", poisoned=False, halted=False, reconcile_passed=True)
     assert v["kind"] == "start_readiness"
     assert v["source"] == "backend_derived"
     assert v["live_readiness_available"] is False
     assert v["verdict"] == "BLOCKED"
+    stopped = next(g for g in v["gates"] if g["name"] == "desired_state")
+    assert stopped["gate_result"] == {
+        "gate_id": "desired_state",
+        "status": "block",
+        "source": "backend_derived",
+        "operator_reason": "STOPPED — start refused until intent changes",
+        "operator_next_step": "STOPPED — start refused until intent changes",
+        "evidence_at_ms": 1,
+    }
 
 
 def test_start_readiness_running_clear_is_ready() -> None:
-    v = build_start_readiness(
-        as_of_ms=1, desired_state="RUNNING", poisoned=False, halted=False, reconcile_passed=True
-    )
+    v = build_start_readiness(as_of_ms=1, desired_state="RUNNING", poisoned=False, halted=False, reconcile_passed=True)
     assert v["verdict"] == "READY"
 
 
 def test_start_readiness_poisoned_blocks() -> None:
-    v = build_start_readiness(
-        as_of_ms=1, desired_state="RUNNING", poisoned=True, halted=False, reconcile_passed=True
-    )
+    v = build_start_readiness(as_of_ms=1, desired_state="RUNNING", poisoned=True, halted=False, reconcile_passed=True)
     assert v["verdict"] == "BLOCKED"
 
 
 def test_start_readiness_no_intent_is_degraded() -> None:
-    v = build_start_readiness(
-        as_of_ms=1, desired_state=None, poisoned=False, halted=False, reconcile_passed=None
-    )
+    v = build_start_readiness(as_of_ms=1, desired_state=None, poisoned=False, halted=False, reconcile_passed=None)
     assert v["verdict"] == "DEGRADED"

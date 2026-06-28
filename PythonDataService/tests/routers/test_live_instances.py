@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
+from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
@@ -28,11 +29,18 @@ from tests._fixtures.daemon_transport import as_typed_get
 
 
 def _write_ledger(
-    root: Path, run_id: str, sid: str, created_at_ms: int, spec_path: Path | None = None
+    root: Path,
+    run_id: str,
+    sid: str,
+    created_at_ms: int,
+    spec_path: Path | None = None,
+    account_id: str | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
     payload: dict = {"run_id": run_id, "strategy_instance_id": sid, "created_at_ms": created_at_ms}
+    if account_id is not None:
+        payload["account_id"] = account_id
     if spec_path is not None:
         payload["strategy_spec_path"] = str(spec_path)
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
@@ -240,9 +248,7 @@ def clear_ibkr_api_evidence_recorder():
     recorder.clear()
 
 
-def _set_daemon(
-    monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None
-) -> None:
+def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None) -> None:
     async def fake_instances(_base_url: str):
         return as_typed_get(instances)
 
@@ -253,9 +259,7 @@ def _set_daemon(
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
 
 
-async def test_instance_status_running_exposes_live_binding(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_instance_status_running_exposes_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100)
     _set_daemon(
@@ -277,9 +281,7 @@ async def test_instance_status_running_exposes_live_binding(
     assert body["desired_state"] is not None
 
 
-async def test_instance_status_dead_is_evidence_only(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_instance_status_dead_is_evidence_only(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-old-bbb", "spy_ema_paper", 50)
     _set_daemon(monkeypatch, process={"state": "idle"})
@@ -383,9 +385,7 @@ async def test_status_start_defaults_carry_redeploy_identity_from_ledger(
     assert defaults["account_id"] == "DU1234567"
 
 
-async def test_chart_snapshot_today_returns_bars_and_runs(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_chart_snapshot_today_returns_bars_and_runs(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 5: ``GET /chart-snapshot`` returns the day's bars + every run
     of the instance that touched the day. ``has_bars`` is True iff the
     response carries at least one bar."""
@@ -400,9 +400,7 @@ async def test_chart_snapshot_today_returns_bars_and_runs(
 
     ny_tz = ZoneInfo("America/New_York")
     today = datetime.now(ny_tz).date()
-    today_start_ms = int(
-        datetime(today.year, today.month, today.day, tzinfo=ny_tz).timestamp() * 1000
-    )
+    today_start_ms = int(datetime(today.year, today.month, today.day, tzinfo=ny_tz).timestamp() * 1000)
 
     run_dir = root / "run-chart"
     run_dir.mkdir(parents=True)
@@ -451,24 +449,18 @@ async def test_chart_snapshot_today_returns_bars_and_runs(
     assert run["color_index"] == 0
 
 
-async def test_chart_snapshot_rejects_invalid_resolution(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_chart_snapshot_rejects_invalid_resolution(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 5: only ``1m`` and ``5s`` resolutions are accepted; anything else
     is a 400, not a silent default."""
     app, _root = app_with_root
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/live-instances/spy_chart/chart-snapshot", params={"resolution": "15m"}
-        )
+        response = await client.get("/api/live-instances/spy_chart/chart-snapshot", params={"resolution": "15m"})
     assert response.status_code == 400
 
 
-async def test_chart_snapshot_past_date_omits_live_buffer(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_chart_snapshot_past_date_omits_live_buffer(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 5: a past-date request ignores the live aggregator buffer. With
     no persistence data and no runs touching that day, ``has_bars`` is
     False and ``runs`` is empty — the frontend renders the "bars
@@ -477,9 +469,7 @@ async def test_chart_snapshot_past_date_omits_live_buffer(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/live-instances/spy_chart/chart-snapshot", params={"date": "2025-01-01"}
-        )
+        response = await client.get("/api/live-instances/spy_chart/chart-snapshot", params={"date": "2025-01-01"})
     assert response.status_code == 200
     body = response.json()
     assert body["date"] == "2025-01-01"
@@ -487,17 +477,13 @@ async def test_chart_snapshot_past_date_omits_live_buffer(
     assert body["runs"] == []
 
 
-async def test_chart_snapshot_rejects_malformed_date(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_chart_snapshot_rejects_malformed_date(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 5: a malformed date string is a 400; never silently coerced."""
     app, _root = app_with_root
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/live-instances/spy_chart/chart-snapshot", params={"date": "not-a-date"}
-        )
+        response = await client.get("/api/live-instances/spy_chart/chart-snapshot", params={"date": "not-a-date"})
     assert response.status_code == 400
 
 
@@ -512,10 +498,7 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     sid = "spy_activity"
     _write_ledger(root, "run-activity", sid, 100)
     day = live_instances._today_ny()
-    base_ms = int(
-        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
-        * 1000
-    )
+    base_ms = int(datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
     _write_broker_activity_rows(
         root,
         sid,
@@ -601,10 +584,7 @@ async def test_activity_projection_preserves_backend_fill_verdict(
     sid = "spy_unexpected_fill"
     _write_ledger(root, "run-unexpected", sid, 100)
     day = live_instances._today_ny()
-    fill_ms = int(
-        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
-        * 1000
-    )
+    fill_ms = int(datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
     _write_broker_activity_rows(
         root,
         sid,
@@ -630,9 +610,7 @@ async def test_activity_projection_preserves_backend_fill_verdict(
         response = await client.get(f"/api/live-instances/{sid}/activity")
 
     assert response.status_code == 200
-    fill_events = [
-        row for row in response.json()["broker_activity_rows"] if row["row_type"] == "fill"
-    ]
+    fill_events = [row for row in response.json()["broker_activity_rows"] if row["row_type"] == "fill"]
     assert len(fill_events) == 1
     assert fill_events[0]["verdict"] == "unexpected"
 
@@ -644,10 +622,7 @@ async def test_activity_projection_matches_evidence_to_specific_order(
     sid = "spy_evidence_join"
     _write_ledger(root, "run-evidence-join", sid, 100)
     day = live_instances._today_ny()
-    fill_ms = int(
-        datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp()
-        * 1000
-    )
+    fill_ms = int(datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
     buy_ref = f"learn-ai/{sid}/v1:intent-buy"
     sell_ref = f"learn-ai/{sid}/v1:intent-sell"
     _write_broker_activity_rows(
@@ -702,11 +677,7 @@ async def test_activity_projection_matches_evidence_to_specific_order(
         response = await client.get(f"/api/live-instances/{sid}/activity")
 
     assert response.status_code == 200
-    fills = {
-        row["id"]: row
-        for row in response.json()["broker_activity_rows"]
-        if row["row_type"] == "fill"
-    }
+    fills = {row["id"]: row for row in response.json()["broker_activity_rows"] if row["row_type"] == "fill"}
     assert [ref["seq"] for ref in fills["exec:exec-buy"]["evidence"]] == [buy_evidence.seq]
     assert [ref["seq"] for ref in fills["exec:exec-sell"]["evidence"]] == [sell_evidence.seq]
 
@@ -718,10 +689,7 @@ async def test_activity_projection_emits_terminal_non_fill_events(
     sid = "spy_cancelled"
     _write_ledger(root, "run-cancelled", sid, 100)
     day = live_instances._today_ny()
-    cancel_ms = int(
-        datetime(day.year, day.month, day.day, 13, 0, tzinfo=live_instances._NY_TZ).timestamp()
-        * 1000
-    )
+    cancel_ms = int(datetime(day.year, day.month, day.day, 13, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
     _write_broker_activity_rows(
         root,
         sid,
@@ -751,9 +719,7 @@ async def test_activity_projection_emits_terminal_non_fill_events(
     assert response.status_code == 200
     body = response.json()
     assert body["orders_today"][0]["group"] == "resolved"
-    terminal_events = [
-        row for row in body["broker_activity_rows"] if row["row_type"] == "order_terminal"
-    ]
+    terminal_events = [row for row in body["broker_activity_rows"] if row["row_type"] == "order_terminal"]
     assert len(terminal_events) == 1
     assert terminal_events[0]["summary"] == "Broker cancelled SPY order"
     assert terminal_events[0]["status"] == "cancellation"
@@ -846,8 +812,7 @@ async def test_activity_projection_surfaces_full_broker_api_evidence_rows(
     )
     assert not any(row["row_type"] == "endpoint_snapshot" for row in body["broker_activity_rows"])
     assert not any(
-        warning["code"] == "broker_position_snapshot_unavailable"
-        for warning in body["reconciliation_warnings"]
+        warning["code"] == "broker_position_snapshot_unavailable" for warning in body["reconciliation_warnings"]
     )
 
 
@@ -873,9 +838,7 @@ async def test_activity_projection_repairs_execution_artifact_without_wal_mutati
     body = response.json()
     assert body["session_date"] == "2026-06-25"
     assert [row["id"] for row in body["fill_markers"]] == ["exec:exec-repair-1"]
-    fill_rows = [
-        row for row in body["broker_activity_rows"] if row["row_type"] == "fill"
-    ]
+    fill_rows = [row for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert len(fill_rows) == 1
     assert fill_rows[0]["source"] == "activity_repair_projection"
     assert fill_rows[0]["display_type"] == "Broker fill"
@@ -971,9 +934,7 @@ async def test_active_dates_returns_run_dates_with_no_bars_marker(
     assert entry["has_bars"] is False
 
 
-async def test_active_dates_counts_every_utc_day_a_run_overlaps(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_active_dates_counts_every_utc_day_a_run_overlaps(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 6 (PR #483 review): a run spanning midnight UTC must appear on
     BOTH dates the picker shows, not just its start day. Anchoring solely
     on started_at_ms previously hid the later day."""
@@ -1073,9 +1034,7 @@ async def test_chart_snapshot_filters_trades_to_requested_utc_day(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/live-instances/spy_spans/chart-snapshot", params={"date": "2026-01-05"}
-        )
+        response = await client.get("/api/live-instances/spy_spans/chart-snapshot", params={"date": "2026-01-05"})
 
     assert response.status_code == 200
     runs = response.json()["runs"]
@@ -1085,23 +1044,17 @@ async def test_chart_snapshot_filters_trades_to_requested_utc_day(
     assert trades[0]["entry_time_ms"] == day_a_ms
 
 
-async def test_active_dates_rejects_invalid_resolution(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_active_dates_rejects_invalid_resolution(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 6: only 1m / 5s accepted at the boundary."""
     app, _root = app_with_root
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/live-instances/spy_dates/active-dates", params={"resolution": "10s"}
-        )
+        response = await client.get("/api/live-instances/spy_dates/active-dates", params={"resolution": "10s"})
     assert response.status_code == 400
 
 
-async def test_status_provenance_attests_the_run_identity(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_provenance_attests_the_run_identity(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """The status carries what the run's content-addressed identity attests to —
     the hashed inputs (commit, spec+SHA, QC audit copy+SHA, backtest id, account)
     — so the console can explain the hashes ("what this proves") not dump them."""
@@ -1147,9 +1100,7 @@ async def test_status_provenance_attests_the_run_identity(
     assert prov["live_config"] == {"symbol": "SPY", "consolidator_period_min": 15}
 
 
-async def test_status_exposes_symbol_from_ledger_live_config(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_exposes_symbol_from_ledger_live_config(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 2: the chart card needs the traded symbol to drop its 'SPY' default.
     Symbol is sourced from the ledger's ``live_config.symbol`` so two strategies
     that differ only in symbol don't have to plumb it through the URL."""
@@ -1177,9 +1128,7 @@ async def test_status_exposes_symbol_from_ledger_live_config(
     assert body["symbol"] == "QQQ"
 
 
-async def test_status_symbol_is_null_when_nothing_deployed(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_symbol_is_null_when_nothing_deployed(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """No ledger → no symbol. The frontend must treat ``null`` as 'unknown' and
     not fall back to a hardcoded ticker — the prior 'SPY' default was the bug
     Slice 2 closes."""
@@ -1221,9 +1170,7 @@ async def test_status_symbol_is_null_when_live_config_missing_symbol(
     assert response.json()["symbol"] is None
 
 
-async def test_status_provenance_none_when_nothing_deployed(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_provenance_none_when_nothing_deployed(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process={"state": "idle"})
 
@@ -1285,9 +1232,7 @@ async def test_status_last_exit_surfaces_the_specific_halt_trigger(
     assert last_exit["halt_detail"]["symbol"] == "SPY"
 
 
-async def test_emergency_flatten_works_without_live_binding(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_emergency_flatten_works_without_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """The account-wide flatten reaches the latest run's daemon emergency-flatten
     even with NO live binding (the binding-gated console FLATTEN command can't) —
     exactly the post-halt/poison case where flattening matters most."""
@@ -1316,9 +1261,7 @@ async def test_emergency_flatten_works_without_live_binding(
     assert captured["payload"] == {"account": "DU123", "confirm": True}
 
 
-async def test_emergency_flatten_requires_confirm(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_emergency_flatten_requires_confirm(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-flat2", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle"})
@@ -1332,9 +1275,7 @@ async def test_emergency_flatten_requires_confirm(
     assert response.status_code == 400
 
 
-async def test_emergency_flatten_404_when_instance_has_no_run(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_emergency_flatten_404_when_instance_has_no_run(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process={"state": "idle"})
 
@@ -1382,9 +1323,7 @@ async def test_instance_status_unreachable_daemon_is_not_guessed(
     assert body["evidence_binding"]["run_id"] == "run-x"
 
 
-async def test_list_instances_merges_daemon_and_disk(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_list_instances_merges_daemon_and_disk(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
     _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 100)
@@ -1417,9 +1356,7 @@ async def test_list_instances_merges_daemon_and_disk(
     assert rows["spy_vwap_shadow"]["latest_run_id"] == "run-vwap-1"
 
 
-async def test_instance_status_rejects_invalid_id(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_instance_status_rejects_invalid_id(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process=None)
 
@@ -1462,9 +1399,7 @@ async def test_status_includes_namespace_attributed_broker_slice(
     assert broker["pending_order_count"] == 1
 
 
-async def test_status_broker_absent_without_sidecar(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_broker_absent_without_sidecar(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-nobrk", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle"})
@@ -1475,9 +1410,7 @@ async def test_status_broker_absent_without_sidecar(
     assert response.json()["broker"] is None
 
 
-async def test_account_fleet_flags_residual_contamination(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_account_fleet_flags_residual_contamination(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-ema", "spy_ema", 100)
     _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
@@ -1498,9 +1431,7 @@ async def test_account_fleet_flags_residual_contamination(
     assert any(b["strategy_instance_id"] == "spy_ema" for b in body["explained_by_instance"])
 
 
-async def test_account_fleet_unknown_without_broker(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_account_fleet_unknown_without_broker(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-ema", "spy_ema", 100)
     _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
@@ -1543,9 +1474,7 @@ async def test_account_summary_surfaces_broker_evidence_notice_when_positions_un
     assert "could not fetch broker net positions" in body["notice"]["message"]
 
 
-async def test_instance_commands_returns_bound_run_timeline(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_instance_commands_returns_bound_run_timeline(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-cmd", "spy_ema_paper", 100)
     commands = root / "run-cmd" / "commands"
@@ -1565,9 +1494,7 @@ async def test_instance_commands_returns_bound_run_timeline(
     assert body["entries"][0]["status"] == "queued"
 
 
-async def test_instance_commands_empty_without_live_binding(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_instance_commands_empty_without_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process=None)
 
@@ -1577,17 +1504,13 @@ async def test_instance_commands_empty_without_live_binding(
     assert response.json() == {"entries": [], "poll_interval_ms": 1000}
 
 
-async def test_issue_one_shot_command_queues_on_bound_run(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_issue_one_shot_command_queues_on_bound_run(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-os", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-os", "pid": 1})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/live-instances/spy_ema_paper/commands", json={"verb": "RECONCILE"}
-        )
+        response = await client.post("/api/live-instances/spy_ema_paper/commands", json={"verb": "RECONCILE"})
 
     assert response.status_code == 200
     assert response.json()["verb"] == "RECONCILE"
@@ -1595,38 +1518,28 @@ async def test_issue_one_shot_command_queues_on_bound_run(
     assert len(queued) == 1
 
 
-async def test_issue_command_rejects_intent_verbs(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_issue_command_rejects_intent_verbs(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-os2", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-os2", "pid": 1})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/live-instances/spy_ema_paper/commands", json={"verb": "PAUSE"}
-        )
+        response = await client.post("/api/live-instances/spy_ema_paper/commands", json={"verb": "PAUSE"})
 
     assert response.status_code == 400  # PAUSE is the intent knob, not a one-shot command
 
 
-async def test_issue_command_without_live_binding_conflicts(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_issue_command_without_live_binding_conflicts(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process=None)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/live-instances/spy_ema_paper/commands", json={"verb": "FLATTEN"}
-        )
+        response = await client.post("/api/live-instances/spy_ema_paper/commands", json={"verb": "FLATTEN"})
 
     assert response.status_code == 409
 
 
-async def test_status_transports_engine_readiness_when_live(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_transports_engine_readiness_when_live(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-live-rdy", "spy_ema_paper", 100)
     (root / "run-live-rdy" / "readiness.json").write_text(
@@ -1653,9 +1566,7 @@ async def test_status_transports_engine_readiness_when_live(
     assert readiness["verdict"] == "READY"
 
 
-async def test_status_derives_start_readiness_when_dead(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_derives_start_readiness_when_dead(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-dead-rdy", "spy_ema_paper", 50)
     _set_daemon(monkeypatch, process={"state": "idle"})
@@ -1692,9 +1603,7 @@ async def test_status_includes_spec_derived_decision_column_descriptors(
     assert body["latest_decision"] is None
 
 
-async def test_set_desired_state_actuates_live_binding(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_set_desired_state_actuates_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-live-ccc", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live-ccc", "pid": 7})
@@ -1715,6 +1624,35 @@ async def test_set_desired_state_actuates_live_binding(
     assert body["actuation"]["command_seq"] is not None
     queued = list((root / "run-live-ccc" / "commands").glob("command.*.PAUSE.pending.json"))
     assert len(queued) == 1
+
+
+async def test_resume_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-freeze", "spy_ema_paper", 100, account_id="DU123456")
+    write_account_freeze(
+        root.parent,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "pause", "updated_by": "operator"},
+        )
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "resume", "updated_by": "operator"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["disabled_reason_code"] == "ACCOUNT_FROZEN"
 
 
 async def test_set_desired_state_without_live_binding_is_durable_only(
@@ -1820,9 +1758,7 @@ def _set_connected_broker_account(
     )
 
 
-async def test_deploy_instance_created_returns_201(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_instance_created_returns_201(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     captured: dict = {}
 
@@ -1842,6 +1778,36 @@ async def test_deploy_instance_created_returns_201(
     assert body["run_id"] == "run-new"
     assert body["created"] is True
     assert captured["account_id"] == "DU111"
+
+
+async def test_deploy_instance_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    write_account_freeze(
+        root.parent,
+        AccountFreezeEvidence(
+            account_id="DU111",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_FROZEN"
+    assert called is False
 
 
 async def test_deploy_instance_uses_connected_broker_account_when_request_omits_account(
@@ -1867,9 +1833,7 @@ async def test_deploy_instance_uses_connected_broker_account_when_request_omits_
     assert captured["account_id"] == "DU222"
 
 
-async def test_deploy_instance_rejects_stale_client_account_id(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_instance_rejects_stale_client_account_id(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     _set_connected_broker_account(monkeypatch, "DU222")
@@ -1886,9 +1850,7 @@ async def test_deploy_instance_rejects_stale_client_account_id(
     assert "account mismatch" in response.json()["detail"].lower()
 
 
-async def test_deploy_instance_rejects_blank_legacy_account_id(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_instance_rejects_blank_legacy_account_id(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     body = _deploy_body()
     body["account_id"] = " "
@@ -1941,9 +1903,7 @@ async def test_deploy_instance_rejects_when_connected_broker_account_unavailable
     assert "connected broker account unavailable" in response.json()["detail"].lower()
 
 
-async def test_deploy_instance_idempotent_returns_200(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_instance_idempotent_returns_200(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")
 
@@ -1959,9 +1919,7 @@ async def test_deploy_instance_idempotent_returns_200(
     assert response.json()["created"] is False
 
 
-async def test_deploy_instance_dirty_tree_propagates_409(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_instance_dirty_tree_propagates_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")
 
@@ -1994,9 +1952,7 @@ async def test_deploy_instance_daemon_unreachable_propagates_503(
     assert response.status_code == 503
 
 
-async def test_deploy_instance_invalid_payload_returns_502(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_instance_invalid_payload_returns_502(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A schema-invalid deploy payload from the daemon is an upstream contract
     failure → 502, not a 500 that makes the data plane look broken."""
     app, _ = app_with_root
@@ -2013,9 +1969,7 @@ async def test_deploy_instance_invalid_payload_returns_502(
     assert response.status_code == 502
 
 
-async def test_qc_audit_copies_invalid_payload_returns_502(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_qc_audit_copies_invalid_payload_returns_502(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A malformed (non-None) listing from the daemon must not 500 or silently
     read as an empty list — surface it as a gateway error."""
     app, _ = app_with_root
@@ -2035,9 +1989,7 @@ async def test_qc_audit_copies_passthrough(app_with_root, monkeypatch: pytest.Mo
     app, _ = app_with_root
 
     async def fake_fetch(_base_url: str):
-        return as_typed_get(
-            {"scope_root": "references/qc-shadow", "entries": ["references/qc-shadow/A.py"]}
-        )
+        return as_typed_get({"scope_root": "references/qc-shadow", "entries": ["references/qc-shadow/A.py"]})
 
     monkeypatch.setattr(host_daemon_client, "fetch_qc_audit_copies", fake_fetch)
 
@@ -2048,9 +2000,7 @@ async def test_qc_audit_copies_passthrough(app_with_root, monkeypatch: pytest.Mo
     assert response.json()["entries"] == ["references/qc-shadow/A.py"]
 
 
-async def test_qc_audit_copies_failclosed_to_empty(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_qc_audit_copies_failclosed_to_empty(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_fetch(_base_url: str):
@@ -2090,9 +2040,7 @@ def _idle_health() -> dict:
     }
 
 
-async def test_daemon_health_forwards_envelope(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_daemon_health_forwards_envelope(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """The browser cannot send X-Live-Runner-Token. The data plane probes
     the daemon and forwards the parsed envelope so the cockpit / deploy
     form can render Daemon up = OK."""
@@ -2116,9 +2064,7 @@ async def test_daemon_health_forwards_envelope(
     assert body["daemon_boot_id"] == "boot-abc"
 
 
-async def test_daemon_health_auth_failed_surfaces_as_502(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_daemon_health_auth_failed_surfaces_as_502(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A stale/rotated token would have silently shown the deploy form
     "Live engine unavailable" before this route existed. Surfacing 502
     lets the connectivity strip distinguish auth from unreachable."""
@@ -2138,9 +2084,7 @@ async def test_daemon_health_auth_failed_surfaces_as_502(
     assert "token" in response.json()["detail"].lower()
 
 
-async def test_daemon_health_unreachable_surfaces_as_503(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_daemon_health_unreachable_surfaces_as_503(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Daemon process down → 503, matching the existing operation-error
     map's remediation copy for "live engine unavailable"."""
     import httpx
@@ -2163,9 +2107,7 @@ async def test_daemon_health_unreachable_surfaces_as_503(
     assert response.status_code == 503
 
 
-async def test_renew_daemon_lease_forwards_to_host_daemon(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_renew_daemon_lease_forwards_to_host_daemon(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     payload = {
         **_idle_health(),
@@ -2208,9 +2150,7 @@ def _running_process(run_id: str) -> dict:
     }
 
 
-async def test_start_run_forwards_and_returns_action(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     seen: dict = {}
 
@@ -2237,9 +2177,7 @@ async def test_start_run_forwards_and_returns_action(
     assert seen["payload"]["hydrate_policy"] == "optional"
 
 
-async def test_start_run_rejects_when_poisoned(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_rejects_when_poisoned(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """ADR 0013 amendment 2026-06-22: a stale ``start_capability.enabled=true``
     must not bypass the poisoned-flag gate. The data plane re-evaluates."""
     app, root = app_with_root
@@ -2264,9 +2202,7 @@ async def test_start_run_rejects_when_poisoned(
     assert called is False  # daemon never reached
 
 
-async def test_start_run_rejects_when_desired_state_is_stopped(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_rejects_when_desired_state_is_stopped(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-perma", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle"})
@@ -2283,9 +2219,39 @@ async def test_start_run_rejects_when_desired_state_is_stopped(
     assert response.json()["detail"]["reason_code"] == "STOPPED_REQUIRES_REDEPLOY"
 
 
-async def test_start_run_rejects_when_daemon_already_running(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-freeze-start", "spy_ema_paper", 100, account_id="DU123456")
+    write_account_freeze(
+        root.parent,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-freeze-start/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_FROZEN"
+    assert called is False
+
+
+async def test_start_run_rejects_when_daemon_already_running(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-live", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live", "pid": 7})
@@ -2297,9 +2263,7 @@ async def test_start_run_rejects_when_daemon_already_running(
     assert response.json()["detail"]["reason_code"] == "ALREADY_RUNNING"
 
 
-async def test_start_run_rejects_when_host_service_unreachable(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_rejects_when_host_service_unreachable(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-x", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process=None)  # daemon unreachable
@@ -2311,9 +2275,7 @@ async def test_start_run_rejects_when_host_service_unreachable(
     assert response.json()["detail"]["reason_code"] == "HOST_SERVICE_OFFLINE"
 
 
-async def test_start_run_proceeds_when_idle_and_not_poisoned(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_proceeds_when_idle_and_not_poisoned(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate must not block a legitimately startable bot — IDLE, no
     durable STOPPED, no poison, daemon reachable -> proceed to the daemon."""
     app, root = app_with_root
@@ -2332,9 +2294,7 @@ async def test_start_run_proceeds_when_idle_and_not_poisoned(
     assert response.json()["accepted"] is True
 
 
-async def test_stop_run_forwards_and_returns_action(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_stop(_base_url: str, run_id: str, _payload: dict) -> dict:
@@ -2351,9 +2311,7 @@ async def test_stop_run_forwards_and_returns_action(
     assert response.json()["process"]["state"] == "stopping"
 
 
-async def test_start_run_propagates_daemon_404(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_propagates_daemon_404(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
@@ -2368,9 +2326,7 @@ async def test_start_run_propagates_daemon_404(
     assert "not found" in response.json()["detail"].lower()
 
 
-async def test_start_run_propagates_daemon_unreachable_503(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_propagates_daemon_unreachable_503(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
@@ -2384,9 +2340,7 @@ async def test_start_run_propagates_daemon_unreachable_503(
     assert response.status_code == 503
 
 
-async def test_start_run_invalid_daemon_payload_returns_502(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_invalid_daemon_payload_returns_502(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
@@ -2408,14 +2362,10 @@ async def test_start_run_invalid_daemon_payload_returns_502(
 def _outcome_unknown_exc(
     *, category: str = "read_timeout", detail: str = "response lost"
 ) -> host_daemon_client.HostDaemonOutcomeUnknownError:
-    return host_daemon_client.HostDaemonOutcomeUnknownError(
-        error_category=category, detail=detail
-    )
+    return host_daemon_client.HostDaemonOutcomeUnknownError(error_category=category, detail=detail)
 
 
-def _assert_outcome_unknown_body(
-    body: dict, *, endpoint: str, category: str = "read_timeout"
-) -> None:
+def _assert_outcome_unknown_body(body: dict, *, endpoint: str, category: str = "read_timeout") -> None:
     """Shared assertions for the 619-C5 typed 409 response body."""
     assert body["outcome"] == "UNKNOWN"
     assert body["reason_code"] == "OUTCOME_UNKNOWN"
@@ -2427,9 +2377,7 @@ def _assert_outcome_unknown_body(
     assert body["runbook_hint"]  # non-empty
 
 
-async def test_deploy_outcome_unknown_returns_typed_409(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_outcome_unknown_returns_typed_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ReadTimeout-after-send during deploy must surface as 409 +
     OUTCOME_UNKNOWN — the run may or may not have been created on the
     daemon side."""
@@ -2448,9 +2396,7 @@ async def test_deploy_outcome_unknown_returns_typed_409(
     _assert_outcome_unknown_body(response.json()["detail"], endpoint="deploy")
 
 
-async def test_start_run_outcome_unknown_returns_typed_409(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_outcome_unknown_returns_typed_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
@@ -2462,14 +2408,10 @@ async def test_start_run_outcome_unknown_returns_typed_409(
         response = await client.post("/api/live-instances/runs/run-abc/start", json={})
 
     assert response.status_code == 409
-    _assert_outcome_unknown_body(
-        response.json()["detail"], endpoint="start_run", category="write_timeout"
-    )
+    _assert_outcome_unknown_body(response.json()["detail"], endpoint="start_run", category="write_timeout")
 
 
-async def test_stop_run_outcome_unknown_returns_typed_409(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_stop_run_outcome_unknown_returns_typed_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
 
     async def fake_stop(_base_url: str, _run_id: str, _payload: dict) -> dict:
@@ -2542,9 +2484,7 @@ def test_outcome_unknown_reason_code_is_in_documented_vocabulary() -> None:
     assert "OUTCOME_UNKNOWN" in REASON_CODES
 
 
-async def test_start_run_rejects_unsafe_run_id_400(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_rejects_unsafe_run_id_400(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """An unsafe run_id is rejected at the boundary before any forward."""
     app, _ = app_with_root
     called = False
@@ -2592,9 +2532,7 @@ def _write_run_status(
 
 def _write_hydration(root: Path, run_id: str, *, accepted: bool, failure_reason: str) -> None:
     (root / run_id / "indicator_state_hydration.json").write_text(
-        json.dumps(
-            {"schema_version": 1, "accepted": accepted, "validation": {"failure_reason": failure_reason}}
-        ),
+        json.dumps({"schema_version": 1, "accepted": accepted, "validation": {"failure_reason": failure_reason}}),
         encoding="utf-8",
     )
 
@@ -2623,9 +2561,7 @@ async def test_status_last_exit_surfaces_cold_start_hydration_failure(
     assert last_exit["hydration_failure_reason"] == "missing"
 
 
-async def test_status_last_exit_absent_while_run_is_live(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_last_exit_absent_while_run_is_live(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A live run (no terminal ended_at_ms) must not surface a stale last_exit —
     that would contradict the RUNNING badge."""
     app, root = app_with_root
@@ -2667,9 +2603,7 @@ async def test_status_last_exit_tolerates_malformed_hydration_receipt(
     assert last_exit["hydration_failure_reason"] is None
 
 
-async def test_start_defaults_readonly_false_in_paper_mode(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_defaults_readonly_false_in_paper_mode(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Paper mode with orders allowed defaults the Start card to place (paper)
     orders — readonly=False — so the operator doesn't re-enable trading on every
     start. Orders are paper, so trading-by-default is safe."""
@@ -2693,9 +2627,7 @@ async def test_start_defaults_readonly_false_in_paper_mode(
     assert response.json()["start_defaults"]["readonly"] is False
 
 
-async def test_start_defaults_readonly_true_in_live_mode(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_defaults_readonly_true_in_live_mode(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Live mode keeps the Start card in shadow (no-orders) by default — a
     real-money run never auto-trades from a server-authored default."""
     app, root = app_with_root
@@ -2744,9 +2676,7 @@ async def test_start_defaults_honors_ibkr_readonly_in_paper_mode(
     assert response.json()["start_defaults"]["readonly"] is True
 
 
-async def test_start_defaults_fail_closed_when_mode_missing(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_defaults_fail_closed_when_mode_missing(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing/unknown ``mode`` (config drift, partial rollout) must fail closed
     to shadow — never default to placing orders on a possibly-live account.
     (CodeRabbit #436.)"""
@@ -2802,9 +2732,7 @@ def test_today_ny_uses_america_new_york_not_utc(monkeypatch: pytest.MonkeyPatch)
 # ── reconciliation PR 2 — runtime reconcile endpoint ────────────────────
 
 
-async def test_reconcile_endpoint_enqueues_command_when_bound(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_reconcile_endpoint_enqueues_command_when_bound(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Daemon reports a live binding + bound run_dir exists on disk →
     POST /reconcile returns 200 with a request_id + accepted_at_ms and
     a pending RECONCILE command file appears under the run's commands dir.
@@ -2825,11 +2753,7 @@ async def test_reconcile_endpoint_enqueues_command_when_bound(
     assert isinstance(body["request_id"], str) and len(body["request_id"]) == 22
     assert isinstance(body["accepted_at_ms"], int) and body["accepted_at_ms"] > 0
 
-    queued = list(
-        (root / "run-reconcile" / "commands").glob(
-            "command.*.RECONCILE.pending.json"
-        )
-    )
+    queued = list((root / "run-reconcile" / "commands").glob("command.*.RECONCILE.pending.json"))
     assert len(queued) == 1, "RECONCILE command must be persisted to the bound run"
 
 

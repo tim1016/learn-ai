@@ -32,6 +32,39 @@ def gate(name: str, status: str, severity: str, detail: str) -> dict:
     return {"name": name, "status": status, "severity": severity, "detail": detail}
 
 
+def _gate_result_status(status: str) -> str:
+    if status == PASS:
+        return "pass"
+    if status == FAIL:
+        return "block"
+    if status == UNKNOWN:
+        return "unknown"
+    return "unknown"
+
+
+def _with_gate_results(gates: list[dict], *, source: str, as_of_ms: int) -> list[dict]:
+    out: list[dict] = []
+    for item in gates:
+        if "gate_result" in item:
+            out.append(item)
+            continue
+        detail = str(item.get("detail") or "")
+        out.append(
+            {
+                **item,
+                "gate_result": {
+                    "gate_id": str(item.get("name") or ""),
+                    "status": _gate_result_status(str(item.get("status") or UNKNOWN)),
+                    "source": source,
+                    "operator_reason": detail,
+                    "operator_next_step": "GATE_PASSING" if item.get("status") == PASS else detail,
+                    "evidence_at_ms": as_of_ms,
+                },
+            }
+        )
+    return out
+
+
 def derive_verdict(gates: list[dict]) -> str:
     """Collapse the gate list into a single verdict per the ADR 0005 rules."""
     if not gates:
@@ -75,6 +108,7 @@ def build_live_readiness(
     poisoned: bool,
     bar_source: str,
     expected_bar_source: str,
+    account_registry_gate_result: dict | None = None,
 ) -> dict:
     """Engine-authored live readiness from in-loop guard values."""
     gates: list[dict] = [
@@ -95,18 +129,34 @@ def build_live_readiness(
         gates.append(gate("session_window", PASS, HARD, "in session"))
     if orders_cap is not None:
         capped = orders_used >= orders_cap
-        gates.append(
-            gate("orders_cap", FAIL if capped else PASS, HARD, f"{orders_used} / {orders_cap} orders used")
-        )
+        gates.append(gate("orders_cap", FAIL if capped else PASS, HARD, f"{orders_used} / {orders_cap} orders used"))
     gates.append(gate("submission_mode", PASS, SOFT, submit_mode))
-    if expected_bar_source and bar_source and bar_source != expected_bar_source:
+    if account_registry_gate_result is not None:
+        registry_status = str(account_registry_gate_result.get("status") or UNKNOWN)
+        if registry_status == "pass":
+            status = PASS
+        elif registry_status == "unknown":
+            status = UNKNOWN
+        else:
+            status = FAIL
         gates.append(
-            gate("data_provenance", FAIL, SOFT, f"expected {expected_bar_source}; latest {bar_source}")
+            {
+                **gate(
+                    "account_instance_registry",
+                    status,
+                    HARD,
+                    str(account_registry_gate_result.get("operator_reason") or registry_status),
+                ),
+                "gate_result": account_registry_gate_result,
+            }
         )
+    if expected_bar_source and bar_source and bar_source != expected_bar_source:
+        gates.append(gate("data_provenance", FAIL, SOFT, f"expected {expected_bar_source}; latest {bar_source}"))
     else:
         gates.append(gate("data_provenance", PASS, SOFT, bar_source or "n/a"))
 
     verdict = derive_verdict(gates)
+    gates = _with_gate_results(gates, source="engine", as_of_ms=as_of_ms)
     # PRD #607 / Slice 1 (#608) — emit ``orders_used`` / ``orders_cap``
     # as structured top-level fields alongside the existing
     # ``orders_cap`` gate ``detail`` prose.  The cockpit's
@@ -150,10 +200,13 @@ def build_start_readiness(
         gates.append(gate("latest_reconcile", UNKNOWN, SOFT, "no reconcile receipt"))
     else:
         gates.append(
-            gate("latest_reconcile", PASS if reconcile_passed else FAIL, SOFT, "passed" if reconcile_passed else "failed")
+            gate(
+                "latest_reconcile", PASS if reconcile_passed else FAIL, SOFT, "passed" if reconcile_passed else "failed"
+            )
         )
 
     verdict = derive_verdict(gates)
+    gates = _with_gate_results(gates, source="backend_derived", as_of_ms=as_of_ms)
     summary = _summarize(gates, verdict)
     if verdict == READY:
         summary = "Start-ready: durable gates permit a start."

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.schemas.live_runs import (
     DesiredStateView,
     InstanceBrokerView,
@@ -182,9 +183,7 @@ def _defaults(strategy: str = "spy_ema_crossover") -> InstanceStartDefaults:
         ("exited", "EXITED"),
     ],
 )
-def test_host_process_start_capability_enabled_for_startable_states(
-    daemon_state: str, want_state: str
-) -> None:
+def test_host_process_start_capability_enabled_for_startable_states(daemon_state: str, want_state: str) -> None:
     surface = _surface(
         process=InstanceProcessView(state=daemon_state),
         start_run_id=_START_RUN,
@@ -221,9 +220,7 @@ def test_host_process_start_capability_enabled_for_waiting_for_host() -> None:
         ("unreachable", "UNREACHABLE", "HOST_SERVICE_OFFLINE"),
     ],
 )
-def test_host_process_start_capability_disabled_per_state(
-    daemon_state: str, want_state: str, want_reason: str
-) -> None:
+def test_host_process_start_capability_disabled_per_state(daemon_state: str, want_state: str, want_reason: str) -> None:
     # Even with valid start inputs, these states block Start.
     surface = _surface(
         process=InstanceProcessView(state=daemon_state),
@@ -236,6 +233,14 @@ def test_host_process_start_capability_disabled_per_state(
     assert cap.disabled_reason_code == want_reason
     assert cap.run_id is None
     assert cap.request is None
+    assert len(cap.gate_results) == 1
+    gate = cap.gate_results[0]
+    assert gate.gate_id == "start.daemon_state"
+    assert gate.status == "block"
+    assert gate.source == "operator_surface"
+    assert gate.operator_reason == want_reason
+    assert gate.operator_next_step == want_reason
+    assert gate.evidence_at_ms == _NOW_MS
 
 
 def test_host_process_start_capability_intent_stopped_overrides_state() -> None:
@@ -602,8 +607,47 @@ def test_resume_pause_under_clean_guards_and_paused_intent() -> None:
         surface = _surface(live_binding=binding, desired_state=_desired("PAUSED"))
         assert surface.actions.resume.enabled is True
         assert surface.actions.resume.disabled_reason_code is None
+        assert surface.actions.resume.gate_results[0].gate_id == "action.resume"
+        assert surface.actions.resume.gate_results[0].status == "pass"
+        assert surface.actions.resume.gate_results[0].evidence_at_ms == _NOW_MS
         assert surface.actions.pause.enabled is False
         assert surface.actions.pause.disabled_reason_code == "ALREADY_PAUSED"
+        assert surface.actions.pause.gate_results[0].gate_id == "action.pause"
+        assert surface.actions.pause.gate_results[0].status == "block"
+        assert surface.actions.pause.gate_results[0].operator_reason == "ALREADY_PAUSED"
+        assert surface.actions.pause.gate_results[0].operator_next_step == "ALREADY_PAUSED"
+        assert surface.actions.pause.gate_results[0].evidence_at_ms == _NOW_MS
+
+
+def test_account_freeze_blocks_start_and_resume() -> None:
+    freeze = AccountFreezeEvidence(
+        account_id="DU123456",
+        reason="watchdog.flatten_failed",
+        source="watchdog_halt_executor",
+        recorded_at_ms=_NOW_MS,
+        operator_next_step="CHECK_IBKR",
+    )
+
+    surface = _surface(
+        process=_IDLE_PROC,
+        desired_state=_desired("PAUSED"),
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+        account_freeze=freeze,
+    )
+
+    assert surface.host_process.start_capability.enabled is False
+    assert surface.host_process.start_capability.disabled_reason_code == "ACCOUNT_FROZEN"
+    start_gate = surface.host_process.start_capability.gate_results[0]
+    assert start_gate.gate_id == "account.unresolved_exposure"
+    assert start_gate.status == "freeze"
+
+    assert surface.actions.resume.enabled is False
+    assert surface.actions.resume.disabled_reason_code == "ACCOUNT_FROZEN"
+    resume_gate = surface.actions.resume.gate_results[0]
+    assert resume_gate.gate_id == "account.unresolved_exposure"
+    assert resume_gate.status == "freeze"
+    assert resume_gate.operator_reason == "watchdog.flatten_failed"
 
 
 def test_resume_pause_effect_discriminator_flips_with_binding_and_state() -> None:
@@ -753,6 +797,7 @@ def test_readiness_gates_empty_when_no_readiness() -> None:
 def test_readiness_gates_passing_gate_has_no_action_but_documented_unavailable_reason() -> None:
     surface = _surface(
         readiness=_readiness(
+            as_of_ms=_NOW_MS,
             gates=[
                 ReadinessGate(
                     name="broker_connection",
@@ -760,7 +805,7 @@ def test_readiness_gates_passing_gate_has_no_action_but_documented_unavailable_r
                     severity="hard",
                     detail="connected",
                 )
-            ]
+            ],
         )
     )
     assert len(surface.readiness_gates) == 1
@@ -768,6 +813,12 @@ def test_readiness_gates_passing_gate_has_no_action_but_documented_unavailable_r
     assert gate.status == "pass"
     assert gate.suggested_action is None
     assert gate.suggested_action_unavailable_reason == "GATE_PASSING"
+    assert gate.gate_result.gate_id == "broker_connection"
+    assert gate.gate_result.status == "pass"
+    assert gate.gate_result.source == "engine"
+    assert gate.gate_result.evidence_at_ms == _NOW_MS
+    assert gate.gate_result.operator_reason == "connected"
+    assert gate.gate_result.operator_next_step == "GATE_PASSING"
 
 
 def test_readiness_gates_failing_gate_has_authored_action_or_unavailable_reason() -> None:
@@ -929,9 +980,7 @@ def test_control_plane_connected_has_no_notice_or_runbook() -> None:
         ("INCOMPATIBLE_CONTRACT", "daemon-incompatible-contract"),
     ],
 )
-def test_control_plane_unhealthy_kinds_carry_notice_and_runbook(
-    kind: str, expected_runbook: str
-) -> None:
+def test_control_plane_unhealthy_kinds_carry_notice_and_runbook(kind: str, expected_runbook: str) -> None:
     surface = _surface(control_plane_state=_conn_state(kind, attempt=2))
 
     assert surface.control_plane is not None
@@ -1064,9 +1113,7 @@ def test_project_reconciliation_in_progress() -> None:
 
 
 def test_project_reconciliation_failed_carries_reason() -> None:
-    proj = _project(
-        _make_receipt(status="failed", failure_reason="broker_probe_failed")
-    )
+    proj = _project(_make_receipt(status="failed", failure_reason="broker_probe_failed"))
     assert proj.state == "FAILED"
     assert proj.failure_reason == "broker_probe_failed"
 
@@ -1077,11 +1124,7 @@ def test_project_reconciliation_passed_clean() -> None:
 
 
 def test_project_reconciliation_passed_adopted_surfaces_intent_ids() -> None:
-    proj = _project(
-        _make_receipt(
-            status="passed", outcome="adopted", adopted_intent_ids=("iid-1",)
-        )
-    )
+    proj = _project(_make_receipt(status="passed", outcome="adopted", adopted_intent_ids=("iid-1",)))
     assert proj.state == "ADOPTED"
     assert proj.adopted_intent_ids == ("iid-1",)
 

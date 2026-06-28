@@ -414,6 +414,17 @@ class RunnerProcessManager:
                         "Stop it before starting another run for this instance.",
                     )
 
+            account_freeze = self._write_account_registry_binding(
+                run_dir,
+                run_id=run_id,
+                lifecycle_state="ACTIVE",
+                source="host_daemon.start",
+            )
+            if account_freeze is not None:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    f"Account is frozen by {account_freeze.source}: {account_freeze.reason}",
+                )
             command = self._build_start_command(
                 run_dir,
                 request,
@@ -436,7 +447,9 @@ class RunnerProcessManager:
                 )
             except OSError as exc:
                 log_handle.close()
-                raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}") from exc
+                raise HostRunnerError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}"
+                ) from exc
 
             self._managed[key] = ManagedProcess(
                 strategy_instance_id=sid,
@@ -448,9 +461,7 @@ class RunnerProcessManager:
                 log_path=log_path,
                 log_handle=log_handle,
             )
-            logger.info(
-                "Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid
-            )
+            logger.info("Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid)
             return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
     def emergency_flatten(self, run_id: str, account: str) -> HostRunnerActionResponse:
@@ -512,11 +523,7 @@ class RunnerProcessManager:
             if proc.returncode != 0:
                 # CLI exit codes: 2 = operator precondition (account mismatch / no
                 # --confirm) -> 400; everything else (3 = broker/runtime) -> 502.
-                http_code = (
-                    status.HTTP_400_BAD_REQUEST
-                    if proc.returncode == 2
-                    else status.HTTP_502_BAD_GATEWAY
-                )
+                http_code = status.HTTP_400_BAD_REQUEST if proc.returncode == 2 else status.HTTP_502_BAD_GATEWAY
                 detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
                     f"emergency-flatten exited {proc.returncode}"
                 )
@@ -568,9 +575,7 @@ class RunnerProcessManager:
                 f"Run directory already exists without a matching ledger: {exc.run_dir}",
             ) from exc
         except InvalidInstanceIdError as exc:
-            raise HostRunnerError(
-                status.HTTP_400_BAD_REQUEST, f"Invalid deployment name: {exc}"
-            ) from exc
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Invalid deployment name: {exc}") from exc
         except StrategyInstanceIdAlreadyUsedError as exc:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
@@ -583,25 +588,24 @@ class RunnerProcessManager:
                 ),
             ) from exc
         except ExplicitSurfaceSizingMismatchError as exc:
-            raise HostRunnerError(
-                status.HTTP_400_BAD_REQUEST, f"Invalid sizing policy: {exc}"
-            ) from exc
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Invalid sizing policy: {exc}") from exc
         except SizingPolicyMissingError as exc:
-            raise HostRunnerError(
-                status.HTTP_400_BAD_REQUEST, f"Sizing policy required: {exc}"
-            ) from exc
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Sizing policy required: {exc}") from exc
         except UnknownLiveConfigKeyError as exc:
-            raise HostRunnerError(
-                status.HTTP_400_BAD_REQUEST, f"Unknown live_config key: {exc}"
-            ) from exc
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Unknown live_config key: {exc}") from exc
         except SpecOrAuditMissingError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc
         except GitUnavailableError as exc:
             raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"git unavailable: {exc}") from exc
         except DeployIOError as exc:
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE, f"deploy filesystem error: {exc}"
-            ) from exc
+            raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"deploy filesystem error: {exc}") from exc
+
+        self._write_account_registry_binding(
+            result.run_dir,
+            run_id=result.run_id,
+            lifecycle_state="DEPLOYED",
+            source="host_daemon.deploy",
+        )
 
         start_action: HostRunnerActionResponse | None = None
         if request.start:
@@ -620,6 +624,66 @@ class RunnerProcessManager:
             created=result.created,
             start=start_action,
         )
+
+    def _write_account_registry_binding(
+        self,
+        run_dir: Path,
+        *,
+        run_id: str,
+        lifecycle_state: str,
+        source: str,
+    ):
+        ledger_path = run_dir / "run_ledger.json"
+        if not ledger_path.is_file():
+            return None
+        try:
+            data = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not read run ledger for account registry: {exc}",
+            ) from exc
+        account_id = data.get("account_id")
+        strategy_instance_id = data.get("strategy_instance_id")
+        if not isinstance(account_id, str) or not account_id:
+            return
+        if not isinstance(strategy_instance_id, str) or not strategy_instance_id:
+            return
+        from app.engine.live.account_artifacts import (
+            AccountInstanceBinding,
+            bot_order_namespace_for_instance,
+            evaluate_restart_intensity,
+            read_account_freeze,
+            write_account_instance_binding,
+        )
+
+        try:
+            recorded_at_ms = _now_ms()
+            write_account_instance_binding(
+                self.artifacts_root,
+                AccountInstanceBinding(
+                    account_id=account_id,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+                    lifecycle_state=lifecycle_state,
+                    recorded_at_ms=recorded_at_ms,
+                    source=source,
+                ),
+            )
+            if lifecycle_state == "ACTIVE":
+                evaluate_restart_intensity(
+                    self.artifacts_root,
+                    account_id=account_id,
+                    now_ms=recorded_at_ms,
+                )
+                return read_account_freeze(self.artifacts_root, account_id)
+            return None
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not write account instance registry: {exc}",
+            ) from exc
 
     def _git_tracked_under(self, subdir: Path) -> list[str]:
         """Repo-relative POSIX paths of git-tracked files under ``subdir``.
@@ -640,9 +704,7 @@ class RunnerProcessManager:
             raise RuntimeError(f"git ls-files failed: rc={proc.returncode} stderr={proc.stderr!r}")
         return [p for p in proc.stdout.split("\0") if p]
 
-    def lookup_audit_copy_sizing(
-        self, audit_copy_path: str, proposed_sizing: dict | None
-    ) -> dict:
+    def lookup_audit_copy_sizing(self, audit_copy_path: str, proposed_sizing: dict | None) -> dict:
         """ADR 0009 § 3 — Reference parity gate status for the deploy form.
 
         Resolves the operator's audit-copy choice against
@@ -670,9 +732,7 @@ class RunnerProcessManager:
             "expected_rule": policy_to_ledger_dict(verdict.expected_rule)
             if verdict.expected_rule is not None
             else None,
-            "actual_rule": policy_to_ledger_dict(verdict.actual_rule)
-            if verdict.actual_rule is not None
-            else None,
+            "actual_rule": policy_to_ledger_dict(verdict.actual_rule) if verdict.actual_rule is not None else None,
         }
 
     def list_qc_audit_copies(self) -> QcAuditCopyListing:
@@ -699,9 +759,7 @@ class RunnerProcessManager:
             if not resolved.is_relative_to(scope_root):
                 continue  # symlink pointing outside the scope root
             entries.append(resolved.relative_to(self.repo_root).as_posix())
-        return QcAuditCopyListing(
-            scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=sorted(entries)
-        )
+        return QcAuditCopyListing(scope_root=_QC_SHADOW_SUBDIR.as_posix(), entries=sorted(entries))
 
     def _resolve_under_repo(self, raw: str, *, field: str) -> Path:
         """Resolve an operator-supplied path against ``repo_root`` and confine
@@ -736,9 +794,7 @@ class RunnerProcessManager:
         command_id = f"stop-{_uuid.uuid4().hex[:12]}"
         current = self._by_run_id(run_id)
         if current is None:
-            raise HostRunnerError(
-                status.HTTP_404_NOT_FOUND, f"No host runner process is being tracked for {run_id}."
-            )
+            raise HostRunnerError(status.HTTP_404_NOT_FOUND, f"No host runner process is being tracked for {run_id}.")
         if current.process.poll() is not None:
             # Already-exited race: report it as ``exited`` with the runner's
             # actual exit code so the cockpit doesn't render a phantom stop.
@@ -878,9 +934,7 @@ class RunnerProcessManager:
             if key == exclude_key:
                 continue
             self._refresh(managed)
-            if managed.process.poll() is None and _is_set_holdings_full(
-                self._read_sibling_sizing(managed.run_dir)
-            ):
+            if managed.process.poll() is None and _is_set_holdings_full(self._read_sibling_sizing(managed.run_dir)):
                 symbol = self._resolve_symbol(managed.run_dir)
                 if symbol:
                     symbols.add(symbol)
@@ -1046,9 +1100,7 @@ def create_app(
     ) -> None:
         # Constant-time compare: response latency must not depend on which
         # byte of the token is wrong. See VCR-0011 / ADR 0007.
-        if not hmac.compare_digest(
-            (supplied or "").encode("utf-8"), token.encode("utf-8")
-        ):
+        if not hmac.compare_digest((supplied or "").encode("utf-8"), token.encode("utf-8")):
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
                 detail=f"missing or wrong {TOKEN_HEADER}",
@@ -1123,9 +1175,7 @@ def create_app(
                     detail="proposed_sizing must be a JSON object",
                 )
             sizing = parsed
-        return AuditCopySizingLookup.model_validate(
-            process_manager.lookup_audit_copy_sizing(audit_copy_path, sizing)
-        )
+        return AuditCopySizingLookup.model_validate(process_manager.lookup_audit_copy_sizing(audit_copy_path, sizing))
 
     @app.post("/deploy", response_model=HostRunnerDeployResponse, dependencies=auth)
     async def deploy(request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
@@ -1153,17 +1203,11 @@ def create_app(
         response_model=HostRunnerActionResponse,
         dependencies=auth,
     )
-    async def emergency_flatten_run(
-        run_id: str, request: EmergencyFlattenRequest
-    ) -> HostRunnerActionResponse:
+    async def emergency_flatten_run(run_id: str, request: EmergencyFlattenRequest) -> HostRunnerActionResponse:
         if not request.confirm:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true"
-            )
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
         try:
-            return await run_in_threadpool(
-                process_manager.emergency_flatten, run_id, request.account
-            )
+            return await run_in_threadpool(process_manager.emergency_flatten, run_id, request.account)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -1244,9 +1288,7 @@ def _valid_bind_host(host: str) -> str:
     try:
         ipaddress.ip_address(host)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"--host must be an IP address or 'localhost', got {host!r}."
-        ) from exc
+        raise argparse.ArgumentTypeError(f"--host must be an IP address or 'localhost', got {host!r}.") from exc
     return host
 
 
@@ -1278,9 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
     # Log the executing code's git SHA at startup: the daemon is long-lived and
     # does NOT reload on `git pull`, so this is the operator's anchor for "which
     # code is this daemon actually running" after a fix merges.
-    logger.info(
-        "host daemon code git_sha=%s (repo_root=%s)", manager._launch_git_sha, repo_root
-    )
+    logger.info("host daemon code git_sha=%s (repo_root=%s)", manager._launch_git_sha, repo_root)
 
     import uvicorn
 

@@ -243,6 +243,53 @@ async def test_flatten_failed_records_critical_and_continues(tmp_path: Path) -> 
     assert "request_engine_exit" in [e.split(":", 1)[1] for e in rec.events]
     # error captured in evidence
     assert "broker gone" in str(incident.evidence.get("flatten_error", ""))
+    gate = incident.evidence["gate_results"][0]  # type: ignore[index]
+    assert gate["gate_id"] == "watchdog.lease_loss"
+    assert gate["status"] == "freeze"
+    assert gate["source"] == "watchdog_halt_executor"
+    assert gate["operator_reason"] == "watchdog.flatten_failed"
+    assert gate["operator_next_step"] == "CHECK_IBKR"
+    assert isinstance(gate["evidence_at_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_flatten_failure_evidence_is_persisted_before_disconnect(tmp_path: Path) -> None:
+    """The broker may disconnect only after terminal flatten evidence exists.
+
+    The initial scaffold is not enough; disconnect must observe the
+    post-flatten ``flatten_outcome`` evidence on disk so a crash during
+    broker teardown still leaves an explainable unresolved exposure record.
+    """
+    rec = _OrderingRecorder()
+    store = IncidentStore(tmp_path)
+
+    class _CheckingController(_FakeController):
+        async def disconnect_broker(self) -> BrokerDisconnectOutcome:
+            unresolved = store.list_unresolved()
+            assert any(
+                incident.evidence.get("flatten_outcome") == "failed"
+                and incident.evidence.get("disconnect_outcome") is None
+                for incident in unresolved
+            ), "terminal flatten failure evidence must be durable before disconnect"
+            return await super().disconnect_broker()
+
+    controller = _CheckingController(
+        recorder=rec, flatten_raises=RuntimeError("broker gone")
+    )
+    tick = [0]
+
+    def _clock_ms() -> int:
+        tick[0] += 1
+        return tick[0]
+
+    executor = WatchdogHaltExecutor(
+        controller, store, timeouts=_FAST_TIMEOUTS, clock_ms=_clock_ms
+    )
+
+    incident = await executor.execute("LEASE_EXPIRED")
+
+    assert incident.notice.code == "watchdog.flatten_failed"
+    assert rec.seq_of("disconnect_broker") > rec.seq_of("flatten_now")
 
 
 # ---------------------------------------------------------------------------

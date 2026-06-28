@@ -812,6 +812,36 @@ class EvidenceBinding(BaseModel):
     is_live: bool = False
 
 
+GateResultStatus = Literal[
+    "pass",
+    "block",
+    "poison",
+    "freeze",
+    "unknown",
+    "not_applicable",
+]
+
+
+class GateResult(BaseModel):
+    """Canonical lifecycle gate result row.
+
+    A gate result is the enforcement-backed predicate the cockpit can
+    render and diagnose. Older readiness rows still expose their
+    ``name`` / ``status`` / ``severity`` / ``detail`` fields for
+    compatibility; ``GateResult`` is the normalized contract newer
+    account-level gates consume.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    gate_id: str
+    status: GateResultStatus
+    source: str
+    operator_reason: str
+    operator_next_step: str | None = None
+    evidence_at_ms: int = Field(ge=0)
+
+
 class ReadinessGate(BaseModel):
     """One named input to the "can this strategy act on the next bar?" verdict
     (ADR 0005). ``status`` is pass|fail|unknown; ``severity`` is hard|soft."""
@@ -820,6 +850,7 @@ class ReadinessGate(BaseModel):
     status: str  # pass | fail | unknown
     severity: str  # hard | soft
     detail: str
+    gate_result: GateResult | None = None
 
 
 class ReadinessVector(BaseModel):
@@ -1144,6 +1175,8 @@ class ActionCapability(BaseModel):
     effect: ActionEffect
     disabled_reason_code: str | None = None
     disabled_reasons: list[str] = Field(default_factory=list)
+    # Canonical gate result rows backing this action affordance.
+    gate_results: list[GateResult] = Field(default_factory=list)
 
 
 class OperatorSurfaceActions(BaseModel):
@@ -1232,6 +1265,7 @@ HostProcessStartDisabledReasonCode = Literal[
     "HOST_SERVICE_OFFLINE",
     "STOPPED_REQUIRES_REDEPLOY",
     "START_SETTINGS_INCOMPLETE",
+    "ACCOUNT_FROZEN",
 ]
 
 
@@ -1257,6 +1291,8 @@ class HostProcessStartCapability(BaseModel):
     request: HostRunnerStartRequest | None = None
     # Closed reason code; present iff ``enabled`` is False.
     disabled_reason_code: HostProcessStartDisabledReasonCode | None = None
+    # Canonical gate result rows backing the Start affordance.
+    gate_results: list[GateResult] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1390,13 +1426,13 @@ GateSuggestedAction = Annotated[
     Field(discriminator="kind"),
 ]
 
-
 class OperatorGate(BaseModel):
     """Operator-facing projection of an engine readiness gate (PRD #616).
 
     The engine's ``ReadinessGate`` carries name / status / severity /
-    detail.  ``OperatorGate`` adds server-authored remediation metadata
-    so the cockpit never infers a "fix" from the gate name.
+    detail.  ``OperatorGate`` adds a canonical ``GateResult`` plus
+    server-authored remediation metadata so the cockpit never infers a
+    "fix" from the gate name.
 
     Either ``suggested_action`` is present (a structured, closed-union
     descriptor), or it is ``None`` AND
@@ -1410,6 +1446,7 @@ class OperatorGate(BaseModel):
     status: str  # pass | fail | unknown
     severity: str  # hard | soft
     detail: str
+    gate_result: GateResult
     suggested_action: GateSuggestedAction | None = None
     suggested_action_unavailable_reason: str | None = None
 

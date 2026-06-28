@@ -11,7 +11,14 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
-from app.engine.live.live_portfolio import LivePortfolio
+from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitResult
+from app.engine.live.live_portfolio import (
+    AccountFreezeBlockError,
+    AccountRegistryBlockError,
+    LivePortfolio,
+)
+from app.schemas.live_runs import GateResult
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 
@@ -155,18 +162,14 @@ def test_market_order_internal_callers_unaffected_by_p3_f_guard() -> None:
 
     # set_holdings is the policy surface; calling it on policy-registered
     # is the CORRECT case and must succeed even with the new guard.
-    order = portfolio.set_holdings(
-        "SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC)
-    )
+    order = portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
     assert order is not None
     assert order.quantity == 2  # FixedShares(2)
 
     # A direct internal submit_market_order without explicit_call=True
     # (e.g. engine recovery_flatten constructs an Order directly) must
     # also keep working.
-    order2 = portfolio.submit_market_order(
-        "SPY", -1, datetime(2026, 5, 4, 14, 46, tzinfo=UTC)
-    )
+    order2 = portfolio.submit_market_order("SPY", -1, datetime(2026, 5, 4, 14, 46, tzinfo=UTC))
     assert order2.quantity == -1
 
 
@@ -249,9 +252,7 @@ def test_set_holdings_with_set_holdings_policy_routes_through_lean() -> None:
         portfolio_value_provider=WholeAccountPortfolioValueProvider(portfolio.total_value),
     )
 
-    order = portfolio.set_holdings(
-        "SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC)
-    )
+    order = portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
 
     assert order is not None
     # Lean buffered + IBKR fee: 199 shares (not 200 the legacy SimpleFloor buys).
@@ -277,3 +278,97 @@ async def test_submit_pending_orders_routes_through_paper_order_spec() -> None:
     assert broker.orders[0].confirm_paper is True
     assert broker.orders[0].client_order_id == "live-1"
     assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_when_account_is_frozen() -> None:
+    broker = FakeBroker()
+    freeze = AccountFreezeEvidence(
+        account_id="DU123",
+        reason="watchdog.flatten_failed",
+        source="watchdog_halt_executor",
+        recorded_at_ms=1_700_000_000_000,
+        operator_next_step="CHECK_IBKR",
+    )
+    portfolio = LivePortfolio(broker, account_freeze_provider=lambda: freeze)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountFreezeBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.evidence == freeze
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_when_account_registry_rejects() -> None:
+    broker = FakeBroker()
+    gate = GateResult(
+        gate_id="account.instance_registry",
+        status="block",
+        source="account_instance_registry",
+        operator_reason="ACCOUNT_REGISTRY_STALE_RUN",
+        operator_next_step="STOP_STALE_RUNNER",
+        evidence_at_ms=1_700_000_000_000,
+    )
+    portfolio = LivePortfolio(broker, account_registry_gate_provider=lambda: gate)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountRegistryBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == gate
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_routes_to_account_owner_when_enabled() -> None:
+    broker = FakeBroker()
+    captured: list[AccountOwnerSubmitIntent] = []
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
+        captured.append(intent)
+        return AccountOwnerSubmitResult(
+            status="accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            order_id=44,
+            perm_id=90044,
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+        trace_id_provider=lambda: "trace-owner-1",
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(captured) == 1
+    assert captured[0].trace_id == "trace-owner-1"
+    assert captured[0].account_id == "DU123"
+    assert captured[0].run_id == "run-alpha"
+    assert captured[0].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
+    assert captured[0].owner_generation == 3
+    assert captured[0].order_spec["symbol"] == "SPY"
+    assert acks[0].order_id == 44
+    assert broker.orders == []

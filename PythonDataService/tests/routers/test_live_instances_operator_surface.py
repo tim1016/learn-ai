@@ -23,6 +23,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
+from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.engine.live.engine_runtime import (
     BarLoopBlock,
     BrokerBlock,
@@ -35,10 +36,19 @@ from app.routers import live_instances
 from tests._fixtures.daemon_transport import as_typed_get
 
 
-def _write_ledger(root: Path, run_id: str, sid: str, created_at_ms: int, spec_path: Path | None = None) -> None:
+def _write_ledger(
+    root: Path,
+    run_id: str,
+    sid: str,
+    created_at_ms: int,
+    spec_path: Path | None = None,
+    account_id: str | None = None,
+) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
     payload: dict = {"run_id": run_id, "strategy_instance_id": sid, "created_at_ms": created_at_ms}
+    if account_id is not None:
+        payload["account_id"] = account_id
     if spec_path is not None:
         payload["strategy_spec_path"] = str(spec_path)
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
@@ -281,7 +291,9 @@ async def test_running_instance_status_carries_every_operator_surface_block(
             "effect",
             "disabled_reason_code",
             "disabled_reasons",
+            "gate_results",
         }
+        assert isinstance(cap["gate_results"], list)
         assert cap["effect"] in {"DURABLE_ONLY", "LIVE_ACTUATION"}
         if cap["enabled"]:
             assert cap["disabled_reason_code"] is None
@@ -292,9 +304,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     # readiness_gates projection is always present (even empty).
     assert isinstance(surface["readiness_gates"], list)
     assert surface["runtime_freshness"]["posture_demoted"] is True
-    assert surface["runtime_freshness"]["stale_reason_codes"] == [
-        "ENGINE_RUNTIME_MISSING"
-    ]
+    assert surface["runtime_freshness"]["stale_reason_codes"] == ["ENGINE_RUNTIME_MISSING"]
     for name in ("resume", "flatten_and_pause"):
         assert surface["actions"][name]["enabled"] is False
         assert surface["actions"][name]["disabled_reason_code"] == "POSTURE_DEMOTED"
@@ -356,18 +366,42 @@ async def test_running_instance_fresh_runtime_keeps_actions_current(
     )
     monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get(
-            "/api/live-instances/spy_ema_paper/status"
-        )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
     assert surface["runtime_freshness"]["posture_demoted"] is False
     assert surface["runtime_freshness"]["stale_reason_codes"] == []
     assert surface["runtime_freshness"]["bar_loop"]["state"] == "FRESH"
+
+
+async def test_status_uses_account_freeze_artifact_to_block_start_and_resume(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-freeze", "spy_ema_paper", 100, account_id="DU123456")
+    write_account_freeze(
+        root.parent,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["host_process"]["start_capability"]["disabled_reason_code"] == "ACCOUNT_FROZEN"
+    assert surface["host_process"]["start_capability"]["gate_results"][0]["status"] == "freeze"
+    assert surface["actions"]["resume"]["disabled_reason_code"] == "ACCOUNT_FROZEN"
+    assert surface["actions"]["resume"]["gate_results"][0]["gate_id"] == "account.unresolved_exposure"
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +501,7 @@ async def test_status_control_plane_is_null_when_no_monitor_installed(
     assert surface["control_plane"] is None
 
 
-async def test_status_control_plane_reflects_monitor_state(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_control_plane_reflects_monitor_state(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the lifespan installs a monitor, the operator surface carries
     its current connectivity state — kind, attempt, last_*_ms, daemon
     boot id, server-authored notice + runbook_slug — verbatim."""
@@ -519,9 +551,7 @@ async def test_status_control_plane_reflects_monitor_state(
     assert cp["runbook_slug"] == "daemon-unreachable"
 
 
-async def test_status_control_plane_connected_omits_notice(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_control_plane_connected_omits_notice(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """A healthy CONNECTED state must NOT surface a notice or runbook —
     the cockpit hides the incident card."""
 

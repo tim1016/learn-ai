@@ -65,6 +65,7 @@ def _describe_policy_value(policy: object) -> str:
         return ""
     return ""
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,11 +115,27 @@ class BrokerSafetyVerdictBlockError(RuntimeError):
 
     def __init__(self, *, verdict: str, detail: str | None = None) -> None:
         suffix = f": {detail}" if detail else ""
-        super().__init__(
-            f"BrokerSafetyVerdictBlockError(verdict={verdict!r}){suffix}"
-        )
+        super().__init__(f"BrokerSafetyVerdictBlockError(verdict={verdict!r}){suffix}")
         self.verdict = verdict
         self.detail = detail
+
+
+class AccountFreezeBlockError(RuntimeError):
+    """Raised when account-level freeze evidence blocks order submission."""
+
+    def __init__(self, *, evidence: object) -> None:
+        reason = getattr(evidence, "reason", None)
+        super().__init__(f"AccountFreezeBlockError(reason={reason!r})")
+        self.evidence = evidence
+
+
+class AccountRegistryBlockError(RuntimeError):
+    """Raised when the account instance registry blocks order submission."""
+
+    def __init__(self, *, gate_result: object) -> None:
+        reason = getattr(gate_result, "operator_reason", None)
+        super().__init__(f"AccountRegistryBlockError(reason={reason!r})")
+        self.gate_result = gate_result
 
 
 class SubmitUncertainHaltError(RuntimeError):
@@ -178,9 +195,7 @@ class BrokerAdapter(Protocol):
 
     async def fetch_positions(self): ...
 
-    async def place_order(
-        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
-    ) -> IbkrOrderAck: ...
+    async def place_order(self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0) -> IbkrOrderAck: ...
 
     async def cancel_open_orders(self) -> list[int]:
         """Cancel every order this runner still has open at the broker.
@@ -241,9 +256,7 @@ class IbkrBrokerAdapter(BrokerAdapter):
         """
         return self._stream_failure
 
-    def set_broker_callback_sink(
-        self, sink: Callable[[IbkrOrderEvent], None] | None
-    ) -> None:
+    def set_broker_callback_sink(self, sink: Callable[[IbkrOrderEvent], None] | None) -> None:
         """Install a synchronous receipt-time hook for durable raw callbacks."""
         self._broker_callback_sink = sink
 
@@ -253,9 +266,7 @@ class IbkrBrokerAdapter(BrokerAdapter):
     async def fetch_positions(self):
         return await fetch_positions(self._client)
 
-    async def place_order(
-        self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0
-    ) -> IbkrOrderAck:
+    async def place_order(self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0) -> IbkrOrderAck:
         ack = await place_paper_order(self._client, spec, perm_id_wait_s=perm_id_wait_s)
         self._owned_order_ids.add(int(ack.order_id))
         return ack
@@ -392,6 +403,20 @@ class LivePortfolio:
     # ``paper-only`` or ``None``. ``None`` keeps the prior pre-Phase-7B
     # behavior (no verdict enforcement) for replay / shadow / legacy paths.
     verdict_provider: object = None  # Callable[[], str | None] | None
+    # Account-scoped lifecycle freeze provider. When it returns active
+    # freeze evidence, submit is refused before any broker call.
+    account_freeze_provider: object = None
+    # Account-scoped instance registry provider. When it returns any gate result
+    # other than pass, submit is refused before any broker call.
+    account_registry_gate_provider: object = None
+    # AccountOwner mode: when set, runner code emits an AccountOwnerSubmitIntent
+    # to this callable instead of placing the order through its broker adapter.
+    account_owner_submitter: object = None
+    account_id: str = ""
+    strategy_instance_id: str = ""
+    run_id: str = ""
+    owner_generation_provider: object = None
+    trace_id_provider: object = None
     # Phase 8 / VCR-0003 — SIZING_SKIP audit log path. When set, every
     # set_holdings call that resolves to ``delta == 0`` (target == current
     # → no order to submit) appends a JSON line to this file capturing
@@ -601,16 +626,8 @@ class LivePortfolio:
             self._append_sizing_skip(
                 ts_ms=int(time.timestamp() * 1000),
                 symbol=sym,
-                policy_kind=(
-                    self.order_sizer.policy.kind
-                    if self.order_sizer is not None
-                    else "sizing_model"
-                ),
-                policy_value=(
-                    _describe_policy_value(self.order_sizer.policy)
-                    if self.order_sizer is not None
-                    else ""
-                ),
+                policy_kind=(self.order_sizer.policy.kind if self.order_sizer is not None else "sizing_model"),
+                policy_value=(_describe_policy_value(self.order_sizer.policy) if self.order_sizer is not None else ""),
                 target_qty=int(target_quantity),
                 current_qty=int(current_pos.quantity),
                 reference_price=str(price),
@@ -735,6 +752,20 @@ class LivePortfolio:
 
         requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
 
+        if self.account_freeze_provider is not None:
+            freeze_evidence = self.account_freeze_provider()  # type: ignore[operator]
+            if freeze_evidence is not None:
+                self.pending_orders.clear()
+                self._intent_by_order_id.clear()
+                raise AccountFreezeBlockError(evidence=freeze_evidence)
+
+        if self.account_registry_gate_provider is not None:
+            registry_gate = self.account_registry_gate_provider()  # type: ignore[operator]
+            if registry_gate is not None and getattr(registry_gate, "status", None) != "pass":
+                self.pending_orders.clear()
+                self._intent_by_order_id.clear()
+                raise AccountRegistryBlockError(gate_result=registry_gate)
+
         # Phase 7B / VCR-0010 — broker safety verdict gate. Consulted once at
         # the start of the submit pass (the verdict can't flip mid-call) so
         # the cost is a single getter call per bar, not per order. When the
@@ -777,8 +808,7 @@ class LivePortfolio:
                 raise BrokerSafetyVerdictBlockError(
                     verdict=str(verdict_value),
                     detail=(
-                        "engine refuses to submit while broker safety verdict "
-                        "is not paper-only (PRD §7B order-block)"
+                        "engine refuses to submit while broker safety verdict is not paper-only (PRD §7B order-block)"
                     ),
                 )
 
@@ -787,7 +817,12 @@ class LivePortfolio:
             intent_id = self._intent_by_order_id.pop(order.order_id, None)
             order_ref: str | None = None
 
-            if requires_durable:
+            if self.account_owner_submitter is not None:
+                if intent_id is None:
+                    intent_id = mint_intent_id()
+                    self._last_minted_intent_id = intent_id
+                order_ref = build_order_ref(self.bot_order_namespace, intent_id)
+            elif requires_durable:
                 # __post_init__ guarantees intent_wal + namespace. Mint a
                 # fallback intent_id for orders that bypassed set_holdings
                 # (market_order / liquidate / engine-internal flatten paths)
@@ -829,11 +864,62 @@ class LivePortfolio:
                     f"{spec.order_ref!r} does not start with {expected_prefix!r}"
                 )
 
-            wal_active = (
-                self.intent_wal is not None
-                and intent_id is not None
-                and order_ref is not None
-            )
+            if self.account_owner_submitter is not None:
+                from app.engine.live.account_owner import AccountOwnerSubmitIntent
+                from app.utils.timestamps import now_ms_utc
+
+                if not self.account_id or not self.strategy_instance_id or not self.run_id:
+                    raise ValueError("AccountOwner mode requires account_id, strategy_instance_id, and run_id")
+                if not self.bot_order_namespace:
+                    raise ValueError("AccountOwner mode requires bot_order_namespace")
+                if self.owner_generation_provider is None:
+                    raise ValueError("AccountOwner mode requires owner_generation_provider")
+                assert intent_id is not None and order_ref is not None
+                trace_id = (
+                    self.trace_id_provider()  # type: ignore[operator]
+                    if self.trace_id_provider is not None
+                    else intent_id
+                )
+                owner_generation = self.owner_generation_provider()  # type: ignore[operator]
+                result = await self.account_owner_submitter(  # type: ignore[operator]
+                    AccountOwnerSubmitIntent(
+                        trace_id=str(trace_id),
+                        account_id=self.account_id,
+                        strategy_instance_id=self.strategy_instance_id,
+                        run_id=self.run_id,
+                        bot_order_namespace=self.bot_order_namespace,
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        intent_kind="STRATEGY",
+                        order_spec=spec.model_dump(),
+                        owner_generation=int(owner_generation),
+                        created_at_ms=now_ms_utc(),
+                    )
+                )
+                if getattr(result, "status", None) != "accepted":
+                    raise RuntimeError(
+                        f"AccountOwner submit did not accept intent {intent_id}: {getattr(result, 'reason', None)!r}"
+                    )
+                acks.append(
+                    IbkrOrderAck(
+                        account_id=self.account_id,
+                        is_paper=True,
+                        order_id=int(getattr(result, "order_id")),
+                        perm_id=_try_int(getattr(result, "perm_id", None)),
+                        client_id=0,
+                        con_id=0,
+                        symbol=spec.symbol,
+                        action=spec.action,
+                        quantity=spec.quantity,
+                        order_type=spec.order_type,
+                        limit_price=spec.limit_price,
+                        status="Submitted",
+                        placed_at_ms=now_ms_utc(),
+                    )
+                )
+                continue
+
+            wal_active = self.intent_wal is not None and intent_id is not None and order_ref is not None
 
             # Phase 5D / VCR-0002 — submit retry policy driven by
             # ``submit_state_machine.next_action``. Each attempt fsync's a
@@ -962,9 +1048,7 @@ class LivePortfolio:
                         # Belt-and-suspenders: next_action already enforces the
                         # cap, but a defensive check here removes any window
                         # where a loop bug could double-submit.
-                        raise RuntimeError(
-                            "submit retry exceeded RETRY_CAP — state-machine invariant violated"
-                        )
+                        raise RuntimeError("submit retry exceeded RETRY_CAP — state-machine invariant violated")
                     continue  # next attempt: fresh PENDING_INTENT, same order_ref
 
                 # probe_verdict is HALT. The WAL records the halt-class event
@@ -972,8 +1056,7 @@ class LivePortfolio:
                 # engine cleanup still leaves the recovery-readable receipt.
                 assert probe_verdict is SubmitVerdict.HALT
                 halt_reason = (
-                    f"submit state not provable after retry_count={retry_count} "
-                    f"(probe={probe.value}); {ack_reason}"
+                    f"submit state not provable after retry_count={retry_count} (probe={probe.value}); {ack_reason}"
                 )
                 if wal_active:
                     assert self.intent_wal is not None

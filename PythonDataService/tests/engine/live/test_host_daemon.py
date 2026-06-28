@@ -14,6 +14,13 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.engine.live.account_artifacts import (
+    AccountInstanceBinding,
+    bot_order_namespace_for_instance,
+    read_account_freeze,
+    read_account_instance_registry,
+    write_account_instance_binding,
+)
 from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
 from app.schemas.live_runs import (
@@ -307,6 +314,88 @@ async def test_start_launches_existing_run_with_host_env(
     assert "PythonDataService" in captured["kwargs"]["env"]["PYTHONPATH"]
 
 
+async def test_start_writes_account_registry_before_spawn(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
+        assert bindings
+        assert bindings[-1].strategy_instance_id == "spy_ema_paper"
+        assert bindings[-1].run_id == RUN_ID
+        assert bindings[-1].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
+        assert bindings[-1].lifecycle_state == "ACTIVE"
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(f"/runs/{RUN_ID}/start", json={})
+
+    assert response.status_code == 200
+
+
+async def test_start_blocks_when_restart_intensity_freezes_account(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon as hd
+
+    manager, run_dir = daemon_context
+    fixed_now_ms = 1_700_000_020_000
+    monkeypatch.setattr(hd, "_now_ms", lambda: fixed_now_ms)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    for index, recorded_at_ms in enumerate((fixed_now_ms - 20_000, fixed_now_ms - 10_000), start=1):
+        write_account_instance_binding(
+            manager.artifacts_root,
+            AccountInstanceBinding(
+                account_id="DU111",
+                strategy_instance_id=f"prior-{index}",
+                run_id=f"prior-run-{index}",
+                bot_order_namespace=bot_order_namespace_for_instance(f"prior-{index}"),
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=recorded_at_ms,
+                source="test",
+            ),
+        )
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        raise AssertionError("restart intensity freeze should block before spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(f"/runs/{RUN_ID}/start", json={})
+
+    assert response.status_code == 409
+    freeze = read_account_freeze(manager.artifacts_root, "DU111")
+    assert freeze is not None
+    assert freeze.source == "account_restart_intensity"
+
+
 async def test_start_rejects_second_active_run(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -379,9 +468,7 @@ async def test_stop_handles_process_exiting_between_poll_and_signal(
     assert stop.json()["accepted"] is False
 
 
-async def test_instances_lists_each_managed_strategy_instance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_instances_lists_each_managed_strategy_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The registry keys by strategy_instance_id, so an executing and a shadow
     instance coexist as separate processes and both surface on /instances."""
     repo_root = tmp_path / "repo"
@@ -393,9 +480,7 @@ async def test_instances_lists_each_managed_strategy_instance(
     for run_id, sid in runs.items():
         run_dir = live_runs_root / run_id
         run_dir.mkdir(parents=True)
-        (run_dir / "run_ledger.json").write_text(
-            json.dumps({"strategy_instance_id": sid}), encoding="utf-8"
-        )
+        (run_dir / "run_ledger.json").write_text(json.dumps({"strategy_instance_id": sid}), encoding="utf-8")
 
     manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: FakeProcess())
@@ -447,9 +532,7 @@ async def test_start_falls_back_to_run_id_key_without_ledger_binding(
     assert instances[0]["strategy_instance_id"] == ""
 
 
-async def test_start_injects_sibling_managed_symbols(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_injects_sibling_managed_symbols(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Starting a second instance injects the running sibling's symbol via
     --managed-symbols so the unexpected-position gate excludes it (#395/#398)."""
     from app.engine.strategy.spec import schema as spec_schema
@@ -693,9 +776,7 @@ def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
     repo.mkdir()
     _init_git_repo(repo)
     (repo / "PythonDataService").mkdir()
-    (repo / "PythonDataService" / "spec.json").write_text(
-        '{"strategy": "spy_ema_crossover"}', encoding="utf-8"
-    )
+    (repo / "PythonDataService" / "spec.json").write_text('{"strategy": "spy_ema_crossover"}', encoding="utf-8")
     (repo / "references" / "qc-shadow").mkdir(parents=True)
     (repo / "references" / "qc-shadow" / "SpyEmaCrossoverAlgorithm.py").write_text(
         "# QC audit copy\n", encoding="utf-8"
@@ -761,6 +842,25 @@ async def test_deploy_creates_run(git_daemon_context: tuple[RunnerProcessManager
 
 
 @requires_git
+async def test_deploy_writes_account_registry_binding(
+    git_daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = git_daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post("/deploy", json=_deploy_body())
+
+    assert response.status_code == 200
+    body = response.json()
+    bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
+    assert bindings[-1].strategy_instance_id == "spy-ema-paper-1"
+    assert bindings[-1].run_id == body["run_id"]
+    assert bindings[-1].bot_order_namespace == "learn-ai/spy-ema-paper-1/v1"
+    assert bindings[-1].lifecycle_state == "DEPLOYED"
+
+
+@requires_git
 async def test_deploy_is_idempotent(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, _ = git_daemon_context
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
@@ -792,9 +892,7 @@ async def test_deploy_rejects_missing_spec(git_daemon_context: tuple[RunnerProce
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post(
-            "/deploy", json=_deploy_body(strategy_spec_path="PythonDataService/nope.json")
-        )
+        response = await client.post("/deploy", json=_deploy_body(strategy_spec_path="PythonDataService/nope.json"))
 
     assert response.status_code == 400
 
@@ -805,9 +903,7 @@ async def test_deploy_rejects_path_escape(git_daemon_context: tuple[RunnerProces
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post(
-            "/deploy", json=_deploy_body(strategy_spec_path="../../../etc/passwd")
-        )
+        response = await client.post("/deploy", json=_deploy_body(strategy_spec_path="../../../etc/passwd"))
 
     assert response.status_code == 400
 
@@ -944,9 +1040,7 @@ def test_sibling_all_in_symbols_detects_set_holdings_full(
     monkeypatch.setattr(
         manager,
         "_resolve_symbol",
-        lambda run_dir: json.loads((run_dir / "run_ledger.json").read_text())
-        .get("live_config", {})
-        .get("symbol"),
+        lambda run_dir: json.loads((run_dir / "run_ledger.json").read_text()).get("live_config", {}).get("symbol"),
     )
 
     def _write_sibling(key: str, sizing: dict | None, symbol: str) -> ManagedProcess:
