@@ -5,8 +5,8 @@
 .bots-page {
   min-height: 100%;
   padding: 24px;
-  background: #f6f7f9;
-  color: #172033;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
 }
 
 .page-header,
@@ -26,7 +26,7 @@
 
 .eyebrow {
   margin: 0 0 4px;
-  color: #667085;
+  color: var(--text-subtle);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
@@ -44,16 +44,16 @@ h1 {
   gap: 12px;
   padding: 14px;
   margin-bottom: 14px;
-  border: 1px solid #d9dee8;
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .filter-field {
   display: grid;
   gap: 6px;
   min-width: min(100%, 220px);
-  color: #4b5565;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
 }
@@ -62,14 +62,29 @@ h1 {
   width: 100%;
 }
 
+:host ::ng-deep .filter-field .p-inputtext {
+  border-color: var(--border-light);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+
+  &::placeholder {
+    color: var(--text-muted);
+  }
+
+  &:enabled:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+}
+
 .segmented {
   display: inline-flex;
   align-self: end;
   min-height: 38px;
   padding: 3px;
-  border: 1px solid #cfd6e3;
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--bg-sunken);
 }
 
 .segmented button {
@@ -77,32 +92,32 @@ h1 {
   border-radius: 6px;
   padding: 0 12px;
   background: transparent;
-  color: #475467;
+  color: var(--text-subtle);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
 
 .segmented button.active {
-  background: #ffffff;
-  color: #111827;
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
 }
 
 .load-error {
   margin: 0 0 14px;
   padding: 12px 14px;
-  border: 1px solid #f2b8b5;
+  border: 1px solid var(--verdict-blocked);
   border-radius: 8px;
-  background: #fff4f2;
-  color: #9f1d1d;
+  background: var(--verdict-blocked-soft);
+  color: var(--text-primary);
 }
 
 .result-summary {
   justify-content: space-between;
   min-height: 24px;
   margin-bottom: 10px;
-  color: #667085;
+  color: var(--text-subtle);
   font-size: 13px;
 }
 
@@ -112,20 +127,35 @@ h1 {
   gap: 14px;
 }
 
+:host ::ng-deep .bot-dataview {
+  .p-dataview,
+  .p-dataview-content,
+  .p-dataview-emptymessage {
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+  }
+
+  .p-paginator {
+    border-color: var(--border-light);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
+}
+
 .bot-card {
   display: grid;
   gap: 16px;
   min-width: 0;
   padding: 16px;
-  border: 1px solid #d9dee8;
-  border-left: 4px solid #98a2b3;
+  border: 1px solid var(--border-light);
+  border-left: 4px solid var(--border-strong);
   border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
 }
 
 .bot-card.needs-attention {
-  border-left-color: #dc2626;
+  border-left-color: var(--verdict-blocked);
 }
 
 .card-topline {
@@ -142,7 +172,7 @@ h2 {
 
 .symbol-line {
   margin: 4px 0 0;
-  color: #667085;
+  color: var(--text-subtle);
   font-size: 13px;
 }
 
@@ -155,7 +185,7 @@ h2 {
 }
 
 dt {
-  color: #667085;
+  color: var(--text-subtle);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -166,7 +196,7 @@ dd {
   margin: 3px 0 0;
   min-width: 0;
   overflow-wrap: anywhere;
-  color: #172033;
+  color: var(--text-primary);
   font-size: 13px;
 }
 
@@ -179,14 +209,14 @@ dd {
 .metric-grid div {
   min-width: 0;
   padding: 10px;
-  border: 1px solid #e4e7ec;
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--bg-elevated);
 }
 
 .metric-grid span {
   display: block;
-  color: #667085;
+  color: var(--text-subtle);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -201,8 +231,10 @@ dd {
 }
 
 .expanded {
+  display: grid;
+  gap: 14px;
   padding-top: 14px;
-  border-top: 1px solid #eaecf0;
+  border-top: 1px solid var(--border-light);
 }
 
 .card-actions {

@@ -1390,7 +1390,31 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert row["metrics"]["open_positions"] == 1
     assert row["metrics"]["pnl"] == {"realized": None, "unrealized": None, "total": None}
     assert isinstance(row["status_label"], str)
+    assert isinstance(row["status_detail"], str)
     assert row["status_tone"] in {"positive", "warning", "danger", "neutral"}
+    assert row["last_run_label"] == "No result yet"
+    assert row["last_run_result"] == "UNKNOWN"
+    assert row["last_run_detail"] == "No completed run has been recorded for this bot."
+
+
+async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-error", "spy_error_bot", 100)
+    _write_run_status(root, "run-error", ended_at_ms=200, exit_code=3, exit_reason="exception")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    row = response.json()["bots"][0]
+    assert row["status_label"] in {"Blocked", "Degraded", "Unknown", "Ready"}
+    assert row["status_label"] != row["status_detail"]
+    assert row["last_run_label"] == "Exited with error"
+    assert row["last_run_result"] == "EXITED_WITH_ERROR"
+    assert row["last_run_detail"] == "Previous run exited with an error: runtime exception. Exit code 3."
 
 
 async def test_bot_catalog_does_not_fallback_unknown_symbol_to_instance_id(

@@ -23,10 +23,12 @@ CatalogTone = Literal["positive", "warning", "danger", "neutral"]
 def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMode) -> BotCatalogRow:
     error_count = _error_count(status)
     readiness_verdict = status.readiness.verdict if status.readiness is not None else "UNKNOWN"
+    prior_run_classification = status.operator_surface.prior_run.classification
     return BotCatalogRow(
         strategy_instance_id=status.strategy_instance_id,
         name=status.strategy_instance_id,
         status_label=_status_label(status),
+        status_detail=_status_detail(status),
         status_tone=_status_tone(readiness_verdict, error_count),
         needs_attention=error_count > 0 or readiness_verdict in ("BLOCKED", "DEGRADED"),
         trading_mode=trading_mode,
@@ -36,7 +38,9 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
         created_at_ms=status.provenance.created_at_ms if status.provenance is not None else None,
         updated_at_ms=status.desired_state.updated_at_ms if status.desired_state is not None else None,
         last_run_at_ms=_last_run_at_ms(status),
-        last_run_result=status.operator_surface.prior_run.classification,
+        last_run_label=_last_run_label(prior_run_classification),
+        last_run_result=prior_run_classification,
+        last_run_detail=_last_run_detail(status),
         process_state=status.operator_surface.host_process.state,
         desired_state=status.desired_state.state if status.desired_state is not None else None,
         readiness_verdict=readiness_verdict,
@@ -102,12 +106,86 @@ def _status_tone(readiness_verdict: str, error_count: int) -> CatalogTone:
 
 
 def _status_label(status: LiveInstanceStatus) -> str:
-    if status.readiness is not None and status.readiness.summary:
-        return status.readiness.summary
+    if status.readiness is not None:
+        match status.readiness.verdict:
+            case "READY":
+                return "Ready"
+            case "DEGRADED":
+                return "Degraded"
+            case "BLOCKED":
+                return "Blocked"
+            case _:
+                return "Unknown"
     notice = status.operator_surface.host_process.notice
     if notice:
         return notice
     return status.operator_surface.host_process.state
+
+
+def _status_detail(status: LiveInstanceStatus) -> str | None:
+    if status.readiness is not None and status.readiness.summary:
+        return status.readiness.summary
+    return status.operator_surface.host_process.notice
+
+
+def _last_run_label(classification: str) -> str:
+    match classification:
+        case "CLEAN":
+            return "Clean"
+        case "HALT_TRIGGERED":
+            return "Safety halt"
+        case "EXITED_WITH_ERROR":
+            return "Exited with error"
+        case _:
+            return "No result yet"
+
+
+def _last_run_detail(status: LiveInstanceStatus) -> str | None:
+    last_exit = status.last_exit
+    classification = status.operator_surface.prior_run.classification
+    if last_exit is None:
+        return "No completed run has been recorded for this bot."
+    details: list[str] = []
+    if classification == "CLEAN":
+        details.append("Previous run exited normally.")
+    elif classification == "HALT_TRIGGERED":
+        trigger = _human_code(last_exit.halt_trigger) if last_exit.halt_trigger else "Safety halt"
+        details.append(f"Previous run stopped on a safety halt: {trigger}.")
+    elif classification == "EXITED_WITH_ERROR":
+        reason = _exit_reason_label(str(last_exit.exit_reason)) if last_exit.exit_reason is not None else None
+        if reason is not None:
+            details.append(f"Previous run exited with an error: {reason}.")
+        else:
+            details.append("Previous run exited with an error.")
+    else:
+        details.append("The previous run result is unknown.")
+    if last_exit.exit_code is not None:
+        details.append(f"Exit code {last_exit.exit_code}.")
+    if last_exit.hydration_accepted is False:
+        failure = _human_code(last_exit.hydration_failure_reason) if last_exit.hydration_failure_reason else "not accepted"
+        details.append(f"Indicator-state hydration was {failure}.")
+    return " ".join(details)
+
+
+def _exit_reason_label(reason: str) -> str:
+    labels = {
+        "normal": "normal shutdown",
+        "force_flat_complete": "force-flat completed",
+        "keyboard_interrupt": "keyboard interrupt",
+        "signal": "OS signal",
+        "max_orders_exceeded": "daily order cap reached",
+        "fatal_halt": "fatal safety halt",
+        "recovery_flatten": "recovery flatten",
+        "exception": "runtime exception",
+        "poisoned": "poisoned run refused",
+    }
+    return labels.get(reason, _human_code(reason))
+
+
+def _human_code(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    return value.replace("_", " ").replace("-", " ").strip().capitalize()
 
 
 def _engine_asset_class(status: LiveInstanceStatus) -> str | None:
