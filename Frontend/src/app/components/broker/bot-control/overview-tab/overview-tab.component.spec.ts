@@ -108,9 +108,12 @@ describe('OverviewTabComponent', () => {
     });
 
     const fixture = TestBed.createComponent(OverviewTabComponent);
-    fixture.componentRef.setInput('status', makeStatus());
+    const status = makeStatus();
+    status.lifecycle_chart.global_graph.nodes[0].status_label = 'Server clear';
+    fixture.componentRef.setInput('status', status);
     fixture.detectChanges();
 
+    expect(renderedText(fixture)).toContain('Deploy or start · Server clear');
     const points = new Map(fixture.componentInstance.nodes().map((node) => [node.id, node.point()]));
     expect(points.get('deploy')?.x).toBe(points.get('preflight')?.x);
     expect(points.get('deploy')?.y).toBeLessThan(points.get('preflight')?.y ?? 0);

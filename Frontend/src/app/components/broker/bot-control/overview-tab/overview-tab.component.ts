@@ -137,25 +137,6 @@ export class OverviewTabComponent {
     return ctx.data();
   }
 
-  statusLabel(status: LifecycleChartStatus): string {
-    switch (status) {
-      case 'passed':
-        return 'Clear';
-      case 'active':
-        return 'Here now';
-      case 'blocked':
-        return 'Blocked';
-      case 'poison':
-        return 'Poisoned';
-      case 'freeze':
-        return 'Frozen';
-      case 'inactive':
-        return 'Waiting';
-      case 'unknown':
-        return 'Unknown';
-    }
-  }
-
   edgeColor(status: LifecycleChartStatus): string {
     switch (status) {
       case 'passed':

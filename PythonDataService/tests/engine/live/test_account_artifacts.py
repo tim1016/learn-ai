@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -48,8 +49,31 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
     assert gate.operator_reason == "watchdog.flatten_failed"
     assert gate.operator_next_step == "CHECK_IBKR"
     assert gate.evidence_at_ms == 1_700_000_000_000
-    assert read_account_events(tmp_path, "DU123456")[-1]["event_type"] == "account_freeze_recorded"
+    event = read_account_events(tmp_path, "DU123456")[-1]
+    assert event["event_type"] == "account_freeze_recorded"
+    assert event["seq"] == 1
+    assert event["ts_ms"] == 1_700_000_000_000
     assert account_artifacts_root(tmp_path, "DU123456") == tmp_path / "accounts" / "DU123456"
+
+
+def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    path.write_text('{"seq":5,"event_type":"legacy"}\nnot-json\n[]\n', encoding="utf-8")
+
+    account_artifacts.append_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "event_type": "account_owner_generation_recorded",
+            "recorded_at_ms": 1_700_000_020_000,
+        },
+    )
+
+    appended = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert appended["seq"] == 6
+    assert appended["ts_ms"] == 1_700_000_020_000
 
 
 def test_account_freeze_clears_after_clean_recovery_proof(tmp_path: Path) -> None:
@@ -95,6 +119,8 @@ def test_account_freeze_clears_after_clean_recovery_proof(tmp_path: Path) -> Non
     assert events[-2]["broker_evidence"]["positions"] == []
     assert events[-1]["cleared_reason"] == "recovery:recovery-1"
     assert events[-1]["cleared_source"] == "account_recovery_proof"
+    assert [event["seq"] for event in events] == [1, 2, 3]
+    assert events[-1]["ts_ms"] == 1_700_000_010_000
 
 
 def test_account_freeze_clear_requires_recovery_proof_or_audited_override(tmp_path: Path) -> None:

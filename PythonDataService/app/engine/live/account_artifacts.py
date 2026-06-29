@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +22,16 @@ ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
 RESTART_INTENSITY_REASON = "restart_intensity.threshold_breached"
 RESTART_INTENSITY_SOURCE = "account_restart_intensity"
+ACCOUNT_EVENT_TS_FIELD_PRECEDENCE: tuple[str, ...] = (
+    "recorded_at_ms",
+    "created_at_ms",
+    "approved_at_ms",
+    "cleared_at_ms",
+    "updated_at_ms",
+    "decided_at_ms",
+    "completed_at_ms",
+    "started_at_ms",
+)
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -571,13 +582,65 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 def _append_account_event(root: Path, payload: dict) -> None:
     path = root / ACCOUNT_EVENTS_FILENAME
     root.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n"
     with _file_lock(path):
+        enriched = dict(payload)
+        enriched["seq"] = _next_account_event_seq_locked(path)
+        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
+        line = json.dumps(enriched, separators=(",", ":"), sort_keys=True) + "\n"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
         _fsync_parent_dir(path)
+
+
+def _next_account_event_seq_locked(path: Path) -> int:
+    if not path.exists():
+        return 1
+    max_seq = 0
+    row_count = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row_count += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        seq = row.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool) and seq > max_seq:
+            max_seq = seq
+    return max(max_seq, row_count) + 1
+
+
+def _account_event_ts_ms_for_write(payload: dict) -> int:
+    resolved, _field = resolve_account_event_ts_ms(payload)
+    if resolved is not None:
+        return resolved
+    return time.time_ns() // 1_000_000
+
+
+def resolve_account_event_ts_ms(row: Mapping[str, object]) -> tuple[int | None, str | None]:
+    explicit = _int_ms_or_none(row.get("ts_ms"))
+    if explicit is not None:
+        return explicit, "ts_ms"
+    if row.get("event_type") == "account_freeze_cleared":
+        cleared = _int_ms_or_none(row.get("cleared_at_ms"))
+        if cleared is not None:
+            return cleared, "cleared_at_ms"
+    for field in ACCOUNT_EVENT_TS_FIELD_PRECEDENCE:
+        candidate = _int_ms_or_none(row.get(field))
+        if candidate is not None:
+            return candidate, field
+    return None, None
+
+
+def _int_ms_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) and value >= 0 else None
 
 
 __all__ = [
@@ -605,6 +668,7 @@ __all__ = [
     "read_account_freeze",
     "read_account_instance_registry",
     "read_account_owner_generation",
+    "resolve_account_event_ts_ms",
     "write_account_freeze",
     "write_account_instance_binding",
     "write_account_owner_generation",

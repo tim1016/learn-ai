@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-28 (GateResult contract, account freeze artifact, write-ahead account instance registry, account-scoped classifier V1, AccountOwner submit/generation/reconnect lane, recovery/override evidence, and restart-intensity freeze shipped).
+> **Last reviewed:** 2026-06-29 (lifecycle observability reconciliation: canonical chart nodes, transition table, desired-state casing contract, and projection evidence map).
 
 ---
 
@@ -74,6 +74,58 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 | Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
 | Operator actions | Resume/Pause/Stop/Flatten-and-pause/Mark-poisoned use shared capability evaluator. Start has separate recheck. | `services/operator_capability.py`, `routers/live_instances.py` |
 | Watchdog lease loss | Child watchdog detects daemon lease loss and delegates typed halt sequence. | `child_watchdog.py`, `watchdog_controller.py` |
+
+### 3.1 Canonical Lifecycle Observability Model
+
+The cockpit lifecycle chart is a **projection**, not a separate state machine.
+Its node ids are the stable public vocabulary for operator observability. Each
+node must be backed by server-authored evidence; Angular may choose layout and
+styling, but it must not infer lifecycle meaning from raw process fields.
+
+The chart-status vocabulary is intentionally small and distinct from engine
+state: `passed`, `active`, `blocked`, `poison`, `freeze`, `inactive`, and
+`unknown`. Missing evidence is rendered as `unknown` with a server-authored
+reason, never as a fabricated pass.
+
+| Canonical node id | Meaning | Primary source of truth |
+|---|---|---|
+| `deploy` | Instance package exists and the host process can be started or redeployed. | Host daemon process view, deploy/start defaults, start-capability `GateResult` rows. |
+| `preflight` | Runtime configuration and readiness gates are fit to run. | `ReadinessVector`, strategy spec, sizing proof, `build_start_readiness` / `build_live_readiness`. |
+| `account_safety` | Account-level gates allow the bot to run or submit. | `accounts/<account_id>/unresolved_exposure.flag`, broker safety verdict, broker connection state, account registry gate rows. |
+| `reconcile` | Broker state has been classified against run/account intent evidence. | `reconciliation_receipt.json`, intent WAL cursor, broker observation evidence. |
+| `activate` | Durable desired state and host process are aligned for the live loop. | `desired_state.json`, host process state, action capability rows. |
+| `active` | The live loop is running and processing bars/commands. | `engine_runtime.json`, readiness sidecar, host process state, latest decision artifact. |
+| `submit_order` | A strategy order intent is moving through the submit lane. | `intent_events.jsonl`, AccountOwner submit events, Activity projection rows. |
+| `broker_writer` | The low-level broker writer/publisher lane is healthy or blocked. | Broker Activity WAL/publisher health, AccountOwner phase, IBKR submit evidence. |
+| `recovery` | A safety incident, halt, poison, freeze, or redeploy-required state needs operator recovery. | `poisoned.flag`, `halt.flag`, operator incidents, watchdog evidence, account freeze evidence. |
+
+The canonical overview transition table is:
+
+| Source | Target | Meaning |
+|---|---|---|
+| `deploy` | `preflight` | A deployable instance is ready for runtime gates. |
+| `preflight` | `account_safety` | Local runtime gates have passed; account-scoped gates are next. |
+| `account_safety` | `reconcile` | Account safety permits broker-state classification. |
+| `reconcile` | `activate` | Broker state is clean/adopted enough to honor desired state. |
+| `activate` | `active` | Desired state is `RUNNING` and the host loop is running. |
+| `active` | `submit_order` | Strategy output produced an order intent. |
+| `submit_order` | `broker_writer` | Durable intent reached the broker submit boundary. |
+| `active` | `recovery` | Safety evidence requires flatten, halt, poison, freeze, or redeploy. |
+
+Submit-lane and recovery subgraphs may expose deeper nodes, but those subgraph
+nodes must fold back to the canonical overview nodes above. The richer gate map
+in `docs/architecture/bot-lifecycle-gate-map.md` is supporting design context;
+this section is the implementation authority when the two disagree.
+
+### 3.2 Desired-State Casing Contract
+
+Durable desired state is uppercase and closed: `RUNNING`, `PAUSED`, `STOPPED`.
+`DesiredStateView.state` is either one of those values when
+`path_status=ok`, or `null` when the path is absent, corrupt, or unresolved.
+Operator action names remain lowercase command verbs (`resume`, `pause`,
+`stop`) and are translated at the router boundary before persistence. A
+misspelled or differently-cased durable state is corruption, not an unknown
+state to guess around.
 
 ## 4. Current Artifacts
 

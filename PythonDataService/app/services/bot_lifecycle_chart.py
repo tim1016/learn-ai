@@ -7,7 +7,7 @@ module only adapts those facts into a visual graph contract.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal
@@ -15,6 +15,7 @@ from typing import Literal
 from app.schemas.live_runs import (
     ActionCapability,
     BotLifecycleChartView,
+    BotLifecycleEvent,
     DesiredStateView,
     GateResult,
     HostProcessStartCapability,
@@ -28,6 +29,7 @@ from app.schemas.live_runs import (
     OperatorGate,
     OperatorSurface,
 )
+from app.services.bot_lifecycle_projection import latest_event_for_node, lifecycle_status_label
 
 _BLOCKING_PRIORITY: tuple[LifecycleChartStatus, ...] = (
     "freeze",
@@ -69,6 +71,9 @@ class NodeFact:
     status: LifecycleChartStatus
     evidence: str | None
     technical_label: str | None = None
+    status_label: str | None = None
+    why: str | None = None
+    operator_next_step: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,10 +199,11 @@ def compose_bot_lifecycle_chart(
     *,
     desired_state: DesiredStateView | None = None,
     redeploy_available: bool = False,
+    lifecycle_events: Sequence[BotLifecycleEvent] = (),
 ) -> BotLifecycleChartView:
     """Compose the Overview-tab lifecycle graph from backend-authored facts."""
 
-    facts = _lifecycle_facts(surface, desired_state)
+    facts = _lifecycle_facts(surface, desired_state, lifecycle_events)
     subgraphs = {
         graph_id: _build_graph(graph_def, facts)
         for graph_id, graph_def in SUBGRAPH_DEFS.items()
@@ -216,6 +222,7 @@ def compose_bot_lifecycle_chart(
 def _lifecycle_facts(
     surface: OperatorSurface,
     desired_state: DesiredStateView | None,
+    lifecycle_events: Sequence[BotLifecycleEvent],
 ) -> LifecycleFacts:
     base_statuses = {
         "deploy": _deploy_status(surface),
@@ -229,7 +236,8 @@ def _lifecycle_facts(
     }
     primary_node_id = _primary_node_id(base_statuses, surface, desired_state)
     active_status = _active_status(primary_node_id)
-    submit_order_status = "passed" if primary_node_id == "broker_writer" else "inactive"
+    submit_order_event = latest_event_for_node(lifecycle_events, "submit_order")
+    submit_order_status: LifecycleChartStatus = "passed" if primary_node_id == "broker_writer" else "inactive"
     facts = {
         "deploy": NodeFact(_status_for("deploy", base_statuses["deploy"], primary_node_id), _host_evidence(surface)),
         "preflight": NodeFact(
@@ -248,10 +256,15 @@ def _lifecycle_facts(
             _status_for("activate", base_statuses["activate"], primary_node_id),
             _activate_evidence(desired_state),
         ),
-        "active": NodeFact(active_status, _active_evidence(active_status)),
-        "submit_order": NodeFact(
-            submit_order_status,
-            "Order submission waits for an active signal from the running bot.",
+        "active": NodeFact(
+            active_status,
+            _active_evidence(active_status),
+            why=_active_reason(surface, desired_state, active_status),
+        ),
+        "submit_order": _node_fact_from_event(
+            submit_order_event,
+            fallback_status=submit_order_status,
+            fallback_evidence="Order submission waits for an active signal from the running bot.",
         ),
         "broker_writer": NodeFact(
             _status_for("broker_writer", base_statuses["broker_writer"], primary_node_id),
@@ -309,13 +322,37 @@ def _lifecycle_facts(
             _command_loop_status(surface),
             _command_loop_evidence(surface),
         ),
-        "signal": NodeFact("inactive", "No signal is active in this snapshot."),
-        "intent_wal": NodeFact("inactive", "Order intent evidence is created before broker submission."),
-        "place_order": NodeFact("inactive", "The broker writer is the only order-submit boundary."),
-        "ack_or_reconcile": NodeFact("inactive", "Ambiguous outcomes move to reconciliation before retry."),
+        "signal": _event_or_unknown_fact(
+            lifecycle_events,
+            "signal",
+            "No signal evidence is available in this lifecycle projection.",
+        ),
+        "intent_wal": _event_or_unknown_fact(
+            lifecycle_events,
+            "intent_wal",
+            "No Intent WAL row is available for this node in the selected evidence window.",
+        ),
+        "place_order": _event_or_unknown_fact(
+            lifecycle_events,
+            "place_order",
+            "No broker submit-boundary event is available in the selected evidence window.",
+        ),
+        "ack_or_reconcile": _event_or_unknown_fact(
+            lifecycle_events,
+            "ack_or_reconcile",
+            "No broker acknowledgement or reconciliation event is available in this snapshot.",
+        ),
         "publisher": NodeFact(_broker_writer_status(surface), _broker_writer_evidence(surface), _broker_activity_label(surface)),
-        "writer_guard": NodeFact("passed", "Broker writes are scoped to the bot-owned account boundary."),
-        "broker_ack": NodeFact("inactive", "No live broker acknowledgment is active in this snapshot."),
+        "writer_guard": _event_or_unknown_fact(
+            lifecycle_events,
+            "writer_guard",
+            "No account-writer guard event is available in this lifecycle projection.",
+        ),
+        "broker_ack": _event_or_unknown_fact(
+            lifecycle_events,
+            "broker_ack",
+            "No live broker acknowledgement evidence is available in this snapshot.",
+        ),
         "incident": NodeFact(_recovery_status(surface), _recovery_evidence(surface)),
         "flatten": NodeFact("inactive", "Flatten is shown only when the backend enables the capability."),
         "reconcile_after": NodeFact("inactive", "Recovery requires broker evidence before a fresh run resumes."),
@@ -323,6 +360,46 @@ def _lifecycle_facts(
     }
     facts.update(_readiness_gate_facts(surface.readiness_gates))
     return LifecycleFacts(primary_node_id, base_statuses, facts)
+
+
+def _event_or_unknown_fact(
+    lifecycle_events: Sequence[BotLifecycleEvent],
+    node_id: str,
+    absent_reason: str,
+) -> NodeFact:
+    return _node_fact_from_event(
+        latest_event_for_node(lifecycle_events, node_id),
+        fallback_status="unknown",
+        fallback_evidence=absent_reason,
+        fallback_why=absent_reason,
+        include_event_source_label=True,
+    )
+
+
+def _node_fact_from_event(
+    event: BotLifecycleEvent | None,
+    *,
+    fallback_status: LifecycleChartStatus,
+    fallback_evidence: str,
+    fallback_why: str | None = None,
+    include_event_source_label: bool = False,
+) -> NodeFact:
+    if event is None:
+        return NodeFact(
+            fallback_status,
+            fallback_evidence,
+            status_label=lifecycle_status_label(fallback_status),
+            why=fallback_why,
+        )
+    status = event.status or "unknown"
+    return NodeFact(
+        status,
+        event.summary,
+        event.source if include_event_source_label else None,
+        status_label=event.status_label or lifecycle_status_label(status),
+        why=event.why,
+        operator_next_step=event.operator_next_step,
+    )
 
 
 def _build_graph(
@@ -370,6 +447,10 @@ def _build_node(node_def: NodeDef, facts: LifecycleFacts) -> LifecycleChartNode:
         technical_label=fact.technical_label if fact.technical_label is not None else node_def.technical_label,
         lane=node_def.lane,
         status=fact.status,
+        status_label=fact.status_label or lifecycle_status_label(fact.status),
+        summary=fact.evidence,
+        why=fact.why,
+        operator_next_step=fact.operator_next_step,
         evidence_summary=fact.evidence,
     )
 
@@ -802,6 +883,21 @@ def _active_evidence(status: LifecycleChartStatus) -> str:
     if status == "passed":
         return "The live-monitoring stage was reached before the current recovery path."
     return "This stage waits until earlier lifecycle gates pass."
+
+
+def _active_reason(
+    surface: OperatorSurface,
+    desired_state: DesiredStateView | None,
+    status: LifecycleChartStatus,
+) -> str:
+    desired = _desired_value(desired_state) or "UNKNOWN"
+    if status == "active":
+        return "Host process is RUNNING and durable desired state is RUNNING."
+    if surface.host_process.state != "RUNNING":
+        return f"Host process is {surface.host_process.state}; active requires RUNNING."
+    if desired != "RUNNING":
+        return f"Durable desired state is {desired}; active requires RUNNING."
+    return "Earlier lifecycle gates have not all passed yet."
 
 
 def _preflight_evidence(surface: OperatorSurface) -> str:
