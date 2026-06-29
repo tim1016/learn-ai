@@ -88,6 +88,7 @@ const NAV: NavGroup[] = [
       { label: 'Reconciliation', route: '/broker/reconciliation' },
       { label: 'Bots', route: '/broker/bots' },
       { label: 'Desert Oasis', route: '/broker/desert-oasis' },
+      { label: 'Bot Sprites', route: '/broker/bot-sprites' },
     ],
   },
   {
