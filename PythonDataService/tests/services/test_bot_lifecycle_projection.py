@@ -69,7 +69,7 @@ def test_sort_lifecycle_events_uses_ts_source_rank_then_source_local_seq() -> No
     ]
 
 
-def test_normalize_account_event_uses_timestamp_precedence_without_backfill() -> None:
+def test_normalize_account_event_prefers_clear_timestamp_for_legacy_freeze_clear() -> None:
     projected = normalize_account_event(
         {
             "event_type": "account_freeze_cleared",
@@ -82,10 +82,26 @@ def test_normalize_account_event_uses_timestamp_precedence_without_backfill() ->
         file_position=7,
     )
 
-    assert projected.ts_ms == 1_000
-    assert projected.ts_ms_source == "recorded_at_ms"
+    assert projected.ts_ms == 3_000
+    assert projected.ts_ms_source == "cleared_at_ms"
     assert projected.ts_ms_resolved is True
     assert projected.file_position == 7
+
+
+def test_normalize_account_event_uses_general_timestamp_precedence() -> None:
+    projected = normalize_account_event(
+        {
+            "event_type": "account_instance_binding_recorded",
+            "account_id": "DU123",
+            "created_at_ms": 2_000,
+            "recorded_at_ms": 1_000,
+        },
+        account_id="DU123",
+        file_position=8,
+    )
+
+    assert projected.ts_ms == 1_000
+    assert projected.ts_ms_source == "recorded_at_ms"
 
 
 def test_normalize_account_event_surfaces_missing_timestamp() -> None:
@@ -112,8 +128,31 @@ def test_account_event_lifts_to_lifecycle_event_with_unresolved_timestamp() -> N
 
     assert event.ts_ms is None
     assert event.ts_ms_resolved is False
+    assert event.status == "unknown"
+    assert event.severity == "warning"
     assert event.source_local_seq == 3
     assert event.payload["ts_ms_resolved"] is False
+
+
+def test_account_restart_intensity_lifts_as_freeze() -> None:
+    projected = normalize_account_event(
+        {
+            "event_type": "account_restart_intensity_breached",
+            "account_id": "DU123",
+            "window_end_ms": 1_700_000_020_001,
+            "operator_next_step": "STOP_RESTARTING_AND_RECOVER_ACCOUNT",
+        },
+        account_id="DU123",
+        file_position=4,
+    )
+
+    event = account_event_to_lifecycle_event(projected)
+
+    assert event.category == "freeze"
+    assert event.node_id == "account_safety"
+    assert event.status == "freeze"
+    assert event.severity == "critical"
+    assert event.operator_next_step == "STOP_RESTARTING_AND_RECOVER_ACCOUNT"
 
 
 def test_project_intent_events_surfaces_drop_and_submit_uncertainty() -> None:

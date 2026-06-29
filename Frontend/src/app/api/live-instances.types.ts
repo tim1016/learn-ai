@@ -126,7 +126,7 @@ export interface LifecycleChartNode {
   technical_label: string | null;
   lane: LifecycleChartLane;
   status: LifecycleChartStatus;
-  status_label?: string | null;
+  status_label: string;
   summary?: string | null;
   why?: string | null;
   operator_next_step?: string | null;

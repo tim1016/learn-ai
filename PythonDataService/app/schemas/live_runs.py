@@ -1747,7 +1747,7 @@ class LifecycleChartNode(BaseModel):
     technical_label: str | None = None
     lane: LifecycleChartLane
     status: LifecycleChartStatus
-    status_label: str | None = None
+    status_label: str
     summary: str | None = None
     why: str | None = None
     operator_next_step: str | None = None

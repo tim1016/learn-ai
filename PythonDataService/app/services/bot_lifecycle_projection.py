@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
+from app.engine.live.account_artifacts import resolve_account_event_ts_ms
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.schemas.live_runs import (
     AccountEventProjection,
@@ -39,18 +40,6 @@ SOURCE_RANKS: Mapping[str, int] = {
     "evidence": 110,
 }
 
-ACCOUNT_EVENT_TS_FIELDS: tuple[str, ...] = (
-    "ts_ms",
-    "recorded_at_ms",
-    "created_at_ms",
-    "approved_at_ms",
-    "cleared_at_ms",
-    "updated_at_ms",
-    "decided_at_ms",
-    "completed_at_ms",
-    "started_at_ms",
-)
-
 STATUS_LABELS: Mapping[LifecycleChartStatus, str] = {
     "passed": "Clear",
     "active": "Here now",
@@ -59,6 +48,90 @@ STATUS_LABELS: Mapping[LifecycleChartStatus, str] = {
     "freeze": "Frozen",
     "inactive": "Waiting",
     "unknown": "Unknown",
+}
+
+
+class IntentEventMapping(NamedTuple):
+    event_type: str
+    node_id: str
+    status: LifecycleChartStatus
+    source: str
+    summary: str
+    operator_next_step: str | None
+
+
+class AccountEventLifecycleMapping(NamedTuple):
+    category: LifecycleEventCategory
+    node_id: str
+    source: str
+    status: LifecycleChartStatus
+
+
+UNKNOWN_ACCOUNT_EVENT_MAPPING = AccountEventLifecycleMapping(
+    category="account_event",
+    node_id="recovery",
+    source="account_event",
+    status="unknown",
+)
+
+ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
+    "account_freeze_recorded": AccountEventLifecycleMapping("freeze", "account_safety", "freeze_halt_poison", "freeze"),
+    "account_freeze_cleared": AccountEventLifecycleMapping("freeze", "account_safety", "freeze_halt_poison", "passed"),
+    "account_recovery_proof_recorded": AccountEventLifecycleMapping("evidence", "recovery", "evidence", "passed"),
+    "account_audited_override_recorded": AccountEventLifecycleMapping("decision", "recovery", "decision", "passed"),
+    "account_owner_generation_recorded": AccountEventLifecycleMapping(
+        "lifecycle_transition",
+        "broker_writer",
+        "lifecycle_transition",
+        "active",
+    ),
+    "account_instance_binding_recorded": AccountEventLifecycleMapping(
+        "lifecycle_transition",
+        "account_safety",
+        "lifecycle_transition",
+        "active",
+    ),
+    "account_restart_intensity_breached": AccountEventLifecycleMapping(
+        "freeze",
+        "account_safety",
+        "freeze_halt_poison",
+        "freeze",
+    ),
+    "account_owner_submit_prepared": AccountEventLifecycleMapping("order", "broker_writer", "submit", "active"),
+    "account_owner_submit_accepted": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "passed"),
+    "account_owner_submit_uncertain": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "blocked"),
+    "account_owner_submit_rejected": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "blocked"),
+    "account_owner_client_id_in_use": AccountEventLifecycleMapping("halt", "broker_writer", "broker_ack", "blocked"),
+    "account_owner_reconnect_frozen": AccountEventLifecycleMapping(
+        "freeze",
+        "recovery",
+        "freeze_halt_poison",
+        "freeze",
+    ),
+    "account_owner_reconnect_resumed": AccountEventLifecycleMapping(
+        "lifecycle_transition",
+        "broker_writer",
+        "lifecycle_transition",
+        "passed",
+    ),
+    "account_owner_reconnect_blocked": AccountEventLifecycleMapping(
+        "freeze",
+        "recovery",
+        "freeze_halt_poison",
+        "freeze",
+    ),
+    "account_owner_reconnect_drain_accepted": AccountEventLifecycleMapping(
+        "lifecycle_transition",
+        "recovery",
+        "lifecycle_transition",
+        "passed",
+    ),
+    "account_owner_reconnect_drain_uncertain": AccountEventLifecycleMapping(
+        "order",
+        "recovery",
+        "broker_ack",
+        "blocked",
+    ),
 }
 
 
@@ -100,33 +173,32 @@ def project_intent_events(
         mapped = _intent_event_mapping(event)
         if mapped is None:
             continue
-        event_type, node_id, status, source, summary, operator_next_step = mapped
         ts_ms = event.appended_at_ms if event.appended_at_ms is not None else event.ts_ms
         ts_ms_source = (
             "appended_at_ms"
             if event.appended_at_ms is not None
             else ("ts_ms" if event.ts_ms is not None else None)
         )
-        why = _intent_why(event, fallback=summary)
+        why = _intent_why(event, fallback=mapped.summary)
         projected.append(
             BotLifecycleEvent(
                 event_id=f"intent_wal:{run_id or 'unknown'}:{event.seq}:{event.event_type.value}",
                 bot_id=bot_id,
                 account_id=account_id,
-                event_type=event_type,
+                event_type=mapped.event_type,
                 category="order",
-                node_id=node_id,
-                status=status,
-                status_label=lifecycle_status_label(status),
-                severity=_severity_for_status(status),
+                node_id=mapped.node_id,
+                status=mapped.status,
+                status_label=lifecycle_status_label(mapped.status),
+                severity=_severity_for_status(mapped.status),
                 ts_ms=ts_ms,
                 ts_ms_resolved=ts_ms is not None,
-                source=source,
-                source_rank=SOURCE_RANKS[source],
+                source=mapped.source,
+                source_rank=SOURCE_RANKS[mapped.source],
                 source_local_seq=event.seq,
-                summary=summary,
+                summary=mapped.summary,
                 why=why,
-                operator_next_step=operator_next_step,
+                operator_next_step=mapped.operator_next_step,
                 evidence_refs=[
                     LifecycleEvidenceRef(
                         source="intent_wal",
@@ -171,7 +243,7 @@ def normalize_account_event(
 ) -> AccountEventProjection:
     """Normalize one raw account-event dict without backfilling history."""
 
-    ts_ms, ts_field = _resolve_account_event_ts_ms(row)
+    ts_ms, ts_field = resolve_account_event_ts_ms(row)
     event_type = str(row.get("event_type") or "account_event")
     row_account_id = row.get("account_id")
     resolved_account_id = row_account_id if isinstance(row_account_id, str) and row_account_id else account_id
@@ -194,25 +266,24 @@ def normalize_account_event(
 def account_event_to_lifecycle_event(event: AccountEventProjection) -> BotLifecycleEvent:
     """Lift a typed account-event projection into the common lifecycle row."""
 
-    status = _status_for_account_event(event)
-    source = _source_for_account_event(event)
+    mapping = _account_event_mapping(event.event_type)
     return BotLifecycleEvent(
         event_id=f"account_event:{event.account_id}:{event.seq or event.file_position}:{event.event_type}",
         account_id=event.account_id,
         event_type=event.event_type,
-        category=_category_for_account_event(event),
-        node_id=_node_for_account_event(event),
-        status=status,
-        status_label=lifecycle_status_label(status),
-        severity=_severity_for_status(status),
+        category=mapping.category,
+        node_id=mapping.node_id,
+        status=mapping.status,
+        status_label=lifecycle_status_label(mapping.status),
+        severity=_severity_for_status(mapping.status),
         ts_ms=event.ts_ms,
         ts_ms_resolved=event.ts_ms_resolved,
-        source=source,
-        source_rank=SOURCE_RANKS[source],
+        source=mapping.source,
+        source_rank=SOURCE_RANKS[mapping.source],
         source_local_seq=event.seq or event.file_position,
         summary=event.summary,
         why=event.why,
-        operator_next_step=_string_or_none(event.payload.get("operator_next_step")),
+        operator_next_step=_operator_next_step_for_account_event(event),
         evidence_refs=[
             LifecycleEvidenceRef(
                 source="account_events",
@@ -244,73 +315,73 @@ def latest_event_for_node(
 
 def _intent_event_mapping(
     event: IntentEvent,
-) -> tuple[str, str, LifecycleChartStatus, str, str, str | None] | None:
+) -> IntentEventMapping | None:
     if event.event_type is IntentEventType.PENDING_INTENT:
-        return (
-            "BrokerOrderRequested",
-            "intent_wal",
-            "active",
-            "intent_pending",
-            "Order intent persisted before broker submission.",
-            "WAIT_FOR_BROKER_ACK",
+        return IntentEventMapping(
+            event_type="BrokerOrderRequested",
+            node_id="intent_wal",
+            status="active",
+            source="intent_pending",
+            summary="Order intent persisted before broker submission.",
+            operator_next_step="WAIT_FOR_BROKER_ACK",
         )
     if event.event_type is IntentEventType.SIZING_RESOLVED:
-        return (
-            "RiskCheckPassed",
-            "submit_order",
-            "passed",
-            "risk_gate",
-            "Order sizing resolved before submit.",
-            "GATE_PASSING",
+        return IntentEventMapping(
+            event_type="RiskCheckPassed",
+            node_id="submit_order",
+            status="passed",
+            source="risk_gate",
+            summary="Order sizing resolved before submit.",
+            operator_next_step="GATE_PASSING",
         )
     if event.event_type in {
         IntentEventType.SUBMITTED,
         IntentEventType.SUBMITTED_RECOVERED,
         IntentEventType.ADOPTED_BROKER_ORDER,
     }:
-        return (
-            "BrokerOrderPlaced",
-            "place_order",
-            "passed",
-            "submit",
-            "Order reached the broker submit boundary.",
-            "WATCH_BROKER_ACK",
+        return IntentEventMapping(
+            event_type="BrokerOrderPlaced",
+            node_id="place_order",
+            status="passed",
+            source="submit",
+            summary="Order reached the broker submit boundary.",
+            operator_next_step="WATCH_BROKER_ACK",
         )
     if event.event_type is IntentEventType.INTENT_NOT_ACCEPTED:
-        return (
-            "BrokerOrderRejected",
-            "ack_or_reconcile",
-            "blocked",
-            "broker_ack",
-            "Broker probe proved the intent was not accepted.",
-            "RETRY_OR_RECONCILE",
+        return IntentEventMapping(
+            event_type="BrokerOrderRejected",
+            node_id="ack_or_reconcile",
+            status="blocked",
+            source="broker_ack",
+            summary="Broker probe proved the intent was not accepted.",
+            operator_next_step="RETRY_OR_RECONCILE",
         )
     if event.event_type is IntentEventType.ACK_FAILED_UNCERTAIN:
-        return (
-            "BrokerOrderUncertain",
-            "ack_or_reconcile",
-            "blocked",
-            "broker_ack",
-            "Broker acknowledgement failed; submit outcome is uncertain.",
-            "PROBE_BROKER_BEFORE_RETRY",
+        return IntentEventMapping(
+            event_type="BrokerOrderUncertain",
+            node_id="ack_or_reconcile",
+            status="blocked",
+            source="broker_ack",
+            summary="Broker acknowledgement failed; submit outcome is uncertain.",
+            operator_next_step="PROBE_BROKER_BEFORE_RETRY",
         )
     if event.event_type is IntentEventType.SUBMIT_UNCERTAIN_HALTED:
-        return (
-            "BrokerOrderUncertain",
-            "ack_or_reconcile",
-            "blocked",
-            "broker_ack",
-            "Submit outcome could not be proven; the run halted.",
-            "RECOVER_ACCOUNT_BEFORE_RESTART",
+        return IntentEventMapping(
+            event_type="BrokerOrderUncertain",
+            node_id="ack_or_reconcile",
+            status="blocked",
+            source="broker_ack",
+            summary="Submit outcome could not be proven; the run halted.",
+            operator_next_step="RECOVER_ACCOUNT_BEFORE_RESTART",
         )
     if event.event_type is IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT:
-        return (
-            "BotBlocked",
-            "submit_order",
-            "blocked",
-            "submit",
-            "Order intent was dropped before broker submission.",
-            "CLEAR_SUBMISSION_GATE",
+        return IntentEventMapping(
+            event_type="BotBlocked",
+            node_id="submit_order",
+            status="blocked",
+            source="submit",
+            summary="Order intent was dropped before broker submission.",
+            operator_next_step="CLEAR_SUBMISSION_GATE",
         )
     return None
 
@@ -321,14 +392,6 @@ def _intent_why(event: IntentEvent, *, fallback: str) -> str:
     if event.reason:
         return event.reason
     return fallback
-
-
-def _resolve_account_event_ts_ms(row: Mapping[str, Any]) -> tuple[int | None, str | None]:
-    for field in ACCOUNT_EVENT_TS_FIELDS:
-        ts_ms = _non_negative_int_or_none(row.get(field))
-        if ts_ms is not None:
-            return ts_ms, field
-    return None, None
 
 
 def _positive_int_or_none(value: object) -> int | None:
@@ -363,45 +426,21 @@ def _account_event_summary(event_type: str, row: Mapping[str, Any]) -> str:
     return event_type.replace("_", " ").capitalize() + "."
 
 
-def _source_for_account_event(event: AccountEventProjection) -> str:
-    event_type = event.event_type
-    if event_type in {"account_freeze_recorded", "account_freeze_cleared"}:
-        return "freeze_halt_poison"
-    if event_type.startswith("account_owner_submit_"):
-        return "submit" if event_type.endswith("prepared") else "broker_ack"
-    if event_type == "account_owner_generation_recorded":
-        return "lifecycle_transition"
-    return "account_event"
+def _account_event_mapping(event_type: str) -> AccountEventLifecycleMapping:
+    return ACCOUNT_EVENT_MAPPINGS.get(event_type, UNKNOWN_ACCOUNT_EVENT_MAPPING)
 
 
-def _category_for_account_event(event: AccountEventProjection) -> LifecycleEventCategory:
-    if event.event_type in {"account_freeze_recorded", "account_freeze_cleared"}:
-        return "freeze"
-    if event.event_type.startswith("account_owner_submit_"):
-        return "order"
-    if "poison" in event.event_type:
-        return "poison"
-    if "halt" in event.event_type:
-        return "halt"
-    return "account_event"
-
-
-def _node_for_account_event(event: AccountEventProjection) -> str:
-    if event.event_type in {"account_freeze_recorded", "account_freeze_cleared"}:
-        return "account_safety"
-    if event.event_type.startswith("account_owner_submit_"):
-        return "broker_writer"
-    return "recovery"
-
-
-def _status_for_account_event(event: AccountEventProjection) -> LifecycleChartStatus:
-    if event.event_type == "account_freeze_recorded":
-        return "freeze"
-    if event.event_type == "account_freeze_cleared":
-        return "passed"
-    if event.event_type.endswith("_rejected") or event.event_type.endswith("_uncertain"):
-        return "blocked"
-    return "active"
+def _operator_next_step_for_account_event(event: AccountEventProjection) -> str | None:
+    direct = _string_or_none(event.payload.get("operator_next_step"))
+    if direct is not None:
+        return direct
+    for field in ("final_gate_result", "gate_result"):
+        value = event.payload.get(field)
+        if isinstance(value, Mapping):
+            next_step = _string_or_none(value.get("operator_next_step"))
+            if next_step is not None:
+                return next_step
+    return None
 
 
 def _severity_for_status(status: LifecycleChartStatus) -> LifecycleEventSeverity:

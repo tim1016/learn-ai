@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +22,16 @@ ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
 RESTART_INTENSITY_REASON = "restart_intensity.threshold_breached"
 RESTART_INTENSITY_SOURCE = "account_restart_intensity"
+ACCOUNT_EVENT_TS_FIELD_PRECEDENCE: tuple[str, ...] = (
+    "recorded_at_ms",
+    "created_at_ms",
+    "approved_at_ms",
+    "cleared_at_ms",
+    "updated_at_ms",
+    "decided_at_ms",
+    "completed_at_ms",
+    "started_at_ms",
+)
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -605,27 +616,25 @@ def _next_account_event_seq_locked(path: Path) -> int:
 
 
 def _account_event_ts_ms_for_write(payload: dict) -> int:
-    explicit = _int_ms_or_none(payload.get("ts_ms"))
-    if explicit is not None:
-        return explicit
-    if payload.get("event_type") == "account_freeze_cleared":
-        cleared = _int_ms_or_none(payload.get("cleared_at_ms"))
-        if cleared is not None:
-            return cleared
-    for field in (
-        "recorded_at_ms",
-        "created_at_ms",
-        "approved_at_ms",
-        "cleared_at_ms",
-        "updated_at_ms",
-        "decided_at_ms",
-        "completed_at_ms",
-        "started_at_ms",
-    ):
-        candidate = _int_ms_or_none(payload.get(field))
-        if candidate is not None:
-            return candidate
+    resolved, _field = resolve_account_event_ts_ms(payload)
+    if resolved is not None:
+        return resolved
     return time.time_ns() // 1_000_000
+
+
+def resolve_account_event_ts_ms(row: Mapping[str, object]) -> tuple[int | None, str | None]:
+    explicit = _int_ms_or_none(row.get("ts_ms"))
+    if explicit is not None:
+        return explicit, "ts_ms"
+    if row.get("event_type") == "account_freeze_cleared":
+        cleared = _int_ms_or_none(row.get("cleared_at_ms"))
+        if cleared is not None:
+            return cleared, "cleared_at_ms"
+    for field in ACCOUNT_EVENT_TS_FIELD_PRECEDENCE:
+        candidate = _int_ms_or_none(row.get(field))
+        if candidate is not None:
+            return candidate, field
+    return None, None
 
 
 def _int_ms_or_none(value: object) -> int | None:
@@ -659,6 +668,7 @@ __all__ = [
     "read_account_freeze",
     "read_account_instance_registry",
     "read_account_owner_generation",
+    "resolve_account_event_ts_ms",
     "write_account_freeze",
     "write_account_instance_binding",
     "write_account_owner_generation",

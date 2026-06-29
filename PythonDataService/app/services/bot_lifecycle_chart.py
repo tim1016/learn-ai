@@ -237,11 +237,7 @@ def _lifecycle_facts(
     primary_node_id = _primary_node_id(base_statuses, surface, desired_state)
     active_status = _active_status(primary_node_id)
     submit_order_event = latest_event_for_node(lifecycle_events, "submit_order")
-    submit_order_status = (
-        submit_order_event.status
-        if submit_order_event is not None and submit_order_event.status is not None
-        else ("passed" if primary_node_id == "broker_writer" else "inactive")
-    )
+    submit_order_status: LifecycleChartStatus = "passed" if primary_node_id == "broker_writer" else "inactive"
     facts = {
         "deploy": NodeFact(_status_for("deploy", base_statuses["deploy"], primary_node_id), _host_evidence(surface)),
         "preflight": NodeFact(
@@ -265,17 +261,10 @@ def _lifecycle_facts(
             _active_evidence(active_status),
             why=_active_reason(surface, desired_state, active_status),
         ),
-        "submit_order": NodeFact(
-            submit_order_status,
-            (
-                submit_order_event.summary
-                if submit_order_event is not None
-                else "Order submission waits for an active signal from the running bot."
-            ),
-            why=submit_order_event.why if submit_order_event is not None else None,
-            operator_next_step=(
-                submit_order_event.operator_next_step if submit_order_event is not None else None
-            ),
+        "submit_order": _node_fact_from_event(
+            submit_order_event,
+            fallback_status=submit_order_status,
+            fallback_evidence="Order submission waits for an active signal from the running bot.",
         ),
         "broker_writer": NodeFact(
             _status_for("broker_writer", base_statuses["broker_writer"], primary_node_id),
@@ -378,19 +367,35 @@ def _event_or_unknown_fact(
     node_id: str,
     absent_reason: str,
 ) -> NodeFact:
-    event = latest_event_for_node(lifecycle_events, node_id)
+    return _node_fact_from_event(
+        latest_event_for_node(lifecycle_events, node_id),
+        fallback_status="unknown",
+        fallback_evidence=absent_reason,
+        fallback_why=absent_reason,
+        include_event_source_label=True,
+    )
+
+
+def _node_fact_from_event(
+    event: BotLifecycleEvent | None,
+    *,
+    fallback_status: LifecycleChartStatus,
+    fallback_evidence: str,
+    fallback_why: str | None = None,
+    include_event_source_label: bool = False,
+) -> NodeFact:
     if event is None:
         return NodeFact(
-            "unknown",
-            absent_reason,
-            status_label=lifecycle_status_label("unknown"),
-            why=absent_reason,
+            fallback_status,
+            fallback_evidence,
+            status_label=lifecycle_status_label(fallback_status),
+            why=fallback_why,
         )
     status = event.status or "unknown"
     return NodeFact(
         status,
         event.summary,
-        event.source,
+        event.source if include_event_source_label else None,
         status_label=event.status_label or lifecycle_status_label(status),
         why=event.why,
         operator_next_step=event.operator_next_step,
