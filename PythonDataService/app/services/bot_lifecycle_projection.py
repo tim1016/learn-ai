@@ -97,10 +97,12 @@ ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
         "freeze_halt_poison",
         "freeze",
     ),
-    "account_owner_submit_prepared": AccountEventLifecycleMapping("order", "broker_writer", "submit", "active"),
-    "account_owner_submit_accepted": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "passed"),
-    "account_owner_submit_uncertain": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "blocked"),
-    "account_owner_submit_rejected": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "blocked"),
+    "account_owner_submit_prepared": AccountEventLifecycleMapping("order", "intent_wal", "intent_pending", "active"),
+    "account_owner_submit_accepted": AccountEventLifecycleMapping("order", "place_order", "submit", "passed"),
+    "account_owner_submit_uncertain": AccountEventLifecycleMapping(
+        "order", "ack_or_reconcile", "broker_ack", "blocked"
+    ),
+    "account_owner_submit_rejected": AccountEventLifecycleMapping("order", "ack_or_reconcile", "broker_ack", "blocked"),
     "account_owner_client_id_in_use": AccountEventLifecycleMapping("halt", "broker_writer", "broker_ack", "blocked"),
     "account_owner_reconnect_frozen": AccountEventLifecycleMapping(
         "freeze",
@@ -165,20 +167,24 @@ def project_intent_events(
     account_id: str | None = None,
     run_id: str | None = None,
     wal_path: Path | None = None,
+    since_ms: int | None = None,
+    live_state_last_intent_wal_seq: int | None = None,
 ) -> list[BotLifecycleEvent]:
     """Project Intent WAL rows into lifecycle timeline events."""
 
     projected: list[BotLifecycleEvent] = []
+    stale_by_node: dict[str, list[tuple[IntentEvent, IntentEventMapping, int | None, str | None]]] = {}
     for event in events:
         mapped = _intent_event_mapping(event)
         if mapped is None:
             continue
         ts_ms = event.appended_at_ms if event.appended_at_ms is not None else event.ts_ms
         ts_ms_source = (
-            "appended_at_ms"
-            if event.appended_at_ms is not None
-            else ("ts_ms" if event.ts_ms is not None else None)
+            "appended_at_ms" if event.appended_at_ms is not None else ("ts_ms" if event.ts_ms is not None else None)
         )
+        if _is_before_projection_window(ts_ms, since_ms):
+            stale_by_node.setdefault(mapped.node_id, []).append((event, mapped, ts_ms, ts_ms_source))
+            continue
         why = _intent_why(event, fallback=mapped.summary)
         projected.append(
             BotLifecycleEvent(
@@ -217,6 +223,22 @@ def project_intent_events(
                     "drop_reason": event.drop_reason,
                     "ts_ms_source": ts_ms_source,
                 },
+            )
+        )
+    current_nodes = {event.node_id for event in projected}
+    for node_id, stale_events in stale_by_node.items():
+        if node_id in current_nodes:
+            continue
+        projected.append(
+            _stale_intent_wal_event(
+                stale_events,
+                node_id=node_id,
+                bot_id=bot_id,
+                account_id=account_id,
+                run_id=run_id,
+                wal_path=wal_path,
+                since_ms=since_ms,
+                live_state_last_intent_wal_seq=live_state_last_intent_wal_seq,
             )
         )
     return sort_lifecycle_events(projected)
@@ -311,6 +333,76 @@ def latest_event_for_node(
     if not matching:
         return None
     return sort_lifecycle_events(matching)[-1]
+
+
+def _is_before_projection_window(ts_ms: int | None, since_ms: int | None) -> bool:
+    if since_ms is None:
+        return False
+    return ts_ms is None or ts_ms < since_ms
+
+
+def _stale_intent_wal_event(
+    stale_events: Sequence[tuple[IntentEvent, IntentEventMapping, int | None, str | None]],
+    *,
+    node_id: str,
+    bot_id: str | None,
+    account_id: str | None,
+    run_id: str | None,
+    wal_path: Path | None,
+    since_ms: int | None,
+    live_state_last_intent_wal_seq: int | None,
+) -> BotLifecycleEvent:
+    newest = max(stale_events, key=lambda item: item[0].seq)
+    newest_event = newest[0]
+    max_seq = newest_event.seq
+    stale_ts_values = [ts_ms for _event, _mapped, ts_ms, _source in stale_events if ts_ms is not None]
+    stale_latest_ts_ms = max(stale_ts_values) if stale_ts_values else None
+    cursor_text = (
+        f" Live-state cursor last_intent_wal_seq={live_state_last_intent_wal_seq}."
+        if live_state_last_intent_wal_seq is not None
+        else ""
+    )
+    why = (
+        f"Intent WAL rows through seq {max_seq} are outside the current live session window "
+        f"(started_at_ms={since_ms}). Ignoring them instead of rendering stale submit evidence as current."
+        f"{cursor_text}"
+    )
+    return BotLifecycleEvent(
+        event_id=f"intent_wal_stale:{run_id or 'unknown'}:{node_id}:{max_seq}",
+        bot_id=bot_id,
+        account_id=account_id,
+        event_type="IntentWalEvidenceStale",
+        category="evidence",
+        node_id=node_id,
+        status="unknown",
+        status_label=lifecycle_status_label("unknown"),
+        severity="warning",
+        ts_ms=since_ms,
+        ts_ms_resolved=since_ms is not None,
+        source="evidence",
+        source_rank=SOURCE_RANKS["evidence"],
+        source_local_seq=max_seq,
+        summary="Intent WAL evidence is stale for the current live session.",
+        why=why,
+        operator_next_step="WAIT_FOR_CURRENT_SESSION_INTENT_EVIDENCE",
+        evidence_refs=[
+            LifecycleEvidenceRef(
+                source="intent_wal",
+                source_label="Intent WAL",
+                source_local_seq=max_seq,
+                path=str(wal_path) if wal_path is not None else None,
+                row_id=newest_event.intent_id,
+                summary="stale evidence outside current live session",
+            )
+        ],
+        payload={
+            "stale_intent_wal_count": len(stale_events),
+            "stale_intent_wal_max_seq": max_seq,
+            "stale_intent_wal_latest_ts_ms": stale_latest_ts_ms,
+            "projection_since_ms": since_ms,
+            "live_state_last_intent_wal_seq": live_state_last_intent_wal_seq,
+        },
+    )
 
 
 def _intent_event_mapping(
@@ -418,8 +510,14 @@ def _account_event_summary(event_type: str, row: Mapping[str, Any]) -> str:
         return "Account freeze recorded."
     if event_type == "account_freeze_cleared":
         return "Account freeze cleared."
-    if event_type.startswith("account_owner_submit_"):
-        return event_type.replace("_", " ").capitalize() + "."
+    if event_type == "account_owner_submit_prepared":
+        return "AccountOwner intent persisted before broker submission."
+    if event_type == "account_owner_submit_accepted":
+        return "AccountOwner order reached the broker submit boundary."
+    if event_type == "account_owner_submit_uncertain":
+        return "AccountOwner submit outcome is uncertain."
+    if event_type == "account_owner_submit_rejected":
+        return "AccountOwner rejected the submit before broker placement."
     if event_type == "account_instance_binding_recorded":
         state = row.get("lifecycle_state")
         return f"Account instance binding recorded ({state})." if state else "Account instance binding recorded."

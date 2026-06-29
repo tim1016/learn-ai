@@ -7,6 +7,7 @@ server-side and the serialized response carries both `live_binding` and
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -17,9 +18,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
+from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
-from app.engine.live.intent_events import IntentEventType
+from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run_ledger import LiveRunLedger
 from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
@@ -142,6 +143,14 @@ def _broker_activity_row(**overrides) -> BrokerActivityRow:
     return BrokerActivityRow.model_validate(payload)
 
 
+class _StatusPublisher:
+    is_running = True
+    latest_row_ms = 1_700_000_000_000
+
+    def last_persisted_seq(self) -> int:
+        return 12
+
+
 def _write_broker_activity_rows(root: Path, sid: str, rows: list[BrokerActivityRow]) -> None:
     path = root.parent / "live_instances" / sid / "broker_activity.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,11 +228,9 @@ def test_resolve_reconciliation_inputs_returns_intent_events_for_relative_live_b
         ts_ms=1_700_000_000_000,
     )
 
-    receipt, current_wal_seq, current_run_id, current_namespace, events = (
-        live_instances._resolve_reconciliation_inputs(
-            root,
-            LiveBinding(run_id="run-1", run_dir="run-1"),
-        )
+    receipt, current_wal_seq, current_run_id, current_namespace, events = live_instances._resolve_reconciliation_inputs(
+        root,
+        LiveBinding(run_id="run-1", run_dir="run-1"),
     )
 
     assert receipt is None
@@ -311,6 +318,259 @@ async def test_instance_status_running_exposes_live_binding(app_with_root, monke
     assert body["evidence_binding"]["run_id"] == "run-live-aaa"
     assert body["evidence_binding"]["is_live"] is False
     assert body["desired_state"] is not None
+
+
+async def test_status_activity_publisher_resolution_bootstraps_missing_live_publisher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = "spy_bootstrap_status"
+    publisher = _StatusPublisher()
+
+    class Registry:
+        def __init__(self) -> None:
+            self.publisher = None
+
+        def get(self, _sid: str):
+            return self.publisher
+
+        def registered_at_ms(self, _sid: str) -> int | None:
+            return 123 if self.publisher is not None else None
+
+    registry = Registry()
+
+    async def fake_bootstrap(strategy_instance_id: str):
+        assert strategy_instance_id == sid
+        registry.publisher = publisher
+        return publisher
+
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: registry)
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", fake_bootstrap)
+
+    resolved, registered_at_ms = await live_instances._resolve_activity_publisher_for_status(
+        sid,
+        LiveBinding(run_id="run-live-aaa"),
+    )
+
+    assert resolved is publisher
+    assert registered_at_ms == 123
+
+
+async def test_status_activity_publisher_resolution_times_out_slow_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = "spy_bootstrap_timeout"
+
+    class Registry:
+        def get(self, _sid: str):
+            return None
+
+        def registered_at_ms(self, _sid: str) -> int | None:
+            return None
+
+    async def slow_bootstrap(_strategy_instance_id: str):
+        await asyncio.sleep(1)
+
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: Registry())
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", slow_bootstrap)
+    monkeypatch.setattr(live_instances, "_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S", 0.001)
+
+    resolved, registered_at_ms = await live_instances._resolve_activity_publisher_for_status(
+        sid,
+        LiveBinding(run_id="run-live-aaa"),
+    )
+
+    assert resolved is None
+    assert registered_at_ms is None
+
+
+async def test_instance_status_uses_recovered_activity_publisher_for_health_and_chart(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_status_publisher"
+    run_id = "run-status-publisher"
+    _write_ledger(root, run_id, sid, 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 100},
+    )
+
+    async def fake_resolve_activity_publisher(status_sid: str, live_binding: LiveBinding | None):
+        assert status_sid == sid
+        assert live_binding is not None
+        return _StatusPublisher(), 1_699_999_999_000
+
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_activity_publisher_for_status",
+        fake_resolve_activity_publisher,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    health = body["operator_surface"]["broker_activity_health"]
+    assert health["state"] == "ready"
+    assert health["headline"] is None
+    assert health["facts"]["publisher_registered"] is True
+    assert health["facts"]["publisher_running"] is True
+    assert health["facts"]["latest_row_seq"] == 12
+    broker_writer = {
+        node["id"]: node for node in body["lifecycle_chart"]["global_graph"]["nodes"]
+    }["broker_writer"]
+    assert broker_writer["status"] == "passed"
+
+
+async def test_instance_status_projects_account_owner_submit_events_into_lifecycle_chart(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_account_owner"
+    account_id = "DU123456"
+    run_id = "run-account-owner"
+    namespace = f"learn-ai/{sid}/v1"
+    intent_id = "intent-owner-1"
+    order_ref = f"{namespace}:{intent_id}"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_prepared",
+            "created_at_ms": 1_700_000_010_000,
+            "diagnostics": {
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "intent_id": intent_id,
+                "order_ref": order_ref,
+            },
+        },
+    )
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_accepted",
+            "created_at_ms": 1_700_000_010_000,
+            "diagnostics": {
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "intent_id": intent_id,
+                "order_ref": order_ref,
+                "order_id": 42,
+            },
+        },
+    )
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_accepted",
+            "created_at_ms": 1_700_000_020_000,
+            "diagnostics": {
+                "strategy_instance_id": "other_bot",
+                "run_id": "run-other",
+                "intent_id": "intent-other",
+                "order_ref": "learn-ai/other_bot/v1:intent-other",
+                "order_id": 99,
+            },
+        },
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    submit_nodes = {
+        node["id"]: node for node in response.json()["lifecycle_chart"]["subgraphs"]["submit_order"]["nodes"]
+    }
+    assert submit_nodes["intent_wal"]["status"] == "active"
+    assert submit_nodes["intent_wal"]["summary"] == "AccountOwner intent persisted before broker submission."
+    assert submit_nodes["intent_wal"]["technical_label"] == "intent_pending"
+    assert submit_nodes["place_order"]["status"] == "passed"
+    assert submit_nodes["place_order"]["summary"] == "AccountOwner order reached the broker submit boundary."
+    assert submit_nodes["place_order"]["technical_label"] == "submit"
+
+
+async def test_instance_status_does_not_project_pre_session_intent_wal_as_current(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_stale_intent_wal"
+    account_id = "DU123456"
+    run_id = "run-stale-intent-wal"
+    namespace = f"learn-ai/{sid}/v1"
+    intent_id = "intent-stale-1"
+    order_ref = f"{namespace}:{intent_id}"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    _write_live_state(root, sid, run_id, {})
+    run_dir = root / run_id
+    (run_dir / "intent_events.jsonl").write_text(
+        "".join(
+            event.model_dump_json() + "\n"
+            for event in (
+                IntentEvent(
+                    seq=1,
+                    event_type=IntentEventType.PENDING_INTENT,
+                    intent_id=intent_id,
+                    bot_order_namespace=namespace,
+                    order_ref=order_ref,
+                    ts_ms=900,
+                    appended_at_ms=1_000,
+                ),
+                IntentEvent(
+                    seq=2,
+                    event_type=IntentEventType.SUBMITTED,
+                    intent_id=intent_id,
+                    bot_order_namespace=namespace,
+                    order_ref=order_ref,
+                    order_id=42,
+                    ts_ms=950,
+                    appended_at_ms=1_100,
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 2_000},
+    )
+
+    async def fake_resolve_activity_publisher(_sid: str, _live_binding: LiveBinding | None):
+        return None, None
+
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_activity_publisher_for_status",
+        fake_resolve_activity_publisher,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    submit_nodes = {
+        node["id"]: node for node in response.json()["lifecycle_chart"]["subgraphs"]["submit_order"]["nodes"]
+    }
+    assert submit_nodes["intent_wal"]["status"] == "unknown"
+    assert submit_nodes["intent_wal"]["summary"] == "Intent WAL evidence is stale for the current live session."
+    assert "last_intent_wal_seq=0" in submit_nodes["intent_wal"]["why"]
+    assert submit_nodes["place_order"]["status"] == "unknown"
+    assert submit_nodes["place_order"]["summary"] == "Intent WAL evidence is stale for the current live session."
 
 
 async def test_instance_status_dead_is_evidence_only(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

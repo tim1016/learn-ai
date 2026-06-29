@@ -8,11 +8,12 @@ State machine (in priority order):
 1. publisher is None (not registered) → ``unavailable``
 2. registered but ``is_running == False`` and age < ``starting_timeout_ms`` → ``starting``
 3. registered but ``is_running == False`` and age >= ``starting_timeout_ms`` → ``unavailable``
-4. registered + ``is_running`` + no rows yet AND age < ``degraded_after_idle_ms`` → ``ready``
-   (silent-boot window: the publisher just started, we expect rows soon)
-5. registered + ``is_running`` + no rows yet AND age >= ``degraded_after_idle_ms`` → ``degraded``
-6. registered + ``is_running`` + last row exists AND idle for >= ``degraded_after_idle_ms`` → ``degraded``
-7. otherwise → ``ready``
+4. registered + ``is_running`` → ``ready``
+
+Broker-activity rows are event-driven fills/cancels/pending-intent evidence,
+not a heartbeat.  A quiet account can go many minutes without a new row while
+capture is healthy, so row recency is exposed as facts but no longer demotes
+the publisher's health by itself.
 """
 
 from __future__ import annotations
@@ -80,8 +81,8 @@ def compose_broker_activity_health(
         How long we wait for a registered publisher to start running before
         declaring it ``unavailable``.  Default: 30 s.
     degraded_after_idle_ms:
-        How long a running publisher may emit no rows before we declare it
-        ``degraded``.  Default: 60 s.
+        Deprecated compatibility knob. Broker-activity rows are not a
+        heartbeat, so row idleness is no longer used to demote health.
     """
     publisher_registered = publisher is not None
     publisher_running = publisher is not None and publisher.is_running
@@ -165,56 +166,8 @@ def compose_broker_activity_health(
                 facts=facts,
             )
 
-    # Publisher is registered + running from here.
-
-    # 4 & 5. Running but no rows yet.
-    if last_row_ms is None:
-        if age_ms < degraded_after_idle_ms:
-            # Silent-boot window: the publisher just started; expect rows soon.
-            return BrokerActivityHealth(
-                state="ready",
-                headline=None,
-                notices=[],
-                facts=facts,
-            )
-        else:
-            notice = _notice(
-                code="activity.publisher_degraded",
-                tier="warning",
-                title="Activity feed is degraded",
-                message=(
-                    "The broker-activity publisher is running but has not emitted any rows "
-                    "within the expected window. This can mean no activity yet, but "
-                    "capture health is no longer proven; check data-plane publisher logs."
-                ),
-            )
-            return BrokerActivityHealth(
-                state="degraded",
-                headline=notice,
-                notices=[notice],
-                facts=facts,
-            )
-
-    # 6. Running with rows, but last row is too old.
-    idle_ms = now_ms - last_row_ms
-    if idle_ms >= degraded_after_idle_ms:
-        notice = _notice(
-            code="activity.publisher_degraded",
-            tier="warning",
-            title="Activity feed is degraded",
-            message=(
-                "The broker-activity publisher is running but no new rows have been "
-                "emitted recently. The feed may have stalled."
-            ),
-        )
-        return BrokerActivityHealth(
-            state="degraded",
-            headline=notice,
-            notices=[notice],
-            facts=facts,
-        )
-
-    # 7. All good.
+    # Publisher is registered + running from here. Broker activity is
+    # event-driven, so no recent row is not evidence of a stalled feed.
     return BrokerActivityHealth(
         state="ready",
         headline=None,

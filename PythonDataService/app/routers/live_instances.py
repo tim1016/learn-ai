@@ -12,12 +12,14 @@ Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
@@ -28,7 +30,7 @@ from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_freeze
+from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_events, read_account_freeze
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
@@ -46,7 +48,7 @@ from app.engine.live.fleet import (
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
-from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
+from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.nyse_calendar import nyse_session_state_at_ms
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
@@ -130,7 +132,12 @@ from app.services.activity_projection_contract import (
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
-from app.services.bot_lifecycle_projection import project_intent_events
+from app.services.bot_lifecycle_projection import (
+    account_event_to_lifecycle_event,
+    project_account_events,
+    project_intent_events,
+    sort_lifecycle_events,
+)
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -155,6 +162,9 @@ from app.services.runtime_freshness import (
     unavailable_runtime_freshness,
 )
 
+if TYPE_CHECKING:
+    from app.services.broker_activity_publisher import BrokerActivityPublisher
+
 # The instance command channel is reserved for one-shot operations; PAUSE/
 # RESUME/STOP are the durable intent knob (POST .../desired-state), not commands.
 _ONE_SHOT_VERBS = frozenset({CommandVerb.FLATTEN, CommandVerb.RECONCILE, CommandVerb.MARK_POISONED})
@@ -171,6 +181,7 @@ _ACTION_TO_VERB = {
 # Filename of the durable desired-state sidecar (the stable
 # <artifacts>/live_state/<sid>/ layout owned by desired_state.py).
 _DESIRED_STATE_FILE = "desired_state.json"
+_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +348,79 @@ def _resolve_account_freeze(
     return None
 
 
+def _project_instance_account_lifecycle_events(
+    artifacts_root: Path,
+    *,
+    account_id: str | None,
+    sid: str,
+    run_id: str | None,
+    bot_order_namespace: str | None,
+) -> list:
+    if account_id is None:
+        return []
+    try:
+        rows = read_account_events(artifacts_root, account_id)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "failed to read account events while resolving lifecycle chart",
+            extra={"account_id": account_id, "exception": repr(exc)},
+        )
+        return []
+    projected_account_events = project_account_events(
+        [
+            row
+            for row in rows
+            if isinstance(row, Mapping)
+            and _account_event_matches_instance(
+                row,
+                sid=sid,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace,
+            )
+        ],
+        account_id=account_id,
+    )
+    return [
+        account_event_to_lifecycle_event(event).model_copy(update={"bot_id": sid}) for event in projected_account_events
+    ]
+
+
+def _account_event_matches_instance(
+    row: Mapping,
+    *,
+    sid: str,
+    run_id: str | None,
+    bot_order_namespace: str | None,
+) -> bool:
+    diagnostics = row.get("diagnostics")
+    diagnostic_values = diagnostics if isinstance(diagnostics, Mapping) else {}
+
+    row_sid = _nonempty_str(diagnostic_values.get("strategy_instance_id")) or _nonempty_str(
+        diagnostic_values.get("bot_id")
+    )
+    row_sid = row_sid or _nonempty_str(row.get("strategy_instance_id")) or _nonempty_str(row.get("bot_id"))
+    row_run_id = _nonempty_str(diagnostic_values.get("run_id")) or _nonempty_str(row.get("run_id"))
+    row_namespace = _nonempty_str(row.get("bot_order_namespace"))
+    order_ref = _nonempty_str(diagnostic_values.get("order_ref")) or _nonempty_str(row.get("order_ref"))
+    if row_namespace is None and order_ref is not None and ":" in order_ref:
+        row_namespace = order_ref.rsplit(":", 1)[0]
+
+    sid_matches = row_sid == sid
+    run_matches = run_id is not None and row_run_id == run_id
+    namespace_matches = bot_order_namespace is not None and row_namespace == bot_order_namespace
+    if row_sid is not None and not sid_matches:
+        return False
+    if run_id is not None and row_run_id is not None and not run_matches:
+        return False
+    if bot_order_namespace is not None and row_namespace is not None and not namespace_matches:
+        return False
+    return sid_matches or run_matches or namespace_matches
+
+
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> tuple[dict | None, list[dict]]:
     """Latest decision row + spec-derived column descriptors for the instance.
 
@@ -445,6 +529,29 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
             current_wal_seq = None
             events = []
     return receipt, current_wal_seq, current_run_id, current_namespace, events
+
+
+def _read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
+    artifacts_root = _desired_state_root(root)
+    try:
+        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+    except ValueError:
+        return None
+    try:
+        return LiveStateSidecarRepo(sidecar_dir / "live_state.json").read()
+    except (LiveStateSidecarCorruptError, OSError):
+        return None
+
+
+def _session_started_at_ms(process: InstanceProcessView, live_binding: LiveBinding | None) -> int | None:
+    if live_binding is None:
+        return None
+    started_at_ms = process.started_at_ms
+    if isinstance(started_at_ms, bool):
+        return None
+    if isinstance(started_at_ms, int) and started_at_ms >= 0:
+        return started_at_ms
+    return None
 
 
 def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path | None:
@@ -1064,6 +1171,56 @@ def _daemon_process_from_instance(managed: dict | None) -> dict | None:
     return process
 
 
+async def _resolve_activity_publisher_for_status(
+    sid: str,
+    live_binding: LiveBinding | None,
+) -> tuple[BrokerActivityPublisher | None, int | None]:
+    """Return the publisher facts the status projection should render.
+
+    ``broker_activity.py`` already has a lazy-bootstrap path for the Activity
+    REST/SSE endpoints.  Status/Overview also depends on the same in-memory
+    registry, so a data-plane restart can otherwise make a healthy running bot
+    look detached until the Activity endpoint is hit.  This best-effort retry
+    only rebuilds the runtime publisher; it does not append evidence or mutate
+    broker-activity WAL rows from a status read.
+    """
+    registry = get_publisher_registry()
+    publisher = registry.get(sid)
+    if live_binding is None:
+        return publisher, registry.registered_at_ms(sid)
+    if publisher is not None and publisher.is_running:
+        return publisher, registry.registered_at_ms(sid)
+
+    from app.routers.broker_activity import (
+        PublisherBootstrapError,
+        bootstrap_publisher_for_instance,
+    )
+
+    try:
+        publisher = await asyncio.wait_for(
+            bootstrap_publisher_for_instance(sid),
+            timeout=_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S,
+        )
+    except TimeoutError:
+        logger.warning(
+            "status-time broker-activity publisher bootstrap timed out",
+            extra={"strategy_instance_id": sid},
+        )
+        publisher = registry.get(sid)
+    except PublisherBootstrapError as exc:
+        logger.warning(
+            "status-time broker-activity publisher bootstrap deferred (%s): %s",
+            exc.code,
+            exc.detail,
+            extra={
+                "strategy_instance_id": sid,
+                "bootstrap_error_code": exc.code,
+            },
+        )
+        publisher = registry.get(sid)
+    return publisher, registry.registered_at_ms(sid)
+
+
 async def _resolve_instance_status_from_process(
     sid: str,
     root: Path,
@@ -1111,6 +1268,10 @@ async def _resolve_instance_status_from_process(
         current_namespace,
         intent_wal_events,
     ) = _resolve_reconciliation_inputs(root, live_binding)
+    activity_publisher, activity_publisher_registered_at_ms = await _resolve_activity_publisher_for_status(
+        sid,
+        live_binding,
+    )
     operator_surface = compute_operator_surface(
         process=process,
         last_exit=last_exit,
@@ -1140,8 +1301,8 @@ async def _resolve_instance_status_from_process(
         latest_broker_event_ms=None,
         latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
         reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
-        activity_publisher=get_publisher_registry().get(sid),
-        activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
+        activity_publisher=activity_publisher,
+        activity_publisher_registered_at_ms=activity_publisher_registered_at_ms,
         now_ms=observed_at_ms,
     )
     redeploy_available = bool(
@@ -1151,12 +1312,31 @@ async def _resolve_instance_status_from_process(
         and start_defaults.qc_cloud_backtest_id
     )
     live_run_dir = _resolve_live_run_dir(root, live_binding)
+    live_state = _read_instance_live_state(root, sid)
+    intent_projection_since_ms = _session_started_at_ms(process, live_binding)
+    instance_account_id = _instance_ledger_account_id(root, sid)
     lifecycle_events = project_intent_events(
         intent_wal_events,
         bot_id=sid,
-        account_id=_instance_ledger_account_id(root, sid),
+        account_id=instance_account_id,
         run_id=current_run_id,
         wal_path=live_run_dir / "intent_events.jsonl" if live_run_dir is not None else None,
+        since_ms=intent_projection_since_ms,
+        live_state_last_intent_wal_seq=(
+            live_state.last_intent_wal_seq if live_state is not None else None
+        ),
+    )
+    lifecycle_events = sort_lifecycle_events(
+        [
+            *lifecycle_events,
+            *_project_instance_account_lifecycle_events(
+                root.parent,
+                account_id=instance_account_id,
+                sid=sid,
+                run_id=current_run_id,
+                bot_order_namespace=current_namespace,
+            ),
+        ]
     )
 
     return LiveInstanceStatus(
@@ -1617,18 +1797,7 @@ def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     owned_positions is the engine's running tally of its own namespace fills,
     never decomposed from the net account snapshot.
     """
-    artifacts_root = _desired_state_root(root)
-    try:
-        # Confine the sidecar path on the validated id (same barrier as the
-        # desired-state write) so the read can't escape live_state/.
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
-    except ValueError:
-        return None
-    repo = LiveStateSidecarRepo(sidecar_dir / "live_state.json")
-    try:
-        envelope = repo.read()
-    except LiveStateSidecarCorruptError:
-        return None
+    envelope = _read_instance_live_state(root, sid)
     if envelope is None:
         return None
     return InstanceBrokerView(

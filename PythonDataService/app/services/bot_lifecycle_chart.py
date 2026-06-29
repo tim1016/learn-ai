@@ -204,10 +204,7 @@ def compose_bot_lifecycle_chart(
     """Compose the Overview-tab lifecycle graph from backend-authored facts."""
 
     facts = _lifecycle_facts(surface, desired_state, lifecycle_events)
-    subgraphs = {
-        graph_id: _build_graph(graph_def, facts)
-        for graph_id, graph_def in SUBGRAPH_DEFS.items()
-    }
+    subgraphs = {graph_id: _build_graph(graph_def, facts) for graph_id, graph_def in SUBGRAPH_DEFS.items()}
     global_graph = _build_graph(GLOBAL_GRAPH, facts, expandable_graph_ids=subgraphs.keys())
     return BotLifecycleChartView(
         chart_id="bot_lifecycle_v1",
@@ -300,8 +297,7 @@ def _lifecycle_facts(
         ),
         "risk_posture": NodeFact(
             "passed" if surface.current_risk.verdict == "READY" else "unknown",
-            f"Posture is {surface.current_risk.posture}; pending orders: "
-            f"{surface.current_risk.pending_order_count}.",
+            f"Posture is {surface.current_risk.posture}; pending orders: {surface.current_risk.pending_order_count}.",
             surface.current_risk.posture,
         ),
         "receipt": NodeFact(_reconcile_status(surface), _reconcile_evidence(surface), _reconcile_label(surface)),
@@ -312,7 +308,7 @@ def _lifecycle_facts(
         "desired_state": NodeFact(
             _activate_status(surface, desired_state),
             _activate_evidence(desired_state),
-            _desired_value(desired_state) or "UNKNOWN",
+            _desired_label(desired_state),
         ),
         "resume_gate": NodeFact(
             _capability_status(surface.actions.resume),
@@ -342,7 +338,9 @@ def _lifecycle_facts(
             "ack_or_reconcile",
             "No broker acknowledgement or reconciliation event is available in this snapshot.",
         ),
-        "publisher": NodeFact(_broker_writer_status(surface), _broker_writer_evidence(surface), _broker_activity_label(surface)),
+        "publisher": NodeFact(
+            _broker_writer_status(surface), _broker_writer_evidence(surface), _broker_activity_label(surface)
+        ),
         "writer_guard": _event_or_unknown_fact(
             lifecycle_events,
             "writer_guard",
@@ -434,8 +432,7 @@ def _node_defs_for(graph_def: GraphDef, facts: LifecycleFacts) -> tuple[NodeDef,
         key=_readiness_sort_key,
     )
     return graph_def.nodes + tuple(
-        NodeDef(fact_id, f"Readiness gate {index}", "bot")
-        for index, fact_id in enumerate(readiness_ids, start=1)
+        NodeDef(fact_id, f"Readiness gate {index}", "bot") for index, fact_id in enumerate(readiness_ids, start=1)
     )
 
 
@@ -579,7 +576,7 @@ def _primary_node_id(
             return node_id
     if statuses["broker_writer"] in {"active", "blocked"}:
         return "broker_writer"
-    if surface.host_process.state == "RUNNING" and _desired_value(desired_state) == "RUNNING":
+    if surface.host_process.state == "RUNNING" and _effective_desired_value(desired_state) == "RUNNING":
         return "active"
     return "activate"
 
@@ -659,7 +656,7 @@ def _activate_status(
     surface: OperatorSurface,
     desired_state: DesiredStateView | None,
 ) -> LifecycleChartStatus:
-    desired = _desired_value(desired_state)
+    desired = _effective_desired_value(desired_state)
     if desired == "RUNNING" and surface.host_process.state == "RUNNING":
         return "passed"
     if desired == "PAUSED" and surface.host_process.state == "RUNNING":
@@ -786,6 +783,24 @@ def _desired_value(desired_state: DesiredStateView | None) -> str | None:
     return desired_state.state
 
 
+def _effective_desired_value(desired_state: DesiredStateView | None) -> str | None:
+    desired = _desired_value(desired_state)
+    if desired is not None:
+        return desired
+    if desired_state is not None and desired_state.path_status == "absent":
+        return "RUNNING"
+    return None
+
+
+def _desired_label(desired_state: DesiredStateView | None) -> str:
+    desired = _desired_value(desired_state)
+    if desired is not None:
+        return desired
+    if desired_state is not None and desired_state.path_status == "absent":
+        return "RUNNING default"
+    return "UNKNOWN"
+
+
 def _all_gate_results(surface: OperatorSurface) -> list[GateResult]:
     gates: list[GateResult] = []
     gates.extend(surface.host_process.start_capability.gate_results)
@@ -874,7 +889,11 @@ def _start_capability_reason(capability: HostProcessStartCapability) -> str | No
 def _host_evidence(surface: OperatorSurface) -> str:
     if surface.host_process.state == "RUNNING":
         return "Host daemon reports this bot process is running."
-    return surface.host_process.notice or _start_capability_reason(surface.host_process.start_capability) or "Host state is unavailable."
+    return (
+        surface.host_process.notice
+        or _start_capability_reason(surface.host_process.start_capability)
+        or "Host state is unavailable."
+    )
 
 
 def _active_evidence(status: LifecycleChartStatus) -> str:
@@ -890,13 +909,13 @@ def _active_reason(
     desired_state: DesiredStateView | None,
     status: LifecycleChartStatus,
 ) -> str:
-    desired = _desired_value(desired_state) or "UNKNOWN"
+    desired = _effective_desired_value(desired_state)
     if status == "active":
-        return "Host process is RUNNING and durable desired state is RUNNING."
+        return "Host process is RUNNING and effective desired state is RUNNING."
     if surface.host_process.state != "RUNNING":
         return f"Host process is {surface.host_process.state}; active requires RUNNING."
     if desired != "RUNNING":
-        return f"Durable desired state is {desired}; active requires RUNNING."
+        return f"Effective desired state is {_desired_label(desired_state)}; active requires RUNNING."
     return "Earlier lifecycle gates have not all passed yet."
 
 
@@ -939,6 +958,8 @@ def _reconcile_evidence(surface: OperatorSurface) -> str:
 def _activate_evidence(desired_state: DesiredStateView | None) -> str:
     desired = _desired_value(desired_state)
     if desired is None:
+        if desired_state is not None and desired_state.path_status == "absent":
+            return "Desired-state sidecar is absent; effective state is RUNNING."
         return "Desired-state sidecar is unavailable or not healthy."
     return f"Durable desired state is {desired}."
 
