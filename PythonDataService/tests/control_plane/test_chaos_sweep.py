@@ -82,7 +82,7 @@ def test_chaos_1_daemon_refused_then_restored() -> None:
     )
     # Exhaust the retry budget so the monitor transitions out of the
     # transient RETRYING band into the terminal UNREACHABLE state.
-    for tick in range(DEFAULT_RETRY_BUDGET + 1):
+    for tick in range(DEFAULT_RETRY_BUDGET):
         state = fold_outcome(
             state,
             failure,

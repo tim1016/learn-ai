@@ -4,11 +4,13 @@ import {
   Component,
   DestroyRef,
   computed,
+  effect,
   inject,
   signal,
 } from '@angular/core';
+import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import type {
   FleetAccountSummary,
@@ -18,7 +20,7 @@ import type {
   OperatorSurfaceControlPlane,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import { OperatorNoticeComponent } from '../../operator-notice/operator-notice.component';
+import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
 import { AuditTabComponent } from '../cockpit-v2/tabs/audit-tab.component';
 import { ConfigurationTabComponent } from '../cockpit-v2/tabs/configuration-tab.component';
@@ -38,17 +40,22 @@ type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mar
 
 interface ControlPlaneBanner {
   readonly state: OperatorSurfaceControlPlane['state'];
-  readonly label: 'ATTENTION' | 'LAST-KNOWN';
+  readonly shortLabel: 'attention needed' | 'last known';
   readonly demoted: boolean;
   readonly notice: string | null;
   readonly attemptText: string | null;
+  readonly runbookSlug: string | null;
 }
 
 @Component({
   selector: 'app-bot-control-page',
   imports: [
     CommonModule,
-    OperatorNoticeComponent,
+    Accordion,
+    AccordionPanel,
+    AccordionHeader,
+    AccordionContent,
+    RouterLink,
     StatusRiskTabComponent,
     OverviewTabComponent,
     ActivityTabComponent,
@@ -65,6 +72,7 @@ export class BotControlPageComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly activeBotSidebarNotice = inject(ActiveBotSidebarNoticeService);
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private pollToken = 0;
   private statusRequestSeq = 0;
@@ -89,6 +97,10 @@ export class BotControlPageComponent {
     () => this.accountSummary()?.notice ?? null,
   );
 
+  readonly hasTopWarnings = computed<boolean>(
+    () => this.brokerEvidenceNotice() !== null || this.controlPlaneBanner() !== null,
+  );
+
   readonly hostRunnerNotice = computed(() => {
     const hostProcess = this.status()?.operator_surface.host_process ?? null;
     if (hostProcess?.state !== 'UNREACHABLE') return null;
@@ -105,12 +117,13 @@ export class BotControlPageComponent {
     const demoted = cp.state !== 'RETRYING';
     return {
       state: cp.state,
-      label: demoted ? 'LAST-KNOWN' : 'ATTENTION',
+      shortLabel: demoted ? 'last known' : 'attention needed',
       demoted,
       notice: cp.notice,
       attemptText: cp.state === 'RETRYING' && cp.attempt > 0
         ? `retrying · attempt ${cp.attempt}`
         : null,
+      runbookSlug: cp.runbook_slug,
     };
   });
 
@@ -125,10 +138,24 @@ export class BotControlPageComponent {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
     });
+    effect(() => {
+      const id = this.instanceId();
+      const notice = this.hostRunnerNotice();
+      this.activeBotSidebarNotice.setNotice(
+        id && notice
+          ? {
+              instanceId: id,
+              message: notice.message,
+              command: notice.command,
+            }
+          : null,
+      );
+    });
     this.destroyRef.onDestroy(() => {
       this.destroyed = true;
       this.pollToken += 1;
       this.clearPollTimer();
+      this.activeBotSidebarNotice.clearForInstance(this.instanceId());
     });
   }
 
@@ -188,7 +215,11 @@ export class BotControlPageComponent {
   }
 
   onGateOpenRunbook(slug: string): void {
-    window.open(`/runbooks/${encodeURIComponent(slug)}`, '_blank', 'noopener');
+    window.open(this.runbookHref(slug), '_blank', 'noopener');
+  }
+
+  runbookHref(slug: string): string {
+    return `/runbooks/${encodeURIComponent(slug)}`;
   }
 
   dispatchOverviewAction(action: LifecycleChartActionId): void {

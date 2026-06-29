@@ -32,6 +32,48 @@ import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-pan
 import { LatestSignalStripComponent } from '../reused/latest-signal-strip/latest-signal-strip.component';
 import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-orders-section/working-pending-orders-section.component';
 
+export function activityRefreshKeyForStatus(status: LiveInstanceStatus): number | null {
+  if (!status.live_binding) return 0;
+  const controlPlane = status.operator_surface.control_plane;
+  if (
+    controlPlane !== null &&
+    controlPlane.state !== 'CONNECTED' &&
+    controlPlane.state !== 'RETRYING'
+  ) {
+    return null;
+  }
+  return status.fetched_at_ms;
+}
+
+interface ActivityRequestParams {
+  readonly sid: string;
+  readonly sessionDate: string;
+  readonly resolution: ChartResolution;
+  readonly refreshKey: number | null;
+}
+
+interface CachedActivity {
+  readonly sid: string;
+  readonly sessionDate: string;
+  readonly resolution: ChartResolution;
+  readonly projection: LiveInstanceActivityProjection | null;
+}
+
+export function cachedActivityForRequest(
+  cached: CachedActivity | null,
+  params: ActivityRequestParams,
+): LiveInstanceActivityProjection | null | undefined {
+  if (
+    cached === null ||
+    cached.sid !== params.sid ||
+    cached.sessionDate !== params.sessionDate ||
+    cached.resolution !== params.resolution
+  ) {
+    return undefined;
+  }
+  return cached.projection;
+}
+
 @Component({
   selector: 'app-activity-tab',
   imports: [
@@ -52,6 +94,7 @@ export class ActivityTabComponent {
   private readonly http = inject(HttpClient);
   readonly selectedSessionDate = signal<string>(localDateString());
   readonly selectedResolution = signal<ChartResolution>('1m');
+  private readonly cachedActivity = signal<CachedActivity | null>(null);
 
   readonly chartRunId = computed<string | null>(
     () => this.status().live_binding?.run_id ?? this.status().evidence_binding?.run_id ?? null,
@@ -59,22 +102,27 @@ export class ActivityTabComponent {
 
   readonly strategyInstanceId = computed<string>(() => this.status().strategy_instance_id);
 
+  readonly activityRefreshKey = computed<number | null>(() => {
+    return activityRefreshKeyForStatus(this.status());
+  });
+
   readonly activityResource = resource<
     LiveInstanceActivityProjection | null,
-    {
-      sid: string;
-      sessionDate: string;
-      resolution: ChartResolution;
-      refreshKey: number;
-    }
+    ActivityRequestParams
   >({
     params: () => ({
       sid: this.strategyInstanceId(),
       sessionDate: this.selectedSessionDate(),
       resolution: this.selectedResolution(),
-      refreshKey: this.status().live_binding ? this.status().fetched_at_ms : 0,
+      refreshKey: this.activityRefreshKey(),
     }),
-    loader: ({ params }) => this.loadActivity(params.sid, params.sessionDate, params.resolution),
+    loader: ({ params }): Promise<LiveInstanceActivityProjection | null> => {
+      if (params.refreshKey === null) {
+        const cached = cachedActivityForRequest(this.cachedActivity(), params);
+        if (cached !== undefined) return Promise.resolve(cached);
+      }
+      return this.loadAndCacheActivity(params.sid, params.sessionDate, params.resolution);
+    },
   });
 
   readonly activity = computed(() => this.activityResource.value() ?? null);
@@ -112,5 +160,15 @@ export class ActivityTabComponent {
         { params: { session_date: sessionDate, resolution } },
       ),
     );
+  }
+
+  private async loadAndCacheActivity(
+    sid: string,
+    sessionDate: string,
+    resolution: ChartResolution,
+  ): Promise<LiveInstanceActivityProjection | null> {
+    const projection = await this.loadActivity(sid, sessionDate, resolution);
+    this.cachedActivity.set({ sid, sessionDate, resolution, projection });
+    return projection;
   }
 }

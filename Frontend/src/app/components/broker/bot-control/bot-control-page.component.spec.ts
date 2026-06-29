@@ -1,3 +1,4 @@
+import { Component, signal } from '@angular/core';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
@@ -5,9 +6,28 @@ import { of, Subject } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { FleetAccountSummary, LiveInstanceStatus } from '../../../api/live-instances.types';
+import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { makeLifecycleChartFixture } from '../../../testing/live-instance-status-fixtures';
 import { BotControlPageComponent } from './bot-control-page.component';
+
+@Component({
+  imports: [BotControlPageComponent, BrokerBannerComponent],
+  template: `
+    <app-bot-control-page />
+    <app-broker-banner />
+  `,
+})
+class BotControlWithSidebarHostComponent {}
+
+class FakeBrokerHealthService {
+  readonly health = signal(null);
+  readonly bannerState = signal(null);
+  readonly lifecycleAction = signal(null);
+  connect = vi.fn().mockResolvedValue(undefined);
+  disconnect = vi.fn().mockResolvedValue(undefined);
+}
 
 function makeStatus(options: {
   id?: string;
@@ -117,7 +137,7 @@ function makeStatus(options: {
         attempt: 0,
         daemon_boot_id: null,
         notice: 'Last command channel health check failed.',
-        runbook_slug: 'control-plane',
+        runbook_slug: 'control plane/runbook?',
       },
       broker_observation_consistency: null,
       reconciliation: null,
@@ -155,7 +175,7 @@ function makeAccountSummary(): FleetAccountSummary {
         label: 'Check positions in IBKR',
         target: 'ibkr_positions',
       },
-      runbook_slug: 'broker-evidence-health',
+      runbook_slug: 'broker evidence/health?',
       occurred_at_ms: null,
     },
   };
@@ -186,7 +206,7 @@ describe('BotControlPageComponent', () => {
     vi.useRealTimers();
   });
 
-  it('renders broker evidence, host runner, and control-plane banners before the bot tabs', async () => {
+  it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     TestBed.configureTestingModule({
       providers: [
@@ -217,14 +237,56 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('[data-testid="bot-control-broker-evidence-banner"]')?.textContent)
-      .toContain('Broker evidence is unavailable');
-    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')?.textContent)
-      .toContain('Host runner unreachable');
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')?.textContent)
-      .toContain('CONTROL PLANE · LAST-KNOWN');
+    const brokerPanel = el.querySelector('[data-testid="bot-control-broker-evidence-banner"]');
+    const controlPanel = el.querySelector('[data-testid="bot-control-plane-banner"]');
+    expect(brokerPanel?.textContent)
+      .toContain('Warning, broker evidence unavailable.');
+    expect(controlPanel?.textContent)
+      .toContain('Control plane, last known.');
+    const runbookLinks = Array.from(el.querySelectorAll<HTMLAnchorElement>('.warning-link'))
+      .map((link) => link.getAttribute('href'));
+    expect(runbookLinks).toContain('/runbooks/broker%20evidence%2Fhealth%3F');
+    expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
+    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')?.textContent)
       .toContain('Status & Risk');
+  });
+
+  it('renders the active bot host-runner warning through the sidebar consumer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      imports: [BotControlWithSidebarHostComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlWithSidebarHostComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    const sidebarNotice = el.querySelector('[data-testid="sidebar-host-runner-notice"]');
+    expect(sidebarNotice?.textContent).toContain('Start the host runner before trading this bot.');
+    expect(sidebarNotice?.textContent).toContain('make broker-runner');
+    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
   });
 
   it('refreshes broker evidence on the serialized poll loop', async () => {
@@ -273,9 +335,11 @@ describe('BotControlPageComponent', () => {
       .fn()
       .mockImplementation((id: string) => id === 'bot-a' ? first.promise : second.promise);
     TestBed.configureTestingModule({
+      imports: [BotControlWithSidebarHostComponent],
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         {
           provide: ActivatedRoute,
           useValue: { paramMap },
@@ -294,7 +358,7 @@ describe('BotControlPageComponent', () => {
       ],
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
+    const fixture = TestBed.createComponent(BotControlWithSidebarHostComponent);
     fixture.detectChanges();
     paramMap.next(convertToParamMap({ id: 'bot-a' }));
     paramMap.next(convertToParamMap({ id: 'bot-b' }));
@@ -303,9 +367,9 @@ describe('BotControlPageComponent', () => {
     first.resolve(makeStatus({ id: 'bot-a', hostNotice: 'A runner is unreachable.' }));
     await flush(fixture);
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('B runner is unreachable.');
-    expect(text).not.toContain('A runner is unreachable.');
+    const sidebarNotice = (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="sidebar-host-runner-notice"]');
+    expect(sidebarNotice?.textContent).toContain('B runner is unreachable.');
   });
 
   it('requires typed HALT before marking a run poisoned', async () => {

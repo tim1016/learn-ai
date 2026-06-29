@@ -3,6 +3,7 @@ import { signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { BrokerBannerComponent } from './broker-banner.component';
 import { BrokerHealthService } from '../services/broker-health.service';
+import { ActiveBotSidebarNoticeService } from './active-bot-sidebar-notice.service';
 import type { IbkrConnectionHealth } from '../api/broker-models';
 
 function health(overrides: Partial<IbkrConnectionHealth> = {}): IbkrConnectionHealth {
@@ -34,13 +35,17 @@ class FakeBrokerHealthService {
 
 function setup() {
   const brokerHealth = new FakeBrokerHealthService();
+  const activeBotNotice = new ActiveBotSidebarNoticeService();
   TestBed.configureTestingModule({
     imports: [BrokerBannerComponent],
-    providers: [{ provide: BrokerHealthService, useValue: brokerHealth }],
+    providers: [
+      { provide: BrokerHealthService, useValue: brokerHealth },
+      { provide: ActiveBotSidebarNoticeService, useValue: activeBotNotice },
+    ],
   });
   const fixture = TestBed.createComponent(BrokerBannerComponent);
   fixture.detectChanges();
-  return { fixture, brokerHealth };
+  return { fixture, brokerHealth, activeBotNotice };
 }
 
 function toggle(fixture: ComponentFixture<BrokerBannerComponent>): HTMLButtonElement | null {
@@ -90,5 +95,25 @@ describe('BrokerBannerComponent', () => {
 
     expect(fixture.nativeElement.textContent).toContain('Host-owned');
     expect(toggle(fixture)).toBeNull();
+  });
+
+  it('renders active bot host-runner warning above the IBKR banner', () => {
+    const { fixture, brokerHealth, activeBotNotice } = setup();
+    activeBotNotice.setNotice({
+      instanceId: 'DEPVAL-DIA-20260626',
+      message: 'The bot service is offline.',
+      command: 'make host-runner',
+    });
+    brokerHealth.bannerState.set('disconnected');
+    brokerHealth.health.set(health({ connected: false, is_paper: null }));
+    fixture.detectChanges();
+
+    const notice = fixture.nativeElement.querySelector(
+      '[data-testid="sidebar-host-runner-notice"]',
+    ) as HTMLElement | null;
+    const banner = fixture.nativeElement.querySelector('.broker-banner') as HTMLElement | null;
+    expect(notice?.querySelector('summary')?.textContent).toContain('Warning, host runner unreachable.');
+    expect(notice?.textContent).toContain('The bot service is offline.');
+    expect(notice?.compareDocumentPosition(banner as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 });

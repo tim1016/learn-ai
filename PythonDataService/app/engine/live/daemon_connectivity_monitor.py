@@ -32,9 +32,9 @@ CONNECTED                        kind=CONNECTED, attempt=0,
                                  fields refreshed. If observed
                                  boot_id changed across consecutive
                                  CONNECTED probes a signal fires.
-UNREACHABLE (attempt+1 ≤ budget) kind=RETRYING (carries detail +
+UNREACHABLE (attempt+1 < budget) kind=RETRYING (carries detail +
                                  error_category from the probe)
-UNREACHABLE (attempt+1 > budget) kind=UNREACHABLE (terminal until a
+UNREACHABLE (attempt+1 >= budget) kind=UNREACHABLE (terminal until a
                                  CONNECTED probe lands)
 AUTH_FAILED                      terminal — pass-through, no folding,
                                  attempt preserved (a future
@@ -248,11 +248,12 @@ def _fold_unreachable(
     rng: random.Random | None,
 ) -> DaemonConnectivityState:
     # Attempt counter advances on every UNREACHABLE outcome until the
-    # budget is exceeded; once exceeded we surface UNREACHABLE and stop
-    # counting upward (the operator sees a stable terminal number).
+    # budget is reached; once the last allowed attempt lands we surface
+    # UNREACHABLE and stop counting upward (the operator sees a stable
+    # terminal number).
     next_attempt = prev.attempt if prev.kind == "UNREACHABLE" else prev.attempt + 1
 
-    if next_attempt <= retry_budget:
+    if next_attempt < retry_budget:
         wait_ms = backoff_for_attempt(
             next_attempt,
             schedule_ms=backoff_schedule_ms,
@@ -274,8 +275,9 @@ def _fold_unreachable(
             next_probe_in_ms=wait_ms,
         )
 
-    # Budget exhausted — emit UNREACHABLE and idle at the steady cadence
-    # until recovery or operator action.
+    # Budget exhausted — emit UNREACHABLE as soon as the last allowed
+    # attempt is reached, then idle at the steady cadence until recovery
+    # or operator action.
     return DaemonConnectivityState(
         kind="UNREACHABLE",
         attempt=retry_budget,

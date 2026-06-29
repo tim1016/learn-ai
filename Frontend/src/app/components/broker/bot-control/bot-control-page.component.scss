@@ -71,81 +71,42 @@
   color: var(--text-primary);
 }
 
-.top-banners {
+.warning-panel-detail {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border);
+  gap: 0.4rem;
+  padding: 0.65rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
-.top-banner {
-  display: block;
-  min-width: 0;
+.warning-action,
+.warning-meta {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 
-.host-runner {
-  padding: 0.75rem;
+.warning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.warning-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 0.55rem;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--accent-faint);
-
-  header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: var(--fs-base);
-    letter-spacing: 0;
-  }
-
-  p {
-    margin: 0;
-    color: var(--text-secondary);
-  }
-
-  .tier-pill {
-    padding: 0.1rem 0.4rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--text-on-accent);
-    background: var(--accent);
-    font-size: var(--fs-xs);
-    text-transform: uppercase;
-  }
-
-  details {
-    margin-top: 0.5rem;
-  }
-
-  pre {
-    overflow-x: auto;
-    margin: 0.5rem 0 0;
-  }
-}
-
-.control-plane-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.65rem 1rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--accent-faint);
+  background: var(--bg-surface);
   color: var(--text-primary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-decoration: none;
 
-  span {
-    color: var(--text-secondary);
-  }
-
-  .attempt {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 
@@ -199,11 +160,13 @@
     justify-content: flex-start;
   }
 
-  .top-banners {
-    grid-template-columns: 1fr;
-  }
-
   .inner-tabs {
     overflow-x: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .top-banners {
+    grid-template-columns: 1fr;
   }
 }
