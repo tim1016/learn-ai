@@ -20,7 +20,7 @@ from app.broker.ibkr.api_evidence import evidence_request, evidence_response, ge
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
-from app.engine.live.intent_events import IntentEventType
+from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run_ledger import LiveRunLedger
 from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
@@ -502,6 +502,75 @@ async def test_instance_status_projects_account_owner_submit_events_into_lifecyc
     assert submit_nodes["place_order"]["status"] == "passed"
     assert submit_nodes["place_order"]["summary"] == "AccountOwner order reached the broker submit boundary."
     assert submit_nodes["place_order"]["technical_label"] == "submit"
+
+
+async def test_instance_status_does_not_project_pre_session_intent_wal_as_current(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_stale_intent_wal"
+    account_id = "DU123456"
+    run_id = "run-stale-intent-wal"
+    namespace = f"learn-ai/{sid}/v1"
+    intent_id = "intent-stale-1"
+    order_ref = f"{namespace}:{intent_id}"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    _write_live_state(root, sid, run_id, {})
+    run_dir = root / run_id
+    (run_dir / "intent_events.jsonl").write_text(
+        "".join(
+            event.model_dump_json() + "\n"
+            for event in (
+                IntentEvent(
+                    seq=1,
+                    event_type=IntentEventType.PENDING_INTENT,
+                    intent_id=intent_id,
+                    bot_order_namespace=namespace,
+                    order_ref=order_ref,
+                    ts_ms=900,
+                    appended_at_ms=1_000,
+                ),
+                IntentEvent(
+                    seq=2,
+                    event_type=IntentEventType.SUBMITTED,
+                    intent_id=intent_id,
+                    bot_order_namespace=namespace,
+                    order_ref=order_ref,
+                    order_id=42,
+                    ts_ms=950,
+                    appended_at_ms=1_100,
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 2_000},
+    )
+
+    async def fake_resolve_activity_publisher(_sid: str, _live_binding: LiveBinding | None):
+        return None, None
+
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_activity_publisher_for_status",
+        fake_resolve_activity_publisher,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    submit_nodes = {
+        node["id"]: node for node in response.json()["lifecycle_chart"]["subgraphs"]["submit_order"]["nodes"]
+    }
+    assert submit_nodes["intent_wal"]["status"] == "unknown"
+    assert submit_nodes["intent_wal"]["summary"] == "Intent WAL evidence is stale for the current live session."
+    assert "last_intent_wal_seq=0" in submit_nodes["intent_wal"]["why"]
+    assert submit_nodes["place_order"]["status"] == "unknown"
+    assert submit_nodes["place_order"]["summary"] == "Intent WAL evidence is stale for the current live session."
 
 
 async def test_instance_status_dead_is_evidence_only(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

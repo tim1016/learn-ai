@@ -48,7 +48,7 @@ from app.engine.live.fleet import (
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
-from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
+from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.nyse_calendar import nyse_session_state_at_ms
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
@@ -529,6 +529,29 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
             current_wal_seq = None
             events = []
     return receipt, current_wal_seq, current_run_id, current_namespace, events
+
+
+def _read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
+    artifacts_root = _desired_state_root(root)
+    try:
+        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+    except ValueError:
+        return None
+    try:
+        return LiveStateSidecarRepo(sidecar_dir / "live_state.json").read()
+    except (LiveStateSidecarCorruptError, OSError):
+        return None
+
+
+def _session_started_at_ms(process: InstanceProcessView, live_binding: LiveBinding | None) -> int | None:
+    if live_binding is None:
+        return None
+    started_at_ms = process.started_at_ms
+    if isinstance(started_at_ms, bool):
+        return None
+    if isinstance(started_at_ms, int) and started_at_ms >= 0:
+        return started_at_ms
+    return None
 
 
 def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path | None:
@@ -1289,6 +1312,8 @@ async def _resolve_instance_status_from_process(
         and start_defaults.qc_cloud_backtest_id
     )
     live_run_dir = _resolve_live_run_dir(root, live_binding)
+    live_state = _read_instance_live_state(root, sid)
+    intent_projection_since_ms = _session_started_at_ms(process, live_binding)
     instance_account_id = _instance_ledger_account_id(root, sid)
     lifecycle_events = project_intent_events(
         intent_wal_events,
@@ -1296,6 +1321,10 @@ async def _resolve_instance_status_from_process(
         account_id=instance_account_id,
         run_id=current_run_id,
         wal_path=live_run_dir / "intent_events.jsonl" if live_run_dir is not None else None,
+        since_ms=intent_projection_since_ms,
+        live_state_last_intent_wal_seq=(
+            live_state.last_intent_wal_seq if live_state is not None else None
+        ),
     )
     lifecycle_events = sort_lifecycle_events(
         [
@@ -1768,18 +1797,7 @@ def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     owned_positions is the engine's running tally of its own namespace fills,
     never decomposed from the net account snapshot.
     """
-    artifacts_root = _desired_state_root(root)
-    try:
-        # Confine the sidecar path on the validated id (same barrier as the
-        # desired-state write) so the read can't escape live_state/.
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
-    except ValueError:
-        return None
-    repo = LiveStateSidecarRepo(sidecar_dir / "live_state.json")
-    try:
-        envelope = repo.read()
-    except LiveStateSidecarCorruptError:
-        return None
+    envelope = _read_instance_live_state(root, sid)
     if envelope is None:
         return None
     return InstanceBrokerView(

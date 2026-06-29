@@ -225,3 +225,48 @@ def test_project_intent_events_surfaces_drop_and_submit_uncertainty() -> None:
     assert projected[0].why == "Submission gate dropped the intent: max_orders_per_day."
     assert projected[1].event_type == "BrokerOrderUncertain"
     assert projected[1].operator_next_step == "PROBE_BROKER_BEFORE_RETRY"
+
+
+def test_project_intent_events_marks_pre_session_wal_rows_stale() -> None:
+    projected = project_intent_events(
+        [
+            _intent(1, IntentEventType.PENDING_INTENT, appended_at_ms=1_000),
+            _intent(2, IntentEventType.SUBMITTED, appended_at_ms=1_100),
+        ],
+        bot_id="bot-a",
+        account_id="DU123",
+        run_id="run-1",
+        since_ms=2_000,
+        live_state_last_intent_wal_seq=0,
+    )
+
+    by_node = {event.node_id: event for event in projected}
+
+    assert set(by_node) == {"intent_wal", "place_order"}
+    assert by_node["intent_wal"].event_type == "IntentWalEvidenceStale"
+    assert by_node["intent_wal"].status == "unknown"
+    assert by_node["intent_wal"].summary == "Intent WAL evidence is stale for the current live session."
+    assert by_node["intent_wal"].payload["projection_since_ms"] == 2_000
+    assert by_node["intent_wal"].payload["live_state_last_intent_wal_seq"] == 0
+    assert by_node["place_order"].status == "unknown"
+    assert "outside the current live session window" in (by_node["place_order"].why or "")
+
+
+def test_project_intent_events_prefers_current_session_evidence_over_stale_rows() -> None:
+    projected = project_intent_events(
+        [
+            _intent(1, IntentEventType.SUBMITTED, appended_at_ms=1_000),
+            _intent(2, IntentEventType.SUBMITTED, appended_at_ms=2_100),
+        ],
+        bot_id="bot-a",
+        account_id="DU123",
+        run_id="run-1",
+        since_ms=2_000,
+        live_state_last_intent_wal_seq=2,
+    )
+
+    by_node = {event.node_id: event for event in projected}
+
+    assert set(by_node) == {"place_order"}
+    assert by_node["place_order"].event_type == "BrokerOrderPlaced"
+    assert by_node["place_order"].status == "passed"
