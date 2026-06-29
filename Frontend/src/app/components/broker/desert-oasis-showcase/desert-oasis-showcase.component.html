@@ -1,0 +1,122 @@
+<section class="oasis-page">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Pixel environment pack</p>
+      <h1>Desert Oasis scene lab</h1>
+      <p class="lede">Four 16:9 backgrounds with five composable parallax planes per scene.</p>
+    </div>
+
+    <div class="controls" aria-label="Desert oasis showcase controls">
+      <div class="control-group" aria-label="Scene">
+        @for (scene of scenes; track scene.id) {
+          <button
+            type="button"
+            class="segmented-button"
+            [class.active]="selectedSceneId() === scene.id"
+            [attr.aria-pressed]="selectedSceneId() === scene.id"
+            (click)="selectScene(scene.id)"
+          >
+            {{ scene.id }}
+          </button>
+        }
+      </div>
+
+      <div class="control-group" aria-label="Showcase mode">
+        @for (mode of modes; track mode.id) {
+          <button
+            type="button"
+            class="segmented-button wide"
+            [class.active]="selectedMode() === mode.id"
+            [attr.aria-pressed]="selectedMode() === mode.id"
+            (click)="selectMode(mode.id)"
+          >
+            {{ mode.label }}
+          </button>
+        }
+      </div>
+    </div>
+  </header>
+
+  @let scene = selectedScene();
+
+  <div class="showcase-grid">
+    <article class="stage-card">
+      <div class="stage-toolbar">
+        <div>
+          <h2>{{ scene.label }}</h2>
+          <span>{{ scene.tone }}</span>
+        </div>
+        <span class="asset-chip">576 x 324</span>
+      </div>
+
+      @switch (selectedMode()) {
+        @case ('menu') {
+          <div class="game-frame menu-frame" [style.--scene-image]="'url(' + scene.background + ')'">
+            <div class="menu-panel">
+              <p>Oasis Runner</p>
+              <button type="button">Continue</button>
+              <button type="button">Loadout</button>
+              <button type="button">Settings</button>
+            </div>
+          </div>
+        }
+        @case ('arena') {
+          <div class="game-frame arena-frame" [style.--scene-image]="'url(' + scene.background + ')'">
+            <div class="hud">
+              <span>WAVE 03</span>
+              <span>HP 86</span>
+            </div>
+            <div class="hero-marker" aria-label="Operator marker in the oasis arena"></div>
+            <div class="combat-lane"></div>
+          </div>
+        }
+        @case ('layers') {
+          <div class="layer-board">
+            @for (plane of scene.planes; track plane.id) {
+              <div class="layer-row">
+                <img [src]="plane.image" [alt]="plane.label" />
+                <div>
+                  <strong>{{ plane.label }}</strong>
+                  <span>Plane {{ plane.id }}</span>
+                </div>
+              </div>
+            }
+          </div>
+        }
+        @default {
+          <div class="game-frame parallax-frame" aria-label="Animated desert oasis parallax scene">
+            @for (plane of scene.planes; track plane.id) {
+              <img
+                class="parallax-plane"
+                [src]="plane.image"
+                [alt]="plane.label"
+                [style.--drift.px]="plane.drift"
+              />
+            }
+          </div>
+        }
+      }
+    </article>
+
+    <aside class="scene-panel" aria-label="Available desert scenes">
+      @for (choice of scenes; track choice.id) {
+        <button
+          type="button"
+          class="scene-choice"
+          [class.active]="selectedSceneId() === choice.id"
+          [attr.aria-pressed]="selectedSceneId() === choice.id"
+          (click)="selectScene(choice.id)"
+        >
+          <img
+            [src]="'/assets/backgrounds/desert-oasis/background-' + choice.id + '/background.png'"
+            [alt]="choice.label"
+          />
+          <span>
+            <strong>{{ choice.label }}</strong>
+            <small>{{ choice.tone }}</small>
+          </span>
+        </button>
+      }
+    </aside>
+  </div>
+</section>
