@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.schemas.live_runs import (
     BotLifecycleChartView,
     DesiredStateView,
@@ -16,6 +17,7 @@ from app.schemas.live_runs import (
     ReconciliationReceipt,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
+from app.services.bot_lifecycle_projection import project_intent_events
 from app.services.operator_surface import compute_operator_surface
 
 _NOW_MS = 1_700_000_000_000
@@ -98,6 +100,18 @@ def _receipt(status: str = "passed") -> ReconciliationReceipt:
     )
 
 
+def _intent(seq: int, event_type: IntentEventType) -> IntentEvent:
+    intent_id = f"intent-{seq}"
+    return IntentEvent(
+        seq=seq,
+        event_type=event_type,
+        intent_id=intent_id,
+        bot_order_namespace=_NAMESPACE,
+        order_ref=f"{_NAMESPACE}:{intent_id}",
+        appended_at_ms=_NOW_MS + seq,
+    )
+
+
 def _surface(**overrides: object) -> OperatorSurface:
     kwargs = {
         "process": InstanceProcessView(state="running"),
@@ -152,6 +166,39 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert _edge_status(chart, "deploy_to_preflight") == "passed"
     assert _edge_status(chart, "activate_to_active") == "active"
     assert chart.subgraphs["submit_order"].nodes[2].technical_label == "placeOrder boundary"
+
+
+def test_submit_subgraph_is_unknown_without_durable_submit_evidence() -> None:
+    surface = _surface()
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    nodes = {node.id: node for node in chart.subgraphs["submit_order"].nodes}
+
+    assert nodes["intent_wal"].status == "unknown"
+    assert nodes["intent_wal"].status_label == "Unknown"
+    assert "No Intent WAL row" in (nodes["intent_wal"].why or "")
+    broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
+    assert broker_nodes["writer_guard"].status == "unknown"
+
+
+def test_submit_uncertainty_reaches_submit_subgraph() -> None:
+    surface = _surface()
+    lifecycle_events = project_intent_events(
+        [_intent(1, IntentEventType.ACK_FAILED_UNCERTAIN)],
+        bot_id=_SID,
+        account_id="DU123",
+        run_id=_RUN_ID,
+    )
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        surface,
+        desired_state=_desired("RUNNING"),
+        lifecycle_events=lifecycle_events,
+    )
+    nodes = {node.id: node for node in chart.subgraphs["submit_order"].nodes}
+
+    assert nodes["ack_or_reconcile"].status == "blocked"
+    assert nodes["ack_or_reconcile"].summary == "Broker acknowledgement failed; submit outcome is uncertain."
+    assert nodes["ack_or_reconcile"].operator_next_step == "PROBE_BROKER_BEFORE_RETRY"
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:

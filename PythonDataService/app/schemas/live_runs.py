@@ -7,7 +7,7 @@ trades, and artifacts. All timestamps are int64 milliseconds UTC.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -661,6 +661,14 @@ class DesiredStatePathStatus(StrEnum):
     unknown_no_ledger_binding = "unknown_no_ledger_binding"
 
 
+class DesiredStateValue(StrEnum):
+    """Canonical durable desired-state values stored on disk."""
+
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    STOPPED = "STOPPED"
+
+
 class DesiredStateView(BaseModel):
     """Resolved durable-intent view; ``path_status`` carries resolution.
 
@@ -669,7 +677,7 @@ class DesiredStateView(BaseModel):
     ``unknown_no_ledger_binding`` and is never guessed from parquet.
     """
 
-    state: str | None = None
+    state: DesiredStateValue | None = None
     updated_at_ms: int | None = None
     updated_by: str | None = None
     reason: str | None = None
@@ -1739,6 +1747,10 @@ class LifecycleChartNode(BaseModel):
     technical_label: str | None = None
     lane: LifecycleChartLane
     status: LifecycleChartStatus
+    status_label: str | None = None
+    summary: str | None = None
+    why: str | None = None
+    operator_next_step: str | None = None
     expandable: bool = False
     subgraph_id: str | None = None
     evidence_summary: str | None = None
@@ -2038,6 +2050,112 @@ class ActivityReconciliationWarning(BaseModel):
     code: str
     message: str
     row_ids: list[str] = Field(default_factory=list)
+
+
+LifecycleEventSeverity = Literal["info", "warning", "critical"]
+LifecycleEventCategory = Literal[
+    "decision",
+    "risk_gate",
+    "order",
+    "fill",
+    "position_change",
+    "account_balance",
+    "freeze",
+    "halt",
+    "poison",
+    "desired_state",
+    "lifecycle_transition",
+    "account_event",
+    "evidence",
+]
+
+
+class LifecycleEvidenceRef(BaseModel):
+    """Reference to the durable evidence behind a lifecycle event."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: str
+    source_label: str | None = None
+    source_local_seq: int | None = Field(default=None, ge=0)
+    path: str | None = None
+    row_id: str | None = None
+    summary: str | None = None
+
+
+class BotLifecycleEvent(BaseModel):
+    """Typed read-side lifecycle event projected from existing evidence.
+
+    This is not a new write-ahead log. It is the normalized row shape used by
+    node details, timelines, and future persistence. Legacy evidence that lacks
+    a trustworthy timestamp keeps ``ts_ms=None`` and ``ts_ms_resolved=False`` so
+    the UI can surface the gap instead of pretending chronology is proven.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    event_id: str
+    bot_id: str | None = None
+    account_id: str | None = None
+    event_type: str
+    category: LifecycleEventCategory
+    node_id: str | None = None
+    status: LifecycleChartStatus | None = None
+    status_label: str | None = None
+    severity: LifecycleEventSeverity = "info"
+    ts_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    ts_ms_resolved: bool = True
+    source: str
+    source_rank: int = Field(ge=0)
+    source_local_seq: int = Field(ge=0)
+    summary: str
+    why: str | None = None
+    operator_next_step: str | None = None
+    evidence_refs: list[LifecycleEvidenceRef] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _timestamp_resolution_contract(self) -> BotLifecycleEvent:
+        if self.ts_ms is None and self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved cannot be true when ts_ms is absent")
+        if self.ts_ms is not None and not self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved=false is reserved for absent timestamps")
+        return self
+
+
+class AccountEventProjection(BaseModel):
+    """Tolerant typed view over ``account_events.jsonl`` rows."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str
+    event_type: str
+    seq: int | None = Field(default=None, ge=1)
+    file_position: int = Field(ge=1)
+    ts_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    ts_ms_resolved: bool
+    ts_ms_source: str | None = None
+    summary: str
+    why: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class LifecycleNodeDetail(BaseModel):
+    """Server-authored drill-down for one lifecycle chart node."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: str
+    status: LifecycleChartStatus
+    status_label: str
+    summary: str
+    why: str | None = None
+    operator_next_step: str | None = None
+    since_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    related_events: list[BotLifecycleEvent] = Field(default_factory=list)
+    evidence_refs: list[LifecycleEvidenceRef] = Field(default_factory=list)
 
 
 class LiveInstanceActivityProjection(BaseModel):

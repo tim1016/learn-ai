@@ -571,13 +571,67 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 def _append_account_event(root: Path, payload: dict) -> None:
     path = root / ACCOUNT_EVENTS_FILENAME
     root.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n"
     with _file_lock(path):
+        enriched = dict(payload)
+        enriched["seq"] = _next_account_event_seq_locked(path)
+        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
+        line = json.dumps(enriched, separators=(",", ":"), sort_keys=True) + "\n"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
         _fsync_parent_dir(path)
+
+
+def _next_account_event_seq_locked(path: Path) -> int:
+    if not path.exists():
+        return 1
+    max_seq = 0
+    row_count = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row_count += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        seq = row.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool) and seq > max_seq:
+            max_seq = seq
+    return max(max_seq, row_count) + 1
+
+
+def _account_event_ts_ms_for_write(payload: dict) -> int:
+    explicit = _int_ms_or_none(payload.get("ts_ms"))
+    if explicit is not None:
+        return explicit
+    if payload.get("event_type") == "account_freeze_cleared":
+        cleared = _int_ms_or_none(payload.get("cleared_at_ms"))
+        if cleared is not None:
+            return cleared
+    for field in (
+        "recorded_at_ms",
+        "created_at_ms",
+        "approved_at_ms",
+        "cleared_at_ms",
+        "updated_at_ms",
+        "decided_at_ms",
+        "completed_at_ms",
+        "started_at_ms",
+    ):
+        candidate = _int_ms_or_none(payload.get(field))
+        if candidate is not None:
+            return candidate
+    return time.time_ns() // 1_000_000
+
+
+def _int_ms_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) and value >= 0 else None
 
 
 __all__ = [

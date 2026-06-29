@@ -1,17 +1,25 @@
 # Bot Lifecycle Gate Map
 
-**Status:** design map for review
+**Status:** supporting design map; not implementation authority
 **Created:** 2026-06-27
 **Deepened codebase review:** 2026-06-28
 **Input:** codebase review plus design notes summarized in "Design Source Summary" below.
 **Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/ibkr-integration-authority.md`
 
 This document makes the bot lifecycle gates visible as a chart and a set of tables.
+For current implementation authority, load
+`docs/bot-lifecycle-account-owner-authority.md` first. That authority document
+now owns the canonical lifecycle node ids, overview transition table, desired-
+state casing contract, and shipped/not-shipped status. When this map disagrees
+with the authority document, the authority document wins.
 It intentionally separates:
 
 - **Current gates**: checks already enforced by code.
 - **Partial gates**: checks that exist, but not at the scope Claude's design requires.
-- **Proposed gates**: new account/fleet substrate from Claude's design.
+- **Proposed gates**: new account/fleet substrate from the original design.
+  Some rows below intentionally preserve historical design context and may now
+  be shipped; check the authority document before treating any "Proposed" cell
+  as current truth.
 
 ## Design Source Summary
 
@@ -87,9 +95,9 @@ flowchart TD
 
 Important reading of the chart:
 
-- `GATE.PREFLIGHT` in Claude's spec is **account-scoped and pre-spawn**. Today we have several pre-flight checks, but they are mostly run/instance-scoped.
+- `GATE.PREFLIGHT` in the original spec is **account-scoped and pre-spawn**. Today we have several pre-flight checks; the shipped account-artifact pieces are tracked in the authority document.
 - `GATE.RECONCILE` is already a real cold-start gate.
-- `GATE.UNRESOLVED_EXPOSURE` is not a first-class artifact today. It is the biggest missing visual/gate concept.
+- `GATE.UNRESOLVED_EXPOSURE` is now a shipped account artifact according to the authority document. This map keeps the original design language for provenance.
 - `PROC.SUBMIT` has one low-level IBKR `placeOrder` call site today, but more than one production path can reach it through wrappers.
 
 ## Visualization Layers

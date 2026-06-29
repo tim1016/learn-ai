@@ -44,7 +44,7 @@ from app.engine.live.fleet import (
     compute_fleet_contamination,
 )
 from app.engine.live.halt import read_poisoned_flag
-from app.engine.live.intent_events import IntentEventType
+from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
 from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.nyse_calendar import nyse_session_state_at_ms
@@ -130,6 +130,7 @@ from app.services.activity_projection_contract import (
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
+from app.services.bot_lifecycle_projection import project_intent_events
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -413,26 +414,23 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
     """Read the cold-start reconciliation receipt + current freshness inputs
     for the operator-surface projection (ADR-0008 §5 / PR 1).
 
-    Returns ``(receipt, current_wal_seq, current_run_id, current_namespace)``.
+    Returns ``(receipt, current_wal_seq, current_run_id, current_namespace,
+    wal_events)``.
     Every element is ``None`` when the input is unresolvable — e.g. no live
     binding, the run dir is missing, the WAL is empty / corrupt, or the
     receipt is absent. The projection turns absences into ``NOT_AVAILABLE``
     rather than raising.
     """
-    from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
     from app.services.resume_guard_state import read_full_reconciliation_receipt
 
-    if live_binding is None or live_binding.run_dir is None:
-        return None, None, None, None
-    run_dir = Path(live_binding.run_dir)
-    if not run_dir.is_absolute():
-        run_dir = root / run_dir
-    if not run_dir.exists():
-        return None, None, None, None
+    run_dir = _resolve_live_run_dir(root, live_binding)
+    if run_dir is None or not run_dir.exists():
+        return None, None, None, None, []
     receipt = read_full_reconciliation_receipt(run_dir)
     current_run_id = live_binding.run_id
     current_namespace: str | None = None
     current_wal_seq: int | None = None
+    events: list[IntentEvent] = []
     wal_path = run_dir / "intent_events.jsonl"
     if wal_path.exists():
         try:
@@ -445,7 +443,15 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
             # projection we treat it as "no current seq" so a stale-flag
             # comparison falls through to the other rules.
             current_wal_seq = None
-    return receipt, current_wal_seq, current_run_id, current_namespace
+            events = []
+    return receipt, current_wal_seq, current_run_id, current_namespace, events
+
+
+def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path | None:
+    if live_binding is None or live_binding.run_dir is None:
+        return None
+    run_dir = Path(live_binding.run_dir)
+    return run_dir if run_dir.is_absolute() else root / run_dir
 
 
 def _resolve_latest_mutation(live_runs_root: Path, strategy_instance_id: str) -> MutationAttempt | None:
@@ -1103,6 +1109,7 @@ async def _resolve_instance_status_from_process(
         current_wal_seq,
         current_run_id,
         current_namespace,
+        intent_wal_events,
     ) = _resolve_reconciliation_inputs(root, live_binding)
     operator_surface = compute_operator_surface(
         process=process,
@@ -1143,6 +1150,14 @@ async def _resolve_instance_status_from_process(
         and start_defaults.qc_audit_copy_path
         and start_defaults.qc_cloud_backtest_id
     )
+    live_run_dir = _resolve_live_run_dir(root, live_binding)
+    lifecycle_events = project_intent_events(
+        intent_wal_events,
+        bot_id=sid,
+        account_id=_instance_ledger_account_id(root, sid),
+        run_id=current_run_id,
+        wal_path=live_run_dir / "intent_events.jsonl" if live_run_dir is not None else None,
+    )
 
     return LiveInstanceStatus(
         strategy_instance_id=sid,
@@ -1168,6 +1183,7 @@ async def _resolve_instance_status_from_process(
             operator_surface,
             desired_state=desired,
             redeploy_available=redeploy_available,
+            lifecycle_events=lifecycle_events,
         ),
         fetched_at_ms=observed_at_ms,
     )

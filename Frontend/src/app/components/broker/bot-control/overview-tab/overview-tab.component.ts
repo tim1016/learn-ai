@@ -137,6 +137,10 @@ export class OverviewTabComponent {
     return ctx.data();
   }
 
+  nodeStatusLabel(node: LifecycleChartNode): string {
+    return node.status_label ?? this.statusLabel(node.status);
+  }
+
   statusLabel(status: LifecycleChartStatus): string {
     switch (status) {
       case 'passed':

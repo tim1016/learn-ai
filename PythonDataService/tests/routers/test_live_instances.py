@@ -25,6 +25,7 @@ from app.engine.live.run_ledger import LiveRunLedger
 from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
+from app.schemas.live_runs import LiveBinding
 from tests._fixtures.daemon_transport import as_typed_get
 
 
@@ -199,6 +200,37 @@ def _write_repair_intent(run_dir: Path, sid: str, *, quantity: int = 100) -> Non
         perm_id=9001,
         ts_ms=1_782_400_000_100,
     )
+
+
+def test_resolve_reconciliation_inputs_returns_intent_events_for_relative_live_binding(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "live_runs"
+    run_dir = root / "run-1"
+    run_dir.mkdir(parents=True)
+    namespace = "learn-ai/spy_rel/v1"
+    intent_id = "intent-rel-1"
+    wal = IntentWal(run_dir / "intent_events.jsonl")
+    wal.append(
+        event_type=IntentEventType.PENDING_INTENT,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=f"{namespace}:{intent_id}",
+        ts_ms=1_700_000_000_000,
+    )
+
+    receipt, current_wal_seq, current_run_id, current_namespace, events = (
+        live_instances._resolve_reconciliation_inputs(
+            root,
+            LiveBinding(run_id="run-1", run_dir="run-1"),
+        )
+    )
+
+    assert receipt is None
+    assert current_wal_seq == 1
+    assert current_run_id == "run-1"
+    assert current_namespace == namespace
+    assert [event.event_type for event in events] == [IntentEventType.PENDING_INTENT]
 
 
 def _write_execution(run_dir: Path, *, ts_ms: int, exec_id: str = "exec-repair-1") -> None:

@@ -4,7 +4,7 @@
       <p class="eyebrow">{{ isExpanded() ? 'Focused internals' : 'Global lifecycle' }}</p>
       <h2>{{ currentGraph().title }}</h2>
       @if (activeNode(); as node) {
-        <p class="active-summary">{{ node.label }} · {{ statusLabel(node.status) }}</p>
+        <p class="active-summary">{{ node.label }} · {{ nodeStatusLabel(node) }}</p>
       }
     </div>
     @if (isExpanded()) {
@@ -43,7 +43,7 @@
             @if (node.technical_label) {
               <span class="node-technical">{{ node.technical_label }}</span>
             }
-            <span class="node-status">{{ statusLabel(node.status) }}</span>
+            <span class="node-status">{{ nodeStatusLabel(node) }}</span>
             @if (node.expandable) {
               <span class="node-expand">Open</span>
             }
