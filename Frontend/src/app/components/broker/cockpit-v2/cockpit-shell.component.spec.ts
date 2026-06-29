@@ -238,6 +238,7 @@ describe('CockpitShellComponent', () => {
     const el = fixture.nativeElement as HTMLElement;
     for (const id of [
       'indicator-process',
+      'indicator-mode',
       'indicator-intent',
       'indicator-readiness',
       'indicator-broker',
@@ -247,6 +248,84 @@ describe('CockpitShellComponent', () => {
       expect(el.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
     }
     expect(el.querySelector('[data-testid="indicator-session"]')).toBeNull();
+  });
+
+  it('renders a loud active-readonly warning and MODE chip when the running bot cannot submit orders', async () => {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      readiness: {
+        ...status.readiness,
+        gates: [
+          {
+            name: 'submission_mode',
+            status: 'pass',
+            severity: 'hard',
+            detail: 'readonly',
+          },
+        ],
+      },
+      operator_surface: {
+        ...status.operator_surface,
+        host_process: {
+          ...status.operator_surface.host_process,
+          state: 'RUNNING',
+        },
+      },
+    });
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector('[data-testid="readonly-mode-banner"]');
+    expect(banner).toBeTruthy();
+    expect(banner?.getAttribute('role')).toBe('alert');
+    expect(banner?.textContent).toContain('READONLY MODE');
+    expect(banner?.textContent).toContain('Not trading');
+    expect(banner?.textContent).toContain('will not submit orders');
+    expect(el.querySelector('[data-testid="indicator-mode"]')?.textContent?.trim()).toBe(
+      'MODE · READONLY',
+    );
+    expect(el.querySelector('[data-testid="indicator-mode"]')?.classList).toContain('danger');
+  });
+
+  it('warns when the next Start action is prefilled as readonly', async () => {
+    const stub = makeStub();
+    const status = makeStatus();
+    stub.getInstanceStatus = vi.fn().mockResolvedValue({
+      ...status,
+      start_defaults: {
+        strategy: 'deployment_validation',
+        readonly: true,
+        hydrate_policy: 'require',
+        max_orders_per_day: 10,
+        ibkr_host: '127.0.0.1',
+      },
+      operator_surface: {
+        ...status.operator_surface,
+        host_process: {
+          ...status.operator_surface.host_process,
+          state: 'EXITED',
+        },
+      },
+    });
+    const fixture = await renderShell(stub);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const banner = el.querySelector('[data-testid="readonly-mode-banner"]');
+    expect(banner).toBeTruthy();
+    expect(banner?.getAttribute('role')).toBe('status');
+    expect(banner?.textContent).toContain('START DEFAULT');
+    expect(banner?.textContent).toContain('Readonly is on');
+    expect(banner?.textContent).toContain('observation-only');
+    expect(el.querySelector('[data-testid="indicator-mode"]')?.textContent?.trim()).toBe(
+      'MODE · READONLY DEFAULT',
+    );
+    expect(el.querySelector('[data-testid="indicator-mode"]')?.classList).toContain('warning');
   });
 
   it('renders backend-authored account summary notices', async () => {

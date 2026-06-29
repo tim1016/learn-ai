@@ -365,6 +365,34 @@ def read_account_instance_registry(
     return bindings
 
 
+def compute_reconcile_namespaces(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+    current_namespace: str,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return ``(owned_namespaces, known_sibling_namespaces)`` for reconciliation.
+
+    Owned namespaces are adoptable into the current run's WAL. Sibling
+    namespaces are recognized as same-account managed activity, but never
+    adoptable by this run.
+    """
+    bindings = read_account_instance_registry(artifacts_root, account_id)
+    latest_by_instance: dict[str, AccountInstanceBinding] = {}
+    for binding in sorted(bindings, key=lambda b: b.recorded_at_ms):
+        if binding.account_id.upper() != account_id.upper():
+            continue
+        latest_by_instance[binding.strategy_instance_id] = binding
+
+    sibling_namespaces = {
+        binding.bot_order_namespace
+        for binding in latest_by_instance.values()
+        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
+        and binding.bot_order_namespace != current_namespace
+    }
+    return frozenset({current_namespace}), frozenset(sibling_namespaces)
+
+
 def evaluate_account_instance_binding(
     artifacts_root: Path,
     *,
@@ -662,6 +690,7 @@ __all__ = [
     "append_account_event",
     "bot_order_namespace_for_instance",
     "clear_account_freeze",
+    "compute_reconcile_namespaces",
     "evaluate_account_instance_binding",
     "evaluate_restart_intensity",
     "read_account_events",

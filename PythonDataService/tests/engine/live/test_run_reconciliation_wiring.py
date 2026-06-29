@@ -275,7 +275,7 @@ async def test_adoption_ordering_wal_seq_precedes_receipt_seq(tmp_path: Path) ->
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=probe,
-        allowed_namespaces=frozenset({NS}),
+        owned_namespaces=frozenset({NS}),
         now_ms=now,
     )
     assert isinstance(result.verdict, Adopt)
@@ -330,7 +330,7 @@ async def test_empty_broker_cache_cannot_satisfy_reconciliation(tmp_path: Path) 
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=empty_probe,
-        allowed_namespaces=frozenset({NS}),
+        owned_namespaces=frozenset({NS}),
         now_ms=now,
     )
     # Clean — orchestrator is honest with its inputs. The sync guarantee

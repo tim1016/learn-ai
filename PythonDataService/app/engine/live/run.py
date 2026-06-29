@@ -1879,7 +1879,10 @@ def cmd_start(args: argparse.Namespace) -> int:
                     executions_for_reconnect_recovery,
                     list_open_orders,
                 )
-                from app.engine.live.account_artifacts import read_account_events
+                from app.engine.live.account_artifacts import (
+                    compute_reconcile_namespaces,
+                    read_account_events,
+                )
                 from app.engine.live.live_state_sidecar import (
                     LiveStateSidecarRepo,
                     stable_live_state_path,
@@ -1928,6 +1931,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                     return 3
 
                 _broker_snapshot = _build_broker_snapshot_from_ibkr(_open_orders, _executions)
+                _owned_namespaces, _known_sibling_namespaces = compute_reconcile_namespaces(
+                    artifacts_root=_artifacts_root,
+                    current_namespace=_bot_order_namespace,
+                    account_id=ledger.account_id,
+                )
 
                 _prior_run_dir = _resolve_prior_run_dir(
                     current_run_dir=args.run_dir,
@@ -1952,7 +1960,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                         run_dir=args.run_dir,
                         sidecar=_sidecar_repo,
                         broker_probe=_probe,
-                        allowed_namespaces=frozenset({_bot_order_namespace}),
+                        owned_namespaces=_owned_namespaces,
+                        known_sibling_namespaces=_known_sibling_namespaces,
                         now_ms=now_ms,
                         prior_run_dir=_prior_run_dir,
                         # The per-instance sidecar may still carry the prior

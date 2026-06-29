@@ -48,6 +48,7 @@ from app.engine.live.reconciliation_receipt import RECEIPT_FILENAME
 from app.schemas.live_runs import ReconciliationReceipt
 
 NS = build_bot_order_namespace("test-strategy")
+SIBLING_NS = build_bot_order_namespace("sibling-strategy")
 ALLOWED = frozenset({NS})
 RUN_ID = "run-cold-start-1"
 SID = "test-strategy"
@@ -103,7 +104,7 @@ async def test_clean_continue_writes_passed_receipt(tmp_path: Path) -> None:
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=_empty_broker(),
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -144,7 +145,7 @@ async def test_adoption_appends_wal_and_records_intent_id(tmp_path: Path) -> Non
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=probe,
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -167,6 +168,43 @@ async def test_adoption_appends_wal_and_records_intent_id(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_known_sibling_order_is_not_adopted_into_current_wal(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo = _make_envelope(run_dir)
+    sibling_intent_id = mint_intent_id()
+
+    async def probe() -> BrokerSnapshot:
+        return BrokerSnapshot(
+            open_orders=(
+                BrokerOrderView(
+                    order_ref=build_order_ref(SIBLING_NS, sibling_intent_id),
+                    perm_id=12346,
+                    order_id=8,
+                    status="Submitted",
+                    remaining=1.0,
+                ),
+            )
+        )
+
+    result = await reconcile(
+        run_dir=run_dir,
+        sidecar=repo,
+        broker_probe=probe,
+        owned_namespaces=ALLOWED,
+        known_sibling_namespaces=frozenset({SIBLING_NS}),
+        now_ms=_clock(),
+    )
+
+    assert isinstance(result.verdict, Continue)
+    assert result.receipt.status == "passed"
+    assert result.receipt.outcome == "clean"
+    assert result.receipt.adopted_intent_ids == ()
+    assert IntentWal(run_dir / "intent_events.jsonl").read_tail() == []
+    assert not (run_dir / POISONED_FLAG_FILENAME).exists()
+
+
+@pytest.mark.asyncio
 async def test_foreign_perm_id_poisons(tmp_path: Path) -> None:
     """Broker shows an unowned perm_id with no order_ref → Poison, failed receipt."""
     run_dir = tmp_path / "run"
@@ -182,7 +220,7 @@ async def test_foreign_perm_id_poisons(tmp_path: Path) -> None:
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=probe,
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -219,7 +257,7 @@ async def test_account_owner_durable_intent_allows_missing_order_ref_by_perm_id(
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=probe,
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
         account_durable_intents=(
             AccountDurableIntent(
@@ -256,7 +294,7 @@ async def test_broker_probe_failure_poisons(tmp_path: Path) -> None:
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=probe,
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -281,7 +319,7 @@ async def test_sidecar_corrupt_poisons(tmp_path: Path) -> None:
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=_empty_broker(),
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -331,7 +369,7 @@ async def test_wal_corrupt_poisons(tmp_path: Path) -> None:
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=_empty_broker(),
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -352,7 +390,7 @@ async def test_receipt_round_trips_through_disk(tmp_path: Path) -> None:
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=_empty_broker(),
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
@@ -383,7 +421,7 @@ async def test_redeploy_receipt_uses_current_run_id_over_stale_envelope(
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=_empty_broker(),
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
         current_run_id=new_run_id,
         current_strategy_instance_id=new_sid,
@@ -427,7 +465,7 @@ async def test_existing_poisoned_flag_does_not_block_receipt(tmp_path: Path) -> 
         run_dir=run_dir,
         sidecar=repo,
         broker_probe=probe,
-        allowed_namespaces=ALLOWED,
+        owned_namespaces=ALLOWED,
         now_ms=_clock(),
     )
 
