@@ -7,10 +7,11 @@ one of three verdicts:
 
 * ``Continue``  — broker state all matches the projection / WAL.
 * ``Adopt``     — an owned orphan (parsed ``order_ref`` namespace EXACTLY equals
-                  ours, intent unknown to the projection) is recovered, not
-                  poisoned. A KNOWN-but-unresolved intent (``PENDING_INTENT`` /
-                  ``ACK_FAILED_UNCERTAIN``) the broker confirms is live is
-                  recovered the same way — never silently continued.
+                  an owned namespace, intent unknown to the projection) is
+                  recovered, not poisoned. A KNOWN-but-unresolved intent
+                  (``PENDING_INTENT`` / ``ACK_FAILED_UNCERTAIN``) the broker
+                  confirms is live is recovered the same way — never silently
+                  continued.
                   ``pause=True`` when an adopted order is still active and
                   creates ambiguous exposure.
 * ``Poison``    — outside mutation: unknown / foreign / unparseable namespace,
@@ -127,7 +128,8 @@ def classify(
     *,
     projection: LedgerView,
     broker_snapshot: BrokerSnapshot,
-    allowed_namespaces: frozenset[str],
+    owned_namespaces: frozenset[str],
+    known_sibling_namespaces: frozenset[str] = frozenset(),
     prior_run_unacked_tail: Sequence[IntentEvent] = (),
     emergency_audit: Sequence[IntentEvent] = (),
     ignore_unknown_namespaces_before_ms: int | None = None,
@@ -170,7 +172,12 @@ def classify(
                 return  # ours despite a garbled ref echo
             poison_reasons.add("unparseable_order_ref")
             return
-        if namespace not in allowed_namespaces:
+        # Sibling namespaces are recognized-and-skipped regardless of
+        # perm/exec id: they are managed on this account, but not owned by
+        # this run and therefore never adoptable into this run's WAL.
+        if namespace in known_sibling_namespaces:
+            return
+        if namespace not in owned_namespaces:
             if known_by_id:
                 return  # ours by perm/exec despite a foreign-looking ref
             if (

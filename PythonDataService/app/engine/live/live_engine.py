@@ -1936,6 +1936,8 @@ class LiveEngine:
         verdict_payload: dict = {"status": "completed", "request_id": request_id}
         try:
             from app.engine.live import reconciliation_orchestrator
+            from app.engine.live.account_artifacts import compute_reconcile_namespaces
+            from app.engine.live.fleet_reset_baseline import read_applicable_baseline
             from app.engine.live.live_state_sidecar import (
                 LiveStateSidecarRepo,
                 stable_live_state_path,
@@ -1946,7 +1948,12 @@ class LiveEngine:
                 Poison,
             )
 
-            if self._output_dir is None or self._artifacts_root is None or not self._strategy_instance_id:
+            if (
+                self._output_dir is None
+                or self._artifacts_root is None
+                or not self._strategy_instance_id
+                or not self._account_id
+            ):
                 # Replay / test paths without a real broker can't reconcile.
                 # Surface this honestly rather than pretending the verb did
                 # anything; leave the barrier set so the operator notices.
@@ -1965,6 +1972,16 @@ class LiveEngine:
             sidecar_repo = LiveStateSidecarRepo(
                 stable_live_state_path(self._artifacts_root, self._strategy_instance_id)
             )
+            owned_namespaces, known_sibling_namespaces = compute_reconcile_namespaces(
+                artifacts_root=self._artifacts_root,
+                account_id=self._account_id,
+                current_namespace=bot_order_namespace,
+            )
+            baseline = read_applicable_baseline(
+                live_runs_root=self._output_dir.parent,
+                account_id=self._account_id,
+                strategy_instance_id=self._strategy_instance_id,
+            )
 
             async with self._submit_lock:
                 # Refresh broker caches under the lock so the snapshot is
@@ -1978,11 +1995,15 @@ class LiveEngine:
                     run_dir=self._output_dir,
                     sidecar=sidecar_repo,
                     broker_probe=_probe,
-                    allowed_namespaces=frozenset({bot_order_namespace}),
+                    owned_namespaces=owned_namespaces,
+                    known_sibling_namespaces=known_sibling_namespaces,
                     now_ms=now_ms_utc,
                     current_run_id=self._run_id,
                     current_strategy_instance_id=self._strategy_instance_id,
                     current_namespace=bot_order_namespace,
+                    ignore_unknown_namespaces_before_ms=(
+                        baseline.baseline_at_ms if baseline is not None else None
+                    ),
                 )
                 verdict = result.verdict
                 if isinstance(verdict, Continue):

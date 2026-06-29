@@ -30,9 +30,11 @@ from typing import Any
 import pytest
 
 from app.engine.live import reconciliation_orchestrator
+from app.engine.live.account_artifacts import AccountInstanceBinding, write_account_instance_binding
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState
+from app.engine.live.fleet_reset_baseline import baseline_path
 from app.engine.live.live_engine import LiveEngine
 from app.engine.live.reconciliation_classifier import (
     Adopt,
@@ -131,6 +133,62 @@ def _harness(tmp_path: Path) -> _EngineHarness:
     return _EngineHarness(
         engine, channel, snapshot=BrokerSnapshot(open_orders=(), executions=())
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_reconcile_passes_known_sibling_namespaces_and_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    engine, channel = _make_engine(run_dir)
+    harness = _EngineHarness(
+        engine, channel, snapshot=BrokerSnapshot(open_orders=(), executions=())
+    )
+    write_account_instance_binding(
+        run_dir / "artifacts",
+        AccountInstanceBinding(
+            account_id="DU123",
+            strategy_instance_id="aapl_ema_paper",
+            run_id="run-aapl",
+            bot_order_namespace="learn-ai/aapl_ema_paper/v1",
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1_700_000_000_000,
+            source="test",
+        ),
+    )
+    path = baseline_path(run_dir.parent, "DU123")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _json.dumps(
+            {
+                "account_id": "DU123",
+                "baseline_at_ms": 1_700_000_010_000,
+                "positions": [],
+                "open_orders": [],
+                "applies_to_strategy_instance_ids": ["spy_ema_paper"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    shutdown_event = asyncio.Event()
+
+    async def _result(kwargs: dict) -> ReconciliationResult:
+        assert kwargs["owned_namespaces"] == frozenset({"learn-ai/spy_ema_paper/v1"})
+        assert kwargs["known_sibling_namespaces"] == frozenset({"learn-ai/aapl_ema_paper/v1"})
+        assert kwargs["ignore_unknown_namespaces_before_ms"] == 1_700_000_010_000
+        return ReconciliationResult(verdict=Continue(), receipt=_make_receipt())
+
+    harness.stub_reconcile(monkeypatch, _result)
+
+    engine._dispatch_command(
+        Command(seq=1, verb=CommandVerb.RECONCILE),
+        shutdown_event,
+    )
+    await _await_task(engine)
+
+    assert engine._inhibit_submits is False
+    assert not shutdown_event.is_set()
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from app.engine.live.account_artifacts import (
     RestartIntensityPolicy,
     account_artifacts_root,
     clear_account_freeze,
+    compute_reconcile_namespaces,
     evaluate_account_instance_binding,
     evaluate_restart_intensity,
     read_account_events,
@@ -274,6 +275,97 @@ def test_account_instance_registry_accepts_current_binding(tmp_path: Path) -> No
     )
     assert gate.status == "pass"
     assert gate.operator_next_step == "GATE_PASSING"
+
+
+def test_compute_reconcile_namespaces_splits_owned_from_active_siblings(tmp_path: Path) -> None:
+    write_account_instance_binding(
+        tmp_path,
+        _binding(
+            sid="spy",
+            run_id="run-spy",
+            namespace="learn-ai/spy/v1",
+            recorded_at_ms=2,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _binding(
+            sid="spy",
+            run_id="run-old",
+            namespace="learn-ai/spy-old/v1",
+            recorded_at_ms=1,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _binding(
+            sid="aapl",
+            run_id="run-aapl",
+            namespace="learn-ai/aapl/v1",
+            recorded_at_ms=4,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _binding(
+            sid="retired",
+            run_id="run-retired",
+            namespace="learn-ai/retired/v1",
+            recorded_at_ms=3,
+        ).model_copy(update={"lifecycle_state": "RETIRED"}),
+    )
+
+    owned, siblings = compute_reconcile_namespaces(
+        artifacts_root=tmp_path,
+        account_id="DU123456",
+        current_namespace="learn-ai/aapl/v1",
+    )
+
+    assert owned == frozenset({"learn-ai/aapl/v1"})
+    assert siblings == frozenset({"learn-ai/spy/v1"})
+
+
+def test_compute_reconcile_namespaces_drops_later_retired_and_wrong_account_bindings(
+    tmp_path: Path,
+) -> None:
+    write_account_instance_binding(
+        tmp_path,
+        _binding(
+            sid="retiring-spy",
+            run_id="run-active",
+            namespace="learn-ai/retiring-spy/v1",
+            recorded_at_ms=1,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _binding(
+            sid="retiring-spy",
+            run_id="run-retired",
+            namespace="learn-ai/retiring-spy/v1",
+            recorded_at_ms=2,
+        ).model_copy(update={"lifecycle_state": "RETIRED"}),
+    )
+    registry_path = account_artifacts_root(tmp_path, "DU123456") / "instance_registry.jsonl"
+    with open(registry_path, "a", encoding="utf-8") as fh:
+        fh.write(
+            _binding(
+                sid="wrong-account",
+                run_id="run-wrong",
+                namespace="learn-ai/wrong-account/v1",
+                recorded_at_ms=3,
+            ).model_copy(update={"account_id": "DU999999"}).model_dump_json()
+            + "\n"
+        )
+
+    owned, siblings = compute_reconcile_namespaces(
+        artifacts_root=tmp_path,
+        account_id="DU123456",
+        current_namespace="learn-ai/aapl/v1",
+    )
+
+    assert owned == frozenset({"learn-ai/aapl/v1"})
+    assert siblings == frozenset()
 
 
 def test_account_instance_registry_blocks_unknown_instance(tmp_path: Path) -> None:

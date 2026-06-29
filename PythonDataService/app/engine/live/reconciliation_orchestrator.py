@@ -71,7 +71,8 @@ async def reconcile(
     run_dir: Path,
     sidecar: LiveStateSidecarRepo,
     broker_probe: Callable[[], Awaitable[BrokerSnapshot]],
-    allowed_namespaces: frozenset[str],
+    owned_namespaces: frozenset[str],
+    known_sibling_namespaces: frozenset[str] = frozenset(),
     now_ms: Callable[[], int],
     prior_run_dir: Path | None = None,
     current_run_id: str | None = None,
@@ -222,7 +223,8 @@ async def reconcile(
     verdict = classify(
         projection=ledger_view,
         broker_snapshot=broker_snapshot,
-        allowed_namespaces=allowed_namespaces,
+        owned_namespaces=owned_namespaces,
+        known_sibling_namespaces=known_sibling_namespaces,
         prior_run_unacked_tail=prior_tail,
         emergency_audit=emergency_audit,
         ignore_unknown_namespaces_before_ms=ignore_unknown_namespaces_before_ms,
@@ -241,7 +243,7 @@ async def reconcile(
     # Step 9: adopt branch — append ADOPTED_BROKER_ORDER for each orphan
     # BEFORE writing the receipt, so on-disk evidence orders correctly
     # (receipt.sidecar_wal_seq reflects the post-adoption WAL state).
-    # ``allowed_namespaces`` is a single-element set in PR 1 (no /v2 dual
+    # ``owned_namespaces`` is a single-element set in PR 1 (no /v2 dual
     # read yet); pick that one for stamping. The classifier already
     # guarantees every orphan's namespace is in this set.
     adopted_intent_ids: tuple[str, ...] = ()
@@ -249,7 +251,7 @@ async def reconcile(
         adoption_namespace = (
             envelope.bot_order_namespace
             if envelope is not None
-            else next(iter(allowed_namespaces))
+            else next(iter(owned_namespaces))
         )
         for orphan in verdict.orphans:
             wal.append(

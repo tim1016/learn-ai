@@ -190,6 +190,21 @@
       </aside>
     }
 
+    @if (readonlyModeWarning(); as warning) {
+      <aside
+        class="readonly-mode-banner"
+        [class.danger]="warning.tone === 'danger'"
+        [class.warning]="warning.tone === 'warning'"
+        [attr.role]="warning.tone === 'danger' ? 'alert' : 'status'"
+        data-testid="readonly-mode-banner"
+      >
+        <span class="readonly-mode-label">{{ warning.label }}</span>
+        <strong>{{ warning.title }}</strong>
+        <span class="readonly-mode-detail">{{ warning.detail }}</span>
+        <span class="readonly-mode-action">{{ warning.action }}</span>
+      </aside>
+    }
+
     <!-- Identity / control strip -->
     <section class="identity-strip" data-testid="identity-strip">
       <div class="identity">

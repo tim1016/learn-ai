@@ -76,6 +76,14 @@ interface IndicatorChip {
   readonly tone: IndicatorTone;
 }
 
+interface ReadonlyModeWarning {
+  readonly tone: 'danger' | 'warning';
+  readonly label: string;
+  readonly title: string;
+  readonly detail: string;
+  readonly action: string;
+}
+
 @Component({
   selector: 'app-cockpit-shell',
   standalone: true,
@@ -206,8 +214,10 @@ export class CockpitShellComponent {
     const broker = s.operator_surface.broker.connection;
     const safety = s.operator_surface.broker.safety_verdict;
     const lastRun = s.operator_surface.prior_run.classification;
+    const mode = this._executionModeChip(s);
     return [
       { id: 'process', label: 'PROCESS', value: process, tone: this._indicatorTone(process) },
+      { id: 'mode', label: 'MODE', value: mode.value, tone: mode.tone },
       { id: 'intent', label: 'INTENT', value: intent, tone: this._indicatorTone(intent) },
       { id: 'readiness', label: 'READINESS', value: readiness, tone: this._indicatorTone(readiness) },
       { id: 'broker', label: 'BROKER', value: broker, tone: this._indicatorTone(broker) },
@@ -294,6 +304,33 @@ export class CockpitShellComponent {
   readonly localTransportStale = computed(() => {
     const cp = this.status()?.operator_surface.control_plane ?? null;
     return cp !== null && cp.state !== 'CONNECTED';
+  });
+
+  readonly readonlyModeWarning = computed<ReadonlyModeWarning | null>(() => {
+    const s = this.status();
+    if (!s) return null;
+
+    if (this._isActiveReadonlyRun(s)) {
+      return {
+        tone: 'danger',
+        label: 'READONLY MODE',
+        title: 'Not trading',
+        detail: 'This bot is observing only. It will not submit orders while the run is readonly.',
+        action: 'Stop it and start a fresh live-paper run with readonly off before expecting trades.',
+      };
+    }
+
+    if (s.start_defaults?.readonly === true) {
+      return {
+        tone: 'warning',
+        label: 'START DEFAULT',
+        title: 'Readonly is on',
+        detail: 'The next Start action is prefilled as observation-only.',
+        action: 'Turn readonly off before starting a bot that should trade.',
+      };
+    }
+
+    return null;
   });
 
   constructor() {
@@ -809,5 +846,28 @@ export class CockpitShellComponent {
       default:
         return 'neutral';
     }
+  }
+
+  private _executionModeChip(s: LiveInstanceStatus): { value: string; tone: IndicatorTone } {
+    if (this._isActiveReadonlyRun(s)) {
+      return { value: 'READONLY', tone: 'danger' };
+    }
+    const submissionMode = this._submissionMode(s);
+    if (submissionMode === 'live_paper') {
+      return { value: 'LIVE PAPER', tone: 'positive' };
+    }
+    if (s.start_defaults?.readonly === true) {
+      return { value: 'READONLY DEFAULT', tone: 'warning' };
+    }
+    return { value: 'UNKNOWN', tone: 'neutral' };
+  }
+
+  private _isActiveReadonlyRun(s: LiveInstanceStatus): boolean {
+    return s.operator_surface.host_process.state === 'RUNNING' && this._submissionMode(s) === 'readonly';
+  }
+
+  private _submissionMode(s: LiveInstanceStatus): string | null {
+    const raw = s.readiness?.gates.find((gate) => gate.name === 'submission_mode')?.detail ?? null;
+    return raw?.trim().toLowerCase() ?? null;
   }
 }
