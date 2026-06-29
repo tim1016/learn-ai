@@ -184,14 +184,15 @@ class TestUnavailableWhenTimedOut:
         assert "host process state is separate" in result.headline.message
 
 
-# ── ready (running, no rows yet, within silent-boot window) ───────────────────
+# ── ready (running, no rows yet) ──────────────────────────────────────────────
 
-class TestReadySilentBootWindow:
-    def test_state_is_ready_within_silent_boot_window(self) -> None:
+
+class TestReadyNoRowsYet:
+    def test_state_is_ready_with_no_rows(self) -> None:
         pub = _FakePublisher(is_running=True, latest_row_ms=None)
         result = _compose(
             publisher=pub,
-            registered_at_ms=_registered_at(10_000),  # 10 s ago
+            registered_at_ms=_registered_at(10_000),
             last_row_ms=None,
             degraded_after_idle_ms=60_000,
         )
@@ -208,67 +209,45 @@ class TestReadySilentBootWindow:
         assert result.headline is None
         assert result.notices == []
 
-    def test_boundary_just_before_degraded_is_ready(self) -> None:
-        """Age of exactly (degraded_after_idle_ms - 1) with no rows is still 'ready'."""
+    def test_state_remains_ready_after_idle_window(self) -> None:
+        """Broker-activity rows are event-driven, not a heartbeat."""
         pub = _FakePublisher(is_running=True, latest_row_ms=None)
         result = _compose(
             publisher=pub,
-            registered_at_ms=_registered_at(59_999),
+            registered_at_ms=_registered_at(120_000),
             last_row_ms=None,
             degraded_after_idle_ms=60_000,
         )
         assert result.state == "ready"
+        assert result.headline is None
 
 
-# ── degraded (running, no rows yet, past silent-boot window) ──────────────────
-
-class TestDegradedNoRowsYet:
-    def test_state_is_degraded_past_silent_boot_window(self) -> None:
-        pub = _FakePublisher(is_running=True, latest_row_ms=None)
-        result = _compose(
-            publisher=pub,
-            registered_at_ms=_registered_at(60_000),  # exactly at threshold
-            last_row_ms=None,
-            degraded_after_idle_ms=60_000,
-        )
-        assert result.state == "degraded"
-
-    def test_headline_is_degraded_code(self) -> None:
-        pub = _FakePublisher(is_running=True, latest_row_ms=None)
-        result = _compose(
-            publisher=pub,
-            registered_at_ms=_registered_at(120_000),
-            last_row_ms=None,
-            degraded_after_idle_ms=60_000,
-        )
-        assert result.headline is not None
-        assert result.headline.code == "activity.publisher_degraded"
-
-    def test_headline_tier_is_warning(self) -> None:
-        pub = _FakePublisher(is_running=True, latest_row_ms=None)
-        result = _compose(
-            publisher=pub,
-            registered_at_ms=_registered_at(120_000),
-            last_row_ms=None,
-            degraded_after_idle_ms=60_000,
-        )
-        assert result.headline is not None
-        assert result.headline.tier == "warning"
+# ── ready (running, last row is old) ──────────────────────────────────────────
 
 
-# ── degraded (running, last row is stale) ────────────────────────────────────
-
-class TestDegradedStaleRows:
-    def test_state_is_degraded_when_last_row_is_stale(self) -> None:
+class TestReadyWithIdleRows:
+    def test_state_is_ready_when_last_row_is_old(self) -> None:
         pub = _FakePublisher(is_running=True)
-        stale_row_ms = _NOW_MS - 60_000  # exactly at the threshold
+        old_row_ms = _NOW_MS - 600_000
         result = _compose(
             publisher=pub,
             registered_at_ms=_registered_at(120_000),
-            last_row_ms=stale_row_ms,
+            last_row_ms=old_row_ms,
             degraded_after_idle_ms=60_000,
         )
-        assert result.state == "degraded"
+        assert result.state == "ready"
+        assert result.headline is None
+
+    def test_seconds_since_last_row_still_surfaces_as_fact(self) -> None:
+        pub = _FakePublisher(is_running=True)
+        old_row_ms = _NOW_MS - 600_000
+        result = _compose(
+            publisher=pub,
+            registered_at_ms=_registered_at(120_000),
+            last_row_ms=old_row_ms,
+            degraded_after_idle_ms=60_000,
+        )
+        assert result.facts.seconds_since_last_row == 600
 
     def test_state_is_ready_when_last_row_is_fresh(self) -> None:
         pub = _FakePublisher(is_running=True)
@@ -281,9 +260,9 @@ class TestDegradedStaleRows:
         )
         assert result.state == "ready"
 
-    def test_just_before_stale_threshold_is_ready(self) -> None:
+    def test_state_is_ready_at_former_stale_threshold(self) -> None:
         pub = _FakePublisher(is_running=True)
-        row_ms = _NOW_MS - 59_999
+        row_ms = _NOW_MS - 60_000
         result = _compose(
             publisher=pub,
             registered_at_ms=_registered_at(120_000),
@@ -382,10 +361,10 @@ class TestFacts:
 class TestColdStartNoInProcessRows:
     """latest_row_ms=None because the publisher has not yet authored a row
     in this process (regardless of what the WAL contains).  The health
-    composer must use the registered_at grace path, not a stale WAL ts."""
+    composer must not treat an idle event stream as failed."""
 
     def test_ready_during_grace_window(self) -> None:
-        """latest_row_ms=None + recently registered → ready (silent boot)."""
+        """latest_row_ms=None + recently registered → ready."""
         pub = _FakePublisher(is_running=True, latest_row_ms=None)
         result = _compose(
             publisher=pub,
@@ -397,8 +376,8 @@ class TestColdStartNoInProcessRows:
         assert result.state == "ready"
         assert result.headline is None
 
-    def test_degraded_after_grace_expires(self) -> None:
-        """latest_row_ms=None + registered > grace ago → degraded."""
+    def test_ready_after_former_grace_expires(self) -> None:
+        """latest_row_ms=None + registered > grace ago stays ready."""
         pub = _FakePublisher(is_running=True, latest_row_ms=None)
         result = _compose(
             publisher=pub,
@@ -407,12 +386,11 @@ class TestColdStartNoInProcessRows:
             starting_timeout_ms=30_000,
             degraded_after_idle_ms=60_000,
         )
-        assert result.state == "degraded"
-        assert result.headline is not None
-        assert result.headline.code == "activity.publisher_degraded"
+        assert result.state == "ready"
+        assert result.headline is None
 
-    def test_boundary_exactly_at_grace_is_degraded(self) -> None:
-        """Age == degraded_after_idle_ms with no rows → degraded (closed bound)."""
+    def test_boundary_exactly_at_former_grace_is_ready(self) -> None:
+        """Age == degraded_after_idle_ms with no rows → ready."""
         pub = _FakePublisher(is_running=True, latest_row_ms=None)
         result = _compose(
             publisher=pub,
@@ -420,7 +398,7 @@ class TestColdStartNoInProcessRows:
             last_row_ms=None,
             degraded_after_idle_ms=60_000,
         )
-        assert result.state == "degraded"
+        assert result.state == "ready"
 
     def test_boundary_one_ms_before_grace_is_ready(self) -> None:
         """Age == degraded_after_idle_ms - 1 ms → still ready."""

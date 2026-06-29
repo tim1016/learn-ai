@@ -7,6 +7,7 @@ server-side and the serialized response carries both `live_binding` and
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -140,6 +141,14 @@ def _broker_activity_row(**overrides) -> BrokerActivityRow:
     }
     payload.update(overrides)
     return BrokerActivityRow.model_validate(payload)
+
+
+class _StatusPublisher:
+    is_running = True
+    latest_row_ms = 1_700_000_000_000
+
+    def last_persisted_seq(self) -> int:
+        return 12
 
 
 def _write_broker_activity_rows(root: Path, sid: str, rows: list[BrokerActivityRow]) -> None:
@@ -309,6 +318,114 @@ async def test_instance_status_running_exposes_live_binding(app_with_root, monke
     assert body["evidence_binding"]["run_id"] == "run-live-aaa"
     assert body["evidence_binding"]["is_live"] is False
     assert body["desired_state"] is not None
+
+
+async def test_status_activity_publisher_resolution_bootstraps_missing_live_publisher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = "spy_bootstrap_status"
+    publisher = _StatusPublisher()
+
+    class Registry:
+        def __init__(self) -> None:
+            self.publisher = None
+
+        def get(self, _sid: str):
+            return self.publisher
+
+        def registered_at_ms(self, _sid: str) -> int | None:
+            return 123 if self.publisher is not None else None
+
+    registry = Registry()
+
+    async def fake_bootstrap(strategy_instance_id: str):
+        assert strategy_instance_id == sid
+        registry.publisher = publisher
+        return publisher
+
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: registry)
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", fake_bootstrap)
+
+    resolved, registered_at_ms = await live_instances._resolve_activity_publisher_for_status(
+        sid,
+        LiveBinding(run_id="run-live-aaa"),
+    )
+
+    assert resolved is publisher
+    assert registered_at_ms == 123
+
+
+async def test_status_activity_publisher_resolution_times_out_slow_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = "spy_bootstrap_timeout"
+
+    class Registry:
+        def get(self, _sid: str):
+            return None
+
+        def registered_at_ms(self, _sid: str) -> int | None:
+            return None
+
+    async def slow_bootstrap(_strategy_instance_id: str):
+        await asyncio.sleep(1)
+
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: Registry())
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", slow_bootstrap)
+    monkeypatch.setattr(live_instances, "_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S", 0.001)
+
+    resolved, registered_at_ms = await live_instances._resolve_activity_publisher_for_status(
+        sid,
+        LiveBinding(run_id="run-live-aaa"),
+    )
+
+    assert resolved is None
+    assert registered_at_ms is None
+
+
+async def test_instance_status_uses_recovered_activity_publisher_for_health_and_chart(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_status_publisher"
+    run_id = "run-status-publisher"
+    _write_ledger(root, run_id, sid, 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 100},
+    )
+
+    async def fake_resolve_activity_publisher(status_sid: str, live_binding: LiveBinding | None):
+        assert status_sid == sid
+        assert live_binding is not None
+        return _StatusPublisher(), 1_699_999_999_000
+
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_activity_publisher_for_status",
+        fake_resolve_activity_publisher,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    health = body["operator_surface"]["broker_activity_health"]
+    assert health["state"] == "ready"
+    assert health["headline"] is None
+    assert health["facts"]["publisher_registered"] is True
+    assert health["facts"]["publisher_running"] is True
+    assert health["facts"]["latest_row_seq"] == 12
+    broker_writer = {
+        node["id"]: node for node in body["lifecycle_chart"]["global_graph"]["nodes"]
+    }["broker_writer"]
+    assert broker_writer["status"] == "passed"
 
 
 async def test_instance_status_projects_account_owner_submit_events_into_lifecycle_chart(

@@ -357,10 +357,7 @@ class BrokerActivityPublisher:
         # re-author if the engine ever re-emits the intent.
         # PR 5 — most-recent row's wall-clock ms for the health surface.
         # Cold-start: latest_row_ms is None until this process observes a row.
-        # We do NOT seed from the WAL here because that would cause the health
-        # composer to compare now_ms against a stale historical timestamp and
-        # report ``degraded`` immediately after a healthy restart on a quiet
-        # strategy. The WAL is read below only for dedup (_seen_exec_ids) and
+        # The WAL is read below only for dedup (_seen_exec_ids) and
         # pending-intent bookkeeping (_authored_pending_intent_ids); the
         # health cursor advances exclusively inside _persist_and_broadcast
         # when a row is authored in-process.
@@ -431,7 +428,7 @@ class BrokerActivityPublisher:
 
         ``None`` when no rows have been authored yet (cold-start with an
         empty WAL).  Updated by ``_persist_and_broadcast`` on every new
-        row so the health surface can detect a stalled feed.
+        row so the health surface can expose row recency facts.
         """
         return self._latest_row_ms
 

@@ -12,13 +12,14 @@ Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
@@ -161,6 +162,9 @@ from app.services.runtime_freshness import (
     unavailable_runtime_freshness,
 )
 
+if TYPE_CHECKING:
+    from app.services.broker_activity_publisher import BrokerActivityPublisher
+
 # The instance command channel is reserved for one-shot operations; PAUSE/
 # RESUME/STOP are the durable intent knob (POST .../desired-state), not commands.
 _ONE_SHOT_VERBS = frozenset({CommandVerb.FLATTEN, CommandVerb.RECONCILE, CommandVerb.MARK_POISONED})
@@ -177,6 +181,7 @@ _ACTION_TO_VERB = {
 # Filename of the durable desired-state sidecar (the stable
 # <artifacts>/live_state/<sid>/ layout owned by desired_state.py).
 _DESIRED_STATE_FILE = "desired_state.json"
+_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -1143,6 +1148,56 @@ def _daemon_process_from_instance(managed: dict | None) -> dict | None:
     return process
 
 
+async def _resolve_activity_publisher_for_status(
+    sid: str,
+    live_binding: LiveBinding | None,
+) -> tuple[BrokerActivityPublisher | None, int | None]:
+    """Return the publisher facts the status projection should render.
+
+    ``broker_activity.py`` already has a lazy-bootstrap path for the Activity
+    REST/SSE endpoints.  Status/Overview also depends on the same in-memory
+    registry, so a data-plane restart can otherwise make a healthy running bot
+    look detached until the Activity endpoint is hit.  This best-effort retry
+    only rebuilds the runtime publisher; it does not append evidence or mutate
+    broker-activity WAL rows from a status read.
+    """
+    registry = get_publisher_registry()
+    publisher = registry.get(sid)
+    if live_binding is None:
+        return publisher, registry.registered_at_ms(sid)
+    if publisher is not None and publisher.is_running:
+        return publisher, registry.registered_at_ms(sid)
+
+    from app.routers.broker_activity import (
+        PublisherBootstrapError,
+        bootstrap_publisher_for_instance,
+    )
+
+    try:
+        publisher = await asyncio.wait_for(
+            bootstrap_publisher_for_instance(sid),
+            timeout=_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S,
+        )
+    except TimeoutError:
+        logger.warning(
+            "status-time broker-activity publisher bootstrap timed out",
+            extra={"strategy_instance_id": sid},
+        )
+        publisher = registry.get(sid)
+    except PublisherBootstrapError as exc:
+        logger.warning(
+            "status-time broker-activity publisher bootstrap deferred (%s): %s",
+            exc.code,
+            exc.detail,
+            extra={
+                "strategy_instance_id": sid,
+                "bootstrap_error_code": exc.code,
+            },
+        )
+        publisher = registry.get(sid)
+    return publisher, registry.registered_at_ms(sid)
+
+
 async def _resolve_instance_status_from_process(
     sid: str,
     root: Path,
@@ -1190,6 +1245,10 @@ async def _resolve_instance_status_from_process(
         current_namespace,
         intent_wal_events,
     ) = _resolve_reconciliation_inputs(root, live_binding)
+    activity_publisher, activity_publisher_registered_at_ms = await _resolve_activity_publisher_for_status(
+        sid,
+        live_binding,
+    )
     operator_surface = compute_operator_surface(
         process=process,
         last_exit=last_exit,
@@ -1219,8 +1278,8 @@ async def _resolve_instance_status_from_process(
         latest_broker_event_ms=None,
         latest_mutation_ms=(latest_mutation.last_transition_at_ms if latest_mutation is not None else None),
         reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
-        activity_publisher=get_publisher_registry().get(sid),
-        activity_publisher_registered_at_ms=get_publisher_registry().registered_at_ms(sid),
+        activity_publisher=activity_publisher,
+        activity_publisher_registered_at_ms=activity_publisher_registered_at_ms,
         now_ms=observed_at_ms,
     )
     redeploy_available = bool(
