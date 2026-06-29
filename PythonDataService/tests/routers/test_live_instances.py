@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
+from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
@@ -219,11 +219,9 @@ def test_resolve_reconciliation_inputs_returns_intent_events_for_relative_live_b
         ts_ms=1_700_000_000_000,
     )
 
-    receipt, current_wal_seq, current_run_id, current_namespace, events = (
-        live_instances._resolve_reconciliation_inputs(
-            root,
-            LiveBinding(run_id="run-1", run_dir="run-1"),
-        )
+    receipt, current_wal_seq, current_run_id, current_namespace, events = live_instances._resolve_reconciliation_inputs(
+        root,
+        LiveBinding(run_id="run-1", run_dir="run-1"),
     )
 
     assert receipt is None
@@ -311,6 +309,82 @@ async def test_instance_status_running_exposes_live_binding(app_with_root, monke
     assert body["evidence_binding"]["run_id"] == "run-live-aaa"
     assert body["evidence_binding"]["is_live"] is False
     assert body["desired_state"] is not None
+
+
+async def test_instance_status_projects_account_owner_submit_events_into_lifecycle_chart(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_account_owner"
+    account_id = "DU123456"
+    run_id = "run-account-owner"
+    namespace = f"learn-ai/{sid}/v1"
+    intent_id = "intent-owner-1"
+    order_ref = f"{namespace}:{intent_id}"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_prepared",
+            "created_at_ms": 1_700_000_010_000,
+            "diagnostics": {
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "intent_id": intent_id,
+                "order_ref": order_ref,
+            },
+        },
+    )
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_accepted",
+            "created_at_ms": 1_700_000_010_000,
+            "diagnostics": {
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "intent_id": intent_id,
+                "order_ref": order_ref,
+                "order_id": 42,
+            },
+        },
+    )
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_accepted",
+            "created_at_ms": 1_700_000_020_000,
+            "diagnostics": {
+                "strategy_instance_id": "other_bot",
+                "run_id": "run-other",
+                "intent_id": "intent-other",
+                "order_ref": "learn-ai/other_bot/v1:intent-other",
+                "order_id": 99,
+            },
+        },
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    submit_nodes = {
+        node["id"]: node for node in response.json()["lifecycle_chart"]["subgraphs"]["submit_order"]["nodes"]
+    }
+    assert submit_nodes["intent_wal"]["status"] == "active"
+    assert submit_nodes["intent_wal"]["summary"] == "AccountOwner intent persisted before broker submission."
+    assert submit_nodes["intent_wal"]["technical_label"] == "intent_pending"
+    assert submit_nodes["place_order"]["status"] == "passed"
+    assert submit_nodes["place_order"]["summary"] == "AccountOwner order reached the broker submit boundary."
+    assert submit_nodes["place_order"]["technical_label"] == "submit"
 
 
 async def test_instance_status_dead_is_evidence_only(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

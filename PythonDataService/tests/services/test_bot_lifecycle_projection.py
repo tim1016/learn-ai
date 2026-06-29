@@ -155,6 +155,55 @@ def test_account_restart_intensity_lifts_as_freeze() -> None:
     assert event.operator_next_step == "STOP_RESTARTING_AND_RECOVER_ACCOUNT"
 
 
+def test_account_owner_submit_events_lift_to_submit_path_nodes() -> None:
+    prepared = account_event_to_lifecycle_event(
+        normalize_account_event(
+            {
+                "event_type": "account_owner_submit_prepared",
+                "account_id": "DU123",
+                "seq": 9,
+                "created_at_ms": 1_700_000_010_000,
+                "diagnostics": {
+                    "strategy_instance_id": "bot-a",
+                    "run_id": "run-1",
+                    "intent_id": "intent-a",
+                    "order_ref": "learn-ai/bot-a/v1:intent-a",
+                },
+            },
+            account_id="DU123",
+            file_position=9,
+        )
+    )
+    accepted = account_event_to_lifecycle_event(
+        normalize_account_event(
+            {
+                "event_type": "account_owner_submit_accepted",
+                "account_id": "DU123",
+                "seq": 10,
+                "created_at_ms": 1_700_000_010_000,
+                "diagnostics": {
+                    "strategy_instance_id": "bot-a",
+                    "run_id": "run-1",
+                    "intent_id": "intent-a",
+                    "order_ref": "learn-ai/bot-a/v1:intent-a",
+                    "order_id": 42,
+                },
+            },
+            account_id="DU123",
+            file_position=10,
+        )
+    )
+
+    assert prepared.node_id == "intent_wal"
+    assert prepared.status == "active"
+    assert prepared.source == "intent_pending"
+    assert prepared.summary == "AccountOwner intent persisted before broker submission."
+    assert accepted.node_id == "place_order"
+    assert accepted.status == "passed"
+    assert accepted.source == "submit"
+    assert accepted.summary == "AccountOwner order reached the broker submit boundary."
+
+
 def test_project_intent_events_surfaces_drop_and_submit_uncertainty() -> None:
     projected = project_intent_events(
         [

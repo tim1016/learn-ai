@@ -97,10 +97,12 @@ ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
         "freeze_halt_poison",
         "freeze",
     ),
-    "account_owner_submit_prepared": AccountEventLifecycleMapping("order", "broker_writer", "submit", "active"),
-    "account_owner_submit_accepted": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "passed"),
-    "account_owner_submit_uncertain": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "blocked"),
-    "account_owner_submit_rejected": AccountEventLifecycleMapping("order", "broker_writer", "broker_ack", "blocked"),
+    "account_owner_submit_prepared": AccountEventLifecycleMapping("order", "intent_wal", "intent_pending", "active"),
+    "account_owner_submit_accepted": AccountEventLifecycleMapping("order", "place_order", "submit", "passed"),
+    "account_owner_submit_uncertain": AccountEventLifecycleMapping(
+        "order", "ack_or_reconcile", "broker_ack", "blocked"
+    ),
+    "account_owner_submit_rejected": AccountEventLifecycleMapping("order", "ack_or_reconcile", "broker_ack", "blocked"),
     "account_owner_client_id_in_use": AccountEventLifecycleMapping("halt", "broker_writer", "broker_ack", "blocked"),
     "account_owner_reconnect_frozen": AccountEventLifecycleMapping(
         "freeze",
@@ -175,9 +177,7 @@ def project_intent_events(
             continue
         ts_ms = event.appended_at_ms if event.appended_at_ms is not None else event.ts_ms
         ts_ms_source = (
-            "appended_at_ms"
-            if event.appended_at_ms is not None
-            else ("ts_ms" if event.ts_ms is not None else None)
+            "appended_at_ms" if event.appended_at_ms is not None else ("ts_ms" if event.ts_ms is not None else None)
         )
         why = _intent_why(event, fallback=mapped.summary)
         projected.append(
@@ -418,8 +418,14 @@ def _account_event_summary(event_type: str, row: Mapping[str, Any]) -> str:
         return "Account freeze recorded."
     if event_type == "account_freeze_cleared":
         return "Account freeze cleared."
-    if event_type.startswith("account_owner_submit_"):
-        return event_type.replace("_", " ").capitalize() + "."
+    if event_type == "account_owner_submit_prepared":
+        return "AccountOwner intent persisted before broker submission."
+    if event_type == "account_owner_submit_accepted":
+        return "AccountOwner order reached the broker submit boundary."
+    if event_type == "account_owner_submit_uncertain":
+        return "AccountOwner submit outcome is uncertain."
+    if event_type == "account_owner_submit_rejected":
+        return "AccountOwner rejected the submit before broker placement."
     if event_type == "account_instance_binding_recorded":
         state = row.get("lifecycle_state")
         return f"Account instance binding recorded ({state})." if state else "Account instance binding recorded."

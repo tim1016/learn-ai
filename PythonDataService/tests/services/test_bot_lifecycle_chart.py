@@ -38,6 +38,10 @@ def _desired(state: str) -> DesiredStateView:
     return DesiredStateView(state=state, path_status="ok")
 
 
+def _desired_absent() -> DesiredStateView:
+    return DesiredStateView(state=None, path_status="absent")
+
+
 def _start_defaults() -> InstanceStartDefaults:
     return InstanceStartDefaults(
         strategy="spy_ema_crossover",
@@ -168,6 +172,19 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert chart.subgraphs["submit_order"].nodes[2].technical_label == "placeOrder boundary"
 
 
+def test_chart_absent_desired_state_uses_effective_running_default() -> None:
+    surface = _surface()
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired_absent())
+    activate_nodes = {node.id: node for node in chart.subgraphs["activate"].nodes}
+
+    assert chart.global_graph.primary_node_id == "active"
+    assert _node_status(chart, "activate") == "passed"
+    assert _node_status(chart, "active") == "active"
+    assert activate_nodes["desired_state"].status == "passed"
+    assert activate_nodes["desired_state"].technical_label == "RUNNING default"
+    assert activate_nodes["desired_state"].summary == "Desired-state sidecar is absent; effective state is RUNNING."
+
+
 def test_submit_subgraph_is_unknown_without_durable_submit_evidence() -> None:
     surface = _surface()
     chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
@@ -239,11 +256,14 @@ def test_account_safety_focuses_broker_connection_blocker() -> None:
 
     assert chart.global_graph.primary_node_id == "account_safety"
     assert chart.subgraphs["account_safety"].primary_node_id == "broker_connection"
-    assert _subgraph_edge_status(
-        chart,
-        "account_safety",
-        "broker_connection_to_risk_posture",
-    ) == "blocked"
+    assert (
+        _subgraph_edge_status(
+            chart,
+            "account_safety",
+            "broker_connection_to_risk_posture",
+        )
+        == "blocked"
+    )
 
 
 def test_chart_failed_reconciliation_blocks_at_reconciliation_edge() -> None:

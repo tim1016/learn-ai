@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
@@ -28,7 +29,7 @@ from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_freeze
+from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_events, read_account_freeze
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
@@ -130,7 +131,12 @@ from app.services.activity_projection_contract import (
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
-from app.services.bot_lifecycle_projection import project_intent_events
+from app.services.bot_lifecycle_projection import (
+    account_event_to_lifecycle_event,
+    project_account_events,
+    project_intent_events,
+    sort_lifecycle_events,
+)
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -335,6 +341,79 @@ def _resolve_account_freeze(
         if account_freeze is not None:
             return account_freeze
     return None
+
+
+def _project_instance_account_lifecycle_events(
+    artifacts_root: Path,
+    *,
+    account_id: str | None,
+    sid: str,
+    run_id: str | None,
+    bot_order_namespace: str | None,
+) -> list:
+    if account_id is None:
+        return []
+    try:
+        rows = read_account_events(artifacts_root, account_id)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "failed to read account events while resolving lifecycle chart",
+            extra={"account_id": account_id, "exception": repr(exc)},
+        )
+        return []
+    projected_account_events = project_account_events(
+        [
+            row
+            for row in rows
+            if isinstance(row, Mapping)
+            and _account_event_matches_instance(
+                row,
+                sid=sid,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace,
+            )
+        ],
+        account_id=account_id,
+    )
+    return [
+        account_event_to_lifecycle_event(event).model_copy(update={"bot_id": sid}) for event in projected_account_events
+    ]
+
+
+def _account_event_matches_instance(
+    row: Mapping,
+    *,
+    sid: str,
+    run_id: str | None,
+    bot_order_namespace: str | None,
+) -> bool:
+    diagnostics = row.get("diagnostics")
+    diagnostic_values = diagnostics if isinstance(diagnostics, Mapping) else {}
+
+    row_sid = _nonempty_str(diagnostic_values.get("strategy_instance_id")) or _nonempty_str(
+        diagnostic_values.get("bot_id")
+    )
+    row_sid = row_sid or _nonempty_str(row.get("strategy_instance_id")) or _nonempty_str(row.get("bot_id"))
+    row_run_id = _nonempty_str(diagnostic_values.get("run_id")) or _nonempty_str(row.get("run_id"))
+    row_namespace = _nonempty_str(row.get("bot_order_namespace"))
+    order_ref = _nonempty_str(diagnostic_values.get("order_ref")) or _nonempty_str(row.get("order_ref"))
+    if row_namespace is None and order_ref is not None and ":" in order_ref:
+        row_namespace = order_ref.rsplit(":", 1)[0]
+
+    sid_matches = row_sid == sid
+    run_matches = run_id is not None and row_run_id == run_id
+    namespace_matches = bot_order_namespace is not None and row_namespace == bot_order_namespace
+    if row_sid is not None and not sid_matches:
+        return False
+    if run_id is not None and row_run_id is not None and not run_matches:
+        return False
+    if bot_order_namespace is not None and row_namespace is not None and not namespace_matches:
+        return False
+    return sid_matches or run_matches or namespace_matches
+
+
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> tuple[dict | None, list[dict]]:
@@ -1151,12 +1230,25 @@ async def _resolve_instance_status_from_process(
         and start_defaults.qc_cloud_backtest_id
     )
     live_run_dir = _resolve_live_run_dir(root, live_binding)
+    instance_account_id = _instance_ledger_account_id(root, sid)
     lifecycle_events = project_intent_events(
         intent_wal_events,
         bot_id=sid,
-        account_id=_instance_ledger_account_id(root, sid),
+        account_id=instance_account_id,
         run_id=current_run_id,
         wal_path=live_run_dir / "intent_events.jsonl" if live_run_dir is not None else None,
+    )
+    lifecycle_events = sort_lifecycle_events(
+        [
+            *lifecycle_events,
+            *_project_instance_account_lifecycle_events(
+                root.parent,
+                account_id=instance_account_id,
+                sid=sid,
+                run_id=current_run_id,
+                bot_order_namespace=current_namespace,
+            ),
+        ]
     )
 
     return LiveInstanceStatus(
