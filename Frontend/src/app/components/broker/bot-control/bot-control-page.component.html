@@ -47,56 +47,69 @@
   }
 
   @if (hasTopWarnings()) {
-    <section class="top-banners" aria-label="Bot warnings">
+    <section
+      class="top-banners grid grid-cols-1 gap-2 border-b border-[var(--border)] px-4 py-2 md:grid-cols-2"
+      aria-label="Bot warnings"
+    >
       @if (brokerEvidenceNotice(); as notice) {
-        <details
-          class="top-banner warning-panel broker-evidence"
+        <p-accordion
+          class="top-banner min-w-0"
           data-testid="bot-control-broker-evidence-banner"
+          [multiple]="true"
         >
-          <summary>
-            <span>Warning, broker evidence unavailable.</span>
-          </summary>
-          <div class="warning-panel-detail">
-            <p>{{ notice.message }}</p>
-            <div class="warning-actions">
-              <a class="warning-link" [routerLink]="['/broker/account-monitor']">Open Account Monitor</a>
-              @if (notice.runbook_slug) {
-                <a class="warning-link" [href]="'/runbooks/' + notice.runbook_slug" target="_blank" rel="noopener">
-                  Open runbook
-                </a>
-              }
-            </div>
-          </div>
-        </details>
+          <p-accordion-panel value="broker-evidence">
+            <p-accordion-header>
+              <span>Warning, broker evidence unavailable.</span>
+            </p-accordion-header>
+            <p-accordion-content>
+              <div class="warning-panel-detail">
+                <p>{{ notice.message }}</p>
+                <div class="warning-actions">
+                  <a class="warning-link" [routerLink]="['/broker/account-monitor']">Open Account Monitor</a>
+                  @if (notice.runbook_slug) {
+                    <a class="warning-link" [href]="runbookHref(notice.runbook_slug)" target="_blank" rel="noopener">
+                      Open runbook
+                    </a>
+                  }
+                </div>
+              </div>
+            </p-accordion-content>
+          </p-accordion-panel>
+        </p-accordion>
       }
 
       @if (controlPlaneBanner(); as banner) {
-        <details
-          class="top-banner warning-panel control-plane"
+        <p-accordion
+          class="top-banner min-w-0"
           [class.demoted]="banner.demoted"
           data-testid="bot-control-plane-banner"
+          [multiple]="true"
         >
-          <summary>
-            <span>Control plane, {{ banner.shortLabel }}.</span>
-          </summary>
-          <div class="warning-panel-detail">
-            @if (banner.notice) {
-              <p>{{ banner.notice }}</p>
-            }
-            @if (banner.attemptText) {
-              <p class="warning-meta">{{ banner.attemptText }}</p>
-            }
-            <p class="warning-meta">State: {{ banner.state }}</p>
-            <div class="warning-actions">
-              <a class="warning-link" [routerLink]="['/broker']">Open Broker Status</a>
-              @if (banner.runbookSlug) {
-                <a class="warning-link" [href]="'/runbooks/' + banner.runbookSlug" target="_blank" rel="noopener">
-                  Open runbook
-                </a>
-              }
-            </div>
-          </div>
-        </details>
+          <p-accordion-panel value="control-plane">
+            <p-accordion-header>
+              <span>Control plane, {{ banner.shortLabel }}.</span>
+            </p-accordion-header>
+            <p-accordion-content>
+              <div class="warning-panel-detail">
+                @if (banner.notice) {
+                  <p>{{ banner.notice }}</p>
+                }
+                @if (banner.attemptText) {
+                  <p class="warning-meta">{{ banner.attemptText }}</p>
+                }
+                <p class="warning-meta">State: {{ banner.state }}</p>
+                <div class="warning-actions">
+                  <a class="warning-link" [routerLink]="['/broker']">Open Broker Status</a>
+                  @if (banner.runbookSlug) {
+                    <a class="warning-link" [href]="runbookHref(banner.runbookSlug)" target="_blank" rel="noopener">
+                      Open runbook
+                    </a>
+                  }
+                </div>
+              </div>
+            </p-accordion-content>
+          </p-accordion-panel>
+        </p-accordion>
       }
     </section>
   }

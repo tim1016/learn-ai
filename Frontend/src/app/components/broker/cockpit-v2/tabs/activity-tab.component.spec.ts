@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { LiveInstanceStatus, OperatorSurfaceControlPlane } from '../../../../api/live-instances.types';
 import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
-import { activityRefreshKeyForStatus } from './activity-tab.component';
+import { activityRefreshKeyForStatus, cachedActivityForRequest } from './activity-tab.component';
 
 function controlPlane(
   state: OperatorSurfaceControlPlane['state'],
@@ -139,5 +139,35 @@ describe('activityRefreshKeyForStatus', () => {
     expect(activityRefreshKeyForStatus(status('AUTH_FAILED'))).toBeNull();
     expect(activityRefreshKeyForStatus(status('PROTOCOL_ERROR'))).toBeNull();
     expect(activityRefreshKeyForStatus(status('INCOMPATIBLE_CONTRACT'))).toBeNull();
+  });
+});
+
+describe('cachedActivityForRequest', () => {
+  it('reuses terminal-state activity only for the same sid, session date, and resolution', () => {
+    const cached = {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m' as const,
+      projection: null,
+    };
+
+    expect(cachedActivityForRequest(cached, {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m',
+      refreshKey: null,
+    })).toBeNull();
+    expect(cachedActivityForRequest(cached, {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '5s',
+      refreshKey: null,
+    })).toBeUndefined();
+    expect(cachedActivityForRequest(null, {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m',
+      refreshKey: null,
+    })).toBeUndefined();
   });
 });

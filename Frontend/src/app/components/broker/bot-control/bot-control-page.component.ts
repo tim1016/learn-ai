@@ -8,6 +8,7 @@ import {
   inject,
   signal,
 } from '@angular/core';
+import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
@@ -50,6 +51,10 @@ interface ControlPlaneBanner {
   selector: 'app-bot-control-page',
   imports: [
     CommonModule,
+    Accordion,
+    AccordionPanel,
+    AccordionHeader,
+    AccordionContent,
     RouterLink,
     StatusRiskTabComponent,
     OverviewTabComponent,
@@ -210,7 +215,11 @@ export class BotControlPageComponent {
   }
 
   onGateOpenRunbook(slug: string): void {
-    window.open(`/runbooks/${encodeURIComponent(slug)}`, '_blank', 'noopener');
+    window.open(this.runbookHref(slug), '_blank', 'noopener');
+  }
+
+  runbookHref(slug: string): string {
+    return `/runbooks/${encodeURIComponent(slug)}`;
   }
 
   dispatchOverviewAction(action: LifecycleChartActionId): void {

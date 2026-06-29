@@ -45,6 +45,35 @@ export function activityRefreshKeyForStatus(status: LiveInstanceStatus): number 
   return status.fetched_at_ms;
 }
 
+interface ActivityRequestParams {
+  readonly sid: string;
+  readonly sessionDate: string;
+  readonly resolution: ChartResolution;
+  readonly refreshKey: number | null;
+}
+
+interface CachedActivity {
+  readonly sid: string;
+  readonly sessionDate: string;
+  readonly resolution: ChartResolution;
+  readonly projection: LiveInstanceActivityProjection | null;
+}
+
+export function cachedActivityForRequest(
+  cached: CachedActivity | null,
+  params: ActivityRequestParams,
+): LiveInstanceActivityProjection | null | undefined {
+  if (
+    cached === null ||
+    cached.sid !== params.sid ||
+    cached.sessionDate !== params.sessionDate ||
+    cached.resolution !== params.resolution
+  ) {
+    return undefined;
+  }
+  return cached.projection;
+}
+
 @Component({
   selector: 'app-activity-tab',
   imports: [
@@ -65,7 +94,7 @@ export class ActivityTabComponent {
   private readonly http = inject(HttpClient);
   readonly selectedSessionDate = signal<string>(localDateString());
   readonly selectedResolution = signal<ChartResolution>('1m');
-  private readonly cachedActivity = signal<LiveInstanceActivityProjection | null>(null);
+  private readonly cachedActivity = signal<CachedActivity | null>(null);
 
   readonly chartRunId = computed<string | null>(
     () => this.status().live_binding?.run_id ?? this.status().evidence_binding?.run_id ?? null,
@@ -79,12 +108,7 @@ export class ActivityTabComponent {
 
   readonly activityResource = resource<
     LiveInstanceActivityProjection | null,
-    {
-      sid: string;
-      sessionDate: string;
-      resolution: ChartResolution;
-      refreshKey: number | null;
-    }
+    ActivityRequestParams
   >({
     params: () => ({
       sid: this.strategyInstanceId(),
@@ -94,7 +118,8 @@ export class ActivityTabComponent {
     }),
     loader: ({ params }): Promise<LiveInstanceActivityProjection | null> => {
       if (params.refreshKey === null) {
-        return Promise.resolve(this.cachedActivity());
+        const cached = cachedActivityForRequest(this.cachedActivity(), params);
+        if (cached !== undefined) return Promise.resolve(cached);
       }
       return this.loadAndCacheActivity(params.sid, params.sessionDate, params.resolution);
     },
@@ -143,7 +168,7 @@ export class ActivityTabComponent {
     resolution: ChartResolution,
   ): Promise<LiveInstanceActivityProjection | null> {
     const projection = await this.loadActivity(sid, sessionDate, resolution);
-    this.cachedActivity.set(projection);
+    this.cachedActivity.set({ sid, sessionDate, resolution, projection });
     return projection;
   }
 }

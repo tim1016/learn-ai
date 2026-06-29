@@ -248,8 +248,9 @@ def _fold_unreachable(
     rng: random.Random | None,
 ) -> DaemonConnectivityState:
     # Attempt counter advances on every UNREACHABLE outcome until the
-    # budget is exceeded; once exceeded we surface UNREACHABLE and stop
-    # counting upward (the operator sees a stable terminal number).
+    # budget is reached; once the last allowed attempt lands we surface
+    # UNREACHABLE and stop counting upward (the operator sees a stable
+    # terminal number).
     next_attempt = prev.attempt if prev.kind == "UNREACHABLE" else prev.attempt + 1
 
     if next_attempt < retry_budget:
