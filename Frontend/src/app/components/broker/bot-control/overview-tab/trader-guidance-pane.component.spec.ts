@@ -30,6 +30,7 @@ function makeTimelineRow(): LifecycleProjectionEventRow {
     ts_ms_resolved: true,
     source_artifact: 'intent_events.jsonl',
     source_type: 'broker_ack',
+    source_rank: 30,
     source_seq: 1,
     source_offset: null,
     source_hash: null,
@@ -160,6 +161,6 @@ describe('TraderGuidancePaneComponent', () => {
 
     const timeline = screen.getByTestId('trader-guidance-timeline');
     expect(timeline.textContent).toContain('Projection unavailable; current snapshot remains file-backed.');
-    expect(timeline.textContent).toContain('No recent projection rows are available for this bot.');
+    expect(timeline.textContent).not.toContain('Lifecycle projection is unavailable for this bot.');
   });
 });

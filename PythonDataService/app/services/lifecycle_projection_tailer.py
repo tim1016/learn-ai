@@ -304,6 +304,22 @@ def _advance_cursor(
     source_hash: str | None,
     updated_at_ms: int,
 ) -> None:
+    current = cursor.sources.get(source_key)
+    if current is not None:
+        incoming_file_position = last_file_position
+        incoming_source_seq = last_source_seq
+        incoming_advances_cursor = (
+            incoming_file_position > current.last_file_position
+            or (
+                incoming_file_position == current.last_file_position
+                and _optional_int_gt(incoming_source_seq, current.last_source_seq)
+            )
+        )
+        last_file_position = max(current.last_file_position, last_file_position)
+        last_source_seq = _max_optional_int(current.last_source_seq, last_source_seq)
+        if not incoming_advances_cursor:
+            source_hash = current.source_hash
+        updated_at_ms = max(current.updated_at_ms, updated_at_ms)
     cursor.sources[source_key] = LifecycleProjectionSourceCursor(
         source_kind=source_kind,
         source_artifact=source_artifact,
@@ -312,6 +328,22 @@ def _advance_cursor(
         source_hash=source_hash,
         updated_at_ms=updated_at_ms,
     )
+
+
+def _max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
+
+
+def _optional_int_gt(left: int | None, right: int | None) -> bool:
+    if left is None:
+        return False
+    if right is None:
+        return True
+    return left > right
 
 
 def _source_key(source_kind: LifecycleProjectionSourceKind, path: Path) -> str:

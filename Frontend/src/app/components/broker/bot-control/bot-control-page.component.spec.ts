@@ -250,6 +250,7 @@ function makeLifecycleTimeline(): LifecycleTimelineResponse {
         ts_ms_resolved: true,
         source_artifact: 'intent_events.jsonl',
         source_type: 'broker_ack',
+        source_rank: 30,
         source_seq: 7,
         source_offset: null,
         source_hash: null,
@@ -498,7 +499,7 @@ describe('BotControlPageComponent', () => {
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).not.toContain('Broker acknowledgement failed; submit outcome is uncertain.');
-    expect(text).toContain('No recent projection rows are available for this bot.');
+    expect(text).toContain('Lifecycle projection is unavailable for this bot.');
   });
 
   it('renders selected lifecycle node freshness and receipts', async () => {

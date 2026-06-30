@@ -7,7 +7,9 @@
   @if (notice(); as currentNotice) {
     <p class="timeline-notice">{{ currentNotice }}</p>
   }
-  @if (rows().length > 0) {
+  @if (!projectionAvailable() && !notice()) {
+    <p>Lifecycle projection is unavailable for this bot.</p>
+  } @else if (rows().length > 0) {
     <ol>
       @for (row of rows(); track trackTimelineRow($index, row)) {
         <li [class]="'severity-' + row.severity">
