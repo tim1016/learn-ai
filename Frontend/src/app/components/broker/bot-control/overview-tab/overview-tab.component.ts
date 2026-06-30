@@ -8,7 +8,9 @@ import type {
   LifecycleChartNode,
   LifecycleChartStatus,
   LiveInstanceStatus,
+  TraderPrimaryRemediation,
 } from '../../../../api/live-instances.types';
+import { TraderGuidancePaneComponent } from './trader-guidance-pane.component';
 
 interface Point {
   readonly x: number;
@@ -41,7 +43,7 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule, Vflow],
+  imports: [CommonModule, Vflow, TraderGuidancePaneComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -50,6 +52,7 @@ export class OverviewTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly selectedNodeId = input<string | null>(null);
   readonly nodeSelected = output<LifecycleChartNode>();
+  readonly traderGuidanceAction = output<TraderPrimaryRemediation>();
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly chart = computed(() => this.status().lifecycle_chart);
@@ -153,6 +156,10 @@ export class OverviewTabComponent {
       case 'inactive':
         return 'var(--border-light)';
     }
+  }
+
+  onTraderGuidanceAction(action: TraderPrimaryRemediation): void {
+    this.traderGuidanceAction.emit(action);
   }
 
   private nodePoint(graph: LifecycleChartGraph, node: LifecycleChartNode, index: number): Point {

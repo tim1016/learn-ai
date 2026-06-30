@@ -19,6 +19,7 @@ import type {
   LiveInstanceStatus,
   OperatorNotice,
   OperatorSurfaceControlPlane,
+  TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
@@ -274,6 +275,48 @@ export class BotControlPageComponent {
         const unreachable: never = action;
         this.mutationError.set(`Unsupported lifecycle action: ${String(unreachable)}`);
       }
+    }
+  }
+
+  dispatchTraderGuidanceAction(action: TraderPrimaryRemediation): void {
+    switch (action.kind) {
+      case 'invoke_capability':
+        if (action.capability === 'resume') void this.dispatchResume();
+        else void this.dispatchPause();
+        break;
+      case 'focus_action':
+        this.selectTab(action.tab);
+        break;
+      case 'redeploy':
+        this.onGateRedeploy();
+        break;
+      case 'open_runbook':
+        this.onGateOpenRunbook(action.slug);
+        break;
+      case 'invoke_endpoint':
+        if (action.endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
+        break;
+      case 'none':
+        break;
+      default: {
+        const unreachable: never = action;
+        this.mutationError.set(`Unsupported trader guidance action: ${String(unreachable)}`);
+      }
+    }
+  }
+
+  async dispatchReconcileNow(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('reconcile_now');
+    this.mutationError.set(null);
+    try {
+      await this.liveRuns.reconcileInstance(id);
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
     }
   }
 

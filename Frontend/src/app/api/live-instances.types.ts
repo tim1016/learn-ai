@@ -261,6 +261,30 @@ export type TradingSessionPhase =
   | 'CLOSED'
   | 'UNKNOWN';
 
+export type AccountOwnerPhase = 'accepting' | 'reconnecting' | 'draining' | 'frozen' | 'unknown';
+
+export type SubmitReadinessCode =
+  | 'safe_to_submit'
+  | 'safe_to_monitor'
+  | 'blocked_before_submit'
+  | 'broker_state_unproven'
+  | 'account_frozen'
+  | 'waiting_for_owner_generation'
+  | 'submit_outcome_uncertain';
+
+export type TraderSituationCode =
+  | 'ready_to_submit'
+  | 'monitor_only'
+  | 'submission_blocked'
+  | 'broker_state_unproven'
+  | 'account_frozen'
+  | 'waiting_for_owner_generation'
+  | 'submit_outcome_uncertain'
+  | 'attention_required'
+  | 'unknown';
+
+export type TraderAttentionSeverity = 'info' | 'warning' | 'critical';
+
 export type RiskPosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
 
 export type ActionPlanConsumption = 'ACTIVE' | 'DECLARATIVE_ONLY' | 'UNKNOWN';
@@ -345,6 +369,16 @@ export interface OperatorSurfacePriorRun {
   classification: PriorRunClassification;
 }
 
+/** PRD #718 — AccountOwner generation/phase surfaced from canonical
+ * account artifacts. `phase = unknown` means missing proof, not healthy. */
+export interface OperatorSurfaceAccountOwner {
+  account_id: string;
+  generation: number | null;
+  phase: AccountOwnerPhase;
+  recorded_at_ms: number | null;
+  source: string | null;
+}
+
 export interface OperatorSurfaceBroker {
   safety_verdict: BrokerSafetyVerdict;
   /** Independent of safety_verdict: whether the broker session is up.
@@ -427,11 +461,67 @@ export interface OpenRunbookAction {
   slug: string;
 }
 
+export interface InvokeEndpointAction {
+  kind: 'invoke_endpoint';
+  endpoint: 'reconcile_instance';
+  method: 'POST';
+  path_template: '/api/live-instances/{strategy_instance_id}/reconcile';
+}
+
+export interface NoPrimaryRemediationAction {
+  kind: 'none';
+  reason: string;
+}
+
 export type GateSuggestedAction =
   | InvokeCapabilityAction
   | FocusAction
   | RedeployAction
   | OpenRunbookAction;
+
+export type TraderPrimaryRemediation =
+  | GateSuggestedAction
+  | InvokeEndpointAction
+  | NoPrimaryRemediationAction;
+
+export interface OperatorSurfaceEvidenceFact {
+  label: string;
+  value: string;
+  source: string | null;
+  gate_id: string | null;
+  ts_ms: number | null;
+  ts_ms_resolved: boolean;
+}
+
+export interface OperatorSurfaceAttentionGroup {
+  code: string;
+  severity: TraderAttentionSeverity;
+  headline: string;
+  explanation: string;
+}
+
+export interface OperatorSurfaceSubmitReadiness {
+  code: SubmitReadinessCode;
+  label: string;
+  explanation: string;
+  can_submit: boolean;
+  blocking_reason_codes: string[];
+  template_id: string;
+  template_version: number;
+}
+
+export interface OperatorSurfaceTraderGuidance {
+  situation_code: TraderSituationCode;
+  headline: string;
+  explanation: string;
+  risk_headline: string;
+  risk_explanation: string;
+  primary_remediation: TraderPrimaryRemediation;
+  additional_attention_groups: OperatorSurfaceAttentionGroup[];
+  advanced_evidence: OperatorSurfaceEvidenceFact[];
+  template_id: string;
+  template_version: number;
+}
 
 export interface OperatorGate {
   name: string;
@@ -611,6 +701,12 @@ export interface OperatorSurface {
   current_risk: OperatorSurfaceCurrentRisk;
   daily_order_cap: OperatorSurfaceDailyOrderCap;
   action_plan: OperatorSurfaceActionPlan;
+  /** PRD #718 — optional AccountOwner generation/phase evidence. */
+  account_owner: OperatorSurfaceAccountOwner | null;
+  /** PRD #718 — backend-authored submit-readiness answer. */
+  submit_readiness: OperatorSurfaceSubmitReadiness;
+  /** PRD #718 — backend-authored trader-language right-pane contract. */
+  trader_guidance: OperatorSurfaceTraderGuidance;
   actions: OperatorSurfaceActions;
   trading_session: OperatorSurfaceTradingSession;
   /** PRD #616 — operator-facing projection of engine readiness gates with

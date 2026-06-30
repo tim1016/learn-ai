@@ -58,7 +58,8 @@
 }
 
 .overview-layout {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(640px, 1fr) minmax(320px, 390px);
   flex: 1 1 auto;
   min-height: 1060px;
 }
@@ -67,7 +68,6 @@
   min-width: 0;
   min-height: 0;
   background: var(--bg-canvas);
-  flex: 1 1 auto;
 }
 
 .flow-canvas {

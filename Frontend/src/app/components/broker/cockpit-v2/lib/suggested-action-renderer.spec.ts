@@ -10,6 +10,7 @@ function makeDispatch(): RendererDispatch & {
     focus: [string, string][];
     redeploy: number;
     openRunbook: string[];
+    invokeEndpoint: string[];
   };
 } {
   const calls = {
@@ -17,6 +18,7 @@ function makeDispatch(): RendererDispatch & {
     focus: [] as [string, string][],
     redeploy: 0,
     openRunbook: [] as string[],
+    invokeEndpoint: [] as string[],
   };
   return {
     invokeCapability: vi.fn((cap) => calls.invokeCapability.push(cap)),
@@ -25,6 +27,7 @@ function makeDispatch(): RendererDispatch & {
       calls.redeploy += 1;
     }),
     openRunbook: vi.fn((slug) => calls.openRunbook.push(slug)),
+    invokeEndpoint: vi.fn((endpoint) => calls.invokeEndpoint.push(endpoint)),
     calls,
   };
 }
@@ -73,6 +76,46 @@ describe('renderSuggestedAction', () => {
     );
     rendered?.invoke();
     expect(dispatch.calls.openRunbook).toEqual(['broker-reconnect']);
+  });
+
+  it('invoke_endpoint dispatches the stable backend endpoint name', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      {
+        kind: 'invoke_endpoint',
+        endpoint: 'reconcile_instance',
+        method: 'POST',
+        path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+      },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Reconcile now');
+    expect(rendered?.variant).toBe('primary');
+    rendered?.invoke();
+    expect(dispatch.calls.invokeEndpoint).toEqual(['reconcile_instance']);
+  });
+
+  it('fails closed for invoke_endpoint when the caller does not support endpoint dispatch', () => {
+    const dispatch: RendererDispatch = {
+      invokeCapability: vi.fn(),
+      focus: vi.fn(),
+      redeploy: vi.fn(),
+      openRunbook: vi.fn(),
+    };
+    const rendered = renderSuggestedAction(
+      {
+        kind: 'invoke_endpoint',
+        endpoint: 'reconcile_instance',
+        method: 'POST',
+        path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+      },
+      dispatch,
+    );
+    expect(rendered).toBe(null);
+  });
+
+  it('returns null for no primary remediation', () => {
+    expect(renderSuggestedAction({ kind: 'none', reason: 'READY' }, makeDispatch())).toBe(null);
   });
 
   it('returns null for an unknown kind (fail closed visibly)', () => {

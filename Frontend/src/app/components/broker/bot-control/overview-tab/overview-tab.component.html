@@ -65,5 +65,10 @@
         </ng-template>
       </vflow>
     </section>
+
+    <app-trader-guidance-pane
+      [surface]="status().operator_surface"
+      (primaryRemediationSelected)="onTraderGuidanceAction($event)"
+    />
   </div>
 </section>

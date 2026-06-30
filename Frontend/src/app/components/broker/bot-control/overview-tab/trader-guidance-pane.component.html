@@ -1,0 +1,103 @@
+<aside
+  class="trader-guidance-pane"
+  data-testid="trader-guidance-pane"
+  aria-label="Trader guidance"
+  [attr.data-situation]="traderGuidance().situation_code"
+  [attr.data-submit-readiness]="submitReadiness().code"
+>
+  <section class="summary-band">
+    <p class="eyebrow">Trader view</p>
+    <h3 data-testid="trader-guidance-headline">{{ traderGuidance().headline }}</h3>
+    <p>{{ traderGuidance().explanation }}</p>
+  </section>
+
+  <section class="readiness-band" [class.can-submit]="submitReadiness().can_submit">
+    <p class="eyebrow">Submit readiness</p>
+    <div class="readiness-line">
+      <span class="readiness-dot" aria-hidden="true"></span>
+      <strong>{{ submitReadiness().label }}</strong>
+    </div>
+    <p>{{ submitReadiness().explanation }}</p>
+    @if (submitReadiness().blocking_reason_codes.length > 0) {
+      <ul class="reason-list" aria-label="Blocking reason codes">
+        @for (code of submitReadiness().blocking_reason_codes; track code) {
+          <li>{{ code }}</li>
+        }
+      </ul>
+    }
+  </section>
+
+  <section class="risk-band">
+    <p class="eyebrow">Risk meaning</p>
+    <h3>{{ traderGuidance().risk_headline }}</h3>
+    <p>{{ traderGuidance().risk_explanation }}</p>
+  </section>
+
+  @if (accountOwner(); as owner) {
+    <section class="owner-band">
+      <p class="eyebrow">Account owner</p>
+      <dl>
+        <div>
+          <dt>Account</dt>
+          <dd>{{ owner.account_id }}</dd>
+        </div>
+        <div>
+          <dt>Phase</dt>
+          <dd>{{ owner.phase }}</dd>
+        </div>
+        @if (owner.generation !== null) {
+          <div>
+            <dt>Generation</dt>
+            <dd>{{ owner.generation }}</dd>
+          </div>
+        }
+      </dl>
+    </section>
+  }
+
+  @if (attentionGroups().length > 0) {
+    <section class="attention-band">
+      <p class="eyebrow">Attention</p>
+      <ul>
+        @for (group of attentionGroups(); track trackAttention($index, group)) {
+          <li [class]="'severity-' + group.severity">
+            <strong>{{ group.headline }}</strong>
+            <p>{{ group.explanation }}</p>
+          </li>
+        }
+      </ul>
+    </section>
+  }
+
+  @if (renderedPrimary(); as action) {
+    <section class="next-step-band">
+      <p class="eyebrow">Next step</p>
+      <button
+        type="button"
+        class="primary-remediation"
+        [class.link-remediation]="action.variant === 'link'"
+        data-testid="trader-guidance-primary-remediation"
+        (click)="action.invoke()"
+      >
+        {{ action.label }}
+      </button>
+    </section>
+  }
+
+  <details class="advanced-evidence" data-testid="trader-guidance-advanced-evidence">
+    <summary>Advanced evidence</summary>
+    <dl>
+      @for (fact of advancedEvidence(); track trackEvidence($index, fact)) {
+        <div class="evidence-row">
+          <dt>{{ fact.label }}</dt>
+          <dd>
+            <span>{{ fact.value }}</span>
+            @if (fact.source) {
+              <small>{{ fact.source }}</small>
+            }
+          </dd>
+        </div>
+      }
+    </dl>
+  </details>
+</aside>
