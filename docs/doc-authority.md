@@ -28,7 +28,7 @@
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
-| `docs/bot-lifecycle-account-owner-authority.md` | Bot lifecycle and account ownership implementation snapshot | `docs/architecture/bot-lifecycle-account-owner-prd.md` for implementation authority; supersedes `docs/architecture/bot-lifecycle-gate-map.md` on current shipped behavior | 2026-06-29 |
+| `docs/bot-lifecycle-account-owner-authority.md` | Bot lifecycle and account ownership implementation snapshot | `docs/architecture/bot-lifecycle-account-owner-prd.md` for implementation authority; supersedes `docs/architecture/bot-lifecycle-gate-map.md` on current shipped behavior | 2026-06-30 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |

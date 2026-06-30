@@ -224,10 +224,18 @@ def test_writer_guard_surfaces_account_owner_generation_without_claiming_r3_daem
     surface = _surface(account_owner=_account_owner())
     chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
     broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
+    receipts = {receipt.label: receipt for receipt in broker_nodes["writer_guard"].receipts}
 
     assert broker_nodes["writer_guard"].label == "Owner generation"
     assert broker_nodes["writer_guard"].technical_label == "accepting gen 4"
     assert broker_nodes["writer_guard"].status == "passed"
+    assert broker_nodes["writer_guard"].ts_ms == _NOW_MS - 1_000
+    assert broker_nodes["writer_guard"].ts_ms_resolved is True
+    assert receipts["account_owner.phase"].value == "accepting"
+    assert receipts["account_owner.phase"].source == "test"
+    assert receipts["account_owner.generation"].value == "4"
+    assert receipts["account_owner.generation"].ts_ms == _NOW_MS - 1_000
+    assert receipts["account_owner.generation"].ts_ms_resolved is True
     assert "generation is 4" in (broker_nodes["writer_guard"].summary or "")
     assert "not proof that R3 daemon/IPC single-writer authority is shipped" in (
         broker_nodes["writer_guard"].summary or ""
@@ -249,10 +257,18 @@ def test_submit_uncertainty_reaches_submit_subgraph() -> None:
         lifecycle_events=lifecycle_events,
     )
     nodes = {node.id: node for node in chart.subgraphs["submit_order"].nodes}
+    ack_receipts = {receipt.label: receipt for receipt in nodes["ack_or_reconcile"].receipts}
 
     assert nodes["ack_or_reconcile"].status == "blocked"
+    assert nodes["ack_or_reconcile"].ts_ms == _NOW_MS + 1
+    assert nodes["ack_or_reconcile"].ts_ms_resolved is True
     assert nodes["ack_or_reconcile"].summary == "Broker acknowledgement failed; submit outcome is uncertain."
     assert nodes["ack_or_reconcile"].operator_next_step == "PROBE_BROKER_BEFORE_RETRY"
+    assert ack_receipts["event_type"].value == "BrokerOrderUncertain"
+    assert ack_receipts["source_seq"].value == "1"
+    assert ack_receipts["intent_id"].value == "intent-1"
+    assert ack_receipts["order_ref"].value == f"{_NAMESPACE}:intent-1"
+    assert ack_receipts["ts_ms_source"].value == "appended_at_ms"
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:
@@ -306,8 +322,21 @@ def test_account_safety_focuses_broker_connection_blocker() -> None:
 def test_chart_failed_reconciliation_blocks_at_reconciliation_edge() -> None:
     surface = _surface(reconciliation_receipt=_receipt("failed"))
     chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    reconcile_node = next(node for node in chart.global_graph.nodes if node.id == "reconcile")
+    receipt_node = next(node for node in chart.subgraphs["reconcile"].nodes if node.id == "receipt")
+    reconcile_receipts = {receipt.label: receipt for receipt in reconcile_node.receipts}
+    receipt_receipts = {receipt.label: receipt for receipt in receipt_node.receipts}
 
     assert chart.global_graph.primary_node_id == "reconcile"
     assert _node_status(chart, "reconcile") == "blocked"
+    assert reconcile_node.ts_ms == _NOW_MS - 4_000
+    assert reconcile_node.ts_ms_resolved is True
+    assert reconcile_receipts["reconciliation.state"].value == "FAILED"
+    assert reconcile_receipts["last_reconcile_ms"].value == str(_NOW_MS - 4_000)
+    assert reconcile_receipts["last_reconcile_ms"].unit == "ms UTC"
+    assert reconcile_receipts["failure_reason"].value == "Broker snapshot disagrees with the intent WAL."
+    assert receipt_node.ts_ms == _NOW_MS - 4_000
+    assert receipt_node.ts_ms_resolved is True
+    assert receipt_receipts["reconciliation.state"].value == "FAILED"
     assert _edge_status(chart, "account_safety_to_reconcile") == "blocked"
     assert _edge_status(chart, "reconcile_to_activate") == "inactive"

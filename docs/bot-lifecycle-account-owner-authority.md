@@ -378,6 +378,18 @@ The Overview chart's node/edge meaning remains backend-authored through `lifecyc
 
 The Overview chart no longer labels the `broker_writer` global node as a `placeOrder boundary`. `PythonDataService/app/services/bot_lifecycle_chart.py` now labels that node as broker-activity publisher health and includes explicit copy that publisher health is capture health, not proof that R3 AccountOwner daemon/IPC single-writer authority is shipped. The `writer_guard` subnode is the AccountOwner generation/phase row; when generation evidence exists it renders that evidence, and when absent it renders unknown with explicit R2 process-local wording. AccountOwner generation lifecycle events now project to `writer_guard`, not the global `broker_writer` node.
 
+### Lifecycle Node Receipt Snapshot
+
+`PythonDataService/app/services/bot_lifecycle_chart.py` now attaches receipt metadata directly to `LifecycleChartNode` rows. The node-level fields are `ts_ms`, `ts_ms_resolved`, and `receipts[]`; each receipt carries a backend-authored label/value plus optional source, gate id, unit, and timestamp. This is the shipped authority for the flowchart's "when / what evidence backs this node?" contract.
+
+The receipt sources are intentionally narrow:
+
+- intent/order lifecycle nodes expose existing `BotLifecycleEvent` facts such as event type, source-local sequence, intent id, order ref, broker ids when present, and timestamp source;
+- reconciliation nodes expose `operator_surface.reconciliation` facts such as state, adopted-intent count, last reconcile timestamp, and failure reason;
+- `writer_guard` exposes AccountOwner phase/generation facts from `operator_surface.account_owner`.
+
+These receipts are display evidence only. They do not create a new event log, do not make Postgres canonical, do not prove R3 daemon/IPC single-writer authority, and do not let Angular infer a lifecycle or submit-safety verdict. Angular may render and format these rows; Python remains the author of node status, evidence, receipt labels, and receipt values.
+
 ### Postgres Projection Replay Snapshot
 
 `PythonDataService/app/services/lifecycle_projection_replay.py` is the shipped replay seam for the Postgres lifecycle read model. It consumes already-normalized Intent WAL and account-event inputs through the existing `bot_lifecycle_projection.py` chart projection functions, converts those events to `LifecycleProjectionEventRow` rows, routes bot-scoped rows to `bot_lifecycle_events`, routes account-only rows to `account_lifecycle_events`, and projects `account_owner_generation_recorded` evidence into `account_owner_status_snapshots`.
@@ -406,5 +418,6 @@ This replay seam does not read artifacts, schedule background work, mutate canon
 | AccountOwner submit/reconnect lane | `PythonDataService/app/engine/live/account_owner.py` |
 | Operator trader guidance and submit-readiness | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/operator_surface.py`, `PythonDataService/app/routers/live_instances.py`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts` |
 | Broker activity vs writer authority charting | `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_projection.py` |
+| Lifecycle chart node receipts | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/bot_lifecycle_chart.py`, `Frontend/src/app/api/live-instances.types.ts` |
 | Lifecycle chart layout geometry | `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.html` |
 | Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
