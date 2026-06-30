@@ -336,7 +336,11 @@ export class BotControlPageComponent {
   }
 
   onGateOpenRunbook(slug: string): void {
-    void this.router.navigate(['/docs/signal-engine-methodology'], { fragment: slug });
+    window.open(this.runbookHref(slug), '_blank', 'noopener');
+  }
+
+  runbookHref(slug: string): string {
+    return `/runbooks/${encodeURIComponent(slug)}`;
   }
 
   dispatchOverviewAction(action: LifecycleChartActionId): void {
