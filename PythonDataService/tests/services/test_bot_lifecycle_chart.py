@@ -7,6 +7,7 @@ from app.schemas.live_runs import (
     DesiredStateView,
     GateResult,
     InstanceBrokerView,
+    InstanceLastExit,
     InstanceProcessView,
     InstanceSizing,
     InstanceStartDefaults,
@@ -297,6 +298,58 @@ def test_submit_drop_receipts_include_daily_order_cap_and_drop_reason() -> None:
     assert receipts["daily_order_cap.used"].unit == "orders"
     assert receipts["daily_order_cap.limit"].value == "50"
     assert receipts["daily_order_cap.limit"].unit == "orders"
+
+
+def test_recovery_placeholders_are_inactive_without_active_incident() -> None:
+    surface = _surface()
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    nodes = {node.id: node for node in chart.subgraphs["recovery"].nodes}
+
+    assert nodes["incident"].status == "inactive"
+    for node_id in ("flatten", "reconcile_after", "fresh_run"):
+        assert nodes[node_id].status == "inactive"
+        assert nodes[node_id].why is None
+        assert nodes[node_id].operator_next_step is None
+        assert nodes[node_id].ts_ms is None
+        assert nodes[node_id].ts_ms_resolved is False
+        assert "No active recovery incident" in (nodes[node_id].summary or "")
+
+
+def test_recovery_placeholders_are_unknown_when_recovery_requires_proof() -> None:
+    surface = _surface(
+        last_exit=InstanceLastExit(
+            run_id="prior-run",
+            exit_code=1,
+            halt_trigger="OUTSIDE_MUTATION",
+            halt_at_ms=_NOW_MS - 6_000,
+        )
+    )
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    nodes = {node.id: node for node in chart.subgraphs["recovery"].nodes}
+
+    assert chart.global_graph.primary_node_id == "recovery"
+    assert nodes["incident"].status == "poison"
+    expected = {
+        "flatten": (
+            "No backend-authored flatten proof is available for this recovery incident.",
+            "WAIT_FOR_FLATTEN_PROOF_OR_FREEZE_ACCOUNT",
+        ),
+        "reconcile_after": (
+            "No post-incident reconciliation proof is available for this recovery incident.",
+            "RUN_RECONCILIATION_AFTER_RECOVERY",
+        ),
+        "fresh_run": (
+            "No fresh-run or redeploy proof is available for this recovery incident.",
+            "WAIT_FOR_REDEPLOY_PROOF",
+        ),
+    }
+    for node_id, (reason, next_step) in expected.items():
+        assert nodes[node_id].status == "unknown"
+        assert nodes[node_id].summary == reason
+        assert nodes[node_id].why == reason
+        assert nodes[node_id].operator_next_step == next_step
+        assert nodes[node_id].ts_ms is None
+        assert nodes[node_id].ts_ms_resolved is False
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:

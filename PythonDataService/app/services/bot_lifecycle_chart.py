@@ -239,6 +239,7 @@ def _lifecycle_facts(
     active_status = _active_status(primary_node_id)
     submit_order_event = latest_event_for_node(lifecycle_events, "submit_order")
     submit_order_status: LifecycleChartStatus = "passed" if primary_node_id == "broker_writer" else "inactive"
+    recovery_status = base_statuses["recovery"]
     facts = {
         "deploy": NodeFact(_status_for("deploy", base_statuses["deploy"], primary_node_id), _host_evidence(surface)),
         "preflight": NodeFact(
@@ -357,10 +358,10 @@ def _lifecycle_facts(
             "broker_ack",
             "No live broker acknowledgement evidence is available in this snapshot.",
         ),
-        "incident": NodeFact(_recovery_status(surface), _recovery_evidence(surface)),
-        "flatten": NodeFact("inactive", "Flatten is shown only when the backend enables the capability."),
-        "reconcile_after": NodeFact("inactive", "Recovery requires broker evidence before a fresh run resumes."),
-        "fresh_run": NodeFact("inactive", "Poisoned or stopped runs require a fresh run_id."),
+        "incident": NodeFact(recovery_status, _recovery_evidence(surface)),
+        "flatten": _recovery_placeholder_fact("flatten", recovery_status),
+        "reconcile_after": _recovery_placeholder_fact("reconcile_after", recovery_status),
+        "fresh_run": _recovery_placeholder_fact("fresh_run", recovery_status),
     }
     facts.update(_readiness_gate_facts(surface.readiness_gates))
     return LifecycleFacts(primary_node_id, base_statuses, facts)
@@ -509,6 +510,28 @@ def _daily_order_cap_receipts(surface: OperatorSurface) -> tuple[LifecycleChartR
     if cap.limit is not None:
         receipts.append(_receipt("daily_order_cap.limit", cap.limit, unit="orders", source="readiness"))
     return tuple(receipts)
+
+
+def _recovery_placeholder_fact(node_id: str, recovery_status: LifecycleChartStatus) -> NodeFact:
+    if recovery_status in {"active", "blocked", "poison"}:
+        unknown_reasons = {
+            "flatten": "No backend-authored flatten proof is available for this recovery incident.",
+            "reconcile_after": "No post-incident reconciliation proof is available for this recovery incident.",
+            "fresh_run": "No fresh-run or redeploy proof is available for this recovery incident.",
+        }
+        next_steps = {
+            "flatten": "WAIT_FOR_FLATTEN_PROOF_OR_FREEZE_ACCOUNT",
+            "reconcile_after": "RUN_RECONCILIATION_AFTER_RECOVERY",
+            "fresh_run": "WAIT_FOR_REDEPLOY_PROOF",
+        }
+        reason = unknown_reasons[node_id]
+        return NodeFact("unknown", reason, why=reason, operator_next_step=next_steps[node_id])
+    inactive_reasons = {
+        "flatten": "No active recovery incident requires flatten proof.",
+        "reconcile_after": "No active recovery incident requires post-incident reconciliation proof.",
+        "fresh_run": "No active recovery incident requires a fresh run.",
+    }
+    return NodeFact("inactive", inactive_reasons[node_id])
 
 
 def _build_graph(
