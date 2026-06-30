@@ -153,6 +153,10 @@ namespace Backend.Migrations
                 ADD CONSTRAINT ck_account_lifecycle_events_severity CHECK (severity IN ('info','warning','critical'));
                 ALTER TABLE operator_gate_snapshots
                 ADD CONSTRAINT ck_operator_gate_snapshots_severity CHECK (severity IN ('info','warning','critical'));
+                ALTER TABLE bot_lifecycle_events
+                ADD CONSTRAINT ck_bot_lifecycle_events_source_rank_nonnegative CHECK (source_rank >= 0);
+                ALTER TABLE account_lifecycle_events
+                ADD CONSTRAINT ck_account_lifecycle_events_source_rank_nonnegative CHECK (source_rank >= 0);
 
                 ALTER TABLE bot_lifecycle_events
                 ADD CONSTRAINT ck_bot_lifecycle_events_ts_resolution CHECK (

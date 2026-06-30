@@ -65,6 +65,16 @@ interface LifecycleTimelinePaneState {
   readonly notice: string | null;
 }
 
+interface LifecycleTimelineRequestContext {
+  readonly statusKey: string;
+  readonly params: {
+    readonly account_id: string | null;
+    readonly strategy_instance_id: string;
+    readonly run_id: string | null;
+    readonly limit: number;
+  };
+}
+
 const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
   statusKey: null,
   rows: [],
@@ -447,14 +457,14 @@ export class BotControlPageComponent {
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.status.set(status);
       this.statusError.set(null);
-      const statusKey = this.lifecycleTimelineStatusKey(status);
-      if (this.lifecycleTimeline().statusKey !== statusKey) {
+      const timelineContext = this.lifecycleTimelineContext(status);
+      if (this.lifecycleTimeline().statusKey !== timelineContext.statusKey) {
         this.lifecycleTimeline.set({
           ...EMPTY_TIMELINE_STATE,
-          statusKey,
+          statusKey: timelineContext.statusKey,
         });
       }
-      void this.refreshLifecycleTimeline(id, status, seq);
+      void this.refreshLifecycleTimeline(id, timelineContext, seq);
     } catch (err) {
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.statusError.set(this.humanError(err));
@@ -463,20 +473,15 @@ export class BotControlPageComponent {
 
   private async refreshLifecycleTimeline(
     id: string,
-    status: LiveInstanceStatus,
+    context: LifecycleTimelineRequestContext,
     statusSeq: number,
   ): Promise<void> {
     const seq = ++this.timelineRequestSeq;
     try {
-      const timeline = await this.liveRuns.getLifecycleTimeline({
-        account_id: status.operator_surface.account_owner?.account_id ?? this.accountSummary()?.account_id ?? null,
-        strategy_instance_id: status.strategy_instance_id,
-        run_id: status.live_binding?.run_id ?? status.evidence_binding?.run_id ?? null,
-        limit: TIMELINE_LIMIT,
-      });
+      const timeline = await this.liveRuns.getLifecycleTimeline(context.params);
       if (this.instanceId() !== id || statusSeq !== this.statusRequestSeq || seq !== this.timelineRequestSeq) return;
       this.lifecycleTimeline.set({
-        statusKey: this.lifecycleTimelineStatusKey(status),
+        statusKey: context.statusKey,
         rows: timeline.rows,
         projectionAvailable: timeline.projection_available,
         canonicalFallbackRequired: timeline.canonical_fallback_required,
@@ -485,7 +490,7 @@ export class BotControlPageComponent {
     } catch (err) {
       if (this.instanceId() !== id || statusSeq !== this.statusRequestSeq || seq !== this.timelineRequestSeq) return;
       this.lifecycleTimeline.set({
-        statusKey: this.lifecycleTimelineStatusKey(status),
+        statusKey: context.statusKey,
         rows: [],
         projectionAvailable: false,
         canonicalFallbackRequired: true,
@@ -503,12 +508,22 @@ export class BotControlPageComponent {
     }
   }
 
-  private lifecycleTimelineStatusKey(status: LiveInstanceStatus): string {
-    return [
-      status.strategy_instance_id,
-      status.operator_surface.account_owner?.account_id ?? this.accountSummary()?.account_id ?? '',
-      status.live_binding?.run_id ?? status.evidence_binding?.run_id ?? '',
-    ].join(':');
+  private lifecycleTimelineContext(status: LiveInstanceStatus): LifecycleTimelineRequestContext {
+    const accountId = status.operator_surface.account_owner?.account_id ?? null;
+    const runId = status.live_binding?.run_id ?? status.evidence_binding?.run_id ?? null;
+    return {
+      statusKey: [
+        status.strategy_instance_id,
+        accountId ?? '',
+        runId ?? '',
+      ].join(':'),
+      params: {
+        account_id: accountId,
+        strategy_instance_id: status.strategy_instance_id,
+        run_id: runId,
+        limit: TIMELINE_LIMIT,
+      },
+    };
   }
 
   private async setIntent(

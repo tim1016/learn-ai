@@ -17,8 +17,8 @@ export class TraderGuidanceTimelineComponent {
   readonly canonicalFallbackRequired = input<boolean>(true);
   readonly notice = input<string | null>(null);
 
-  trackTimelineRow(index: number, row: LifecycleProjectionEventRow): string {
-    return `${row.event_id}:${index}`;
+  trackTimelineRow(_index: number, row: LifecycleProjectionEventRow): string {
+    return row.event_id;
   }
 
   timelineHeadline(row: LifecycleProjectionEventRow): string {

@@ -431,6 +431,7 @@ def _event_or_unknown_fact(
 def _writer_guard_fact(surface: OperatorSurface, lifecycle_events: Sequence[BotLifecycleEvent]) -> NodeFact:
     event = latest_event_for_node(lifecycle_events, "writer_guard")
     if event is not None:
+        account_owner_receipt_rows = account_owner_receipts(surface)
         fact = _node_fact_from_event(
             event,
             fallback_status="unknown",
@@ -440,7 +441,13 @@ def _writer_guard_fact(surface: OperatorSurface, lifecycle_events: Sequence[BotL
         )
         status = _account_owner_event_status(event)
         if status is not None:
-            return replace(fact, status=status, status_label=lifecycle_status_label(status))
+            fact = replace(fact, status=status, status_label=lifecycle_status_label(status))
+        if account_owner_receipt_rows:
+            return replace(
+                fact,
+                technical_label=_account_owner_label(surface),
+                receipts=account_owner_receipt_rows,
+            )
         return fact
     account_owner_ts_ms = _account_owner_ts_ms(surface)
     account_owner_status = _account_owner_status(surface)

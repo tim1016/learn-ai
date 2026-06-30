@@ -12,6 +12,7 @@ from app.services.lifecycle_projection_tailer import (
     AccountEventsProjectionSource,
     IntentWalProjectionSource,
     default_lifecycle_projection_cursor_path,
+    merge_lifecycle_projection_cursor_source,
     read_lifecycle_projection_cursor,
     tail_lifecycle_projection_sources,
 )
@@ -203,3 +204,52 @@ async def test_tailer_does_not_advance_cursor_when_projection_write_fails(tmp_pa
         )
 
     assert not cursor_path.exists()
+
+
+def test_cursor_source_merge_is_monotonic(tmp_path: Path) -> None:
+    cursor_path = default_lifecycle_projection_cursor_path(tmp_path)
+    source_artifact = str(tmp_path / "accounts" / "DU123456" / "account_events.jsonl")
+
+    merge_lifecycle_projection_cursor_source(
+        cursor_path,
+        source_key=f"account_events:{source_artifact}",
+        source_kind="account_events",
+        source_artifact=source_artifact,
+        last_file_position=12,
+        last_source_seq=9,
+        source_hash="a" * 64,
+        updated_at_ms=1_700_000_000_200,
+    )
+    cursor = merge_lifecycle_projection_cursor_source(
+        cursor_path,
+        source_key=f"account_events:{source_artifact}",
+        source_kind="account_events",
+        source_artifact=source_artifact,
+        last_file_position=5,
+        last_source_seq=3,
+        source_hash="b" * 64,
+        updated_at_ms=1_700_000_000_100,
+    )
+
+    source = cursor.sources[f"account_events:{source_artifact}"]
+    assert source.last_file_position == 12
+    assert source.last_source_seq == 9
+    assert source.source_hash == "a" * 64
+    assert source.updated_at_ms == 1_700_000_000_200
+
+    cursor = merge_lifecycle_projection_cursor_source(
+        cursor_path,
+        source_key=f"account_events:{source_artifact}",
+        source_kind="account_events",
+        source_artifact=source_artifact,
+        last_file_position=12,
+        last_source_seq=8,
+        source_hash="c" * 64,
+        updated_at_ms=1_700_000_000_300,
+    )
+
+    source = cursor.sources[f"account_events:{source_artifact}"]
+    assert source.last_file_position == 12
+    assert source.last_source_seq == 9
+    assert source.source_hash == "a" * 64
+    assert source.updated_at_ms == 1_700_000_000_300

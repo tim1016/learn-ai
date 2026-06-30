@@ -168,6 +168,26 @@ def test_read_account_events_tolerant_skips_malformed_legacy_rows(tmp_path: Path
     assert events == [{"event_type": "legacy", "account_id": "DU123456"}]
 
 
+def test_read_account_events_tolerant_skips_unreadable_rows_only(tmp_path: Path) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    path.write_bytes(
+        b'{"event_type":"first","account_id":"DU123456"}\n'
+        b"\xff\xfe\xfa\n"
+        b'{"event_type":"second","account_id":"DU123456"}\n'
+    )
+
+    events = read_account_events_tolerant(tmp_path, "DU123456")
+
+    assert events == [
+        {"event_type": "first", "account_id": "DU123456"},
+        {"event_type": "second", "account_id": "DU123456"},
+    ]
+    with pytest.raises(AccountArtifactError, match="invalid account event UTF-8"):
+        read_account_events(tmp_path, "DU123456")
+
+
 def test_account_freeze_clears_after_clean_recovery_proof(tmp_path: Path) -> None:
     evidence = AccountFreezeEvidence(
         account_id="DU123456",

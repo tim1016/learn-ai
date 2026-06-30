@@ -320,6 +320,38 @@ def test_writer_guard_event_uses_account_owner_status_mapping(
     )
 
 
+def test_writer_guard_event_preserves_surface_owner_receipts() -> None:
+    event = BotLifecycleEvent(
+        event_id="account_event:DU123:1:account_owner_generation_recorded",
+        account_id="DU123",
+        event_type="account_owner_generation_recorded",
+        category="lifecycle_transition",
+        node_id="writer_guard",
+        status="active",
+        severity="info",
+        ts_ms=_NOW_MS - 1_000,
+        source="account_owner",
+        source_rank=20,
+        source_local_seq=1,
+        summary="AccountOwner generation recorded.",
+        payload={"phase": "accepting", "generation": 4},
+    )
+
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        _surface(account_owner=_account_owner()),
+        desired_state=_desired("RUNNING"),
+        lifecycle_events=[event],
+    )
+    writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
+    receipts = {receipt.label: receipt for receipt in writer_guard.receipts}
+
+    assert writer_guard.status == "passed"
+    assert writer_guard.technical_label == "accepting gen 4"
+    assert receipts["account_owner.phase"].value == "accepting"
+    assert receipts["account_owner.generation"].value == "4"
+
+
 def test_reconnect_resumed_event_with_generation_marks_writer_guard_passed() -> None:
     account_events = project_account_events(
         [

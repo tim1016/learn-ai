@@ -92,7 +92,7 @@ class AccountOwnerStatusSnapshotRow(BaseModel):
     generation: int = Field(ge=0)
     phase: Literal["accepting", "reconnecting", "draining", "frozen"]
     recorded_at_ms: int = Field(ge=0)
-    ts_ms_resolved: bool
+    ts_ms_resolved: Literal[True] = True
     source_artifact: str
     source_seq: int | None = Field(default=None, ge=0)
     source_offset: int | None = Field(default=None, ge=0)

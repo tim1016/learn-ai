@@ -116,6 +116,7 @@ export interface LifecycleProjectionEventRow {
   ts_ms_resolved: boolean;
   source_artifact: string;
   source_type: string;
+  source_rank: number;
   source_seq: number | null;
   source_offset: number | null;
   source_hash: string | null;
@@ -136,4 +137,12 @@ export interface LifecycleTimelineResponse {
   rows: LifecycleProjectionEventRow[];
 }
 
-export type LifecycleSafetyTriageResponse = LifecycleTimelineResponse;
+export type LifecycleSafetyProjectionEventRow = Omit<LifecycleProjectionEventRow, 'severity'> & {
+  severity: LifecycleSafetySeverity;
+};
+
+export interface LifecycleSafetyTriageResponse {
+  projection_available: boolean;
+  canonical_fallback_required: boolean;
+  rows: LifecycleSafetyProjectionEventRow[];
+}

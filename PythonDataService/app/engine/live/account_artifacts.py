@@ -320,16 +320,30 @@ def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str
 
 
 def _parse_account_event_bytes(path: Path, raw: bytes, *, tolerant: bool) -> list[dict]:
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        if not tolerant:
+    if not tolerant:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
             raise AccountArtifactError(f"invalid account event UTF-8 in {path}: {exc}") from exc
-        logger.warning("Skipping unreadable account event file", extra={"path": str(path), "error": str(exc)})
-        return []
+        lines: list[str | bytes] = text.splitlines()
+    else:
+        lines = raw.splitlines()
 
     events: list[dict] = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line_value in enumerate(lines, start=1):
+        if isinstance(line_value, bytes):
+            if not line_value.strip():
+                continue
+            try:
+                line = line_value.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                logger.warning(
+                    "Skipping unreadable account event row",
+                    extra={"path": str(path), "line_no": line_no, "error": str(exc)},
+                )
+                continue
+        else:
+            line = line_value
         if not line.strip():
             continue
         try:
