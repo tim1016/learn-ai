@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence
-from app.engine.live.intent_events import IntentEvent, IntentEventType
+from app.engine.live.intent_events import DropReason, IntentEvent, IntentEventType
 from app.schemas.live_runs import (
     BotLifecycleChartView,
     DesiredStateView,
@@ -105,7 +105,7 @@ def _receipt(status: str = "passed") -> ReconciliationReceipt:
     )
 
 
-def _intent(seq: int, event_type: IntentEventType) -> IntentEvent:
+def _intent(seq: int, event_type: IntentEventType, *, drop_reason: DropReason | None = None) -> IntentEvent:
     intent_id = f"intent-{seq}"
     return IntentEvent(
         seq=seq,
@@ -114,6 +114,7 @@ def _intent(seq: int, event_type: IntentEventType) -> IntentEvent:
         bot_order_namespace=_NAMESPACE,
         order_ref=f"{_NAMESPACE}:{intent_id}",
         appended_at_ms=_NOW_MS + seq,
+        drop_reason=drop_reason,
     )
 
 
@@ -269,6 +270,33 @@ def test_submit_uncertainty_reaches_submit_subgraph() -> None:
     assert ack_receipts["intent_id"].value == "intent-1"
     assert ack_receipts["order_ref"].value == f"{_NAMESPACE}:intent-1"
     assert ack_receipts["ts_ms_source"].value == "appended_at_ms"
+
+
+def test_submit_drop_receipts_include_daily_order_cap_and_drop_reason() -> None:
+    readiness = _readiness().model_copy(update={"orders_used": 50, "orders_cap": 50})
+    surface = _surface(readiness=readiness)
+    lifecycle_events = project_intent_events(
+        [_intent(1, IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT, drop_reason="max_orders_per_day")],
+        bot_id=_SID,
+        account_id="DU123",
+        run_id=_RUN_ID,
+    )
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        surface,
+        desired_state=_desired("RUNNING"),
+        lifecycle_events=lifecycle_events,
+    )
+    submit_node = next(node for node in chart.global_graph.nodes if node.id == "submit_order")
+    receipts = {receipt.label: receipt for receipt in submit_node.receipts}
+
+    assert submit_node.status == "blocked"
+    assert submit_node.why == "Submission gate dropped the intent: max_orders_per_day."
+    assert receipts["drop_reason"].value == "max_orders_per_day"
+    assert receipts["daily_order_cap.used"].value == "50"
+    assert receipts["daily_order_cap.used"].unit == "orders"
+    assert receipts["daily_order_cap.limit"].value == "50"
+    assert receipts["daily_order_cap.limit"].unit == "orders"
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:

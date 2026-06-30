@@ -8,7 +8,7 @@ module only adapts those facts into a visual graph contract.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from typing import Literal
 
@@ -265,11 +265,7 @@ def _lifecycle_facts(
             _active_evidence(active_status),
             why=_active_reason(surface, desired_state, active_status),
         ),
-        "submit_order": _node_fact_from_event(
-            submit_order_event,
-            fallback_status=submit_order_status,
-            fallback_evidence="Order submission waits for an active signal from the running bot.",
-        ),
+        "submit_order": _submit_order_fact(surface, submit_order_event, fallback_status=submit_order_status),
         "broker_writer": NodeFact(
             _status_for("broker_writer", base_statuses["broker_writer"], primary_node_id),
             _broker_writer_evidence(surface),
@@ -475,7 +471,7 @@ def _event_receipts(event: BotLifecycleEvent) -> tuple[LifecycleChartReceipt, ..
             ts_ms_resolved=event.ts_ms_resolved,
         ),
     ]
-    for key in ("intent_id", "order_ref", "order_id", "perm_id", "ts_ms_source"):
+    for key in ("intent_id", "order_ref", "order_id", "perm_id", "drop_reason", "ts_ms_source"):
         value = event.payload.get(key)
         if value is not None:
             receipts.append(
@@ -487,6 +483,31 @@ def _event_receipts(event: BotLifecycleEvent) -> tuple[LifecycleChartReceipt, ..
                     ts_ms_resolved=event.ts_ms_resolved,
                 )
             )
+    return tuple(receipts)
+
+
+def _submit_order_fact(
+    surface: OperatorSurface,
+    event: BotLifecycleEvent | None,
+    *,
+    fallback_status: LifecycleChartStatus,
+) -> NodeFact:
+    fact = _node_fact_from_event(
+        event,
+        fallback_status=fallback_status,
+        fallback_evidence="Order submission waits for an active signal from the running bot.",
+    )
+    receipts = fact.receipts + _daily_order_cap_receipts(surface)
+    return replace(fact, receipts=receipts)
+
+
+def _daily_order_cap_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    cap = surface.daily_order_cap
+    receipts: list[LifecycleChartReceipt] = []
+    if cap.used is not None:
+        receipts.append(_receipt("daily_order_cap.used", cap.used, unit="orders", source="readiness"))
+    if cap.limit is not None:
+        receipts.append(_receipt("daily_order_cap.limit", cap.limit, unit="orders", source="readiness"))
     return tuple(receipts)
 
 
