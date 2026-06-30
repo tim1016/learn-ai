@@ -57,11 +57,21 @@ class _FakeStore:
         self,
         *,
         account_id: str | None = None,
+        strategy_instance_id: str | None = None,
+        run_id: str | None = None,
         status: str | None = None,
+        event_type: str | None = None,
+        node_id: str | None = None,
+        severity: str | None = None,
         limit: int = 100,
     ) -> list[LifecycleProjectionEventRow]:
         assert account_id == "DU123"
+        assert strategy_instance_id == "bot-a"
+        assert run_id == "run-1"
         assert status == "blocked"
+        assert event_type == "BrokerOrderUncertain"
+        assert node_id == "ack_or_reconcile"
+        assert severity == "warning"
         assert limit == 10
         return []
 
@@ -105,7 +115,16 @@ async def test_safety_triage_endpoint_applies_bounded_filters() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
             "/api/lifecycle-projection/safety-triage",
-            params={"account_id": "DU123", "status": "blocked", "limit": 10},
+            params={
+                "account_id": "DU123",
+                "strategy_instance_id": "bot-a",
+                "run_id": "run-1",
+                "status": "blocked",
+                "event_type": "BrokerOrderUncertain",
+                "node_id": "ack_or_reconcile",
+                "severity": "warning",
+                "limit": 10,
+            },
         )
 
     assert response.status_code == 200
@@ -114,6 +133,15 @@ async def test_safety_triage_endpoint_applies_bounded_filters() -> None:
         "canonical_fallback_required": False,
         "rows": [],
     }
+
+
+async def test_safety_triage_rejects_non_safety_severity() -> None:
+    app = _app_with_store(_FakeStore())
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/lifecycle-projection/safety-triage", params={"severity": "info"})
+
+    assert response.status_code == 422
 
 
 async def test_projection_unavailable_returns_503_for_fallback() -> None:

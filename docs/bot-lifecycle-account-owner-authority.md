@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (projection artifact tailer slice: durable file cursor over account-event and Intent WAL artifacts, replay-store writes, and scheduler/authority limits).
+> **Last reviewed:** 2026-06-30 (safety-triage filter slice: backend query filters for account, bot, run, status, event type, node id, warning/critical severity, and typed Angular client access).
 
 ---
 
@@ -425,6 +425,12 @@ This replay seam does not read artifacts, schedule background work, mutate canon
 The cursor is file-backed and source-scoped. It stores source kind, source artifact path, last valid file position, last source-local sequence, source SHA-256, and `updated_at_ms` as `int64 ms UTC`. A cursor advances only after replay-store writes succeed; if the projection write fails, the cursor is not written and the next pass replays the same source rows idempotently by projection `event_id`.
 
 This tailer does not run from any GET route, does not make `/status` depend on Postgres, does not schedule a background process, and does not make Postgres canonical. It is the business-logic seam a future daemon/worker can call. Tests pin idempotent resume, append-only progress, write-failure cursor behavior, and tailed legacy account-event file positions in `PythonDataService/tests/services/test_lifecycle_projection_tailer.py` and `PythonDataService/tests/services/test_lifecycle_projection_replay.py`.
+
+### Safety Triage Query Snapshot
+
+`GET /api/lifecycle-projection/safety-triage` now exposes bounded backend filters for `account_id`, `strategy_instance_id`, `run_id`, `status`, `event_type`, `node_id`, `severity`, and `limit`. The store keeps the safety-triage invariant by returning warning/critical projection rows only; the `severity` query parameter is restricted to `warning` or `critical`.
+
+`Frontend/src/app/services/live-runs.service.ts` exposes the same contract as `getLifecycleSafetyTriage(...)`, with `LifecycleSafetySeverity` typed as the warning/critical subset of lifecycle severities. This is a query/read contract only: Angular does not derive safety labels, compose triage verdicts, or mutate projection state. Tests pin router filter forwarding, SQL parameter ordering, severity rejection, and Angular query construction.
 
 ## 10. Code Cross-Reference
 

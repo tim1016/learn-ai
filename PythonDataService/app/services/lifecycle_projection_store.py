@@ -333,7 +333,12 @@ async def select_timeline(
 async def select_safety_triage(
     *,
     account_id: str | None = None,
+    strategy_instance_id: str | None = None,
+    run_id: str | None = None,
     status: str | None = None,
+    event_type: str | None = None,
+    node_id: str | None = None,
+    severity: str | None = None,
     limit: int = 100,
 ) -> list[LifecycleProjectionEventRow]:
     """Return warning/critical projection rows for fleet triage."""
@@ -351,15 +356,30 @@ async def select_safety_triage(
                operator_next_step, receipt_payload, evidence_refs,
                rendered_headline, rendered_template_id, inserted_at_ms,
                updated_at_ms
-          FROM unioned
+         FROM unioned
          WHERE severity IN ('warning','critical')
            AND ($1::text IS NULL OR account_id = $1)
-           AND ($2::text IS NULL OR status = $2)
+           AND ($2::text IS NULL OR strategy_instance_id = $2)
+           AND ($3::text IS NULL OR run_id = $3)
+           AND ($4::text IS NULL OR status = $4)
+           AND ($5::text IS NULL OR event_type = $5)
+           AND ($6::text IS NULL OR node_id = $6)
+           AND ($7::text IS NULL OR severity = $7)
          ORDER BY COALESCE(ts_ms, 9223372036854775807) DESC, source_seq DESC NULLS LAST, id DESC
-         LIMIT $3;
+         LIMIT $8;
     """
     async with connection() as conn:
-        records = await conn.fetch(query, account_id, status, limit)
+        records = await conn.fetch(
+            query,
+            account_id,
+            strategy_instance_id,
+            run_id,
+            status,
+            event_type,
+            node_id,
+            severity,
+            limit,
+        )
     return [_row_from_record(record) for record in records]
 
 
@@ -408,10 +428,24 @@ class LifecycleProjectionStore:
         self,
         *,
         account_id: str | None = None,
+        strategy_instance_id: str | None = None,
+        run_id: str | None = None,
         status: str | None = None,
+        event_type: str | None = None,
+        node_id: str | None = None,
+        severity: str | None = None,
         limit: int = 100,
     ) -> list[LifecycleProjectionEventRow]:
-        return await select_safety_triage(account_id=account_id, status=status, limit=limit)
+        return await select_safety_triage(
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            status=status,
+            event_type=event_type,
+            node_id=node_id,
+            severity=severity,
+            limit=limit,
+        )
 
 
 _DEFAULT_STORE = LifecycleProjectionStore()

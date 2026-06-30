@@ -28,6 +28,9 @@ import type {
   FleetContamination,
   BotCatalogResponse,
   InstanceDesiredStateRequest,
+  LifecycleChartStatus,
+  LifecycleSafetySeverity,
+  LifecycleSafetyTriageResponse,
   LifecycleTimelineResponse,
   LiveInstanceStatus,
   LiveInstanceSummary,
@@ -175,6 +178,33 @@ export class LiveRunsService {
     return firstValueFrom(
       this.http.get<LifecycleTimelineResponse>(
         `${this.lifecycleProjectionBase}/timeline`,
+        { params: query },
+      ),
+    );
+  }
+
+  getLifecycleSafetyTriage(params: {
+    account_id?: string | null;
+    strategy_instance_id?: string | null;
+    run_id?: string | null;
+    status?: LifecycleChartStatus | null;
+    event_type?: string | null;
+    node_id?: string | null;
+    severity?: LifecycleSafetySeverity | null;
+    limit?: number;
+  }): Promise<LifecycleSafetyTriageResponse> {
+    let query = new HttpParams();
+    if (params.account_id) query = query.set('account_id', params.account_id);
+    if (params.strategy_instance_id) query = query.set('strategy_instance_id', params.strategy_instance_id);
+    if (params.run_id) query = query.set('run_id', params.run_id);
+    if (params.status) query = query.set('status', params.status);
+    if (params.event_type) query = query.set('event_type', params.event_type);
+    if (params.node_id) query = query.set('node_id', params.node_id);
+    if (params.severity) query = query.set('severity', params.severity);
+    if (params.limit !== undefined) query = query.set('limit', String(params.limit));
+    return firstValueFrom(
+      this.http.get<LifecycleSafetyTriageResponse>(
+        `${this.lifecycleProjectionBase}/safety-triage`,
         { params: query },
       ),
     );

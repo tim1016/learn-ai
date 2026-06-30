@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.lifecycle_projection import (
@@ -49,7 +51,12 @@ async def get_lifecycle_timeline(
 @router.get("/safety-triage", response_model=LifecycleSafetyTriageResponse)
 async def get_lifecycle_safety_triage(
     account_id: str | None = Query(default=None, min_length=1, max_length=64),
+    strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=128),
+    run_id: str | None = Query(default=None, min_length=1, max_length=128),
     status_filter: str | None = Query(default=None, alias="status", min_length=1, max_length=40),
+    event_type: str | None = Query(default=None, min_length=1, max_length=128),
+    node_id: str | None = Query(default=None, min_length=1, max_length=80),
+    severity: Literal["warning", "critical"] | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     store: LifecycleProjectionStore = Depends(get_lifecycle_projection_store),
 ) -> LifecycleSafetyTriageResponse:
@@ -58,7 +65,12 @@ async def get_lifecycle_safety_triage(
     try:
         rows = await store.select_safety_triage(
             account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
             status=status_filter,
+            event_type=event_type,
+            node_id=node_id,
+            severity=severity,
             limit=limit,
         )
     except LifecycleProjectionUnavailable as exc:
