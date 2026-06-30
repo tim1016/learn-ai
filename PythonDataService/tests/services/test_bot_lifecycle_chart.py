@@ -334,9 +334,15 @@ def test_chart_failed_reconciliation_blocks_at_reconciliation_edge() -> None:
     assert reconcile_receipts["reconciliation.state"].value == "FAILED"
     assert reconcile_receipts["last_reconcile_ms"].value == str(_NOW_MS - 4_000)
     assert reconcile_receipts["last_reconcile_ms"].unit == "ms UTC"
+    assert reconcile_receipts["sidecar_wal_seq"].value == "7"
+    assert reconcile_receipts["sidecar_wal_seq"].unit == "seq"
+    assert reconcile_receipts["broker_observed_at_ms"].value == str(_NOW_MS - 4_000)
+    assert reconcile_receipts["broker_observed_at_ms"].unit == "ms UTC"
     assert reconcile_receipts["failure_reason"].value == "Broker snapshot disagrees with the intent WAL."
     assert receipt_node.ts_ms == _NOW_MS - 4_000
     assert receipt_node.ts_ms_resolved is True
     assert receipt_receipts["reconciliation.state"].value == "FAILED"
+    assert receipt_receipts["sidecar_wal_seq"].value == "7"
+    assert receipt_receipts["broker_observed_at_ms"].value == str(_NOW_MS - 4_000)
     assert _edge_status(chart, "account_safety_to_reconcile") == "blocked"
     assert _edge_status(chart, "reconcile_to_activate") == "inactive"

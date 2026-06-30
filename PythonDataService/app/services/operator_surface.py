@@ -70,6 +70,7 @@ from app.schemas.live_runs import (
     ReadinessGate,
     ReadinessVector,
     ReconciliationReceipt,
+    ReconciliationState,
     RedeployAction,
 )
 from app.services.broker_activity_publisher import BrokerActivityPublisher
@@ -830,57 +831,46 @@ def _project_reconciliation(
     if receipt is None:
         return OperatorSurfaceReconciliation(state="NOT_AVAILABLE")
     if receipt.status == "in_progress":
-        return OperatorSurfaceReconciliation(state="IN_PROGRESS", last_reconcile_ms=receipt.last_reconcile_ms)
+        return _reconciliation_from_receipt(receipt, state="IN_PROGRESS")
     if receipt.status == "failed":
-        return OperatorSurfaceReconciliation(
-            state="FAILED",
-            failure_reason=receipt.failure_reason,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="FAILED", failure_reason=receipt.failure_reason)
     # status == "passed" from here on. Apply staleness rules.
     if current_wal_seq is not None and current_wal_seq > receipt.sidecar_wal_seq:
-        return OperatorSurfaceReconciliation(
-            state="STALE",
-            adopted_intent_ids=receipt.adopted_intent_ids,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="STALE")
     if current_run_id is not None and current_run_id != receipt.run_id:
-        return OperatorSurfaceReconciliation(
-            state="STALE",
-            adopted_intent_ids=receipt.adopted_intent_ids,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="STALE")
     if current_namespace is not None and current_namespace != receipt.namespace:
-        return OperatorSurfaceReconciliation(
-            state="STALE",
-            adopted_intent_ids=receipt.adopted_intent_ids,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="STALE")
     observed = receipt.broker_observed_at_ms
     if observed is not None and latest_broker_event_ms is not None and latest_broker_event_ms > observed:
-        return OperatorSurfaceReconciliation(
-            state="STALE",
-            adopted_intent_ids=receipt.adopted_intent_ids,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="STALE")
     if observed is not None and latest_mutation_ms is not None and latest_mutation_ms > observed:
-        return OperatorSurfaceReconciliation(
-            state="STALE",
-            adopted_intent_ids=receipt.adopted_intent_ids,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="STALE")
     if ttl_ms is not None and receipt.last_reconcile_ms is not None and (now_ms - receipt.last_reconcile_ms) > ttl_ms:
-        return OperatorSurfaceReconciliation(
-            state="STALE",
-            adopted_intent_ids=receipt.adopted_intent_ids,
-            last_reconcile_ms=receipt.last_reconcile_ms,
-        )
+        return _reconciliation_from_receipt(receipt, state="STALE")
     # Fresh passed receipt — distinguish clean vs adopted.
     state = "ADOPTED" if receipt.outcome == "adopted" else "CLEAN"
-    return OperatorSurfaceReconciliation(
+    return _reconciliation_from_receipt(
+        receipt,
         state=state,
         adopted_intent_ids=receipt.adopted_intent_ids,
+    )
+
+
+def _reconciliation_from_receipt(
+    receipt: ReconciliationReceipt,
+    *,
+    state: ReconciliationState,
+    failure_reason: str | None = None,
+    adopted_intent_ids: tuple[str, ...] | None = None,
+) -> OperatorSurfaceReconciliation:
+    return OperatorSurfaceReconciliation(
+        state=state,
+        failure_reason=failure_reason,
+        adopted_intent_ids=adopted_intent_ids if adopted_intent_ids is not None else receipt.adopted_intent_ids,
         last_reconcile_ms=receipt.last_reconcile_ms,
+        sidecar_wal_seq=receipt.sidecar_wal_seq,
+        broker_observed_at_ms=receipt.broker_observed_at_ms,
     )
 
 

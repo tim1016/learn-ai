@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (safety-triage filter slice: backend query filters for account, bot, run, status, event type, node id, warning/critical severity, and typed Angular client access).
+> **Last reviewed:** 2026-06-30 (reconciliation receipt evidence slice: operator-surface preservation and chart receipts for sidecar WAL seq, broker-observed timestamp, and last reconcile timestamp).
 
 ---
 
@@ -431,6 +431,12 @@ This tailer does not run from any GET route, does not make `/status` depend on P
 `GET /api/lifecycle-projection/safety-triage` now exposes bounded backend filters for `account_id`, `strategy_instance_id`, `run_id`, `status`, `event_type`, `node_id`, `severity`, and `limit`. The store keeps the safety-triage invariant by returning warning/critical projection rows only; the `severity` query parameter is restricted to `warning` or `critical`.
 
 `Frontend/src/app/services/live-runs.service.ts` exposes the same contract as `getLifecycleSafetyTriage(...)`, with `LifecycleSafetySeverity` typed as the warning/critical subset of lifecycle severities. This is a query/read contract only: Angular does not derive safety labels, compose triage verdicts, or mutate projection state. Tests pin router filter forwarding, SQL parameter ordering, severity rejection, and Angular query construction.
+
+### Reconciliation Receipt Evidence Snapshot
+
+`OperatorSurfaceReconciliation` now preserves `sidecar_wal_seq` and `broker_observed_at_ms` from `reconciliation_receipt.json` alongside the existing `last_reconcile_ms`. `PythonDataService/app/services/bot_lifecycle_chart.py` renders those fields as backend-authored reconciliation receipts on the global `reconcile` node and the reconcile subgraph's `receipt` node.
+
+The receipt fields remain evidence, not verdicts. `sidecar_wal_seq` is the Intent WAL cursor the receipt folded, and `broker_observed_at_ms` / `last_reconcile_ms` are persisted and serialized as `int64 ms UTC`; Angular may format them for display only. Tests pin preservation in `PythonDataService/tests/services/test_operator_surface.py` and chart rendering in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
 
 ## 10. Code Cross-Reference
 
