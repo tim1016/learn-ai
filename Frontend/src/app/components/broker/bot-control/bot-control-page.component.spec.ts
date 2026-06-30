@@ -451,6 +451,72 @@ describe('BotControlPageComponent', () => {
     expect(timeline?.textContent).toContain('broker_ack #7');
   });
 
+  it('renders selected lifecycle node freshness and receipts', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    const reconcile = status.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'reconcile');
+    if (!reconcile) throw new Error('Expected reconcile lifecycle node in fixture.');
+    reconcile.ts_ms = 1_700_000_001_000;
+    reconcile.ts_ms_resolved = true;
+    reconcile.receipts = [
+      {
+        label: 'reconciliation.state',
+        value: 'FAILED',
+        unit: null,
+        source: 'reconciliation_projection',
+        gate_id: null,
+        ts_ms: 1_700_000_001_000,
+        ts_ms_resolved: true,
+      },
+      {
+        label: 'failure_reason',
+        value: 'Broker snapshot disagrees with the intent WAL.',
+        unit: null,
+        source: 'reconciliation_projection',
+        gate_id: null,
+        ts_ms: null,
+        ts_ms_resolved: false,
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+    fixture.componentInstance.selectLifecycleNode(reconcile);
+    fixture.detectChanges();
+
+    const receipts = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="bot-control-node-receipts"]');
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Evidence time:');
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('ET');
+    expect(receipts?.textContent).toContain('reconciliation.state');
+    expect(receipts?.textContent).toContain('FAILED');
+    expect(receipts?.textContent).toContain('failure_reason');
+    expect(receipts?.textContent).toContain('Broker snapshot disagrees with the intent WAL.');
+    expect(receipts?.textContent).toContain('reconciliation_projection');
+  });
+
   it('keeps the cockpit file-backed when the projection timeline is unavailable', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const getLifecycleTimeline = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 503 }));

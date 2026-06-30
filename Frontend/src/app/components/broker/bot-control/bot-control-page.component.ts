@@ -17,6 +17,7 @@ import type {
   FleetAccountSummary,
   LifecycleChartActionId,
   LifecycleChartNode,
+  LifecycleChartReceipt,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
   OperatorNotice,
@@ -33,6 +34,7 @@ import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confi
 import type { InnerTab } from '../cockpit-v2/lib/instance-tab-state';
 import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
 import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-v2/lib/start-host-process';
+import { fmtTimestampNy } from '../format';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 
@@ -214,6 +216,19 @@ export class BotControlPageComponent {
   selectLifecycleNode(node: LifecycleChartNode): void {
     this.selectedLifecycleNodeId.set(node.id);
     this.selectedTab.set(this.tabForLifecycleNode(node));
+  }
+
+  nodeTimestamp(node: LifecycleChartNode): string {
+    return node.ts_ms_resolved ? fmtTimestampNy(node.ts_ms) : 'timestamp unresolved';
+  }
+
+  receiptTimestamp(receipt: LifecycleChartReceipt): string | null {
+    if (receipt.ts_ms === null) return null;
+    return receipt.ts_ms_resolved ? fmtTimestampNy(receipt.ts_ms) : 'timestamp unresolved';
+  }
+
+  trackNodeReceipt(index: number, receipt: LifecycleChartReceipt): string {
+    return `${receipt.label}:${receipt.source ?? 'unknown'}:${index}`;
   }
 
   async dispatchResume(): Promise<void> {

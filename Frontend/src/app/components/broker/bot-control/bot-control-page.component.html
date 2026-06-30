@@ -159,6 +159,30 @@
             @if (node.evidence_summary) {
               <p>{{ node.evidence_summary }}</p>
             }
+            <p class="context-timestamp">
+              Evidence time: {{ nodeTimestamp(node) }}
+            </p>
+            @if (node.receipts.length > 0) {
+              <details class="context-receipts" data-testid="bot-control-node-receipts">
+                <summary>Node receipts</summary>
+                <dl>
+                  @for (receipt of node.receipts; track trackNodeReceipt($index, receipt)) {
+                    <div>
+                      <dt>{{ receipt.label }}</dt>
+                      <dd>
+                        <span>{{ receipt.value }}{{ receipt.unit ? ' ' + receipt.unit : '' }}</span>
+                        @if (receipt.source) {
+                          <small>{{ receipt.source }}</small>
+                        }
+                        @if (receiptTimestamp(receipt); as receiptTime) {
+                          <small>{{ receiptTime }}</small>
+                        }
+                      </dd>
+                    </div>
+                  }
+                </dl>
+              </details>
+            }
           </section>
         }
 
