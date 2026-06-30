@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (daily-order-cap evidence slice: submit-order chart receipts for durable drop reason and readiness-authored daily cap used/limit).
+> **Last reviewed:** 2026-06-30 (recovery-lane truthfulness slice: recovery placeholders render inactive only without an incident and unknown with backend-authored remediation when proof is missing).
 
 ---
 
@@ -443,6 +443,12 @@ The receipt fields remain evidence, not verdicts. `sidecar_wal_seq` is the Inten
 `PythonDataService/app/services/bot_lifecycle_chart.py` now attaches daily-order-cap receipts to the `submit_order` lifecycle node when `operator_surface.daily_order_cap` has structured `used` or `limit` values from the readiness sidecar. Event-backed submit nodes also expose `drop_reason` from the lifecycle event payload, including `INTENT_DROPPED_BEFORE_SUBMIT(max_orders_per_day)`.
 
 This is evidence, not a frontend-authored block reason. Python authors the blocked submit event and daily cap counters; Angular renders receipt labels/values and may format timestamps only. The max-orders path is pinned in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
+
+### Recovery Lane Truthfulness Snapshot
+
+`PythonDataService/app/services/bot_lifecycle_chart.py` now keeps the recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders inactive only when there is no active recovery incident. When recovery is active, blocked, or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists.
+
+This slice does not ship a recovery daemon, new flatten proof writer, or R3 AccountOwner IPC process. Missing recovery proof remains missing proof. Recovery timestamps and receipts remain canonical only when authored by backend evidence as `int64 ms UTC`; Angular may format those integers for local display only and must not store, send back, or order lifecycle state by display strings. Tests pin inactive-no-incident and unknown-missing-proof behavior in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
 
 ## 10. Code Cross-Reference
 
