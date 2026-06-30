@@ -157,6 +157,10 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
         if self._green_streak >= 2:
             self._pending_signal_time = bar.end_time
+            # Cross-asset ``trade_symbol`` is a live-run-only hook: Engine Lab
+            # hides/rejects it because the backtest engine has one price stream,
+            # and cmd_start requires FixedShares when this differs from the
+            # signal symbol because no trade-symbol bar stream is subscribed.
             self.ctx.set_holdings(self._trade_symbol, Decimal(1))
             self._entry_pending = True
             self._green_streak = 0
@@ -223,4 +227,3 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self.ctx.liquidate(self._trade_symbol)
             self._in_position = False
             self._entry_pending = False
-
