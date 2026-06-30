@@ -5,50 +5,11 @@
   </header>
 
   <div class="action-groups">
-    <div class="action-list emergency-actions" aria-label="Emergency lifecycle controls">
-      @for (action of emergencyActions(); track trackAction($index, action)) {
-        <app-lifecycle-action-button
-          [action]="action"
-          [busyAction]="busyAction()"
-          (actionInvoked)="actionInvoked.emit($event)"
-          (disabledActionSelected)="disabledActionSelected.emit($event)"
-          (actionTargetHovered)="actionTargetHovered.emit($event)"
-        />
-      }
-    </div>
-
-    @if (redeployAction(); as action) {
-      <app-lifecycle-action-button
-        class="redeploy-action"
-        [action]="action"
-        [busyAction]="busyAction()"
-        (actionInvoked)="actionInvoked.emit($event)"
-        (disabledActionSelected)="disabledActionSelected.emit($event)"
-        (actionTargetHovered)="actionTargetHovered.emit($event)"
-      />
-    }
-
-    @if (overflowActions().length > 0) {
-      <div class="overflow-menu">
-        <button
-          type="button"
-          class="overflow-trigger"
-          aria-haspopup="menu"
-          [attr.aria-expanded]="overflowMenu.visible ? 'true' : 'false'"
-          (click)="overflowMenu.toggle($event)"
-        >
-          More
-        </button>
-        <p-menu
-          #overflowMenu
-          styleClass="lifecycle-overflow-menu"
-          [model]="overflowMenuItems()"
-          [popup]="true"
-          appendTo="body"
-          ariaLabel="More lifecycle actions"
-        >
-          <ng-template pTemplate="item" let-item>
-            @let action = item.action;
+    @for (group of actionGroups(); track trackGroup($index, group)) {
+      <div class="action-group" [class.danger-group]="group.id === 'danger'">
+        <span class="group-label">{{ group.label }}</span>
+        <div class="action-list" [attr.aria-label]="group.ariaLabel">
+          @for (action of group.actions; track trackAction($index, action)) {
             <app-lifecycle-action-button
               [action]="action"
               [busyAction]="busyAction()"
@@ -56,8 +17,8 @@
               (disabledActionSelected)="disabledActionSelected.emit($event)"
               (actionTargetHovered)="actionTargetHovered.emit($event)"
             />
-          </ng-template>
-        </p-menu>
+          }
+        </div>
       </div>
     }
   </div>

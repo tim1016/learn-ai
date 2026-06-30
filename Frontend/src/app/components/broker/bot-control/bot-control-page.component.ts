@@ -46,6 +46,7 @@ const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
 const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
+const ATTENTION_STORAGE_PREFIX = 'bot-control-attention';
 
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
 
@@ -83,6 +84,13 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
   canonicalFallbackRequired: true,
   notice: null,
 };
+
+function isStorageUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (typeof DOMException !== 'undefined' && error instanceof DOMException)
+  );
+}
 
 @Component({
   selector: 'app-bot-control-page',
@@ -129,6 +137,7 @@ export class BotControlPageComponent {
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly activityPanelOpen = signal<boolean>(false);
+  private readonly attentionOpenStates = signal<Record<string, boolean>>({});
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
@@ -186,9 +195,16 @@ export class BotControlPageComponent {
   readonly attentionGroups = computed<OperatorSurfaceAttentionGroup[]>(
     () => this.traderGuidance()?.additional_attention_groups ?? [],
   );
-  readonly hasCriticalAttention = computed(() =>
-    this.attentionGroups().some((group) => group.severity === 'critical'),
-  );
+  readonly attentionStorageKey = computed(() => {
+    const id = this.instanceId();
+    const situationCode = this.traderGuidance()?.situation_code ?? null;
+    return id && situationCode ? this.attentionKey(id, situationCode) : null;
+  });
+  readonly isAttentionOpen = computed(() => {
+    const key = this.attentionStorageKey();
+    if (key === null) return false;
+    return this.attentionOpenStates()[key] ?? true;
+  });
   readonly renderedPrimaryRemediation = computed<RenderedAction | null>(() => {
     const remediation = this.traderGuidance()?.primary_remediation ?? null;
     return renderTraderRemediation(remediation, this.primaryRemediationDispatch);
@@ -318,11 +334,7 @@ export class BotControlPageComponent {
   }
 
   onGateOpenRunbook(slug: string): void {
-    window.open(this.runbookHref(slug), '_blank', 'noopener');
-  }
-
-  runbookHref(slug: string): string {
-    return `/runbooks/${encodeURIComponent(slug)}`;
+    void this.router.navigate(['/docs/signal-engine-methodology'], { fragment: slug });
   }
 
   dispatchOverviewAction(action: LifecycleChartActionId): void {
@@ -374,6 +386,13 @@ export class BotControlPageComponent {
 
   setActivityPanelOpen(open: boolean): void {
     this.activityPanelOpen.set(open);
+  }
+
+  setAttentionOpen(open: boolean): void {
+    const key = this.attentionStorageKey();
+    if (key === null) return;
+    this.attentionOpenStates.update((states) => ({ ...states, [key]: open }));
+    this.writeAttentionOpenState(key, open);
   }
 
   trackAttention(_: number, group: OperatorSurfaceAttentionGroup): string {
@@ -464,6 +483,7 @@ export class BotControlPageComponent {
       const status = await this.liveRuns.getInstanceStatus(id);
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.status.set(status);
+      this.ensureAttentionOpenState(id, status);
       this.statusError.set(null);
       const timelineContext = this.lifecycleTimelineContext(status);
       if (this.lifecycleTimeline().statusKey !== timelineContext.statusKey) {
@@ -532,6 +552,40 @@ export class BotControlPageComponent {
         limit: TIMELINE_LIMIT,
       },
     };
+  }
+
+  private ensureAttentionOpenState(instanceId: string, status: LiveInstanceStatus): void {
+    const key = this.attentionKey(
+      instanceId,
+      status.operator_surface.trader_guidance.situation_code,
+    );
+    if (Object.prototype.hasOwnProperty.call(this.attentionOpenStates(), key)) return;
+    const stored = this.readAttentionOpenState(key);
+    this.attentionOpenStates.update((states) => ({ ...states, [key]: stored ?? true }));
+  }
+
+  private attentionKey(instanceId: string, situationCode: string): string {
+    return `${ATTENTION_STORAGE_PREFIX}:${instanceId}:${situationCode}`;
+  }
+
+  private readAttentionOpenState(key: string): boolean | null {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value === 'open') return true;
+      if (value === 'closed') return false;
+    } catch (error) {
+      if (!isStorageUnavailableError(error)) throw error;
+    }
+    return null;
+  }
+
+  private writeAttentionOpenState(key: string, open: boolean): void {
+    try {
+      window.localStorage.setItem(key, open ? 'open' : 'closed');
+    } catch (error) {
+      if (!isStorageUnavailableError(error)) throw error;
+      // localStorage can be disabled; the signal state still handles this session.
+    }
   }
 
   private async setIntent(

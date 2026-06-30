@@ -90,6 +90,13 @@ export function isAtLiveEdge(
   return range.to >= barCount - 1 - threshold;
 }
 
+export function visibleRangeToRestore(
+  liveAtEdge: boolean,
+  range: LogicalRange | null,
+): LogicalRange | null {
+  return liveAtEdge ? null : range;
+}
+
 /** Map a strategy/fill event timestamp onto the candle timestamp used by
  * lightweight-charts. Broker bars are keyed by ``start_ms`` on the chart,
  * while the live engine records trade rows at the bar close/fill instant.
@@ -415,6 +422,7 @@ export class BotTradeChartCardComponent {
   /** Date-picker change handler (Slice 6). Setting a date triggers the
    * snapshot resource to refetch via its params dependency. */
   protected onDateSelected(date: string): void {
+    this.liveAtEdge.set(true);
     this.chartDate.set(date);
   }
 
@@ -447,6 +455,17 @@ export class BotTradeChartCardComponent {
         horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
       },
       rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.2)' },
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: false,
+        mouseWheel: false,
+        pinch: false,
+      },
       timeScale: {
         timeVisible: true,
         secondsVisible: m.secondsVisible,
@@ -486,6 +505,11 @@ export class BotTradeChartCardComponent {
 
   private syncCandles(): void {
     if (!this.candles) return;
+    const timeScale = this.chart?.timeScale();
+    const restoreRange = visibleRangeToRestore(
+      this.liveAtEdge(),
+      timeScale?.getVisibleLogicalRange() ?? null,
+    );
     const bars = this.bars();
     this.candles.setData(
       bars.map((b) => ({
@@ -496,6 +520,9 @@ export class BotTradeChartCardComponent {
         close: Number(b.close),
       })),
     );
+    if (restoreRange !== null) {
+      timeScale?.setVisibleLogicalRange(restoreRange);
+    }
   }
 
   /** Render trade markers across every run that touched the day, with a

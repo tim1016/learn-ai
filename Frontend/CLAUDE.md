@@ -53,6 +53,7 @@ src/app/
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
 - Modern control flow: `@if`, `@for` (with `track`), `@switch`, `@let`
 - API proxy: `/graphql` proxied to backend container via `proxy.conf.json`
+- Receipt/evidence identifiers render through the shared `receiptLabel` pipe. Backend-authored trader/operator prose stays unpiped.
 
 ## Testing
 
