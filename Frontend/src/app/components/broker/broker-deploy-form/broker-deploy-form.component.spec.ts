@@ -473,7 +473,7 @@ describe('BrokerDeployFormComponent', () => {
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.start).toBe(true);
     expect(req.start_options.strategy).toBe('spy_ema_crossover');
-    expect(req.start_options.max_orders_per_day).toBe(50_000);
+    expect(req.start_options.max_orders_per_day).toBe(2);
   });
 
   it('keeps the deployment validation audit copy selectable when the daemon listing is empty', async () => {
@@ -492,9 +492,8 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
-    // Default is now 50_000 (orphan-fill recovery + predictive cap-check
-    // removed the need for the per-strategy auto-bump from 4→100).
-    expect(component.maxOrdersPerDay()).toBe(50_000);
+    // Default stays a one-round-trip paper canary: entry + exit, then fail closed.
+    expect(component.maxOrdersPerDay()).toBe(2);
 
     component.strategyKey.set('spy_ema_crossover');
     await flush();

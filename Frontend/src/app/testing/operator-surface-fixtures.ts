@@ -27,7 +27,7 @@ export function makeOperatorSurfaceFixture(
       verdict: 'READY',
       unrealized_pnl: 0,
     },
-    daily_order_cap: { used: 0, limit: 50_000 },
+    daily_order_cap: { used: 0, limit: 2 },
     action_plan: { consumption: 'ACTIVE', anomaly_verdict: 'READY' },
     account_owner: {
       account_id: 'DU123',

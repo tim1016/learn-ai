@@ -78,6 +78,7 @@ from app.engine.live.pre_flight import (
     run_pre_flight,
 )
 from app.engine.live.run_ledger import read_ledger
+from app.schemas.live_runs import DEFAULT_MAX_ORDERS_PER_DAY
 
 logger = logging.getLogger(__name__)
 
@@ -2836,11 +2837,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument(
         "--max-orders-per-day",
         type=int,
-        default=50_000,
+        default=DEFAULT_MAX_ORDERS_PER_DAY,
         help=(
-            "§ 9 cap. Crossing this halts the run with exit 1. Default 50,000 — kept in sync "
-            "with the daemon's HostRunnerStartRequest default so a direct CLI launch matches "
-            "the control-plane behaviour."
+            f"§ 9 cap. Crossing this halts the run with exit 1. Default {DEFAULT_MAX_ORDERS_PER_DAY} — "
+            "kept in sync with the daemon's HostRunnerStartRequest default so a direct CLI "
+            "launch matches the control-plane behaviour."
         ),
     )
     start.add_argument(
