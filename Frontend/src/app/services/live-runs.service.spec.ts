@@ -5,6 +5,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LiveRunsService } from './live-runs.service';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
+import type { LifecycleTimelineResponse } from '../api/live-instances.types';
 
 /**
  * Start/Stop/health all go through the data plane (`/api/live-instances/...`),
@@ -119,6 +120,33 @@ describe('LiveRunsService start/stop proxy', () => {
     req.flush(health);
 
     await expect(promise).resolves.toEqual(health);
+  });
+
+  it('reads the bounded lifecycle projection timeline through the data plane', async () => {
+    const response: LifecycleTimelineResponse = {
+      projection_available: true,
+      canonical_fallback_required: false,
+      rows: [],
+    };
+    const promise = service.getLifecycleTimeline({
+      account_id: 'DU123',
+      strategy_instance_id: 'sid-x',
+      run_id: 'run-x',
+      limit: 5,
+    });
+
+    const req = httpMock.expectOne((request) =>
+      request.url === '/api/lifecycle-projection/timeline'
+      && request.params.get('account_id') === 'DU123'
+      && request.params.get('strategy_instance_id') === 'sid-x'
+      && request.params.get('run_id') === 'run-x'
+      && request.params.get('limit') === '5',
+    );
+    expect(req.request.method).toBe('GET');
+    expect(req.request.url.startsWith('http')).toBe(false);
+    req.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
   });
 
   it('renewControlPlaneLease posts to the data-plane proxy, not the daemon directly', async () => {

@@ -28,6 +28,7 @@ import type {
   FleetContamination,
   BotCatalogResponse,
   InstanceDesiredStateRequest,
+  LifecycleTimelineResponse,
   LiveInstanceStatus,
   LiveInstanceSummary,
   SetInstanceDesiredStateResponse,
@@ -38,6 +39,7 @@ export class LiveRunsService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/live-runs';
   private readonly instancesBase = '/api/live-instances';
+  private readonly lifecycleProjectionBase = '/api/lifecycle-projection';
 
   listRuns(params?: {
     limit?: number;
@@ -156,6 +158,25 @@ export class LiveRunsService {
   getInstanceStatus(instanceId: string): Promise<LiveInstanceStatus> {
     return firstValueFrom(
       this.http.get<LiveInstanceStatus>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/status`),
+    );
+  }
+
+  getLifecycleTimeline(params: {
+    account_id?: string | null;
+    strategy_instance_id?: string | null;
+    run_id?: string | null;
+    limit?: number;
+  }): Promise<LifecycleTimelineResponse> {
+    let query = new HttpParams();
+    if (params.account_id) query = query.set('account_id', params.account_id);
+    if (params.strategy_instance_id) query = query.set('strategy_instance_id', params.strategy_instance_id);
+    if (params.run_id) query = query.set('run_id', params.run_id);
+    if (params.limit !== undefined) query = query.set('limit', String(params.limit));
+    return firstValueFrom(
+      this.http.get<LifecycleTimelineResponse>(
+        `${this.lifecycleProjectionBase}/timeline`,
+        { params: query },
+      ),
     );
   }
 

@@ -7,6 +7,7 @@ import type {
   LifecycleChartGraph,
   LifecycleChartNode,
   LifecycleChartStatus,
+  LifecycleProjectionEventRow,
   LiveInstanceStatus,
   TraderPrimaryRemediation,
 } from '../../../../api/live-instances.types';
@@ -57,6 +58,10 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 export class OverviewTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly selectedNodeId = input<string | null>(null);
+  readonly timelineRows = input<LifecycleProjectionEventRow[]>([]);
+  readonly timelineProjectionAvailable = input<boolean>(false);
+  readonly timelineCanonicalFallbackRequired = input<boolean>(true);
+  readonly timelineNotice = input<string | null>(null);
   readonly nodeSelected = output<LifecycleChartNode>();
   readonly traderGuidanceAction = output<TraderPrimaryRemediation>();
 

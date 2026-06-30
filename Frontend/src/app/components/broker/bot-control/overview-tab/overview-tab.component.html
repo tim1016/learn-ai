@@ -74,6 +74,10 @@
 
     <app-trader-guidance-pane
       [surface]="status().operator_surface"
+      [timelineRows]="timelineRows()"
+      [timelineProjectionAvailable]="timelineProjectionAvailable()"
+      [timelineCanonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
+      [timelineNotice]="timelineNotice()"
       (primaryRemediationSelected)="onTraderGuidanceAction($event)"
     />
   </div>
