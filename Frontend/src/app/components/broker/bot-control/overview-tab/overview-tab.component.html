@@ -38,6 +38,14 @@
             (click)="expandNode(node)"
             (keydown)="onNodeKeydown($event, node)"
           >
+            @for (handleDef of chartHandles; track handleDef.id) {
+              <handle
+                class="flow-handle"
+                [id]="handleDef.id"
+                [type]="handleDef.type"
+                [position]="handleDef.position"
+              />
+            }
             <span class="node-lane">{{ node.lane }}</span>
             <strong>{{ node.label }}</strong>
             @if (node.technical_label) {

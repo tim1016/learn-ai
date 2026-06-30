@@ -477,9 +477,7 @@ async def test_instance_status_uses_recovered_activity_publisher_for_health_and_
     assert health["facts"]["publisher_registered"] is True
     assert health["facts"]["publisher_running"] is True
     assert health["facts"]["latest_row_seq"] == 12
-    broker_writer = {
-        node["id"]: node for node in body["lifecycle_chart"]["global_graph"]["nodes"]
-    }["broker_writer"]
+    broker_writer = {node["id"]: node for node in body["lifecycle_chart"]["global_graph"]["nodes"]}["broker_writer"]
     assert broker_writer["status"] == "passed"
 
 
@@ -557,6 +555,33 @@ async def test_instance_status_projects_account_owner_submit_events_into_lifecyc
     assert submit_nodes["place_order"]["status"] == "passed"
     assert submit_nodes["place_order"]["summary"] == "AccountOwner order reached the broker submit boundary."
     assert submit_nodes["place_order"]["technical_label"] == "submit"
+
+
+async def test_instance_status_skips_malformed_account_events_without_500(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_bad_account_events"
+    account_id = "DU123456"
+    run_id = "run-bad-account-events"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    account_events_path = root.parent / "accounts" / account_id / "account_events.jsonl"
+    account_events_path.parent.mkdir(parents=True)
+    account_events_path.write_text("{bad json\n", encoding="utf-8")
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    broker_nodes = {
+        node["id"]: node for node in response.json()["lifecycle_chart"]["subgraphs"]["broker_writer"]["nodes"]
+    }
+    assert broker_nodes["writer_guard"]["status"] == "unknown"
 
 
 async def test_instance_status_does_not_project_pre_session_intent_wal_as_current(

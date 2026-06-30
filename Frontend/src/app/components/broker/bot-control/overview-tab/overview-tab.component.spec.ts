@@ -109,6 +109,8 @@ function statusWithGlobalBranchEdges(): LiveInstanceStatus {
       status: 'active',
       label: 'Signal arrives',
       animated: true,
+      source_handle: 'source-east',
+      target_handle: 'target-west',
     },
     {
       id: 'active_to_recovery',
@@ -117,6 +119,8 @@ function statusWithGlobalBranchEdges(): LiveInstanceStatus {
       status: 'blocked',
       label: 'Safety incident',
       animated: false,
+      source_handle: 'source-south',
+      target_handle: 'target-north',
     },
   ];
   return status;
@@ -241,7 +245,7 @@ describe('OverviewTabComponent', () => {
     expect(actionSelected).toHaveBeenCalledWith(surface.trader_guidance.primary_remediation);
   });
 
-  it('uses floating edges for backend-authored branch edges', () => {
+  it('uses backend-authored handles for branch edges', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
@@ -255,10 +259,12 @@ describe('OverviewTabComponent', () => {
     fixture.detectChanges();
 
     const edges = new Map(fixture.componentInstance.edges().map((edge) => [edge.id, edge]));
-    expect(edges.get('active_to_submit_order')?.floating?.()).toBe(true);
-    expect(edges.get('active_to_recovery')?.floating?.()).toBe(true);
-    expect(edges.get('active_to_submit_order')?.sourceHandle).toBe('');
-    expect(edges.get('active_to_recovery')?.targetHandle).toBe('');
+    expect(edges.get('active_to_submit_order')?.floating?.()).toBe(false);
+    expect(edges.get('active_to_submit_order')?.sourceHandle).toBe('source-east');
+    expect(edges.get('active_to_submit_order')?.targetHandle).toBe('target-west');
+    expect(edges.get('active_to_recovery')?.floating?.()).toBe(false);
+    expect(edges.get('active_to_recovery')?.sourceHandle).toBe('source-south');
+    expect(edges.get('active_to_recovery')?.targetHandle).toBe('target-north');
   });
 
   it('returns to the global graph when the bot identity changes', () => {

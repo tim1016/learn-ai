@@ -1943,6 +1943,8 @@ class LifecycleChartEdge(BaseModel):
     status: LifecycleChartStatus
     label: str | None = None
     animated: bool = False
+    source_handle: str | None = None
+    target_handle: str | None = None
 
 
 class LifecycleChartAction(BaseModel):

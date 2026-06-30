@@ -292,6 +292,9 @@ async def test_account_owner_reconnect_drains_prepared_intent_as_uncertain(tmp_p
 
     events = read_account_events(tmp_path, ACCOUNT)
     assert events[-1]["event_type"] == "account_owner_reconnect_resumed"
+    assert events[-1]["phase"] == "accepting"
+    assert events[-1]["generation"] == GENERATION
+    assert isinstance(events[-1]["recorded_at_ms"], int)
     assert any(event["event_type"] == "account_owner_reconnect_drain_uncertain" for event in events)
 
 

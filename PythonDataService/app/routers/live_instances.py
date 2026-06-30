@@ -30,6 +30,7 @@ from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
+    AccountArtifactError,
     AccountFreezeEvidence,
     read_account_events,
     read_account_freeze,
@@ -413,7 +414,7 @@ def _project_instance_account_lifecycle_events(
         return []
     try:
         rows = read_account_events(artifacts_root, account_id)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, AccountArtifactError) as exc:
         logger.warning(
             "failed to read account events while resolving lifecycle chart",
             extra={"account_id": account_id, "exception": repr(exc)},

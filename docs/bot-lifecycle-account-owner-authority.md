@@ -255,6 +255,8 @@ Structured diagnostics include trace id, bot/instance id, account id, run id, in
 
 `AccountOwner.handle_reconnect(...)` ships the current generation/reconnect drain behavior inside the V1 lane. It persists `owner_generation.json`, moves phases through `reconnecting`, `draining`, `accepting`, or `frozen`, rejects new submit intents while non-accepting, rotates client ids on IBKR client-id-in-use code `326`, records reconnect drain outcomes for prepared-without-terminal account events via the supplied classifier, and resumes only after the supplied account classifier gate passes. `AccountOwner.reconnect_gate_result()` projects the current phase into `gate_id=account_owner.reconnect`.
 
+On successful reconnect, `account_owner_reconnect_resumed` carries the accepting phase, current owner generation, and `recorded_at_ms` from the same `AccountOwnerGeneration` record written by the phase transition. Missing generation evidence still projects as `unknown`; the fix is to persist the evidence at the emitter, not to mark all resume events as passing.
+
 Current limitation: production still needs a long-lived AccountOwner process with a real broker session and IPC intake. V1 proves the serialized submit lane and runner no-direct-submit mode. Reconnect drain events are reconnect evidence, not submit terminal events; until a terminal `account_owner_submit_*` event exists, a later reconnect may still classify the prepared event again.
 
 ## 6. Current Reconciliation Authority
@@ -395,7 +397,7 @@ The new contract does not ship an AccountOwner daemon, does not move canonical t
 
 ### Lifecycle Layout Snapshot
 
-The Overview chart's node/edge meaning remains backend-authored through `lifecycle_chart`; Angular owns only fixed graph geometry. `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts` uses `ngx-vflow` floating closest-handle routing for all backend-authored edges and no longer carries a bespoke coordinate-to-handle router or hidden handle grid. This changes no Python contract and grants Angular no lifecycle authority. The fan-out guard is pinned in `overview-tab.component.spec.ts` by asserting branch edges are floating and have no custom handle routing.
+The Overview chart's node/edge meaning remains backend-authored through `lifecycle_chart`; Angular owns only fixed graph geometry and handle rendering. `PythonDataService/app/services/bot_lifecycle_chart.py` authors optional `source_handle` / `target_handle` values on `LifecycleChartEdge` rows where branch topology matters. `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts` passes those handle ids to `ngx-vflow`; edges without backend-authored handles may still use floating fallback routing. This changes no lifecycle authority: Python authors topology, status, labels, and receipts; Angular renders the named handles. The fan-out guard is pinned in Python chart tests and `overview-tab.component.spec.ts` by asserting branch edges use distinct backend-authored handles.
 
 ### Broker Activity / Writer Authority Snapshot
 
@@ -465,9 +467,9 @@ This is evidence, not a frontend-authored block reason. Python authors the block
 
 ### Recovery Lane Truthfulness Snapshot
 
-`PythonDataService/app/services/bot_lifecycle_chart.py` now resolves the overview `recovery` node through one recovery fact helper so status, evidence, timestamp, and receipts come from the same source. Current precedence is: active account freeze keeps recovery inactive because account safety owns that condition; an unresolved incident renders recovery `blocked` with incident/watchdog receipts; a prior halted run renders `poison`; an actively stopping process renders `active`; otherwise recovery is inactive.
+`PythonDataService/app/services/bot_lifecycle_chart.py` now resolves the overview `recovery` node through one recovery fact helper so status, evidence, timestamp, and receipts come from the same source. Current precedence is: an unresolved incident renders recovery `blocked` with incident/watchdog receipts even when account freeze is also active; active account freeze without an incident keeps recovery inactive because account safety owns that condition; a prior halted run renders `poison`; an actively stopping process renders `active`; otherwise recovery is inactive.
 
-The recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders stay inactive only when there is no active recovery incident. When recovery is active, blocked, or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists.
+The recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders stay inactive only when there is no active recovery incident. When recovery is blocked or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists. A routine host-process `STOPPING` state is treated as shutdown/drain, not as proof that flatten/freeze recovery is required; its placeholder next step is `WAIT_FOR_STOPPING_TO_FINISH`.
 
 This slice does not ship a recovery daemon, new flatten proof writer, or R3 AccountOwner IPC process. Missing recovery proof remains missing proof. Recovery timestamps and receipts remain canonical only when authored by backend evidence as `int64 ms UTC`; Angular may format those integers for local display only and must not store, send back, or order lifecycle state by display strings. Tests pin inactive-no-incident and unknown-missing-proof behavior in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
 

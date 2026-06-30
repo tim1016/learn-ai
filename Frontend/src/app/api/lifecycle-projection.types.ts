@@ -44,6 +44,8 @@ export interface LifecycleChartEdge {
   status: LifecycleChartStatus;
   label: string | null;
   animated: boolean;
+  source_handle: string | null;
+  target_handle: string | null;
 }
 
 export type LifecycleChartActionId =
