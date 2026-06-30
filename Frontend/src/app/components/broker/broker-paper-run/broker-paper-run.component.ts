@@ -13,17 +13,18 @@ import { from, of, switchMap, timer } from 'rxjs';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import type {
-  CommandsSummary,
-  CommandVerb,
-  DesiredState,
-  DesiredStateAction,
-  HostRunnerHealth,
-  HydratePolicy,
-  LiveRunStatus,
-  LiveRunSummary,
-  LogLine,
-  RunState,
+import {
+  DEFAULT_MAX_ORDERS_PER_DAY,
+  type CommandsSummary,
+  type CommandVerb,
+  type DesiredState,
+  type DesiredStateAction,
+  type HostRunnerHealth,
+  type HydratePolicy,
+  type LiveRunStatus,
+  type LiveRunSummary,
+  type LogLine,
+  type RunState,
 } from '../../../api/live-runs.types';
 import { fmtTimestampNy, fmtInteger } from '../format';
 import { DesiredStateCardComponent } from './desired-state-card.component';
@@ -442,7 +443,7 @@ export class BrokerPaperRunComponent {
         readonly: this.runnerReadonly(),
         hydrate_policy: this.runnerHydratePolicy(),
         strategy: 'spy_ema_crossover',
-        max_orders_per_day: 50_000,
+        max_orders_per_day: DEFAULT_MAX_ORDERS_PER_DAY,
         ibkr_host: '127.0.0.1',
       });
       this.runnerMessage.set(response.process.message ?? 'Host runner start accepted.');

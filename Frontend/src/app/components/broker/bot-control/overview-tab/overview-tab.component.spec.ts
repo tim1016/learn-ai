@@ -1,5 +1,4 @@
-import { CommonModule } from '@angular/common';
-import { Component, Directive, Input, provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,64 +6,6 @@ import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
 import { makeOperatorSurfaceFixture } from '../../../../testing/operator-surface-fixtures';
 import { OverviewTabComponent } from './overview-tab.component';
-
-@Component({
-  // eslint-disable-next-line @angular-eslint/component-selector
-  selector: 'vflow',
-  standalone: true,
-  template: '<ng-content />',
-})
-class VflowStubComponent {
-  @Input() nodes: unknown;
-  @Input() edges: unknown;
-  @Input() view: unknown;
-  @Input() background: unknown;
-  @Input() minZoom: unknown;
-  @Input() maxZoom: unknown;
-  @Input() entitiesSelectable: unknown;
-}
-
-@Component({
-  // eslint-disable-next-line @angular-eslint/component-selector
-  selector: 'handle',
-  standalone: true,
-  template: '',
-})
-class HandleStubComponent {
-  @Input() id: unknown;
-  @Input() type: unknown;
-  @Input() position: unknown;
-}
-
-@Directive({
-  // eslint-disable-next-line @angular-eslint/directive-selector
-  selector: 'ng-template[nodeHtml]',
-  standalone: true,
-})
-class NodeHtmlStubDirective {}
-
-@Directive({
-  // eslint-disable-next-line @angular-eslint/directive-selector
-  selector: 'ng-template[edge]',
-  standalone: true,
-})
-class EdgeStubDirective {}
-
-@Directive({
-  // eslint-disable-next-line @angular-eslint/directive-selector
-  selector: 'g[customTemplateEdge]',
-  standalone: true,
-})
-class CustomTemplateEdgeStubDirective {}
-
-const OVERVIEW_TEST_IMPORTS = [
-  CommonModule,
-  VflowStubComponent,
-  HandleStubComponent,
-  NodeHtmlStubDirective,
-  EdgeStubDirective,
-  CustomTemplateEdgeStubDirective,
-];
 
 function makeStatus(id = 'sid-x'): LiveInstanceStatus {
   return {
@@ -125,13 +66,10 @@ function statusWithGlobalBranchEdges(): LiveInstanceStatus {
 }
 
 describe('OverviewTabComponent', () => {
-  it('keeps the global lifecycle on a vertical path with themed blocked edges', () => {
+  it('renders every global lifecycle gate as document-flow cards with themed blocked states', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
-    });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
     });
 
     const fixture = TestBed.createComponent(OverviewTabComponent);
@@ -141,21 +79,65 @@ describe('OverviewTabComponent', () => {
     fixture.detectChanges();
 
     expect(renderedText(fixture)).toContain('Deploy or start · Server clear');
-    const points = new Map(fixture.componentInstance.nodes().map((node) => [node.id, node.point()]));
-    expect(points.get('deploy')?.x).toBe(points.get('preflight')?.x);
-    expect(points.get('deploy')?.y).toBeLessThan(points.get('preflight')?.y ?? 0);
-    expect(points.get('preflight')?.y).toBeLessThan(points.get('account_safety')?.y ?? 0);
-    expect(points.get('submit_order')?.x).toBeGreaterThan(points.get('active')?.x ?? 0);
-    expect(fixture.componentInstance.edgeColor('blocked')).toBe('var(--warn)');
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('vflow')).toBeNull();
+    const gateLabels = Array.from(el.querySelectorAll<HTMLElement>('.flow-node strong'))
+      .map((node) => node.textContent?.trim());
+    expect(gateLabels).toEqual([
+      'Deploy or start',
+      'Pre-flight gates',
+      'Account safety',
+      'Reconcile broker state',
+      'Activate bot',
+      'Monitor live bot',
+      'Submit order path',
+      'Broker activity',
+      'Recovery lane',
+    ]);
+    const blockedGate = el.querySelector<HTMLElement>('.flow-node.status-blocked');
+    expect(blockedGate?.querySelector('strong')?.textContent?.trim()).toBe('Reconcile broker state');
+  });
+
+  it('marks the current blocking gate directly in the lifecycle flow', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    const status = makeStatus();
+    status.lifecycle_chart.global_graph.primary_node_id = 'deploy';
+    status.lifecycle_chart.global_graph.nodes[0].status = 'blocked';
+    status.lifecycle_chart.global_graph.nodes[0].status_label = 'Blocked';
+    status.lifecycle_chart.global_graph.edges = [
+      {
+        id: 'deploy_to_preflight',
+        source: 'deploy',
+        target: 'preflight',
+        status: 'inactive',
+        label: null,
+        animated: false,
+        source_handle: null,
+        target_handle: null,
+      },
+    ];
+    fixture.componentRef.setInput('status', status);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const blockingNode = el.querySelector<HTMLElement>('.flow-node.blocking-node');
+    expect(blockingNode?.querySelector('strong')?.textContent?.trim()).toBe('Deploy or start');
+    expect(blockingNode?.querySelector('.node-callout')?.textContent?.trim()).toBe('Blocking step');
+    const blockedConnector = el.querySelector<HTMLElement>('.flow-connector.status-blocked');
+    expect(blockedConnector?.textContent?.replace(/\s+/g, ' ')).toContain(
+      'Blocked Deploy or start -> Pre-flight gates',
+    );
   });
 
   it('expands an expandable backend-authored subgraph and collapses to global', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
-    });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
     });
 
     const fixture = TestBed.createComponent(OverviewTabComponent);
@@ -179,9 +161,6 @@ describe('OverviewTabComponent', () => {
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
     });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
-    });
 
     const fixture = TestBed.createComponent(OverviewTabComponent);
     const nodeSelected = vi.fn();
@@ -196,35 +175,29 @@ describe('OverviewTabComponent', () => {
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
   });
 
-  it('uses backend-authored handles for branch edges', () => {
+  it('renders backend-authored branch transitions as in-flow arrows without requiring a pan-zoom viewport', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
-    });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
     });
 
     const fixture = TestBed.createComponent(OverviewTabComponent);
     fixture.componentRef.setInput('status', statusWithGlobalBranchEdges());
     fixture.detectChanges();
 
-    const edges = new Map(fixture.componentInstance.edges().map((edge) => [edge.id, edge]));
-    expect(edges.get('active_to_submit_order')?.floating?.()).toBe(false);
-    expect(edges.get('active_to_submit_order')?.sourceHandle).toBe('source-east');
-    expect(edges.get('active_to_submit_order')?.targetHandle).toBe('target-west');
-    expect(edges.get('active_to_recovery')?.floating?.()).toBe(false);
-    expect(edges.get('active_to_recovery')?.sourceHandle).toBe('source-south');
-    expect(edges.get('active_to_recovery')?.targetHandle).toBe('target-north');
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('vflow')).toBeNull();
+    const transitionText = el.querySelector('.connector-group')?.textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(transitionText).toContain('Active Monitor live bot -> Submit order path Signal arrives');
+    expect(transitionText).toContain('Blocked Monitor live bot -> Recovery lane Safety incident');
+    const animatedConnector = el.querySelector<HTMLElement>('.flow-connector.connector-animated');
+    expect(animatedConnector?.textContent?.replace(/\s+/g, ' ')).toContain('Signal arrives');
   });
 
   it('returns to the global graph when the bot identity changes', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
-    });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
     });
 
     const fixture = TestBed.createComponent(OverviewTabComponent);

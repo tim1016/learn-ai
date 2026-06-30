@@ -12,13 +12,14 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
-import type {
-  HostRunnerDeployRequest,
-  HostRunnerDeployResponse,
-  HydratePolicy,
-  SizingPolicy,
-  SizingPreset,
-  SpecStrategyFixture,
+import {
+  DEFAULT_MAX_ORDERS_PER_DAY,
+  type HostRunnerDeployRequest,
+  type HostRunnerDeployResponse,
+  type HydratePolicy,
+  type SizingPolicy,
+  type SizingPreset,
+  type SpecStrategyFixture,
 } from '../../../api/live-runs.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
 import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
@@ -95,7 +96,7 @@ export class BrokerDeployFormComponent {
   readonly instanceId = signal<string>('');
   readonly readonlyFlag = signal<boolean>(true);
   readonly hydratePolicy = signal<HydratePolicy>('require');
-  readonly maxOrdersPerDay = signal<number>(50_000);
+  readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
   readonly startNow = signal<boolean>(false);
   // PRD #593 Slice 1B (#595) — operator-declared action plan. Empty by
   // default; the picker mutates it in place. The submitted ``live_config``
@@ -465,7 +466,7 @@ export class BrokerDeployFormComponent {
         readonly: this.readonlyFlag(),
         hydrate_policy: this.hydratePolicy(),
         strategy: strategyKey,
-        max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : 50_000,
+        max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : DEFAULT_MAX_ORDERS_PER_DAY,
         ibkr_host: '127.0.0.1',
       };
     }

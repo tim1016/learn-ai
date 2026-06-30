@@ -1,64 +1,26 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, input, output, signal, type Signal } from '@angular/core';
-import { createEdges, createNodes, type Edge, type Node, Vflow } from 'ngx-vflow';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
 import type {
   LifecycleChartEdge,
-  LifecycleChartGraph,
   LifecycleChartNode,
   LifecycleChartStatus,
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
-
-interface Point {
-  readonly x: number;
-  readonly y: number;
-}
-
-interface VflowDataContext<T> {
-  readonly data: Signal<T>;
-}
 
 interface ExpandedGraphSelection {
   readonly chartKey: string;
   readonly graphId: string;
 }
 
-interface ChartHandle {
-  readonly id: string;
-  readonly type: 'source' | 'target';
-  readonly position: 'top' | 'right' | 'bottom' | 'left';
+interface LifecycleFlowRow {
+  readonly node: LifecycleChartNode;
+  readonly outgoingEdges: readonly LifecycleChartEdge[];
 }
-
-const NODE_WIDTH = 190;
-const NODE_HEIGHT = 96;
-
-const CHART_HANDLES: readonly ChartHandle[] = [
-  { id: 'target-north', type: 'target', position: 'top' },
-  { id: 'source-north', type: 'source', position: 'top' },
-  { id: 'target-east', type: 'target', position: 'right' },
-  { id: 'source-east', type: 'source', position: 'right' },
-  { id: 'target-south', type: 'target', position: 'bottom' },
-  { id: 'source-south', type: 'source', position: 'bottom' },
-  { id: 'target-west', type: 'target', position: 'left' },
-  { id: 'source-west', type: 'source', position: 'left' },
-];
-
-const GLOBAL_LAYOUT: Record<string, Point> = {
-  deploy: { x: 40, y: 36 },
-  preflight: { x: 40, y: 184 },
-  account_safety: { x: 40, y: 332 },
-  reconcile: { x: 40, y: 480 },
-  activate: { x: 40, y: 628 },
-  active: { x: 40, y: 776 },
-  submit_order: { x: 300, y: 776 },
-  broker_writer: { x: 300, y: 924 },
-  recovery: { x: 40, y: 924 },
-};
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule, Vflow],
+  imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -68,7 +30,6 @@ export class OverviewTabComponent {
   readonly selectedNodeId = input<string | null>(null);
   readonly highlightedNodeId = input<string | null>(null);
   readonly nodeSelected = output<LifecycleChartNode>();
-  readonly chartHandles = CHART_HANDLES;
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly chart = computed(() => this.status().lifecycle_chart);
@@ -90,45 +51,26 @@ export class OverviewTabComponent {
     const graph = this.currentGraph();
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
-  readonly nodes = computed<Node<LifecycleChartNode>[]>(() => {
-    const graph = this.currentGraph();
-    return createNodes(
-      graph.nodes.map((node, index) => ({
-        id: node.id,
-        type: 'html-template' as const,
-        point: this.nodePoint(graph, node, index),
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
-        draggable: false,
-        data: node,
-      })),
-      { useDefaults: true },
-    );
+  readonly lifecycleNodes = computed(() => this.currentGraph().nodes);
+  readonly lifecycleEdges = computed(() => this.currentGraph().edges);
+  readonly lifecycleFlowRows = computed<readonly LifecycleFlowRow[]>(() => {
+    const edgesBySource = new Map<string, LifecycleChartEdge[]>();
+    for (const edge of this.lifecycleEdges()) {
+      const edges = edgesBySource.get(edge.source);
+      if (edges) {
+        edges.push(edge);
+      } else {
+        edgesBySource.set(edge.source, [edge]);
+      }
+    }
+    return this.lifecycleNodes().map((node) => ({
+      node,
+      outgoingEdges: edgesBySource.get(node.id) ?? [],
+    }));
   });
-  readonly edges = computed<Edge<LifecycleChartEdge>[]>(() => {
+  readonly nodeLabels = computed(() => {
     const graph = this.currentGraph();
-    return createEdges(
-      graph.edges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: 'template' as const,
-        curve: 'smooth-step' as const,
-        sourceHandle: edge.source_handle ?? undefined,
-        targetHandle: edge.target_handle ?? undefined,
-        floating: edge.source_handle === null && edge.target_handle === null,
-        data: edge,
-        markers: {
-          end: {
-            type: 'arrow-closed' as const,
-            width: 18,
-            height: 18,
-            color: this.edgeColor(edge.status),
-          },
-        },
-      })),
-      { useDefaults: true },
-    );
+    return new Map(graph.nodes.map((node) => [node.id, node.label]));
   });
 
   collapse(): void {
@@ -150,12 +92,33 @@ export class OverviewTabComponent {
     this.expandNode(node);
   }
 
-  nodeData(ctx: VflowDataContext<LifecycleChartNode>): LifecycleChartNode {
-    return ctx.data();
+  nodeAriaLabel(node: LifecycleChartNode): string {
+    const action = node.expandable ? 'Open' : 'Select';
+    const callout = this.isBlockingNode(node)
+      ? ' Blocking step.'
+      : this.isPrimaryNode(node)
+        ? ' Current step.'
+        : '';
+    return `${action} ${node.label}. Status: ${node.status_label}.${callout}`;
   }
 
-  edgeData(ctx: VflowDataContext<LifecycleChartEdge>): LifecycleChartEdge {
-    return ctx.data();
+  isPrimaryNode(node: LifecycleChartNode): boolean {
+    return node.id === this.currentGraph().primary_node_id;
+  }
+
+  isBlockingNode(node: LifecycleChartNode): boolean {
+    return this.isPrimaryNode(node) && this.isBlockingStatus(node.status);
+  }
+
+  isBlockingStatus(status: LifecycleChartStatus): boolean {
+    return status === 'blocked' || status === 'poison' || status === 'freeze' || status === 'unknown';
+  }
+
+  visualEdgeStatus(sourceNode: LifecycleChartNode, edge: LifecycleChartEdge): LifecycleChartStatus {
+    if (this.isBlockingNode(sourceNode) && (edge.status === 'inactive' || edge.status === 'unknown')) {
+      return sourceNode.status;
+    }
+    return edge.status;
   }
 
   edgeColor(status: LifecycleChartStatus): string {
@@ -177,23 +140,30 @@ export class OverviewTabComponent {
     }
   }
 
-  private nodePoint(graph: LifecycleChartGraph, node: LifecycleChartNode, index: number): Point {
-    if (graph.graph_id === 'global') return GLOBAL_LAYOUT[node.id] ?? this.fallbackPoint(index);
-    return this.focusedPoint(index);
+  edgeEndpointLabel(nodeId: string): string {
+    return this.nodeLabels().get(nodeId) ?? nodeId;
   }
 
-  private focusedPoint(index: number): Point {
-    return {
-      x: 80,
-      y: 40 + index * 148,
-    };
+  edgeStatusLabel(edge: LifecycleChartEdge): string {
+    return this.lifecycleStatusLabel(edge.status);
   }
 
-  private fallbackPoint(index: number): Point {
-    return {
-      x: 80,
-      y: 40 + index * 148,
-    };
+  lifecycleStatusLabel(status: LifecycleChartStatus): string {
+    switch (status) {
+      case 'passed':
+        return 'Passed';
+      case 'active':
+        return 'Active';
+      case 'blocked':
+        return 'Blocked';
+      case 'poison':
+        return 'Poison';
+      case 'freeze':
+        return 'Freeze';
+      case 'unknown':
+        return 'Unknown';
+      case 'inactive':
+        return 'Waiting';
+    }
   }
-
 }
