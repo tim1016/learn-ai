@@ -31,6 +31,13 @@ from app.schemas.live_runs import (
     OperatorSurface,
 )
 from app.services.bot_lifecycle_projection import latest_event_for_node, lifecycle_status_label
+from app.services.bot_lifecycle_receipts import (
+    account_owner_receipts,
+    daily_order_cap_receipts,
+    event_receipts,
+    incident_receipts,
+    reconciliation_receipts,
+)
 
 _BLOCKING_PRIORITY: tuple[LifecycleChartStatus, ...] = (
     "freeze",
@@ -225,6 +232,7 @@ def _lifecycle_facts(
     desired_state: DesiredStateView | None,
     lifecycle_events: Sequence[BotLifecycleEvent],
 ) -> LifecycleFacts:
+    recovery_fact = _recovery_fact(surface)
     base_statuses = {
         "deploy": _deploy_status(surface),
         "preflight": _preflight_status(surface),
@@ -233,7 +241,7 @@ def _lifecycle_facts(
         "activate": _activate_status(surface, desired_state),
         "active": "active",
         "broker_writer": _broker_writer_status(surface),
-        "recovery": _recovery_status(surface),
+        "recovery": recovery_fact.status,
     }
     primary_node_id = _primary_node_id(base_statuses, surface, desired_state)
     active_status = _active_status(primary_node_id)
@@ -255,7 +263,7 @@ def _lifecycle_facts(
             _reconcile_evidence(surface),
             ts_ms=_reconcile_ts_ms(surface),
             ts_ms_resolved=_reconcile_ts_resolved(surface),
-            receipts=_reconciliation_receipts(surface),
+            receipts=reconciliation_receipts(surface),
         ),
         "activate": NodeFact(
             _status_for("activate", base_statuses["activate"], primary_node_id),
@@ -273,10 +281,10 @@ def _lifecycle_facts(
         ),
         "recovery": NodeFact(
             _status_for("recovery", base_statuses["recovery"], primary_node_id),
-            _recovery_evidence(surface),
-            ts_ms=_incident_ts_ms(surface),
-            ts_ms_resolved=_incident_ts_ms(surface) is not None,
-            receipts=_incident_receipts(surface),
+            recovery_fact.evidence,
+            ts_ms=recovery_fact.ts_ms,
+            ts_ms_resolved=recovery_fact.ts_ms_resolved,
+            receipts=recovery_fact.receipts,
         ),
         "deploy.host_state": NodeFact(_deploy_status(surface), _host_evidence(surface), surface.host_process.state),
         "start_settings": NodeFact(
@@ -313,7 +321,7 @@ def _lifecycle_facts(
             _reconcile_label(surface),
             ts_ms=_reconcile_ts_ms(surface),
             ts_ms_resolved=_reconcile_ts_resolved(surface),
-            receipts=_reconciliation_receipts(surface),
+            receipts=reconciliation_receipts(surface),
         ),
         "broker_snapshot": NodeFact(
             "passed" if _reconcile_status(surface) in {"passed", "active"} else "blocked",
@@ -361,13 +369,7 @@ def _lifecycle_facts(
             "broker_ack",
             "No live broker acknowledgement evidence is available in this snapshot.",
         ),
-        "incident": NodeFact(
-            recovery_status,
-            _recovery_evidence(surface),
-            ts_ms=_incident_ts_ms(surface),
-            ts_ms_resolved=_incident_ts_ms(surface) is not None,
-            receipts=_incident_receipts(surface),
-        ),
+        "incident": recovery_fact,
         "flatten": _recovery_placeholder_fact("flatten", recovery_status),
         "reconcile_after": _recovery_placeholder_fact("reconcile_after", recovery_status),
         "fresh_run": _recovery_placeholder_fact("fresh_run", recovery_status),
@@ -393,23 +395,28 @@ def _event_or_unknown_fact(
 def _writer_guard_fact(surface: OperatorSurface, lifecycle_events: Sequence[BotLifecycleEvent]) -> NodeFact:
     event = latest_event_for_node(lifecycle_events, "writer_guard")
     if event is not None:
-        return _node_fact_from_event(
+        fact = _node_fact_from_event(
             event,
             fallback_status="unknown",
             fallback_evidence=_account_owner_evidence(surface),
             fallback_why=_account_owner_evidence(surface),
             include_event_source_label=True,
         )
+        status = _account_owner_event_status(event)
+        if status is not None:
+            return replace(fact, status=status, status_label=lifecycle_status_label(status))
+        return fact
     account_owner_ts_ms = _account_owner_ts_ms(surface)
+    account_owner_status = _account_owner_status(surface)
     return NodeFact(
-        _account_owner_status(surface),
+        account_owner_status,
         _account_owner_evidence(surface),
         _account_owner_label(surface),
-        status_label=lifecycle_status_label(_account_owner_status(surface)),
+        status_label=lifecycle_status_label(account_owner_status),
         why=_account_owner_evidence(surface),
         ts_ms=account_owner_ts_ms,
         ts_ms_resolved=account_owner_ts_ms is not None,
-        receipts=_account_owner_receipts(surface),
+        receipts=account_owner_receipts(surface),
     )
 
 
@@ -438,62 +445,8 @@ def _node_fact_from_event(
         operator_next_step=event.operator_next_step,
         ts_ms=event.ts_ms,
         ts_ms_resolved=event.ts_ms_resolved,
-        receipts=_event_receipts(event),
+        receipts=event_receipts(event),
     )
-
-
-def _receipt(
-    label: str,
-    value: object,
-    *,
-    unit: str | None = None,
-    source: str | None = None,
-    gate_id: str | None = None,
-    ts_ms: int | None = None,
-    ts_ms_resolved: bool | None = None,
-) -> LifecycleChartReceipt:
-    resolved = ts_ms is not None if ts_ms_resolved is None else ts_ms_resolved
-    return LifecycleChartReceipt(
-        label=label,
-        value=str(value),
-        unit=unit,
-        source=source,
-        gate_id=gate_id,
-        ts_ms=ts_ms,
-        ts_ms_resolved=resolved,
-    )
-
-
-def _event_receipts(event: BotLifecycleEvent) -> tuple[LifecycleChartReceipt, ...]:
-    receipts = [
-        _receipt(
-            "event_type",
-            event.event_type,
-            source=event.source,
-            ts_ms=event.ts_ms,
-            ts_ms_resolved=event.ts_ms_resolved,
-        ),
-        _receipt(
-            "source_seq",
-            event.source_local_seq,
-            source=event.source,
-            ts_ms=event.ts_ms,
-            ts_ms_resolved=event.ts_ms_resolved,
-        ),
-    ]
-    for key in ("intent_id", "order_ref", "order_id", "perm_id", "drop_reason", "ts_ms_source"):
-        value = event.payload.get(key)
-        if value is not None:
-            receipts.append(
-                _receipt(
-                    key,
-                    value,
-                    source=event.source,
-                    ts_ms=event.ts_ms,
-                    ts_ms_resolved=event.ts_ms_resolved,
-                )
-            )
-    return tuple(receipts)
 
 
 def _submit_order_fact(
@@ -507,18 +460,8 @@ def _submit_order_fact(
         fallback_status=fallback_status,
         fallback_evidence="Order submission waits for an active signal from the running bot.",
     )
-    receipts = fact.receipts + _daily_order_cap_receipts(surface)
+    receipts = fact.receipts + daily_order_cap_receipts(surface)
     return replace(fact, receipts=receipts)
-
-
-def _daily_order_cap_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
-    cap = surface.daily_order_cap
-    receipts: list[LifecycleChartReceipt] = []
-    if cap.used is not None:
-        receipts.append(_receipt("daily_order_cap.used", cap.used, unit="orders", source="readiness"))
-    if cap.limit is not None:
-        receipts.append(_receipt("daily_order_cap.limit", cap.limit, unit="orders", source="readiness"))
-    return tuple(receipts)
 
 
 def _recovery_placeholder_fact(node_id: str, recovery_status: LifecycleChartStatus) -> NodeFact:
@@ -543,33 +486,23 @@ def _recovery_placeholder_fact(node_id: str, recovery_status: LifecycleChartStat
     return NodeFact("inactive", inactive_reasons[node_id])
 
 
-def _incident_ts_ms(surface: OperatorSurface) -> int | None:
-    notice = surface.incident_headline
-    return notice.occurred_at_ms if notice is not None else None
-
-
-def _incident_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
-    notice = surface.incident_headline
-    if notice is None:
-        return ()
-    ts_ms = notice.occurred_at_ms
-    receipts = [
-        _receipt("watchdog.outcome", notice.code, source="operator_incident", ts_ms=ts_ms),
-        _receipt("watchdog.tier", notice.tier, source="operator_incident", ts_ms=ts_ms),
-    ]
-    if notice.runbook_slug is not None:
-        receipts.append(_receipt("watchdog.runbook", notice.runbook_slug, source="operator_incident", ts_ms=ts_ms))
-    if ts_ms is not None:
-        receipts.append(
-            _receipt(
-                "watchdog.occurred_at_ms",
-                ts_ms,
-                unit="ms UTC",
-                source="operator_incident",
-                ts_ms=ts_ms,
-            )
+def _recovery_fact(surface: OperatorSurface) -> NodeFact:
+    if _freeze_status(surface) == "freeze":
+        return NodeFact("inactive", "No active recovery incident is present.")
+    if surface.incident_headline is not None:
+        ts_ms = surface.incident_headline.occurred_at_ms
+        return NodeFact(
+            "blocked",
+            surface.incident_headline.message,
+            ts_ms=ts_ms,
+            ts_ms_resolved=ts_ms is not None,
+            receipts=incident_receipts(surface),
         )
-    return tuple(receipts)
+    if surface.prior_run.classification == "HALT_TRIGGERED":
+        return NodeFact("poison", "Previous run halted for safety and requires recovery review.")
+    if surface.host_process.state == "STOPPING":
+        return NodeFact("active", "The bot process is currently stopping.")
+    return NodeFact("inactive", "No active recovery incident is present.")
 
 
 def _build_graph(
@@ -854,25 +787,39 @@ def _broker_writer_status(surface: OperatorSurface) -> LifecycleChartStatus:
 
 def _account_owner_status(surface: OperatorSurface) -> LifecycleChartStatus:
     owner = surface.account_owner
-    if owner is None or owner.phase == "unknown" or owner.generation is None:
-        return "unknown"
-    if owner.phase == "frozen":
+    if owner is None:
+        return _account_owner_chart_status(None, None)
+    return _account_owner_chart_status(owner.phase, owner.generation)
+
+
+def _account_owner_event_status(event: BotLifecycleEvent) -> LifecycleChartStatus | None:
+    if event.event_type not in {"account_owner_generation_recorded", "account_owner_reconnect_resumed"}:
+        return None
+    phase = _payload_str(event.payload.get("phase"))
+    generation = _payload_positive_int(event.payload.get("generation"))
+    return _account_owner_chart_status(phase, generation)
+
+
+def _account_owner_chart_status(phase: str | None, generation: int | None) -> LifecycleChartStatus:
+    if phase == "frozen":
         return "freeze"
-    if owner.phase == "accepting":
+    if phase is None or phase == "unknown" or generation is None:
+        return "unknown"
+    if phase == "accepting":
         return "passed"
     return "active"
 
 
-def _recovery_status(surface: OperatorSurface) -> LifecycleChartStatus:
-    if _freeze_status(surface) == "freeze":
-        return "inactive"
-    if surface.prior_run.classification == "HALT_TRIGGERED":
-        return "poison"
-    if surface.incident_headline is not None:
-        return "blocked"
-    if surface.host_process.state == "STOPPING":
-        return "active"
-    return "inactive"
+def _payload_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _payload_positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 1:
+        return value
+    return None
 
 
 def _configuration_status(surface: OperatorSurface) -> LifecycleChartStatus:
@@ -1150,57 +1097,6 @@ def _reconcile_ts_resolved(surface: OperatorSurface) -> bool:
     return _reconcile_ts_ms(surface) is not None
 
 
-def _reconciliation_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
-    reconciliation = surface.reconciliation
-    if reconciliation is None:
-        return ()
-    ts_ms = reconciliation.last_reconcile_ms
-    receipts = [
-        _receipt("reconciliation.state", reconciliation.state, source="reconciliation_projection", ts_ms=ts_ms),
-        _receipt(
-            "adopted_intent_count",
-            len(reconciliation.adopted_intent_ids),
-            source="reconciliation_projection",
-            ts_ms=ts_ms,
-        ),
-    ]
-    if reconciliation.last_reconcile_ms is not None:
-        receipts.append(
-            _receipt(
-                "last_reconcile_ms",
-                reconciliation.last_reconcile_ms,
-                unit="ms UTC",
-                source="reconciliation_projection",
-                ts_ms=ts_ms,
-            )
-        )
-    if reconciliation.sidecar_wal_seq is not None:
-        receipts.append(
-            _receipt(
-                "sidecar_wal_seq",
-                reconciliation.sidecar_wal_seq,
-                unit="seq",
-                source="reconciliation_projection",
-                ts_ms=ts_ms,
-            )
-        )
-    if reconciliation.broker_observed_at_ms is not None:
-        receipts.append(
-            _receipt(
-                "broker_observed_at_ms",
-                reconciliation.broker_observed_at_ms,
-                unit="ms UTC",
-                source="reconciliation_projection",
-                ts_ms=reconciliation.broker_observed_at_ms,
-            )
-        )
-    if reconciliation.failure_reason:
-        receipts.append(
-            _receipt("failure_reason", reconciliation.failure_reason, source="reconciliation_projection", ts_ms=ts_ms)
-        )
-    return tuple(receipts)
-
-
 def _activate_evidence(desired_state: DesiredStateView | None) -> str:
     desired = _desired_value(desired_state)
     if desired is None:
@@ -1255,32 +1151,6 @@ def _account_owner_evidence(surface: OperatorSurface) -> str:
 def _account_owner_ts_ms(surface: OperatorSurface) -> int | None:
     owner = surface.account_owner
     return owner.recorded_at_ms if owner is not None else None
-
-
-def _account_owner_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
-    owner = surface.account_owner
-    if owner is None:
-        return ()
-    ts_ms = owner.recorded_at_ms
-    return (
-        _receipt("account_owner.phase", owner.phase, source=owner.source, ts_ms=ts_ms),
-        _receipt(
-            "account_owner.generation",
-            owner.generation if owner.generation is not None else "unknown",
-            source=owner.source,
-            ts_ms=ts_ms,
-        ),
-    )
-
-
-def _recovery_evidence(surface: OperatorSurface) -> str:
-    if surface.prior_run.classification == "HALT_TRIGGERED":
-        return "Previous run halted for safety and requires recovery review."
-    if surface.incident_headline is not None:
-        return surface.incident_headline.message
-    if surface.host_process.state == "STOPPING":
-        return "The bot process is currently stopping."
-    return "No active recovery incident is present."
 
 
 def _configuration_evidence(surface: OperatorSurface) -> str:

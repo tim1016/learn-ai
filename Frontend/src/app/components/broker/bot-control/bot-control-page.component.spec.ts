@@ -451,6 +451,56 @@ describe('BotControlPageComponent', () => {
     expect(timeline?.textContent).toContain('broker_ack #7');
   });
 
+  it('clears lifecycle timeline rows when refreshed status changes run context', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const nextTimeline = deferred<LifecycleTimelineResponse>();
+    const nextStatus = {
+      ...makeStatus(),
+      evidence_binding: { run_id: 'run-y', state: 'latest_run_by_ledger', is_live: false },
+    };
+    const getInstanceStatus = vi.fn()
+      .mockResolvedValueOnce(makeStatus())
+      .mockResolvedValueOnce(nextStatus);
+    const getLifecycleTimeline = vi.fn()
+      .mockResolvedValueOnce(makeLifecycleTimeline())
+      .mockReturnValueOnce(nextTimeline.promise);
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus,
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline,
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+    expect((fixture.nativeElement as HTMLElement).textContent)
+      .toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+
+    await (fixture.componentInstance as unknown as { refreshStatus(id: string): Promise<void> }).refreshStatus('sid-x');
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).not.toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+    expect(text).toContain('No recent projection rows are available for this bot.');
+  });
+
   it('renders selected lifecycle node freshness and receipts', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();

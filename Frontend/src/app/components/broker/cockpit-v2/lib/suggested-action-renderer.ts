@@ -48,8 +48,8 @@ const _INVOKE_ENDPOINT_LABELS: Record<InvokeEndpointAction['endpoint'], string> 
   reconcile_instance: 'Reconcile now',
 };
 
-export function renderSuggestedAction(
-  action: GateSuggestedAction | TraderPrimaryRemediation | null,
+export function renderGateSuggestedAction(
+  action: GateSuggestedAction | null,
   dispatch: RendererDispatch,
 ): RenderedAction | null {
   if (action === null) {
@@ -80,19 +80,6 @@ export function renderSuggestedAction(
         variant: 'link',
         invoke: () => dispatch.openRunbook((action as OpenRunbookAction).slug),
       };
-    case 'invoke_endpoint': {
-      if (!dispatch.invokeEndpoint) {
-        return null;
-      }
-      const invokeEndpoint = dispatch.invokeEndpoint;
-      return {
-        label: _INVOKE_ENDPOINT_LABELS[action.endpoint],
-        variant: 'primary',
-        invoke: () => invokeEndpoint(action.endpoint),
-      };
-    }
-    case 'none':
-      return null;
     default: {
       // Unknown kind — fail closed visibly.  The cockpit's caller
       // renders the raw gate name + the documented unavailable
@@ -100,4 +87,35 @@ export function renderSuggestedAction(
       return null;
     }
   }
+}
+
+export function renderTraderRemediation(
+  action: TraderPrimaryRemediation | null,
+  dispatch: RendererDispatch,
+): RenderedAction | null {
+  if (action === null || action.kind === 'none') {
+    return null;
+  }
+  if (action.kind === 'invoke_endpoint') {
+    if (!dispatch.invokeEndpoint) {
+      return null;
+    }
+    const invokeEndpoint = dispatch.invokeEndpoint;
+    return {
+      label: _INVOKE_ENDPOINT_LABELS[action.endpoint],
+      variant: 'primary',
+      invoke: () => invokeEndpoint(action.endpoint),
+    };
+  }
+  return renderGateSuggestedAction(action as GateSuggestedAction, dispatch);
+}
+
+export function renderSuggestedAction(
+  action: GateSuggestedAction | TraderPrimaryRemediation | null,
+  dispatch: RendererDispatch,
+): RenderedAction | null {
+  if (action?.kind === 'invoke_endpoint' || action?.kind === 'none') {
+    return renderTraderRemediation(action, dispatch);
+  }
+  return renderGateSuggestedAction(action, dispatch);
 }

@@ -18,7 +18,7 @@ import type {
   OperatorGate,
 } from '../../../../api/live-instances.types';
 import type { InnerTab } from '../lib/instance-tab-state';
-import { renderSuggestedAction } from '../lib/suggested-action-renderer';
+import { renderGateSuggestedAction } from '../lib/suggested-action-renderer';
 
 @Component({
   selector: 'app-status-risk-tab',
@@ -52,7 +52,7 @@ export class StatusRiskTabComponent {
   readonly broker = computed(() => this.status().broker);
 
   renderAction(gate: OperatorGate): { label: string; variant: 'primary' | 'link'; invoke: () => void } | null {
-    return renderSuggestedAction(gate.suggested_action, {
+    return renderGateSuggestedAction(gate.suggested_action, {
       invokeCapability: (cap) => {
         if (cap === 'resume') this.invokeResume.emit();
         else if (cap === 'pause') this.invokePause.emit();

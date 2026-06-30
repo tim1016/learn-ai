@@ -24,6 +24,8 @@ from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run_ledger import LiveRunLedger
 from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
+from app.operator.incidents.store import IncidentStore
+from app.operator.notices.schema import OperatorIncident, OperatorNotice, OperatorNoticeAction
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import LiveBinding
@@ -46,6 +48,25 @@ def _write_ledger(
     if spec_path is not None:
         payload["strategy_spec_path"] = str(spec_path)
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _append_watchdog_incident(run_dir: Path, *, incident_id: str, message: str, started_at_ms: int) -> None:
+    IncidentStore(run_dir).append(
+        OperatorIncident(
+            incident_id=incident_id,
+            category="watchdog",
+            started_at_ms=started_at_ms,
+            notice=OperatorNotice(
+                code="watchdog.flatten_failed",
+                tier="critical",
+                title="Watchdog flatten failed",
+                message=message,
+                action=OperatorNoticeAction(kind="open_runbook", label="Open runbook", target="watchdog-halt"),
+                runbook_slug="watchdog-halt",
+                occurred_at_ms=started_at_ms,
+            ),
+        )
+    )
 
 
 def test_resolve_symbol_prefers_stock_action_plan_over_spec_fixture(tmp_path: Path) -> None:
@@ -94,6 +115,33 @@ def test_resolve_symbol_prefers_stock_action_plan_over_spec_fixture(tmp_path: Pa
     )
 
     assert symbol == "TSLA"
+
+
+def test_resolve_incident_headline_uses_evidence_run_dir_guard(tmp_path: Path) -> None:
+    root = tmp_path / "live_runs"
+    _write_ledger(root, "run-live", "spy_ema_paper", 200)
+    _write_ledger(root, "run-latest", "spy_ema_paper", 100)
+    _append_watchdog_incident(
+        root / "run-live",
+        incident_id="live",
+        message="This mismatched live binding must not win.",
+        started_at_ms=200,
+    )
+    _append_watchdog_incident(
+        root / "run-latest",
+        incident_id="latest",
+        message="Latest evidence incident wins.",
+        started_at_ms=100,
+    )
+
+    notice = live_instances._resolve_incident_headline(
+        root,
+        LiveBinding(run_id="run-live", run_dir="run-live"),
+        [{"run_dir": str(root / "run-latest")}],
+    )
+
+    assert notice is not None
+    assert notice.message == "Latest evidence incident wins."
 
 
 def _write_live_state(root: Path, sid: str, run_id: str, positions: dict[str, int]) -> None:
@@ -1144,6 +1192,46 @@ def test_ny_session_bounds_use_next_calendar_midnight_on_dst_transition() -> Non
     assert start == datetime(2026, 3, 8, 0, 0, tzinfo=live_instances._NY_TZ)
     assert end == datetime(2026, 3, 9, 0, 0, tzinfo=live_instances._NY_TZ)
     assert end_ms - start_ms == 23 * 60 * 60 * 1000
+
+
+def test_lifecycle_activity_refs_use_ny_session_window_not_utc_day(tmp_path: Path) -> None:
+    root = tmp_path / "live_runs"
+    sid = "spy_evening_session"
+    run_id = "run-evening-session"
+    day = date(2026, 6, 29)
+    event_ms = int(datetime(2026, 6, 29, 21, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
+    namespace = f"learn-ai/{sid}/v1"
+    order_ref = f"{namespace}:intent-evening"
+    _write_ledger(root, run_id, sid, event_ms)
+    _write_intent_events(
+        root / run_id,
+        [
+            IntentEvent(
+                seq=1,
+                event_type=IntentEventType.SUBMITTED,
+                intent_id="intent-evening",
+                bot_order_namespace=namespace,
+                order_ref=order_ref,
+                order_id=42,
+                ts_ms=event_ms,
+                appended_at_ms=event_ms,
+            )
+        ],
+    )
+    start_ms, end_ms = live_instances._ny_session_bounds_ms(day)
+
+    refs = live_instances._lifecycle_order_refs_for_activity(
+        artifacts_root=root.parent,
+        sid=sid,
+        day=day,
+        runs=[{"run_id": run_id, "run_dir": str(root / run_id), "created_at_ms": event_ms}],
+        live_binding=None,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+
+    assert datetime.fromtimestamp(event_ms / 1000, tz=UTC).date() == date(2026, 6, 30)
+    assert refs == {order_ref}
 
 
 async def test_activity_projection_defaults_to_latest_broker_ledger_session(

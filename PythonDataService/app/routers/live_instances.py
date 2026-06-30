@@ -20,7 +20,6 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
-from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, Response, status
@@ -130,6 +129,17 @@ from app.schemas.live_runs import (
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
     matching_evidence_refs,
+)
+from app.services.activity_lifecycle_consistency import (
+    NY_TZ as _NY_TZ,
+)
+from app.services.activity_lifecycle_consistency import (
+    activity_lifecycle_consistency_warnings as compare_activity_lifecycle_refs,
+)
+from app.services.activity_lifecycle_consistency import (
+    activity_order_refs_for_session,
+    ny_session_bounds_ms,
+    runs_active_in_window,
 )
 from app.services.activity_projection_contract import (
     activity_cluster_label,
@@ -605,9 +615,7 @@ def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path 
 
 
 def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> OperatorNotice | None:
-    run_dir = _resolve_live_run_dir(root, live_binding)
-    if run_dir is None and runs:
-        run_dir = Path(runs[0]["run_dir"])
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
     if run_dir is None or not run_dir.is_dir():
         return None
     incidents = [incident for incident in IncidentStore(run_dir).list_unresolved() if incident.category == "watchdog"]
@@ -2426,7 +2434,6 @@ def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | 
 # bars under today's banner. The chart-snapshot is the only consumer in
 # this module; everything else operates on bar-time milliseconds where
 # the timezone is already explicit.
-_NY_TZ = ZoneInfo("America/New_York")
 _ACTIVITY_EVIDENCE_BACKFILL_LIMIT = 10_000
 
 
@@ -2489,9 +2496,7 @@ def _ny_session_bounds_ms(day: date) -> tuple[int, int]:
     UTC bucket. This includes PRE/RTH/POST/CLOSED broker events whose
     wall-clock belongs to that NY date.
     """
-    start = datetime.combine(day, datetime.min.time(), tzinfo=_NY_TZ)
-    end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=_NY_TZ)
-    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+    return ny_session_bounds_ms(day)
 
 
 def _activity_evidence_refs_for_session(
@@ -2868,40 +2873,15 @@ def _activity_lifecycle_consistency_warnings(
         runs=runs,
         live_binding=live_binding,
         start_ms=start_ms,
+            end_ms=end_ms,
+        )
+    activity_refs = activity_order_refs_for_session(
+        activity_rows,
+        start_ms=start_ms,
         end_ms=end_ms,
+        row_time_ms=_activity_row_time_ms,
     )
-    activity_refs = {
-        row.order_ref
-        for row in activity_rows
-        if row.order_ref and start_ms <= _activity_row_time_ms(row) < end_ms
-    }
-
-    warnings: list[ActivityReconciliationWarning] = []
-    missing_activity = sorted(lifecycle_refs - activity_refs)
-    if missing_activity:
-        warnings.append(
-            ActivityReconciliationWarning(
-                code="lifecycle_order_missing_activity",
-                message=(
-                    "Lifecycle submit evidence exists for order refs that are absent from the Activity projection; "
-                    "treat broker capture as incomplete until reconciled."
-                ),
-                row_ids=missing_activity,
-            )
-        )
-    missing_lifecycle = sorted(activity_refs - lifecycle_refs)
-    if missing_lifecycle:
-        warnings.append(
-            ActivityReconciliationWarning(
-                code="activity_order_missing_lifecycle",
-                message=(
-                    "Activity has broker/order evidence for order refs that are absent from the lifecycle timeline; "
-                    "treat lifecycle capture as incomplete until reconciled."
-                ),
-                row_ids=missing_lifecycle,
-            )
-        )
-    return warnings
+    return compare_activity_lifecycle_refs(lifecycle_refs=lifecycle_refs, activity_refs=activity_refs)
 
 
 def _lifecycle_order_refs_for_activity(
@@ -2915,9 +2895,17 @@ def _lifecycle_order_refs_for_activity(
     end_ms: int,
 ) -> set[str]:
     refs: set[str] = set()
-    for run in _runs_active_on(runs, day, live_binding=live_binding):
-        run_dir = Path(run["run_dir"])
-        run_id = str(run.get("run_id") or run_dir.name)
+    live_run_id = live_binding.run_id if live_binding is not None else None
+    for run in runs_active_in_window(
+        runs,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        live_run_id=live_run_id,
+        force_include_live_run=day == _today_ny(),
+        read_sidecar=_read_sidecar,
+    ):
+        run_dir = run.run_dir
+        run_id = run.run_id
         intent_events = _read_intent_events_for_activity(run_dir, sid=sid)
         namespace = next((event.bot_order_namespace for event in intent_events), None)
         for event in intent_events:

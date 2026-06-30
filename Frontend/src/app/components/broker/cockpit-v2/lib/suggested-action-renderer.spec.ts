@@ -2,7 +2,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderSuggestedAction, type RendererDispatch } from './suggested-action-renderer';
+import {
+  renderGateSuggestedAction,
+  renderSuggestedAction,
+  renderTraderRemediation,
+  type RendererDispatch,
+} from './suggested-action-renderer';
 
 function makeDispatch(): RendererDispatch & {
   calls: {
@@ -39,7 +44,7 @@ describe('renderSuggestedAction', () => {
 
   it('invokes capability via the dispatch handler', () => {
     const dispatch = makeDispatch();
-    const rendered = renderSuggestedAction(
+    const rendered = renderGateSuggestedAction(
       { kind: 'invoke_capability', capability: 'resume' },
       dispatch,
     );
@@ -51,7 +56,7 @@ describe('renderSuggestedAction', () => {
 
   it('focus_action routes to the canonical render site for destructive actions', () => {
     const dispatch = makeDispatch();
-    const rendered = renderSuggestedAction(
+    const rendered = renderGateSuggestedAction(
       { kind: 'focus_action', tab: 'audit', action: 'mark_poisoned' },
       dispatch,
     );
@@ -63,14 +68,14 @@ describe('renderSuggestedAction', () => {
 
   it('redeploy dispatches the redeploy handler', () => {
     const dispatch = makeDispatch();
-    const rendered = renderSuggestedAction({ kind: 'redeploy' }, dispatch);
+    const rendered = renderGateSuggestedAction({ kind: 'redeploy' }, dispatch);
     rendered?.invoke();
     expect(dispatch.calls.redeploy).toBe(1);
   });
 
   it('open_runbook passes the slug through', () => {
     const dispatch = makeDispatch();
-    const rendered = renderSuggestedAction(
+    const rendered = renderGateSuggestedAction(
       { kind: 'open_runbook', slug: 'broker-reconnect' },
       dispatch,
     );
@@ -80,7 +85,7 @@ describe('renderSuggestedAction', () => {
 
   it('invoke_endpoint dispatches the stable backend endpoint name', () => {
     const dispatch = makeDispatch();
-    const rendered = renderSuggestedAction(
+    const rendered = renderTraderRemediation(
       {
         kind: 'invoke_endpoint',
         endpoint: 'reconcile_instance',
@@ -102,7 +107,7 @@ describe('renderSuggestedAction', () => {
       redeploy: vi.fn(),
       openRunbook: vi.fn(),
     };
-    const rendered = renderSuggestedAction(
+    const rendered = renderTraderRemediation(
       {
         kind: 'invoke_endpoint',
         endpoint: 'reconcile_instance',
@@ -115,7 +120,7 @@ describe('renderSuggestedAction', () => {
   });
 
   it('returns null for no primary remediation', () => {
-    expect(renderSuggestedAction({ kind: 'none', reason: 'READY' }, makeDispatch())).toBe(null);
+    expect(renderTraderRemediation({ kind: 'none', reason: 'READY' }, makeDispatch())).toBe(null);
   });
 
   it('returns null for an unknown kind (fail closed visibly)', () => {

@@ -11,12 +11,12 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any
 
 import asyncpg
 
 from app.config import settings
 from app.schemas.lifecycle_projection import (
+    AccountOwnerStatusSnapshotRow,
     LifecycleProjectionEventRow,
     LifecycleProjectionTable,
 )
@@ -113,6 +113,7 @@ def lifecycle_event_to_projection_row(
     return LifecycleProjectionEventRow(
         account_id=event.account_id,
         strategy_instance_id=event.bot_id,
+        run_id=event.run_id,
         event_id=event.event_id,
         event_type=event.event_type,
         category=event.category,
@@ -123,6 +124,7 @@ def lifecycle_event_to_projection_row(
         ts_ms_resolved=event.ts_ms_resolved,
         source_artifact=resolved_source_artifact,
         source_type=event.source,
+        source_rank=event.source_rank,
         source_seq=event.source_local_seq,
         source_hash=source_hash,
         summary=event.summary,
@@ -131,7 +133,7 @@ def lifecycle_event_to_projection_row(
         receipt_payload=event.payload,
         evidence_refs=evidence_refs,
         rendered_headline=event.summary,
-        rendered_template_id=_lifecycle_rendered_template_id(event),
+        rendered_template_id=event.rendered_template_id or _lifecycle_rendered_template_id(event),
         inserted_at_ms=now_ms,
         updated_at_ms=now_ms,
     )
@@ -147,7 +149,7 @@ def account_owner_status_snapshot_from_event(
     source_artifact: str = "account_events",
     source_hash: str | None = None,
     inserted_at_ms: int | None = None,
-) -> dict[str, Any] | None:
+) -> AccountOwnerStatusSnapshotRow | None:
     """Project an account_owner_generation_recorded event into a status row."""
 
     if event.event_type != "account_owner_generation_recorded":
@@ -158,20 +160,20 @@ def account_owner_status_snapshot_from_event(
     if not isinstance(generation, int) or not isinstance(phase, str) or not isinstance(recorded_at_ms, int):
         raise ValueError("account_owner_generation_recorded event is missing generation, phase, or recorded_at_ms")
     now_ms = inserted_at_ms or _now_ms()
-    return {
-        "account_id": event.account_id,
-        "generation": generation,
-        "phase": phase,
-        "recorded_at_ms": recorded_at_ms,
-        "ts_ms_resolved": True,
-        "source_artifact": source_artifact,
-        "source_seq": event.seq or event.file_position,
-        "source_offset": event.file_position,
-        "source_hash": source_hash,
-        "receipt_payload": event.payload,
-        "inserted_at_ms": now_ms,
-        "updated_at_ms": now_ms,
-    }
+    return AccountOwnerStatusSnapshotRow(
+        account_id=event.account_id,
+        generation=generation,
+        phase=phase,
+        recorded_at_ms=recorded_at_ms,
+        ts_ms_resolved=True,
+        source_artifact=source_artifact,
+        source_seq=event.seq or event.file_position,
+        source_offset=event.file_position,
+        source_hash=source_hash,
+        receipt_payload=event.payload,
+        inserted_at_ms=now_ms,
+        updated_at_ms=now_ms,
+    )
 
 
 async def upsert_lifecycle_events(
@@ -180,6 +182,15 @@ async def upsert_lifecycle_events(
 ) -> int:
     """Idempotently upsert lifecycle projection rows into the requested table."""
 
+    async with connection() as conn:
+        return await _upsert_lifecycle_events_on_connection(conn, table, rows)
+
+
+async def _upsert_lifecycle_events_on_connection(
+    conn: asyncpg.Connection,
+    table: LifecycleProjectionTable,
+    rows: list[LifecycleProjectionEventRow],
+) -> int:
     if table not in _EVENT_TABLES:
         raise ValueError(f"unsupported lifecycle projection table: {table!r}")
     if not rows:
@@ -188,7 +199,7 @@ async def upsert_lifecycle_events(
         INSERT INTO {table} (
             account_id, strategy_instance_id, run_id, event_id, event_type,
             category, node_id, gate_id, status, severity, ts_ms,
-            ts_ms_resolved, source_artifact, source_type, source_seq,
+            ts_ms_resolved, source_artifact, source_type, source_rank, source_seq,
             source_offset, source_hash, summary, why, operator_next_step,
             receipt_payload, evidence_refs, rendered_headline,
             rendered_template_id, inserted_at_ms, updated_at_ms
@@ -196,10 +207,10 @@ async def upsert_lifecycle_events(
         VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10, $11,
-            $12, $13, $14, $15,
-            $16, $17, $18, $19, $20,
-            $21::jsonb, $22::jsonb, $23,
-            $24, $25, $26
+            $12, $13, $14, $15, $16,
+            $17, $18, $19, $20, $21,
+            $22::jsonb, $23::jsonb, $24,
+            $25, $26, $27
         )
         ON CONFLICT (event_id) DO UPDATE SET
             strategy_instance_id = EXCLUDED.strategy_instance_id,
@@ -214,6 +225,7 @@ async def upsert_lifecycle_events(
             ts_ms_resolved = EXCLUDED.ts_ms_resolved,
             source_artifact = EXCLUDED.source_artifact,
             source_type = EXCLUDED.source_type,
+            source_rank = EXCLUDED.source_rank,
             source_seq = EXCLUDED.source_seq,
             source_offset = EXCLUDED.source_offset,
             source_hash = EXCLUDED.source_hash,
@@ -242,6 +254,7 @@ async def upsert_lifecycle_events(
             row.ts_ms_resolved,
             row.source_artifact,
             row.source_type,
+            row.source_rank,
             row.source_seq,
             row.source_offset,
             row.source_hash,
@@ -257,14 +270,21 @@ async def upsert_lifecycle_events(
         )
         for row in rows
     ]
-    async with connection() as conn:
-        await conn.executemany(query, args)
+    await conn.executemany(query, args)
     return len(rows)
 
 
-async def upsert_account_owner_status_snapshot(row: dict[str, Any]) -> None:
+async def upsert_account_owner_status_snapshot(row: AccountOwnerStatusSnapshotRow) -> None:
     """Idempotently upsert one AccountOwner generation/phase snapshot."""
 
+    async with connection() as conn:
+        await _upsert_account_owner_status_snapshot_on_connection(conn, row)
+
+
+async def _upsert_account_owner_status_snapshot_on_connection(
+    conn: asyncpg.Connection,
+    row: AccountOwnerStatusSnapshotRow,
+) -> None:
     query = """
         INSERT INTO account_owner_status_snapshots (
             account_id, generation, phase, recorded_at_ms, ts_ms_resolved,
@@ -284,22 +304,39 @@ async def upsert_account_owner_status_snapshot(row: dict[str, Any]) -> None:
             receipt_payload = EXCLUDED.receipt_payload,
             updated_at_ms = EXCLUDED.updated_at_ms;
     """
-    async with connection() as conn:
-        await conn.execute(
-            query,
-            row["account_id"],
-            row["generation"],
-            row["phase"],
-            row["recorded_at_ms"],
-            row["ts_ms_resolved"],
-            row["source_artifact"],
-            row.get("source_seq"),
-            row.get("source_offset"),
-            row.get("source_hash"),
-            _json_dump(row["receipt_payload"]),
-            row["inserted_at_ms"],
-            row["updated_at_ms"],
-        )
+    await conn.execute(
+        query,
+        row.account_id,
+        row.generation,
+        row.phase,
+        row.recorded_at_ms,
+        row.ts_ms_resolved,
+        row.source_artifact,
+        row.source_seq,
+        row.source_offset,
+        row.source_hash,
+        _json_dump(row.receipt_payload),
+        row.inserted_at_ms,
+        row.updated_at_ms,
+    )
+
+
+async def upsert_replay_batch(
+    *,
+    bot_events: list[LifecycleProjectionEventRow],
+    account_events: list[LifecycleProjectionEventRow],
+    account_owner_status_snapshots: list[AccountOwnerStatusSnapshotRow],
+) -> int:
+    """Atomically persist one replay-authored projection batch."""
+
+    written = 0
+    async with connection() as conn, conn.transaction():
+        written += await _upsert_lifecycle_events_on_connection(conn, "bot_lifecycle_events", bot_events)
+        written += await _upsert_lifecycle_events_on_connection(conn, "account_lifecycle_events", account_events)
+        for snapshot in account_owner_status_snapshots:
+            await _upsert_account_owner_status_snapshot_on_connection(conn, snapshot)
+            written += 1
+    return written
 
 
 async def select_timeline(
@@ -320,7 +357,7 @@ async def select_timeline(
         SELECT id, account_id, strategy_instance_id, run_id, event_id,
                event_type, category, node_id, gate_id, status, severity,
                ts_ms, ts_ms_resolved, source_artifact, source_type,
-               source_seq, source_offset, source_hash, summary, why,
+               source_rank, source_seq, source_offset, source_hash, summary, why,
                operator_next_step, receipt_payload, evidence_refs,
                rendered_headline, rendered_template_id, inserted_at_ms,
                updated_at_ms
@@ -328,7 +365,7 @@ async def select_timeline(
          WHERE ($1::text IS NULL OR account_id = $1)
            AND ($2::text IS NULL OR strategy_instance_id = $2)
            AND ($3::text IS NULL OR run_id = $3)
-         ORDER BY COALESCE(ts_ms, 9223372036854775807) DESC, source_seq DESC NULLS LAST, id DESC
+         ORDER BY (ts_ms IS NULL) ASC, ts_ms DESC NULLS LAST, source_rank DESC, source_seq DESC NULLS LAST, id DESC
          LIMIT $4;
     """
     async with connection() as conn:
@@ -358,7 +395,7 @@ async def select_safety_triage(
         SELECT id, account_id, strategy_instance_id, run_id, event_id,
                event_type, category, node_id, gate_id, status, severity,
                ts_ms, ts_ms_resolved, source_artifact, source_type,
-               source_seq, source_offset, source_hash, summary, why,
+               source_rank, source_seq, source_offset, source_hash, summary, why,
                operator_next_step, receipt_payload, evidence_refs,
                rendered_headline, rendered_template_id, inserted_at_ms,
                updated_at_ms
@@ -371,7 +408,7 @@ async def select_safety_triage(
            AND ($5::text IS NULL OR event_type = $5)
            AND ($6::text IS NULL OR node_id = $6)
            AND ($7::text IS NULL OR severity = $7)
-         ORDER BY COALESCE(ts_ms, 9223372036854775807) DESC, source_seq DESC NULLS LAST, id DESC
+         ORDER BY (ts_ms IS NULL) ASC, ts_ms DESC NULLS LAST, source_rank DESC, source_seq DESC NULLS LAST, id DESC
          LIMIT $8;
     """
     async with connection() as conn:
@@ -412,8 +449,21 @@ class LifecycleProjectionStore:
     ) -> int:
         return await upsert_lifecycle_events(table, rows)
 
-    async def upsert_account_owner_status_snapshot(self, row: dict[str, Any]) -> None:
+    async def upsert_account_owner_status_snapshot(self, row: AccountOwnerStatusSnapshotRow) -> None:
         await upsert_account_owner_status_snapshot(row)
+
+    async def upsert_replay_batch(
+        self,
+        *,
+        bot_events: list[LifecycleProjectionEventRow],
+        account_events: list[LifecycleProjectionEventRow],
+        account_owner_status_snapshots: list[AccountOwnerStatusSnapshotRow],
+    ) -> int:
+        return await upsert_replay_batch(
+            bot_events=bot_events,
+            account_events=account_events,
+            account_owner_status_snapshots=account_owner_status_snapshots,
+        )
 
     async def select_timeline(
         self,

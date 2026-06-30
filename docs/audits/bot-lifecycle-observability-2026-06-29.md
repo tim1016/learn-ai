@@ -9,9 +9,11 @@
 > below were true when recorded but are now stale: submit/broker subgraph nodes
 > are event-backed or `unknown`+reason, `writer_guard` is no longer hardcoded
 > passed, AccountOwner generation/unresolved-exposure/restart-intensity V1
-> artifacts are shipped, and restart intensity is 3 starts / 5 minutes. Treat
-> the explicit correction notes in this document as superseding the original
-> G3/G6 wording.
+> artifacts are shipped, restart intensity is 3 starts / 5 minutes, lifecycle
+> status labels are backend-authored, Angular lifecycle edges use ngx-vflow
+> floating routing rather than bespoke handle inference, and timeline/receipt
+> rendering is split into focused components. Treat the explicit correction
+> notes in this document as superseding the original G3/G6 wording.
 
 ---
 
@@ -21,7 +23,7 @@ The lifecycle feature is **better architected than "vibe-coded" implies on the a
 
 1. **Authorship is clean, but the naming is a trap.** The "backend-authored bot lifecycle overview" is authored in **PythonDataService**, not the .NET Backend. The .NET Backend has **zero** bot / lifecycle / live-instance / activity / broker-order code. "Backend-authored" = Python-authored, served straight to Angular over FastAPI REST, bypassing .NET entirely. This is actually consistent with the authority rules (Python owns trading meaning) — but it means the .NET "owns persistence/identity/GraphQL" rule does **not** currently apply to bots at all. Decide deliberately whether that's intended.
 
-2. **Angular is clean.** No lifecycle meaning is computed in Angular. The flowchart graph (nodes, edges, statuses, action-enablement, subgraphs) is rendered 1:1 from the backend `lifecycle_chart` payload. Only x/y layout, status→label wording, and status→color theming are local — all off a canonical enum. No P&L/stats/signals in TS. **Two minor gray-areas** (operator wording + edge color in TS) are flagged below, not blockers.
+2. **Angular is clean.** No lifecycle meaning is computed in Angular. The flowchart graph (nodes, edges, statuses, action-enablement, subgraphs) is rendered 1:1 from the backend `lifecycle_chart` payload. Only x/y layout and status→color theming are local; lifecycle labels and explanations are backend-authored. No P&L/stats/signals in TS. The remaining gray-area is visual theming off the canonical enum, not lifecycle authorship.
 
 3. **There is no single canonical lifecycle state machine.** The "lifecycle" is a **visual projection composed from ~8 unrelated state vocabularies** (`RunState`, `HostProcessState`, gate status, reconciliation state, desired state, intent-event types, poison triggers, chart-node status). No enum enumerates the lifecycle states + legal transitions. Two transition graphs exist (chart edges vs. gate-map mermaid) and are **not isomorphic**.
 

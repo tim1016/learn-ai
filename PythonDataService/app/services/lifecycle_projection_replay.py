@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.engine.live.intent_events import IntentEvent
-from app.schemas.lifecycle_projection import LifecycleProjectionEventRow, LifecycleProjectionTable
+from app.schemas.lifecycle_projection import (
+    AccountOwnerStatusSnapshotRow,
+    LifecycleProjectionEventRow,
+)
 from app.schemas.live_runs import BotLifecycleEvent
 from app.services.bot_lifecycle_projection import (
     account_event_to_lifecycle_event,
@@ -29,14 +32,13 @@ from app.services.lifecycle_projection_store import (
 class LifecycleProjectionReplayStore(Protocol):
     """Store protocol required to persist replay-authored projection rows."""
 
-    async def upsert_lifecycle_events(
+    async def upsert_replay_batch(
         self,
-        table: LifecycleProjectionTable,
-        rows: list[LifecycleProjectionEventRow],
+        *,
+        bot_events: list[LifecycleProjectionEventRow],
+        account_events: list[LifecycleProjectionEventRow],
+        account_owner_status_snapshots: list[AccountOwnerStatusSnapshotRow],
     ) -> int:
-        ...
-
-    async def upsert_account_owner_status_snapshot(self, row: dict[str, Any]) -> None:
         ...
 
 
@@ -46,7 +48,7 @@ class LifecycleProjectionReplayBatch:
 
     bot_events: list[LifecycleProjectionEventRow] = field(default_factory=list)
     account_events: list[LifecycleProjectionEventRow] = field(default_factory=list)
-    account_owner_status_snapshots: list[dict[str, Any]] = field(default_factory=list)
+    account_owner_status_snapshots: list[AccountOwnerStatusSnapshotRow] = field(default_factory=list)
 
     @property
     def row_count(self) -> int:
@@ -86,8 +88,7 @@ def batch_from_account_events(
     rows: list[dict[str, Any]],
     *,
     account_id: str,
-    bot_id: str | None = None,
-    source_artifact: str = "account_events",
+    source_artifact: str | None = None,
     source_hash: str | None = None,
     inserted_at_ms: int | None = None,
     start_file_position: int = 1,
@@ -99,10 +100,9 @@ def batch_from_account_events(
         account_id=account_id,
         start_file_position=start_file_position,
     )
-    lifecycle_events = [
-        _apply_bot_id(account_event_to_lifecycle_event(event), bot_id)
-        for event in account_event_projections
-    ]
+    if source_artifact is None:
+        raise ValueError("source_artifact is required for account-event projection replay")
+    lifecycle_events = [account_event_to_lifecycle_event(event) for event in account_event_projections]
     batch = batch_from_lifecycle_events(
         lifecycle_events,
         source_artifact=source_artifact,
@@ -143,6 +143,8 @@ def batch_from_intent_events(
 ) -> LifecycleProjectionReplayBatch:
     """Author projection rows from Intent WAL events."""
 
+    if wal_path is None:
+        raise ValueError("wal_path is required for intent WAL projection replay")
     lifecycle_events = project_intent_events(
         events,
         bot_id=bot_id,
@@ -154,7 +156,7 @@ def batch_from_intent_events(
     )
     return batch_from_lifecycle_events(
         lifecycle_events,
-        source_artifact=str(wal_path) if wal_path is not None else "intent_wal",
+        source_artifact=str(wal_path),
         source_hash=source_hash,
         inserted_at_ms=inserted_at_ms,
     )
@@ -168,18 +170,8 @@ async def write_replay_batch(
     """Persist one replay batch through the projection store."""
 
     target = store or LifecycleProjectionStore()
-    written = 0
-    if batch.bot_events:
-        written += await target.upsert_lifecycle_events("bot_lifecycle_events", batch.bot_events)
-    if batch.account_events:
-        written += await target.upsert_lifecycle_events("account_lifecycle_events", batch.account_events)
-    for snapshot in batch.account_owner_status_snapshots:
-        await target.upsert_account_owner_status_snapshot(snapshot)
-        written += 1
-    return written
-
-
-def _apply_bot_id(event: BotLifecycleEvent, bot_id: str | None) -> BotLifecycleEvent:
-    if bot_id is None:
-        return event
-    return event.model_copy(update={"bot_id": bot_id})
+    return await target.upsert_replay_batch(
+        bot_events=batch.bot_events,
+        account_events=batch.account_events,
+        account_owner_status_snapshots=batch.account_owner_status_snapshots,
+    )

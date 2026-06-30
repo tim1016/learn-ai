@@ -43,6 +43,7 @@ class _FakeStore:
                 ts_ms_resolved=True,
                 source_artifact="/tmp/run-1/intent_events.jsonl",
                 source_type="broker_ack",
+                source_rank=50,
                 source_seq=2,
                 summary="Broker acknowledgement failed; submit outcome is uncertain.",
                 operator_next_step="PROBE_BROKER_BEFORE_RETRY",

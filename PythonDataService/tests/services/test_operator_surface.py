@@ -534,6 +534,22 @@ def test_trader_guidance_reconciliation_not_available_cannot_be_safe_to_submit()
     assert surface.trader_guidance.primary_remediation.kind == "invoke_endpoint"
 
 
+def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="disconnected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    assert surface.submit_readiness.code == "broker_state_unproven"
+    assert "BROKER_CONNECTION_DISCONNECTED" in surface.submit_readiness.blocking_reason_codes
+    assert "RECONCILIATION_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.primary_remediation.kind == "open_runbook"
+    assert surface.trader_guidance.primary_remediation.slug == "broker-reconnect"
+
+
 # ---------------------------------------------------------------------------
 # current_risk
 # ---------------------------------------------------------------------------

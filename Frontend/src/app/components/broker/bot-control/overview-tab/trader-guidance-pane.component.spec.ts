@@ -6,7 +6,7 @@ import type {
   OperatorSurface,
   TraderPrimaryRemediation,
 } from '../../../../api/live-instances.types';
-import { makeOperatorSurfaceFixture } from '../../../../testing/live-instance-status-fixtures';
+import { makeOperatorSurfaceFixture } from '../../../../testing/operator-surface-fixtures';
 import { TraderGuidancePaneComponent } from './trader-guidance-pane.component';
 
 function makeSurface(overrides: Partial<OperatorSurface> = {}): OperatorSurface {

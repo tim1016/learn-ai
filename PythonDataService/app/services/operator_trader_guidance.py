@@ -1,0 +1,568 @@
+"""Trader guidance authoring for the operator surface."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.schemas.live_runs import (
+    InvokeEndpointAction,
+    NoPrimaryRemediationAction,
+    OpenRunbookAction,
+    OperatorGate,
+    OperatorSurfaceAccountOwner,
+    OperatorSurfaceAttentionGroup,
+    OperatorSurfaceBroker,
+    OperatorSurfaceDailyOrderCap,
+    OperatorSurfaceEvidenceFact,
+    OperatorSurfaceHostProcess,
+    OperatorSurfaceReconciliation,
+    OperatorSurfaceSubmitReadiness,
+    OperatorSurfaceTraderGuidance,
+    OperatorSurfaceTradingSession,
+    ReconciliationState,
+    SubmitReadinessCode,
+    TraderAttentionSeverity,
+    TraderPrimaryRemediation,
+    TraderSituationCode,
+)
+from app.services.resume_guard_state import ResumeGuardState
+
+_READY_RECONCILIATION_STATES: frozenset[ReconciliationState] = frozenset({"CLEAN", "ADOPTED"})
+
+_SUBMIT_READINESS_COPY: dict[SubmitReadinessCode, tuple[str, str]] = {
+    "safe_to_submit": (
+        "Safe to submit",
+        "Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.",
+    ),
+    "safe_to_monitor": (
+        "Safe to monitor",
+        "The cockpit can observe this bot, but order submission is not currently active or appropriate.",
+    ),
+    "blocked_before_submit": (
+        "Blocked before submit",
+        "A pre-submit gate would stop a new order before it reaches the broker.",
+    ),
+    "broker_state_unproven": (
+        "Broker state unproven",
+        "The backend cannot prove the broker/session/reconciliation evidence required for a safe submit.",
+    ),
+    "account_frozen": (
+        "Account frozen",
+        "Account-wide unresolved exposure is active; no sibling bot on this account may submit.",
+    ),
+    "waiting_for_owner_generation": (
+        "Waiting for owner generation",
+        "The AccountOwner generation or phase is not proven accepting, so single-writer submission is not proven.",
+    ),
+    "submit_outcome_uncertain": (
+        "Submit outcome uncertain",
+        "An intent may already have reached the broker; probe/reconcile before any retry.",
+    ),
+}
+
+_TRADER_GUIDANCE_COPY: dict[TraderSituationCode, tuple[str, str, str, str]] = {
+    "ready_to_submit": (
+        "This bot is ready to submit paper orders.",
+        "All backend submit-readiness proofs are currently satisfied.",
+        "Submission gates are satisfied",
+        "The surface is allowed to say safe to submit because the broker, submit lane, owner generation, and reconciliation proofs are all present.",
+    ),
+    "monitor_only": (
+        "This bot is safe to monitor, not safe to submit right now.",
+        "The current state is observable, but at least one non-critical condition means order submission should not be treated as active.",
+        "Observation is okay; trading is not active",
+        "Keep watching the bot, but do not interpret the Overview as a trade-permission signal.",
+    ),
+    "submission_blocked": (
+        "A pre-submit gate is blocking this bot.",
+        "The backend would stop a new order before it reaches the broker.",
+        "Order submission is blocked before broker placement",
+        "This is a controlled block, not proof that a broker order exists.",
+    ),
+    "broker_state_unproven": (
+        "Broker state is not proven enough to submit.",
+        "The backend cannot prove the broker/session/reconciliation facts needed before a submit.",
+        "Do not treat stale or missing broker evidence as live truth",
+        "Reconnect or reconcile until the broker evidence is fresh and explicit.",
+    ),
+    "account_frozen": (
+        "This account has an active freeze.",
+        "An account-wide unresolved-exposure artifact is present, so every sibling bot must treat submission as stopped.",
+        "Account-wide stop sign",
+        "Resolve the account exposure before any bot on this account submits.",
+    ),
+    "waiting_for_owner_generation": (
+        "AccountOwner is not accepting submits yet.",
+        "The current AccountOwner generation/phase is missing or not in the accepting phase.",
+        "Single-writer proof is incomplete",
+        "Wait for AccountOwner to reach accepting, or recover the owner lane before trading.",
+    ),
+    "submit_outcome_uncertain": (
+        "A previous submit outcome is uncertain.",
+        "An ACK_FAILED_UNCERTAIN or equivalent unresolved submit condition is active in the durable evidence.",
+        "Do not blind-retry",
+        "Probe or reconcile the broker before any retry so the bot cannot duplicate or orphan an order.",
+    ),
+    "attention_required": (
+        "This bot needs operator attention.",
+        "One or more backend-authored facts are not in their ready state.",
+        "Review the independent facts below",
+        "The summary does not replace the underlying process, broker, safety, and account facts.",
+    ),
+    "unknown": (
+        "The bot state is not fully known.",
+        "The backend is missing enough evidence that it cannot author a stronger trader summary.",
+        "Unknown is not safe",
+        "Treat missing evidence as a reason to inspect the raw artifacts or runbook.",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class SubmitReadinessFinding:
+    """One prioritized backend-authored reason affecting submit readiness."""
+
+    readiness_code: SubmitReadinessCode
+    reason_code: str
+    attention_code: str
+    attention_severity: TraderAttentionSeverity
+    attention_headline: str
+    attention_explanation: str
+    remediation: TraderPrimaryRemediation
+
+
+def author_submit_readiness(
+    *,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+) -> OperatorSurfaceSubmitReadiness:
+    """Author submit readiness from a single prioritized finding list."""
+
+    findings = build_submit_readiness_findings(
+        host_process=host_process,
+        broker=broker,
+        trading_session=trading_session,
+        account_owner=account_owner,
+        account_freeze=account_freeze,
+        guard_state=guard_state,
+        reconciliation=reconciliation,
+        readiness_gates=readiness_gates,
+    )
+    code: SubmitReadinessCode = findings[0].readiness_code if findings else "safe_to_submit"
+    label, explanation = _SUBMIT_READINESS_COPY[code]
+    return OperatorSurfaceSubmitReadiness(
+        code=code,
+        label=label,
+        explanation=explanation,
+        can_submit=code == "safe_to_submit",
+        blocking_reason_codes=_unique_reason_codes(findings),
+        template_id=f"operator_surface.submit_readiness.{code}",
+        template_version=1,
+    )
+
+
+def author_trader_guidance(
+    *,
+    submit_readiness: OperatorSurfaceSubmitReadiness,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+    daily_order_cap: OperatorSurfaceDailyOrderCap,
+) -> OperatorSurfaceTraderGuidance:
+    """Author trader-readable guidance from the same prioritized findings."""
+
+    findings = build_submit_readiness_findings(
+        host_process=host_process,
+        broker=broker,
+        trading_session=trading_session,
+        account_owner=account_owner,
+        account_freeze=account_freeze,
+        guard_state=guard_state,
+        reconciliation=reconciliation,
+        readiness_gates=readiness_gates,
+    )
+    situation_code = _situation_code_for_submit_readiness(submit_readiness.code, findings)
+    headline, explanation, risk_headline, risk_explanation = _TRADER_GUIDANCE_COPY[situation_code]
+    return OperatorSurfaceTraderGuidance(
+        situation_code=situation_code,
+        headline=headline,
+        explanation=explanation,
+        risk_headline=risk_headline,
+        risk_explanation=risk_explanation,
+        primary_remediation=_primary_remediation(submit_readiness.code, findings),
+        additional_attention_groups=_attention_groups(findings),
+        advanced_evidence=_submit_readiness_evidence(
+            host_process=host_process,
+            broker=broker,
+            trading_session=trading_session,
+            account_owner=account_owner,
+            account_freeze=account_freeze,
+            guard_state=guard_state,
+            reconciliation=reconciliation,
+            readiness_gates=readiness_gates,
+            daily_order_cap=daily_order_cap,
+        ),
+        template_id=f"operator_surface.trader_guidance.{situation_code}",
+        template_version=1,
+    )
+
+
+def build_submit_readiness_findings(
+    *,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+) -> list[SubmitReadinessFinding]:
+    findings: list[SubmitReadinessFinding] = []
+    if account_freeze is not None:
+        findings.append(
+            _finding(
+                "account_frozen",
+                "ACCOUNT_FROZEN",
+                "account_frozen",
+                "critical",
+                "Account freeze active",
+                account_freeze.reason,
+                OpenRunbookAction(kind="open_runbook", slug="watchdog-halt"),
+            )
+        )
+    if guard_state.uncertain_intent.state == "PRESENT":
+        intents = ", ".join(guard_state.uncertain_intent.unresolved_intent_ids) or "unknown intent"
+        findings.append(
+            _finding(
+                "submit_outcome_uncertain",
+                "UNRESOLVED_UNCERTAIN_INTENT",
+                "submit_outcome_uncertain",
+                "critical",
+                "Submit outcome uncertain",
+                f"Unresolved intents: {intents}.",
+                InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance"),
+            )
+        )
+    if guard_state.uncertain_intent.state == "UNKNOWN":
+        findings.append(
+            _finding(
+                "broker_state_unproven",
+                "UNCERTAIN_INTENT_STATE_UNKNOWN",
+                "uncertain_intent",
+                "warning",
+                "Uncertain intent state unknown",
+                "The durable Intent WAL uncertain-state proof is unavailable.",
+                InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance"),
+            )
+        )
+    if broker.safety_verdict != "PAPER_ONLY":
+        findings.append(
+            _finding(
+                "broker_state_unproven",
+                f"BROKER_SAFETY_{broker.safety_verdict}",
+                "broker_safety",
+                "critical",
+                "Broker safety is not paper-only",
+                f"Safety verdict is {broker.safety_verdict}.",
+                OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
+            )
+        )
+    if broker.connection != "CONNECTED":
+        findings.append(
+            _finding(
+                "broker_state_unproven",
+                f"BROKER_CONNECTION_{broker.connection}",
+                "broker_connection",
+                "warning",
+                "Broker disconnected or unknown",
+                f"Connection is {broker.connection}.",
+                OpenRunbookAction(kind="open_runbook", slug="broker-reconnect"),
+            )
+        )
+    if guard_state.submission_capability.state != "SATISFIED":
+        findings.append(
+            _finding(
+                "blocked_before_submit",
+                f"SUBMISSION_CAPABILITY_{guard_state.submission_capability.state}",
+                "submission_capability",
+                "warning",
+                "Submission capability is blocked",
+                f"Submission capability is {guard_state.submission_capability.state}.",
+                OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
+            )
+        )
+    if not _account_owner_ready(account_owner):
+        phase = "unknown" if account_owner is None else account_owner.phase
+        reason = (
+            "ACCOUNT_OWNER_GENERATION_UNPROVEN"
+            if account_owner is None or account_owner.generation is None or phase == "unknown"
+            else f"ACCOUNT_OWNER_PHASE_{phase.upper()}"
+        )
+        findings.append(
+            _finding(
+                "waiting_for_owner_generation",
+                reason,
+                "account_owner",
+                "warning",
+                "AccountOwner not proven accepting",
+                f"AccountOwner phase is {phase}.",
+                OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
+            )
+        )
+    if not _is_reconciliation_ready(reconciliation):
+        state = "NOT_AVAILABLE" if reconciliation is None else reconciliation.state
+        findings.append(
+            _finding(
+                "broker_state_unproven",
+                f"RECONCILIATION_{state}",
+                "reconciliation",
+                "warning",
+                "Reconciliation is not fresh-clean",
+                f"Reconciliation state is {state}.",
+                InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance"),
+            )
+        )
+    for gate in _hard_blocking_readiness_gates(readiness_gates):
+        findings.append(
+            _finding(
+                "blocked_before_submit",
+                f"READINESS_GATE_{gate.name}",
+                f"readiness.{gate.name}",
+                "warning",
+                gate.name.replace("_", " ").capitalize(),
+                gate.detail,
+                OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
+            )
+        )
+    if host_process.state != "RUNNING":
+        findings.append(
+            _finding(
+                "safe_to_monitor",
+                f"HOST_PROCESS_{host_process.state}",
+                "host_process",
+                "info",
+                "Bot process is not running",
+                f"Host process is {host_process.state}.",
+                NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY"),
+            )
+        )
+    if trading_session.permits_strategy_activity is not True:
+        findings.append(
+            _finding(
+                "safe_to_monitor",
+                f"TRADING_SESSION_{trading_session.phase}",
+                "trading_session",
+                "info",
+                "Trading session not accepting strategy activity",
+                trading_session.phase,
+                NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY"),
+            )
+        )
+    return findings
+
+
+def _finding(
+    readiness_code: SubmitReadinessCode,
+    reason_code: str,
+    attention_code: str,
+    attention_severity: TraderAttentionSeverity,
+    attention_headline: str,
+    attention_explanation: str,
+    remediation: TraderPrimaryRemediation,
+) -> SubmitReadinessFinding:
+    return SubmitReadinessFinding(
+        readiness_code=readiness_code,
+        reason_code=reason_code,
+        attention_code=attention_code,
+        attention_severity=attention_severity,
+        attention_headline=attention_headline,
+        attention_explanation=attention_explanation,
+        remediation=remediation,
+    )
+
+
+def _fact(
+    label: str,
+    value: object,
+    *,
+    source: str | None = None,
+    gate_id: str | None = None,
+    ts_ms: int | None = None,
+) -> OperatorSurfaceEvidenceFact:
+    return OperatorSurfaceEvidenceFact(
+        label=label,
+        value=str(value),
+        source=source,
+        gate_id=gate_id,
+        ts_ms=ts_ms,
+        ts_ms_resolved=ts_ms is not None,
+    )
+
+
+def _hard_blocking_readiness_gates(readiness_gates: list[OperatorGate]) -> list[OperatorGate]:
+    return [gate for gate in readiness_gates if gate.status != "pass" and gate.severity == "hard"]
+
+
+def _is_reconciliation_ready(reconciliation: OperatorSurfaceReconciliation | None) -> bool:
+    return reconciliation is not None and reconciliation.state in _READY_RECONCILIATION_STATES
+
+
+def _account_owner_ready(account_owner: OperatorSurfaceAccountOwner | None) -> bool:
+    return account_owner is not None and account_owner.generation is not None and account_owner.phase == "accepting"
+
+
+def _unique_reason_codes(findings: list[SubmitReadinessFinding]) -> list[str]:
+    codes: list[str] = []
+    for finding in findings:
+        if finding.reason_code not in codes:
+            codes.append(finding.reason_code)
+    return codes
+
+
+def _primary_remediation(
+    code: SubmitReadinessCode,
+    findings: list[SubmitReadinessFinding],
+) -> TraderPrimaryRemediation:
+    if code == "safe_to_submit":
+        return NoPrimaryRemediationAction(kind="none", reason="READY")
+    if code == "safe_to_monitor":
+        return NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY")
+    if findings:
+        return findings[0].remediation
+    return OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface")
+
+
+def _attention_groups(findings: list[SubmitReadinessFinding]) -> list[OperatorSurfaceAttentionGroup]:
+    groups: list[OperatorSurfaceAttentionGroup] = []
+    for finding in findings:
+        if any(group.code == finding.attention_code for group in groups):
+            continue
+        groups.append(
+            OperatorSurfaceAttentionGroup(
+                code=finding.attention_code,
+                severity=finding.attention_severity,
+                headline=finding.attention_headline,
+                explanation=finding.attention_explanation,
+            )
+        )
+    return groups
+
+
+def _situation_code_for_submit_readiness(
+    code: SubmitReadinessCode,
+    findings: list[SubmitReadinessFinding],
+) -> TraderSituationCode:
+    if code == "safe_to_submit":
+        return "ready_to_submit"
+    if code == "safe_to_monitor":
+        return "monitor_only"
+    if code == "blocked_before_submit":
+        return "submission_blocked"
+    if code in {
+        "broker_state_unproven",
+        "account_frozen",
+        "waiting_for_owner_generation",
+        "submit_outcome_uncertain",
+    }:
+        return code
+    if findings:
+        return "attention_required"
+    return "unknown"
+
+
+def _submit_readiness_evidence(
+    *,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+    daily_order_cap: OperatorSurfaceDailyOrderCap,
+) -> list[OperatorSurfaceEvidenceFact]:
+    facts = [
+        _fact("host_process.state", host_process.state, source="operator_surface"),
+        _fact("broker.safety_verdict", broker.safety_verdict, source="operator_surface"),
+        _fact("broker.connection", broker.connection, source="operator_surface"),
+        _fact(
+            "submission_capability.state",
+            guard_state.submission_capability.state,
+            source="resume_guard_state",
+        ),
+        _fact("uncertain_intent.state", guard_state.uncertain_intent.state, source="intent_wal"),
+        _fact(
+            "reconciliation.state",
+            reconciliation.state if reconciliation is not None else "NOT_AVAILABLE",
+            source="reconciliation_receipt",
+            ts_ms=reconciliation.last_reconcile_ms if reconciliation is not None else None,
+        ),
+        _fact("trading_session.phase", trading_session.phase, source="operator_surface", ts_ms=trading_session.as_of_ms),
+    ]
+    if daily_order_cap.used is not None or daily_order_cap.limit is not None:
+        facts.append(
+            _fact(
+                "daily_order_cap",
+                f"{daily_order_cap.used if daily_order_cap.used is not None else 'unknown'}/"
+                f"{daily_order_cap.limit if daily_order_cap.limit is not None else 'unknown'}",
+                source="readiness",
+            )
+        )
+    if account_owner is None:
+        facts.append(_fact("account_owner.phase", "unknown", source="account_artifacts"))
+    else:
+        facts.append(
+            _fact(
+                "account_owner.phase",
+                account_owner.phase,
+                source=account_owner.source or "account_artifacts",
+                ts_ms=account_owner.recorded_at_ms,
+            )
+        )
+        facts.append(
+            _fact(
+                "account_owner.generation",
+                account_owner.generation if account_owner.generation is not None else "unknown",
+                source=account_owner.source or "account_artifacts",
+                ts_ms=account_owner.recorded_at_ms,
+            )
+        )
+    if account_freeze is not None:
+        gate = account_freeze.to_gate_result()
+        facts.append(
+            _fact(
+                "account_freeze",
+                account_freeze.reason,
+                source=account_freeze.source,
+                gate_id=gate.gate_id,
+                ts_ms=account_freeze.recorded_at_ms,
+            )
+        )
+    for gate in _hard_blocking_readiness_gates(readiness_gates):
+        facts.append(
+            _fact(
+                f"readiness.{gate.name}",
+                gate.detail,
+                source=gate.gate_result.source,
+                gate_id=gate.gate_result.gate_id,
+                ts_ms=gate.gate_result.evidence_at_ms,
+            )
+        )
+    return facts
+
+
+__all__ = ["author_submit_readiness", "author_trader_guidance", "build_submit_readiness_findings"]

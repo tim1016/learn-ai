@@ -33,6 +33,17 @@ ACCOUNT_EVENT_TS_FIELD_PRECEDENCE: tuple[str, ...] = (
     "completed_at_ms",
     "started_at_ms",
 )
+ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
+    (
+        "ts_ms",
+        "placed_at_ms",
+        "valid_until_ms",
+        "window_start_ms",
+        "window_end_ms",
+        "evidence_at_ms",
+        *ACCOUNT_EVENT_TS_FIELD_PRECEDENCE,
+    )
+)
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 logger = logging.getLogger(__name__)
@@ -281,26 +292,57 @@ def clear_account_freeze(
 
 
 def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
+    """Read account events strictly for canonical safety consumers."""
+
     path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_EVENTS_FILENAME
     if not path.is_file():
         return []
+    return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
+
+
+def read_account_events_tolerant(artifacts_root: Path, account_id: str) -> list[dict]:
+    """Read account events tolerantly for legacy projection/replay adapters."""
+
+    rows, _source_hash = read_account_events_tolerant_with_hash(artifacts_root, account_id)
+    return rows
+
+
+def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str) -> tuple[list[dict], str | None]:
+    """Read tolerant account events and hash the same byte snapshot."""
+
+    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_EVENTS_FILENAME
     events: list[dict] = []
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    if not path.is_file():
+        return events, None
+    with _file_lock(path):
+        raw = path.read_bytes()
+    return _parse_account_event_bytes(path, raw, tolerant=True), _sha256_bytes(raw)
+
+
+def _parse_account_event_bytes(path: Path, raw: bytes, *, tolerant: bool) -> list[dict]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if not tolerant:
+            raise AccountArtifactError(f"invalid account event UTF-8 in {path}: {exc}") from exc
+        logger.warning("Skipping unreadable account event file", extra={"path": str(path), "error": str(exc)})
+        return []
+
+    events: list[dict] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
-            logger.warning(
-                "Skipping malformed account event row",
-                extra={"path": str(path), "line_no": line_no, "error": str(exc)},
-            )
+            if not tolerant:
+                raise AccountArtifactError(f"malformed account event row {line_no} in {path}: {exc}") from exc
+            logger.warning("Skipping malformed account event row", extra={"path": str(path), "line_no": line_no, "error": str(exc)})
             continue
         if not isinstance(row, dict):
-            logger.warning(
-                "Skipping non-object account event row",
-                extra={"path": str(path), "line_no": line_no, "row_type": type(row).__name__},
-            )
+            if not tolerant:
+                raise AccountArtifactError(f"non-object account event row {line_no} in {path}: {type(row).__name__}")
+            logger.warning("Skipping non-object account event row", extra={"path": str(path), "line_no": line_no, "row_type": type(row).__name__})
             continue
         events.append(row)
     return events
@@ -677,6 +719,7 @@ def _next_account_event_seq_locked(path: Path) -> int:
 def _account_event_ts_ms_for_write(payload: dict) -> int:
     if "ts_ms" in payload and _int_ms_or_none(payload.get("ts_ms")) is None:
         raise AccountArtifactError("account event ts_ms must be a non-negative int64 ms UTC value")
+    _validate_account_event_timestamp_fields(payload)
     resolved, _field = resolve_account_event_ts_ms(payload)
     if resolved is not None:
         return resolved
@@ -704,6 +747,18 @@ def _int_ms_or_none(value: object) -> int | None:
     return value if isinstance(value, int) and value >= 0 else None
 
 
+def _validate_account_event_timestamp_fields(payload: Mapping[str, object]) -> None:
+    for field in ACCOUNT_EVENT_TIMESTAMP_FIELDS:
+        if field in payload and _int_ms_or_none(payload.get(field)) is None:
+            raise AccountArtifactError(f"account event {field} must be a non-negative int64 ms UTC value")
+
+
+def _sha256_bytes(raw: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(raw).hexdigest()
+
+
 __all__ = [
     "ACCOUNT_EVENTS_FILENAME",
     "ACCOUNT_FREEZE_FILENAME",
@@ -728,6 +783,8 @@ __all__ = [
     "evaluate_account_instance_binding",
     "evaluate_restart_intensity",
     "read_account_events",
+    "read_account_events_tolerant",
+    "read_account_events_tolerant_with_hash",
     "read_account_freeze",
     "read_account_instance_registry",
     "read_account_owner_generation",

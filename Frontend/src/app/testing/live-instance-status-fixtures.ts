@@ -1,139 +1,14 @@
 import type {
   BotLifecycleChartView,
   LifecycleChartNode,
-  OperatorSurface,
 } from '../api/live-instances.types';
+export { makeOperatorSurfaceFixture } from './operator-surface-fixtures';
 
 const EMPTY_NODE_EVIDENCE: Pick<LifecycleChartNode, 'ts_ms' | 'ts_ms_resolved' | 'receipts'> = {
   ts_ms: null,
   ts_ms_resolved: false,
   receipts: [],
 };
-
-export function makeOperatorSurfaceFixture(
-  overrides: Partial<OperatorSurface> = {},
-): OperatorSurface {
-  const surface: OperatorSurface = {
-    schema_version: 1,
-    host_process: {
-      state: 'RUNNING',
-      notice: null,
-      copyable_command: null,
-      start_capability: {
-        enabled: false,
-        run_id: null,
-        request: null,
-        disabled_reason_code: 'ALREADY_RUNNING',
-        gate_results: [],
-      },
-    },
-    prior_run: { classification: 'UNKNOWN' },
-    broker: { safety_verdict: 'PAPER_ONLY', connection: 'CONNECTED' },
-    configuration: { verdict: 'READY', reason_codes: [] },
-    current_risk: {
-      posture: 'FLAT',
-      pending_order_count: 0,
-      verdict: 'READY',
-      unrealized_pnl: 0,
-    },
-    daily_order_cap: { used: 0, limit: 50_000 },
-    action_plan: { consumption: 'ACTIVE', anomaly_verdict: 'READY' },
-    account_owner: {
-      account_id: 'DU123',
-      generation: 4,
-      phase: 'accepting',
-      recorded_at_ms: 1_800_000_000_000,
-      source: 'account_owner',
-    },
-    submit_readiness: {
-      code: 'safe_to_submit',
-      label: 'Safe to submit',
-      explanation: 'Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.',
-      can_submit: true,
-      blocking_reason_codes: [],
-      template_id: 'operator_surface.submit_readiness.safe_to_submit',
-      template_version: 1,
-    },
-    trader_guidance: {
-      situation_code: 'ready_to_submit',
-      headline: 'This bot is ready to submit paper orders.',
-      explanation: 'All backend submit-readiness proofs are currently satisfied.',
-      risk_headline: 'Submission gates are satisfied',
-      risk_explanation: 'The surface is allowed to say safe to submit because the broker, submit lane, owner generation, and reconciliation proofs are all present.',
-      primary_remediation: { kind: 'none', reason: 'READY' },
-      additional_attention_groups: [],
-      advanced_evidence: [
-        {
-          label: 'account_owner.generation',
-          value: '4',
-          source: 'account_owner',
-          gate_id: null,
-          ts_ms: 1_800_000_000_000,
-          ts_ms_resolved: true,
-        },
-      ],
-      template_id: 'operator_surface.trader_guidance.ready_to_submit',
-      template_version: 1,
-    },
-    actions: {
-      resume: {
-        enabled: true,
-        effect: 'LIVE_ACTUATION',
-        disabled_reason_code: null,
-        disabled_reasons: [],
-        gate_results: [],
-      },
-      pause: {
-        enabled: true,
-        effect: 'LIVE_ACTUATION',
-        disabled_reason_code: null,
-        disabled_reasons: [],
-        gate_results: [],
-      },
-      stop: {
-        enabled: true,
-        effect: 'DURABLE_ONLY',
-        disabled_reason_code: null,
-        disabled_reasons: [],
-        gate_results: [],
-      },
-      flatten_and_pause: {
-        enabled: false,
-        effect: 'LIVE_ACTUATION',
-        disabled_reason_code: 'NO_OWNED_POSITIONS',
-        disabled_reasons: ['NO_OWNED_POSITIONS'],
-        gate_results: [],
-      },
-      mark_poisoned: {
-        enabled: true,
-        effect: 'LIVE_ACTUATION',
-        disabled_reason_code: null,
-        disabled_reasons: [],
-        gate_results: [],
-      },
-    },
-    trading_session: {
-      phase: 'RTH',
-      permits_strategy_activity: true,
-      next_transition_ms: null,
-      timezone: 'America/New_York',
-      as_of_ms: 1_800_000_000_000,
-    },
-    readiness_gates: [],
-    runtime_freshness: null,
-    control_plane: null,
-    broker_observation_consistency: null,
-    reconciliation: {
-      state: 'CLEAN',
-      failure_reason: null,
-      adopted_intent_ids: [],
-      last_reconcile_ms: 1_800_000_000_000,
-    },
-    broker_activity_health: null,
-    incident_headline: null,
-  };
-  return { ...surface, ...overrides };
-}
 
 export function makeLifecycleChartFixture(
   overrides: Partial<BotLifecycleChartView> = {},

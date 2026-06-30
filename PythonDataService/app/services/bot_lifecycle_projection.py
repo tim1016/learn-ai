@@ -58,6 +58,7 @@ class IntentEventMapping(NamedTuple):
     source: str
     summary: str
     operator_next_step: str | None
+    template_id: str
 
 
 class AccountEventLifecycleMapping(NamedTuple):
@@ -65,6 +66,7 @@ class AccountEventLifecycleMapping(NamedTuple):
     node_id: str
     source: str
     status: LifecycleChartStatus
+    template_id: str
 
 
 UNKNOWN_ACCOUNT_EVENT_MAPPING = AccountEventLifecycleMapping(
@@ -72,67 +74,100 @@ UNKNOWN_ACCOUNT_EVENT_MAPPING = AccountEventLifecycleMapping(
     node_id="recovery",
     source="account_event",
     status="unknown",
+    template_id="lifecycle_projection.account_event.unknown.v1",
 )
 
 ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
-    "account_freeze_recorded": AccountEventLifecycleMapping("freeze", "account_safety", "freeze_halt_poison", "freeze"),
-    "account_freeze_cleared": AccountEventLifecycleMapping("freeze", "account_safety", "freeze_halt_poison", "passed"),
-    "account_recovery_proof_recorded": AccountEventLifecycleMapping("evidence", "recovery", "evidence", "passed"),
-    "account_audited_override_recorded": AccountEventLifecycleMapping("decision", "recovery", "decision", "passed"),
+    "account_freeze_recorded": AccountEventLifecycleMapping(
+        "freeze", "account_safety", "freeze_halt_poison", "freeze", "lifecycle_projection.account_event.account_freeze_recorded.v1"
+    ),
+    "account_freeze_cleared": AccountEventLifecycleMapping(
+        "freeze", "account_safety", "freeze_halt_poison", "passed", "lifecycle_projection.account_event.account_freeze_cleared.v1"
+    ),
+    "account_recovery_proof_recorded": AccountEventLifecycleMapping(
+        "evidence", "recovery", "evidence", "passed", "lifecycle_projection.account_event.account_recovery_proof_recorded.v1"
+    ),
+    "account_audited_override_recorded": AccountEventLifecycleMapping(
+        "decision", "recovery", "decision", "passed", "lifecycle_projection.account_event.account_audited_override_recorded.v1"
+    ),
     "account_owner_generation_recorded": AccountEventLifecycleMapping(
         "lifecycle_transition",
         "writer_guard",
         "lifecycle_transition",
         "active",
+        "lifecycle_projection.account_event.account_owner_generation_recorded.v1",
     ),
     "account_instance_binding_recorded": AccountEventLifecycleMapping(
         "lifecycle_transition",
         "account_safety",
         "lifecycle_transition",
         "active",
+        "lifecycle_projection.account_event.account_instance_binding_recorded.v1",
     ),
     "account_restart_intensity_breached": AccountEventLifecycleMapping(
         "freeze",
         "account_safety",
         "freeze_halt_poison",
         "freeze",
+        "lifecycle_projection.account_event.account_restart_intensity_breached.v1",
     ),
-    "account_owner_submit_prepared": AccountEventLifecycleMapping("order", "intent_wal", "intent_pending", "active"),
-    "account_owner_submit_accepted": AccountEventLifecycleMapping("order", "place_order", "submit", "passed"),
+    "account_owner_submit_prepared": AccountEventLifecycleMapping(
+        "order", "intent_wal", "intent_pending", "active", "lifecycle_projection.account_event.account_owner_submit_prepared.v1"
+    ),
+    "account_owner_submit_accepted": AccountEventLifecycleMapping(
+        "order", "place_order", "submit", "passed", "lifecycle_projection.account_event.account_owner_submit_accepted.v1"
+    ),
     "account_owner_submit_uncertain": AccountEventLifecycleMapping(
-        "order", "ack_or_reconcile", "broker_ack", "blocked"
+        "order",
+        "ack_or_reconcile",
+        "broker_ack",
+        "blocked",
+        "lifecycle_projection.account_event.account_owner_submit_uncertain.v1",
     ),
-    "account_owner_submit_rejected": AccountEventLifecycleMapping("order", "ack_or_reconcile", "broker_ack", "blocked"),
-    "account_owner_client_id_in_use": AccountEventLifecycleMapping("halt", "broker_writer", "broker_ack", "blocked"),
+    "account_owner_submit_rejected": AccountEventLifecycleMapping(
+        "order",
+        "ack_or_reconcile",
+        "broker_ack",
+        "blocked",
+        "lifecycle_projection.account_event.account_owner_submit_rejected.v1",
+    ),
+    "account_owner_client_id_in_use": AccountEventLifecycleMapping(
+        "halt", "broker_writer", "broker_ack", "blocked", "lifecycle_projection.account_event.account_owner_client_id_in_use.v1"
+    ),
     "account_owner_reconnect_frozen": AccountEventLifecycleMapping(
         "freeze",
         "recovery",
         "freeze_halt_poison",
         "freeze",
+        "lifecycle_projection.account_event.account_owner_reconnect_frozen.v1",
     ),
     "account_owner_reconnect_resumed": AccountEventLifecycleMapping(
         "lifecycle_transition",
         "writer_guard",
         "lifecycle_transition",
         "passed",
+        "lifecycle_projection.account_event.account_owner_reconnect_resumed.v1",
     ),
     "account_owner_reconnect_blocked": AccountEventLifecycleMapping(
         "freeze",
         "recovery",
         "freeze_halt_poison",
         "freeze",
+        "lifecycle_projection.account_event.account_owner_reconnect_blocked.v1",
     ),
     "account_owner_reconnect_drain_accepted": AccountEventLifecycleMapping(
         "lifecycle_transition",
         "recovery",
         "lifecycle_transition",
         "passed",
+        "lifecycle_projection.account_event.account_owner_reconnect_drain_accepted.v1",
     ),
     "account_owner_reconnect_drain_uncertain": AccountEventLifecycleMapping(
         "order",
         "recovery",
         "broker_ack",
         "blocked",
+        "lifecycle_projection.account_event.account_owner_reconnect_drain_uncertain.v1",
     ),
 }
 
@@ -190,6 +225,7 @@ def project_intent_events(
             BotLifecycleEvent(
                 event_id=f"intent_wal:{run_id or 'unknown'}:{event.seq}:{event.event_type.value}",
                 bot_id=bot_id,
+                run_id=run_id,
                 account_id=account_id,
                 event_type=mapped.event_type,
                 category="order",
@@ -223,6 +259,7 @@ def project_intent_events(
                     "drop_reason": event.drop_reason,
                     "ts_ms_source": ts_ms_source,
                 },
+                rendered_template_id=mapped.template_id,
             )
         )
     current_nodes = {event.node_id for event in projected}
@@ -290,8 +327,12 @@ def account_event_to_lifecycle_event(event: AccountEventProjection) -> BotLifecy
     """Lift a typed account-event projection into the common lifecycle row."""
 
     mapping = _account_event_mapping(event.event_type)
+    bot_id = _account_event_bot_id(event)
+    run_id = _account_event_run_id(event)
     return BotLifecycleEvent(
         event_id=f"account_event:{event.account_id}:{event.seq or event.file_position}:{event.event_type}",
+        bot_id=bot_id,
+        run_id=run_id,
         account_id=event.account_id,
         event_type=event.event_type,
         category=mapping.category,
@@ -321,6 +362,7 @@ def account_event_to_lifecycle_event(event: AccountEventProjection) -> BotLifecy
             "ts_ms_resolved": event.ts_ms_resolved,
             **event.payload,
         },
+        rendered_template_id=mapping.template_id,
     )
 
 
@@ -371,6 +413,7 @@ def _stale_intent_wal_event(
     return BotLifecycleEvent(
         event_id=f"intent_wal_stale:{run_id or 'unknown'}:{node_id}:{max_seq}",
         bot_id=bot_id,
+        run_id=run_id,
         account_id=account_id,
         event_type="IntentWalEvidenceStale",
         category="evidence",
@@ -403,6 +446,7 @@ def _stale_intent_wal_event(
             "projection_since_ms": since_ms,
             "live_state_last_intent_wal_seq": live_state_last_intent_wal_seq,
         },
+        rendered_template_id="lifecycle_projection.intent_wal.stale_evidence.v1",
     )
 
 
@@ -411,71 +455,78 @@ def _intent_event_mapping(
 ) -> IntentEventMapping | None:
     if event.event_type is IntentEventType.PENDING_INTENT:
         return IntentEventMapping(
-            event_type="BrokerOrderRequested",
-            node_id="intent_wal",
-            status="active",
-            source="intent_pending",
-            summary="Order intent persisted before broker submission.",
-            operator_next_step="WAIT_FOR_BROKER_ACK",
-        )
+                event_type="BrokerOrderRequested",
+                node_id="intent_wal",
+                status="active",
+                source="intent_pending",
+                summary="Order intent persisted before broker submission.",
+                operator_next_step="WAIT_FOR_BROKER_ACK",
+                template_id="lifecycle_projection.intent_wal.pending_intent.v1",
+            )
     if event.event_type is IntentEventType.SIZING_RESOLVED:
         return IntentEventMapping(
-            event_type="RiskCheckPassed",
-            node_id="submit_order",
-            status="passed",
-            source="risk_gate",
-            summary="Order sizing resolved before submit.",
-            operator_next_step="GATE_PASSING",
-        )
+                event_type="RiskCheckPassed",
+                node_id="submit_order",
+                status="passed",
+                source="risk_gate",
+                summary="Order sizing resolved before submit.",
+                operator_next_step="GATE_PASSING",
+                template_id="lifecycle_projection.intent_wal.sizing_resolved.v1",
+            )
     if event.event_type in {
         IntentEventType.SUBMITTED,
         IntentEventType.SUBMITTED_RECOVERED,
         IntentEventType.ADOPTED_BROKER_ORDER,
     }:
         return IntentEventMapping(
-            event_type="BrokerOrderPlaced",
-            node_id="place_order",
-            status="passed",
-            source="submit",
-            summary="Order reached the broker submit boundary.",
-            operator_next_step="WATCH_BROKER_ACK",
-        )
+                event_type="BrokerOrderPlaced",
+                node_id="place_order",
+                status="passed",
+                source="submit",
+                summary="Order reached the broker submit boundary.",
+                operator_next_step="WATCH_BROKER_ACK",
+                template_id=f"lifecycle_projection.intent_wal.{event.event_type.value.lower()}.v1",
+            )
     if event.event_type is IntentEventType.INTENT_NOT_ACCEPTED:
         return IntentEventMapping(
-            event_type="BrokerOrderRejected",
-            node_id="ack_or_reconcile",
-            status="blocked",
-            source="broker_ack",
-            summary="Broker probe proved the intent was not accepted.",
-            operator_next_step="RETRY_OR_RECONCILE",
-        )
+                event_type="BrokerOrderRejected",
+                node_id="ack_or_reconcile",
+                status="blocked",
+                source="broker_ack",
+                summary="Broker probe proved the intent was not accepted.",
+                operator_next_step="RETRY_OR_RECONCILE",
+                template_id="lifecycle_projection.intent_wal.intent_not_accepted.v1",
+            )
     if event.event_type is IntentEventType.ACK_FAILED_UNCERTAIN:
         return IntentEventMapping(
-            event_type="BrokerOrderUncertain",
-            node_id="ack_or_reconcile",
-            status="blocked",
-            source="broker_ack",
-            summary="Broker acknowledgement failed; submit outcome is uncertain.",
-            operator_next_step="PROBE_BROKER_BEFORE_RETRY",
-        )
+                event_type="BrokerOrderUncertain",
+                node_id="ack_or_reconcile",
+                status="blocked",
+                source="broker_ack",
+                summary="Broker acknowledgement failed; submit outcome is uncertain.",
+                operator_next_step="PROBE_BROKER_BEFORE_RETRY",
+                template_id="lifecycle_projection.intent_wal.ack_failed_uncertain.v1",
+            )
     if event.event_type is IntentEventType.SUBMIT_UNCERTAIN_HALTED:
         return IntentEventMapping(
-            event_type="BrokerOrderUncertain",
-            node_id="ack_or_reconcile",
-            status="blocked",
-            source="broker_ack",
-            summary="Submit outcome could not be proven; the run halted.",
-            operator_next_step="RECOVER_ACCOUNT_BEFORE_RESTART",
-        )
+                event_type="BrokerOrderUncertain",
+                node_id="ack_or_reconcile",
+                status="blocked",
+                source="broker_ack",
+                summary="Submit outcome could not be proven; the run halted.",
+                operator_next_step="RECOVER_ACCOUNT_BEFORE_RESTART",
+                template_id="lifecycle_projection.intent_wal.submit_uncertain_halted.v1",
+            )
     if event.event_type is IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT:
         return IntentEventMapping(
-            event_type="BotBlocked",
-            node_id="submit_order",
-            status="blocked",
-            source="submit",
-            summary="Order intent was dropped before broker submission.",
-            operator_next_step="CLEAR_SUBMISSION_GATE",
-        )
+                event_type="BotBlocked",
+                node_id="submit_order",
+                status="blocked",
+                source="submit",
+                summary="Order intent was dropped before broker submission.",
+                operator_next_step="CLEAR_SUBMISSION_GATE",
+                template_id="lifecycle_projection.intent_wal.intent_dropped_before_submit.v1",
+            )
     return None
 
 
@@ -548,6 +599,26 @@ def _operator_next_step_for_account_event(event: AccountEventProjection) -> str 
             next_step = _string_or_none(value.get("operator_next_step"))
             if next_step is not None:
                 return next_step
+    return None
+
+
+def _account_event_bot_id(event: AccountEventProjection) -> str | None:
+    value = _string_or_none(event.payload.get("strategy_instance_id"))
+    if value is not None:
+        return value
+    diagnostics = event.payload.get("diagnostics")
+    if isinstance(diagnostics, Mapping):
+        return _string_or_none(diagnostics.get("strategy_instance_id"))
+    return None
+
+
+def _account_event_run_id(event: AccountEventProjection) -> str | None:
+    value = _string_or_none(event.payload.get("run_id"))
+    if value is not None:
+        return value
+    diagnostics = event.payload.get("diagnostics")
+    if isinstance(diagnostics, Mapping):
+        return _string_or_none(diagnostics.get("run_id"))
     return None
 
 
