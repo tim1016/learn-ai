@@ -27,11 +27,19 @@ from app.schemas.live_runs import (
     InstanceSizing,
     InstanceStartDefaults,
     LiveBinding,
+    OperatorSurfaceAccountOwner,
     ReadinessGate,
     ReadinessVector,
 )
 from app.services.operator_capability import REASON_CODES, evaluate_action
 from app.services.operator_surface import compute_operator_surface
+from app.services.resume_guard_state import (
+    BrokerSafetyArtifact,
+    ReconciliationArtifact,
+    SubmissionCapabilityArtifact,
+    UncertainIntentArtifact,
+    resolve_guard_state,
+)
 
 _PROC = InstanceProcessView(state="running")
 _IDLE_PROC = InstanceProcessView(state="idle")
@@ -44,6 +52,39 @@ def _surface(**overrides):
     kwargs = {"process": _PROC, "now_ms": _NOW_MS}
     kwargs.update(overrides)
     return compute_operator_surface(**kwargs)
+
+
+def _guard(
+    *,
+    broker_state: str = "SAFE",
+    submission_state: str = "SATISFIED",
+    reconciliation_state: str = "PASSED",
+    uncertain_state: str = "CLEAR",
+    unresolved_intent_ids: tuple[str, ...] = (),
+):
+    return resolve_guard_state(
+        broker_safety=BrokerSafetyArtifact(state=broker_state),  # type: ignore[arg-type]
+        submission_capability=SubmissionCapabilityArtifact(state=submission_state),  # type: ignore[arg-type]
+        reconciliation=ReconciliationArtifact(state=reconciliation_state),  # type: ignore[arg-type]
+        uncertain_intent=UncertainIntentArtifact(
+            state=uncertain_state,  # type: ignore[arg-type]
+            unresolved_intent_ids=unresolved_intent_ids,
+        ),
+    )
+
+
+def _owner(
+    *,
+    phase: str = "accepting",
+    generation: int | None = 4,
+) -> OperatorSurfaceAccountOwner:
+    return OperatorSurfaceAccountOwner(
+        account_id="DU123",
+        generation=generation,
+        phase=phase,  # type: ignore[arg-type]
+        recorded_at_ms=_NOW_MS - 10_000,
+        source="account_owner",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +427,111 @@ def test_broker_connection_independent_of_safety(connection_state, expected_conn
             broker_connection_state=connection_state,
         )
         assert surface.broker.connection == expected_connection
+
+
+# ---------------------------------------------------------------------------
+# trader_guidance + submit_readiness (PRD #718)
+# ---------------------------------------------------------------------------
+
+
+def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        now_ms=_RTH_MID,
+    )
+
+    assert surface.submit_readiness.code == "safe_to_submit"
+    assert surface.submit_readiness.can_submit is True
+    assert surface.submit_readiness.blocking_reason_codes == []
+    assert surface.trader_guidance.situation_code == "ready_to_submit"
+    assert surface.trader_guidance.primary_remediation.kind == "none"
+    assert surface.trader_guidance.additional_attention_groups == []
+    evidence = {fact.label: fact for fact in surface.trader_guidance.advanced_evidence}
+    assert evidence["account_owner.generation"].value == "4"
+    assert evidence["broker.safety_verdict"].value == "PAPER_ONLY"
+    assert evidence["reconciliation.state"].value == "CLEAN"
+
+
+def test_trader_guidance_account_freeze_is_never_collapsed() -> None:
+    freeze = AccountFreezeEvidence(
+        account_id="DU123",
+        reason="watchdog.flatten_failed",
+        source="watchdog_halt_executor",
+        recorded_at_ms=_NOW_MS,
+        operator_next_step="CHECK_IBKR",
+    )
+
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        account_freeze=freeze,
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+    )
+
+    assert surface.submit_readiness.code == "account_frozen"
+    assert surface.submit_readiness.can_submit is False
+    assert "ACCOUNT_FROZEN" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.situation_code == "account_frozen"
+    assert surface.trader_guidance.primary_remediation.kind == "open_runbook"
+    assert surface.trader_guidance.primary_remediation.slug == "watchdog-halt"
+    assert any(group.code == "account_frozen" for group in surface.trader_guidance.additional_attention_groups)
+
+
+def test_trader_guidance_submit_uncertainty_routes_to_reconcile_endpoint() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(
+            uncertain_state="PRESENT",
+            unresolved_intent_ids=("intent-1",),
+        ),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+    )
+
+    assert surface.submit_readiness.code == "submit_outcome_uncertain"
+    assert surface.trader_guidance.situation_code == "submit_outcome_uncertain"
+    assert "UNRESOLVED_UNCERTAIN_INTENT" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.primary_remediation.kind == "invoke_endpoint"
+    assert surface.trader_guidance.primary_remediation.endpoint == "reconcile_instance"
+    assert any(group.code == "submit_outcome_uncertain" for group in surface.trader_guidance.additional_attention_groups)
+
+
+def test_trader_guidance_missing_owner_generation_is_waiting_not_safe() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(phase="unknown", generation=None),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+    )
+
+    assert surface.submit_readiness.code == "waiting_for_owner_generation"
+    assert surface.submit_readiness.can_submit is False
+    assert "ACCOUNT_OWNER_GENERATION_UNPROVEN" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.situation_code == "waiting_for_owner_generation"
+    assert any(group.code == "account_owner" for group in surface.trader_guidance.additional_attention_groups)
+
+
+def test_trader_guidance_reconciliation_not_available_cannot_be_safe_to_submit() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    assert surface.submit_readiness.code == "broker_state_unproven"
+    assert surface.submit_readiness.can_submit is False
+    assert "RECONCILIATION_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.primary_remediation.kind == "invoke_endpoint"
 
 
 # ---------------------------------------------------------------------------

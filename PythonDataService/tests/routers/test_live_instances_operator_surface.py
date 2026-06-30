@@ -23,7 +23,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    AccountOwnerGeneration,
+    write_account_freeze,
+    write_account_owner_generation,
+)
 from app.engine.live.engine_runtime import (
     BarLoopBlock,
     BrokerBlock,
@@ -248,6 +253,9 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "configuration",
         "current_risk",
         "daily_order_cap",
+        "account_owner",
+        "submit_readiness",
+        "trader_guidance",
         "control_plane",
         "action_plan",
         "actions",
@@ -273,6 +281,24 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     assert surface["broker"]["connection"] in {"CONNECTED", "DISCONNECTED", "UNKNOWN"}
     assert surface["configuration"]["verdict"] in {"READY", "ATTENTION", "UNKNOWN"}
     assert surface["current_risk"]["verdict"] in {"READY", "ATTENTION", "UNKNOWN"}
+    assert surface["submit_readiness"]["code"] in {
+        "safe_to_submit",
+        "safe_to_monitor",
+        "blocked_before_submit",
+        "broker_state_unproven",
+        "account_frozen",
+        "waiting_for_owner_generation",
+        "submit_outcome_uncertain",
+    }
+    assert surface["trader_guidance"]["headline"]
+    assert surface["trader_guidance"]["primary_remediation"]["kind"] in {
+        "invoke_capability",
+        "focus_action",
+        "redeploy",
+        "open_runbook",
+        "invoke_endpoint",
+        "none",
+    }
     assert surface["daily_order_cap"]["used"] is None
     assert surface["daily_order_cap"]["limit"] is None
     # Trading-session projection is always present; phase + permission
@@ -310,6 +336,42 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         assert surface["actions"][name]["disabled_reason_code"] == "POSTURE_DEMOTED"
     for name in ("pause", "stop"):
         assert surface["actions"][name]["enabled"] is True
+
+
+async def test_running_instance_status_carries_account_owner_generation(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-owner", "spy_ema_paper", 100, account_id="DU123")
+    write_account_owner_generation(
+        root.parent,
+        AccountOwnerGeneration(
+            account_id="DU123",
+            generation=9,
+            phase="draining",
+            recorded_at_ms=1_700_000_001_000,
+            source="account_owner",
+        ),
+    )
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-owner", "pid": 1, "started_at_ms": 100},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["account_owner"] == {
+        "account_id": "DU123",
+        "generation": 9,
+        "phase": "draining",
+        "recorded_at_ms": 1_700_000_001_000,
+        "source": "account_owner",
+    }
+    assert surface["submit_readiness"]["can_submit"] is False
+    assert any(group["code"] == "account_owner" for group in surface["trader_guidance"]["additional_attention_groups"])
 
 
 async def test_running_instance_fresh_runtime_keeps_actions_current(

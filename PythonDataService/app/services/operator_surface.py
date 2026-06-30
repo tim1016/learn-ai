@@ -43,22 +43,29 @@ from app.schemas.live_runs import (
     InstanceSizing,
     InstanceStartDefaults,
     InvokeCapabilityAction,
+    InvokeEndpointAction,
     LiveBinding,
+    NoPrimaryRemediationAction,
     OpenRunbookAction,
     OperatorGate,
     OperatorSurface,
+    OperatorSurfaceAccountOwner,
     OperatorSurfaceActionPlan,
     OperatorSurfaceActions,
+    OperatorSurfaceAttentionGroup,
     OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
     OperatorSurfaceControlPlane,
     OperatorSurfaceCurrentRisk,
     OperatorSurfaceDailyOrderCap,
     OperatorSurfaceDomainFreshness,
+    OperatorSurfaceEvidenceFact,
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
     OperatorSurfaceReconciliation,
     OperatorSurfaceRuntimeFreshness,
+    OperatorSurfaceSubmitReadiness,
+    OperatorSurfaceTraderGuidance,
     OperatorSurfaceTradingSession,
     ReadinessGate,
     ReadinessVector,
@@ -878,6 +885,432 @@ def _project_reconciliation(
 
 
 # ---------------------------------------------------------------------------
+# trader_guidance + submit_readiness (PRD #718)
+# ---------------------------------------------------------------------------
+
+_READY_RECONCILIATION_STATES = frozenset({"CLEAN", "ADOPTED"})
+
+_SUBMIT_READINESS_COPY: dict[str, tuple[str, str]] = {
+    "safe_to_submit": (
+        "Safe to submit",
+        "Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.",
+    ),
+    "safe_to_monitor": (
+        "Safe to monitor",
+        "The cockpit can observe this bot, but order submission is not currently active or appropriate.",
+    ),
+    "blocked_before_submit": (
+        "Blocked before submit",
+        "A pre-submit gate would stop a new order before it reaches the broker.",
+    ),
+    "broker_state_unproven": (
+        "Broker state unproven",
+        "The backend cannot prove the broker/session/reconciliation evidence required for a safe submit.",
+    ),
+    "account_frozen": (
+        "Account frozen",
+        "Account-wide unresolved exposure is active; no sibling bot on this account may submit.",
+    ),
+    "waiting_for_owner_generation": (
+        "Waiting for owner generation",
+        "The AccountOwner generation or phase is not proven accepting, so single-writer submission is not proven.",
+    ),
+    "submit_outcome_uncertain": (
+        "Submit outcome uncertain",
+        "An intent may already have reached the broker; probe/reconcile before any retry.",
+    ),
+}
+
+_TRADER_GUIDANCE_COPY: dict[str, tuple[str, str, str, str]] = {
+    "ready_to_submit": (
+        "This bot is ready to submit paper orders.",
+        "All backend submit-readiness proofs are currently satisfied.",
+        "Submission gates are satisfied",
+        "The surface is allowed to say safe to submit because the broker, submit lane, owner generation, and reconciliation proofs are all present.",
+    ),
+    "monitor_only": (
+        "This bot is safe to monitor, not safe to submit right now.",
+        "The current state is observable, but at least one non-critical condition means order submission should not be treated as active.",
+        "Observation is okay; trading is not active",
+        "Keep watching the bot, but do not interpret the Overview as a trade-permission signal.",
+    ),
+    "submission_blocked": (
+        "A pre-submit gate is blocking this bot.",
+        "The backend would stop a new order before it reaches the broker.",
+        "Order submission is blocked before broker placement",
+        "This is a controlled block, not proof that a broker order exists.",
+    ),
+    "broker_state_unproven": (
+        "Broker state is not proven enough to submit.",
+        "The backend cannot prove the broker/session/reconciliation facts needed before a submit.",
+        "Do not treat stale or missing broker evidence as live truth",
+        "Reconnect or reconcile until the broker evidence is fresh and explicit.",
+    ),
+    "account_frozen": (
+        "This account has an active freeze.",
+        "An account-wide unresolved-exposure artifact is present, so every sibling bot must treat submission as stopped.",
+        "Account-wide stop sign",
+        "Resolve the account exposure before any bot on this account submits.",
+    ),
+    "waiting_for_owner_generation": (
+        "AccountOwner is not accepting submits yet.",
+        "The current AccountOwner generation/phase is missing or not in the accepting phase.",
+        "Single-writer proof is incomplete",
+        "Wait for AccountOwner to reach accepting, or recover the owner lane before trading.",
+    ),
+    "submit_outcome_uncertain": (
+        "A previous submit outcome is uncertain.",
+        "An ACK_FAILED_UNCERTAIN or equivalent unresolved submit condition is active in the durable evidence.",
+        "Do not blind-retry",
+        "Probe or reconcile the broker before any retry so the bot cannot duplicate or orphan an order.",
+    ),
+    "attention_required": (
+        "This bot needs operator attention.",
+        "One or more backend-authored facts are not in their ready state.",
+        "Review the independent facts below",
+        "The summary does not replace the underlying process, broker, safety, and account facts.",
+    ),
+    "unknown": (
+        "The bot state is not fully known.",
+        "The backend is missing enough evidence that it cannot author a stronger trader summary.",
+        "Unknown is not safe",
+        "Treat missing evidence as a reason to inspect the raw artifacts or runbook.",
+    ),
+}
+
+
+def _fact(
+    label: str,
+    value: object,
+    *,
+    source: str | None = None,
+    gate_id: str | None = None,
+    ts_ms: int | None = None,
+) -> OperatorSurfaceEvidenceFact:
+    return OperatorSurfaceEvidenceFact(
+        label=label,
+        value=str(value),
+        source=source,
+        gate_id=gate_id,
+        ts_ms=ts_ms,
+        ts_ms_resolved=ts_ms is not None,
+    )
+
+
+def _append_unique(codes: list[str], code: str) -> None:
+    if code not in codes:
+        codes.append(code)
+
+
+def _hard_blocking_readiness_gates(readiness_gates: list[OperatorGate]) -> list[OperatorGate]:
+    return [gate for gate in readiness_gates if gate.status != "pass" and gate.severity == "hard"]
+
+
+def _is_reconciliation_ready(reconciliation: OperatorSurfaceReconciliation | None) -> bool:
+    return reconciliation is not None and reconciliation.state in _READY_RECONCILIATION_STATES
+
+
+def _account_owner_ready(account_owner: OperatorSurfaceAccountOwner | None) -> bool:
+    return account_owner is not None and account_owner.generation is not None and account_owner.phase == "accepting"
+
+
+def _submit_readiness_remediation(
+    code: str,
+    *,
+    broker: OperatorSurfaceBroker,
+    reconciliation: OperatorSurfaceReconciliation | None,
+) -> object:
+    if code == "safe_to_submit":
+        return NoPrimaryRemediationAction(kind="none", reason="READY")
+    if code == "safe_to_monitor":
+        return NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY")
+    if code == "submit_outcome_uncertain":
+        return InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance")
+    if code == "broker_state_unproven" and (
+        reconciliation is None or reconciliation.state not in _READY_RECONCILIATION_STATES
+    ):
+        return InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance")
+    if code == "broker_state_unproven" and broker.connection != "CONNECTED":
+        return OpenRunbookAction(kind="open_runbook", slug="broker-reconnect")
+    if code == "account_frozen":
+        return OpenRunbookAction(kind="open_runbook", slug="watchdog-halt")
+    if code == "waiting_for_owner_generation":
+        return OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface")
+    if code == "blocked_before_submit":
+        return OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface")
+    return OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface")
+
+
+def _submit_readiness_evidence(
+    *,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+    daily_order_cap: OperatorSurfaceDailyOrderCap,
+) -> list[OperatorSurfaceEvidenceFact]:
+    facts = [
+        _fact("host_process.state", host_process.state, source="operator_surface"),
+        _fact("broker.safety_verdict", broker.safety_verdict, source="operator_surface"),
+        _fact("broker.connection", broker.connection, source="operator_surface"),
+        _fact(
+            "submission_capability.state",
+            guard_state.submission_capability.state,
+            source="resume_guard_state",
+        ),
+        _fact("uncertain_intent.state", guard_state.uncertain_intent.state, source="intent_wal"),
+        _fact(
+            "reconciliation.state",
+            reconciliation.state if reconciliation is not None else "NOT_AVAILABLE",
+            source="reconciliation_receipt",
+            ts_ms=reconciliation.last_reconcile_ms if reconciliation is not None else None,
+        ),
+        _fact("trading_session.phase", trading_session.phase, source="operator_surface", ts_ms=trading_session.as_of_ms),
+    ]
+    if daily_order_cap.used is not None or daily_order_cap.limit is not None:
+        facts.append(
+            _fact(
+                "daily_order_cap",
+                f"{daily_order_cap.used if daily_order_cap.used is not None else 'unknown'}/"
+                f"{daily_order_cap.limit if daily_order_cap.limit is not None else 'unknown'}",
+                source="readiness",
+            )
+        )
+    if account_owner is None:
+        facts.append(_fact("account_owner.phase", "unknown", source="account_artifacts"))
+    else:
+        facts.append(
+            _fact(
+                "account_owner.phase",
+                account_owner.phase,
+                source=account_owner.source or "account_artifacts",
+                ts_ms=account_owner.recorded_at_ms,
+            )
+        )
+        facts.append(
+            _fact(
+                "account_owner.generation",
+                account_owner.generation if account_owner.generation is not None else "unknown",
+                source=account_owner.source or "account_artifacts",
+                ts_ms=account_owner.recorded_at_ms,
+            )
+        )
+    if account_freeze is not None:
+        gate = account_freeze.to_gate_result()
+        facts.append(
+            _fact(
+                "account_freeze",
+                account_freeze.reason,
+                source=account_freeze.source,
+                gate_id=gate.gate_id,
+                ts_ms=account_freeze.recorded_at_ms,
+            )
+        )
+    for gate in _hard_blocking_readiness_gates(readiness_gates):
+        facts.append(
+            _fact(
+                f"readiness.{gate.name}",
+                gate.detail,
+                source=gate.gate_result.source,
+                gate_id=gate.gate_result.gate_id,
+                ts_ms=gate.gate_result.evidence_at_ms,
+            )
+        )
+    return facts
+
+
+def _author_submit_readiness(
+    *,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+    daily_order_cap: OperatorSurfaceDailyOrderCap,
+) -> OperatorSurfaceSubmitReadiness:
+    hard_gates = _hard_blocking_readiness_gates(readiness_gates)
+    codes: list[str] = []
+    code = "safe_to_submit"
+
+    if account_freeze is not None:
+        code = "account_frozen"
+        _append_unique(codes, "ACCOUNT_FROZEN")
+    elif guard_state.uncertain_intent.state == "PRESENT":
+        code = "submit_outcome_uncertain"
+        _append_unique(codes, "UNRESOLVED_UNCERTAIN_INTENT")
+    elif guard_state.uncertain_intent.state == "UNKNOWN":
+        code = "broker_state_unproven"
+        _append_unique(codes, "UNCERTAIN_INTENT_STATE_UNKNOWN")
+    elif broker.safety_verdict != "PAPER_ONLY":
+        code = "broker_state_unproven"
+        _append_unique(codes, f"BROKER_SAFETY_{broker.safety_verdict}")
+    elif broker.connection != "CONNECTED":
+        code = "broker_state_unproven"
+        _append_unique(codes, f"BROKER_CONNECTION_{broker.connection}")
+    elif guard_state.submission_capability.state != "SATISFIED":
+        code = "blocked_before_submit"
+        _append_unique(codes, f"SUBMISSION_CAPABILITY_{guard_state.submission_capability.state}")
+    elif not _account_owner_ready(account_owner):
+        code = "waiting_for_owner_generation"
+        if account_owner is None or account_owner.generation is None or account_owner.phase == "unknown":
+            _append_unique(codes, "ACCOUNT_OWNER_GENERATION_UNPROVEN")
+        else:
+            _append_unique(codes, f"ACCOUNT_OWNER_PHASE_{account_owner.phase.upper()}")
+    elif not _is_reconciliation_ready(reconciliation):
+        code = "broker_state_unproven"
+        _append_unique(codes, f"RECONCILIATION_{reconciliation.state if reconciliation is not None else 'NOT_AVAILABLE'}")
+    elif hard_gates:
+        code = "blocked_before_submit"
+        for gate in hard_gates:
+            _append_unique(codes, f"READINESS_GATE_{gate.name}")
+    elif host_process.state != "RUNNING":
+        code = "safe_to_monitor"
+        _append_unique(codes, f"HOST_PROCESS_{host_process.state}")
+    elif trading_session.permits_strategy_activity is not True:
+        code = "safe_to_monitor"
+        _append_unique(codes, f"TRADING_SESSION_{trading_session.phase}")
+
+    label, explanation = _SUBMIT_READINESS_COPY[code]
+    return OperatorSurfaceSubmitReadiness(
+        code=code,  # type: ignore[arg-type]
+        label=label,
+        explanation=explanation,
+        can_submit=code == "safe_to_submit",
+        blocking_reason_codes=codes,
+        template_id=f"operator_surface.submit_readiness.{code}",
+        template_version=1,
+    )
+
+
+def _attention_groups(
+    *,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+) -> list[OperatorSurfaceAttentionGroup]:
+    groups: list[OperatorSurfaceAttentionGroup] = []
+
+    def add(code: str, severity: str, headline: str, explanation: str) -> None:
+        if any(group.code == code for group in groups):
+            return
+        groups.append(
+            OperatorSurfaceAttentionGroup(
+                code=code,
+                severity=severity,  # type: ignore[arg-type]
+                headline=headline,
+                explanation=explanation,
+            )
+        )
+
+    if account_freeze is not None:
+        add("account_frozen", "critical", "Account freeze active", account_freeze.reason)
+    if guard_state.uncertain_intent.state == "PRESENT":
+        intents = ", ".join(guard_state.uncertain_intent.unresolved_intent_ids) or "unknown intent"
+        add("submit_outcome_uncertain", "critical", "Submit outcome uncertain", f"Unresolved intents: {intents}.")
+    if broker.connection != "CONNECTED":
+        add("broker_connection", "warning", "Broker disconnected or unknown", f"Connection is {broker.connection}.")
+    if broker.safety_verdict != "PAPER_ONLY":
+        add("broker_safety", "critical", "Broker safety is not paper-only", f"Safety verdict is {broker.safety_verdict}.")
+    if account_owner is None or account_owner.phase != "accepting" or account_owner.generation is None:
+        phase = "unknown" if account_owner is None else account_owner.phase
+        add("account_owner", "warning", "AccountOwner not proven accepting", f"AccountOwner phase is {phase}.")
+    if reconciliation is None or reconciliation.state not in _READY_RECONCILIATION_STATES:
+        state = "NOT_AVAILABLE" if reconciliation is None else reconciliation.state
+        add("reconciliation", "warning", "Reconciliation is not fresh-clean", f"Reconciliation state is {state}.")
+    for gate in _hard_blocking_readiness_gates(readiness_gates):
+        add(f"readiness.{gate.name}", "warning", gate.name.replace("_", " ").capitalize(), gate.detail)
+    if host_process.state != "RUNNING":
+        add("host_process", "info", "Bot process is not running", f"Host process is {host_process.state}.")
+    if trading_session.permits_strategy_activity is not True:
+        add("trading_session", "info", "Trading session not accepting strategy activity", trading_session.phase)
+    return groups
+
+
+def _situation_code_for_submit_readiness(code: str, groups: list[OperatorSurfaceAttentionGroup]) -> str:
+    if code == "safe_to_submit":
+        return "ready_to_submit"
+    if code == "safe_to_monitor":
+        return "monitor_only"
+    if code == "blocked_before_submit":
+        return "submission_blocked"
+    if code in {
+        "broker_state_unproven",
+        "account_frozen",
+        "waiting_for_owner_generation",
+        "submit_outcome_uncertain",
+    }:
+        return code
+    if groups:
+        return "attention_required"
+    return "unknown"
+
+
+def _author_trader_guidance(
+    *,
+    submit_readiness: OperatorSurfaceSubmitReadiness,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    trading_session: OperatorSurfaceTradingSession,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    account_freeze: AccountFreezeEvidence | None,
+    guard_state: ResumeGuardState,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    readiness_gates: list[OperatorGate],
+    daily_order_cap: OperatorSurfaceDailyOrderCap,
+) -> OperatorSurfaceTraderGuidance:
+    groups = _attention_groups(
+        host_process=host_process,
+        broker=broker,
+        trading_session=trading_session,
+        account_owner=account_owner,
+        account_freeze=account_freeze,
+        guard_state=guard_state,
+        reconciliation=reconciliation,
+        readiness_gates=readiness_gates,
+    )
+    situation_code = _situation_code_for_submit_readiness(submit_readiness.code, groups)
+    headline, explanation, risk_headline, risk_explanation = _TRADER_GUIDANCE_COPY[situation_code]
+    return OperatorSurfaceTraderGuidance(
+        situation_code=situation_code,  # type: ignore[arg-type]
+        headline=headline,
+        explanation=explanation,
+        risk_headline=risk_headline,
+        risk_explanation=risk_explanation,
+        primary_remediation=_submit_readiness_remediation(
+            submit_readiness.code,
+            broker=broker,
+            reconciliation=reconciliation,
+        ),  # type: ignore[arg-type]
+        additional_attention_groups=groups,
+        advanced_evidence=_submit_readiness_evidence(
+            host_process=host_process,
+            broker=broker,
+            trading_session=trading_session,
+            account_owner=account_owner,
+            account_freeze=account_freeze,
+            guard_state=guard_state,
+            reconciliation=reconciliation,
+            readiness_gates=readiness_gates,
+            daily_order_cap=daily_order_cap,
+        ),
+        template_id=f"operator_surface.trader_guidance.{situation_code}",
+        template_version=1,
+    )
+
+
+# ---------------------------------------------------------------------------
 # compose
 # ---------------------------------------------------------------------------
 
@@ -905,6 +1338,7 @@ def compute_operator_surface(
     host_start_command: str | None = None,
     start_run_id: str | None = None,
     account_freeze: AccountFreezeEvidence | None = None,
+    account_owner: OperatorSurfaceAccountOwner | None = None,
     # ADR-0008 §5 / PR 1 — cold-start reconciliation projection inputs.
     # All optional: when no live binding is resolved, the router passes
     # ``reconciliation_receipt=None`` and the projection turns into
@@ -955,51 +1389,85 @@ def compute_operator_surface(
             now_ms=now_ms,
         )
 
-    return OperatorSurface(
-        host_process=_project_host_process(
-            process,
-            desired_state,
-            start_run_id=start_run_id,
-            start_defaults=start_defaults,
+    host_process = _project_host_process(
+        process,
+        desired_state,
+        start_run_id=start_run_id,
+        start_defaults=start_defaults,
+        poisoned=poisoned,
+        host_start_command=host_start_command,
+        now_ms=now_ms,
+        account_freeze=account_freeze,
+    )
+    broker_projection = _project_broker(safety_verdict_final, broker_connection_state)
+    daily_order_cap = _project_daily_order_cap(readiness)
+    actions = _attach_action_gate_results(
+        evaluate_all_actions(
+            process=process,
+            live_binding=live_binding,
             poisoned=poisoned,
-            host_start_command=host_start_command,
-            now_ms=now_ms,
-            account_freeze=account_freeze,
+            owned_positions_empty=owned_positions_empty,
+            desired_state=desired_state,
+            guard_state=resolved_guards,
+            runtime_freshness=runtime_freshness,
+            latest_mutation=latest_mutation,
         ),
+        now_ms=now_ms,
+        account_freeze=account_freeze,
+    )
+    trading_session = _project_trading_session(now_ms=now_ms)
+    readiness_gates = project_readiness_gates(readiness)
+    reconciliation_projection = _project_reconciliation(
+        reconciliation_receipt,
+        current_wal_seq=current_wal_seq,
+        current_run_id=current_run_id,
+        current_namespace=current_namespace,
+        latest_broker_event_ms=latest_broker_event_ms,
+        latest_mutation_ms=latest_mutation_ms,
+        ttl_ms=reconciliation_ttl_ms,
+        now_ms=now_ms,
+    )
+    submit_readiness = _author_submit_readiness(
+        host_process=host_process,
+        broker=broker_projection,
+        trading_session=trading_session,
+        account_owner=account_owner,
+        account_freeze=account_freeze,
+        guard_state=resolved_guards,
+        reconciliation=reconciliation_projection,
+        readiness_gates=readiness_gates,
+        daily_order_cap=daily_order_cap,
+    )
+    trader_guidance = _author_trader_guidance(
+        submit_readiness=submit_readiness,
+        host_process=host_process,
+        broker=broker_projection,
+        trading_session=trading_session,
+        account_owner=account_owner,
+        account_freeze=account_freeze,
+        guard_state=resolved_guards,
+        reconciliation=reconciliation_projection,
+        readiness_gates=readiness_gates,
+        daily_order_cap=daily_order_cap,
+    )
+
+    return OperatorSurface(
+        host_process=host_process,
         prior_run=_project_prior_run(last_exit),
-        broker=_project_broker(safety_verdict_final, broker_connection_state),
+        broker=broker_projection,
         configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),
         current_risk=_project_current_risk(broker),
-        daily_order_cap=_project_daily_order_cap(readiness),
+        daily_order_cap=daily_order_cap,
         action_plan=_project_action_plan(action_plan),
-        actions=_attach_action_gate_results(
-            evaluate_all_actions(
-                process=process,
-                live_binding=live_binding,
-                poisoned=poisoned,
-                owned_positions_empty=owned_positions_empty,
-                desired_state=desired_state,
-                guard_state=resolved_guards,
-                runtime_freshness=runtime_freshness,
-                latest_mutation=latest_mutation,
-            ),
-            now_ms=now_ms,
-            account_freeze=account_freeze,
-        ),
-        trading_session=_project_trading_session(now_ms=now_ms),
-        readiness_gates=project_readiness_gates(readiness),
+        account_owner=account_owner,
+        submit_readiness=submit_readiness,
+        trader_guidance=trader_guidance,
+        actions=actions,
+        trading_session=trading_session,
+        readiness_gates=readiness_gates,
         runtime_freshness=_project_runtime_freshness(runtime_freshness),
         control_plane=_project_control_plane(control_plane_state),
         broker_observation_consistency=broker_observation_consistency,
-        reconciliation=_project_reconciliation(
-            reconciliation_receipt,
-            current_wal_seq=current_wal_seq,
-            current_run_id=current_run_id,
-            current_namespace=current_namespace,
-            latest_broker_event_ms=latest_broker_event_ms,
-            latest_mutation_ms=latest_mutation_ms,
-            ttl_ms=reconciliation_ttl_ms,
-            now_ms=now_ms,
-        ),
+        reconciliation=reconciliation_projection,
         broker_activity_health=broker_activity_health,
     )
