@@ -130,9 +130,15 @@ def lifecycle_event_to_projection_row(
         operator_next_step=event.operator_next_step,
         receipt_payload=event.payload,
         evidence_refs=evidence_refs,
+        rendered_headline=event.summary,
+        rendered_template_id=_lifecycle_rendered_template_id(event),
         inserted_at_ms=now_ms,
         updated_at_ms=now_ms,
     )
+
+
+def _lifecycle_rendered_template_id(event: BotLifecycleEvent) -> str:
+    return f"lifecycle_projection.{event.source}.{event.event_type}.v1"
 
 
 def account_owner_status_snapshot_from_event(
