@@ -357,7 +357,16 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 | Existing readiness, Start, and action capability rows generated from enforcement `GateResult` values | Shipped in `schemas/live_runs.py`, `engine/live/readiness.py`, and `services/operator_surface.py`. Account-level gate board rows are not shipped. |
 | Restart intensity fold over account events | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, and `engine/live/run.py`. |
 | Audited operator override for unreachable broker proof | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_classifier.py`. |
+| Backend-authored trader guidance and submit-readiness contract | Shipped in `schemas/live_runs.py`, `services/operator_surface.py`, and `routers/live_instances.py` as `operator_surface.trader_guidance`, `operator_surface.submit_readiness`, and `operator_surface.account_owner`. Angular must render these fields; it must not derive a replacement verdict. |
 | Postgres lifecycle projection read model | Shipped as a rebuildable projection in `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, and `PythonDataService/app/routers/lifecycle_projection.py`. It is not canonical and has no R3 safety authority. |
+
+### Trader Guidance Snapshot
+
+`PythonDataService/app/services/operator_surface.py` now authors `operator_surface.submit_readiness` and `operator_surface.trader_guidance` from the same backend facts that feed the existing operator surface: broker safety, broker connection, submission capability, uncertain-intent WAL state, reconciliation projection, account freeze evidence, AccountOwner generation/phase evidence, runtime process state, trading-session permission, and readiness gates.
+
+The only shipped `submit_readiness.code` allowed to claim order submission is safe is `safe_to_submit`. It requires broker safety `PAPER_ONLY`, broker connection `CONNECTED`, submission capability `SATISFIED`, no unresolved uncertain intent, AccountOwner phase `accepting` with a known generation, fresh `CLEAN` or `ADOPTED` reconciliation, no account freeze, no hard readiness gate failure, a running host process, and a trading session that permits strategy activity. All other codes are non-submit states: `safe_to_monitor`, `blocked_before_submit`, `broker_state_unproven`, `account_frozen`, `waiting_for_owner_generation`, and `submit_outcome_uncertain`.
+
+The new contract does not ship an AccountOwner daemon, does not move canonical truth to Postgres, and does not grant Angular permission to compose trader status. Tests pin the contract in `PythonDataService/tests/services/test_operator_surface.py` and `PythonDataService/tests/routers/test_live_instances_operator_surface.py`.
 
 ### Postgres Projection Replay Snapshot
 
@@ -385,4 +394,5 @@ This replay seam does not read artifacts, schedule background work, mutate canon
 | Account artifacts, recovery, override, and restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
 | Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
 | AccountOwner submit/reconnect lane | `PythonDataService/app/engine/live/account_owner.py` |
+| Operator trader guidance and submit-readiness | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/operator_surface.py`, `PythonDataService/app/routers/live_instances.py` |
 | Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/routers/lifecycle_projection.py` |

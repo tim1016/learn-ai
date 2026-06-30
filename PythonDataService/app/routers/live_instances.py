@@ -30,7 +30,12 @@ from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, read_account_events, read_account_freeze
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    read_account_events,
+    read_account_freeze,
+    read_account_owner_generation,
+)
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
@@ -112,6 +117,7 @@ from app.schemas.live_runs import (
     LiveInstanceStatus,
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
+    OperatorSurfaceAccountOwner,
     QcAuditCopyListing,
     ReadinessVector,
     ReconcileAckResponse,
@@ -346,6 +352,31 @@ def _resolve_account_freeze(
         if account_freeze is not None:
             return account_freeze
     return None
+
+
+def _resolve_account_owner_surface(
+    artifacts_root: Path,
+    account_id: str | None,
+) -> OperatorSurfaceAccountOwner | None:
+    if account_id is None:
+        return None
+    try:
+        generation = read_account_owner_generation(artifacts_root, account_id)
+    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        logger.warning(
+            "failed to read account owner generation while resolving operator surface",
+            extra={"account_id": account_id, "exception": repr(exc)},
+        )
+        return OperatorSurfaceAccountOwner(account_id=account_id, phase="unknown")
+    if generation is None:
+        return OperatorSurfaceAccountOwner(account_id=account_id, phase="unknown")
+    return OperatorSurfaceAccountOwner(
+        account_id=generation.account_id,
+        generation=generation.generation,
+        phase=generation.phase,
+        recorded_at_ms=generation.recorded_at_ms,
+        source=generation.source,
+    )
 
 
 def _project_instance_account_lifecycle_events(
@@ -1254,6 +1285,8 @@ async def _resolve_instance_status_from_process(
         live_binding,
         now_ms=observed_at_ms,
     )
+    instance_account_id = _instance_ledger_account_id(root, sid)
+    account_owner = _resolve_account_owner_surface(root.parent, instance_account_id)
     latest_mutation = _resolve_latest_mutation(root, sid)
     broker_observation_consistency = _resolve_broker_observation_consistency(
         root,
@@ -1294,6 +1327,7 @@ async def _resolve_instance_status_from_process(
         host_start_command=settings.live_runner_host_start_command,
         start_run_id=_resolve_start_run_id(root, live_binding, runs),
         account_freeze=account_freeze,
+        account_owner=account_owner,
         reconciliation_receipt=reconciliation_receipt,
         current_wal_seq=current_wal_seq,
         current_run_id=current_run_id,
@@ -1314,7 +1348,6 @@ async def _resolve_instance_status_from_process(
     live_run_dir = _resolve_live_run_dir(root, live_binding)
     live_state = _read_instance_live_state(root, sid)
     intent_projection_since_ms = _session_started_at_ms(process, live_binding)
-    instance_account_id = _instance_ledger_account_id(root, sid)
     lifecycle_events = project_intent_events(
         intent_wal_events,
         bot_id=sid,

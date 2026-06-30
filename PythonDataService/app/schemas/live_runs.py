@@ -1090,6 +1090,28 @@ OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
 ActionPlanConsumption = Literal["ACTIVE", "DECLARATIVE_ONLY", "UNKNOWN"]
 TradingSessionPhase = Literal["PRE", "RTH", "POST", "CLOSED", "UNKNOWN"]
+AccountOwnerPhase = Literal["accepting", "reconnecting", "draining", "frozen", "unknown"]
+SubmitReadinessCode = Literal[
+    "safe_to_submit",
+    "safe_to_monitor",
+    "blocked_before_submit",
+    "broker_state_unproven",
+    "account_frozen",
+    "waiting_for_owner_generation",
+    "submit_outcome_uncertain",
+]
+TraderSituationCode = Literal[
+    "ready_to_submit",
+    "monitor_only",
+    "submission_blocked",
+    "broker_state_unproven",
+    "account_frozen",
+    "waiting_for_owner_generation",
+    "submit_outcome_uncertain",
+    "attention_required",
+    "unknown",
+]
+TraderAttentionSeverity = Literal["info", "warning", "critical"]
 
 
 class OperatorSurfaceCurrentRisk(BaseModel):
@@ -1124,6 +1146,22 @@ class OperatorSurfaceDailyOrderCap(BaseModel):
 
     used: int | None
     limit: int | None
+
+
+class OperatorSurfaceAccountOwner(BaseModel):
+    """AccountOwner generation/phase surfaced from canonical account artifacts.
+
+    ``phase=unknown`` means the account exists but no generation evidence is
+    available yet. The cockpit renders this as missing proof, not as healthy.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str
+    generation: int | None = Field(default=None, ge=0)
+    phase: AccountOwnerPhase
+    recorded_at_ms: int | None = Field(default=None, ge=0)
+    source: str | None = None
 
 
 class OperatorSurfaceActionPlan(BaseModel):
@@ -1429,10 +1467,106 @@ class OpenRunbookAction(BaseModel):
     slug: str
 
 
+class InvokeEndpointAction(BaseModel):
+    """Suggested action: invoke an existing backend endpoint by stable name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["invoke_endpoint"]
+    endpoint: Literal["reconcile_instance"]
+    method: Literal["POST"] = "POST"
+    path_template: Literal["/api/live-instances/{strategy_instance_id}/reconcile"] = (
+        "/api/live-instances/{strategy_instance_id}/reconcile"
+    )
+
+
+class NoPrimaryRemediationAction(BaseModel):
+    """No primary remediation is appropriate for the current healthy state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["none"]
+    reason: str
+
+
 GateSuggestedAction = Annotated[
     InvokeCapabilityAction | FocusAction | RedeployAction | OpenRunbookAction,
     Field(discriminator="kind"),
 ]
+
+TraderPrimaryRemediation = Annotated[
+    InvokeCapabilityAction
+    | FocusAction
+    | RedeployAction
+    | OpenRunbookAction
+    | InvokeEndpointAction
+    | NoPrimaryRemediationAction,
+    Field(discriminator="kind"),
+]
+
+
+class OperatorSurfaceEvidenceFact(BaseModel):
+    """Raw fact rendered in the right pane's Advanced evidence drawer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    value: str
+    source: str | None = None
+    gate_id: str | None = None
+    ts_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    ts_ms_resolved: bool = False
+
+    @model_validator(mode="after")
+    def _timestamp_resolution_contract(self) -> OperatorSurfaceEvidenceFact:
+        if self.ts_ms is None and self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved cannot be true when ts_ms is absent")
+        if self.ts_ms is not None and not self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved=false is reserved for absent timestamps")
+        return self
+
+
+class OperatorSurfaceAttentionGroup(BaseModel):
+    """One independent fact that must remain visible alongside the summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    severity: TraderAttentionSeverity
+    headline: str
+    explanation: str
+
+
+class OperatorSurfaceSubmitReadiness(BaseModel):
+    """Backend-authored answer to "Can this bot submit an order now?"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: SubmitReadinessCode
+    label: str
+    explanation: str
+    can_submit: bool
+    blocking_reason_codes: list[str] = Field(default_factory=list)
+    template_id: str
+    template_version: int = 1
+
+
+class OperatorSurfaceTraderGuidance(BaseModel):
+    """Backend-authored trader semantics for the Overview right pane."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    situation_code: TraderSituationCode
+    headline: str
+    explanation: str
+    risk_headline: str
+    risk_explanation: str
+    primary_remediation: TraderPrimaryRemediation
+    additional_attention_groups: list[OperatorSurfaceAttentionGroup] = Field(default_factory=list)
+    advanced_evidence: list[OperatorSurfaceEvidenceFact] = Field(default_factory=list)
+    template_id: str
+    template_version: int = 1
+
 
 class OperatorGate(BaseModel):
     """Operator-facing projection of an engine readiness gate (PRD #616).
@@ -1669,6 +1803,9 @@ class OperatorSurface(BaseModel):
     current_risk: OperatorSurfaceCurrentRisk
     daily_order_cap: OperatorSurfaceDailyOrderCap
     action_plan: OperatorSurfaceActionPlan
+    account_owner: OperatorSurfaceAccountOwner | None = None
+    submit_readiness: OperatorSurfaceSubmitReadiness
+    trader_guidance: OperatorSurfaceTraderGuidance
     actions: OperatorSurfaceActions
     trading_session: OperatorSurfaceTradingSession
     # PRD #616 — operator-facing projection of the engine readiness
