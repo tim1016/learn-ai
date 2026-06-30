@@ -60,6 +60,7 @@ from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
 from app.engine.strategy.spec.schema import load_spec_from_path
+from app.operator.incidents.store import IncidentStore
 from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
@@ -601,6 +602,19 @@ def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path 
         return None
     run_dir = Path(live_binding.run_dir)
     return run_dir if run_dir.is_absolute() else root / run_dir
+
+
+def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> OperatorNotice | None:
+    run_dir = _resolve_live_run_dir(root, live_binding)
+    if run_dir is None and runs:
+        run_dir = Path(runs[0]["run_dir"])
+    if run_dir is None or not run_dir.is_dir():
+        return None
+    incidents = [incident for incident in IncidentStore(run_dir).list_unresolved() if incident.category == "watchdog"]
+    if not incidents:
+        return None
+    latest = max(incidents, key=lambda incident: incident.started_at_ms)
+    return latest.notice
 
 
 def _resolve_latest_mutation(live_runs_root: Path, strategy_instance_id: str) -> MutationAttempt | None:
@@ -1316,6 +1330,7 @@ async def _resolve_instance_status_from_process(
         sid,
         live_binding,
     )
+    incident_headline = _resolve_incident_headline(root, live_binding, runs)
     operator_surface = compute_operator_surface(
         process=process,
         last_exit=last_exit,
@@ -1348,6 +1363,7 @@ async def _resolve_instance_status_from_process(
         reconciliation_ttl_ms=getattr(settings, "reconciliation_receipt_ttl_ms", None),
         activity_publisher=activity_publisher,
         activity_publisher_registered_at_ms=activity_publisher_registered_at_ms,
+        incident_headline_notice=incident_headline,
         now_ms=observed_at_ms,
     )
     redeploy_available = bool(

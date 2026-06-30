@@ -27,6 +27,7 @@ from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
+from app.operator.notices.schema import OperatorNotice
 from app.schemas.live_runs import (
     ActionCapability,
     BrokerActivityHealth,
@@ -1459,5 +1460,6 @@ def compute_operator_surface(
         control_plane=_project_control_plane(control_plane_state),
         broker_observation_consistency=broker_observation_consistency,
         reconciliation=reconciliation_projection,
+        incident_headline=incident_headline_notice if isinstance(incident_headline_notice, OperatorNotice) else None,
         broker_activity_health=broker_activity_health,
     )

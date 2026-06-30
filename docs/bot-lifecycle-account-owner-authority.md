@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (lifecycle template-receipt slice: projection rows persist rendered headline plus stable backend template id).
+> **Last reviewed:** 2026-06-30 (watchdog recovery-receipt slice: unresolved watchdog incidents surface in the recovery lane with backend-authored `int64 ms UTC` evidence).
 
 ---
 
@@ -449,6 +449,12 @@ This is evidence, not a frontend-authored block reason. Python authors the block
 `PythonDataService/app/services/bot_lifecycle_chart.py` now keeps the recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders inactive only when there is no active recovery incident. When recovery is active, blocked, or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists.
 
 This slice does not ship a recovery daemon, new flatten proof writer, or R3 AccountOwner IPC process. Missing recovery proof remains missing proof. Recovery timestamps and receipts remain canonical only when authored by backend evidence as `int64 ms UTC`; Angular may format those integers for local display only and must not store, send back, or order lifecycle state by display strings. Tests pin inactive-no-incident and unknown-missing-proof behavior in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
+
+### Watchdog Recovery Receipt Snapshot
+
+`GET /api/live-instances/{strategy_instance_id}/status` now reads the latest unresolved watchdog `OperatorIncident` from the live run when a daemon binding exists, or from the latest run ledger when the daemon is idle. That incident notice is projected into `operator_surface.incident_headline` and into the lifecycle chart's `recovery` overview node plus the recovery subgraph's `incident` node.
+
+The recovery incident nodes carry backend-authored watchdog receipts for outcome, tier, runbook, and `watchdog.occurred_at_ms`. The incident timestamp is emitted only as Unix epoch milliseconds UTC (`int64 ms UTC`); Angular may convert it to local/exchange time for display only. This slice is read-only over existing incident files: it does not create a new watchdog daemon, does not write flatten proof, does not ship R3 AccountOwner IPC, does not query Postgres for status truth, and does not let Angular infer recovery status from raw files or formatted timestamps. Tests pin the projection in `PythonDataService/tests/services/test_bot_lifecycle_chart.py` and `PythonDataService/tests/routers/test_live_instances_operator_surface.py`.
 
 ### Activity/Lifecycle Consistency Snapshot
 

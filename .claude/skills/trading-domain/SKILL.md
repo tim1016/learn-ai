@@ -20,10 +20,18 @@ This skill captures the vocabulary and invariants of the learn-ai trading platfo
 
 ## Timestamp conventions
 
-- **Storage timezone: UTC.** All Postgres timestamps are `timestamp with time zone`, stored as UTC.
-- **Display/logic timezone: `America/New_York` (EST/EDT).** Trading logic operates in exchange time. Conversion happens at the boundary.
-- Use `pandas.Timestamp` with `tz='America/New_York'` for logic; convert to UTC only for serialization.
-- **Never compare naive timestamps.** If you see a naive `datetime` in this codebase, it's a bug.
+- **Canonical timestamp format: `int64 ms UTC`.** Every timestamp in flight,
+  at rest, in Postgres, in files, or on the wire is Unix epoch milliseconds
+  UTC. ISO strings, `datetime`, `DateTime`, and local-time strings are not
+  storage or wire formats.
+- **Display timezone: `America/New_York` (EST/EDT).** UI code converts
+  `int64 ms UTC` to exchange/local time for display only; display strings are
+  never stored, sent back, or used for ordering.
+- **Logic timezone: `America/New_York` when wall-clock session semantics
+  matter.** Use timezone-aware in-function values for local arithmetic, then
+  convert back to `int64 ms UTC` before returning, persisting, or serializing.
+- **Never compare naive timestamps.** If you see a naive `datetime` in this
+  codebase, it's a bug.
 
 ## Indicator conventions
 
