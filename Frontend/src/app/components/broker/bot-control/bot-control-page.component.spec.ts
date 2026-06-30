@@ -355,8 +355,8 @@ describe('BotControlPageComponent', () => {
       .toContain('Control plane, last known.');
     const runbookLinks = Array.from(el.querySelectorAll<HTMLAnchorElement>('.warning-link'))
       .map((link) => link.getAttribute('href'));
-    expect(runbookLinks).toContain('/runbooks/broker%20evidence%2Fhealth%3F');
-    expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
+    expect(runbookLinks).toContain('/docs/signal-engine-methodology#broker%20evidence/health?');
+    expect(runbookLinks).toContain('/docs/signal-engine-methodology#control%20plane/runbook?');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
     expect(el.querySelector('.decision-row')?.textContent).toContain('Broker proof');

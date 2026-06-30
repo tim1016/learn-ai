@@ -122,7 +122,11 @@
                 <div class="warning-actions">
                   <a class="warning-link" [routerLink]="['/broker/account-monitor']">Open Account Monitor</a>
                   @if (notice.runbook_slug) {
-                    <a class="warning-link" [href]="runbookHref(notice.runbook_slug)" target="_blank" rel="noopener">
+                    <a
+                      class="warning-link"
+                      [routerLink]="['/docs/signal-engine-methodology']"
+                      [fragment]="notice.runbook_slug"
+                    >
                       Open runbook
                     </a>
                   }
@@ -156,7 +160,11 @@
                 <div class="warning-actions">
                   <a class="warning-link" [routerLink]="['/broker']">Open Broker Status</a>
                   @if (banner.runbookSlug) {
-                    <a class="warning-link" [href]="runbookHref(banner.runbookSlug)" target="_blank" rel="noopener">
+                    <a
+                      class="warning-link"
+                      [routerLink]="['/docs/signal-engine-methodology']"
+                      [fragment]="banner.runbookSlug"
+                    >
                       Open runbook
                     </a>
                   }
