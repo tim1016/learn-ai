@@ -2,7 +2,16 @@
 
 **Date:** 2026-06-29
 **Scope:** Turn the bot lifecycle flowchart into a foolproof observability surface — clickable lifecycle nodes that reveal state, why, when, and what system evidence supports it, at both bot and account level.
-**Status:** Read-only audit. No code written. This is the grounded research brief; implementation slices follow after review.
+**Status:** Read-only audit. No code written in the original audit. Implementation slices followed after review.
+
+> **2026-06-30 correction:** Current implementation authority is
+> `docs/bot-lifecycle-account-owner-authority.md`. Several audit line refs
+> below were true when recorded but are now stale: submit/broker subgraph nodes
+> are event-backed or `unknown`+reason, `writer_guard` is no longer hardcoded
+> passed, AccountOwner generation/unresolved-exposure/restart-intensity V1
+> artifacts are shipped, and restart intensity is 3 starts / 5 minutes. Treat
+> the explicit correction notes in this document as superseding the original
+> G3/G6 wording.
 
 ---
 
@@ -20,7 +29,7 @@ The lifecycle feature is **better architected than "vibe-coded" implies on the a
 
 5. **No unified per-bot/per-account event stream or timeline.** A human cannot ask "where is this bot and why, with timestamps and evidence." Today they'd hand-join the WAL + callbacks + 3 parquet files + 6 sidecars. The fusion (`compute_operator_surface`) exists only as a per-request snapshot — nothing emits a durable, queryable, ordered event log keyed by bot id / account id.
 
-**The work is mostly a Python event-emission + projection-enrichment task, plus an Angular drill-down panel — not new .NET, and not new trading math.** Risk areas: the chart has hardcoded "always inactive/passed" subgraph nodes that misrepresent live state (G3), decision rationale is captured for only one strategy (Gap-2), and the .NET Portfolio domain (separate from bots) carries timestamp-format and trading-math authority violations that this work should NOT entangle with but should note.
+**The work is mostly a Python event-emission + projection-enrichment task, plus an Angular drill-down panel — not new .NET, and not new trading math.** Remaining risk areas: recovery-lane placeholder nodes are still static, decision rationale is captured for only one strategy (Gap-2), and the .NET Portfolio domain (separate from bots) carries timestamp-format and trading-math authority violations that this work should NOT entangle with but should note.
 
 ---
 
@@ -28,9 +37,9 @@ The lifecycle feature is **better architected than "vibe-coded" implies on the a
 
 ### Lifecycle authority sources (no single one — split across 5)
 - `docs/bot-lifecycle-account-owner-authority.md` — registered canonical snapshot. Header says paper-only, R2; §10/changelog claims R3 artifacts shipped 2026-06-28 (**contradiction G6/G7**). Desired-state values stored uppercase `RUNNING/PAUSED/STOPPED` (`:83`); AccountOwner phases `accepting/reconnecting/draining/frozen` (`:93`); submit uncertainty states `ACK_FAILED_UNCERTAIN`/`SUBMIT_UNCERTAIN_HALTED` (`:104`).
-- `PythonDataService/app/services/bot_lifecycle_chart.py` (≈869–900 lines) — **the backend-authored chart projection.** Entry `compose_bot_lifecycle_chart(...)` `:191`. Global nodes `:84-94`, edges `:95-104`, main path `:38`, blocking priority `:43`. Hardcoded static subgraph nodes `:312-322` (**G3**). Primary-node selection `:489-503` (**G4**). Desired-state compare `:501,582-587,702-705` (**G5**). Gate→status map `:688-699`.
+- `PythonDataService/app/services/bot_lifecycle_chart.py` — **the backend-authored chart projection.** Original line refs are stale after issue #718 slices. Current chart facts include event-backed submit/broker subgraph nodes, node receipts/freshness, and explicit broker-activity vs AccountOwner-generation wording; only recovery placeholders such as `flatten` / `reconcile_after` / `fresh_run` remain static.
 - `PythonDataService/app/schemas/live_runs.py` — chart contract + state vocabularies. `RunState` `:19-31`; `HostRunnerProcessState` `:244-250`; `HostProcessState` `:1070-1077`; `LifecycleChartStatus` `:1705-1713`; `LifecycleChartNode` (frontend-must-not-infer docstring) `:1728-1733`; `BotLifecycleChartView` `:1786`; `OperatorSurface` `:1636`.
-- `docs/architecture/bot-lifecycle-gate-map.md` — richest transition model (mermaid `:55-86`); recommended gate-status model `:240`; "Angular must not infer gate meaning" `:227,246`. Marks several artifacts "Proposed / none yet" `:129,140,141,143` (**stale vs authority doc — G6**).
+- `docs/architecture/bot-lifecycle-gate-map.md` — richest transition model; supporting design context only. The inventory rows for account classifier, owner generation/fencing, unresolved exposure, and restart intensity were reconciled on 2026-06-30 to match the authority document.
 - `docs/architecture/bot-lifecycle-account-owner-prd.md` — R3 AccountOwner future design.
 - Registration: `docs/doc-authority.md:31`.
 
@@ -72,10 +81,10 @@ The lifecycle feature is **better architected than "vibe-coded" implies on the a
 ### Lifecycle-model gaps / contradictions
 - **G1 — No canonical lifecycle state enum or single state machine.** `LifecycleChartStatus` is a node-color vocabulary, not lifecycle states. ~8 vocabularies coexist.
 - **G2 — Two non-isomorphic transition graphs.** Chart edges (`bot_lifecycle_chart.py:95-104`) collapse the gate-map mermaid's `accountGate/runLedger/startGate/daemon/morning/process` into `deploy`+`preflight`, and render `poison/freeze/blocked/paused` as node *statuses* whereas the gate-map models them as terminal *nodes*. No cross-reference.
-- **G3 — Chart subgraph nodes are hardcoded.** `signal/intent_wal/place_order/ack_or_reconcile/broker_ack` always `"inactive"`, `writer_guard` always `"passed"` (`bot_lifecycle_chart.py:312-322`) regardless of real state. **Misleading on an "operator-facing facts" surface — the submit/broker lane shows nothing real.**
+- **G3 — Corrected 2026-06-30.** The original audit found hardcoded submit/broker subgraph nodes. Current implementation projects `signal` / `intent_wal` / `place_order` / `ack_or_reconcile` / `broker_ack` from lifecycle events or renders `unknown` with server-authored reasons, and `writer_guard` renders AccountOwner generation/phase evidence or an explicit R2 limitation. Remaining static placeholders are in the recovery lane (`flatten`, `reconcile_after`, `fresh_run`).
 - **G4 — `active` has no real entry guard.** `_primary_node_id` (`:489-503`) marks `active` only when `host_process.state=="RUNNING"` AND desired=="RUNNING"; otherwise silently falls back to `activate` even with all gates passed.
 - **G5 — Desired-state casing fork.** Durable compare uppercase `"RUNNING/PAUSED/STOPPED"` vs operator-action enum lowercase `pause/resume/stop`; `DesiredStateView.state: str|None` unconstrained → a casing/typo silently reads as `unknown` instead of failing.
-- **G6 — Stale gate-map vs authority doc.** Gate-map marks account-classifier/fencing/exposure-freeze/restart-intensity "Proposed / none yet"; authority changelog says they shipped 2026-06-28. Nothing flags the gate-map as superseded.
+- **G6 — Corrected 2026-06-30.** The gate-map inventory now marks account-classifier V1, owner generation/fencing V1, unresolved-exposure freeze, and restart-intensity fold as shipped where the authority doc says they are shipped. It still calls out the future R3 daemon/IPC and unified account gate board gaps.
 - **G7 — R2/R3 self-contradiction** within the authority doc (header "not R3" vs §5.1/changelog describing shipped AccountOwner lane).
 - **G8 — Submit uncertainty state machine invisible.** `submit_state_machine.py` outcomes (`ACK_FAILED_UNCERTAIN`, `SUBMIT_UNCERTAIN_HALTED`, adopt/recover/halt) and the gate-map's submit branches never reach the chart's binary `submit_order→broker_writer` edge.
 
@@ -153,7 +162,7 @@ All under `/api/live-instances`. Keep REST (bots already are; GraphQL is portfol
 The flowchart stays the navigation surface (`overview-tab.component`). Make **every** node clickable (not just `expandable` subgraph nodes), opening a **node-detail panel** (new child component, e.g. `lifecycle-node-detail.component`) that renders, all backend-authored:
 - **Current state summary** — node `status` + server `current_summary` + `why` string (no local switch authoring the reason).
 - **Timeline entries** — `GET /{bot_id}/lifecycle/node/{id}` `related_events[]`, rendered as an ordered list (server provides label + ts_ms; Angular only formats the ms→NY display string, per the int64-ms display-boundary rule).
-- **Related broker/account events** — for submit_order/broker_writer/recovery nodes, the order-lifecycle events that were previously hardcoded inactive (closes G3).
+- **Related broker/account events** — for submit_order/broker_writer/recovery nodes, render backend-authored order-lifecycle and account-event rows. Submit/broker nodes are no longer hardcoded; recovery-lane placeholders still need richer evidence.
 - **Decision inputs/outputs** — for `active`, the latest `BotDecisionEvaluated` (indicators in, signal out).
 - **Blockers/errors** — `blockers[]` with `DropReason`/`PoisonedHaltTrigger` (server-authored text).
 - **Raw evidence references** — `evidence_refs[]` (WAL seq / parquet row / sidecar file) for the debugging human; render as references, not parsed locally.
@@ -185,7 +194,7 @@ Account-level: a sibling account-history view (catalog → account drill-in) bac
 2. **PR-2 — Canonical `BotEvent` schema + fold (read-side, no behavior change).** Add `BotEvent` Pydantic model + a projection that folds existing Intent WAL + broker_callbacks + parquet + sidecars into an ordered, bot/account-keyed stream. Pure read; fully testable against fixtures. Closes Gap-1/Gap-3 at the data layer.
 3. **PR-3 — Durable lifecycle-transition + balance/position emission.** Emit `BotLifecycleTransitioned`, `AccountBalanceChanged`, `PositionChanged`, and structured `RiskCheckPassed/Failed` at the points that already mutate that state (engine loop, live_portfolio, gates). Append to fsynced `events.jsonl`. Fills the genuinely-missing events.
 4. **PR-4 — FastAPI query endpoints.** Snapshot, timeline, bot activity, account activity, broker order history, node detail. Server-authored `why`/summary strings.
-5. **PR-5 — Fix chart truthfulness (G3/G4/G8).** Replace hardcoded `submit_order/broker_writer/recovery` subgraph statuses with live projection; add real `active` entry guard; surface submit-uncertainty.
+5. **PR-5 — Fix chart truthfulness (G3/G4/G8).** Submit/broker truthfulness is now partially shipped; remaining work is recovery-lane evidence, richer `active` entry rationale, and continued submit-uncertainty coverage.
 6. **PR-6 — Decision rationale backfill (Gap-2).** Populate `last_decision_snapshot` for SMA/RSI/buy-and-hold; parity test.
 7. **PR-7 — Angular node-detail panel + account-history view.** Clickable nodes → backend-authored detail; account drill-in. Hold the no-local-meaning line.
 8. **PR-8 — Test hardening.** Per-state regression suite, timestamp-boundary tests, endpoint tests, FE component tests.
@@ -201,7 +210,7 @@ Account-level: a sibling account-history view (catalog → account drill-in) bac
 
 ---
 
-*Do not assume things are correct because the UI renders: the chart's submit/broker lane (G3) renders static "inactive" nodes that do not reflect real broker state, and "blocked" reasons that are durably recorded in the Intent WAL do not currently reach the UI (Gap-3).*
+*Do not assume things are correct because the UI renders: the chart's submit/broker lane now renders event-backed facts or unknown reasons, but timeline/projection rows still need source-provenance review, and some "blocked" causes that are durably recorded in artifacts remain outside the visible operator path.*
 
 ---
 
@@ -225,7 +234,7 @@ This supersedes the "Proposed event model", "API shapes", and "Staged plan" sect
 - **Phase 0 — Docs reconciliation (no code).** Make the authority doc name the canonical lifecycle node ids, gate ids, and the single transition table (resolve G1/G2). Demote or update the gate-map so stale "Proposed" rows aren't read as truth (G6/G7). Lock the desired-state casing contract (G5: constrain `DesiredStateView.state` to an enum; one canonical case). For each canonical node, name the existing source that backs it.
 - **Phase 1 — Typed read models + fold (read-only, no new writes).** Define `BotLifecycleEvent`, `LifecycleNodeDetail`, and a typed `AccountEvent`. Fold existing sources — Intent WAL, the `/activity` Broker Activity projection, `decisions/executions/trades.parquet`, account artifacts, and `OperatorSurface` — into an ordered, bot/account-keyed stream exposing `ts_ms` (int64 UTC), `source`, `evidence_ref`, `node_id`, `severity`, and **server-authored** `summary`/`why`. This closes Gap-1/Gap-3 at the data layer with zero behavior change. These models double as the future DB schema (decision 1).
 - **Phase 2 — Harden account events.** Add a typed schema, required `ts_ms`, and a monotonic `seq` to the account-event write/read path (`account_artifacts.py:259/271/571`) before exposing account history. Hardening existing writes — not a new log.
-- **Phase 3 — Fix chart truthfulness (G3/G4/G8).** Replace the hardcoded `submit_order/broker_writer/recovery` subgraph statuses (`bot_lifecycle_chart.py:312-322`) with projection-backed facts; render `unknown`/`not_available` when evidence is genuinely absent rather than a misleading `passed`/`inactive`. Add a server-authored reason for the `active`-vs-`activate` decision (`:489-503`). Surface submit-uncertainty (`submit_state_machine`) so `ACK_FAILED_UNCERTAIN`/`SUBMIT_UNCERTAIN_HALTED` appear.
+- **Phase 3 — Fix chart truthfulness (G3/G4/G8).** Submit/broker subgraph statuses are now projection-backed or `unknown`+reason, and submit-uncertainty reaches `ack_or_reconcile`. Remaining work: replace recovery placeholders with evidence-backed facts and keep improving the server-authored reason for the `active`-vs-`activate` decision.
 - **Phase 4 — Server-authored verbiage (decision 4).** Move status labels / node summaries / blocker reasons into the backend payload; Angular renders verbatim.
 - **Phase 5 — Endpoints (bounded, paginated, side-effect-free GET).** `GET /{id}/lifecycle/node/{node_id}`, `GET /{id}/lifecycle/timeline?since_ms=&limit=`, `GET /api/live-instances/accounts/{account_id}/activity?since_ms=&limit=`. Reuse `/{id}/activity` for order/fill/broker rows rather than duplicating.
 - **Phase 6 — Lifecycle-transition emission (the only genuinely-new durable write).** Emit `BotLifecycleTransitioned` **only at authoritative mutation points** — desired-state writes, AccountOwner submit results, freeze/clear, halt/poison, reconciliation outcomes, engine readiness transitions — **with debounce**. **Never from GET/status polling** (the cockpit polls every 4s; reads stay pure). Prefer reconstructing transitions from existing durable trails where possible; persist a typed transition record only where no history exists today, co-located with run artifacts (not a new global log).
@@ -245,7 +254,7 @@ Seven refinements accepted and made concrete so they're settled before code.
 
 2. **Deterministic timeline ordering (defined now).** Sort key is the tuple `(ts_ms ASC, source_rank ASC, source_local_seq ASC)`. `source_rank` is a fixed, documented table used *only* as a same-millisecond tie-break (not a causality claim). Representative ranks: `decision=10, risk_gate=20, intent_pending=30, submit=40, broker_ack=50, fill=60, position_change=70, account_balance=80, freeze/halt/poison=85, lifecycle_transition=90`. `source_local_seq` = WAL line seq / parquet row index / account-event `seq`. Ordering is covered by a unit test with colliding `ts_ms` across sources.
 
-3. **Absent evidence renders as `unknown` + a server-authored reason.** Do **not** introduce `not_available`; keep `LifecycleChartStatus` at its stable 7 values (`passed, active, blocked, poison, freeze, inactive, unknown`, `live_runs.py:1705-1713`). The hardcoded `passed`/`inactive` subgraph fixes (Phase 3) resolve to real status or `unknown`+reason. If a distinct value is ever justified later, it ships with frontend theming + label tests.
+3. **Absent evidence renders as `unknown` + a server-authored reason.** Do **not** introduce `not_available`; keep `LifecycleChartStatus` at its stable 7 values (`passed, active, blocked, poison, freeze, inactive, unknown`, `live_runs.py:1705-1713`). Projection-backed chart nodes resolve to real status or `unknown`+reason when evidence is absent. If a distinct value is ever justified later, it ships with frontend theming + label tests.
 
 4. **Consistency invariant scoped.** "No order/fill in the lifecycle timeline absent from `/activity`, and vice versa" applies only to: same `bot_id`, same session/date window, and event types `{order, fill}`. The timeline's `decision / risk_gate / freeze / desired_state / lifecycle_transition` rows are explicitly **outside** this invariant.
 
