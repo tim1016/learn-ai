@@ -79,6 +79,8 @@ def test_batch_from_intent_events_authors_bot_projection_rows() -> None:
     assert row.status == "blocked"
     assert row.source_artifact == str(wal_path)
     assert row.source_hash == "a" * 64
+    assert row.rendered_headline == "Broker acknowledgement failed; submit outcome is uncertain."
+    assert row.rendered_template_id == "lifecycle_projection.broker_ack.BrokerOrderUncertain.v1"
     assert row.receipt_payload["intent_id"] == "intent-2"
     assert row.evidence_refs[0]["source"] == "intent_wal"
 
@@ -110,6 +112,8 @@ def test_batch_from_account_events_authors_account_rows_and_owner_snapshot() -> 
     assert row.node_id == "writer_guard"
     assert row.status == "active"
     assert "not R3 daemon/IPC writer authority" in row.summary
+    assert row.rendered_headline == row.summary
+    assert row.rendered_template_id == "lifecycle_projection.lifecycle_transition.account_owner_generation_recorded.v1"
     assert row.source_artifact == "/tmp/accounts/DU123/account_events.jsonl"
     assert row.receipt_payload["generation"] == 7
 
