@@ -27,7 +27,7 @@
           [class.blocking-node]="isBlockingNode(node)"
           role="button"
           tabindex="0"
-          [attr.aria-label]="node.expandable ? 'Open ' + node.label : 'Select ' + node.label"
+          [attr.aria-label]="nodeAriaLabel(node)"
           (click)="expandNode(node)"
           (keydown)="onNodeKeydown($event, node)"
         >
@@ -49,7 +49,7 @@
           </span>
         </article>
 
-        @if (row.outgoingEdges.length > 0) {
+        @if (row.outgoingEdges.length) {
           <div
             class="connector-group"
             [class.branching]="row.outgoingEdges.length > 1"
@@ -66,7 +66,7 @@
                 <span class="connector-copy">
                   <span class="connector-status">{{ lifecycleStatusLabel(visualStatus) }}</span>
                   <span class="connector-path">
-                    {{ edgeEndpointLabel(edge.source) }} -> {{ edgeEndpointLabel(edge.target) }}
+                    {{ edgeEndpointLabel(edge.source) }} -&gt; {{ edgeEndpointLabel(edge.target) }}
                   </span>
                   @if (edge.label) {
                     <span class="connector-label">{{ edge.label }}</span>

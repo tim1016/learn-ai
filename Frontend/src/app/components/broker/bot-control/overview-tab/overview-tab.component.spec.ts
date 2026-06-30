@@ -94,7 +94,8 @@ describe('OverviewTabComponent', () => {
       'Broker activity',
       'Recovery lane',
     ]);
-    expect(fixture.componentInstance.edgeColor('blocked')).toBe('var(--warn)');
+    const blockedGate = el.querySelector<HTMLElement>('.flow-node.status-blocked');
+    expect(blockedGate?.querySelector('strong')?.textContent?.trim()).toBe('Reconcile broker state');
   });
 
   it('marks the current blocking gate directly in the lifecycle flow', () => {
@@ -105,6 +106,7 @@ describe('OverviewTabComponent', () => {
 
     const fixture = TestBed.createComponent(OverviewTabComponent);
     const status = makeStatus();
+    status.lifecycle_chart.global_graph.primary_node_id = 'deploy';
     status.lifecycle_chart.global_graph.nodes[0].status = 'blocked';
     status.lifecycle_chart.global_graph.nodes[0].status_label = 'Blocked';
     status.lifecycle_chart.global_graph.edges = [

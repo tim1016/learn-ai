@@ -92,6 +92,16 @@ export class OverviewTabComponent {
     this.expandNode(node);
   }
 
+  nodeAriaLabel(node: LifecycleChartNode): string {
+    const action = node.expandable ? 'Open' : 'Select';
+    const callout = this.isBlockingNode(node)
+      ? ' Blocking step.'
+      : this.isPrimaryNode(node)
+        ? ' Current step.'
+        : '';
+    return `${action} ${node.label}. Status: ${node.status_label}.${callout}`;
+  }
+
   isPrimaryNode(node: LifecycleChartNode): boolean {
     return node.id === this.currentGraph().primary_node_id;
   }
