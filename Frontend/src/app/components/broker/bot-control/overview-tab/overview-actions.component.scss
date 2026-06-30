@@ -5,12 +5,13 @@
 
 .action-panel {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   min-width: 0;
-  height: 100%;
-  padding: 1rem;
+  padding: 0.75rem 1rem;
   background: var(--bg-surface);
-  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   color: var(--text-primary);
 
   h3 {
@@ -29,18 +30,23 @@
 }
 
 .action-list {
-  display: grid;
-  gap: 0.6rem;
-  margin-top: 0.85rem;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .chart-action {
   display: grid;
   gap: 0.2rem;
-  min-height: 54px;
-  padding: 0.65rem 0.75rem;
+  align-content: center;
+  min-width: 150px;
+  min-height: 44px;
+  padding: 0.45rem 0.65rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 4px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   text-align: left;
@@ -86,6 +92,15 @@
 
 @media (max-width: 980px) {
   .action-panel {
-    border-left: 0;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .action-list {
+    justify-content: flex-start;
+  }
+
+  .chart-action {
+    flex: 1 1 180px;
   }
 }

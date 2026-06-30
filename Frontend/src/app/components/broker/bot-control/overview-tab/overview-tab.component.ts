@@ -10,7 +10,6 @@ import type {
   LifecycleChartStatus,
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
-import { OverviewActionsComponent } from './overview-actions.component';
 
 interface Point {
   readonly x: number;
@@ -43,7 +42,7 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule, Vflow, OverviewActionsComponent],
+  imports: [CommonModule, Vflow],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -51,7 +50,9 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 export class OverviewTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly busyAction = input<string | null>(null);
+  readonly selectedNodeId = input<string | null>(null);
   readonly actionInvoked = output<LifecycleChartActionId>();
+  readonly nodeSelected = output<LifecycleChartNode>();
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly chart = computed(() => this.status().lifecycle_chart);
@@ -116,6 +117,7 @@ export class OverviewTabComponent {
   }
 
   expandNode(node: LifecycleChartNode): void {
+    this.nodeSelected.emit(node);
     if (!node.expandable || !node.subgraph_id || !this.chart().subgraphs[node.subgraph_id]) return;
     this.expandedGraphSelection.set({
       chartKey: this.chartKey(),

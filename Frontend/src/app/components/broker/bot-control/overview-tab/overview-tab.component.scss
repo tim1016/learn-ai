@@ -58,8 +58,7 @@
 }
 
 .overview-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  display: flex;
   flex: 1 1 auto;
   min-height: 1060px;
 }
@@ -67,8 +66,8 @@
 .flow-panel {
   min-width: 0;
   min-height: 0;
-  border-right: 1px solid var(--border);
   background: var(--bg-canvas);
+  flex: 1 1 auto;
 }
 
 .flow-canvas {
@@ -92,14 +91,18 @@
   color: var(--text-primary);
   box-shadow: var(--shadow-card);
   overflow: hidden;
+  cursor: pointer;
 
-  &.expandable {
-    cursor: pointer;
-  }
-
-  &.expandable:hover {
+  &:hover {
     border-color: var(--accent);
     background: var(--bg-hover);
+  }
+
+  &.selected {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 2px var(--accent-faint),
+      var(--shadow-card);
   }
 
   &:focus-visible {
