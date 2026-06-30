@@ -10,6 +10,7 @@ function makeDispatch(): RendererDispatch & {
     focus: [string, string][];
     redeploy: number;
     openRunbook: string[];
+    invokeEndpoint: string[];
   };
 } {
   const calls = {
@@ -17,6 +18,7 @@ function makeDispatch(): RendererDispatch & {
     focus: [] as [string, string][],
     redeploy: 0,
     openRunbook: [] as string[],
+    invokeEndpoint: [] as string[],
   };
   return {
     invokeCapability: vi.fn((cap) => calls.invokeCapability.push(cap)),
@@ -25,6 +27,7 @@ function makeDispatch(): RendererDispatch & {
       calls.redeploy += 1;
     }),
     openRunbook: vi.fn((slug) => calls.openRunbook.push(slug)),
+    invokeEndpoint: vi.fn((endpoint) => calls.invokeEndpoint.push(endpoint)),
     calls,
   };
 }
@@ -75,6 +78,46 @@ describe('renderSuggestedAction', () => {
     expect(dispatch.calls.openRunbook).toEqual(['broker-reconnect']);
   });
 
+  it('invoke_endpoint dispatches the stable backend endpoint name', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      {
+        kind: 'invoke_endpoint',
+        endpoint: 'reconcile_instance',
+        method: 'POST',
+        path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+      },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Reconcile now');
+    expect(rendered?.variant).toBe('primary');
+    rendered?.invoke();
+    expect(dispatch.calls.invokeEndpoint).toEqual(['reconcile_instance']);
+  });
+
+  it('fails closed for invoke_endpoint when the caller does not support endpoint dispatch', () => {
+    const dispatch: RendererDispatch = {
+      invokeCapability: vi.fn(),
+      focus: vi.fn(),
+      redeploy: vi.fn(),
+      openRunbook: vi.fn(),
+    };
+    const rendered = renderSuggestedAction(
+      {
+        kind: 'invoke_endpoint',
+        endpoint: 'reconcile_instance',
+        method: 'POST',
+        path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+      },
+      dispatch,
+    );
+    expect(rendered).toBe(null);
+  });
+
+  it('returns null for no primary remediation', () => {
+    expect(renderSuggestedAction({ kind: 'none', reason: 'READY' }, makeDispatch())).toBe(null);
+  });
+
   it('returns null for an unknown kind (fail closed visibly)', () => {
     const dispatch = makeDispatch();
     const rendered = renderSuggestedAction(
@@ -83,5 +126,66 @@ describe('renderSuggestedAction', () => {
       dispatch,
     );
     expect(rendered).toBe(null);
+  });
+
+  it('invoke_capability pause produces the Pause label and dispatches the pause capability', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'invoke_capability', capability: 'pause' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Pause');
+    expect(rendered?.variant).toBe('primary');
+    rendered?.invoke();
+    expect(dispatch.calls.invokeCapability).toEqual(['pause']);
+  });
+
+  it('redeploy returns a link-variant Redeploy label', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction({ kind: 'redeploy' }, dispatch);
+    expect(rendered?.label).toBe('Redeploy →');
+    expect(rendered?.variant).toBe('link');
+  });
+
+  it('open_runbook returns a link-variant Open runbook label', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'open_runbook', slug: 'any-runbook' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Open runbook →');
+    expect(rendered?.variant).toBe('link');
+    rendered?.invoke();
+    expect(dispatch.calls.openRunbook).toEqual(['any-runbook']);
+  });
+
+  it('focus_action with flatten_and_pause routes to the correct tab and action', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'focus_action', tab: 'status', action: 'flatten_and_pause' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Flatten and pause →');
+    expect(rendered?.variant).toBe('link');
+    rendered?.invoke();
+    expect(dispatch.calls.focus).toEqual([['status', 'flatten_and_pause']]);
+  });
+
+  it('focus_action with stop routes to the correct tab and action', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'focus_action', tab: 'activity', action: 'stop' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Stop instance →');
+    rendered?.invoke();
+    expect(dispatch.calls.focus).toEqual([['activity', 'stop']]);
+  });
+
+  it('none with any reason string returns null without calling any handler', () => {
+    const dispatch = makeDispatch();
+    expect(renderSuggestedAction({ kind: 'none', reason: 'ACCOUNT_FROZEN' }, dispatch)).toBe(null);
+    expect(dispatch.calls.invokeCapability).toHaveLength(0);
+    expect(dispatch.calls.invokeEndpoint).toHaveLength(0);
   });
 });
