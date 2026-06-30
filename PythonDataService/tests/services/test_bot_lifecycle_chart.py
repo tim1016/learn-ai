@@ -593,9 +593,13 @@ def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
     start = next(action for action in chart.actions if action.id == "start_process")
     resume = next(action for action in chart.actions if action.id == "resume")
     assert start.enabled is False
-    assert start.reason == "ACCOUNT_FROZEN"
+    assert start.reason_code == "ACCOUNT_FROZEN"
+    assert start.reason_headline == "Account frozen"
+    assert "account-wide freeze" in start.reason_detail
     assert resume.enabled is False
-    assert resume.reason == "ACCOUNT_FROZEN"
+    assert resume.reason_code == "ACCOUNT_FROZEN"
+    assert resume.reason_headline == "Account frozen"
+    assert "account-wide freeze" in resume.reason_detail
 
 
 def test_account_safety_focuses_broker_connection_blocker() -> None:

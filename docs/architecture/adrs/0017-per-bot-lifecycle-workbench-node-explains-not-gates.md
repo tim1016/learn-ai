@@ -2,7 +2,7 @@
 
 **Status:** Proposed 2026-06-30. Drafted during the 2026-06-30 bot lifecycle control-panel grilling session.
 **Decision drivers:** The per-bot workbench (`broker/bots/:id`) was organized around implementation tabs (Status & Risk / Activity / Audit / Configuration) that no longer match the product as the lifecycle chart accrues numerical receipts and new variables; the tab layout no longer fits the page; trader-facing surfaces were at risk of leaking raw enum codes as primary copy; "posture" was used as an overloaded, sometimes frontend-derived label; and there was no clear home for "what field or proof needs action" guidance.
-**Related:** ADR 0013 (operator-surface boundary: judgment vs evidence — this ADR will be amended by Slice 3), ADR 0014 (broker-authored operator view, backend-rendered narratives), ADR 0015 (operator notice contract), ADR 0016 (Bot Cockpit trader-authored activity and deploy packages), `CONTEXT.md` (Live operator console glossary), PRD #718, `docs/bot-lifecycle-workbench-redesign.md` (implementation spec).
+**Related:** ADR 0013 (operator-surface boundary: judgment vs evidence — amended by Slice 3), ADR 0014 (broker-authored operator view, backend-rendered narratives), ADR 0015 (operator notice contract), ADR 0016 (Bot Cockpit trader-authored activity and deploy packages), `CONTEXT.md` (Live operator console glossary), PRD #718, `docs/bot-lifecycle-workbench-redesign.md` (implementation spec).
 
 ## Context
 
@@ -36,7 +36,7 @@ The header carries two distinct, qualified chips: **Execution** (`PAPER_EXECUTIO
 
 ### 5. Trader copy: backend authors state; raw codes appear only as receipts
 
-Backend authors live verdicts and reasons. Angular renders them verbatim or via the parity-locked closed-enum copy table (permitted by ADR 0013 §4). A raw reason code may appear only when framed as a receipt/provenance fact, never as the primary explanation. For MVP the Act-now bar maps `disabled_reason_code` (from `operator_surface.actions[id]` / `host_process.start_capability`) through `disabled-reason-copy.ts` and shows the code only as a receipt; it never renders `lifecycle_chart.actions[].reason`. The end-state (Slice 3) moves action-reason prose to the backend (`reason_code` / `reason_headline` / `reason_detail` on `lifecycle_chart.actions[]`) and amends ADR 0013.
+Backend authors live verdicts and reasons. Angular renders them verbatim. A raw reason code may appear only when framed as a receipt/provenance fact, never as the primary explanation. Slice 3 moves per-bot action-reason prose to the backend: `lifecycle_chart.actions[]` carries `reason_code` / `reason_headline` / `reason_detail`, the Act-now bar renders headline/detail directly, and `reason_code` is displayed only as `Receipt: ...`. The per-bot workbench must not map action codes through `disabled-reason-copy.ts` or infer action prose from `operator_surface.actions[id]`; the shared copy table remains only for legacy cockpit-v2/fleet-console surfaces while they exist.
 
 ### 6. Tooltips explain concepts; verdicts explain state
 
@@ -52,6 +52,6 @@ This decision redesigns the **per-bot lifecycle workbench only** (`broker/bots/:
 - **+** Emergency controls are always reachable; node selection can never strand a trader from stopping risk.
 - **+** No frontend-derived chips, so the instrument panel cannot teach false confidence.
 - **+** Ships frontend-only first (Slice 1, including the raw-code fix); backend work (Execution posture, action prose) is additive and independently testable.
-- **−** Two copy mechanisms (frontend table + backend prose) coexist until Slice 3.
+- **+** Slice 3 removes the per-bot action-copy side lookup: lifecycle actions now carry backend-authored trader prose and raw codes are receipts only.
 - **−** Two per-bot/fleet surfaces coexist until a later fleet-console cutover; the dissolved tab components linger as cockpit-v2 dependencies.
 - **−** Two backend-authored posture chips now coexist by design: Execution can say `UNSAFE` while Broker proof carries the detailed safety verdict and receipts. Operators must read them as different facts, not synonyms.

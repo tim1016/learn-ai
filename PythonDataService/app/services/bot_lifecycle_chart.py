@@ -38,6 +38,11 @@ from app.services.bot_lifecycle_receipts import (
     incident_receipts,
     reconciliation_receipts,
 )
+from app.services.lifecycle_action_reasons import (
+    REDEPLOY_PROOF_MISSING,
+    LifecycleActionReason,
+    lifecycle_action_reason_for_code,
+)
 
 _BLOCKING_PRIORITY: tuple[LifecycleChartStatus, ...] = (
     "freeze",
@@ -1034,12 +1039,20 @@ def _all_gate_results(surface: OperatorSurface) -> list[GateResult]:
 
 def _actions(surface: OperatorSurface, *, redeploy_available: bool) -> list[LifecycleChartAction]:
     start = surface.host_process.start_capability
+    start_reason = _start_action_reason(start)
+    redeploy_reason = lifecycle_action_reason_for_code(
+        None if redeploy_available else REDEPLOY_PROOF_MISSING,
+        enabled=redeploy_available,
+        enabled_detail="Redeploy proof is available.",
+    )
     return [
         LifecycleChartAction(
             id="start_process",
             label="Start bot process",
             enabled=start.enabled,
-            reason=_start_capability_reason(start),
+            reason_code=start_reason.code,
+            reason_headline=start_reason.headline,
+            reason_detail=start_reason.detail,
             target_node_id="deploy",
             tone="primary",
         ),
@@ -1052,11 +1065,9 @@ def _actions(surface: OperatorSurface, *, redeploy_available: bool) -> list[Life
             id="redeploy",
             label="Redeploy fresh run",
             enabled=redeploy_available,
-            reason=(
-                "Redeploy proof is available."
-                if redeploy_available
-                else "Redeploy requires stored deployment proof for this bot."
-            ),
+            reason_code=redeploy_reason.code,
+            reason_headline=redeploy_reason.headline,
+            reason_detail=redeploy_reason.detail,
             target_node_id="deploy",
             tone="secondary",
         ),
@@ -1070,33 +1081,83 @@ def _action(
     target_node_id: str,
     tone: Literal["primary", "secondary", "danger"],
 ) -> LifecycleChartAction:
+    reason = _capability_action_reason(capability)
     return LifecycleChartAction(
         id=action_id,
         label=label,
         enabled=capability.enabled,
-        reason=_capability_reason(capability),
+        reason_code=reason.code,
+        reason_headline=reason.headline,
+        reason_detail=reason.detail,
         target_node_id=target_node_id,
         tone=tone,
     )
 
 
-def _capability_reason(capability: ActionCapability) -> str | None:
+def _capability_reason_code(capability: ActionCapability) -> str | None:
     if capability.enabled:
-        return "Backend gate currently allows this action."
+        return None
     if capability.disabled_reason_code:
         return capability.disabled_reason_code
     if capability.disabled_reasons:
         return capability.disabled_reasons[0]
+    return None
+
+
+def _capability_action_reason(capability: ActionCapability) -> LifecycleActionReason:
+    return lifecycle_action_reason_for_code(
+        _capability_reason_code(capability),
+        enabled=capability.enabled,
+        disabled_fallback_detail=_capability_reason_fallback(capability),
+    )
+
+
+def _capability_reason(capability: ActionCapability) -> str | None:
+    if capability.enabled:
+        return lifecycle_action_reason_for_code(None, enabled=True).detail
+    code = _capability_reason_code(capability)
+    if code is not None:
+        return lifecycle_action_reason_for_code(code).detail
+    return _capability_reason_fallback(capability)
+
+
+def _capability_reason_fallback(capability: ActionCapability) -> str:
     if capability.gate_results:
         return capability.gate_results[0].operator_reason
     return "Backend gate currently blocks this action."
 
 
-def _start_capability_reason(capability: HostProcessStartCapability) -> str | None:
+def _start_reason_code(capability: HostProcessStartCapability) -> str | None:
     if capability.enabled:
-        return "Backend-authored start request is ready."
+        return None
     if capability.disabled_reason_code:
         return capability.disabled_reason_code
+    return None
+
+
+def _start_action_reason(capability: HostProcessStartCapability) -> LifecycleActionReason:
+    return lifecycle_action_reason_for_code(
+        _start_reason_code(capability),
+        enabled=capability.enabled,
+        enabled_detail="Backend-authored start request is ready.",
+        disabled_fallback_detail=_start_capability_reason_fallback(capability),
+    )
+
+
+def _start_capability_reason(capability: HostProcessStartCapability) -> str | None:
+    if capability.enabled:
+        return lifecycle_action_reason_for_code(
+            None,
+            enabled=True,
+            enabled_detail="Backend-authored start request is ready.",
+        ).detail
+    code = _start_reason_code(capability)
+    if code is not None:
+        return lifecycle_action_reason_for_code(code).detail
+    return _start_capability_reason_fallback(capability)
+
+
+def _start_capability_reason_fallback(capability: HostProcessStartCapability) -> str:
     if capability.gate_results:
         return capability.gate_results[0].operator_reason
     return "Backend gate currently blocks start."

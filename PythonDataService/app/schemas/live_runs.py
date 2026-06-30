@@ -1971,7 +1971,9 @@ class LifecycleChartAction(BaseModel):
     id: LifecycleChartActionId
     label: str
     enabled: bool
-    reason: str | None = None
+    reason_code: str | None = None
+    reason_headline: str
+    reason_detail: str
     target_node_id: str | None = None
     tone: Literal["primary", "secondary", "danger"] = "secondary"
 

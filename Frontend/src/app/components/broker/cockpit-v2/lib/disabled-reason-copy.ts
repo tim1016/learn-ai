@@ -35,6 +35,7 @@ export type OperatorReasonCode =
   | 'NO_OWNED_POSITIONS'
   | 'ALREADY_POISONED'
   | 'ALREADY_STOPPED'
+  | 'ACCOUNT_FROZEN'
   // Runtime freshness (PRD #619-B7)
   | 'POSTURE_DEMOTED'
   // Broker safety identity (ADR-0011)
@@ -89,6 +90,8 @@ const OPERATOR_REASON_COPY: Record<OperatorReasonCode, string> = {
   NO_OWNED_POSITIONS: 'Nothing to flatten — the broker reports no owned positions for this bot.',
   ALREADY_POISONED: 'This run is already marked POISONED. Redeploy to recover.',
   ALREADY_STOPPED: 'Already STOPPED. STOPPED is a terminal state; revival requires Redeploy.',
+  ACCOUNT_FROZEN:
+    'The account is frozen. Resolve the account-wide freeze before starting or resuming this bot.',
   // Runtime freshness
   POSTURE_DEMOTED:
     'Runtime evidence is stale (control-plane lease or daemon heartbeat). Resume/Flatten are held until fresh evidence returns.',

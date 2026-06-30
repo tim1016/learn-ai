@@ -6,95 +6,41 @@
 
   <div class="action-groups">
     <div class="action-list emergency-actions" aria-label="Emergency lifecycle controls">
-      @for (rendered of emergencyActions(); track trackAction($index, rendered)) {
-        @let action = rendered.action;
-        <button
-          type="button"
-          class="chart-action"
-          [class.tone-primary]="action.tone === 'primary'"
-          [class.tone-danger]="action.tone === 'danger'"
-          [class.is-disabled]="!action.enabled || busyAction() !== null"
-          [attr.aria-disabled]="!action.enabled || busyAction() !== null"
-          [attr.title]="actionHelp(action)"
-          (click)="activateAction(action)"
-          (mouseenter)="hoverAction(action)"
-          (mouseleave)="hoverAction(null)"
-          (focus)="hoverAction(action)"
-          (blur)="hoverAction(null)"
-        >
-          <span data-trader-copy>{{ action.label }}</span>
-          @if (action.enabled && busyAction() === null) {
-            <small data-trader-copy>Available</small>
-          } @else if (rendered.traderCopy) {
-            <small data-trader-copy>{{ rendered.traderCopy }}</small>
-          } @else {
-            <small data-trader-copy>Unavailable</small>
-          }
-          @if (rendered.reasonCode) {
-            <small class="receipt" data-receipt>Receipt: {{ rendered.reasonCode }}</small>
-          }
-        </button>
+      @for (action of emergencyActions(); track trackAction($index, action)) {
+        <app-lifecycle-action-button
+          [action]="action"
+          [busyAction]="busyAction()"
+          (actionInvoked)="actionInvoked.emit($event)"
+          (disabledActionSelected)="disabledActionSelected.emit($event)"
+          (actionTargetHovered)="actionTargetHovered.emit($event)"
+        />
       }
     </div>
 
-    @if (redeployAction(); as rendered) {
-      @let action = rendered.action;
-      <button
-        type="button"
-        class="chart-action redeploy-action"
-        [class.tone-primary]="action.tone === 'primary'"
-        [class.tone-danger]="action.tone === 'danger'"
-        [class.is-disabled]="!action.enabled || busyAction() !== null"
-        [attr.aria-disabled]="!action.enabled || busyAction() !== null"
-        [attr.title]="actionHelp(action)"
-        (click)="activateAction(action)"
-        (mouseenter)="hoverAction(action)"
-        (mouseleave)="hoverAction(null)"
-        (focus)="hoverAction(action)"
-        (blur)="hoverAction(null)"
-      >
-        <span data-trader-copy>{{ action.label }}</span>
-        @if (action.enabled && busyAction() === null) {
-          <small data-trader-copy>Available</small>
-        } @else if (rendered.traderCopy) {
-          <small data-trader-copy>{{ rendered.traderCopy }}</small>
-        } @else {
-          <small data-trader-copy>Unavailable</small>
-        }
-      </button>
+    @if (redeployAction(); as action) {
+      <app-lifecycle-action-button
+        class="redeploy-action"
+        [action]="action"
+        [busyAction]="busyAction()"
+        (actionInvoked)="actionInvoked.emit($event)"
+        (disabledActionSelected)="disabledActionSelected.emit($event)"
+        (actionTargetHovered)="actionTargetHovered.emit($event)"
+      />
     }
 
     @if (overflowActions().length > 0) {
       <details class="overflow-menu">
         <summary aria-label="More lifecycle actions">More</summary>
         <div class="overflow-list">
-          @for (rendered of overflowActions(); track trackAction($index, rendered)) {
-            @let action = rendered.action;
-            <button
-              type="button"
-              class="chart-action overflow-action"
-              [class.tone-danger]="action.tone === 'danger'"
-              [class.is-disabled]="!action.enabled || busyAction() !== null"
-              [attr.aria-disabled]="!action.enabled || busyAction() !== null"
-              [attr.title]="actionHelp(action)"
-              (click)="activateAction(action)"
-              (mouseenter)="hoverAction(action)"
-              (mouseleave)="hoverAction(null)"
-              (focus)="hoverAction(action)"
-              (blur)="hoverAction(null)"
-            >
-              <span data-trader-copy>{{ action.label }}</span>
-              @if (action.enabled && busyAction() === null) {
-                <small data-trader-copy>Typed confirmation required</small>
-              } @else if (rendered.traderCopy) {
-                <small data-trader-copy>{{ rendered.traderCopy }}</small>
-              } @else {
-                <small data-trader-copy>Unavailable</small>
-              }
-              @if (rendered.reasonCode) {
-                <small class="receipt" data-receipt>Receipt: {{ rendered.reasonCode }}</small>
-              }
-            </button>
+          @for (action of overflowActions(); track trackAction($index, action)) {
+            <app-lifecycle-action-button
+              [action]="action"
+              [busyAction]="busyAction()"
+              enabledCaption="Typed confirmation required"
+              (actionInvoked)="actionInvoked.emit($event)"
+              (disabledActionSelected)="disabledActionSelected.emit($event)"
+              (actionTargetHovered)="actionTargetHovered.emit($event)"
+            />
           }
         </div>
       </details>

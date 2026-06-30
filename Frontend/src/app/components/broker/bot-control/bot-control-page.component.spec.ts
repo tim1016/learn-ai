@@ -478,7 +478,7 @@ describe('BotControlPageComponent', () => {
       .querySelector('[data-testid="bot-control-execution-chip"]')).toBeNull();
   });
 
-  it('maps disabled action codes to trader copy and renders raw codes only as receipts', async () => {
+  it('renders backend-authored action prose and raw codes only as receipts', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.lifecycle_chart.actions = [
@@ -486,7 +486,9 @@ describe('BotControlPageComponent', () => {
         id: 'flatten_and_pause',
         label: 'Flatten and pause',
         enabled: false,
-        reason: 'NO_LIVE_BINDING',
+        reason_code: 'NO_LIVE_BINDING',
+        reason_headline: 'No live binding',
+        reason_detail: 'The lifecycle action contract says the runner is not bound.',
         target_node_id: 'recovery',
         tone: 'danger',
       },
@@ -494,8 +496,8 @@ describe('BotControlPageComponent', () => {
     status.operator_surface.actions.flatten_and_pause = {
       enabled: false,
       effect: 'LIVE_ACTUATION',
-      disabled_reason_code: 'NO_LIVE_BINDING',
-      disabled_reasons: ['NO_LIVE_BINDING'],
+      disabled_reason_code: 'BROKER_SAFETY_UNSAFE',
+      disabled_reasons: ['BROKER_SAFETY_UNSAFE'],
       gate_results: [],
     };
     TestBed.configureTestingModule({
@@ -535,8 +537,11 @@ describe('BotControlPageComponent', () => {
       .map((node) => node.textContent ?? '')
       .join(' ');
     expect(traderCopy).toContain('No live binding');
+    expect(traderCopy).toContain('The lifecycle action contract says the runner is not bound.');
     expect(traderCopy).not.toContain('NO_LIVE_BINDING');
+    expect(traderCopy).not.toContain('BROKER_SAFETY_UNSAFE');
     expect(receipts).toContain('NO_LIVE_BINDING');
+    expect(receipts).not.toContain('BROKER_SAFETY_UNSAFE');
   });
 
   it('keeps node selection explanatory and never gates enabled emergency actions', async () => {
@@ -547,7 +552,9 @@ describe('BotControlPageComponent', () => {
         id: 'pause',
         label: 'Pause',
         enabled: true,
-        reason: null,
+        reason_code: null,
+        reason_headline: 'Available',
+        reason_detail: 'Backend gates currently allow this action.',
         target_node_id: 'active',
         tone: 'secondary',
       },

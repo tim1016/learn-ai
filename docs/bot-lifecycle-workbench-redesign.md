@@ -13,7 +13,7 @@ Governing layout principle:
 
 > **Top of page = facts that affect the next decision · Inspector = *why* · Advanced panels = *how the system knows*** (decision → explanation → provenance).
 
-Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend authors state; Angular renders it verbatim or via a parity-locked closed-enum copy table (`disabled-reason-copy.ts`, ADR 0013 §4). *Concept* tooltips are the only frontend-authored copy, keyed on stable ids, never on live values.
+Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend authors state and lifecycle-action reason prose; Angular renders it verbatim. *Concept* tooltips are the only frontend-authored copy, keyed on stable ids, never on live values.
 
 ## Layout
 
@@ -42,7 +42,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Header row order (sticky region):** identity → `broker proof · submit · exposure` → Act-now bar → Next Step → Risk → Attention (collapsed). The Act-now bar separates the emergency cluster `[Start][Resume][Pause][Flatten & pause][Stop]` from `[Redeploy]` and the `⋯` overflow, so the emergency controls scan as one block. Redeploy is important but is not a risk brake.
+**Header row order (sticky region):** identity → `broker proof · submit · execution · exposure` → Act-now bar → Next Step → Risk → Attention (collapsed). The Act-now bar separates the emergency cluster `[Start][Resume][Pause][Flatten & pause][Stop]` from `[Redeploy]` and the `⋯` overflow, so the emergency controls scan as one block. Redeploy is important but is not a risk brake.
 
 ## The three trader buckets
 
@@ -61,7 +61,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 | **D3** | "Posture" banned as a label → **Execution chip** (new `operator_surface.execution.posture`, no Angular derivation, Slice 2; engine `UNSAFE` maps to trader `UNSAFE`) + **Exposure chip** (`current_risk.posture`, ships now). |
 | **D4** | Risk gets a persistent line (`risk_headline`) under Next Step; `risk_explanation` in a "▸ Why this risk matters" disclosure. Angular renders the backend-authored headline; it never classifies risk. |
 | **D5** | Attention is global (collapsed "Attention (N)" band, auto-expands on a critical group) **and** node-scoped (badges on related nodes + detail in the inspector on select). |
-| **D6** | (a) MVP: Act-now bar maps `disabled_reason_code` via `disabled-reason-copy.ts`, code shown only as a receipt; **never** render `lifecycle_chart.actions[].reason`. End-state: backend `reason_code` / `reason_headline` / `reason_detail`. (b) Tooltips = static concept registry + runbook links. |
+| **D6** | Act-now bar renders backend-authored `lifecycle_chart.actions[].reason_headline` / `reason_detail`; `reason_code` appears only as a receipt. No per-bot frontend action-copy table. Tooltips = static concept registry + runbook links. |
 
 ## Where each dissolving `trader-guidance-pane` band lands
 
@@ -92,7 +92,7 @@ No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all fo
 
 ## Copy model (D6)
 
-- **Verdict/reason copy (state-dependent).** MVP: the Act-now bar consumes `lifecycle_chart.actions[]` for `{id, label, enabled, target_node_id, tone}` and reads the **code** from the parallel source by action id — `operator_surface.actions[id].disabled_reason_code` for resume/pause/stop/flatten/mark-poisoned, `host_process.start_capability.disabled_reason_code` for Start; Redeploy's reason is already prose. The code maps through `disabled-reason-copy.ts`; the raw code renders only as a receipt. Invariant:
+- **Verdict/reason copy (state-dependent).** End-state: the Act-now bar consumes `lifecycle_chart.actions[]` for `{id, label, enabled, target_node_id, tone, reason_code, reason_headline, reason_detail}`. `reason_headline` / `reason_detail` are backend-authored trader copy. `reason_code` is a raw receipt only; Angular never maps it through `disabled-reason-copy.ts` on this surface and never looks sideways at `operator_surface.actions[id].disabled_reason_code` to explain a lifecycle action. Invariant:
   - Bad: `Flatten and pause` / `NO_LIVE_BINDING`
   - Good: `Flatten and pause` / `No live bot process is bound to this run.` / `Receipt: NO_LIVE_BINDING`
 - **Educational copy (concept-explaining, static).** A frontend help registry keyed on stable ids: node ids, action ids, gate ids, chips (Broker proof / Submit / Exposure / Execution), the three buckets, and concepts (reconciliation, AccountOwner, runtime freshness). Rule: *a tooltip explains what a concept means; a backend verdict explains what is true right now.* Deep/debug docs stay behind existing runbook links (`OpenRunbookAction`).
@@ -100,7 +100,7 @@ No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all fo
 ## Tests (D8)
 
 1. **No-raw-enum invariant.** Mark primary copy regions `data-trader-copy` and receipt regions `data-receipt`. In states that produce disabled actions, assert **no member of the `OperatorReasonCode` union** appears in any `data-trader-copy` region, the mapped sentence *does*, and the code appears under `data-receipt`. (Primary regions must not render raw codes; receipt/provenance regions may and should.)
-2. **Parity.** Extend `disabled-reason-copy.spec.ts` — every server code maps to copy; no reachable raw-fallback path.
+2. **Backend prose coverage.** Every server lifecycle-action reason code maps to backend-authored `reason_headline` / `reason_detail`; the per-bot Act-now component does not import `disabled-reason-copy.ts`.
 3. **Chart purity.** `trader-guidance-pane` is not a descendant of `overview-tab`; no tab-nav `role` in bot-control; chart and inspector panes do not overlap.
 4. **Node never gates actions.** Select a passed node → emergency action buttons keep their backend-driven enabled state.
 5. **Execution-chip honesty (Slice 2).** The Execution chip renders only when `operator_surface.execution` exists; Angular never derives it.
@@ -110,7 +110,7 @@ No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all fo
 
 - **Slice 1 — frontend-only, ships now.** Full re-layout: relocate guidance out of the chart; header chips (broker proof, submit, exposure) + Act-now bar (Redeploy split, Mark-poisoned overflow); Next-Step / Risk / Attention rows; node-scoped inspector + Change-for-next-run; below-fold Activity / Audit (read-only mode) / Advanced; node attention badges; tooltip registry; **fix the raw-code bug** via table + receipt; tests 1–4, 6. **No Execution chip, no backend changes.**
 - **Slice 2 — backend.** `operator_surface.execution.posture` — an *authored translation* of engine `effective_posture` (`PAPER_EXECUTION` → `PAPER_EXECUTION`; `PAPER_OBSERVATION` → `READ_ONLY`; `UNSAFE` → `UNSAFE`; stale/missing broker runtime proof → `UNKNOWN`). Add the Execution chip + test 5.
-- **Slice 3 — backend, end-state.** `reason_code` / `reason_headline` / `reason_detail` on `lifecycle_chart.actions[]`; retire the frontend copy table for this surface; amend ADR 0013.
+- **Slice 3 — backend, end-state.** `reason_code` / `reason_headline` / `reason_detail` on `lifecycle_chart.actions[]`; retire the frontend copy table for this surface; amend ADR 0013. Implemented in this PR slice.
 
 ## Out of scope
 

@@ -44,7 +44,6 @@
 
       <app-overview-actions
         class="top-action-banner"
-        [status]="s"
         [actions]="s.lifecycle_chart.actions"
         [busyAction]="busyAction()"
         (actionInvoked)="dispatchOverviewAction($event)"
