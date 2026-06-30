@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-29 (lifecycle observability reconciliation: canonical chart nodes, transition table, desired-state casing contract, and projection evidence map).
+> **Last reviewed:** 2026-06-30 (lifecycle projection read-model slice: Postgres DDL, Python projection store/read API, canonical-file fallback contract, and safety-claim limits).
 
 ---
 
@@ -144,6 +144,65 @@ state to guess around.
 | `accounts/<account_id>/unresolved_exposure.flag` | account | Durable account-level freeze evidence. Blocks deploy, start, router/operator-surface resume, and broker submit while active. |
 | `accounts/<account_id>/owner_generation.json` | account | Current AccountOwner fencing generation and phase (`accepting`, `reconnecting`, `draining`, `frozen`). |
 | `accounts/<account_id>/account_events.jsonl` | account | Append-only audit events for account freeze recorded/cleared transitions, recovery proofs, audited overrides, owner generation/reconnect, submit lane evidence, instance registry writes, and restart-intensity breaches. |
+| Postgres lifecycle projection tables | rebuildable read model | Queryable projection over canonical artifacts for operator timelines and safety triage. Not canonical; safe to truncate and rebuild from files. |
+
+### 4.1 Postgres Lifecycle Projection Read Model
+
+The lifecycle Postgres slice is a **projection layer**, not a substrate
+migration. ADR 0001 still governs the live-runtime control plane: files remain
+canonical, and Postgres is a downstream read model that can be emptied, rebuilt,
+or unavailable without costing truth.
+
+The first shipped storage slice is:
+
+- EF migration `20260630023000_AddLifecycleProjectionReadModel`;
+- projection tables `bot_lifecycle_events`, `account_lifecycle_events`,
+  `operator_gate_snapshots`, `lifecycle_node_receipts`, and
+  `account_owner_status_snapshots`;
+- Python schema-drift expectations in
+  `app/services/lifecycle_projection_schema.py`;
+- Python projection store helpers in
+  `app/services/lifecycle_projection_store.py`;
+- read-only FastAPI endpoints:
+  `GET /api/lifecycle-projection/timeline` and
+  `GET /api/lifecycle-projection/safety-triage`.
+
+The `.NET` migration owns table/index/check-constraint shape only. `.NET` does
+not author lifecycle meaning, expose a resolver, classify submit safety, or
+decide trader-facing status.
+
+Python owns all projection authoring. Projection rows are derived from
+backend-authored lifecycle/account evidence such as `intent_events.jsonl`,
+`account_events.jsonl`, reconciliation receipts, broker activity evidence, and
+AccountOwner generation events. Each row carries source provenance
+(`account_id`, optional `strategy_instance_id` / `run_id`, `ts_ms`,
+`source_artifact`, `source_seq`/offset/hash where available, node/gate ids,
+status, severity, summary, and JSON receipt payload). Replays are idempotent by
+authored `event_id` plus source indexes.
+
+If `LIFECYCLE_PROJECTION_ENABLED=false`, `POSTGRES_URL` is empty, the database
+is stale, or the projection is down, the cockpit must use the existing
+file-backed path (`compute_operator_surface` and
+`compose_bot_lifecycle_chart`). Postgres unavailability means "projection
+unavailable", not "bot state unknown."
+
+Safety-claim limits for this slice:
+
+- Projection rows may say an event was blocked, frozen, uncertain, or critical
+  when Python authored that status from canonical evidence.
+- Projection rows may surface AccountOwner generation and phase when present.
+- Projection rows may support fleet triage queries such as "show warning or
+  critical lifecycle rows."
+- Projection rows may **not** claim R3 AccountOwner daemon/IPC single-writer
+  authority. That daemon is still not shipped.
+- A UI must not infer "safe to submit" from the projection table alone. That
+  future claim requires a Python-authored submit-readiness contract over broker
+  safety, submit capability, owner generation phase, reconciliation freshness,
+  and unresolved exposure.
+
+Not shipped in this slice: the long-running artifact tailer, Angular trader
+right pane, `operator_surface.trader_guidance`, the submit-readiness enum, and
+R3 AccountOwner daemon/IPC.
 
 ## 5. Current Submit Authority
 
@@ -298,6 +357,7 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 | Existing readiness, Start, and action capability rows generated from enforcement `GateResult` values | Shipped in `schemas/live_runs.py`, `engine/live/readiness.py`, and `services/operator_surface.py`. Account-level gate board rows are not shipped. |
 | Restart intensity fold over account events | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, and `engine/live/run.py`. |
 | Audited operator override for unreachable broker proof | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_classifier.py`. |
+| Postgres lifecycle projection read model | Shipped as a rebuildable projection in `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, and `PythonDataService/app/routers/lifecycle_projection.py`. It is not canonical and has no R3 safety authority. |
 
 ## 10. Code Cross-Reference
 
@@ -319,3 +379,4 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 | Account artifacts, recovery, override, and restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
 | Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
 | AccountOwner submit/reconnect lane | `PythonDataService/app/engine/live/account_owner.py` |
+| Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/routers/lifecycle_projection.py` |

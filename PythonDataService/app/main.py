@@ -33,6 +33,7 @@ from app.routers import (
     jobs,
     lean_lint,
     lean_sidecar,
+    lifecycle_projection,
     market_monitor,
     monte_carlo,
     options,
@@ -358,6 +359,7 @@ app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures
 # Layer 3: inode-tracked incremental deque on log tail.
 app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
 app.include_router(live_instances_router.router, prefix="/api/live-instances", tags=["live-instances"])
+app.include_router(lifecycle_projection.router)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally
 # (so the path is sibling to the live-instances router), keeping the
