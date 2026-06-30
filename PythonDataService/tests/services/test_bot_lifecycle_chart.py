@@ -12,6 +12,7 @@ from app.schemas.live_runs import (
     InstanceStartDefaults,
     LiveBinding,
     OperatorSurface,
+    OperatorSurfaceAccountOwner,
     ReadinessGate,
     ReadinessVector,
     ReconciliationReceipt,
@@ -146,6 +147,20 @@ def _surface(**overrides: object) -> OperatorSurface:
     return compute_operator_surface(**kwargs)
 
 
+def _account_owner(
+    *,
+    generation: int | None = 4,
+    phase: str = "accepting",
+) -> OperatorSurfaceAccountOwner:
+    return OperatorSurfaceAccountOwner(
+        account_id="DU123",
+        generation=generation,
+        phase=phase,  # type: ignore[arg-type]
+        recorded_at_ms=_NOW_MS - 1_000,
+        source="test",
+    )
+
+
 def _edge_status(chart: BotLifecycleChartView, edge_id: str) -> str:
     edge = next(edge for edge in chart.global_graph.edges if edge.id == edge_id)
     return edge.status
@@ -169,7 +184,14 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert _node_status(chart, "active") == "active"
     assert _edge_status(chart, "deploy_to_preflight") == "passed"
     assert _edge_status(chart, "activate_to_active") == "active"
-    assert chart.subgraphs["submit_order"].nodes[2].technical_label == "placeOrder boundary"
+    broker_writer = next(node for node in chart.global_graph.nodes if node.id == "broker_writer")
+    assert broker_writer.label == "Broker activity"
+    assert broker_writer.technical_label == "Publisher health"
+    assert "capture health" in (broker_writer.summary or "")
+    assert "not proof that R3 AccountOwner daemon/IPC single-writer authority is shipped" in (
+        broker_writer.summary or ""
+    )
+    assert chart.subgraphs["submit_order"].nodes[2].technical_label == "Broker submit boundary"
 
 
 def test_chart_absent_desired_state_uses_effective_running_default() -> None:
@@ -195,6 +217,21 @@ def test_submit_subgraph_is_unknown_without_durable_submit_evidence() -> None:
     assert "No Intent WAL row" in (nodes["intent_wal"].why or "")
     broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
     assert broker_nodes["writer_guard"].status == "unknown"
+    assert "R3 daemon/IPC single-writer authority is not shipped" in (broker_nodes["writer_guard"].summary or "")
+
+
+def test_writer_guard_surfaces_account_owner_generation_without_claiming_r3_daemon() -> None:
+    surface = _surface(account_owner=_account_owner())
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
+
+    assert broker_nodes["writer_guard"].label == "Owner generation"
+    assert broker_nodes["writer_guard"].technical_label == "accepting gen 4"
+    assert broker_nodes["writer_guard"].status == "passed"
+    assert "generation is 4" in (broker_nodes["writer_guard"].summary or "")
+    assert "not proof that R3 daemon/IPC single-writer authority is shipped" in (
+        broker_nodes["writer_guard"].summary or ""
+    )
 
 
 def test_submit_uncertainty_reaches_submit_subgraph() -> None:

@@ -94,7 +94,7 @@ GLOBAL_GRAPH = GraphDef(
         NodeDef("activate", "Activate bot", "bot", "Durable desired state"),
         NodeDef("active", "Monitor live bot", "bot", "Running loop"),
         NodeDef("submit_order", "Submit order path", "broker", "Signal -> WAL -> order"),
-        NodeDef("broker_writer", "Broker writer", "broker", "placeOrder boundary"),
+        NodeDef("broker_writer", "Broker activity", "broker", "Publisher health"),
         NodeDef("recovery", "Recovery lane", "recovery", "Flatten, halt, redeploy"),
     ),
     edges=(
@@ -165,17 +165,17 @@ SUBGRAPH_DEFS: Mapping[str, GraphDef] = {
         nodes=(
             NodeDef("signal", "Strategy signal", "bot", "Future engine state"),
             NodeDef("intent_wal", "Intent WAL", "broker", "Durable order intent"),
-            NodeDef("place_order", "Broker submit", "broker", "placeOrder boundary"),
+            NodeDef("place_order", "Broker submit", "broker", "Broker submit boundary"),
             NodeDef("ack_or_reconcile", "Ack or reconcile", "recovery", "Uncertain outcome handling"),
         ),
     ),
     "broker_writer": GraphDef(
         graph_id="broker_writer",
-        title="Broker-writer internals",
+        title="Broker activity internals",
         primary_node_id="publisher",
         nodes=(
             NodeDef("publisher", "Activity publisher", "broker"),
-            NodeDef("writer_guard", "Writer guard", "broker", "AccountOwner target"),
+            NodeDef("writer_guard", "Owner generation", "broker", "R2 generation evidence"),
             NodeDef("broker_ack", "Broker ack", "broker", "Execution evidence"),
         ),
     ),
@@ -341,11 +341,7 @@ def _lifecycle_facts(
         "publisher": NodeFact(
             _broker_writer_status(surface), _broker_writer_evidence(surface), _broker_activity_label(surface)
         ),
-        "writer_guard": _event_or_unknown_fact(
-            lifecycle_events,
-            "writer_guard",
-            "No account-writer guard event is available in this lifecycle projection.",
-        ),
+        "writer_guard": _writer_guard_fact(surface, lifecycle_events),
         "broker_ack": _event_or_unknown_fact(
             lifecycle_events,
             "broker_ack",
@@ -371,6 +367,25 @@ def _event_or_unknown_fact(
         fallback_evidence=absent_reason,
         fallback_why=absent_reason,
         include_event_source_label=True,
+    )
+
+
+def _writer_guard_fact(surface: OperatorSurface, lifecycle_events: Sequence[BotLifecycleEvent]) -> NodeFact:
+    event = latest_event_for_node(lifecycle_events, "writer_guard")
+    if event is not None:
+        return _node_fact_from_event(
+            event,
+            fallback_status="unknown",
+            fallback_evidence=_account_owner_evidence(surface),
+            fallback_why=_account_owner_evidence(surface),
+            include_event_source_label=True,
+        )
+    return NodeFact(
+        _account_owner_status(surface),
+        _account_owner_evidence(surface),
+        _account_owner_label(surface),
+        status_label=lifecycle_status_label(_account_owner_status(surface)),
+        why=_account_owner_evidence(surface),
     )
 
 
@@ -677,6 +692,17 @@ def _broker_writer_status(surface: OperatorSurface) -> LifecycleChartStatus:
     return "blocked"
 
 
+def _account_owner_status(surface: OperatorSurface) -> LifecycleChartStatus:
+    owner = surface.account_owner
+    if owner is None or owner.phase == "unknown" or owner.generation is None:
+        return "unknown"
+    if owner.phase == "frozen":
+        return "freeze"
+    if owner.phase == "accepting":
+        return "passed"
+    return "active"
+
+
 def _recovery_status(surface: OperatorSurface) -> LifecycleChartStatus:
     if _freeze_status(surface) == "freeze":
         return "inactive"
@@ -967,10 +993,43 @@ def _activate_evidence(desired_state: DesiredStateView | None) -> str:
 def _broker_writer_evidence(surface: OperatorSurface) -> str:
     health = surface.broker_activity_health
     if health is None:
-        return "No broker-activity publisher is registered for this snapshot."
+        return (
+            "No broker-activity publisher is registered for this snapshot; this says nothing about "
+            "R3 AccountOwner daemon/IPC writer authority."
+        )
     if health.headline is not None:
         return health.headline.message
-    return f"Broker-activity publisher state is {health.state}."
+    return (
+        f"Broker-activity publisher state is {health.state}; this is capture health, not proof that "
+        "R3 AccountOwner daemon/IPC single-writer authority is shipped."
+    )
+
+
+def _account_owner_label(surface: OperatorSurface) -> str:
+    owner = surface.account_owner
+    if owner is None:
+        return "generation unproven"
+    if owner.generation is None:
+        return f"{owner.phase} generation unknown"
+    return f"{owner.phase} gen {owner.generation}"
+
+
+def _account_owner_evidence(surface: OperatorSurface) -> str:
+    owner = surface.account_owner
+    if owner is None:
+        return (
+            "No AccountOwner generation evidence is available; R2 still uses process-local broker "
+            "sessions and the R3 daemon/IPC single-writer authority is not shipped."
+        )
+    if owner.generation is None:
+        return (
+            f"AccountOwner phase is {owner.phase}, but generation is unproven; R2 still uses "
+            "process-local broker sessions."
+        )
+    return (
+        f"AccountOwner phase is {owner.phase}; generation is {owner.generation}. This is generation "
+        "evidence, not proof that R3 daemon/IPC single-writer authority is shipped."
+    )
 
 
 def _recovery_evidence(surface: OperatorSurface) -> str:

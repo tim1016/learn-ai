@@ -81,7 +81,7 @@ ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
     "account_audited_override_recorded": AccountEventLifecycleMapping("decision", "recovery", "decision", "passed"),
     "account_owner_generation_recorded": AccountEventLifecycleMapping(
         "lifecycle_transition",
-        "broker_writer",
+        "writer_guard",
         "lifecycle_transition",
         "active",
     ),
@@ -112,7 +112,7 @@ ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
     ),
     "account_owner_reconnect_resumed": AccountEventLifecycleMapping(
         "lifecycle_transition",
-        "broker_writer",
+        "writer_guard",
         "lifecycle_transition",
         "passed",
     ),
@@ -518,6 +518,15 @@ def _account_event_summary(event_type: str, row: Mapping[str, Any]) -> str:
         return "AccountOwner submit outcome is uncertain."
     if event_type == "account_owner_submit_rejected":
         return "AccountOwner rejected the submit before broker placement."
+    if event_type == "account_owner_generation_recorded":
+        generation = row.get("generation")
+        phase = row.get("phase")
+        if generation is not None and phase:
+            return (
+                f"AccountOwner generation {generation} recorded ({phase}); this is R2 generation "
+                "evidence, not R3 daemon/IPC writer authority."
+            )
+        return "AccountOwner generation recorded; this is R2 evidence, not R3 daemon/IPC writer authority."
     if event_type == "account_instance_binding_recorded":
         state = row.get("lifecycle_state")
         return f"Account instance binding recorded ({state})." if state else "Account instance binding recorded."

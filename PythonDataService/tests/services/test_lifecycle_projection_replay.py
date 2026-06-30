@@ -107,8 +107,9 @@ def test_batch_from_account_events_authors_account_rows_and_owner_snapshot() -> 
     row = batch.account_events[0]
     assert row.event_id == "account_event:DU123:5:account_owner_generation_recorded"
     assert row.strategy_instance_id is None
-    assert row.node_id == "broker_writer"
+    assert row.node_id == "writer_guard"
     assert row.status == "active"
+    assert "not R3 daemon/IPC writer authority" in row.summary
     assert row.source_artifact == "/tmp/accounts/DU123/account_events.jsonl"
     assert row.receipt_payload["generation"] == 7
 
