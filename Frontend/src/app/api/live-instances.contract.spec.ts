@@ -30,6 +30,10 @@ describe('operator_surface wire contract', () => {
     expect(STEADY.operator_surface.actions.pause.enabled).toBe(true);
     expect(STEADY.operator_surface.actions.resume.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.actions.pause.disabled_reason_code).toBeNull();
+    expect(STEADY.operator_surface.submit_readiness.code).toBe('broker_state_unproven');
+    expect(STEADY.operator_surface.trader_guidance.primary_remediation.kind).toBe(
+      'invoke_endpoint',
+    );
   });
 
   it('STOPPED fixture surfaces the host-process notice and reflects the unbound state', () => {
@@ -64,6 +68,9 @@ describe('operator_surface wire contract', () => {
       'current_risk',
       'daily_order_cap',
       'action_plan',
+      'account_owner',
+      'submit_readiness',
+      'trader_guidance',
       'actions',
       'trading_session',
       'readiness_gates',

@@ -11,8 +11,10 @@
 import type {
   GateSuggestedAction,
   InvokeCapabilityAction,
+  InvokeEndpointAction,
   FocusAction,
   OpenRunbookAction,
+  TraderPrimaryRemediation,
 } from '../../../../api/live-instances.types';
 import type { InnerTab } from './instance-tab-state';
 
@@ -21,6 +23,7 @@ export interface RendererDispatch {
   focus(tab: InnerTab, action: FocusAction['action']): void;
   redeploy(): void;
   openRunbook(slug: string): void;
+  invokeEndpoint?(endpoint: InvokeEndpointAction['endpoint']): void;
 }
 
 export interface RenderedAction {
@@ -41,8 +44,12 @@ const _FOCUS_LABELS: Record<FocusAction['action'], string> = {
   mark_poisoned: 'Mark poisoned →',
 };
 
+const _INVOKE_ENDPOINT_LABELS: Record<InvokeEndpointAction['endpoint'], string> = {
+  reconcile_instance: 'Reconcile now',
+};
+
 export function renderSuggestedAction(
-  action: GateSuggestedAction | null,
+  action: GateSuggestedAction | TraderPrimaryRemediation | null,
   dispatch: RendererDispatch,
 ): RenderedAction | null {
   if (action === null) {
@@ -73,6 +80,19 @@ export function renderSuggestedAction(
         variant: 'link',
         invoke: () => dispatch.openRunbook((action as OpenRunbookAction).slug),
       };
+    case 'invoke_endpoint': {
+      if (!dispatch.invokeEndpoint) {
+        return null;
+      }
+      const invokeEndpoint = dispatch.invokeEndpoint;
+      return {
+        label: _INVOKE_ENDPOINT_LABELS[action.endpoint],
+        variant: 'primary',
+        invoke: () => invokeEndpoint(action.endpoint),
+      };
+    }
+    case 'none':
+      return null;
     default: {
       // Unknown kind — fail closed visibly.  The cockpit's caller
       // renders the raw gate name + the documented unavailable
