@@ -79,27 +79,29 @@
     <p class="empty">No provenance available — instance has not been deployed.</p>
   }
 
-  <section class="subsection mark-poisoned" data-testid="audit-mark-poisoned">
-    <h3>Mark this run POISONED</h3>
-    <p class="explainer">
-      The poison sentinel halts the bot and refuses future starts on the same run_id.
-      Recovery requires a fresh deployment after manual account reconciliation.
-    </p>
-    @let mp = markPoisoned();
-    <button
-      type="button"
-      class="poison-button"
-      data-testid="audit-mark-poisoned-trigger"
-      [disabled]="!mp.enabled || busyAction() !== null"
-      [attr.title]="markPoisonedTooltip()"
-      (click)="requestMarkPoisoned()"
-    >
-      Mark POISONED (type HALT)
-    </button>
-    @if (markPoisonedDisabledLine(); as reason) {
-      <p class="disabled-reason" data-testid="audit-mark-poisoned-reason">{{ reason }}</p>
-    }
-  </section>
+  @if (!hideDestructiveControls()) {
+    <section class="subsection mark-poisoned" data-testid="audit-mark-poisoned">
+      <h3>Mark this run POISONED</h3>
+      <p class="explainer">
+        The poison sentinel halts the bot and refuses future starts on the same run_id.
+        Recovery requires a fresh deployment after manual account reconciliation.
+      </p>
+      @let mp = markPoisoned();
+      <button
+        type="button"
+        class="poison-button"
+        data-testid="audit-mark-poisoned-trigger"
+        [disabled]="!mp.enabled || busyAction() !== null"
+        [attr.title]="markPoisonedTooltip()"
+        (click)="requestMarkPoisoned()"
+      >
+        Mark POISONED (type HALT)
+      </button>
+      @if (markPoisonedDisabledLine(); as reason) {
+        <p class="disabled-reason" data-testid="audit-mark-poisoned-reason">{{ reason }}</p>
+      }
+    </section>
+  }
 
   <section class="subsection broker-evidence" data-testid="audit-broker-evidence">
     <app-ibkr-api-evidence-panel />

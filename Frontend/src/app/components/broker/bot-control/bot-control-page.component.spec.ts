@@ -1,6 +1,8 @@
 import { Component, signal } from '@angular/core';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
 import { HttpErrorResponse } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
 import { of, Subject } from 'rxjs';
@@ -299,6 +301,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -336,8 +340,8 @@ describe('BotControlPageComponent', () => {
     expect(runbookLinks).toContain('/runbooks/broker%20evidence%2Fhealth%3F');
     expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
-    expect(el.querySelector('[data-testid="bot-control-tabs"]')?.textContent)
-      .toContain('Status & Risk');
+    expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
+    expect(el.querySelector('.decision-row')?.textContent).toContain('Broker proof');
   });
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
@@ -346,6 +350,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -370,13 +376,12 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Bot actions');
+    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Act now');
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Start bot process');
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
+    expect(el.querySelector('app-overview-tab app-trader-guidance-pane')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Current lifecycle focus');
-    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
-      .toContain('Status & Risk');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Deploy or start');
 
@@ -395,15 +400,124 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Selected lifecycle step');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
-      .toContain('Audit');
-    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Recovery lane');
-    expect(fixture.componentInstance.selectedTab()).toBe('audit');
-    expect(el.querySelector('[data-testid="inner-tab-audit"]')?.classList.contains('selected'))
-      .toBe(true);
+    expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 
-  it('renders the projection timeline in the trader guidance pane', async () => {
+  it('maps disabled action codes to trader copy and renders raw codes only as receipts', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.lifecycle_chart.actions = [
+      {
+        id: 'flatten_and_pause',
+        label: 'Flatten and pause',
+        enabled: false,
+        reason: 'NO_LIVE_BINDING',
+        target_node_id: 'recovery',
+        tone: 'danger',
+      },
+    ];
+    status.operator_surface.actions.flatten_and_pause = {
+      enabled: false,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: 'NO_LIVE_BINDING',
+      disabled_reasons: ['NO_LIVE_BINDING'],
+      gate_results: [],
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
+      .map((node) => node.textContent ?? '')
+      .join(' ');
+    const receipts = Array.from(el.querySelectorAll('[data-receipt]'))
+      .map((node) => node.textContent ?? '')
+      .join(' ');
+    expect(traderCopy).toContain('No live binding');
+    expect(traderCopy).not.toContain('NO_LIVE_BINDING');
+    expect(receipts).toContain('NO_LIVE_BINDING');
+  });
+
+  it('keeps node selection explanatory and never gates enabled emergency actions', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.lifecycle_chart.actions = [
+      {
+        id: 'pause',
+        label: 'Pause',
+        enabled: true,
+        reason: null,
+        target_node_id: 'active',
+        tone: 'secondary',
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const recovery = status.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
+    if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+
+    const pause = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.chart-action'))
+      .find((button) => button.textContent?.includes('Pause'));
+    expect(pause?.getAttribute('aria-disabled')).toBe('false');
+  });
+
+  it('renders the projection timeline below the fold as recent activity', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.account_owner = {
@@ -418,6 +532,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -447,7 +563,8 @@ describe('BotControlPageComponent', () => {
       run_id: null,
       limit: 5,
     });
-    const timeline = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="trader-guidance-timeline"]');
+    const timeline = (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="bot-control-recent-activity"] [data-testid="trader-guidance-timeline"]');
     expect(timeline?.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
     expect(timeline?.textContent).toContain('broker_ack #7');
   });
@@ -469,6 +586,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -533,6 +652,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -575,6 +696,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -600,7 +723,7 @@ describe('BotControlPageComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
-    expect(el.querySelector('[data-testid="trader-guidance-timeline"]')?.textContent)
+    expect(el.querySelector('[data-testid="bot-control-recent-activity"]')?.textContent)
       .toContain('Projection unavailable; current snapshot remains file-backed.');
     expect(el.querySelector('.error-banner')?.textContent ?? '').not.toContain('Projection unavailable');
   });
@@ -612,6 +735,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -658,6 +783,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -702,6 +829,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap },
@@ -731,13 +860,12 @@ describe('BotControlPageComponent', () => {
     if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
     fixture.componentInstance.selectLifecycleNode(recovery);
     fixture.detectChanges();
-    expect(fixture.componentInstance.selectedTab()).toBe('audit');
     expect(fixture.componentInstance.selectedLifecycleNodeId()).toBe('recovery');
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
 
     paramMap.next(convertToParamMap({ id: 'bot-b' }));
     await flush(fixture);
 
-    expect(fixture.componentInstance.selectedTab()).toBe('status');
     expect(fixture.componentInstance.selectedLifecycleNodeId()).toBeNull();
   });
 
@@ -748,6 +876,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         {
           provide: ActivatedRoute,
@@ -787,6 +917,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -834,6 +966,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         {
           provide: ActivatedRoute,
@@ -875,6 +1009,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },

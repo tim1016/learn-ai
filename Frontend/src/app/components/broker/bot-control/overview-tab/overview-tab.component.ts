@@ -7,11 +7,8 @@ import type {
   LifecycleChartGraph,
   LifecycleChartNode,
   LifecycleChartStatus,
-  LifecycleProjectionEventRow,
   LiveInstanceStatus,
-  TraderPrimaryRemediation,
 } from '../../../../api/live-instances.types';
-import { TraderGuidancePaneComponent } from './trader-guidance-pane.component';
 
 interface Point {
   readonly x: number;
@@ -61,7 +58,7 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule, Vflow, TraderGuidancePaneComponent],
+  imports: [CommonModule, Vflow],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -69,12 +66,8 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 export class OverviewTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly selectedNodeId = input<string | null>(null);
-  readonly timelineRows = input<LifecycleProjectionEventRow[]>([]);
-  readonly timelineProjectionAvailable = input<boolean>(false);
-  readonly timelineCanonicalFallbackRequired = input<boolean>(true);
-  readonly timelineNotice = input<string | null>(null);
+  readonly highlightedNodeId = input<string | null>(null);
   readonly nodeSelected = output<LifecycleChartNode>();
-  readonly traderGuidanceAction = output<TraderPrimaryRemediation>();
   readonly chartHandles = CHART_HANDLES;
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
@@ -182,10 +175,6 @@ export class OverviewTabComponent {
       case 'inactive':
         return 'var(--border-light)';
     }
-  }
-
-  onTraderGuidanceAction(action: TraderPrimaryRemediation): void {
-    this.traderGuidanceAction.emit(action);
   }
 
   private nodePoint(graph: LifecycleChartGraph, node: LifecycleChartNode, index: number): Point {

@@ -26,6 +26,7 @@ import { IbkrApiEvidencePanelComponent } from '../reused/ibkr-api-evidence-panel
 export class AuditTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly busyAction = input<string | null>(null);
+  readonly hideDestructiveControls = input<boolean>(false);
   readonly markPoisonedRequested = output();
 
   readonly provenance = computed(() => this.status().provenance);

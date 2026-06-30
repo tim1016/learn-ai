@@ -1,28 +1,103 @@
-<section class="action-panel" aria-label="Available bot actions">
+<section class="action-panel" aria-label="Act now">
   <header>
-    <p class="eyebrow">Bot actions</p>
-    <h3>What you can do now</h3>
+    <p class="eyebrow">Act now</p>
+    <h3>Lifecycle controls</h3>
   </header>
 
-  <div class="action-list">
-    @for (action of actions(); track action.id) {
+  <div class="action-groups">
+    <div class="action-list emergency-actions" aria-label="Emergency lifecycle controls">
+      @for (rendered of emergencyActions(); track trackAction($index, rendered)) {
+        @let action = rendered.action;
+        <button
+          type="button"
+          class="chart-action"
+          [class.tone-primary]="action.tone === 'primary'"
+          [class.tone-danger]="action.tone === 'danger'"
+          [class.is-disabled]="!action.enabled || busyAction() !== null"
+          [attr.aria-disabled]="!action.enabled || busyAction() !== null"
+          [attr.title]="actionHelp(action)"
+          (click)="activateAction(action)"
+          (mouseenter)="hoverAction(action)"
+          (mouseleave)="hoverAction(null)"
+          (focus)="hoverAction(action)"
+          (blur)="hoverAction(null)"
+        >
+          <span data-trader-copy>{{ action.label }}</span>
+          @if (action.enabled && busyAction() === null) {
+            <small data-trader-copy>Available</small>
+          } @else if (rendered.traderCopy) {
+            <small data-trader-copy>{{ rendered.traderCopy }}</small>
+          } @else {
+            <small data-trader-copy>Unavailable</small>
+          }
+          @if (rendered.reasonCode) {
+            <small class="receipt" data-receipt>Receipt: {{ rendered.reasonCode }}</small>
+          }
+        </button>
+      }
+    </div>
+
+    @if (redeployAction(); as rendered) {
+      @let action = rendered.action;
       <button
         type="button"
-        class="chart-action"
+        class="chart-action redeploy-action"
         [class.tone-primary]="action.tone === 'primary'"
         [class.tone-danger]="action.tone === 'danger'"
-        [disabled]="!action.enabled || busyAction() !== null"
-        (click)="invokeAction(action)"
+        [class.is-disabled]="!action.enabled || busyAction() !== null"
+        [attr.aria-disabled]="!action.enabled || busyAction() !== null"
+        [attr.title]="actionHelp(action)"
+        (click)="activateAction(action)"
+        (mouseenter)="hoverAction(action)"
+        (mouseleave)="hoverAction(null)"
+        (focus)="hoverAction(action)"
+        (blur)="hoverAction(null)"
       >
-        <span>{{ action.label }}</span>
-        @if (action.enabled) {
-          <small>Available</small>
-        } @else if (action.reason) {
-          <small>{{ action.reason }}</small>
+        <span data-trader-copy>{{ action.label }}</span>
+        @if (action.enabled && busyAction() === null) {
+          <small data-trader-copy>Available</small>
+        } @else if (rendered.traderCopy) {
+          <small data-trader-copy>{{ rendered.traderCopy }}</small>
         } @else {
-          <small>Unavailable</small>
+          <small data-trader-copy>Unavailable</small>
         }
       </button>
+    }
+
+    @if (overflowActions().length > 0) {
+      <details class="overflow-menu">
+        <summary aria-label="More lifecycle actions">More</summary>
+        <div class="overflow-list">
+          @for (rendered of overflowActions(); track trackAction($index, rendered)) {
+            @let action = rendered.action;
+            <button
+              type="button"
+              class="chart-action overflow-action"
+              [class.tone-danger]="action.tone === 'danger'"
+              [class.is-disabled]="!action.enabled || busyAction() !== null"
+              [attr.aria-disabled]="!action.enabled || busyAction() !== null"
+              [attr.title]="actionHelp(action)"
+              (click)="activateAction(action)"
+              (mouseenter)="hoverAction(action)"
+              (mouseleave)="hoverAction(null)"
+              (focus)="hoverAction(action)"
+              (blur)="hoverAction(null)"
+            >
+              <span data-trader-copy>{{ action.label }}</span>
+              @if (action.enabled && busyAction() === null) {
+                <small data-trader-copy>Typed confirmation required</small>
+              } @else if (rendered.traderCopy) {
+                <small data-trader-copy>{{ rendered.traderCopy }}</small>
+              } @else {
+                <small data-trader-copy>Unavailable</small>
+              }
+              @if (rendered.reasonCode) {
+                <small class="receipt" data-receipt>Receipt: {{ rendered.reasonCode }}</small>
+              }
+            </button>
+          }
+        </div>
+      </details>
     }
   </div>
 </section>

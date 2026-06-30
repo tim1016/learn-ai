@@ -19,23 +19,28 @@ import type {
   LifecycleChartNode,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
+  OperatorSurfaceAttentionGroup,
+  OperatorSurfaceEvidenceFact,
   OperatorNotice,
   OperatorSurfaceControlPlane,
-  TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
 import { AuditTabComponent } from '../cockpit-v2/tabs/audit-tab.component';
-import { ConfigurationTabComponent } from '../cockpit-v2/tabs/configuration-tab.component';
-import { StatusRiskTabComponent } from '../cockpit-v2/tabs/status-risk-tab.component';
 import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
-import type { InnerTab } from '../cockpit-v2/lib/instance-tab-state';
 import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
 import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-v2/lib/start-host-process';
+import {
+  renderTraderRemediation,
+  type RenderedAction,
+  type RendererDispatch,
+} from '../cockpit-v2/lib/suggested-action-renderer';
 import { fmtTimestampNy } from '../format';
+import { bucketHelp, chipHelp, gateHelp, nodeHelp } from './concept-help.registry';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
+import { TraderGuidanceTimelineComponent } from './overview-tab/trader-guidance-timeline.component';
 import { NodeReceiptsPaneComponent } from './node-receipts-pane.component';
 
 const POLL_INTERVAL_MS = 4_000;
@@ -45,8 +50,22 @@ const POISONED_CONFIRM_MESSAGE =
 const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
 
-type BotControlTab = InnerTab;
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
+
+interface RedeploySettingField {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly detail: string;
+}
+
+interface LockedEvidenceField {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly source: string;
+  readonly receipt: string | null;
+}
 
 interface ControlPlaneBanner {
   readonly state: OperatorSurfaceControlPlane['state'];
@@ -92,13 +111,12 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     AccordionHeader,
     AccordionContent,
     RouterLink,
-    StatusRiskTabComponent,
     OverviewTabComponent,
     ActivityTabComponent,
     AuditTabComponent,
-    ConfigurationTabComponent,
     TypedHaltConfirmComponent,
     OverviewActionsComponent,
+    TraderGuidanceTimelineComponent,
     NodeReceiptsPaneComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -121,13 +139,14 @@ export class BotControlPageComponent {
   readonly status = signal<LiveInstanceStatus | null>(null);
   readonly accountSummary = signal<FleetAccountSummary | null>(null);
   readonly lifecycleTimeline = signal<LifecycleTimelinePaneState>(EMPTY_TIMELINE_STATE);
-  readonly selectedTab = signal<BotControlTab>('status');
   readonly selectedLifecycleNodeId = signal<string | null>(null);
+  readonly highlightedLifecycleNodeId = signal<string | null>(null);
   readonly statusError = signal<string | null>(null);
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
+  readonly activityPanelOpen = signal<boolean>(false);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
@@ -180,12 +199,137 @@ export class BotControlPageComponent {
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
 
+  readonly submitReadiness = computed(() => this.status()?.operator_surface.submit_readiness ?? null);
+  readonly traderGuidance = computed(() => this.status()?.operator_surface.trader_guidance ?? null);
+  readonly attentionGroups = computed<OperatorSurfaceAttentionGroup[]>(
+    () => this.traderGuidance()?.additional_attention_groups ?? [],
+  );
+  readonly advancedEvidence = computed<OperatorSurfaceEvidenceFact[]>(
+    () => this.traderGuidance()?.advanced_evidence ?? [],
+  );
+  readonly hasCriticalAttention = computed(() =>
+    this.attentionGroups().some((group) => group.severity === 'critical'),
+  );
+  readonly renderedPrimaryRemediation = computed<RenderedAction | null>(() => {
+    const remediation = this.traderGuidance()?.primary_remediation ?? null;
+    return renderTraderRemediation(remediation, this.primaryRemediationDispatch);
+  });
+  readonly brokerProofLabel = computed(() =>
+    this.status()?.operator_surface.broker.safety_verdict ?? 'UNKNOWN',
+  );
+  readonly exposureLabel = computed(() =>
+    this.status()?.operator_surface.current_risk.posture ?? 'UNKNOWN',
+  );
+  readonly changeForNextRunFields = computed<RedeploySettingField[]>(() => {
+    const status = this.status();
+    if (!status) return [];
+    const startDefaults = status.start_defaults;
+    const dailyCap = status.operator_surface.daily_order_cap;
+    const sizing = status.sizing;
+    const actionPlan = status.operator_surface.action_plan;
+    return [
+      {
+        id: 'daily-order-cap',
+        label: 'Daily order cap',
+        value: dailyCap.limit === null ? 'Not recorded' : `${dailyCap.limit} orders per day`,
+        detail: `${dailyCap.used ?? 'unknown'} used today. Change the cap through redeploy.`,
+      },
+      {
+        id: 'sizing',
+        label: 'Sizing preset',
+        value: sizing?.preset ?? 'Not recorded',
+        detail: `Current sizing source: ${this.sizingSourceLabel(sizing?.sizing_provenance)}.`,
+      },
+      {
+        id: 'hydrate-policy',
+        label: 'Hydrate policy',
+        value: this.hydratePolicyLabel(startDefaults?.hydrate_policy),
+        detail: 'Controls how the next run restores prior engine state.',
+      },
+      {
+        id: 'action-plan',
+        label: 'Action plan',
+        value: actionPlan.consumption,
+        detail: `Anomaly verdict: ${actionPlan.anomaly_verdict}.`,
+      },
+      {
+        id: 'deploy-config',
+        label: 'Deploy/start config',
+        value: startDefaults?.strategy ?? 'Not recorded',
+        detail: `Order mode: ${this.orderMode(startDefaults?.readonly)}.`,
+      },
+    ];
+  });
+  readonly lockedEvidenceFields = computed<LockedEvidenceField[]>(() => {
+    const status = this.status();
+    if (!status) return [];
+    const surface = status.operator_surface;
+    return [
+      {
+        id: 'broker-proof',
+        label: 'Broker proof',
+        value: surface.broker.safety_verdict,
+        source: 'operator_surface.broker.safety_verdict',
+        receipt: surface.broker.connection,
+      },
+      {
+        id: 'submit-readiness',
+        label: 'Submit readiness',
+        value: surface.submit_readiness.label,
+        source: 'operator_surface.submit_readiness',
+        receipt: surface.submit_readiness.blocking_reason_codes.join(', ') || null,
+      },
+      {
+        id: 'reconciliation',
+        label: 'Reconciliation state',
+        value: surface.reconciliation?.state ?? 'NOT_AVAILABLE',
+        source: 'operator_surface.reconciliation',
+        receipt: surface.reconciliation?.failure_reason ?? null,
+      },
+      {
+        id: 'account-owner',
+        label: 'AccountOwner generation',
+        value: surface.account_owner?.generation === null || surface.account_owner === null
+          ? 'Unknown'
+          : String(surface.account_owner.generation),
+        source: surface.account_owner?.source ?? 'operator_surface.account_owner',
+        receipt: surface.account_owner?.phase ?? null,
+      },
+      {
+        id: 'runtime-freshness',
+        label: 'Runtime freshness',
+        value: surface.runtime_freshness === null
+          ? 'No live runtime evidence'
+          : surface.runtime_freshness.posture_demoted ? 'DEMOTED' : 'FRESH',
+        source: 'operator_surface.runtime_freshness',
+        receipt: surface.runtime_freshness?.stale_reason_codes.join(', ') || null,
+      },
+    ];
+  });
   readonly timelineRows = computed(() => this.lifecycleTimeline().rows);
   readonly timelineProjectionAvailable = computed(() => this.lifecycleTimeline().projectionAvailable);
   readonly timelineCanonicalFallbackRequired = computed(() => this.lifecycleTimeline().canonicalFallbackRequired);
   readonly timelineNotice = computed(() => this.lifecycleTimeline().notice);
+  readonly chipHelp = chipHelp;
+  readonly bucketHelp = bucketHelp;
+  readonly gateHelp = gateHelp;
+  readonly nodeHelp = nodeHelp;
 
-  readonly selectedTabLabel = computed<string>(() => this.tabLabel(this.selectedTab()));
+  private readonly primaryRemediationDispatch: RendererDispatch = {
+    invokeCapability: (capability) => {
+      if (capability === 'resume') void this.dispatchResume();
+      else void this.dispatchPause();
+    },
+    focus: (_tab, action) => {
+      const targetNodeId = this.targetNodeForAction(action);
+      if (targetNodeId) this.selectedLifecycleNodeId.set(targetNodeId);
+    },
+    redeploy: () => this.onGateRedeploy(),
+    openRunbook: (slug) => this.onGateOpenRunbook(slug),
+    invokeEndpoint: (endpoint) => {
+      if (endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
+    },
+  };
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
@@ -195,8 +339,9 @@ export class BotControlPageComponent {
       this.instanceId.set(id);
       this.status.set(null);
       this.lifecycleTimeline.set(EMPTY_TIMELINE_STATE);
-      this.selectedTab.set('status');
       this.selectedLifecycleNodeId.set(null);
+      this.highlightedLifecycleNodeId.set(null);
+      this.activityPanelOpen.set(false);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
@@ -222,13 +367,8 @@ export class BotControlPageComponent {
     });
   }
 
-  selectTab(tab: BotControlTab): void {
-    this.selectedTab.set(tab);
-  }
-
   selectLifecycleNode(node: LifecycleChartNode): void {
     this.selectedLifecycleNodeId.set(node.id);
-    this.selectedTab.set(this.tabForLifecycleNode(node));
   }
 
   nodeTimestamp(node: LifecycleChartNode): string {
@@ -324,30 +464,87 @@ export class BotControlPageComponent {
     }
   }
 
-  dispatchTraderGuidanceAction(action: TraderPrimaryRemediation): void {
-    switch (action.kind) {
-      case 'invoke_capability':
-        if (action.capability === 'resume') void this.dispatchResume();
-        else void this.dispatchPause();
-        break;
-      case 'focus_action':
-        this.selectTab(action.tab);
-        break;
-      case 'redeploy':
-        this.onGateRedeploy();
-        break;
-      case 'open_runbook':
-        this.onGateOpenRunbook(action.slug);
-        break;
-      case 'invoke_endpoint':
-        if (action.endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
-        break;
-      case 'none':
-        break;
-      default: {
-        const unreachable: never = action;
-        this.mutationError.set(`Unsupported trader guidance action: ${String(unreachable)}`);
-      }
+  selectActionTargetNode(target: string): void {
+    const status = this.status();
+    if (!status) return;
+    const nodeId = this.findLifecycleNode(status, target)
+      ? target
+      : this.targetNodeForAction(target);
+    if (nodeId) this.selectedLifecycleNodeId.set(nodeId);
+  }
+
+  setHighlightedLifecycleNode(nodeId: string | null): void {
+    this.highlightedLifecycleNodeId.set(nodeId);
+  }
+
+  invokePrimaryRemediation(action: RenderedAction): void {
+    action.invoke();
+  }
+
+  setActivityPanelOpen(open: boolean): void {
+    this.activityPanelOpen.set(open);
+  }
+
+  trackRedeployField(_: number, field: RedeploySettingField): string {
+    return field.id;
+  }
+
+  trackEvidenceField(_: number, field: LockedEvidenceField): string {
+    return field.id;
+  }
+
+  trackAttention(_: number, group: OperatorSurfaceAttentionGroup): string {
+    return group.code;
+  }
+
+  trackAdvancedEvidence(index: number, fact: OperatorSurfaceEvidenceFact): string {
+    return `${fact.label}:${fact.source ?? 'unknown'}:${index}`;
+  }
+
+  actionsForNode(nodeId: string): string {
+    const status = this.status();
+    if (!status) return 'None';
+    const labels = status.lifecycle_chart.actions
+      .filter((action) => action.target_node_id === nodeId)
+      .map((action) => action.label);
+    return labels.length ? labels.join(', ') : 'None';
+  }
+
+  orderMode(readonly: boolean | null | undefined): string {
+    return readonly ? 'Read-only observation' : 'Order placement allowed';
+  }
+
+  hydratePolicyLabel(policy: string | null | undefined): string {
+    switch (policy) {
+      case 'require':
+        return 'Require previous run state';
+      case 'allow_missing':
+        return 'Use previous state when available';
+      case 'ignore':
+        return 'Start without previous state';
+      case null:
+      case undefined:
+      case '':
+        return 'Not recorded';
+      default:
+        return policy;
+    }
+  }
+
+  sizingSourceLabel(value: string | null | undefined): string {
+    switch (value) {
+      case 'live_override':
+        return 'Live configuration override';
+      case 'strategy_default':
+        return 'Strategy default';
+      case 'pre_policy':
+        return 'Pre-policy run';
+      case null:
+      case undefined:
+      case '':
+        return 'not recorded';
+      default:
+        return value;
     }
   }
 
@@ -366,36 +563,10 @@ export class BotControlPageComponent {
     }
   }
 
-  private tabForLifecycleNode(node: LifecycleChartNode): BotControlTab {
-    switch (node.id) {
-      case 'deploy':
-      case 'preflight':
-      case 'activate':
-        return 'configuration';
-      case 'active':
-      case 'submit_order':
-      case 'broker_writer':
-        return 'activity';
-      case 'recovery':
-        return 'audit';
-      case 'account_safety':
-      case 'reconcile':
-      default:
-        return 'status';
-    }
-  }
-
-  private tabLabel(tab: BotControlTab): string {
-    switch (tab) {
-      case 'status':
-        return 'Status & Risk';
-      case 'activity':
-        return 'Activity';
-      case 'audit':
-        return 'Audit';
-      case 'configuration':
-        return 'Configuration';
-    }
+  private targetNodeForAction(actionId: string): string | null {
+    const status = this.status();
+    if (!status) return null;
+    return status.lifecycle_chart.actions.find((action) => action.id === actionId)?.target_node_id ?? null;
   }
 
   private findLifecycleNode(status: LiveInstanceStatus, nodeId: string): LifecycleChartNode | null {

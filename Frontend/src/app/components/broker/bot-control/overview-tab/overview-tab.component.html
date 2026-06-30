@@ -14,71 +14,61 @@
     }
   </header>
 
-  <div class="overview-layout">
-    <section class="flow-panel" aria-label="Lifecycle flowchart">
-      <vflow
-        class="flow-canvas"
-        view="auto"
-        background="dots"
-        [minZoom]="0.45"
-        [maxZoom]="1.2"
-        [nodes]="nodes()"
-        [edges]="edges()"
-        [entitiesSelectable]="false"
-      >
-        <ng-template let-ctx nodeHtml>
-          @let node = nodeData(ctx);
-          <article
-            [class]="'flow-node status-' + node.status"
-            [class.expandable]="node.expandable"
-            [class.selected]="selectedNodeId() === node.id"
-            role="button"
-            tabindex="0"
-            [attr.aria-label]="node.expandable ? 'Open ' + node.label : 'Select ' + node.label"
-            (click)="expandNode(node)"
-            (keydown)="onNodeKeydown($event, node)"
-          >
-            @for (handleDef of chartHandles; track handleDef.id) {
-              <handle
-                class="flow-handle"
-                [id]="handleDef.id"
-                [type]="handleDef.type"
-                [position]="handleDef.position"
-              />
-            }
-            <span class="node-lane">{{ node.lane }}</span>
-            <strong>{{ node.label }}</strong>
-            @if (node.technical_label) {
-              <span class="node-technical">{{ node.technical_label }}</span>
-            }
-            <span class="node-status">{{ node.status_label }}</span>
-            @if (node.expandable) {
-              <span class="node-expand">Open</span>
-            }
-          </article>
-        </ng-template>
-
-        <ng-template let-ctx edge>
-          @let edge = edgeData(ctx);
-          <svg:g customTemplateEdge>
-            <svg:path
-              [attr.d]="ctx.path()"
-              [attr.marker-end]="ctx.markerEnd()"
-              [class]="'flow-edge edge-' + edge.status"
-              [class.edge-animated]="edge.animated"
+  <section class="flow-panel" aria-label="Lifecycle flowchart">
+    <vflow
+      class="flow-canvas"
+      view="auto"
+      background="dots"
+      [minZoom]="0.45"
+      [maxZoom]="1.2"
+      [nodes]="nodes()"
+      [edges]="edges()"
+      [entitiesSelectable]="false"
+    >
+      <ng-template let-ctx nodeHtml>
+        @let node = nodeData(ctx);
+        <article
+          [class]="'flow-node status-' + node.status"
+          [class.expandable]="node.expandable"
+          [class.selected]="selectedNodeId() === node.id"
+          [class.highlighted]="highlightedNodeId() === node.id"
+          role="button"
+          tabindex="0"
+          [attr.aria-label]="node.expandable ? 'Open ' + node.label : 'Select ' + node.label"
+          (click)="expandNode(node)"
+          (keydown)="onNodeKeydown($event, node)"
+        >
+          @for (handleDef of chartHandles; track handleDef.id) {
+            <handle
+              class="flow-handle"
+              [id]="handleDef.id"
+              [type]="handleDef.type"
+              [position]="handleDef.position"
             />
-          </svg:g>
-        </ng-template>
-      </vflow>
-    </section>
+          }
+          <span class="node-lane">{{ node.lane }}</span>
+          <strong>{{ node.label }}</strong>
+          @if (node.technical_label) {
+            <span class="node-technical">{{ node.technical_label }}</span>
+          }
+          <span class="node-status">{{ node.status_label }}</span>
+          @if (node.expandable) {
+            <span class="node-expand">Open</span>
+          }
+        </article>
+      </ng-template>
 
-    <app-trader-guidance-pane
-      [surface]="status().operator_surface"
-      [timelineRows]="timelineRows()"
-      [timelineProjectionAvailable]="timelineProjectionAvailable()"
-      [timelineCanonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
-      [timelineNotice]="timelineNotice()"
-      (primaryRemediationSelected)="onTraderGuidanceAction($event)"
-    />
-  </div>
+      <ng-template let-ctx edge>
+        @let edge = edgeData(ctx);
+        <svg:g customTemplateEdge>
+          <svg:path
+            [attr.d]="ctx.path()"
+            [attr.marker-end]="ctx.markerEnd()"
+            [class]="'flow-edge edge-' + edge.status"
+            [class.edge-animated]="edge.animated"
+          />
+        </svg:g>
+      </ng-template>
+    </vflow>
+  </section>
 </section>
