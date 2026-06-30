@@ -26,6 +26,7 @@ _EVENT_COLUMNS = (
     ColumnExpectation("ts_ms_resolved", "boolean", nullable=False),
     ColumnExpectation("source_artifact", "text", nullable=False),
     ColumnExpectation("source_type", "character varying", nullable=False),
+    ColumnExpectation("source_rank", "integer", nullable=False),
     ColumnExpectation("source_seq", "bigint", nullable=True),
     ColumnExpectation("source_offset", "bigint", nullable=True),
     ColumnExpectation("source_hash", "character", nullable=True),

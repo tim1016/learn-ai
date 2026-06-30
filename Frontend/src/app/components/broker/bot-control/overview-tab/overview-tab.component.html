@@ -38,14 +38,6 @@
             (click)="expandNode(node)"
             (keydown)="onNodeKeydown($event, node)"
           >
-            <handle class="flow-handle" type="target" position="top" [id]="'t-top'" />
-            <handle class="flow-handle" type="target" position="right" [id]="'t-right'" />
-            <handle class="flow-handle" type="target" position="bottom" [id]="'t-bottom'" />
-            <handle class="flow-handle" type="target" position="left" [id]="'t-left'" />
-            <handle class="flow-handle" type="source" position="top" [id]="'s-top'" />
-            <handle class="flow-handle" type="source" position="right" [id]="'s-right'" />
-            <handle class="flow-handle" type="source" position="bottom" [id]="'s-bottom'" />
-            <handle class="flow-handle" type="source" position="left" [id]="'s-left'" />
             <span class="node-lane">{{ node.lane }}</span>
             <strong>{{ node.label }}</strong>
             @if (node.technical_label) {

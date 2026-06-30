@@ -61,6 +61,7 @@ def test_lifecycle_event_to_projection_row_preserves_provenance_and_receipts() -
     assert row.severity == "warning"
     assert row.source_artifact == "/tmp/run-1/intent_events.jsonl"
     assert row.source_type == "broker_ack"
+    assert row.source_rank == 50
     assert row.source_seq == 2
     assert row.source_hash == "a" * 64
     assert row.receipt_payload["order_ref"] == "learn-ai/bot-a/v1:intent-2"
@@ -109,14 +110,14 @@ def test_account_owner_status_snapshot_from_generation_event() -> None:
     )
 
     assert snapshot is not None
-    assert snapshot["account_id"] == "DU123"
-    assert snapshot["generation"] == 7
-    assert snapshot["phase"] == "reconnecting"
-    assert snapshot["recorded_at_ms"] == 1_700_000_000_500
-    assert snapshot["source_seq"] == 5
-    assert snapshot["source_offset"] == 5
-    assert snapshot["source_hash"] == "b" * 64
-    assert snapshot["receipt_payload"]["source"] == "account_owner"
+    assert snapshot.account_id == "DU123"
+    assert snapshot.generation == 7
+    assert snapshot.phase == "reconnecting"
+    assert snapshot.recorded_at_ms == 1_700_000_000_500
+    assert snapshot.source_seq == 5
+    assert snapshot.source_offset == 5
+    assert snapshot.source_hash == "b" * 64
+    assert snapshot.receipt_payload["source"] == "account_owner"
 
 
 def test_account_owner_status_snapshot_ignores_unrelated_event() -> None:
@@ -157,7 +158,15 @@ async def test_select_safety_triage_applies_fleet_filters(monkeypatch: pytest.Mo
     )
 
     assert rows == []
-    assert "severity IN ('warning','critical')" in str(captured["query"])
+    query = str(captured["query"])
+    assert "severity IN ('warning','critical')" in query
+    assert "AND ($1::text IS NULL OR account_id = $1)" in query
+    assert "AND ($2::text IS NULL OR strategy_instance_id = $2)" in query
+    assert "AND ($3::text IS NULL OR run_id = $3)" in query
+    assert "AND ($4::text IS NULL OR status = $4)" in query
+    assert "AND ($5::text IS NULL OR event_type = $5)" in query
+    assert "AND ($6::text IS NULL OR node_id = $6)" in query
+    assert "AND ($7::text IS NULL OR severity = $7)" in query
     assert captured["args"] == (
         "DU123",
         "bot-a",

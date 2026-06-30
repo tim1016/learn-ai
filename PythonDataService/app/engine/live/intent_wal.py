@@ -17,6 +17,7 @@ in-flight double-submit window to resolve), never dropped.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from pathlib import Path
@@ -137,6 +138,17 @@ class IntentWal:
         if not self._path.exists():
             return []
         raw = self._path.read_bytes()
+        return self._parse_tail_bytes(raw)
+
+    def read_tail_with_hash(self) -> tuple[list[IntentEvent], str | None]:
+        """Parse WAL events and hash the same byte snapshot."""
+
+        if not self._path.exists():
+            return [], None
+        raw = self._path.read_bytes()
+        return self._parse_tail_bytes(raw), hashlib.sha256(raw).hexdigest()
+
+    def _parse_tail_bytes(self, raw: bytes) -> list[IntentEvent]:
         if not raw:
             return []
         ends_with_newline = raw.endswith(b"\n")

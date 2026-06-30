@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from app.engine.live.account_artifacts import append_account_event
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
-from app.schemas.lifecycle_projection import LifecycleProjectionEventRow, LifecycleProjectionTable
+from app.schemas.lifecycle_projection import AccountOwnerStatusSnapshotRow, LifecycleProjectionEventRow
 from app.services.lifecycle_projection_tailer import (
     AccountEventsProjectionSource,
     IntentWalProjectionSource,
@@ -22,19 +21,23 @@ _NAMESPACE = "learn-ai/bot-a/v1"
 
 class FakeProjectionStore:
     def __init__(self) -> None:
-        self.lifecycle_calls: list[tuple[LifecycleProjectionTable, list[LifecycleProjectionEventRow]]] = []
-        self.snapshots: list[dict[str, Any]] = []
+        self.batch_calls: list[
+            tuple[
+                list[LifecycleProjectionEventRow],
+                list[LifecycleProjectionEventRow],
+                list[AccountOwnerStatusSnapshotRow],
+            ]
+        ] = []
 
-    async def upsert_lifecycle_events(
+    async def upsert_replay_batch(
         self,
-        table: LifecycleProjectionTable,
-        rows: list[LifecycleProjectionEventRow],
+        *,
+        bot_events: list[LifecycleProjectionEventRow],
+        account_events: list[LifecycleProjectionEventRow],
+        account_owner_status_snapshots: list[AccountOwnerStatusSnapshotRow],
     ) -> int:
-        self.lifecycle_calls.append((table, rows))
-        return len(rows)
-
-    async def upsert_account_owner_status_snapshot(self, row: dict[str, Any]) -> None:
-        self.snapshots.append(row)
+        self.batch_calls.append((bot_events, account_events, account_owner_status_snapshots))
+        return len(bot_events) + len(account_events) + len(account_owner_status_snapshots)
 
 
 def _intent_wal_event(wal: IntentWal, seq_label: str, event_type: IntentEventType) -> None:
@@ -82,9 +85,8 @@ async def test_tailer_projects_account_events_once_and_resumes_from_cursor(tmp_p
     assert first.rows_written == 3
     assert first.sources_checked == 1
     assert first.sources_advanced == 1
-    assert [call[0] for call in store.lifecycle_calls] == ["account_lifecycle_events"]
-    assert [row.source_seq for row in store.lifecycle_calls[0][1]] == [1, 2]
-    assert len(store.snapshots) == 1
+    assert [row.source_seq for row in store.batch_calls[0][1]] == [1, 2]
+    assert len(store.batch_calls[0][2]) == 1
     cursor_source = next(iter(read_lifecycle_projection_cursor(cursor_path).sources.values()))
     assert cursor_source.last_file_position == 2
     assert cursor_source.last_source_seq == 2
@@ -119,7 +121,7 @@ async def test_tailer_projects_account_events_once_and_resumes_from_cursor(tmp_p
     )
 
     assert third.rows_written == 1
-    assert store.lifecycle_calls[-1][1][0].event_id == "account_event:DU123456:3:account_freeze_cleared"
+    assert store.batch_calls[-1][1][0].event_id == "account_event:DU123456:3:account_freeze_cleared"
     cursor_source = next(iter(read_lifecycle_projection_cursor(cursor_path).sources.values()))
     assert cursor_source.last_file_position == 3
     assert cursor_source.last_source_seq == 3
@@ -149,7 +151,7 @@ async def test_tailer_projects_intent_wal_after_saved_seq(tmp_path: Path) -> Non
 
     assert first.rows_written == 2
     assert first.sources_advanced == 1
-    assert [row.source_seq for row in store.lifecycle_calls[0][1]] == [1, 2]
+    assert [row.source_seq for row in store.batch_calls[0][0]] == [1, 2]
     cursor_source = next(iter(read_lifecycle_projection_cursor(cursor_path).sources.values()))
     assert cursor_source.last_file_position == 2
     assert cursor_source.last_source_seq == 2
@@ -164,7 +166,7 @@ async def test_tailer_projects_intent_wal_after_saved_seq(tmp_path: Path) -> Non
     )
 
     assert second.rows_written == 1
-    assert store.lifecycle_calls[-1][1][0].event_id == "intent_wal:run-1:3:SUBMITTED"
+    assert store.batch_calls[-1][0][0].event_id == "intent_wal:run-1:3:SUBMITTED"
     cursor_source = next(iter(read_lifecycle_projection_cursor(cursor_path).sources.values()))
     assert cursor_source.last_source_seq == 3
 
@@ -172,10 +174,12 @@ async def test_tailer_projects_intent_wal_after_saved_seq(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_tailer_does_not_advance_cursor_when_projection_write_fails(tmp_path: Path) -> None:
     class FailingStore(FakeProjectionStore):
-        async def upsert_lifecycle_events(
+        async def upsert_replay_batch(
             self,
-            table: LifecycleProjectionTable,
-            rows: list[LifecycleProjectionEventRow],
+            *,
+            bot_events: list[LifecycleProjectionEventRow],
+            account_events: list[LifecycleProjectionEventRow],
+            account_owner_status_snapshots: list[AccountOwnerStatusSnapshotRow],
         ) -> int:
             raise RuntimeError("db down")
 

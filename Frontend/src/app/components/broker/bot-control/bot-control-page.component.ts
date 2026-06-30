@@ -17,7 +17,6 @@ import type {
   FleetAccountSummary,
   LifecycleChartActionId,
   LifecycleChartNode,
-  LifecycleChartReceipt,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
   OperatorNotice,
@@ -37,6 +36,7 @@ import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-
 import { fmtTimestampNy } from '../format';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
+import { NodeReceiptsPaneComponent } from './node-receipts-pane.component';
 
 const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
@@ -58,6 +58,7 @@ interface ControlPlaneBanner {
 }
 
 interface LifecycleTimelinePaneState {
+  readonly statusKey: string | null;
   readonly rows: LifecycleProjectionEventRow[];
   readonly projectionAvailable: boolean;
   readonly canonicalFallbackRequired: boolean;
@@ -65,6 +66,7 @@ interface LifecycleTimelinePaneState {
 }
 
 const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
+  statusKey: null,
   rows: [],
   projectionAvailable: false,
   canonicalFallbackRequired: true,
@@ -87,6 +89,7 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     ConfigurationTabComponent,
     TypedHaltConfirmComponent,
     OverviewActionsComponent,
+    NodeReceiptsPaneComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -220,15 +223,6 @@ export class BotControlPageComponent {
 
   nodeTimestamp(node: LifecycleChartNode): string {
     return node.ts_ms_resolved ? fmtTimestampNy(node.ts_ms) : 'timestamp unresolved';
-  }
-
-  receiptTimestamp(receipt: LifecycleChartReceipt): string | null {
-    if (receipt.ts_ms === null) return null;
-    return receipt.ts_ms_resolved ? fmtTimestampNy(receipt.ts_ms) : 'timestamp unresolved';
-  }
-
-  trackNodeReceipt(index: number, receipt: LifecycleChartReceipt): string {
-    return `${receipt.label}:${receipt.source ?? 'unknown'}:${index}`;
   }
 
   async dispatchResume(): Promise<void> {
@@ -453,6 +447,13 @@ export class BotControlPageComponent {
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.status.set(status);
       this.statusError.set(null);
+      const statusKey = this.lifecycleTimelineStatusKey(status);
+      if (this.lifecycleTimeline().statusKey !== statusKey) {
+        this.lifecycleTimeline.set({
+          ...EMPTY_TIMELINE_STATE,
+          statusKey,
+        });
+      }
       void this.refreshLifecycleTimeline(id, status, seq);
     } catch (err) {
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
@@ -475,6 +476,7 @@ export class BotControlPageComponent {
       });
       if (this.instanceId() !== id || statusSeq !== this.statusRequestSeq || seq !== this.timelineRequestSeq) return;
       this.lifecycleTimeline.set({
+        statusKey: this.lifecycleTimelineStatusKey(status),
         rows: timeline.rows,
         projectionAvailable: timeline.projection_available,
         canonicalFallbackRequired: timeline.canonical_fallback_required,
@@ -483,6 +485,7 @@ export class BotControlPageComponent {
     } catch (err) {
       if (this.instanceId() !== id || statusSeq !== this.statusRequestSeq || seq !== this.timelineRequestSeq) return;
       this.lifecycleTimeline.set({
+        statusKey: this.lifecycleTimelineStatusKey(status),
         rows: [],
         projectionAvailable: false,
         canonicalFallbackRequired: true,
@@ -498,6 +501,14 @@ export class BotControlPageComponent {
     } catch (err) {
       this.accountSummaryError.set(this.humanError(err));
     }
+  }
+
+  private lifecycleTimelineStatusKey(status: LiveInstanceStatus): string {
+    return [
+      status.strategy_instance_id,
+      status.operator_surface.account_owner?.account_id ?? this.accountSummary()?.account_id ?? '',
+      status.live_binding?.run_id ?? status.evidence_binding?.run_id ?? '',
+    ].join(':');
   }
 
   private async setIntent(

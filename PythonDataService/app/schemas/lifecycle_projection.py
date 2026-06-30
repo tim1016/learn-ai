@@ -31,6 +31,7 @@ class LifecycleProjectionEventRow(BaseModel):
     ts_ms_resolved: bool
     source_artifact: str
     source_type: str
+    source_rank: int = Field(ge=0)
     source_seq: int | None = Field(default=None, ge=0)
     source_offset: int | None = Field(default=None, ge=0)
     source_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -63,6 +64,15 @@ class LifecycleTimelineResponse(BaseModel):
     rows: list[LifecycleProjectionEventRow]
 
 
+LifecycleSafetySeverity = Literal["warning", "critical"]
+
+
+class LifecycleSafetyProjectionEventRow(LifecycleProjectionEventRow):
+    """Safety triage row with the endpoint's warning/critical invariant."""
+
+    severity: LifecycleSafetySeverity
+
+
 class LifecycleSafetyTriageResponse(BaseModel):
     """Bounded safety query over warning/critical lifecycle projection rows."""
 
@@ -70,4 +80,23 @@ class LifecycleSafetyTriageResponse(BaseModel):
 
     projection_available: bool
     canonical_fallback_required: bool
-    rows: list[LifecycleProjectionEventRow]
+    rows: list[LifecycleSafetyProjectionEventRow]
+
+
+class AccountOwnerStatusSnapshotRow(BaseModel):
+    """Persisted AccountOwner generation and phase snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str
+    generation: int = Field(ge=0)
+    phase: Literal["accepting", "reconnecting", "draining", "frozen"]
+    recorded_at_ms: int = Field(ge=0)
+    ts_ms_resolved: bool
+    source_artifact: str
+    source_seq: int | None = Field(default=None, ge=0)
+    source_offset: int | None = Field(default=None, ge=0)
+    source_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    receipt_payload: dict[str, Any] = Field(default_factory=dict)
+    inserted_at_ms: int = Field(ge=0)
+    updated_at_ms: int = Field(ge=0)

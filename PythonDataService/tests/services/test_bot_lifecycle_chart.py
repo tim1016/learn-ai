@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.intent_events import DropReason, IntentEvent, IntentEventType
 from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
 from app.schemas.live_runs import (
     BotLifecycleChartView,
+    BotLifecycleEvent,
     DesiredStateView,
     GateResult,
     InstanceBrokerView,
@@ -257,6 +260,54 @@ def test_writer_guard_surfaces_account_owner_generation_without_claiming_r3_daem
     )
 
 
+@pytest.mark.parametrize(
+    ("phase", "generation", "expected_status"),
+    [
+        ("accepting", 4, "passed"),
+        ("reconnecting", 4, "active"),
+        ("draining", 4, "active"),
+        ("frozen", 4, "freeze"),
+        (None, None, "unknown"),
+    ],
+)
+def test_writer_guard_event_uses_account_owner_status_mapping(
+    phase: str | None,
+    generation: int | None,
+    expected_status: str,
+) -> None:
+    payload = {}
+    if phase is not None:
+        payload["phase"] = phase
+    if generation is not None:
+        payload["generation"] = generation
+    event = BotLifecycleEvent(
+        event_id=f"account_event:DU123:1:account_owner_generation_recorded:{phase}",
+        account_id="DU123",
+        event_type="account_owner_generation_recorded",
+        category="lifecycle_transition",
+        node_id="writer_guard",
+        status="active",
+        severity="info",
+        ts_ms=_NOW_MS - 1_000,
+        source="account_owner",
+        source_rank=20,
+        source_local_seq=1,
+        summary="AccountOwner generation recorded.",
+        payload=payload,
+    )
+
+    chart = compose_bot_lifecycle_chart(_SID, _surface(), desired_state=_desired("RUNNING"), lifecycle_events=[event])
+    writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
+
+    assert writer_guard.status == expected_status
+    assert writer_guard.status_label == {
+        "active": "Here now",
+        "freeze": "Frozen",
+        "passed": "Clear",
+        "unknown": "Unknown",
+    }[expected_status]
+
+
 def test_submit_uncertainty_reaches_submit_subgraph() -> None:
     surface = _surface()
     lifecycle_events = project_intent_events(
@@ -328,6 +379,19 @@ def test_recovery_placeholders_are_inactive_without_active_incident() -> None:
         assert "No active recovery incident" in (nodes[node_id].summary or "")
 
 
+def test_recovery_placeholders_are_unknown_while_process_is_stopping() -> None:
+    surface = _surface(process=InstanceProcessView(state="stopping"))
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    nodes = {node.id: node for node in chart.subgraphs["recovery"].nodes}
+
+    assert chart.global_graph.primary_node_id == "recovery"
+    assert nodes["incident"].status == "active"
+    assert nodes["incident"].summary == "The bot process is currently stopping."
+    for node_id in ("flatten", "reconcile_after", "fresh_run"):
+        assert nodes[node_id].status == "unknown"
+        assert nodes[node_id].operator_next_step is not None
+
+
 def test_recovery_placeholders_are_unknown_when_recovery_requires_proof() -> None:
     surface = _surface(
         last_exit=InstanceLastExit(
@@ -383,6 +447,28 @@ def test_recovery_lane_surfaces_watchdog_incident_receipts() -> None:
     assert receipts["watchdog.runbook"].value == "watchdog-halt"
     assert receipts["watchdog.occurred_at_ms"].value == str(_NOW_MS - 7_000)
     assert receipts["watchdog.occurred_at_ms"].unit == "ms UTC"
+
+
+def test_recovery_lane_does_not_mix_prior_halt_with_watchdog_incident() -> None:
+    surface = _surface(
+        last_exit=InstanceLastExit(
+            run_id="prior-run",
+            exit_code=1,
+            halt_trigger="OUTSIDE_MUTATION",
+            halt_at_ms=_NOW_MS - 6_000,
+        ),
+        incident_headline_notice=_watchdog_notice(),
+    )
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    recovery_node = next(node for node in chart.global_graph.nodes if node.id == "recovery")
+    incident_node = next(node for node in chart.subgraphs["recovery"].nodes if node.id == "incident")
+    receipts = {receipt.label: receipt for receipt in incident_node.receipts}
+
+    assert recovery_node.status == "blocked"
+    assert incident_node.status == "blocked"
+    assert incident_node.summary == "The watchdog could not prove the account was flat before disconnect."
+    assert incident_node.ts_ms == _NOW_MS - 7_000
+    assert receipts["watchdog.outcome"].value == "watchdog.flatten_failed"
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:

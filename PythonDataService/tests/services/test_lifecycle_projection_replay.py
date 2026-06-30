@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.intent_events import IntentEvent, IntentEventType
-from app.schemas.lifecycle_projection import LifecycleProjectionEventRow, LifecycleProjectionTable
+from app.schemas.lifecycle_projection import LifecycleProjectionEventRow
 from app.services.lifecycle_projection_replay import (
     LifecycleProjectionReplayBatch,
     batch_from_account_events,
@@ -46,6 +46,7 @@ def _projection_row(
         ts_ms_resolved=True,
         source_artifact="/tmp/source.jsonl",
         source_type="broker_ack",
+        source_rank=50,
         source_seq=2,
         summary="Broker acknowledgement failed; submit outcome is uncertain.",
         receipt_payload={"intent_id": "intent-2"},
@@ -79,10 +80,45 @@ def test_batch_from_intent_events_authors_bot_projection_rows() -> None:
     assert row.status == "blocked"
     assert row.source_artifact == str(wal_path)
     assert row.source_hash == "a" * 64
+    assert row.run_id == "run-1"
     assert row.rendered_headline == "Broker acknowledgement failed; submit outcome is uncertain."
-    assert row.rendered_template_id == "lifecycle_projection.broker_ack.BrokerOrderUncertain.v1"
+    assert row.rendered_template_id == "lifecycle_projection.intent_wal.ack_failed_uncertain.v1"
     assert row.receipt_payload["intent_id"] == "intent-2"
     assert row.evidence_refs[0]["source"] == "intent_wal"
+
+
+def test_batch_from_intent_events_preserves_distinct_template_ids_after_normalization() -> None:
+    wal_path = Path("/tmp/run-1/intent_events.jsonl")
+
+    batch = batch_from_intent_events(
+        [
+            _intent(2, IntentEventType.ACK_FAILED_UNCERTAIN),
+            _intent(3, IntentEventType.SUBMIT_UNCERTAIN_HALTED),
+        ],
+        bot_id="bot-a",
+        account_id="DU123",
+        run_id="run-1",
+        wal_path=wal_path,
+    )
+
+    assert [row.event_type for row in batch.bot_events] == [
+        "BrokerOrderUncertain",
+        "BrokerOrderUncertain",
+    ]
+    assert {row.rendered_template_id for row in batch.bot_events} == {
+        "lifecycle_projection.intent_wal.ack_failed_uncertain.v1",
+        "lifecycle_projection.intent_wal.submit_uncertain_halted.v1",
+    }
+
+
+def test_batch_from_intent_events_requires_wal_path() -> None:
+    with pytest.raises(ValueError, match="wal_path"):
+        batch_from_intent_events(
+            [_intent(2, IntentEventType.ACK_FAILED_UNCERTAIN)],
+            bot_id="bot-a",
+            account_id="DU123",
+            run_id="run-1",
+        )
 
 
 def test_batch_from_account_events_authors_account_rows_and_owner_snapshot() -> None:
@@ -113,20 +149,28 @@ def test_batch_from_account_events_authors_account_rows_and_owner_snapshot() -> 
     assert row.status == "active"
     assert "not R3 daemon/IPC writer authority" in row.summary
     assert row.rendered_headline == row.summary
-    assert row.rendered_template_id == "lifecycle_projection.lifecycle_transition.account_owner_generation_recorded.v1"
+    assert row.rendered_template_id == "lifecycle_projection.account_event.account_owner_generation_recorded.v1"
     assert row.source_artifact == "/tmp/accounts/DU123/account_events.jsonl"
     assert row.receipt_payload["generation"] == 7
 
     assert len(batch.account_owner_status_snapshots) == 1
     snapshot = batch.account_owner_status_snapshots[0]
-    assert snapshot["account_id"] == "DU123"
-    assert snapshot["generation"] == 7
-    assert snapshot["phase"] == "reconnecting"
-    assert snapshot["recorded_at_ms"] == 1_700_000_000_500
-    assert snapshot["source_hash"] == "b" * 64
+    assert snapshot.account_id == "DU123"
+    assert snapshot.generation == 7
+    assert snapshot.phase == "reconnecting"
+    assert snapshot.recorded_at_ms == 1_700_000_000_500
+    assert snapshot.source_hash == "b" * 64
 
 
-def test_batch_from_account_events_with_bot_id_routes_to_bot_table() -> None:
+def test_batch_from_account_events_requires_canonical_source_artifact() -> None:
+    with pytest.raises(ValueError, match="source_artifact"):
+        batch_from_account_events(
+            [{"event_type": "account_freeze_recorded", "account_id": "DU123"}],
+            account_id="DU123",
+        )
+
+
+def test_batch_from_account_events_derives_bot_scope_from_diagnostics() -> None:
     batch = batch_from_account_events(
         [
             {
@@ -143,7 +187,7 @@ def test_batch_from_account_events_with_bot_id_routes_to_bot_table() -> None:
             }
         ],
         account_id="DU123",
-        bot_id="bot-a",
+        source_artifact="/tmp/accounts/DU123/account_events.jsonl",
     )
 
     assert batch.row_count == 1
@@ -151,6 +195,7 @@ def test_batch_from_account_events_with_bot_id_routes_to_bot_table() -> None:
     assert batch.account_events == []
     row = batch.bot_events[0]
     assert row.strategy_instance_id == "bot-a"
+    assert row.run_id == "run-1"
     assert row.event_type == "account_owner_submit_uncertain"
     assert row.node_id == "ack_or_reconcile"
     assert row.status == "blocked"
@@ -175,34 +220,36 @@ def test_batch_from_account_events_preserves_tailed_file_position() -> None:
 async def test_write_replay_batch_uses_store_methods() -> None:
     class FakeStore:
         def __init__(self) -> None:
-            self.lifecycle_calls: list[tuple[str, list[LifecycleProjectionEventRow]]] = []
-            self.snapshots: list[dict[str, object]] = []
+            self.batch_calls: list[
+                tuple[
+                    list[LifecycleProjectionEventRow],
+                    list[LifecycleProjectionEventRow],
+                    list[object],
+                ]
+            ] = []
 
-        async def upsert_lifecycle_events(
+        async def upsert_replay_batch(
             self,
-            table: LifecycleProjectionTable,
-            rows: list[LifecycleProjectionEventRow],
+            *,
+            bot_events: list[LifecycleProjectionEventRow],
+            account_events: list[LifecycleProjectionEventRow],
+            account_owner_status_snapshots: list[object],
         ) -> int:
-            self.lifecycle_calls.append((table, rows))
-            return len(rows)
-
-        async def upsert_account_owner_status_snapshot(self, row: dict[str, object]) -> None:
-            self.snapshots.append(row)
+            self.batch_calls.append((bot_events, account_events, account_owner_status_snapshots))
+            return len(bot_events) + len(account_events) + len(account_owner_status_snapshots)
 
     store = FakeStore()
     batch = LifecycleProjectionReplayBatch(
         bot_events=[_projection_row("bot-event", strategy_instance_id="bot-a")],
         account_events=[_projection_row("account-event")],
-        account_owner_status_snapshots=[{"account_id": "DU123"}],
+        account_owner_status_snapshots=[],
     )
 
     written = await write_replay_batch(batch, store=store)
 
-    assert written == 3
-    assert [call[0] for call in store.lifecycle_calls] == [
-        "bot_lifecycle_events",
-        "account_lifecycle_events",
-    ]
-    assert store.lifecycle_calls[0][1][0].event_id == "bot-event"
-    assert store.lifecycle_calls[1][1][0].event_id == "account-event"
-    assert store.snapshots == [{"account_id": "DU123"}]
+    assert written == 2
+    assert len(store.batch_calls) == 1
+    bot_events, account_events, snapshots = store.batch_calls[0]
+    assert bot_events[0].event_id == "bot-event"
+    assert account_events[0].event_id == "account-event"
+    assert snapshots == []

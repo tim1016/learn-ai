@@ -31,6 +31,7 @@ namespace Backend.Migrations
                     ts_ms_resolved boolean NOT NULL,
                     source_artifact text NOT NULL,
                     source_type character varying(80) NOT NULL,
+                    source_rank integer NOT NULL,
                     source_seq bigint NULL,
                     source_offset bigint NULL,
                     source_hash character(64) NULL,
@@ -61,6 +62,7 @@ namespace Backend.Migrations
                     ts_ms_resolved boolean NOT NULL,
                     source_artifact text NOT NULL,
                     source_type character varying(80) NOT NULL,
+                    source_rank integer NOT NULL,
                     source_seq bigint NULL,
                     source_offset bigint NULL,
                     source_hash character(64) NULL,
@@ -196,9 +198,9 @@ namespace Backend.Migrations
                   ON account_owner_status_snapshots (account_id, generation, phase, recorded_at_ms);
 
                 CREATE INDEX ix_bot_lifecycle_events_timeline
-                  ON bot_lifecycle_events (account_id, strategy_instance_id, run_id, ts_ms DESC);
+                  ON bot_lifecycle_events (account_id, strategy_instance_id, run_id, ts_ms DESC, source_rank DESC, source_seq DESC);
                 CREATE INDEX ix_account_lifecycle_events_timeline
-                  ON account_lifecycle_events (account_id, ts_ms DESC);
+                  ON account_lifecycle_events (account_id, ts_ms DESC, source_rank DESC, source_seq DESC);
                 CREATE INDEX ix_bot_lifecycle_events_safety
                   ON bot_lifecycle_events (severity, status, account_id, strategy_instance_id)
                   WHERE severity IN ('warning','critical');

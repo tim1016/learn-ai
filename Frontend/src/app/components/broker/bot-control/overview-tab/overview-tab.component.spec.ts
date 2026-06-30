@@ -4,10 +4,8 @@ import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
-import {
-  makeLifecycleChartFixture,
-  makeOperatorSurfaceFixture,
-} from '../../../../testing/live-instance-status-fixtures';
+import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
+import { makeOperatorSurfaceFixture } from '../../../../testing/operator-surface-fixtures';
 import { OverviewTabComponent } from './overview-tab.component';
 import { TraderGuidancePaneComponent } from './trader-guidance-pane.component';
 
@@ -243,7 +241,7 @@ describe('OverviewTabComponent', () => {
     expect(actionSelected).toHaveBeenCalledWith(surface.trader_guidance.primary_remediation);
   });
 
-  it('anchors active branch edges to distinct source handles', () => {
+  it('uses floating edges for backend-authored branch edges', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
@@ -257,12 +255,10 @@ describe('OverviewTabComponent', () => {
     fixture.detectChanges();
 
     const edges = new Map(fixture.componentInstance.edges().map((edge) => [edge.id, edge]));
-    expect(edges.get('active_to_submit_order')?.sourceHandle).toBe('s-right');
-    expect(edges.get('active_to_submit_order')?.targetHandle).toBe('t-left');
-    expect(edges.get('active_to_recovery')?.sourceHandle).toBe('s-bottom');
-    expect(edges.get('active_to_recovery')?.targetHandle).toBe('t-top');
-    expect(edges.get('active_to_submit_order')?.sourceHandle)
-      .not.toBe(edges.get('active_to_recovery')?.sourceHandle);
+    expect(edges.get('active_to_submit_order')?.floating?.()).toBe(true);
+    expect(edges.get('active_to_recovery')?.floating?.()).toBe(true);
+    expect(edges.get('active_to_submit_order')?.sourceHandle).toBe('');
+    expect(edges.get('active_to_recovery')?.targetHandle).toBe('');
   });
 
   it('returns to the global graph when the bot identity changes', () => {

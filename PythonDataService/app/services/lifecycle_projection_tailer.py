@@ -7,7 +7,6 @@ persists a durable file cursor after successful writes.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
@@ -18,7 +17,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.engine.live.account_artifacts import ACCOUNT_EVENTS_FILENAME, account_artifacts_root, read_account_events
+from app.engine.live.account_artifacts import (
+    ACCOUNT_EVENTS_FILENAME,
+    account_artifacts_root,
+    read_account_events_tolerant_with_hash,
+)
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.services.lifecycle_projection_replay import (
@@ -41,7 +44,6 @@ class AccountEventsProjectionSource:
 
     artifacts_root: Path
     account_id: str
-    bot_id: str | None = None
 
     @property
     def path(self) -> Path:
@@ -121,6 +123,43 @@ def write_lifecycle_projection_cursor(path: Path, cursor: LifecycleProjectionCur
         _fsync_parent_dir(path)
 
 
+def merge_lifecycle_projection_cursor_source(
+    path: Path,
+    *,
+    source_key: str,
+    source_kind: LifecycleProjectionSourceKind,
+    source_artifact: str,
+    last_file_position: int,
+    last_source_seq: int | None,
+    source_hash: str | None,
+    updated_at_ms: int,
+) -> LifecycleProjectionCursor:
+    """Atomically merge one source advancement into the durable cursor."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(path):
+        cursor = _read_lifecycle_projection_cursor_unlocked(path)
+        _advance_cursor(
+            cursor,
+            source_key=source_key,
+            source_kind=source_kind,
+            source_artifact=source_artifact,
+            last_file_position=last_file_position,
+            last_source_seq=last_source_seq,
+            source_hash=source_hash,
+            updated_at_ms=updated_at_ms,
+        )
+        data = json.dumps(cursor.model_dump(mode="json"), separators=(",", ":"), sort_keys=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        _fsync_parent_dir(path)
+        return cursor
+
+
 async def tail_lifecycle_projection_sources(
     *,
     cursor_path: Path,
@@ -180,26 +219,24 @@ async def _tail_account_events_source(
     source_key = _source_key("account_events", source.path)
     source_cursor = cursor.sources.get(source_key)
     last_file_position = source_cursor.last_file_position if source_cursor is not None else 0
-    rows = read_account_events(source.artifacts_root, source.account_id)
+    rows, source_hash = read_account_events_tolerant_with_hash(source.artifacts_root, source.account_id)
     if last_file_position > len(rows):
         last_file_position = 0
     new_rows = rows[last_file_position:]
     if not new_rows:
         return 0, False
 
-    source_hash = _sha256_file(source.path)
     batch = batch_from_account_events(
         new_rows,
         account_id=source.account_id,
-        bot_id=source.bot_id,
         source_artifact=str(source.path),
         source_hash=source_hash,
         inserted_at_ms=inserted_at_ms,
         start_file_position=last_file_position + 1,
     )
     written = await write_replay_batch(batch, store=store)
-    _advance_cursor(
-        cursor,
+    merged_cursor = merge_lifecycle_projection_cursor_source(
+        cursor_path,
         source_key=source_key,
         source_kind="account_events",
         source_artifact=str(source.path),
@@ -208,7 +245,7 @@ async def _tail_account_events_source(
         source_hash=source_hash,
         updated_at_ms=inserted_at_ms,
     )
-    write_lifecycle_projection_cursor(cursor_path, cursor)
+    cursor.sources = merged_cursor.sources
     return written, True
 
 
@@ -223,14 +260,13 @@ async def _tail_intent_wal_source(
     source_key = _source_key("intent_wal", source.wal_path)
     source_cursor = cursor.sources.get(source_key)
     last_source_seq = source_cursor.last_source_seq if source_cursor is not None else 0
-    events = IntentWal(source.wal_path).read_tail()
+    events, source_hash = IntentWal(source.wal_path).read_tail_with_hash()
     if source_cursor is not None and source_cursor.last_file_position > len(events):
         last_source_seq = 0
     new_events = [event for event in events if event.seq > (last_source_seq or 0)]
     if not new_events:
         return 0, False
 
-    source_hash = _sha256_file(source.wal_path)
     batch = batch_from_intent_events(
         new_events,
         bot_id=source.bot_id,
@@ -243,8 +279,8 @@ async def _tail_intent_wal_source(
         inserted_at_ms=inserted_at_ms,
     )
     written = await write_replay_batch(batch, store=store)
-    _advance_cursor(
-        cursor,
+    merged_cursor = merge_lifecycle_projection_cursor_source(
+        cursor_path,
         source_key=source_key,
         source_kind="intent_wal",
         source_artifact=str(source.wal_path),
@@ -253,7 +289,7 @@ async def _tail_intent_wal_source(
         source_hash=source_hash,
         updated_at_ms=inserted_at_ms,
     )
-    write_lifecycle_projection_cursor(cursor_path, cursor)
+    cursor.sources = merged_cursor.sources
     return written, True
 
 
@@ -282,14 +318,10 @@ def _source_key(source_kind: LifecycleProjectionSourceKind, path: Path) -> str:
     return f"{source_kind}:{path.resolve()}"
 
 
-def _sha256_file(path: Path) -> str | None:
+def _read_lifecycle_projection_cursor_unlocked(path: Path) -> LifecycleProjectionCursor:
     if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return LifecycleProjectionCursor()
+    return LifecycleProjectionCursor.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def _last_account_event_source_seq(rows: list[dict]) -> int | None:
@@ -308,6 +340,7 @@ __all__ = [
     "LifecycleProjectionSourceCursor",
     "LifecycleProjectionTailResult",
     "default_lifecycle_projection_cursor_path",
+    "merge_lifecycle_projection_cursor_source",
     "read_lifecycle_projection_cursor",
     "tail_lifecycle_projection_sources",
     "write_lifecycle_projection_cursor",

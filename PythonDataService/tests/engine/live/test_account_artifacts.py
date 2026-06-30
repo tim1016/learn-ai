@@ -21,6 +21,7 @@ from app.engine.live.account_artifacts import (
     evaluate_account_instance_binding,
     evaluate_restart_intensity,
     read_account_events,
+    read_account_events_tolerant,
     read_account_freeze,
     read_account_instance_registry,
     write_account_freeze,
@@ -115,6 +116,20 @@ def test_append_account_event_rejects_bad_explicit_timestamp(tmp_path: Path) -> 
     assert read_account_events(tmp_path, "DU123456") == []
 
 
+def test_append_account_event_rejects_bad_timestamp_extra(tmp_path: Path) -> None:
+    with pytest.raises(AccountArtifactError, match="created_at_ms"):
+        account_artifacts.append_account_event(
+            tmp_path,
+            "DU123456",
+            {
+                "event_type": "account_owner_reconnect_resumed",
+                "created_at_ms": "2026-06-30T12:00:00Z",
+            },
+        )
+
+    assert read_account_events(tmp_path, "DU123456") == []
+
+
 def test_append_account_event_requires_event_type(tmp_path: Path) -> None:
     with pytest.raises(AccountArtifactError, match="event_type"):
         account_artifacts.append_account_event(
@@ -126,7 +141,7 @@ def test_append_account_event_requires_event_type(tmp_path: Path) -> None:
     assert read_account_events(tmp_path, "DU123456") == []
 
 
-def test_read_account_events_skips_malformed_legacy_rows(tmp_path: Path) -> None:
+def test_read_account_events_fails_closed_on_malformed_current_rows(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)
     path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
@@ -135,7 +150,20 @@ def test_read_account_events_skips_malformed_legacy_rows(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    events = read_account_events(tmp_path, "DU123456")
+    with pytest.raises(AccountArtifactError, match="malformed account event row"):
+        read_account_events(tmp_path, "DU123456")
+
+
+def test_read_account_events_tolerant_skips_malformed_legacy_rows(tmp_path: Path) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    path.write_text(
+        '{"event_type":"legacy","account_id":"DU123456"}\nnot-json\n[]\n',
+        encoding="utf-8",
+    )
+
+    events = read_account_events_tolerant(tmp_path, "DU123456")
 
     assert events == [{"event_type": "legacy", "account_id": "DU123456"}]
 

@@ -48,14 +48,6 @@ section,
   background: var(--info-soft);
 }
 
-.timeline-band {
-  border-color: var(--border);
-
-  &.fallback {
-    border-style: dashed;
-  }
-}
-
 .eyebrow {
   margin: 0 0 0.35rem;
   color: var(--text-muted);
@@ -98,50 +90,12 @@ p {
 }
 
 .reason-list,
-.timeline-band ol,
 .attention-band ul {
   display: grid;
   gap: 0.5rem;
   margin: 0.75rem 0 0;
   padding: 0;
   list-style: none;
-}
-
-.timeline-notice {
-  color: var(--warn);
-  font-weight: 700;
-}
-
-.timeline-band li {
-  display: grid;
-  gap: 0.35rem;
-  padding: 0.65rem;
-  border-left: 3px solid var(--info);
-  background: var(--bg-surface);
-
-  &.severity-warning {
-    border-left-color: var(--warn);
-  }
-
-  &.severity-critical {
-    border-left-color: var(--bear);
-  }
-
-  strong {
-    color: var(--text-primary);
-    line-height: 1.25;
-  }
-}
-
-.timeline-row-header,
-.timeline-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.6rem;
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  overflow-wrap: anywhere;
 }
 
 .reason-list li {

@@ -2273,6 +2273,7 @@ class BotLifecycleEvent(BaseModel):
     schema_version: int = 1
     event_id: str
     bot_id: str | None = None
+    run_id: str | None = None
     account_id: str | None = None
     event_type: str
     category: LifecycleEventCategory
@@ -2290,6 +2291,7 @@ class BotLifecycleEvent(BaseModel):
     operator_next_step: str | None = None
     evidence_refs: list[LifecycleEvidenceRef] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
+    rendered_template_id: str | None = None
 
     @model_validator(mode="after")
     def _timestamp_resolution_contract(self) -> BotLifecycleEvent:

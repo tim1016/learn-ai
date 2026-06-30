@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (watchdog recovery-receipt slice: unresolved watchdog incidents surface in the recovery lane with backend-authored `int64 ms UTC` evidence).
+> **Last reviewed:** 2026-06-30 (thermonuclear review hardening: projection ordering/source receipts, replay/tailer atomicity, writer-guard/recovery fact ownership, NY-session activity consistency, and Angular render-only decomposition).
 
 ---
 
@@ -180,10 +180,26 @@ Python owns all projection authoring. Projection rows are derived from
 backend-authored lifecycle/account evidence such as `intent_events.jsonl`,
 `account_events.jsonl`, reconciliation receipts, broker activity evidence, and
 AccountOwner generation events. Each row carries source provenance
-(`account_id`, optional `strategy_instance_id` / `run_id`, `ts_ms`,
-`source_artifact`, `source_seq`/offset/hash where available, node/gate ids,
-status, severity, summary, and JSON receipt payload). Replays are idempotent by
+(`account_id`, optional per-row `strategy_instance_id` / `run_id`, `ts_ms`,
+`source_artifact`, `source_type`, `source_rank`, `source_seq`/offset/hash where
+available, node/gate ids, status, severity, summary, rendered headline,
+rendered template id, and JSON receipt payload). Replays are idempotent by
 authored `event_id` plus source indexes.
+
+Timeline and safety-triage reads are newest-first and deterministic:
+unresolved timestamps sort last; resolved rows then sort by `ts_ms DESC`,
+`source_rank DESC`, `source_seq DESC NULLS LAST`, and stable database id. This
+is a display-query order, not a causality claim. The read-side rank vocabulary
+is owned in `PythonDataService/app/services/bot_lifecycle_projection.py` and is
+only a same-millisecond tie-break over existing file-backed evidence.
+
+Replay batches persist bot rows, account rows, and AccountOwner status
+snapshots in one database transaction. Replay source identities must be
+canonical artifact paths; account-scoped rows derive bot/run scope from their
+own typed evidence rather than from a source-level default. The artifact tailer
+advances its cursor only after the replay batch commits, merges cursor updates
+under a file lock, and records a hash of the same byte snapshot used for
+parsing.
 
 If `LIFECYCLE_PROJECTION_ENABLED=false`, `POSTGRES_URL` is empty, the database
 is stale, or the projection is down, the cockpit must use the existing
@@ -197,7 +213,8 @@ Safety-claim limits for this slice:
   when Python authored that status from canonical evidence.
 - Projection rows may surface AccountOwner generation and phase when present.
 - Projection rows may support fleet triage queries such as "show warning or
-  critical lifecycle rows."
+  critical lifecycle rows." The safety-triage endpoint and TypeScript contract
+  expose only the `warning` / `critical` severity subset.
 - Projection rows may **not** claim R3 AccountOwner daemon/IPC single-writer
   authority. That daemon is still not shipped.
 - A UI must not infer "safe to submit" from the projection table alone. That
@@ -205,10 +222,10 @@ Safety-claim limits for this slice:
   safety, submit capability, owner generation phase, reconciliation freshness,
   and unresolved exposure.
 
-Not shipped in the initial storage slice: the long-running artifact tailer,
-Angular trader right pane, `operator_surface.trader_guidance`, the
-submit-readiness enum, and R3 AccountOwner daemon/IPC. A manual/service artifact
-tailer seam is now shipped, but no background scheduler owns it yet.
+Still not shipped: a background scheduler/daemon for the artifact tailer, a
+canonical Postgres control plane, and R3 AccountOwner daemon/IPC. The current
+tailer is a callable service seam only; `/status` and operator safety still come
+from canonical files and Python facts.
 
 ## 5. Current Submit Authority
 
@@ -368,25 +385,25 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 
 ### Trader Guidance Snapshot
 
-`PythonDataService/app/services/operator_surface.py` now authors `operator_surface.submit_readiness` and `operator_surface.trader_guidance` from the same backend facts that feed the existing operator surface: broker safety, broker connection, submission capability, uncertain-intent WAL state, reconciliation projection, account freeze evidence, AccountOwner generation/phase evidence, runtime process state, trading-session permission, and readiness gates.
+`PythonDataService/app/services/operator_trader_guidance.py` now authors `operator_surface.submit_readiness` and `operator_surface.trader_guidance` from one prioritized finding list over the same backend facts that feed the existing operator surface: broker safety, broker connection, submission capability, uncertain-intent WAL state, reconciliation projection, account freeze evidence, AccountOwner generation/phase evidence, runtime process state, trading-session permission, and readiness gates. `operator_surface.py` remains the composition boundary rather than a second copy of the decision ladder.
 
 The only shipped `submit_readiness.code` allowed to claim order submission is safe is `safe_to_submit`. It requires broker safety `PAPER_ONLY`, broker connection `CONNECTED`, submission capability `SATISFIED`, no unresolved uncertain intent, AccountOwner phase `accepting` with a known generation, fresh `CLEAN` or `ADOPTED` reconciliation, no account freeze, no hard readiness gate failure, a running host process, and a trading session that permits strategy activity. All other codes are non-submit states: `safe_to_monitor`, `blocked_before_submit`, `broker_state_unproven`, `account_frozen`, `waiting_for_owner_generation`, and `submit_outcome_uncertain`.
 
-The Angular Overview tab now places the authentic lifecycle flowchart and the trader-guidance pane side by side. `trader-guidance-pane.component.*` renders backend-authored `headline`, `explanation`, `risk_*`, `submit_readiness`, `additional_attention_groups`, and `advanced_evidence` fields verbatim. The only frontend-authored mapping in this pane is closed-union action presentation via `renderSuggestedAction`; clicking an `invoke_endpoint/reconcile_instance` remediation emits the backend remediation object to the page, where `BotControlPageComponent` calls the existing `/api/live-instances/{strategy_instance_id}/reconcile` client method.
+The Angular Overview tab now places the authentic lifecycle flowchart and the trader-guidance pane side by side. `trader-guidance-pane.component.*` renders backend-authored `headline`, `explanation`, `risk_*`, `submit_readiness`, `additional_attention_groups`, `advanced_evidence`, and timeline rows verbatim. Trader remediations render through the trader-specific `renderTraderRemediation` helper, separate from cockpit gate suggested actions. Clicking an `invoke_endpoint/reconcile_instance` remediation emits the backend remediation object to the page, where `BotControlPageComponent` calls the existing `/api/live-instances/{strategy_instance_id}/reconcile` client method.
 
 The new contract does not ship an AccountOwner daemon, does not move canonical truth to Postgres, and does not grant Angular permission to compose trader status. Tests pin the backend contract in `PythonDataService/tests/services/test_operator_surface.py` and `PythonDataService/tests/routers/test_live_instances_operator_surface.py`; frontend rendering/dispatch is pinned in `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.spec.ts`, `overview-tab.component.spec.ts`, `bot-control-page.component.spec.ts`, and `live-instances.contract.spec.ts`.
 
 ### Lifecycle Layout Snapshot
 
-The Overview chart's node/edge meaning remains backend-authored through `lifecycle_chart`; Angular owns only fixed graph geometry. `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts` now resolves named ngx-vflow handles from the Angular-owned node coordinates so lateral branches and vertical branches leave a source node from different sides. This changes no Python contract and grants Angular no lifecycle authority. The fan-out guard is pinned in `overview-tab.component.spec.ts` by asserting `active -> submit_order` leaves `s-right` while `active -> recovery` leaves `s-bottom`.
+The Overview chart's node/edge meaning remains backend-authored through `lifecycle_chart`; Angular owns only fixed graph geometry. `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts` uses `ngx-vflow` floating closest-handle routing for all backend-authored edges and no longer carries a bespoke coordinate-to-handle router or hidden handle grid. This changes no Python contract and grants Angular no lifecycle authority. The fan-out guard is pinned in `overview-tab.component.spec.ts` by asserting branch edges are floating and have no custom handle routing.
 
 ### Broker Activity / Writer Authority Snapshot
 
-The Overview chart no longer labels the `broker_writer` global node as a `placeOrder boundary`. `PythonDataService/app/services/bot_lifecycle_chart.py` now labels that node as broker-activity publisher health and includes explicit copy that publisher health is capture health, not proof that R3 AccountOwner daemon/IPC single-writer authority is shipped. The `writer_guard` subnode is the AccountOwner generation/phase row; when generation evidence exists it renders that evidence, and when absent it renders unknown with explicit R2 process-local wording. AccountOwner generation lifecycle events now project to `writer_guard`, not the global `broker_writer` node.
+The Overview chart no longer labels the `broker_writer` global node as a `placeOrder boundary`. `PythonDataService/app/services/bot_lifecycle_chart.py` now labels that node as broker-activity publisher health and includes explicit copy that publisher health is capture health, not proof that R3 AccountOwner daemon/IPC single-writer authority is shipped. The `writer_guard` subnode is the AccountOwner generation/phase row; when generation evidence exists it renders that evidence, and when absent it renders unknown with explicit R2 process-local wording. `writer_guard` status is resolved through one shared AccountOwner chart-status mapping: `accepting` with a known generation is `passed`; `frozen` is `freeze`; missing/unknown phase or missing generation is `unknown`; any other known phase is `active`. AccountOwner generation lifecycle events now project to `writer_guard`, not the global `broker_writer` node.
 
 ### Lifecycle Node Receipt Snapshot
 
-`PythonDataService/app/services/bot_lifecycle_chart.py` now attaches receipt metadata directly to `LifecycleChartNode` rows. The node-level fields are `ts_ms`, `ts_ms_resolved`, and `receipts[]`; each receipt carries a backend-authored label/value plus optional source, gate id, unit, and timestamp. This is the shipped authority for the flowchart's "when / what evidence backs this node?" contract.
+`PythonDataService/app/services/bot_lifecycle_receipts.py` authors receipt metadata for `LifecycleChartNode` rows, and `bot_lifecycle_chart.py` attaches those facts to nodes. The node-level fields are `ts_ms`, `ts_ms_resolved`, and `receipts[]`; each receipt carries a backend-authored label/value plus optional source, gate id, unit, and timestamp. This is the shipped authority for the flowchart's "when / what evidence backs this node?" contract.
 
 The receipt sources are intentionally narrow:
 
@@ -394,27 +411,29 @@ The receipt sources are intentionally narrow:
 - reconciliation nodes expose `operator_surface.reconciliation` facts such as state, adopted-intent count, last reconcile timestamp, and failure reason;
 - `writer_guard` exposes AccountOwner phase/generation facts from `operator_surface.account_owner`.
 
-`BotControlPageComponent` renders the selected node's evidence timestamp and receipt rows in the lifecycle details pane. This is still display evidence only. The rows do not create a new event log, do not make Postgres canonical, do not prove R3 daemon/IPC single-writer authority, and do not let Angular infer a lifecycle or submit-safety verdict. Angular may render and format these rows; Python remains the author of node status, evidence, receipt labels, and receipt values.
+`BotControlPageComponent` renders the selected node's evidence timestamp, and `NodeReceiptsPaneComponent` renders receipt rows in the lifecycle details pane. This is still display evidence only. The rows do not create a new event log, do not make Postgres canonical, do not prove R3 daemon/IPC single-writer authority, and do not let Angular infer a lifecycle or submit-safety verdict. Angular may render and format these rows; Python remains the author of node status, evidence, receipt labels, and receipt values.
 
 ### Lifecycle Timeline Pane Snapshot
 
 The Overview trader-guidance pane now renders the latest bounded rows from `GET /api/lifecycle-projection/timeline`. `LiveRunsService.getLifecycleTimeline(...)` queries by account id, strategy instance id, optional run id, and limit. `BotControlPageComponent` fetches those rows after the canonical file-backed status snapshot loads, then passes them into `TraderGuidancePaneComponent` as display data.
 
-The pane renders backend-authored timeline row `summary` / `rendered_headline`, `why`, `status`, `node_id`, `source_type`, `source_seq`, and `operator_next_step` verbatim, and formats `ts_ms` for display only. If the projection endpoint is unavailable or returns the canonical-fallback flag, the cockpit keeps the existing file-backed status/chart/trader guidance visible and shows a local timeline notice instead of treating Postgres failure as bot-state failure.
+The pane renders backend-authored timeline row `summary` / `rendered_headline`, `why`, `status`, `node_id`, `source_type`, `source_seq`, and `operator_next_step` verbatim through `TraderGuidanceTimelineComponent`, and formats `ts_ms` for display only. Timeline rows are keyed to the loaded status identity; when the status identity changes, stale rows are cleared before the next projection request can complete. If the projection endpoint is unavailable or returns the canonical-fallback flag, the cockpit keeps the existing file-backed status/chart/trader guidance visible and shows a local timeline notice instead of treating Postgres failure as bot-state failure.
 
-This slice does not ship a projector tailer, does not make `/status` depend on Postgres, and does not let Angular derive lifecycle or submit-safety claims from timeline rows.
+This slice does not ship a background projector, does not make `/status` depend on Postgres, and does not let Angular derive lifecycle or submit-safety claims from timeline rows.
 
 ### Account Event Hardening Snapshot
 
-`PythonDataService/app/engine/live/account_artifacts.py` now authors every new `account_events.jsonl` row through `AccountEventRecord`, a typed forward-write envelope requiring `account_id`, `event_type`, monotonic `seq`, and `ts_ms`.
+`PythonDataService/app/engine/live/account_artifacts.py` now authors every new `account_events.jsonl` row through `AccountEventRecord`, a typed forward-write envelope requiring `account_id`, `event_type`, monotonic `seq`, and recorded `ts_ms`.
 
-The account-event path is account-scoped: `append_account_event(artifacts_root, account_id, payload)` always writes the path account id, even if the payload includes a different `account_id`. The append lock assigns `seq` as the next durable account-local sequence, tolerating malformed historical rows while never reusing a sequence. The writer resolves `ts_ms` from explicit `ts_ms` or known domain timestamp fields, then falls back to append time as Unix epoch milliseconds UTC; an explicit malformed `ts_ms` is rejected instead of parsed or localized.
+The account-event path is account-scoped: `append_account_event(artifacts_root, account_id, payload)` always writes the path account id, even if the payload includes a different `account_id`. The append lock assigns `seq` as the next durable account-local sequence, tolerating malformed historical rows while never reusing a sequence. The writer resolves `ts_ms` from explicit `ts_ms` or known domain timestamp fields, then falls back to append time as Unix epoch milliseconds UTC. Any explicit timestamp-shaped field such as `ts_ms`, `recorded_at_ms`, `created_at_ms`, `approved_at_ms`, or `cleared_at_ms` is rejected if it is not a non-negative `int64 ms UTC` value.
 
-Legacy reads stay tolerant. `read_account_events(...)` skips malformed or non-object JSONL rows, and `bot_lifecycle_projection.normalize_account_event(...)` still permits historical rows with missing `seq` or timestamp by setting `ts_ms_resolved=false` rather than fabricating a canonical timestamp. This is hardening for new writes, not a backfill, and it does not move account-event authority to Postgres.
+Canonical safety reads are strict: `read_account_events(...)` raises on unreadable or malformed rows so safety folds fail closed. Projection/replay adapters use the isolated tolerant readers (`read_account_events_tolerant*`) and `bot_lifecycle_projection.normalize_account_event(...)`, which still permits historical rows with missing `seq` or timestamp by setting `ts_ms_resolved=false` rather than fabricating a canonical timestamp. This is hardening for new writes, not a backfill, and it does not move account-event authority to Postgres.
 
 ### Postgres Projection Replay Snapshot
 
 `PythonDataService/app/services/lifecycle_projection_replay.py` is the shipped replay seam for the Postgres lifecycle read model. It consumes already-normalized Intent WAL and account-event inputs through the existing `bot_lifecycle_projection.py` chart projection functions, converts those events to `LifecycleProjectionEventRow` rows, routes bot-scoped rows to `bot_lifecycle_events`, routes account-only rows to `account_lifecycle_events`, and projects `account_owner_generation_recorded` evidence into `account_owner_status_snapshots`.
+
+Replay source artifacts must identify the concrete canonical file being replayed. Account-event rows derive `strategy_instance_id` and `run_id` per event from typed evidence; bot lifecycle rows preserve `run_id` when a run context exists; and AccountOwner status snapshots use the typed `AccountOwnerStatusSnapshotRow` model. A replay batch writes bot rows, account rows, and snapshots atomically before a caller may advance a cursor.
 
 This replay seam does not read artifacts, schedule background work, mutate canonical files, or decide whether a bot/account is safe to operate. The canonical authority remains the file-backed Intent WAL and account artifacts; Postgres is a rebuildable operator/read-side snapshot only. Tests pin this contract in `PythonDataService/tests/services/test_lifecycle_projection_replay.py`.
 
@@ -422,7 +441,7 @@ This replay seam does not read artifacts, schedule background work, mutate canon
 
 `PythonDataService/app/services/lifecycle_projection_tailer.py` is the shipped service seam that reads canonical `account_events.jsonl` and `intent_events.jsonl` artifacts, writes projection batches through `lifecycle_projection_replay.py`, and persists a durable cursor at `projections/lifecycle_projection_cursor.json`.
 
-The cursor is file-backed and source-scoped. It stores source kind, source artifact path, last valid file position, last source-local sequence, source SHA-256, and `updated_at_ms` as `int64 ms UTC`. A cursor advances only after replay-store writes succeed; if the projection write fails, the cursor is not written and the next pass replays the same source rows idempotently by projection `event_id`.
+The cursor is file-backed and source-scoped. It stores source kind, source artifact path, last valid file position, last source-local sequence, source SHA-256, and `updated_at_ms` as `int64 ms UTC`. A cursor advances only after replay-store writes succeed; if the projection write fails, the cursor is not written and the next pass replays the same source rows idempotently by projection `event_id`. Cursor writes merge under a file lock, so independent source updates do not clobber one another.
 
 This tailer does not run from any GET route, does not make `/status` depend on Postgres, does not schedule a background process, and does not make Postgres canonical. It is the business-logic seam a future daemon/worker can call. Tests pin idempotent resume, append-only progress, write-failure cursor behavior, and tailed legacy account-event file positions in `PythonDataService/tests/services/test_lifecycle_projection_tailer.py` and `PythonDataService/tests/services/test_lifecycle_projection_replay.py`.
 
@@ -446,7 +465,9 @@ This is evidence, not a frontend-authored block reason. Python authors the block
 
 ### Recovery Lane Truthfulness Snapshot
 
-`PythonDataService/app/services/bot_lifecycle_chart.py` now keeps the recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders inactive only when there is no active recovery incident. When recovery is active, blocked, or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists.
+`PythonDataService/app/services/bot_lifecycle_chart.py` now resolves the overview `recovery` node through one recovery fact helper so status, evidence, timestamp, and receipts come from the same source. Current precedence is: active account freeze keeps recovery inactive because account safety owns that condition; an unresolved incident renders recovery `blocked` with incident/watchdog receipts; a prior halted run renders `poison`; an actively stopping process renders `active`; otherwise recovery is inactive.
+
+The recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders stay inactive only when there is no active recovery incident. When recovery is active, blocked, or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists.
 
 This slice does not ship a recovery daemon, new flatten proof writer, or R3 AccountOwner IPC process. Missing recovery proof remains missing proof. Recovery timestamps and receipts remain canonical only when authored by backend evidence as `int64 ms UTC`; Angular may format those integers for local display only and must not store, send back, or order lifecycle state by display strings. Tests pin inactive-no-incident and unknown-missing-proof behavior in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
 
@@ -460,13 +481,13 @@ The recovery incident nodes carry backend-authored watchdog receipts for outcome
 
 `GET /api/live-instances/{strategy_instance_id}/activity` now adds backend-authored `reconciliation_warnings[]` when same-session lifecycle submit evidence and Activity broker/order evidence disagree by `order_ref`.
 
-The check reads canonical file-backed evidence only: run-scoped `intent_events.jsonl`, account-scoped AccountOwner submit events, the instance `broker_activity.jsonl`, and the read-only activity repair projection. It compares only rows with resolved `int64 ms UTC` timestamps inside the selected `America/New_York` session date. Missing or unresolved legacy timestamps are not localized or guessed into the session. A lifecycle-only order emits `lifecycle_order_missing_activity`; an Activity-only order emits `activity_order_missing_lifecycle`.
+The check lives in `PythonDataService/app/services/activity_lifecycle_consistency.py` and reads canonical file-backed evidence only: run-scoped `intent_events.jsonl`, account-scoped AccountOwner submit events, the instance `broker_activity.jsonl`, and the read-only activity repair projection. It compares only rows with resolved `int64 ms UTC` timestamps inside the selected `America/New_York` session window. Missing or unresolved legacy timestamps are not localized or guessed into the session. A lifecycle-only order emits `lifecycle_order_missing_activity`; an Activity-only order emits `activity_order_missing_lifecycle`.
 
 These warnings are capture-gap diagnostics, not new trading verdicts. They do not mutate broker-activity WALs, do not write projection rows from a GET, do not make Postgres canonical, and do not let Angular infer lifecycle or submit safety. Tests pin legacy Intent WAL, AccountOwner submit-event, and Activity-only gaps in `PythonDataService/tests/routers/test_live_instances.py`.
 
 ### Lifecycle Template Receipt Snapshot
 
-`PythonDataService/app/services/lifecycle_projection_store.py` now persists `rendered_headline` and `rendered_template_id` for every lifecycle projection row authored from `BotLifecycleEvent`. The rendered headline is the backend-authored lifecycle summary already shown in the timeline; the template id is stable and versioned as `lifecycle_projection.<source>.<event_type>.v1`.
+`PythonDataService/app/services/lifecycle_projection_store.py` now persists `rendered_headline` and `rendered_template_id` for every lifecycle projection row authored from `BotLifecycleEvent`. The rendered headline is the backend-authored lifecycle summary already shown in the timeline; the template id is stable and versioned from the source template before source/event normalization collapses rows into the public projection shape. For example, `ACK_FAILED_UNCERTAIN` and `SUBMIT_UNCERTAIN_HALTED` keep distinct template ids.
 
 This is a reproducibility receipt, not a new text-authoring engine or frontend template map. Historical projection rows carry the rendered text and the backend template id used to author it; Angular renders the text verbatim and may format timestamps only. Tests pin the contract for Intent WAL and AccountOwner account-event rows in `PythonDataService/tests/services/test_lifecycle_projection_replay.py`.
 
@@ -484,15 +505,16 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 | IBKR order placement | `PythonDataService/app/broker/ibkr/orders.py` |
 | Reconciliation | `PythonDataService/app/engine/live/reconciliation_orchestrator.py`, `reconciliation_classifier.py` |
 | Desired state | `PythonDataService/app/engine/live/desired_state.py` |
-| Operator action gates | `PythonDataService/app/services/operator_capability.py`, `resume_guard_state.py`, `operator_surface.py` |
+| Operator action gates | `PythonDataService/app/services/operator_capability.py`, `resume_guard_state.py`, `operator_surface.py`, `operator_trader_guidance.py` |
 | Start/deploy/instance API | `PythonDataService/app/routers/live_instances.py` |
 | Watchdog lease loss | `PythonDataService/app/engine/live/child_watchdog.py`, `watchdog_controller.py` |
 | Account artifacts, recovery, override, and restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
 | Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
 | AccountOwner submit/reconnect lane | `PythonDataService/app/engine/live/account_owner.py` |
-| Operator trader guidance and submit-readiness | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/operator_surface.py`, `PythonDataService/app/routers/live_instances.py`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts` |
+| Operator trader guidance and submit-readiness | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/operator_surface.py`, `PythonDataService/app/services/operator_trader_guidance.py`, `PythonDataService/app/routers/live_instances.py`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-timeline.component.*`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts` |
 | Broker activity vs writer authority charting | `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_projection.py` |
-| Lifecycle chart node receipts | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/bot_lifecycle_chart.py`, `Frontend/src/app/api/live-instances.types.ts` |
-| Lifecycle projection timeline pane | `PythonDataService/app/routers/lifecycle_projection.py`, `Frontend/src/app/services/live-runs.service.ts`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*` |
+| Lifecycle chart node receipts | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_receipts.py`, `Frontend/src/app/api/lifecycle-projection.types.ts`, `Frontend/src/app/components/broker/bot-control/node-receipts-pane.component.*` |
+| Lifecycle projection timeline pane | `PythonDataService/app/routers/lifecycle_projection.py`, `Frontend/src/app/services/live-runs.service.ts`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-timeline.component.*` |
 | Lifecycle chart layout geometry | `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.html` |
 | Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/services/lifecycle_projection_tailer.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
+| Activity/lifecycle consistency diagnostics | `PythonDataService/app/services/activity_lifecycle_consistency.py`, `PythonDataService/app/routers/live_instances.py` |
