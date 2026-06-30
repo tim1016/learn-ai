@@ -53,10 +53,6 @@ export class LifecycleActionButtonComponent {
     return detail ? `${this.statusHeadline()}. ${detail}` : this.statusHeadline();
   });
 
-  ariaLabel(): string {
-    return this.displayLabel();
-  }
-
   activateAction(): void {
     const action = this.action();
     if (this.isDisabled()) {

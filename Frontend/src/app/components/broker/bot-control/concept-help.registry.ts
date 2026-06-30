@@ -1,15 +1,3 @@
-import type { LifecycleChartActionId } from '../../../api/live-instances.types';
-
-const ACTION_HELP: Record<LifecycleChartActionId, string> = {
-  start_process: 'Starts the host-owned bot process when the backend-authored start gate permits it.',
-  resume: 'Asks the running bot to resume order-capable behavior.',
-  pause: 'Asks the running bot to pause new order placement without changing deploy-time settings.',
-  flatten_and_pause: 'Flattens bot-owned exposure, then pauses new order placement.',
-  stop: 'Stops the current live process. Stopped runs require redeploy to recover.',
-  mark_poisoned: 'Irreversibly marks this run unsafe to resume. Recovery requires a fresh deployment.',
-  redeploy: 'Opens deploy with this run prefilled so the next run can use changed settings.',
-};
-
 const NODE_HELP: Record<string, string> = {
   deploy: 'Deployment and host-start evidence for this bot.',
   preflight: 'Configuration and readiness checks before live activity.',
@@ -36,10 +24,6 @@ const BUCKET_HELP: Record<string, string> = {
 };
 
 const GENERIC_GATE_HELP = 'Gate evidence explains which backend proof allowed or blocked the lifecycle step.';
-
-export function actionHelp(id: LifecycleChartActionId): string {
-  return ACTION_HELP[id];
-}
 
 export function nodeHelp(id: string): string {
   return NODE_HELP[id] ?? GENERIC_GATE_HELP;

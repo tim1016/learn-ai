@@ -14,17 +14,12 @@ const ACRONYMS = new Map<string, string>([
 ]);
 
 const CODE_SEGMENT_PATTERN = /^[A-Za-z0-9_.-]+$/;
+const OPAQUE_RECEIPT_VALUE_LABEL_TOKENS = new Set(['id', 'hash', 'path', 'ref', 'url']);
 
 function isCodeLikeSegment(segment: string): boolean {
   const trimmed = segment.trim();
   if (!trimmed) return false;
-  return (
-    CODE_SEGMENT_PATTERN.test(trimmed) &&
-    (trimmed.includes('_') ||
-      trimmed.includes('.') ||
-      trimmed.includes('-') ||
-      trimmed.toUpperCase() === trimmed)
-  );
+  return CODE_SEGMENT_PATTERN.test(trimmed);
 }
 
 function formatToken(token: string): string {
@@ -54,11 +49,26 @@ export function formatReceiptLabel(value: string | null | undefined): string {
     return segments.map(formatCodeSegment).join(', ');
   }
 
-  if (isCodeLikeSegment(trimmed)) {
-    return formatCodeSegment(trimmed);
-  }
-
   return value;
+}
+
+export function isOpaqueReceiptValueLabel(label: string | null | undefined): boolean {
+  const tokens = label
+    ?.trim()
+    .toLowerCase()
+    .split(/[_.-]+/)
+    .filter(Boolean);
+  if (!tokens?.length) return false;
+  const lastToken = tokens[tokens.length - 1];
+  return OPAQUE_RECEIPT_VALUE_LABEL_TOKENS.has(lastToken);
+}
+
+export function formatReceiptValue(
+  label: string | null | undefined,
+  value: string | null | undefined,
+): string {
+  if (value === null || value === undefined) return '';
+  return isOpaqueReceiptValueLabel(label) ? value : formatReceiptLabel(value);
 }
 
 @Pipe({

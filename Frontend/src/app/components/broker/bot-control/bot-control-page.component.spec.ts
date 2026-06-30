@@ -355,8 +355,8 @@ describe('BotControlPageComponent', () => {
       .toContain('Control plane, last known.');
     const runbookLinks = Array.from(el.querySelectorAll<HTMLAnchorElement>('.warning-link'))
       .map((link) => link.getAttribute('href'));
-    expect(runbookLinks).toContain('/docs/signal-engine-methodology#broker%20evidence/health?');
-    expect(runbookLinks).toContain('/docs/signal-engine-methodology#control%20plane/runbook?');
+    expect(runbookLinks).toContain('/runbooks/broker%20evidence%2Fhealth%3F');
+    expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
     expect(el.querySelector('.decision-row')?.textContent).toContain('Broker proof');
@@ -401,7 +401,7 @@ describe('BotControlPageComponent', () => {
     panel.open = false;
     panel.dispatchEvent(new Event('toggle'));
     fixture.detectChanges();
-    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven'))
+    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven:noncritical'))
       .toBe('closed');
     fixture.destroy();
 
@@ -412,6 +412,57 @@ describe('BotControlPageComponent', () => {
     const reopened = (second.nativeElement as HTMLElement)
       .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
     expect(reopened?.open).toBe(false);
+  });
+
+  it('reopens collapsed attention when critical findings appear for the same situation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    window.localStorage.setItem(
+      'bot-control-attention:sid-x:broker_state_unproven:noncritical',
+      'closed',
+    );
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'broker_safety',
+        severity: 'critical',
+        headline: 'Broker safety is unsafe',
+        explanation: 'Paper-safety evidence is unsafe.',
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const panel = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
+    expect(panel?.open).toBe(true);
+    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven:noncritical'))
+      .toBe('closed');
   });
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
@@ -896,6 +947,15 @@ describe('BotControlPageComponent', () => {
         ts_ms: null,
         ts_ms_resolved: false,
       },
+      {
+        label: 'intent_id',
+        value: 'intent-7',
+        unit: null,
+        source: 'readiness',
+        gate_id: null,
+        ts_ms: null,
+        ts_ms_resolved: false,
+      },
     ];
     TestBed.configureTestingModule({
       providers: [
@@ -936,6 +996,10 @@ describe('BotControlPageComponent', () => {
     expect(receipts?.textContent).toContain('Failure Reason');
     expect(receipts?.textContent).toContain('Broker snapshot disagrees with the intent WAL.');
     expect(receipts?.textContent).toContain('Reconciliation Projection');
+    expect(receipts?.textContent).toContain('Intent ID');
+    expect(receipts?.textContent).toContain('intent-7');
+    expect(receipts?.textContent).not.toContain('Intent 7');
+    expect(receipts?.textContent).toContain('Readiness');
   });
 
   it('keeps lifecycle node codes out of trader copy and formats them in receipts', async () => {

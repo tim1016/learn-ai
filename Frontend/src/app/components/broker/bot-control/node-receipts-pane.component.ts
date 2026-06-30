@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { LifecycleChartReceipt } from '../../../api/live-instances.types';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtTimestampNy } from '../format';
 
 @Component({
@@ -14,6 +14,10 @@ import { fmtTimestampNy } from '../format';
 })
 export class NodeReceiptsPaneComponent {
   readonly receipts = input<LifecycleChartReceipt[]>([]);
+
+  receiptValue(receipt: LifecycleChartReceipt): string {
+    return formatReceiptValue(receipt.label, receipt.value);
+  }
 
   receiptTimestamp(receipt: LifecycleChartReceipt): string | null {
     if (receipt.ts_ms === null) return null;

@@ -198,7 +198,9 @@ export class BotControlPageComponent {
   readonly attentionStorageKey = computed(() => {
     const id = this.instanceId();
     const situationCode = this.traderGuidance()?.situation_code ?? null;
-    return id && situationCode ? this.attentionKey(id, situationCode) : null;
+    return id && situationCode
+      ? this.attentionKey(id, situationCode, this.attentionStateKey(this.attentionGroups()))
+      : null;
   });
   readonly isAttentionOpen = computed(() => {
     const key = this.attentionStorageKey();
@@ -334,7 +336,11 @@ export class BotControlPageComponent {
   }
 
   onGateOpenRunbook(slug: string): void {
-    void this.router.navigate(['/docs/signal-engine-methodology'], { fragment: slug });
+    window.open(this.runbookHref(slug), '_blank', 'noopener');
+  }
+
+  runbookHref(slug: string): string {
+    return `/runbooks/${encodeURIComponent(slug)}`;
   }
 
   dispatchOverviewAction(action: LifecycleChartActionId): void {
@@ -555,17 +561,27 @@ export class BotControlPageComponent {
   }
 
   private ensureAttentionOpenState(instanceId: string, status: LiveInstanceStatus): void {
+    const guidance = status.operator_surface.trader_guidance;
     const key = this.attentionKey(
       instanceId,
-      status.operator_surface.trader_guidance.situation_code,
+      guidance.situation_code,
+      this.attentionStateKey(guidance.additional_attention_groups),
     );
     if (Object.prototype.hasOwnProperty.call(this.attentionOpenStates(), key)) return;
     const stored = this.readAttentionOpenState(key);
     this.attentionOpenStates.update((states) => ({ ...states, [key]: stored ?? true }));
   }
 
-  private attentionKey(instanceId: string, situationCode: string): string {
-    return `${ATTENTION_STORAGE_PREFIX}:${instanceId}:${situationCode}`;
+  private attentionKey(instanceId: string, situationCode: string, attentionStateKey: string): string {
+    return `${ATTENTION_STORAGE_PREFIX}:${instanceId}:${situationCode}:${attentionStateKey}`;
+  }
+
+  private attentionStateKey(groups: readonly OperatorSurfaceAttentionGroup[]): string {
+    const criticalCodes = groups
+      .filter((group) => group.severity === 'critical')
+      .map((group) => group.code)
+      .sort();
+    return criticalCodes.length ? `critical:${criticalCodes.join('|')}` : 'noncritical';
   }
 
   private readAttentionOpenState(key: string): boolean | null {

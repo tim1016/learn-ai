@@ -5,7 +5,7 @@
   [class.tone-danger]="action().tone === 'danger'"
   [class.is-disabled]="isDisabled()"
   [attr.aria-disabled]="isDisabled()"
-  [attr.aria-label]="ariaLabel()"
+  [attr.aria-label]="displayLabel()"
   [attr.title]="disabledTooltip()"
   (click)="activateAction()"
   (mouseenter)="hoverAction(true)"

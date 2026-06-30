@@ -5,7 +5,7 @@
       <div>
         <dt>{{ receipt.label | receiptLabel }}</dt>
         <dd>
-          <span data-receipt>{{ receipt.value | receiptLabel }}{{ receipt.unit ? ' ' + receipt.unit : '' }}</span>
+          <span data-receipt>{{ receiptValue(receipt) }}{{ receipt.unit ? ' ' + receipt.unit : '' }}</span>
           @if (receipt.source) {
             <small>{{ receipt.source | receiptLabel }}</small>
           }
