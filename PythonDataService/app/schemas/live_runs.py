@@ -1018,6 +1018,10 @@ class SizingAuditRow(BaseModel):
     this column; future revision may add it). Frontend renders an
     "unknown" badge when ``None``.
 
+    ``reference_price`` is ``None`` when the sizing policy can resolve without
+    a bar price, e.g. FixedShares. Consumers must render absence rather than
+    inventing a price.
+
     ``skipped`` / ``skip_reason`` (Phase 8 / VCR-0003): present on
     rows folded from ``sizing_skip.jsonl``; absent for WAL rows.
     The Sizing card branch on ``skipped`` to render the "skipped"
@@ -1029,7 +1033,7 @@ class SizingAuditRow(BaseModel):
     policy_kind: str
     policy_value: str
     intended_qty: int
-    reference_price: str
+    reference_price: str | None = None
     sized_via: str
     sizing_provenance_at_resolve_time: str | None = None
     skipped: bool | None = None

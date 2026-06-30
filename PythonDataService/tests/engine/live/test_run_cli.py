@@ -1397,6 +1397,113 @@ def test_deployment_validation_completes_clean_session_offline(tmp_path: Path) -
     assert len(execs) == 2
 
 
+def test_deployment_validation_action_plan_routes_trade_symbol_offline(tmp_path: Path) -> None:
+    """A deployment-validation signal stream can trade a separate stock leg.
+
+    ``live_config.symbol`` is the signal/data stream. The single long stock leg
+    in ``live_config.action`` is the traded instrument.
+    """
+    import argparse as _argparse
+    import json as _json
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from zoneinfo import ZoneInfo
+
+    import pandas as pd
+
+    from app.engine.data.trade_bar import TradeBar
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
+
+    ny = ZoneInfo("America/New_York")
+
+    def _bar(hour: int, minute: int, open_: str, close: str) -> TradeBar:
+        start = datetime(2026, 1, 5, hour, minute, tzinfo=ny)
+        o, c = Decimal(open_), Decimal(close)
+        return TradeBar(
+            symbol="SPY",
+            time=start,
+            end_time=start + timedelta(minutes=1),
+            open=o,
+            high=max(o, c),
+            low=min(o, c),
+            close=c,
+            volume=10_000,
+        )
+
+    bars = [
+        _bar(9, 44, "101", "102"),
+        _bar(9, 45, "102", "103"),
+        _bar(9, 46, "104", "104.5"),
+        _bar(9, 47, "105", "105.5"),
+        _bar(9, 48, "106", "106.5"),
+        _bar(9, 49, "107", "107.5"),
+    ]
+    strategy_spec = (
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "engine"
+        / "strategy"
+        / "spec"
+        / "fixtures"
+        / "deployment_validation.spec.json"
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-cross-asset-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "nvda_long",
+                        "instrument": {"kind": "stock", "underlying": "NVDA"},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
+            },
+        },
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    broker = FakeBroker()
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="deployment_validation",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="require",
+        artifacts_root=artifacts_root,
+        broker=broker,
+        bars=iter_bars(bars),
+        client=None,
+    )
+    rc = cmd_start(args)
+
+    assert rc == 0, f"expected a clean exit 0, got {rc}"
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "normal"
+    assert broker.positions.get("NVDA", 0) == 0
+    assert [order.symbol for order in broker.orders] == ["NVDA", "NVDA"]
+    execs = pd.read_parquet(run_dir / "executions.parquet")
+    assert execs["symbol"].to_list() == ["NVDA", "NVDA"]
+
+
 def test_account_durable_intents_project_account_owner_events() -> None:
     intents = _account_durable_intents_from_events(
         [

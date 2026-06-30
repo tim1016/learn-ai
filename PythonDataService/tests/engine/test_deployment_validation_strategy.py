@@ -9,9 +9,11 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode
+from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
 )
+from app.engine.strategy.base import StrategyContext
 
 NY = ZoneInfo("America/New_York")
 
@@ -76,6 +78,27 @@ def test_two_green_bars_from_0945_enter_next_bar_open_and_exit_cycle() -> None:
     assert events[1].time == datetime(2026, 1, 5, 9, 49, tzinfo=NY)
     assert len(strategy.trade_log) == 1
     assert strategy.trade_log[0].signal_reason == "two_consecutive_green_minute_bars"
+
+
+def test_cross_asset_mode_subscribes_signal_symbol_and_orders_trade_symbol() -> None:
+    strategy = DeploymentValidationConsecutiveGreen(symbol="SPY", trade_symbol="NVDA")
+    portfolio = Portfolio(initial_cash=Decimal("100000"))
+    ctx = StrategyContext(portfolio=portfolio)
+    strategy.ctx = ctx
+    strategy.initialize()
+
+    assert ctx.symbols == ["SPY"]
+
+    portfolio.update_reference_price("NVDA", Decimal("500"))
+    for bar in [
+        _bar(9, 44, "100", "101"),
+        _bar(9, 45, "101", "102"),
+    ]:
+        ctx.current_time = bar.end_time
+        strategy.on_minute_bar(bar)
+
+    assert len(portfolio.pending_orders) == 1
+    assert portfolio.pending_orders[0].symbol == "NVDA"
 
 
 def test_red_bar_resets_green_detection() -> None:

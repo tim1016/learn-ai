@@ -1,12 +1,12 @@
 """DeploymentValidationConsecutiveGreen — minute-bar lifecycle validation strategy.
 
-Formula: Long-only deployment-validation strategy on 1-minute bars. Starting at
-09:45 ET, detect two consecutive green minute bars (close > open). After the
-second green bar, submit an entry order intended to fill with Engine Lab's
-``next_bar_open`` mode on the third bar. Hold through the third, fourth, and
-fifth bar closes, then submit ``Liquidate`` on the fifth bar. Reset detection
-state after each exit cycle. Stop detecting new entries at 15:45 ET and
-liquidate any open position.
+Formula: Long-only deployment-validation strategy on 1-minute signal bars.
+Starting at 09:45 ET, detect two consecutive green minute bars (close > open).
+After the second green bar, submit an entry order for the configured trade
+symbol intended to fill with Engine Lab's ``next_bar_open`` mode on the third
+bar. Hold through the third, fourth, and fifth signal-bar closes, then submit
+``Liquidate`` on the fifth bar. Reset detection state after each exit cycle.
+Stop detecting new entries at 15:45 ET and liquidate any open position.
 Reference: Internal strategy specification from user session 2026-06-02.
 Canonical implementation: this file. LEAN companion:
 ``app/lean_sidecar/trusted_samples/deployment_validation.py``.
@@ -52,10 +52,12 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     STRATEGY_KEY = "deployment_validation"
     CONSOLIDATOR_PERIOD_MIN = 1
 
-    def __init__(self, symbol: str = "SPY") -> None:
+    def __init__(self, symbol: str = "SPY", trade_symbol: str | None = None) -> None:
         super().__init__()
-        self._symbol_name = symbol.upper()
-        self._symbol: str = ""
+        self._signal_symbol_name = symbol.upper()
+        self._trade_symbol_name = (trade_symbol or symbol).upper()
+        self._signal_symbol: str = ""
+        self._trade_symbol: str = ""
 
         self._current_date = None
         self._green_streak = 0
@@ -81,12 +83,13 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         self.set_cash(100000)
 
         assert self.ctx is not None
-        self._symbol = self.ctx.add_equity(self._symbol_name)
+        self._signal_symbol = self.ctx.add_equity(self._signal_symbol_name)
+        self._trade_symbol = self._trade_symbol_name
         # A passthrough 1-minute consolidator keeps this strategy on the same
         # charting/order-drain path as other Engine Lab strategies. Decisions
         # are made in on_minute_bar so next_bar_open fills land on the third
         # raw minute bar after the two green confirmation bars.
-        self.ctx.register_consolidator(self._symbol, timedelta(minutes=1), self._on_one_minute_bar)
+        self.ctx.register_consolidator(self._signal_symbol, timedelta(minutes=1), self._on_one_minute_bar)
 
     def _reset_detection(self) -> None:
         self._green_streak = 0
@@ -116,7 +119,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._reset_detection()
             signal = "HOLD"
             if self._in_position or self._entry_pending:
-                self.ctx.liquidate(self._symbol)
+                self.ctx.liquidate(self._trade_symbol)
                 self.ctx.log(f"SESSION FLATTEN SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')}")
                 self._in_position = False
                 self._entry_pending = False
@@ -134,7 +137,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._bars_until_exit_signal -= 1
             signal = "HOLD"
             if self._bars_until_exit_signal <= 0:
-                self.ctx.liquidate(self._symbol)
+                self.ctx.liquidate(self._trade_symbol)
                 self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
                 self._in_position = False
                 self._bars_until_exit_signal = 0
@@ -154,7 +157,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
         if self._green_streak >= 2:
             self._pending_signal_time = bar.end_time
-            self.ctx.set_holdings(self._symbol, Decimal(1))
+            self.ctx.set_holdings(self._trade_symbol, Decimal(1))
             self._entry_pending = True
             self._green_streak = 0
             self.ctx.log(f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
@@ -217,8 +220,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     def on_end_of_algorithm(self) -> None:
         if self._in_position or self._entry_pending:
             assert self.ctx is not None
-            self.ctx.liquidate(self._symbol)
+            self.ctx.liquidate(self._trade_symbol)
             self._in_position = False
             self._entry_pending = False
-
 

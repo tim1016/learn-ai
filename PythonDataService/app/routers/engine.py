@@ -174,9 +174,10 @@ class OrbParams(StrategyParamsBase):
 
 
 class DeploymentValidationParams(StrategyParamsBase):
-    """Fixed deployment-validation strategy with configurable ticker."""
+    """Deployment-validation strategy with configurable signal/trade tickers."""
 
     symbol: str = Field("SPY", min_length=1, max_length=20)
+    trade_symbol: str | None = Field(None, min_length=1, max_length=20)
 
 
 class EmaCrossoverOptionsParams(StrategyParamsBase):
@@ -812,7 +813,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         algorithm_pseudocode=(
             "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
+            "    signal symbol = configurable (default SPY)\n"
+            "    trade symbol  = configurable (defaults to signal symbol)\n"
             "    resolution = 1-minute bars\n"
             "    session    = regular session data; strategy starts at 09:45 ET\n"
             "\n"
@@ -856,6 +858,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         param_schema=DeploymentValidationParams,
         build=lambda p: DeploymentValidationConsecutiveGreen(
             symbol=p.symbol,  # type: ignore[attr-defined]
+            trade_symbol=p.trade_symbol,  # type: ignore[attr-defined]
         ),
     ),
     "spy_ema_crossover_options": StrategyRegistration(

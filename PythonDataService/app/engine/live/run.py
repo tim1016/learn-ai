@@ -805,6 +805,30 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     return LiveConfig(**kwargs)
 
 
+def _strategy_param_kwargs_from_live_config(
+    registration,
+    live_config: LiveConfig,  # noqa: F821
+    ledger_live_config: dict,
+) -> dict:
+    """Build strategy params from the hashed live config.
+
+    ``live_config.symbol`` remains the signal/data stream. For strategies that
+    opt into a separate ``trade_symbol`` param, a single long stock action-plan
+    leg is the trade target.
+    """
+    fields = registration.param_schema.model_fields
+    kwargs: dict = {}
+    if "symbol" in fields:
+        kwargs["symbol"] = live_config.symbol
+    if "trade_symbol" in fields:
+        from app.engine.live.config import stock_symbol_from_action_plan
+
+        trade_symbol = stock_symbol_from_action_plan(ledger_live_config.get("action"))
+        if trade_symbol is not None:
+            kwargs["trade_symbol"] = trade_symbol
+    return kwargs
+
+
 def _make_ibkr_client(spec_client_id: int | None):
     """Construct the IBKR client for a live ``start``, pinning the Gateway
     clientId the strategy spec declares (PRD-A §16.3 isolation invariant).
@@ -1312,7 +1336,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        param_kwargs = {"symbol": live_config.symbol} if "symbol" in registration.param_schema.model_fields else {}
+        param_kwargs = _strategy_param_kwargs_from_live_config(
+            registration,
+            live_config,
+            ledger_live_config,
+        )
         strategy_params = registration.param_schema(**param_kwargs)
         strategy = registration.build(strategy_params)
     except Exception as exc:

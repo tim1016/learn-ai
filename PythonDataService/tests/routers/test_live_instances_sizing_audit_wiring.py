@@ -184,6 +184,55 @@ def test_falls_back_to_sidecar_when_no_run_dir(
     assert rows[0]["symbol"] == "LEGACY_ONLY"
 
 
+def test_sizing_surface_accepts_sidecar_row_without_reference_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FixedShares can resolve without a reference price. The status/catalog
+    path must preserve that audit row instead of failing Pydantic validation."""
+    _stub_settings(monkeypatch, tmp_path)
+    run_dir = _seed_run_dir(tmp_path, SID)
+    ledger = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    ledger["live_config"] = {
+        "sizing": {
+            "kind": "FixedShares",
+            "value": 1,
+        }
+    }
+    (run_dir / "run_ledger.json").write_text(json.dumps(ledger), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        SID,
+        rows=[
+            {
+                "ts_ms": 1_780_000_000_000,
+                "symbol": "SPY",
+                "policy_kind": "FixedShares",
+                "policy_value": "1",
+                "intended_qty": 1,
+                "reference_price": None,
+                "sized_via": "policy_set_holdings",
+            }
+        ],
+    )
+
+    sizing = live_instances._sizing(
+        tmp_path / "live_runs",
+        live_binding=None,
+        runs=[
+            {
+                "run_id": "run-001",
+                "run_dir": str(run_dir),
+                "created_at_ms": 1_780_000_000_000,
+            }
+        ],
+        strategy_instance_id=SID,
+    )
+
+    assert sizing is not None
+    assert len(sizing.per_trade_audit) == 1
+    assert sizing.per_trade_audit[0].reference_price is None
+
+
 def test_empty_when_neither_source_has_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
