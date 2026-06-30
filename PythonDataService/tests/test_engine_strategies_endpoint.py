@@ -78,7 +78,9 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     strategy = next(s for s in strategies if s["name"] == "deployment_validation")
     assert strategy["display_name"] == "Deployment Validation"
     assert "minute" in strategy["supported_resolutions"]
-    assert set(strategy["params_schema"]["properties"]) == {"symbol"}
+    props = strategy["params_schema"]["properties"]
+    assert set(props) == {"symbol", "trade_symbol"}
+    assert props["trade_symbol"].get("default") is None
     combined = " ".join(strategy["gotchas"]).lower()
     assert "next_bar_open" in combined
 
