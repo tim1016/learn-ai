@@ -152,6 +152,21 @@ def test_batch_from_account_events_with_bot_id_routes_to_bot_table() -> None:
     assert row.status == "blocked"
 
 
+def test_batch_from_account_events_preserves_tailed_file_position() -> None:
+    batch = batch_from_account_events(
+        [{"event_type": "legacy_account_note", "account_id": "DU123"}],
+        account_id="DU123",
+        source_artifact="/tmp/accounts/DU123/account_events.jsonl",
+        start_file_position=5,
+    )
+
+    assert batch.row_count == 1
+    row = batch.account_events[0]
+    assert row.event_id == "account_event:DU123:5:legacy_account_note"
+    assert row.source_seq == 5
+    assert row.receipt_payload["ts_ms_resolved"] is False
+
+
 @pytest.mark.asyncio
 async def test_write_replay_batch_uses_store_methods() -> None:
     class FakeStore:

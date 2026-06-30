@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (account-event hardening slice: typed forward-write envelope, monotonic account-event sequence, canonical `int64 ms UTC` timestamp storage, tolerant legacy reads, and local-time display boundary).
+> **Last reviewed:** 2026-06-30 (projection artifact tailer slice: durable file cursor over account-event and Intent WAL artifacts, replay-store writes, and scheduler/authority limits).
 
 ---
 
@@ -165,6 +165,9 @@ The first shipped storage slice is:
   `app/services/lifecycle_projection_schema.py`;
 - Python projection store helpers in
   `app/services/lifecycle_projection_store.py`;
+- Python artifact replay/tailer helpers in
+  `app/services/lifecycle_projection_replay.py` and
+  `app/services/lifecycle_projection_tailer.py`;
 - read-only FastAPI endpoints:
   `GET /api/lifecycle-projection/timeline` and
   `GET /api/lifecycle-projection/safety-triage`.
@@ -202,9 +205,10 @@ Safety-claim limits for this slice:
   safety, submit capability, owner generation phase, reconciliation freshness,
   and unresolved exposure.
 
-Not shipped in this slice: the long-running artifact tailer, Angular trader
-right pane, `operator_surface.trader_guidance`, the submit-readiness enum, and
-R3 AccountOwner daemon/IPC.
+Not shipped in the initial storage slice: the long-running artifact tailer,
+Angular trader right pane, `operator_surface.trader_guidance`, the
+submit-readiness enum, and R3 AccountOwner daemon/IPC. A manual/service artifact
+tailer seam is now shipped, but no background scheduler owns it yet.
 
 ## 5. Current Submit Authority
 
@@ -414,6 +418,14 @@ Legacy reads stay tolerant. `read_account_events(...)` skips malformed or non-ob
 
 This replay seam does not read artifacts, schedule background work, mutate canonical files, or decide whether a bot/account is safe to operate. The canonical authority remains the file-backed Intent WAL and account artifacts; Postgres is a rebuildable operator/read-side snapshot only. Tests pin this contract in `PythonDataService/tests/services/test_lifecycle_projection_replay.py`.
 
+### Postgres Projection Artifact Tailer Snapshot
+
+`PythonDataService/app/services/lifecycle_projection_tailer.py` is the shipped service seam that reads canonical `account_events.jsonl` and `intent_events.jsonl` artifacts, writes projection batches through `lifecycle_projection_replay.py`, and persists a durable cursor at `projections/lifecycle_projection_cursor.json`.
+
+The cursor is file-backed and source-scoped. It stores source kind, source artifact path, last valid file position, last source-local sequence, source SHA-256, and `updated_at_ms` as `int64 ms UTC`. A cursor advances only after replay-store writes succeed; if the projection write fails, the cursor is not written and the next pass replays the same source rows idempotently by projection `event_id`.
+
+This tailer does not run from any GET route, does not make `/status` depend on Postgres, does not schedule a background process, and does not make Postgres canonical. It is the business-logic seam a future daemon/worker can call. Tests pin idempotent resume, append-only progress, write-failure cursor behavior, and tailed legacy account-event file positions in `PythonDataService/tests/services/test_lifecycle_projection_tailer.py` and `PythonDataService/tests/services/test_lifecycle_projection_replay.py`.
+
 ## 10. Code Cross-Reference
 
 | Concern | Current files |
@@ -439,4 +451,4 @@ This replay seam does not read artifacts, schedule background work, mutate canon
 | Lifecycle chart node receipts | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/bot_lifecycle_chart.py`, `Frontend/src/app/api/live-instances.types.ts` |
 | Lifecycle projection timeline pane | `PythonDataService/app/routers/lifecycle_projection.py`, `Frontend/src/app/services/live-runs.service.ts`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*` |
 | Lifecycle chart layout geometry | `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.html` |
-| Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
+| Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/services/lifecycle_projection_tailer.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
