@@ -388,7 +388,7 @@ The receipt sources are intentionally narrow:
 - reconciliation nodes expose `operator_surface.reconciliation` facts such as state, adopted-intent count, last reconcile timestamp, and failure reason;
 - `writer_guard` exposes AccountOwner phase/generation facts from `operator_surface.account_owner`.
 
-These receipts are display evidence only. They do not create a new event log, do not make Postgres canonical, do not prove R3 daemon/IPC single-writer authority, and do not let Angular infer a lifecycle or submit-safety verdict. Angular may render and format these rows; Python remains the author of node status, evidence, receipt labels, and receipt values.
+`BotControlPageComponent` renders the selected node's evidence timestamp and receipt rows in the lifecycle details pane. This is still display evidence only. The rows do not create a new event log, do not make Postgres canonical, do not prove R3 daemon/IPC single-writer authority, and do not let Angular infer a lifecycle or submit-safety verdict. Angular may render and format these rows; Python remains the author of node status, evidence, receipt labels, and receipt values.
 
 ### Lifecycle Timeline Pane Snapshot
 
