@@ -379,6 +379,16 @@ def _row_from_record(record: asyncpg.Record) -> LifecycleProjectionEventRow:
 class LifecycleProjectionStore:
     """Thin dependency wrapper around module-level projection helpers."""
 
+    async def upsert_lifecycle_events(
+        self,
+        table: LifecycleProjectionTable,
+        rows: list[LifecycleProjectionEventRow],
+    ) -> int:
+        return await upsert_lifecycle_events(table, rows)
+
+    async def upsert_account_owner_status_snapshot(self, row: dict[str, Any]) -> None:
+        await upsert_account_owner_status_snapshot(row)
+
     async def select_timeline(
         self,
         *,
