@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
-import { OverviewActionsComponent } from './overview-actions.component';
 import { OverviewTabComponent } from './overview-tab.component';
 
 @Component({
@@ -63,7 +62,6 @@ const OVERVIEW_TEST_IMPORTS = [
   NodeHtmlStubDirective,
   EdgeStubDirective,
   CustomTemplateEdgeStubDirective,
-  OverviewActionsComponent,
 ];
 
 function makeStatus(id = 'sid-x'): LiveInstanceStatus {
@@ -147,6 +145,28 @@ describe('OverviewTabComponent', () => {
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
   });
 
+  it('emits the selected lifecycle node when a graph node is activated', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+    TestBed.overrideComponent(OverviewTabComponent, {
+      set: { imports: OVERVIEW_TEST_IMPORTS },
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    const nodeSelected = vi.fn();
+    fixture.componentRef.setInput('status', makeStatus());
+    fixture.componentInstance.nodeSelected.subscribe(nodeSelected);
+    fixture.detectChanges();
+
+    const node = fixture.componentInstance.chart().global_graph.nodes.find((candidate) => !candidate.expandable);
+    if (!node) throw new Error('Expected a non-expandable lifecycle node in fixture.');
+    fixture.componentInstance.expandNode(node);
+    expect(nodeSelected).toHaveBeenCalledWith(node);
+    expect(renderedText(fixture)).toContain('Bot lifecycle overview');
+  });
+
   it('returns to the global graph when the bot identity changes', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
@@ -169,23 +189,4 @@ describe('OverviewTabComponent', () => {
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
   });
 
-  it('emits the backend-authored action id when an enabled action is clicked', () => {
-    TestBed.configureTestingModule({
-      imports: [OverviewTabComponent],
-      providers: [provideZonelessChangeDetection()],
-    });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
-    });
-
-    const fixture = TestBed.createComponent(OverviewTabComponent);
-    const actionInvoked = vi.fn();
-    fixture.componentRef.setInput('status', makeStatus());
-    fixture.componentInstance.actionInvoked.subscribe(actionInvoked);
-    fixture.detectChanges();
-
-    const action = fixture.nativeElement.querySelector('.chart-action') as HTMLButtonElement;
-    action.click();
-    expect(actionInvoked).toHaveBeenCalledWith('start_process');
-  });
 });

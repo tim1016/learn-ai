@@ -15,6 +15,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import type {
   FleetAccountSummary,
   LifecycleChartActionId,
+  LifecycleChartNode,
   LiveInstanceStatus,
   OperatorNotice,
   OperatorSurfaceControlPlane,
@@ -29,13 +30,14 @@ import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confi
 import type { InnerTab } from '../cockpit-v2/lib/instance-tab-state';
 import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
 import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-v2/lib/start-host-process';
+import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 
 const POLL_INTERVAL_MS = 4_000;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
 
-type BotControlTab = 'overview' | InnerTab;
+type BotControlTab = InnerTab;
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
 
 interface ControlPlaneBanner {
@@ -62,6 +64,7 @@ interface ControlPlaneBanner {
     AuditTabComponent,
     ConfigurationTabComponent,
     TypedHaltConfirmComponent,
+    OverviewActionsComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -81,7 +84,8 @@ export class BotControlPageComponent {
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
   readonly accountSummary = signal<FleetAccountSummary | null>(null);
-  readonly selectedTab = signal<BotControlTab>('overview');
+  readonly selectedTab = signal<BotControlTab>('status');
+  readonly selectedLifecycleNodeId = signal<string | null>(null);
   readonly statusError = signal<string | null>(null);
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
@@ -127,6 +131,20 @@ export class BotControlPageComponent {
     };
   });
 
+  readonly rightPaneNode = computed<LifecycleChartNode | null>(() => {
+    const status = this.status();
+    if (!status) return null;
+    const selectedId = this.selectedLifecycleNodeId();
+    if (selectedId) {
+      const selected = this.findLifecycleNode(status, selectedId);
+      if (selected) return selected;
+    }
+    const graph = status.lifecycle_chart.global_graph;
+    return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
+  });
+
+  readonly selectedTabLabel = computed<string>(() => this.tabLabel(this.selectedTab()));
+
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
       const id = params.get('id');
@@ -134,6 +152,8 @@ export class BotControlPageComponent {
       this.clearPollTimer();
       this.instanceId.set(id);
       this.status.set(null);
+      this.selectedTab.set('status');
+      this.selectedLifecycleNodeId.set(null);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
@@ -161,6 +181,11 @@ export class BotControlPageComponent {
 
   selectTab(tab: BotControlTab): void {
     this.selectedTab.set(tab);
+  }
+
+  selectLifecycleNode(node: LifecycleChartNode): void {
+    this.selectedLifecycleNodeId.set(node.id);
+    this.selectedTab.set(this.tabForLifecycleNode(node));
   }
 
   async dispatchResume(): Promise<void> {
@@ -250,6 +275,49 @@ export class BotControlPageComponent {
         this.mutationError.set(`Unsupported lifecycle action: ${String(unreachable)}`);
       }
     }
+  }
+
+  private tabForLifecycleNode(node: LifecycleChartNode): BotControlTab {
+    switch (node.id) {
+      case 'deploy':
+      case 'preflight':
+      case 'activate':
+        return 'configuration';
+      case 'active':
+      case 'submit_order':
+      case 'broker_writer':
+        return 'activity';
+      case 'recovery':
+        return 'audit';
+      case 'account_safety':
+      case 'reconcile':
+      default:
+        return 'status';
+    }
+  }
+
+  private tabLabel(tab: BotControlTab): string {
+    switch (tab) {
+      case 'status':
+        return 'Status & Risk';
+      case 'activity':
+        return 'Activity';
+      case 'audit':
+        return 'Audit';
+      case 'configuration':
+        return 'Configuration';
+    }
+  }
+
+  private findLifecycleNode(status: LiveInstanceStatus, nodeId: string): LifecycleChartNode | null {
+    const chart = status.lifecycle_chart;
+    const globalNode = chart.global_graph.nodes.find((node) => node.id === nodeId);
+    if (globalNode) return globalNode;
+    for (const graph of Object.values(chart.subgraphs)) {
+      const subgraphNode = graph.nodes.find((node) => node.id === nodeId);
+      if (subgraphNode) return subgraphNode;
+    }
+    return null;
   }
 
   openTypedHalt(): void {

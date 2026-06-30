@@ -115,91 +115,123 @@
   }
 
   @if (status(); as s) {
-    <nav class="inner-tabs" aria-label="Bot control views" data-testid="bot-control-tabs">
-      <button
-        type="button"
-        class="inner-tab"
-        [class.selected]="selectedTab() === 'overview'"
-        [attr.aria-current]="selectedTab() === 'overview' ? 'page' : null"
-        (click)="selectTab('overview')"
-      >
-        Overview
-      </button>
-      <button
-        type="button"
-        class="inner-tab"
-        [class.selected]="selectedTab() === 'status'"
-        [attr.aria-current]="selectedTab() === 'status' ? 'page' : null"
-        (click)="selectTab('status')"
-      >
-        Status &amp; Risk
-      </button>
-      <button
-        type="button"
-        class="inner-tab"
-        [class.selected]="selectedTab() === 'activity'"
-        [attr.aria-current]="selectedTab() === 'activity' ? 'page' : null"
-        (click)="selectTab('activity')"
-      >
-        Activity
-      </button>
-      <button
-        type="button"
-        class="inner-tab"
-        [class.selected]="selectedTab() === 'audit'"
-        [attr.aria-current]="selectedTab() === 'audit' ? 'page' : null"
-        (click)="selectTab('audit')"
-      >
-        Audit
-      </button>
-      <button
-        type="button"
-        class="inner-tab"
-        [class.selected]="selectedTab() === 'configuration'"
-        [attr.aria-current]="selectedTab() === 'configuration' ? 'page' : null"
-        (click)="selectTab('configuration')"
-      >
-        Configuration
-      </button>
-    </nav>
+    <app-overview-actions
+      class="top-action-banner"
+      [actions]="s.lifecycle_chart.actions"
+      [busyAction]="busyAction()"
+      (actionInvoked)="dispatchOverviewAction($event)"
+    />
 
-    <section class="active-panel" data-testid="bot-control-active-panel">
-      @switch (selectedTab()) {
-        @case ('overview') {
-          <app-overview-tab
-            [status]="s"
-            [busyAction]="busyAction()"
-            (actionInvoked)="dispatchOverviewAction($event)"
-          />
+    <section class="control-workspace" aria-label="Bot lifecycle control workspace">
+      <div class="lifecycle-pane">
+        <app-overview-tab
+          [status]="s"
+          [selectedNodeId]="selectedLifecycleNodeId()"
+          (nodeSelected)="selectLifecycleNode($event)"
+        />
+      </div>
+
+      <section class="right-pane" aria-label="Lifecycle details and controls">
+        @if (rightPaneNode(); as node) {
+          <header class="context-header" data-testid="bot-control-context-header">
+            <div>
+              <p class="eyebrow">{{ selectedLifecycleNodeId() ? 'Selected lifecycle step' : 'Current lifecycle focus' }}</p>
+              <h2>{{ selectedTabLabel() }}</h2>
+              <p class="context-status">{{ node.label }} · {{ node.lane }} · {{ node.status_label }}</p>
+            </div>
+          </header>
+
+          <section class="context-evidence" aria-label="Lifecycle step evidence">
+            @if (node.summary) {
+              <p>{{ node.summary }}</p>
+            }
+            @if (node.why) {
+              <p>{{ node.why }}</p>
+            }
+            @if (node.operator_next_step) {
+              <p>{{ node.operator_next_step }}</p>
+            }
+            @if (node.evidence_summary) {
+              <p>{{ node.evidence_summary }}</p>
+            }
+          </section>
         }
-        @case ('status') {
-          <app-status-risk-tab
-            [status]="s"
-            (invokeResume)="dispatchResume()"
-            (invokePause)="dispatchPause()"
-            (invokeFlattenAndPause)="dispatchFlattenAndPause()"
-            (focusTab)="selectTab($event)"
-            (redeploy)="onGateRedeploy()"
-            (openRunbook)="onGateOpenRunbook($event)"
-          />
-        }
-        @case ('activity') {
-          <app-activity-tab [status]="s" />
-        }
-        @case ('audit') {
-          <app-audit-tab
-            [status]="s"
-            [busyAction]="busyAction()"
-            (markPoisonedRequested)="openTypedHalt()"
-          />
-        }
-        @case ('configuration') {
-          <app-configuration-tab
-            [status]="s"
-            [redeployQueryParams]="redeployQueryParams()"
-          />
-        }
-      }
+
+        <nav class="inner-tabs" aria-label="Bot control views" data-testid="bot-control-tabs">
+          <button
+            type="button"
+            class="inner-tab"
+            [class.selected]="selectedTab() === 'status'"
+            [attr.aria-current]="selectedTab() === 'status' ? 'page' : null"
+            data-testid="inner-tab-status"
+            (click)="selectTab('status')"
+          >
+            Status &amp; Risk
+          </button>
+          <button
+            type="button"
+            class="inner-tab"
+            [class.selected]="selectedTab() === 'activity'"
+            [attr.aria-current]="selectedTab() === 'activity' ? 'page' : null"
+            data-testid="inner-tab-activity"
+            (click)="selectTab('activity')"
+          >
+            Activity
+          </button>
+          <button
+            type="button"
+            class="inner-tab"
+            [class.selected]="selectedTab() === 'audit'"
+            [attr.aria-current]="selectedTab() === 'audit' ? 'page' : null"
+            data-testid="inner-tab-audit"
+            (click)="selectTab('audit')"
+          >
+            Audit
+          </button>
+          <button
+            type="button"
+            class="inner-tab"
+            [class.selected]="selectedTab() === 'configuration'"
+            [attr.aria-current]="selectedTab() === 'configuration' ? 'page' : null"
+            data-testid="inner-tab-configuration"
+            (click)="selectTab('configuration')"
+          >
+            Configuration
+          </button>
+        </nav>
+
+        <section class="active-panel" data-testid="bot-control-active-panel">
+          @switch (selectedTab()) {
+            @case ('status') {
+              <app-status-risk-tab
+                [status]="s"
+                (invokeResume)="dispatchResume()"
+                (invokePause)="dispatchPause()"
+                (invokeFlattenAndPause)="dispatchFlattenAndPause()"
+                (focusTab)="selectTab($event)"
+                (redeploy)="onGateRedeploy()"
+                (openRunbook)="onGateOpenRunbook($event)"
+              />
+            }
+            @case ('activity') {
+              <app-activity-tab [status]="s" />
+            }
+            @case ('audit') {
+              <app-audit-tab
+                [status]="s"
+                [busyAction]="busyAction()"
+                (markPoisonedRequested)="openTypedHalt()"
+              />
+            }
+            @case ('configuration') {
+              <app-configuration-tab
+                [status]="s"
+                [redeployQueryParams]="redeployQueryParams()"
+              />
+            }
+          }
+        </section>
+      </section>
     </section>
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control…</p>

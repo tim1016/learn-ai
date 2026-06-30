@@ -1,10 +1,10 @@
 <section class="overview-tab" aria-label="Bot lifecycle overview">
   <header class="overview-header">
     <div>
-      <p class="eyebrow">{{ isExpanded() ? 'Focused internals' : 'Global lifecycle' }}</p>
-      <h2>{{ currentGraph().title }}</h2>
+      <p class="eyebrow">Bot lifecycle</p>
+      <h2>Lifecycle overview</h2>
       @if (activeNode(); as node) {
-        <p class="active-summary">{{ node.label }} · {{ node.status_label }}</p>
+        <p class="active-summary">{{ currentGraph().title }} · {{ node.label }} · {{ node.status_label }}</p>
       }
     </div>
     @if (isExpanded()) {
@@ -31,9 +31,10 @@
           <article
             [class]="'flow-node status-' + node.status"
             [class.expandable]="node.expandable"
-            [attr.role]="node.expandable ? 'button' : null"
-            [attr.tabindex]="node.expandable ? 0 : null"
-            [attr.aria-label]="node.expandable ? 'Expand ' + node.label : node.label"
+            [class.selected]="selectedNodeId() === node.id"
+            role="button"
+            tabindex="0"
+            [attr.aria-label]="node.expandable ? 'Open ' + node.label : 'Select ' + node.label"
             (click)="expandNode(node)"
             (keydown)="onNodeKeydown($event, node)"
           >
@@ -64,11 +65,5 @@
         </ng-template>
       </vflow>
     </section>
-
-    <app-overview-actions
-      [actions]="chart().actions"
-      [busyAction]="busyAction()"
-      (actionInvoked)="actionInvoked.emit($event)"
-    />
   </div>
 </section>

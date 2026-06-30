@@ -252,6 +252,161 @@ describe('BotControlPageComponent', () => {
       .toContain('Status & Risk');
   });
 
+  it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Bot actions');
+    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Start bot process');
+    expect(el.querySelector('app-overview-tab')).not.toBeNull();
+    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
+      .toContain('Current lifecycle focus');
+    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
+      .toContain('Status & Risk');
+    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
+      .toContain('Deploy or start');
+
+    const dispatch = vi.spyOn(fixture.componentInstance, 'dispatchOverviewAction');
+    const topAction = el.querySelector('.top-action-banner .chart-action') as HTMLButtonElement;
+    topAction.click();
+    expect(dispatch).toHaveBeenCalledWith('start_process');
+
+    const recovery = fixture.componentInstance.status()
+      ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
+    expect(recovery).toBeDefined();
+    if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
+      .toContain('Selected lifecycle step');
+    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
+      .toContain('Audit');
+    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
+      .toContain('Recovery lane');
+    expect(fixture.componentInstance.selectedTab()).toBe('audit');
+    expect(el.querySelector('[data-testid="inner-tab-audit"]')?.classList.contains('selected'))
+      .toBe(true);
+  });
+
+  it('re-derives selected lifecycle context from refreshed status data', async () => {
+    const firstStatus = makeStatus();
+    const secondStatus = makeStatus();
+    const secondRecovery = secondStatus.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
+    if (!secondRecovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    secondRecovery.status_label = 'Updated by poll';
+    secondRecovery.evidence_summary = 'Recovery evidence refreshed.';
+
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(firstStatus),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const recovery = fixture.componentInstance.status()
+      ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
+    if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+
+    fixture.componentInstance.status.set(secondStatus);
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Updated by poll');
+    expect(text).toContain('Recovery evidence refreshed.');
+  });
+
+  it('resets selected tab and lifecycle context when the route changes to another bot', async () => {
+    const paramMap = new Subject<ReturnType<typeof convertToParamMap>>();
+    const getInstanceStatus = vi.fn().mockResolvedValue(makeStatus());
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus,
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    paramMap.next(convertToParamMap({ id: 'bot-a' }));
+    await flush(fixture);
+
+    const recovery = fixture.componentInstance.status()
+      ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
+    if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.selectedTab()).toBe('audit');
+    expect(fixture.componentInstance.selectedLifecycleNodeId()).toBe('recovery');
+
+    paramMap.next(convertToParamMap({ id: 'bot-b' }));
+    await flush(fixture);
+
+    expect(fixture.componentInstance.selectedTab()).toBe('status');
+    expect(fixture.componentInstance.selectedLifecycleNodeId()).toBeNull();
+  });
+
   it('renders the active bot host-runner warning through the sidebar consumer', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     TestBed.configureTestingModule({
