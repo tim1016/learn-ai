@@ -160,9 +160,11 @@ describe('OverviewTabComponent', () => {
     fixture.componentInstance.nodeSelected.subscribe(nodeSelected);
     fixture.detectChanges();
 
-    const node = fixture.componentInstance.chart().global_graph.nodes[0];
+    const node = fixture.componentInstance.chart().global_graph.nodes.find((candidate) => !candidate.expandable);
+    if (!node) throw new Error('Expected a non-expandable lifecycle node in fixture.');
     fixture.componentInstance.expandNode(node);
     expect(nodeSelected).toHaveBeenCalledWith(node);
+    expect(renderedText(fixture)).toContain('Bot lifecycle overview');
   });
 
   it('returns to the global graph when the bot identity changes', () => {

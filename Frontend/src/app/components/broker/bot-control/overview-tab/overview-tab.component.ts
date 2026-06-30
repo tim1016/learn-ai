@@ -3,7 +3,6 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal, ty
 import { createEdges, createNodes, type Edge, type Node, Vflow } from 'ngx-vflow';
 
 import type {
-  LifecycleChartActionId,
   LifecycleChartEdge,
   LifecycleChartGraph,
   LifecycleChartNode,
@@ -49,9 +48,7 @@ const GLOBAL_LAYOUT: Record<string, Point> = {
 })
 export class OverviewTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
-  readonly busyAction = input<string | null>(null);
   readonly selectedNodeId = input<string | null>(null);
-  readonly actionInvoked = output<LifecycleChartActionId>();
   readonly nodeSelected = output<LifecycleChartNode>();
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);

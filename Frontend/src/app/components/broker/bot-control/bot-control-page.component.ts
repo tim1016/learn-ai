@@ -85,7 +85,7 @@ export class BotControlPageComponent {
   readonly status = signal<LiveInstanceStatus | null>(null);
   readonly accountSummary = signal<FleetAccountSummary | null>(null);
   readonly selectedTab = signal<BotControlTab>('status');
-  readonly selectedLifecycleNode = signal<LifecycleChartNode | null>(null);
+  readonly selectedLifecycleNodeId = signal<string | null>(null);
   readonly statusError = signal<string | null>(null);
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
@@ -132,10 +132,15 @@ export class BotControlPageComponent {
   });
 
   readonly rightPaneNode = computed<LifecycleChartNode | null>(() => {
-    const selected = this.selectedLifecycleNode();
-    if (selected) return selected;
-    const graph = this.status()?.lifecycle_chart.global_graph;
-    return graph?.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
+    const status = this.status();
+    if (!status) return null;
+    const selectedId = this.selectedLifecycleNodeId();
+    if (selectedId) {
+      const selected = this.findLifecycleNode(status, selectedId);
+      if (selected) return selected;
+    }
+    const graph = status.lifecycle_chart.global_graph;
+    return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
 
   readonly selectedTabLabel = computed<string>(() => this.tabLabel(this.selectedTab()));
@@ -147,7 +152,8 @@ export class BotControlPageComponent {
       this.clearPollTimer();
       this.instanceId.set(id);
       this.status.set(null);
-      this.selectedLifecycleNode.set(null);
+      this.selectedTab.set('status');
+      this.selectedLifecycleNodeId.set(null);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
@@ -178,7 +184,7 @@ export class BotControlPageComponent {
   }
 
   selectLifecycleNode(node: LifecycleChartNode): void {
-    this.selectedLifecycleNode.set(node);
+    this.selectedLifecycleNodeId.set(node.id);
     this.selectedTab.set(this.tabForLifecycleNode(node));
   }
 
@@ -301,6 +307,17 @@ export class BotControlPageComponent {
       case 'configuration':
         return 'Configuration';
     }
+  }
+
+  private findLifecycleNode(status: LiveInstanceStatus, nodeId: string): LifecycleChartNode | null {
+    const chart = status.lifecycle_chart;
+    const globalNode = chart.global_graph.nodes.find((node) => node.id === nodeId);
+    if (globalNode) return globalNode;
+    for (const graph of Object.values(chart.subgraphs)) {
+      const subgraphNode = graph.nodes.find((node) => node.id === nodeId);
+      if (subgraphNode) return subgraphNode;
+    }
+    return null;
   }
 
   openTypedHalt(): void {

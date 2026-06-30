@@ -126,10 +126,8 @@
       <div class="lifecycle-pane">
         <app-overview-tab
           [status]="s"
-          [busyAction]="busyAction()"
-          [selectedNodeId]="selectedLifecycleNode()?.id ?? null"
+          [selectedNodeId]="selectedLifecycleNodeId()"
           (nodeSelected)="selectLifecycleNode($event)"
-          (actionInvoked)="dispatchOverviewAction($event)"
         />
       </div>
 
@@ -137,7 +135,7 @@
         @if (rightPaneNode(); as node) {
           <header class="context-header" data-testid="bot-control-context-header">
             <div>
-              <p class="eyebrow">{{ selectedLifecycleNode() ? 'Selected lifecycle step' : 'Current lifecycle focus' }}</p>
+              <p class="eyebrow">{{ selectedLifecycleNodeId() ? 'Selected lifecycle step' : 'Current lifecycle focus' }}</p>
               <h2>{{ selectedTabLabel() }}</h2>
               <p class="context-status">{{ node.label }} · {{ node.lane }} · {{ node.status_label }}</p>
             </div>
