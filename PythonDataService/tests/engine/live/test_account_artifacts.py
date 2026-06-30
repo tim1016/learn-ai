@@ -77,6 +77,69 @@ def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> No
     assert appended["ts_ms"] == 1_700_000_020_000
 
 
+def test_append_account_event_authors_typed_int64_ms_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(account_artifacts.time, "time_ns", lambda: 1_700_000_030_000_000_000)
+
+    account_artifacts.append_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "account_id": "DU999999",
+            "event_type": "account_owner_reconnect_resumed",
+            "reason": "manual reconnect complete",
+        },
+    )
+
+    event = read_account_events(tmp_path, "DU123456")[0]
+    assert event["account_id"] == "DU123456"
+    assert event["event_type"] == "account_owner_reconnect_resumed"
+    assert event["seq"] == 1
+    assert event["ts_ms"] == 1_700_000_030_000
+    assert isinstance(event["ts_ms"], int)
+
+
+def test_append_account_event_rejects_bad_explicit_timestamp(tmp_path: Path) -> None:
+    with pytest.raises(AccountArtifactError, match="ts_ms"):
+        account_artifacts.append_account_event(
+            tmp_path,
+            "DU123456",
+            {
+                "event_type": "account_owner_reconnect_resumed",
+                "ts_ms": "2026-06-30T12:00:00Z",
+            },
+        )
+
+    assert read_account_events(tmp_path, "DU123456") == []
+
+
+def test_append_account_event_requires_event_type(tmp_path: Path) -> None:
+    with pytest.raises(AccountArtifactError, match="event_type"):
+        account_artifacts.append_account_event(
+            tmp_path,
+            "DU123456",
+            {"recorded_at_ms": 1_700_000_020_000},
+        )
+
+    assert read_account_events(tmp_path, "DU123456") == []
+
+
+def test_read_account_events_skips_malformed_legacy_rows(tmp_path: Path) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    path.write_text(
+        '{"event_type":"legacy","account_id":"DU123456"}\nnot-json\n[]\n',
+        encoding="utf-8",
+    )
+
+    events = read_account_events(tmp_path, "DU123456")
+
+    assert events == [{"event_type": "legacy", "account_id": "DU123456"}]
+
+
 def test_account_freeze_clears_after_clean_recovery_proof(tmp_path: Path) -> None:
     evidence = AccountFreezeEvidence(
         account_id="DU123456",

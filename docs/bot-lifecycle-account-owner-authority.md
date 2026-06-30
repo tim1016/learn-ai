@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (lifecycle projection read-model slice: Postgres DDL, Python projection store/read API, canonical-file fallback contract, and safety-claim limits).
+> **Last reviewed:** 2026-06-30 (account-event hardening slice: typed forward-write envelope, monotonic account-event sequence, canonical `int64 ms UTC` timestamp storage, tolerant legacy reads, and local-time display boundary).
 
 ---
 
@@ -30,6 +30,8 @@ Authority order:
 4. Model memory.
 
 Same-PR rule: any PR that changes lifecycle gates, broker submit ownership, watchdog shutdown, reconciliation classification, or AccountOwner artifacts must update this document.
+
+Timestamp rule: every lifecycle/account timestamp persisted to files, stored in Postgres, or sent over an API is `int64` Unix epoch milliseconds UTC. UI code may convert that integer to local/exchange time for display only; display strings are never canonical, never stored, never sent back as timestamps, and never used for lifecycle ordering.
 
 ## 2. Current Architecture
 
@@ -397,6 +399,14 @@ The Overview trader-guidance pane now renders the latest bounded rows from `GET 
 The pane renders backend-authored timeline row `summary` / `rendered_headline`, `why`, `status`, `node_id`, `source_type`, `source_seq`, and `operator_next_step` verbatim, and formats `ts_ms` for display only. If the projection endpoint is unavailable or returns the canonical-fallback flag, the cockpit keeps the existing file-backed status/chart/trader guidance visible and shows a local timeline notice instead of treating Postgres failure as bot-state failure.
 
 This slice does not ship a projector tailer, does not make `/status` depend on Postgres, and does not let Angular derive lifecycle or submit-safety claims from timeline rows.
+
+### Account Event Hardening Snapshot
+
+`PythonDataService/app/engine/live/account_artifacts.py` now authors every new `account_events.jsonl` row through `AccountEventRecord`, a typed forward-write envelope requiring `account_id`, `event_type`, monotonic `seq`, and `ts_ms`.
+
+The account-event path is account-scoped: `append_account_event(artifacts_root, account_id, payload)` always writes the path account id, even if the payload includes a different `account_id`. The append lock assigns `seq` as the next durable account-local sequence, tolerating malformed historical rows while never reusing a sequence. The writer resolves `ts_ms` from explicit `ts_ms` or known domain timestamp fields, then falls back to append time as Unix epoch milliseconds UTC; an explicit malformed `ts_ms` is rejected instead of parsed or localized.
+
+Legacy reads stay tolerant. `read_account_events(...)` skips malformed or non-object JSONL rows, and `bot_lifecycle_projection.normalize_account_event(...)` still permits historical rows with missing `seq` or timestamp by setting `ts_ms_resolved=false` rather than fabricating a canonical timestamp. This is hardening for new writes, not a backfill, and it does not move account-event authority to Postgres.
 
 ### Postgres Projection Replay Snapshot
 

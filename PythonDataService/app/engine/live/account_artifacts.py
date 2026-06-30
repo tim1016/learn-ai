@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -10,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.live_runs import GateResult
@@ -34,10 +35,22 @@ ACCOUNT_EVENT_TS_FIELD_PRECEDENCE: tuple[str, ...] = (
 )
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+logger = logging.getLogger(__name__)
 
 
 class AccountArtifactError(ValueError):
     """Raised when an account artifact path or payload is invalid."""
+
+
+class AccountEventRecord(BaseModel):
+    """Typed forward-write envelope for account-scoped audit events."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    account_id: str = Field(min_length=1, max_length=64)
+    event_type: str = Field(min_length=1, max_length=128)
+    seq: int = Field(ge=1)
+    ts_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
 
 
 class AccountFreezeEvidence(BaseModel):
@@ -272,10 +285,24 @@ def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     if not path.is_file():
         return []
     events: list[dict] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
-        events.append(json.loads(line))
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Skipping malformed account event row",
+                extra={"path": str(path), "line_no": line_no, "error": str(exc)},
+            )
+            continue
+        if not isinstance(row, dict):
+            logger.warning(
+                "Skipping non-object account event row",
+                extra={"path": str(path), "line_no": line_no, "row_type": type(row).__name__},
+            )
+            continue
+        events.append(row)
     return events
 
 
@@ -285,7 +312,7 @@ def append_account_event(
     payload: dict,
 ) -> None:
     root = account_artifacts_root(artifacts_root, account_id)
-    _append_account_event(root, {"account_id": account_id, **payload})
+    _append_account_event(root, {**payload, "account_id": account_id})
 
 
 def write_account_owner_generation(
@@ -614,7 +641,11 @@ def _append_account_event(root: Path, payload: dict) -> None:
         enriched = dict(payload)
         enriched["seq"] = _next_account_event_seq_locked(path)
         enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
-        line = json.dumps(enriched, separators=(",", ":"), sort_keys=True) + "\n"
+        try:
+            record = AccountEventRecord.model_validate(enriched)
+        except ValidationError as exc:
+            raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
+        line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
@@ -644,6 +675,8 @@ def _next_account_event_seq_locked(path: Path) -> int:
 
 
 def _account_event_ts_ms_for_write(payload: dict) -> int:
+    if "ts_ms" in payload and _int_ms_or_none(payload.get("ts_ms")) is None:
+        raise AccountArtifactError("account event ts_ms must be a non-negative int64 ms UTC value")
     resolved, _field = resolve_account_event_ts_ms(payload)
     if resolved is not None:
         return resolved
@@ -681,6 +714,7 @@ __all__ = [
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
     "AccountAuditedOverride",
+    "AccountEventRecord",
     "AccountFreezeEvidence",
     "AccountInstanceBinding",
     "AccountOwnerGeneration",
