@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (recovery-lane truthfulness slice: recovery placeholders render inactive only without an incident and unknown with backend-authored remediation when proof is missing).
+> **Last reviewed:** 2026-06-30 (activity/lifecycle consistency slice: `/activity` warns when lifecycle submit evidence and Activity broker/order evidence disagree by order ref).
 
 ---
 
@@ -449,6 +449,14 @@ This is evidence, not a frontend-authored block reason. Python authors the block
 `PythonDataService/app/services/bot_lifecycle_chart.py` now keeps the recovery subgraph's `flatten`, `reconcile_after`, and `fresh_run` placeholders inactive only when there is no active recovery incident. When recovery is active, blocked, or poisoned, those placeholder nodes render as `unknown` with backend-authored reasons and operator next steps rather than implying that flatten proof, post-incident reconciliation proof, or redeploy proof exists.
 
 This slice does not ship a recovery daemon, new flatten proof writer, or R3 AccountOwner IPC process. Missing recovery proof remains missing proof. Recovery timestamps and receipts remain canonical only when authored by backend evidence as `int64 ms UTC`; Angular may format those integers for local display only and must not store, send back, or order lifecycle state by display strings. Tests pin inactive-no-incident and unknown-missing-proof behavior in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
+
+### Activity/Lifecycle Consistency Snapshot
+
+`GET /api/live-instances/{strategy_instance_id}/activity` now adds backend-authored `reconciliation_warnings[]` when same-session lifecycle submit evidence and Activity broker/order evidence disagree by `order_ref`.
+
+The check reads canonical file-backed evidence only: run-scoped `intent_events.jsonl`, account-scoped AccountOwner submit events, the instance `broker_activity.jsonl`, and the read-only activity repair projection. It compares only rows with resolved `int64 ms UTC` timestamps inside the selected `America/New_York` session date. Missing or unresolved legacy timestamps are not localized or guessed into the session. A lifecycle-only order emits `lifecycle_order_missing_activity`; an Activity-only order emits `activity_order_missing_lifecycle`.
+
+These warnings are capture-gap diagnostics, not new trading verdicts. They do not mutate broker-activity WALs, do not write projection rows from a GET, do not make Postgres canonical, and do not let Angular infer lifecycle or submit safety. Tests pin legacy Intent WAL, AccountOwner submit-event, and Activity-only gaps in `PythonDataService/tests/routers/test_live_instances.py`.
 
 ## 10. Code Cross-Reference
 

@@ -160,6 +160,13 @@ def _write_broker_activity_rows(root: Path, sid: str, rows: list[BrokerActivityR
     )
 
 
+def _write_intent_events(run_dir: Path, events: list[IntentEvent]) -> None:
+    (run_dir / "intent_events.jsonl").write_text(
+        "".join(event.model_dump_json() + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+
 def _write_repairable_ledger(root: Path, run_id: str, sid: str, created_at_ms: int) -> Path:
     run_dir = root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -873,6 +880,112 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     assert fill_event_ids.count("exec:exec-sell") == 1
     fill_events = [row for row in body["broker_activity_rows"] if row["row_type"] == "fill"]
     assert {row["ts_ms"] for row in fill_events} == {base_ms, base_ms + 60_000}
+
+
+async def test_activity_projection_warns_when_lifecycle_order_missing_from_activity(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_lifecycle_gap"
+    run_id = "run-lifecycle-gap"
+    day = live_instances._today_ny()
+    base_ms = int(datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
+    _write_ledger(root, run_id, sid, base_ms)
+    namespace = f"learn-ai/{sid}/v1"
+    order_ref = f"{namespace}:intent-gap"
+    _write_intent_events(
+        root / run_id,
+        [
+            IntentEvent(
+                seq=1,
+                event_type=IntentEventType.SUBMITTED,
+                intent_id="intent-gap",
+                bot_order_namespace=namespace,
+                order_ref=order_ref,
+                order_id=42,
+                ts_ms=base_ms,
+                appended_at_ms=base_ms,
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    warnings = {warning["code"]: warning for warning in response.json()["reconciliation_warnings"]}
+    assert warnings["lifecycle_order_missing_activity"]["row_ids"] == [order_ref]
+
+
+async def test_activity_projection_warns_when_account_owner_order_missing_from_activity(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_account_owner_activity_gap"
+    account_id = "DU123456"
+    run_id = "run-account-owner-activity-gap"
+    day = live_instances._today_ny()
+    base_ms = int(datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
+    _write_ledger(root, run_id, sid, base_ms, account_id=account_id)
+    order_ref = f"learn-ai/{sid}/v1:intent-owner-gap"
+    append_account_event(
+        root.parent,
+        account_id,
+        {
+            "event_type": "account_owner_submit_accepted",
+            "created_at_ms": base_ms,
+            "diagnostics": {
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "intent_id": "intent-owner-gap",
+                "order_ref": order_ref,
+                "order_id": 42,
+            },
+        },
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    warnings = {warning["code"]: warning for warning in response.json()["reconciliation_warnings"]}
+    assert warnings["lifecycle_order_missing_activity"]["row_ids"] == [order_ref]
+
+
+async def test_activity_projection_warns_when_activity_order_missing_from_lifecycle(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_activity_gap"
+    run_id = "run-activity-gap"
+    day = live_instances._today_ny()
+    base_ms = int(datetime(day.year, day.month, day.day, 12, 0, tzinfo=live_instances._NY_TZ).timestamp() * 1000)
+    _write_ledger(root, run_id, sid, base_ms)
+    order_ref = f"learn-ai/{sid}/v1:intent-activity-only"
+    _write_broker_activity_rows(
+        root,
+        sid,
+        [
+            _broker_activity_row(
+                seq=1,
+                ts_ms=base_ms,
+                exec_ts_ms=base_ms,
+                exec_id="exec-activity-gap",
+                perm_id=401,
+                order_ref=order_ref,
+            )
+        ],
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/activity")
+
+    assert response.status_code == 200
+    warnings = {warning["code"]: warning for warning in response.json()["reconciliation_warnings"]}
+    assert warnings["activity_order_missing_lifecycle"]["row_ids"] == [order_ref]
 
 
 async def test_activity_projection_preserves_backend_fill_verdict(
