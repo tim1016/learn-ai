@@ -23,7 +23,11 @@ from app.schemas.live_runs import (
     ReconciliationReceipt,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
-from app.services.bot_lifecycle_projection import project_intent_events
+from app.services.bot_lifecycle_projection import (
+    account_event_to_lifecycle_event,
+    project_account_events,
+    project_intent_events,
+)
 from app.services.operator_surface import compute_operator_surface
 
 _NOW_MS = 1_700_000_000_000
@@ -202,6 +206,11 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert _node_status(chart, "active") == "active"
     assert _edge_status(chart, "deploy_to_preflight") == "passed"
     assert _edge_status(chart, "activate_to_active") == "active"
+    branch_edges = {edge.id: edge for edge in chart.global_graph.edges}
+    assert branch_edges["active_to_submit_order"].source_handle == "source-east"
+    assert branch_edges["active_to_submit_order"].target_handle == "target-west"
+    assert branch_edges["active_to_recovery"].source_handle == "source-south"
+    assert branch_edges["active_to_recovery"].target_handle == "target-north"
     broker_writer = next(node for node in chart.global_graph.nodes if node.id == "broker_writer")
     assert broker_writer.label == "Broker activity"
     assert broker_writer.technical_label == "Publisher health"
@@ -300,12 +309,45 @@ def test_writer_guard_event_uses_account_owner_status_mapping(
     writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
 
     assert writer_guard.status == expected_status
-    assert writer_guard.status_label == {
-        "active": "Here now",
-        "freeze": "Frozen",
-        "passed": "Clear",
-        "unknown": "Unknown",
-    }[expected_status]
+    assert (
+        writer_guard.status_label
+        == {
+            "active": "Here now",
+            "freeze": "Frozen",
+            "passed": "Clear",
+            "unknown": "Unknown",
+        }[expected_status]
+    )
+
+
+def test_reconnect_resumed_event_with_generation_marks_writer_guard_passed() -> None:
+    account_events = project_account_events(
+        [
+            {
+                "account_id": "DU123",
+                "event_type": "account_owner_reconnect_resumed",
+                "seq": 1,
+                "ts_ms": _NOW_MS - 1_000,
+                "phase": "accepting",
+                "generation": 4,
+            }
+        ],
+        account_id="DU123",
+    )
+    lifecycle_events = [
+        account_event_to_lifecycle_event(event).model_copy(update={"bot_id": _SID}) for event in account_events
+    ]
+
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        _surface(),
+        desired_state=_desired("RUNNING"),
+        lifecycle_events=lifecycle_events,
+    )
+    writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
+
+    assert writer_guard.status == "passed"
+    assert writer_guard.status_label == "Clear"
 
 
 def test_submit_uncertainty_reaches_submit_subgraph() -> None:
@@ -389,7 +431,8 @@ def test_recovery_placeholders_are_unknown_while_process_is_stopping() -> None:
     assert nodes["incident"].summary == "The bot process is currently stopping."
     for node_id in ("flatten", "reconcile_after", "fresh_run"):
         assert nodes[node_id].status == "unknown"
-        assert nodes[node_id].operator_next_step is not None
+        assert nodes[node_id].operator_next_step == "WAIT_FOR_STOPPING_TO_FINISH"
+    assert "no flatten-proof requirement is active" in (nodes["flatten"].summary or "")
 
 
 def test_recovery_placeholders_are_unknown_when_recovery_requires_proof() -> None:
@@ -469,6 +512,26 @@ def test_recovery_lane_does_not_mix_prior_halt_with_watchdog_incident() -> None:
     assert incident_node.summary == "The watchdog could not prove the account was flat before disconnect."
     assert incident_node.ts_ms == _NOW_MS - 7_000
     assert receipts["watchdog.outcome"].value == "watchdog.flatten_failed"
+
+
+def test_recovery_lane_surfaces_watchdog_incident_even_when_account_is_frozen() -> None:
+    freeze = AccountFreezeEvidence(
+        account_id="DU123",
+        reason="Unresolved exposure exists after a restart.",
+        source="test",
+        recorded_at_ms=_NOW_MS,
+        operator_next_step="Flatten or reconcile before restarting.",
+    )
+    surface = _surface(account_freeze=freeze, incident_headline_notice=_watchdog_notice())
+
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    recovery_node = next(node for node in chart.global_graph.nodes if node.id == "recovery")
+    incident_node = next(node for node in chart.subgraphs["recovery"].nodes if node.id == "incident")
+
+    assert chart.global_graph.primary_node_id == "recovery"
+    assert recovery_node.status == "blocked"
+    assert incident_node.status == "blocked"
+    assert incident_node.summary == "The watchdog could not prove the account was flat before disconnect."
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:

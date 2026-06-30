@@ -63,6 +63,8 @@ class EdgeDef:
     target: str
     label: str | None = None
     kind: Literal["main", "branch", "linear"] = "linear"
+    source_handle: str | None = None
+    target_handle: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,9 +116,30 @@ GLOBAL_GRAPH = GraphDef(
         EdgeDef("account_safety", "reconcile", kind="main"),
         EdgeDef("reconcile", "activate", kind="main"),
         EdgeDef("activate", "active", kind="main"),
-        EdgeDef("active", "submit_order", "Signal arrives", "branch"),
-        EdgeDef("submit_order", "broker_writer", "Order reaches broker", "branch"),
-        EdgeDef("active", "recovery", "Safety incident", "branch"),
+        EdgeDef(
+            "active",
+            "submit_order",
+            "Signal arrives",
+            "branch",
+            source_handle="source-east",
+            target_handle="target-west",
+        ),
+        EdgeDef(
+            "submit_order",
+            "broker_writer",
+            "Order reaches broker",
+            "branch",
+            source_handle="source-south",
+            target_handle="target-north",
+        ),
+        EdgeDef(
+            "active",
+            "recovery",
+            "Safety incident",
+            "branch",
+            source_handle="source-south",
+            target_handle="target-north",
+        ),
     ),
 )
 
@@ -248,6 +271,7 @@ def _lifecycle_facts(
     submit_order_event = latest_event_for_node(lifecycle_events, "submit_order")
     submit_order_status: LifecycleChartStatus = "passed" if primary_node_id == "broker_writer" else "inactive"
     recovery_status = base_statuses["recovery"]
+    recovery_kind = _recovery_kind(surface)
     facts = {
         "deploy": NodeFact(_status_for("deploy", base_statuses["deploy"], primary_node_id), _host_evidence(surface)),
         "preflight": NodeFact(
@@ -370,9 +394,21 @@ def _lifecycle_facts(
             "No live broker acknowledgement evidence is available in this snapshot.",
         ),
         "incident": recovery_fact,
-        "flatten": _recovery_placeholder_fact("flatten", recovery_status),
-        "reconcile_after": _recovery_placeholder_fact("reconcile_after", recovery_status),
-        "fresh_run": _recovery_placeholder_fact("fresh_run", recovery_status),
+        "flatten": _recovery_placeholder_fact(
+            "flatten",
+            recovery_status,
+            recovery_kind=recovery_kind,
+        ),
+        "reconcile_after": _recovery_placeholder_fact(
+            "reconcile_after",
+            recovery_status,
+            recovery_kind=recovery_kind,
+        ),
+        "fresh_run": _recovery_placeholder_fact(
+            "fresh_run",
+            recovery_status,
+            recovery_kind=recovery_kind,
+        ),
     }
     facts.update(_readiness_gate_facts(surface.readiness_gates))
     return LifecycleFacts(primary_node_id, base_statuses, facts)
@@ -464,7 +500,25 @@ def _submit_order_fact(
     return replace(fact, receipts=receipts)
 
 
-def _recovery_placeholder_fact(node_id: str, recovery_status: LifecycleChartStatus) -> NodeFact:
+def _recovery_placeholder_fact(
+    node_id: str,
+    recovery_status: LifecycleChartStatus,
+    *,
+    recovery_kind: str | None,
+) -> NodeFact:
+    if recovery_kind == "stopping":
+        stopping_reasons = {
+            "flatten": "The bot is already stopping; no flatten-proof requirement is active unless an incident appears.",
+            "reconcile_after": "The bot is stopping; post-incident reconciliation is not required for a routine shutdown.",
+            "fresh_run": "Wait for the process to finish stopping before deciding whether a fresh run is needed.",
+        }
+        next_steps = {
+            "flatten": "WAIT_FOR_STOPPING_TO_FINISH",
+            "reconcile_after": "WAIT_FOR_STOPPING_TO_FINISH",
+            "fresh_run": "WAIT_FOR_STOPPING_TO_FINISH",
+        }
+        reason = stopping_reasons[node_id]
+        return NodeFact("unknown", reason, why=reason, operator_next_step=next_steps[node_id])
     if recovery_status in {"active", "blocked", "poison"}:
         unknown_reasons = {
             "flatten": "No backend-authored flatten proof is available for this recovery incident.",
@@ -487,8 +541,6 @@ def _recovery_placeholder_fact(node_id: str, recovery_status: LifecycleChartStat
 
 
 def _recovery_fact(surface: OperatorSurface) -> NodeFact:
-    if _freeze_status(surface) == "freeze":
-        return NodeFact("inactive", "No active recovery incident is present.")
     if surface.incident_headline is not None:
         ts_ms = surface.incident_headline.occurred_at_ms
         return NodeFact(
@@ -498,11 +550,23 @@ def _recovery_fact(surface: OperatorSurface) -> NodeFact:
             ts_ms_resolved=ts_ms is not None,
             receipts=incident_receipts(surface),
         )
+    if _freeze_status(surface) == "freeze":
+        return NodeFact("inactive", "No active recovery incident is present.")
     if surface.prior_run.classification == "HALT_TRIGGERED":
         return NodeFact("poison", "Previous run halted for safety and requires recovery review.")
     if surface.host_process.state == "STOPPING":
         return NodeFact("active", "The bot process is currently stopping.")
     return NodeFact("inactive", "No active recovery incident is present.")
+
+
+def _recovery_kind(surface: OperatorSurface) -> str | None:
+    if surface.incident_headline is not None:
+        return "incident"
+    if surface.prior_run.classification == "HALT_TRIGGERED":
+        return "prior_halt"
+    if surface.host_process.state == "STOPPING":
+        return "stopping"
+    return None
 
 
 def _build_graph(
@@ -589,7 +653,14 @@ def _edge_from_def(edge_def: EdgeDef, facts: LifecycleFacts) -> LifecycleChartEd
         status = facts.base_statuses["recovery"] if facts.primary_node_id == "recovery" else "inactive"
     else:
         status = "inactive"
-    return _edge(edge_def.source, edge_def.target, status, edge_def.label)
+    return _edge(
+        edge_def.source,
+        edge_def.target,
+        status,
+        edge_def.label,
+        source_handle=edge_def.source_handle,
+        target_handle=edge_def.target_handle,
+    )
 
 
 def _edge(
@@ -597,6 +668,9 @@ def _edge(
     target: str,
     status: LifecycleChartStatus,
     label: str | None = None,
+    *,
+    source_handle: str | None = None,
+    target_handle: str | None = None,
 ) -> LifecycleChartEdge:
     return LifecycleChartEdge(
         id=f"{source}_to_{target}",
@@ -605,6 +679,8 @@ def _edge(
         status=status,
         label=label,
         animated=status not in {"inactive", "unknown"},
+        source_handle=source_handle,
+        target_handle=target_handle,
     )
 
 

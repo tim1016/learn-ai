@@ -27,8 +27,25 @@ interface ExpandedGraphSelection {
   readonly graphId: string;
 }
 
+interface ChartHandle {
+  readonly id: string;
+  readonly type: 'source' | 'target';
+  readonly position: 'top' | 'right' | 'bottom' | 'left';
+}
+
 const NODE_WIDTH = 190;
 const NODE_HEIGHT = 96;
+
+const CHART_HANDLES: readonly ChartHandle[] = [
+  { id: 'target-north', type: 'target', position: 'top' },
+  { id: 'source-north', type: 'source', position: 'top' },
+  { id: 'target-east', type: 'target', position: 'right' },
+  { id: 'source-east', type: 'source', position: 'right' },
+  { id: 'target-south', type: 'target', position: 'bottom' },
+  { id: 'source-south', type: 'source', position: 'bottom' },
+  { id: 'target-west', type: 'target', position: 'left' },
+  { id: 'source-west', type: 'source', position: 'left' },
+];
 
 const GLOBAL_LAYOUT: Record<string, Point> = {
   deploy: { x: 40, y: 36 },
@@ -58,6 +75,7 @@ export class OverviewTabComponent {
   readonly timelineNotice = input<string | null>(null);
   readonly nodeSelected = output<LifecycleChartNode>();
   readonly traderGuidanceAction = output<TraderPrimaryRemediation>();
+  readonly chartHandles = CHART_HANDLES;
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly chart = computed(() => this.status().lifecycle_chart);
@@ -103,7 +121,9 @@ export class OverviewTabComponent {
         target: edge.target,
         type: 'template' as const,
         curve: 'smooth-step' as const,
-        floating: true,
+        sourceHandle: edge.source_handle ?? undefined,
+        targetHandle: edge.target_handle ?? undefined,
+        floating: edge.source_handle === null && edge.target_handle === null,
         data: edge,
         markers: {
           end: {

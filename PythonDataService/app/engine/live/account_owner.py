@@ -222,13 +222,16 @@ class AccountOwner:
         decision = await _maybe_await(reconcile())
         gate = decision.to_gate_result()
         if gate.status == "pass":
-            self._set_phase("accepting")
+            generation = self._set_phase("accepting")
             append_account_event(
                 self._artifacts_root,
                 self._account_id,
                 {
                     "event_type": "account_owner_reconnect_resumed",
                     "reason": decision.reason,
+                    "generation": generation.generation,
+                    "phase": generation.phase,
+                    "recorded_at_ms": generation.recorded_at_ms,
                     "gate_result": gate.model_dump(mode="json"),
                 },
             )
@@ -375,19 +378,21 @@ class AccountOwner:
             "exec_id": None,
         }
 
-    def _set_phase(self, phase: str) -> None:
+    def _set_phase(self, phase: str) -> AccountOwnerGeneration:
         self._phase = phase
         self._accepting = phase == "accepting"
+        generation = AccountOwnerGeneration(
+            account_id=self._account_id,
+            generation=self._owner_generation_provider(),
+            phase=phase,  # type: ignore[arg-type]
+            recorded_at_ms=time.time_ns() // 1_000_000,
+            source="account_owner",
+        )
         write_account_owner_generation(
             self._artifacts_root,
-            AccountOwnerGeneration(
-                account_id=self._account_id,
-                generation=self._owner_generation_provider(),
-                phase=phase,  # type: ignore[arg-type]
-                recorded_at_ms=time.time_ns() // 1_000_000,
-                source="account_owner",
-            ),
+            generation,
         )
+        return generation
 
     def _prepared_without_terminal(self) -> list[dict]:
         events = read_account_events(self._artifacts_root, self._account_id)
