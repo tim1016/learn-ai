@@ -1731,6 +1731,8 @@ class OperatorSurfaceReconciliation(BaseModel):
     failure_reason: str | None = None
     adopted_intent_ids: tuple[str, ...] = ()
     last_reconcile_ms: int | None = None
+    sidecar_wal_seq: int | None = Field(default=None, ge=0)
+    broker_observed_at_ms: int | None = Field(default=None, ge=0)
 
 
 class BrokerActivityHealthFacts(BaseModel):

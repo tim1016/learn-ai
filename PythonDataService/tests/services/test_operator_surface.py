@@ -1262,6 +1262,8 @@ def test_project_reconciliation_failed_carries_reason() -> None:
     proj = _project(_make_receipt(status="failed", failure_reason="broker_probe_failed"))
     assert proj.state == "FAILED"
     assert proj.failure_reason == "broker_probe_failed"
+    assert proj.sidecar_wal_seq == 0
+    assert proj.broker_observed_at_ms == 1000
 
 
 def test_project_reconciliation_passed_clean() -> None:
@@ -1354,6 +1356,8 @@ def test_project_reconciliation_matching_inputs_keep_clean() -> None:
         now_ms=2000,
     )
     assert proj.state == "CLEAN"
+    assert proj.sidecar_wal_seq == 10
+    assert proj.broker_observed_at_ms == 1500
 
 
 def test_compute_operator_surface_default_reconciliation_is_not_available() -> None:

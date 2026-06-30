@@ -1092,6 +1092,26 @@ def _reconciliation_receipts(surface: OperatorSurface) -> tuple[LifecycleChartRe
                 ts_ms=ts_ms,
             )
         )
+    if reconciliation.sidecar_wal_seq is not None:
+        receipts.append(
+            _receipt(
+                "sidecar_wal_seq",
+                reconciliation.sidecar_wal_seq,
+                unit="seq",
+                source="reconciliation_projection",
+                ts_ms=ts_ms,
+            )
+        )
+    if reconciliation.broker_observed_at_ms is not None:
+        receipts.append(
+            _receipt(
+                "broker_observed_at_ms",
+                reconciliation.broker_observed_at_ms,
+                unit="ms UTC",
+                source="reconciliation_projection",
+                ts_ms=reconciliation.broker_observed_at_ms,
+            )
+        )
     if reconciliation.failure_reason:
         receipts.append(
             _receipt("failure_reason", reconciliation.failure_reason, source="reconciliation_projection", ts_ms=ts_ms)
