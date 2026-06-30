@@ -54,7 +54,13 @@ def _seed_run_dir(root: Path, sid: str, run_id: str = "run-001") -> Path:
     return run_dir
 
 
-def _write_sizing_resolved(wal: IntentWal, *, symbol: str = "AAPL", ts_ms: int = 1_780_000_000_000) -> None:
+def _write_sizing_resolved(
+    wal: IntentWal,
+    *,
+    symbol: str = "AAPL",
+    ts_ms: int = 1_780_000_000_000,
+    reference_price: str | None = "100.00",
+) -> None:
     iid = mint_intent_id()
     wal.append(
         event_type=IntentEventType.SIZING_RESOLVED,
@@ -67,7 +73,7 @@ def _write_sizing_resolved(wal: IntentWal, *, symbol: str = "AAPL", ts_ms: int =
         policy_kind="SetHoldings",
         policy_value="1.0",
         intended_qty=10,
-        reference_price="100.00",
+        reference_price=reference_price,
         sizing_provenance_at_resolve_time="live_override",
         sized_via="policy_set_holdings",
         ts_ms=ts_ms,
@@ -123,6 +129,21 @@ def test_wal_fold_wins_over_sidecar(
 
     assert len(rows) == 1
     assert rows[0]["symbol"] == "FROM_WAL"
+
+
+def test_wal_fold_preserves_null_reference_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_settings(monkeypatch, tmp_path)
+    run_dir = _seed_run_dir(tmp_path, SID)
+    wal = IntentWal(run_dir / "intent_events.jsonl")
+    _write_sizing_resolved(wal, symbol="NVDA", reference_price=None)
+
+    rows = live_instances._sizing_audit_rows(SID)
+
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "NVDA"
+    assert rows[0]["reference_price"] is None
 
 
 def test_falls_back_to_sidecar_when_wal_empty(
@@ -182,6 +203,55 @@ def test_falls_back_to_sidecar_when_no_run_dir(
 
     assert len(rows) == 1
     assert rows[0]["symbol"] == "LEGACY_ONLY"
+
+
+def test_sizing_surface_accepts_sidecar_row_without_reference_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FixedShares can resolve without a reference price. The status/catalog
+    path must preserve that audit row instead of failing Pydantic validation."""
+    _stub_settings(monkeypatch, tmp_path)
+    run_dir = _seed_run_dir(tmp_path, SID)
+    ledger = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    ledger["live_config"] = {
+        "sizing": {
+            "kind": "FixedShares",
+            "value": 1,
+        }
+    }
+    (run_dir / "run_ledger.json").write_text(json.dumps(ledger), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        SID,
+        rows=[
+            {
+                "ts_ms": 1_780_000_000_000,
+                "symbol": "SPY",
+                "policy_kind": "FixedShares",
+                "policy_value": "1",
+                "intended_qty": 1,
+                "reference_price": None,
+                "sized_via": "policy_set_holdings",
+            }
+        ],
+    )
+
+    sizing = live_instances._sizing(
+        tmp_path / "live_runs",
+        live_binding=None,
+        runs=[
+            {
+                "run_id": "run-001",
+                "run_dir": str(run_dir),
+                "created_at_ms": 1_780_000_000_000,
+            }
+        ],
+        strategy_instance_id=SID,
+    )
+
+    assert sizing is not None
+    assert len(sizing.per_trade_audit) == 1
+    assert sizing.per_trade_audit[0].reference_price is None
 
 
 def test_empty_when_neither_source_has_evidence(

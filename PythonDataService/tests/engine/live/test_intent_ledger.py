@@ -194,6 +194,30 @@ def test_sizing_resolved_decorates_submitted_order_view_without_changing_status(
     assert order.sizing_resolution.sized_via == "policy_set_holdings"
 
 
+def test_sizing_resolved_preserves_null_reference_price() -> None:
+    from app.engine.live.intent_events import IntentEvent
+    from app.engine.live.intent_ledger import LedgerProjection, fold
+
+    order_ref = build_order_ref(NS, IID)
+    sizing = IntentEvent(
+        seq=1,
+        event_type=IntentEventType.SIZING_RESOLVED,
+        intent_id=IID,
+        bot_order_namespace=NS,
+        order_ref=order_ref,
+        policy_kind="FixedShares",
+        policy_value="1",
+        intended_qty=1,
+        reference_price=None,
+    )
+
+    view = fold(LedgerProjection(), [sizing])
+    order = view.submitted_orders[IID]
+
+    assert order.sizing_resolution is not None
+    assert order.sizing_resolution.reference_price is None
+
+
 def test_sizing_resolved_before_submitted_synthesizes_pending_view() -> None:
     """Edge case: SIZING_RESOLVED appears before PENDING_INTENT in the WAL.
     The fold synthesizes a pending view carrying the resolution; the

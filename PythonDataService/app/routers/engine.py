@@ -174,9 +174,10 @@ class OrbParams(StrategyParamsBase):
 
 
 class DeploymentValidationParams(StrategyParamsBase):
-    """Fixed deployment-validation strategy with configurable ticker."""
+    """Deployment-validation strategy with configurable signal/trade tickers."""
 
     symbol: str = Field("SPY", min_length=1, max_length=20)
+    trade_symbol: str | None = Field(None, min_length=1, max_length=20)
 
 
 class EmaCrossoverOptionsParams(StrategyParamsBase):
@@ -378,6 +379,10 @@ class StrategyRegistration:
     # deploy-form sizing selector is disabled + labelled "self-sized" and
     # the required ``live_config.sizing`` is ``StrategyExplicit``.
     sizing_surface: Literal["policy", "explicit"] = "policy"
+    # Fields accepted only by non-Engine-Lab construction paths. They remain in
+    # ``param_schema`` so the live runner can validate its internal injection,
+    # but are hidden from ``GET /strategies`` and rejected by normal backtests.
+    hidden_params: set[str] = dc_field(default_factory=set)
     # ADR 0012 / PRD #593 Slice 1A — which boundary chooses the
     # *instrument* this strategy trades. ``"explicit"`` (default in
     # Slices 1–3 — every current strategy) means the strategy code
@@ -389,6 +394,38 @@ class StrategyRegistration:
     # field in the run ledger but does not refuse deploys based on it
     # in Slices 1–3 — enforcement lands with consumption (Slice 4).
     instrument_surface: Literal["policy", "explicit"] = "explicit"
+
+
+def _public_params_schema(reg: StrategyRegistration) -> dict[str, Any]:
+    schema = reg.param_schema.model_json_schema()
+    if not reg.hidden_params:
+        return schema
+    schema = dict(schema)
+    properties = dict(schema.get("properties") or {})
+    for name in reg.hidden_params:
+        properties.pop(name, None)
+    schema["properties"] = properties
+    if "required" in schema:
+        schema["required"] = [name for name in schema["required"] if name not in reg.hidden_params]
+    return schema
+
+
+def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> None:
+    hidden = sorted(reg.hidden_params.intersection(params))
+    if hidden:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "params_errors": [
+                    {
+                        "loc": ["params", name],
+                        "msg": "Parameter is live-runtime only and is not supported by Engine Lab backtests.",
+                        "type": "value_error.live_only_param",
+                    }
+                    for name in hidden
+                ]
+            },
+        )
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -812,7 +849,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         algorithm_pseudocode=(
             "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
+            "    signal symbol = configurable (default SPY)\n"
+            "    trade symbol  = configurable (defaults to signal symbol)\n"
             "    resolution = 1-minute bars\n"
             "    session    = regular session data; strategy starts at 09:45 ET\n"
             "\n"
@@ -854,8 +892,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "open position cannot contribute to the next entry pattern.",
         ],
         param_schema=DeploymentValidationParams,
+        hidden_params={"trade_symbol"},
         build=lambda p: DeploymentValidationConsecutiveGreen(
             symbol=p.symbol,  # type: ignore[attr-defined]
+            trade_symbol=p.trade_symbol,  # type: ignore[attr-defined]
         ),
     ),
     "spy_ema_crossover_options": StrategyRegistration(
@@ -1667,7 +1707,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 name=name,
                 display_name=reg.display_name,
                 description=reg.description,
-                params_schema=reg.param_schema.model_json_schema(),
+                params_schema=_public_params_schema(reg),
                 supported_resolutions=sorted(reg.supported_resolutions),
                 algorithm_pseudocode=reg.algorithm_pseudocode,
                 gotchas=list(reg.gotchas),
@@ -1899,6 +1939,7 @@ def execute_engine_backtest(
         )
 
     try:
+        _reject_hidden_params(registration, request.params)
         validated_params = registration.param_schema.model_validate(request.params)
     except ValidationError as exc:
         raise HTTPException(

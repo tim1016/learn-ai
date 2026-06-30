@@ -575,7 +575,12 @@ class LivePortfolio:
         sym = symbol.upper()
         target_fraction = Decimal(str(target_fraction))
         price = self.reference_price.get(sym)
-        if price is None:
+        fixed_shares_without_price = (
+            price is None
+            and self.order_sizer is not None
+            and isinstance(self.order_sizer.policy, FixedShares)
+        )
+        if price is None and not fixed_shares_without_price:
             raise RuntimeError(f"Cannot set_holdings on {sym}: no reference price.")
         current_pos = self.get_position(sym)
         # ADR 0009 § 6 — order-surface fail-fast. A strategy registered as
@@ -609,7 +614,7 @@ class LivePortfolio:
                     "policy_kind": policy.kind,
                     "policy_value": _describe_policy_value(policy),
                     "intended_qty": int(target_quantity),
-                    "reference_price": str(price),
+                    "reference_price": str(price) if price is not None else None,
                     "sized_via": "policy_set_holdings",
                 }
             )
@@ -636,7 +641,7 @@ class LivePortfolio:
                 policy_value=(_describe_policy_value(self.order_sizer.policy) if self.order_sizer is not None else ""),
                 target_qty=int(target_quantity),
                 current_qty=int(current_pos.quantity),
-                reference_price=str(price),
+                reference_price=str(price) if price is not None else None,
                 reason=(
                     "target_equals_current"
                     if target_quantity == current_pos.quantity != 0
@@ -682,7 +687,7 @@ class LivePortfolio:
                     policy_kind=policy.kind,
                     policy_value=_describe_policy_value(policy),
                     intended_qty=int(target_quantity),
-                    reference_price=str(price),
+                    reference_price=str(price) if price is not None else None,
                     sizing_provenance_at_resolve_time=default_sizing_provenance(policy),
                     sized_via="policy_set_holdings",
                     symbol=sym,
@@ -1105,7 +1110,7 @@ class LivePortfolio:
         policy_value: str,
         target_qty: int,
         current_qty: int,
-        reference_price: str,
+        reference_price: str | None,
         reason: str,
     ) -> None:
         """Phase 8 / VCR-0003 — durable SIZING_SKIP audit entry.

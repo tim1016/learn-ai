@@ -37,13 +37,14 @@ class SizingResolution:
     """ADR 0009 § 11 — sizing decision frozen into the WAL for the per-trade
     audit list. Captured at order-construction time (not at fill, not at
     session boundary); the cockpit joins it back to fills on ``intent_id``.
-    ``reference_price`` is stored as a decimal string (money never floats).
+    ``reference_price`` is stored as a decimal string when a price was needed,
+    or ``None`` when the sizing policy resolves without a price.
     """
 
     policy_kind: str
     policy_value: str
     intended_qty: int
-    reference_price: str
+    reference_price: str | None
     sizing_provenance_at_resolve_time: str
     sized_via: str
     ts_ms: int | None = None
@@ -149,7 +150,7 @@ def fold(
                 policy_kind=event.policy_kind,
                 policy_value=event.policy_value or "",
                 intended_qty=event.intended_qty,
-                reference_price=event.reference_price or "",
+                reference_price=event.reference_price,
                 sizing_provenance_at_resolve_time=event.sizing_provenance_at_resolve_time
                 or "live_override",
                 sized_via=event.sized_via or "policy_set_holdings",

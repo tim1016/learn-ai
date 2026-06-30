@@ -26,8 +26,9 @@ LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
         "max_submit_latency_ms",
         "sizing",
         # PRD #593 Slice 1A — operator-declared instrument plan.
-        # Hashed into ``run_id`` like every other key here; engine
-        # consumption is deferred to Slice 4 (ADR 0012 §"Scope").
+        # Hashed into ``run_id`` like every other key here. The current
+        # deployment-validation live path consumes exactly one long stock leg;
+        # unsupported shapes remain declarative until their resolver ships.
         "action",
         # ADR 0014 §6 — per-instance lag thresholds for the broker-activity
         # reconciliation verdict ladder. Optional block; absence ⇒ engine
@@ -90,11 +91,10 @@ class LiveConfig:
 def stock_symbol_from_action_plan(action: object) -> str | None:
     """Return the single stock underlying declared by a live action plan.
 
-    Slice 1 action plans are operator-authored deploy identity. For the current
-    stock-only runtime path, exactly one long stock leg is the traded ticker
-    when ``live_config.symbol`` is absent. Option, short, and multi-leg plans
-    are not consumable by the stock runtime yet, so they deliberately return
-    ``None``.
+    Action plans are operator-authored deploy identity. For the current
+    stock-only runtime path, exactly one long stock leg is the traded ticker.
+    Option, short, and multi-leg plans are not consumable by the stock runtime
+    yet, so they deliberately return ``None``.
     """
     if not isinstance(action, dict):
         return None

@@ -773,7 +773,9 @@ export interface SizingAuditRow {
   policy_kind: string;
   policy_value: string;
   intended_qty: number;
-  reference_price: string;
+  /** Null when the sizing policy can resolve without a bar price, e.g.
+   * FixedShares. Render absence rather than inventing a price. */
+  reference_price: string | null;
   sized_via: string;
   /** VCR-0003 last-mile — provenance stamp the engine mints at
    * policy-resolution time. One of {reference_native, live_override,

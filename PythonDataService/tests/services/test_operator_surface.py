@@ -711,8 +711,46 @@ def test_action_plan_null_yields_unknown_unknown() -> None:
     assert surface.action_plan.anomaly_verdict == "UNKNOWN"
 
 
-def test_action_plan_present_yields_declarative_only_ready() -> None:
+def test_action_plan_unsupported_shape_yields_declarative_only_ready() -> None:
     surface = _surface(action_plan={"version": 1, "legs": []})
+    assert surface.action_plan.consumption == "DECLARATIVE_ONLY"
+    assert surface.action_plan.anomaly_verdict == "READY"
+
+
+def test_action_plan_single_long_stock_yields_active_ready() -> None:
+    surface = _surface(
+        start_defaults=InstanceStartDefaults(strategy="deployment_validation"),
+        action_plan={
+            "on_enter": [
+                {
+                    "leg_id": "nvda_long",
+                    "instrument": {"kind": "stock", "underlying": "NVDA"},
+                    "position": "long",
+                    "qty_ratio": 1,
+                }
+            ],
+            "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
+        }
+    )
+    assert surface.action_plan.consumption == "ACTIVE"
+    assert surface.action_plan.anomaly_verdict == "READY"
+
+
+def test_action_plan_stock_shape_non_consuming_strategy_stays_declarative() -> None:
+    surface = _surface(
+        start_defaults=InstanceStartDefaults(strategy="spy_ema_crossover"),
+        action_plan={
+            "on_enter": [
+                {
+                    "leg_id": "nvda_long",
+                    "instrument": {"kind": "stock", "underlying": "NVDA"},
+                    "position": "long",
+                    "qty_ratio": 1,
+                }
+            ],
+            "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
+        },
+    )
     assert surface.action_plan.consumption == "DECLARATIVE_ONLY"
     assert surface.action_plan.anomaly_verdict == "READY"
 

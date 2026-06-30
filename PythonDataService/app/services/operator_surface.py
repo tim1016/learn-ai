@@ -416,10 +416,21 @@ def _project_daily_order_cap(readiness: ReadinessVector | None) -> OperatorSurfa
 # ---------------------------------------------------------------------------
 
 
-def _project_action_plan(action_plan: dict | None) -> OperatorSurfaceActionPlan:
+def _project_action_plan(
+    action_plan: dict | None,
+    start_defaults: InstanceStartDefaults | None,
+) -> OperatorSurfaceActionPlan:
     if action_plan is None:
         return OperatorSurfaceActionPlan(consumption="UNKNOWN", anomaly_verdict="UNKNOWN")
-    return OperatorSurfaceActionPlan(consumption="DECLARATIVE_ONLY", anomaly_verdict="READY")
+    from app.engine.live.config import stock_symbol_from_action_plan
+
+    consuming_strategy = start_defaults is not None and start_defaults.strategy == "deployment_validation"
+    consumption = (
+        "ACTIVE"
+        if consuming_strategy and stock_symbol_from_action_plan(action_plan) is not None
+        else "DECLARATIVE_ONLY"
+    )
+    return OperatorSurfaceActionPlan(consumption=consumption, anomaly_verdict="READY")
 
 
 def _action_gate_result(
@@ -1054,7 +1065,7 @@ def compute_operator_surface(
         configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),
         current_risk=_project_current_risk(broker),
         daily_order_cap=daily_order_cap,
-        action_plan=_project_action_plan(action_plan),
+        action_plan=_project_action_plan(action_plan, start_defaults),
         account_owner=account_owner,
         submit_readiness=submit_readiness,
         trader_guidance=trader_guidance,

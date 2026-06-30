@@ -381,6 +381,26 @@ def test_set_holdings_appends_sizing_resolved_with_minted_intent_id(tmp_path: Pa
     assert row["sized_via"] == "policy_set_holdings"
 
 
+def test_fixed_shares_without_price_writes_null_reference_price_to_wal(tmp_path: Path) -> None:
+    """FixedShares can size without a bar price; the WAL must preserve null
+    semantics instead of serializing the absence as the string ``"None"``."""
+    broker = FakeBroker()
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        broker,
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("test-instance"),
+    )
+    portfolio.order_sizer = OrderSizer(FixedShares(value=1))
+
+    portfolio.set_holdings("NVDA", Decimal("1.0"), _bar_time())
+
+    events = _read_wal_events(tmp_path)
+    sizing = [e for e in events if e["event_type"] == IntentEventType.SIZING_RESOLVED.value]
+    assert len(sizing) == 1
+    assert sizing[0]["reference_price"] is None
+
+
 def test_set_holdings_skip_writes_no_sizing_resolved(tmp_path: Path) -> None:
     """Phase 8 — a skip (delta == 0) must NOT mint an intent_id and therefore
     must NOT append SIZING_RESOLVED. SIZING_SKIP (which carries no intent_id)
