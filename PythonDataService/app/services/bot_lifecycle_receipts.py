@@ -69,6 +69,31 @@ def daily_order_cap_receipts(surface: OperatorSurface) -> tuple[LifecycleChartRe
     return tuple(receipts)
 
 
+def configuration_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    return tuple(
+        chart_receipt(
+            "configuration.reason_code",
+            code,
+            source="operator_surface.configuration",
+        )
+        for code in surface.configuration.reason_codes
+    )
+
+
+def command_loop_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    freshness = surface.runtime_freshness
+    if freshness is None:
+        return ()
+    return tuple(
+        chart_receipt(
+            "runtime_freshness.command_loop.stale_reason_code",
+            code,
+            source="operator_surface.runtime_freshness.command_loop",
+        )
+        for code in freshness.command_loop.stale_reason_codes
+    )
+
+
 def incident_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
     notice = surface.incident_headline
     if notice is None:
@@ -163,6 +188,8 @@ def account_owner_receipts(surface: OperatorSurface) -> tuple[LifecycleChartRece
 __all__ = [
     "account_owner_receipts",
     "chart_receipt",
+    "command_loop_receipts",
+    "configuration_receipts",
     "daily_order_cap_receipts",
     "event_receipts",
     "incident_receipts",

@@ -29,21 +29,36 @@
     }
 
     @if (overflowActions().length > 0) {
-      <details class="overflow-menu">
-        <summary aria-label="More lifecycle actions">More</summary>
-        <div class="overflow-list">
-          @for (action of overflowActions(); track trackAction($index, action)) {
+      <div class="overflow-menu">
+        <button
+          type="button"
+          class="overflow-trigger"
+          aria-haspopup="menu"
+          [attr.aria-expanded]="overflowMenu.visible ? 'true' : 'false'"
+          (click)="overflowMenu.toggle($event)"
+        >
+          More
+        </button>
+        <p-menu
+          #overflowMenu
+          styleClass="lifecycle-overflow-menu"
+          [model]="overflowMenuItems()"
+          [popup]="true"
+          appendTo="body"
+          ariaLabel="More lifecycle actions"
+        >
+          <ng-template pTemplate="item" let-item>
+            @let action = item.action;
             <app-lifecycle-action-button
               [action]="action"
               [busyAction]="busyAction()"
-              enabledCaption="Typed confirmation required"
               (actionInvoked)="actionInvoked.emit($event)"
               (disabledActionSelected)="disabledActionSelected.emit($event)"
               (actionTargetHovered)="actionTargetHovered.emit($event)"
             />
-          }
-        </div>
-      </details>
+          </ng-template>
+        </p-menu>
+      </div>
     }
   </div>
 </section>

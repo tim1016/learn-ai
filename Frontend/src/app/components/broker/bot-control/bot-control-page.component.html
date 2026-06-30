@@ -176,102 +176,12 @@
 
       <section class="right-pane" aria-label="Lifecycle action and evidence inspector">
         @if (rightPaneNode(); as node) {
-          <header class="context-header" data-testid="bot-control-context-header">
-            <div>
-              <p class="eyebrow">{{ selectedLifecycleNodeId() ? 'Selected lifecycle step' : 'Current lifecycle focus' }}</p>
-              <h2 [attr.title]="nodeHelp(node.id)">{{ node.label }}</h2>
-              <p class="context-status">{{ node.lane }} · {{ node.status_label }}</p>
-            </div>
-          </header>
-
-          <section class="context-evidence" aria-label="Selected lifecycle step evidence">
-            <p data-trader-copy>
-              <strong>Meaning:</strong>
-              {{ node.summary ?? node.why ?? node.evidence_summary ?? 'No trader-language meaning is available yet.' }}
-            </p>
-            @if (node.operator_next_step) {
-              <p data-trader-copy><strong>Action guidance:</strong> {{ node.operator_next_step }}</p>
-            }
-            <p data-trader-copy><strong>Related action:</strong> {{ actionsForNode(node.id) }} -> Act-now bar</p>
-            <p class="context-timestamp">
-              Evidence time: {{ nodeTimestamp(node) }}
-            </p>
-            @if (node.receipts.length > 0) {
-              <app-node-receipts-pane [receipts]="node.receipts" />
-            }
-          </section>
-
-          @if (node.id === 'deploy') {
-            <section
-              class="inspector-section change-next-run"
-              data-testid="bot-control-change-next-run"
-              [attr.title]="bucketHelp('change_for_next_run')"
-            >
-              <header>
-                <p class="eyebrow">Change for next run</p>
-                <h3>Deploy-time settings</h3>
-              </header>
-              <p class="redeploy-warning" data-trader-copy>
-                This does not change the current running bot. It creates a new run with updated settings.
-                Pause or flatten first if you need to stop current trading behavior.
-              </p>
-              <div class="redeploy-fields">
-                @for (field of changeForNextRunFields(); track trackRedeployField($index, field)) {
-                  <article class="redeploy-setting-field" data-testid="redeploy-setting-field">
-                    <div>
-                      <strong>{{ field.label }}</strong>
-                      <p>{{ field.value }}</p>
-                      <small>{{ field.detail }}</small>
-                    </div>
-                    <button type="button" class="link-button" (click)="onGateRedeploy()">Change via redeploy</button>
-                  </article>
-                }
-              </div>
-            </section>
-          }
-
-          <section
-            class="inspector-section locked-evidence"
-            data-testid="bot-control-locked-evidence"
-            [attr.title]="bucketHelp('evidence')"
-          >
-            <header>
-              <p class="eyebrow">Evidence</p>
-              <h3>Read-only proof</h3>
-            </header>
-            <div class="locked-fields">
-              @for (field of lockedEvidenceFields(); track trackEvidenceField($index, field)) {
-                <article class="locked-evidence-field" data-testid="locked-evidence-field">
-                  <span>{{ field.label }}</span>
-                  <strong>{{ field.value }}</strong>
-                  <small>{{ field.source }}</small>
-                  @if (field.receipt) {
-                    <code data-receipt>{{ field.receipt }}</code>
-                  }
-                </article>
-              }
-            </div>
-          </section>
-
-          <details class="inspector-section advanced-evidence" data-testid="trader-guidance-advanced-evidence">
-            <summary>Advanced evidence</summary>
-            <dl>
-              @for (fact of advancedEvidence(); track trackAdvancedEvidence($index, fact)) {
-                <div class="evidence-row" [attr.title]="fact.gate_id ? gateHelp() : null">
-                  <dt>{{ fact.label }}</dt>
-                  <dd>
-                    <span>{{ fact.value }}</span>
-                    @if (fact.source) {
-                      <small>{{ fact.source }}</small>
-                    }
-                    @if (fact.gate_id) {
-                      <code data-receipt>{{ fact.gate_id }}</code>
-                    }
-                  </dd>
-                </div>
-              }
-            </dl>
-          </details>
+          <app-node-inspector
+            [node]="node"
+            [status]="s"
+            [hasExplicitSelection]="selectedLifecycleNodeId() !== null"
+            (redeployRequested)="onGateRedeploy()"
+          />
         }
       </section>
     </section>
@@ -297,12 +207,7 @@
 
       <details class="below-fold-panel" data-testid="bot-control-full-audit">
         <summary>Full audit trail</summary>
-        <app-audit-tab
-          [status]="s"
-          [busyAction]="busyAction()"
-          [hideDestructiveControls]="true"
-          (markPoisonedRequested)="openTypedHalt()"
-        />
+        <app-workbench-audit-panel [status]="s" />
       </details>
     </section>
   } @else if (!errorMessage()) {

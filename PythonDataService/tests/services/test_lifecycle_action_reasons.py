@@ -10,7 +10,7 @@ from app.services.lifecycle_action_reasons import (
 
 
 def test_lifecycle_action_reason_copy_covers_every_server_action_code() -> None:
-    assert expected_lifecycle_action_reason_codes().issubset(LIFECYCLE_ACTION_REASON_CODES)
+    assert expected_lifecycle_action_reason_codes() == LIFECYCLE_ACTION_REASON_CODES
 
 
 @pytest.mark.parametrize("code", sorted(expected_lifecycle_action_reason_codes()))

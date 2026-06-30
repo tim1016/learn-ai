@@ -204,7 +204,6 @@ export type BrokerSafetyVerdict = 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
 export type BrokerConnectionState = 'CONNECTED' | 'DISCONNECTED' | 'UNKNOWN';
 export type ExecutionPosture =
   | 'PAPER_EXECUTION'
-  | 'LIVE_EXECUTION'
   | 'READ_ONLY'
   | 'UNSAFE'
   | 'UNKNOWN';

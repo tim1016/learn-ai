@@ -51,44 +51,25 @@
 
 .overflow-menu {
   position: relative;
-
-  summary {
-    display: inline-flex;
-    align-items: center;
-    min-height: 44px;
-    padding: 0 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    cursor: pointer;
-    font-weight: 700;
-    list-style: none;
-
-    &::-webkit-details-marker {
-      display: none;
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-  }
 }
 
-.overflow-list {
-  position: absolute;
-  right: 0;
-  z-index: 4;
-  display: grid;
-  gap: 0.5rem;
-  min-width: 230px;
-  margin-top: 0.4rem;
-  padding: 0.5rem;
+.overflow-trigger {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 }
 
 @media (max-width: 980px) {
@@ -110,8 +91,4 @@
     margin-left: 0;
   }
 
-  .overflow-list {
-    left: 0;
-    right: auto;
-  }
 }

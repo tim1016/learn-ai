@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import type {
@@ -9,7 +8,6 @@ import { actionHelp } from '../concept-help.registry';
 
 @Component({
   selector: 'app-lifecycle-action-button',
-  imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './lifecycle-action-button.component.html',
   styleUrl: './lifecycle-action-button.component.scss',
@@ -17,7 +15,6 @@ import { actionHelp } from '../concept-help.registry';
 export class LifecycleActionButtonComponent {
   readonly action = input.required<LifecycleChartAction>();
   readonly busyAction = input<string | null>(null);
-  readonly enabledCaption = input<string>('Available');
 
   readonly actionInvoked = output<LifecycleChartActionId>();
   readonly disabledActionSelected = output<string>();
@@ -27,12 +24,11 @@ export class LifecycleActionButtonComponent {
   readonly isInteractionLocked = computed(() => this.busyAction() !== null);
   readonly isDisabled = computed(() => this.isBackendDisabled() || this.isInteractionLocked());
   readonly statusHeadline = computed(() => {
-    if (this.isBackendDisabled()) return this.action().reason_headline;
     if (this.isInteractionLocked()) return 'Request in flight';
-    return this.enabledCaption();
+    return this.action().reason_headline;
   });
   readonly statusDetail = computed(() =>
-    this.isBackendDisabled() ? this.action().reason_detail : null,
+    this.isInteractionLocked() ? null : this.action().reason_detail,
   );
 
   actionHelp(): string {

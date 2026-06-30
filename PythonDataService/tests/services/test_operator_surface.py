@@ -31,6 +31,7 @@ from app.schemas.live_runs import (
     ReadinessGate,
     ReadinessVector,
 )
+from app.services import operator_surface as operator_surface_module
 from app.services.operator_capability import REASON_CODES, evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -467,6 +468,11 @@ def test_execution_posture_translates_engine_effective_posture(
     surface = _surface(runtime_freshness=_runtime_freshness(engine_posture))
     assert surface.execution is not None
     assert surface.execution.posture == expected_trader_posture
+
+
+def test_execution_posture_unknown_engine_member_is_loud() -> None:
+    with pytest.raises(AssertionError, match="Unhandled engine effective posture"):
+        operator_surface_module._trader_execution_posture("LIVE_EXECUTION")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

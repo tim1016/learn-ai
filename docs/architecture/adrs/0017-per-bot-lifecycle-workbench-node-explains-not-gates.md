@@ -32,7 +32,7 @@ No in-place config mutation. Operator-facing fields fall into three buckets: **A
 
 ### 4. "Posture" is split into backend-authored Execution and Exposure chips; Angular never derives them
 
-The header carries two distinct, qualified chips: **Execution** (`PAPER_EXECUTION` / `LIVE_EXECUTION` / `READ_ONLY` / `UNSAFE` / `UNKNOWN` — a new backend field `operator_surface.execution.posture`, an authored translation of engine `effective_posture`) and **Exposure** (`FLAT` / `LONG` / `SHORT` / `MIXED` / `UNKNOWN` from `current_risk.posture`). Slice 2 resolves the engine-`UNSAFE` mismatch by preserving it as trader `UNSAFE` rather than collapsing known danger into `UNKNOWN`. The Execution chip does not render until the backend authors it verbatim; Angular must not infer execution posture from `safety_verdict`, `readonly`, action effects, or host state.
+The header carries two distinct, qualified chips: **Execution** (`PAPER_EXECUTION` / `READ_ONLY` / `UNSAFE` / `UNKNOWN` — a new backend field `operator_surface.execution.posture`, an authored translation of engine `effective_posture`) and **Exposure** (`FLAT` / `LONG` / `SHORT` / `MIXED` / `UNKNOWN` from `current_risk.posture`). Slice 2 resolves the engine-`UNSAFE` mismatch by preserving it as trader `UNSAFE` rather than collapsing known danger into `UNKNOWN`; `LIVE_EXECUTION` remains unpublished until a real engine posture can produce it. The Execution chip does not render until the backend authors it verbatim; Angular must not infer execution posture from `safety_verdict`, `readonly`, action effects, or host state.
 
 ### 5. Trader copy: backend authors state; raw codes appear only as receipts
 

@@ -1,7 +1,7 @@
 # Per-Bot Lifecycle Workbench — Redesign Spec
 
 **Surface:** `broker/bots/:id` → `bot-control-page.component` (PRD #718).
-**Status:** Design agreed 2026-06-30 (grilling session). Decisions ratified in ADR 0017.
+**Status:** Design agreed 2026-06-30 (grilling session). Decisions proposed in ADR 0017, pending ratification.
 **Scope:** the per-bot workbench *only* — not the fleet console (`broker/instances`, cockpit-v2).
 **Authority:** ADR 0013 (judgment vs evidence), ADR 0014 (backend-rendered narratives), ADR 0016 (trader-authored activity), `CONTEXT.md` (operator console glossary). Implementation snapshot DoD: `docs/bot-lifecycle-account-owner-authority.md`.
 
@@ -37,7 +37,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 │  (NO guidance pane embedded — relocated out)  │ │ [Change for next run] (deploy node only)      │
 └───────────────────────────────────────────────┘ └───────────────────────────────────────────────┘
 ┌─ BELOW THE FOLD (collapsed) ──────────────────────────────────────────────────────┐
-│ ▸ Recent activity (ActivityTab)   ▸ Full audit trail (AuditTab, read-only mode)     │
+│ ▸ Recent activity (ActivityTab, temporary read-only reuse)   ▸ Full audit trail (workbench-owned read-only panel) │
 │ ▸ Advanced technical evidence                                                        │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -52,7 +52,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 | **Change for next run** | Daily order cap, Sizing preset, Hydrate policy, Action plan, Deploy/start config | `RedeploySettingField` → "Change via redeploy" → prefilled `/broker/deploy` + warning: *"This does not change the current running bot. It creates a new run with updated settings. Pause or flatten first if you need to stop current trading behavior."* |
 | **Evidence** | Broker proof, Reconciliation state, AccountOwner generation, Runtime freshness, gate ids / reason codes / source artifacts / timestamps | `LockedEvidenceField` — read-only, advanced by default. The only place raw codes may appear. |
 
-## Decisions (locked — see ADR 0017)
+## Decisions (pending ratification — see proposed ADR 0017)
 
 | # | Decision |
 |---|---|
@@ -85,7 +85,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 | `StatusRiskTab` | **Dissolve (unmount)** | gates → node evidence / badges / inspector; risk metrics → header chips + Risk row + inspector Evidence. |
 | `ConfigurationTab` | **Dissolve (unmount)** | → "Change for next run" `RedeploySettingField` group on the deploy node. |
 | `ActivityTab` | **Relocate below fold** | Reuse as-is. |
-| `AuditTab` | **Relocate below fold + new input** | Add a `hideDestructiveControls` (mode) input; Mark-poisoned lives **only** in the header `⋯`, never duplicated below the fold. Below-fold audit is provenance / read-only. |
+| `WorkbenchAuditPanel` | **Relocate below fold as workbench-owned read-only provenance** | Mark-poisoned lives **only** in the header `⋯`, never duplicated below the fold. The legacy cockpit-v2 `AuditTab` keeps its destructive control for the old surface until that interface is deleted. |
 | **New** | `RedeploySettingField`, `LockedEvidenceField`, concept help registry, Act-now bar | |
 
 No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all four. The four-tab nav is removed from bot-control entirely.
@@ -108,9 +108,9 @@ No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all fo
 
 ## Slices (D9)
 
-- **Slice 1 — frontend-only, ships now.** Full re-layout: relocate guidance out of the chart; header chips (broker proof, submit, exposure) + Act-now bar (Redeploy split, Mark-poisoned overflow); Next-Step / Risk / Attention rows; node-scoped inspector + Change-for-next-run; below-fold Activity / Audit (read-only mode) / Advanced; node attention badges; tooltip registry; **fix the raw-code bug** via table + receipt; tests 1–4, 6. **No Execution chip, no backend changes.**
+- **Slice 1 — frontend-only, ships now.** Full re-layout: relocate guidance out of the chart; header chips (broker proof, submit, exposure) + Act-now bar (Redeploy split, Mark-poisoned overflow); Next-Step / Risk / Attention rows; node-scoped inspector + Change-for-next-run; below-fold Activity / workbench-owned read-only Audit / Advanced; node attention badges; tooltip registry; **fix the raw-code bug** via table + receipt; tests 1–4, 6. **No Execution chip, no backend changes.**
 - **Slice 2 — backend.** `operator_surface.execution.posture` — an *authored translation* of engine `effective_posture` (`PAPER_EXECUTION` → `PAPER_EXECUTION`; `PAPER_OBSERVATION` → `READ_ONLY`; `UNSAFE` → `UNSAFE`; stale/missing broker runtime proof → `UNKNOWN`). Add the Execution chip + test 5.
-- **Slice 3 — backend, end-state.** `reason_code` / `reason_headline` / `reason_detail` on `lifecycle_chart.actions[]`; retire the frontend copy table for this surface; amend ADR 0013. Implemented in this PR slice.
+- **Slice 3 — backend, end-state.** `reason_code` / `reason_headline` / `reason_detail` on `lifecycle_chart.actions[]`; retire the frontend copy table for this surface; amend ADR 0013. Implemented here pending ADR 0017 ratification.
 
 ## Out of scope
 

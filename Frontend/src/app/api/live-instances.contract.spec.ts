@@ -60,7 +60,7 @@ describe('operator_surface wire contract', () => {
     // PRD #607 (cockpit revision) added ``trading_session``; PRD #616
     // added ``readiness_gates``.  Both fixtures must carry the full
     // set so the cockpit-v2 renderer cannot encounter a missing block.
-    const expected = new Set([
+    const expected = [
       'schema_version',
       'host_process',
       'prior_run',
@@ -75,15 +75,14 @@ describe('operator_surface wire contract', () => {
       'actions',
       'trading_session',
       'readiness_gates',
-    ]);
+    ];
     for (const fixture of [STEADY, STOPPED]) {
-      const actual = new Set(Object.keys(fixture.operator_surface));
-      for (const key of expected) {
-        expect(actual.has(key)).toBe(true);
-      }
+      const actual = Object.keys(fixture.operator_surface).sort();
+      const fixtureExpected = (
+        fixture === STEADY ? [...expected, 'execution'] : [...expected]
+      ).sort();
+      expect(actual).toEqual(fixtureExpected);
     }
-    expect(Object.keys(STEADY.operator_surface)).toContain('execution');
-    expect(Object.keys(STOPPED.operator_surface)).not.toContain('execution');
   });
 
   it('every action capability carries the disabled_reasons list (PRD #616)', () => {

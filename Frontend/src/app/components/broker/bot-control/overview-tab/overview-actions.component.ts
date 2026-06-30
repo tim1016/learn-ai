@@ -1,5 +1,6 @@
-import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import type { MenuItem } from 'primeng/api';
+import { Menu } from 'primeng/menu';
 
 import type {
   LifecycleChartAction,
@@ -20,9 +21,13 @@ const EMERGENCY_ACTION_ORDER: readonly EmergencyActionId[] = [
   'stop',
 ];
 
+interface OverflowMenuItem extends MenuItem {
+  readonly action: LifecycleChartAction;
+}
+
 @Component({
   selector: 'app-overview-actions',
-  imports: [CommonModule, LifecycleActionButtonComponent],
+  imports: [LifecycleActionButtonComponent, Menu],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-actions.component.html',
   styleUrl: './overview-actions.component.scss',
@@ -34,6 +39,7 @@ export class OverviewActionsComponent {
   readonly disabledActionSelected = output<string>();
   readonly actionTargetHovered = output<string | null>();
 
+  readonly actionsById = computed(() => new Map(this.actions().map((action) => [action.id, action])));
   readonly emergencyActions = computed(() => {
     const byId = this.actionsById();
     return EMERGENCY_ACTION_ORDER
@@ -48,12 +54,14 @@ export class OverviewActionsComponent {
     const action = this.actionsById().get('mark_poisoned');
     return action ? [action] : [];
   });
+  readonly overflowMenuItems = computed<OverflowMenuItem[]>(() =>
+    this.overflowActions().map((action) => ({
+      label: action.label,
+      action,
+    })),
+  );
 
   trackAction(_: number, action: LifecycleChartAction): LifecycleChartActionId {
     return action.id;
-  }
-
-  private actionsById(): Map<LifecycleChartActionId, LifecycleChartAction> {
-    return new Map(this.actions().map((action) => [action.id, action]));
   }
 }

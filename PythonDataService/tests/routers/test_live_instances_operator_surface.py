@@ -285,7 +285,6 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     assert surface["broker"]["connection"] in {"CONNECTED", "DISCONNECTED", "UNKNOWN"}
     assert surface["execution"]["posture"] in {
         "PAPER_EXECUTION",
-        "LIVE_EXECUTION",
         "READ_ONLY",
         "UNSAFE",
         "UNKNOWN",

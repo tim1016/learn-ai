@@ -86,7 +86,7 @@ from app.services.runtime_freshness import (
 # available) the broker monitor's recovery overlay into one of these
 # tokens; the projection maps them to the wire-facing enums.
 BrokerConnectionStateInput = Literal["connected", "disconnected", "degraded", "unknown"]
-TraderExecutionPosture = Literal["PAPER_EXECUTION", "LIVE_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
+TraderExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +362,8 @@ def _trader_execution_posture(posture: EngineEffectivePosture) -> TraderExecutio
             return "UNSAFE"
         case "UNKNOWN":
             return "UNKNOWN"
+        case _:
+            raise AssertionError(f"Unhandled engine effective posture: {posture}")
 
 
 # ---------------------------------------------------------------------------

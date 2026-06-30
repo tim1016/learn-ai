@@ -33,6 +33,8 @@ from app.schemas.live_runs import (
 from app.services.bot_lifecycle_projection import latest_event_for_node, lifecycle_status_label
 from app.services.bot_lifecycle_receipts import (
     account_owner_receipts,
+    command_loop_receipts,
+    configuration_receipts,
     daily_order_cap_receipts,
     event_receipts,
     incident_receipts,
@@ -282,6 +284,7 @@ def _lifecycle_facts(
         "preflight": NodeFact(
             _status_for("preflight", base_statuses["preflight"], primary_node_id),
             _preflight_evidence(surface),
+            receipts=configuration_receipts(surface),
         ),
         "account_safety": NodeFact(
             _status_for("account_safety", base_statuses["account_safety"], primary_node_id),
@@ -324,7 +327,11 @@ def _lifecycle_facts(
             "active" if surface.host_process.start_capability.enabled else "blocked",
             _start_capability_reason(surface.host_process.start_capability),
         ),
-        "configuration": NodeFact(_configuration_status(surface), _configuration_evidence(surface)),
+        "configuration": NodeFact(
+            _configuration_status(surface),
+            _configuration_evidence(surface),
+            receipts=configuration_receipts(surface),
+        ),
         "account_freeze": NodeFact(
             _freeze_status(surface),
             _freeze_evidence(surface) or "No account freeze gate is active.",
@@ -368,6 +375,7 @@ def _lifecycle_facts(
         "command_loop": NodeFact(
             _command_loop_status(surface),
             _command_loop_evidence(surface),
+            receipts=command_loop_receipts(surface),
         ),
         "signal": _event_or_unknown_fact(
             lifecycle_events,
@@ -1060,7 +1068,14 @@ def _actions(surface: OperatorSurface, *, redeploy_available: bool) -> list[Life
         _action("pause", "Pause trading", surface.actions.pause, "active", "secondary"),
         _action("flatten_and_pause", "Flatten and pause", surface.actions.flatten_and_pause, "recovery", "danger"),
         _action("stop", "Stop bot", surface.actions.stop, "recovery", "danger"),
-        _action("mark_poisoned", "Mark poisoned", surface.actions.mark_poisoned, "recovery", "danger"),
+        _action(
+            "mark_poisoned",
+            "Mark poisoned",
+            surface.actions.mark_poisoned,
+            "recovery",
+            "danger",
+            enabled_detail="Typed HALT confirmation is required before marking this run poisoned.",
+        ),
         LifecycleChartAction(
             id="redeploy",
             label="Redeploy fresh run",
@@ -1080,8 +1095,10 @@ def _action(
     capability: ActionCapability,
     target_node_id: str,
     tone: Literal["primary", "secondary", "danger"],
+    *,
+    enabled_detail: str = "Backend gates currently allow this action.",
 ) -> LifecycleChartAction:
-    reason = _capability_action_reason(capability)
+    reason = _capability_action_reason(capability, enabled_detail=enabled_detail)
     return LifecycleChartAction(
         id=action_id,
         label=label,
@@ -1104,21 +1121,21 @@ def _capability_reason_code(capability: ActionCapability) -> str | None:
     return None
 
 
-def _capability_action_reason(capability: ActionCapability) -> LifecycleActionReason:
+def _capability_action_reason(
+    capability: ActionCapability,
+    *,
+    enabled_detail: str = "Backend gates currently allow this action.",
+) -> LifecycleActionReason:
     return lifecycle_action_reason_for_code(
         _capability_reason_code(capability),
         enabled=capability.enabled,
+        enabled_detail=enabled_detail,
         disabled_fallback_detail=_capability_reason_fallback(capability),
     )
 
 
 def _capability_reason(capability: ActionCapability) -> str | None:
-    if capability.enabled:
-        return lifecycle_action_reason_for_code(None, enabled=True).detail
-    code = _capability_reason_code(capability)
-    if code is not None:
-        return lifecycle_action_reason_for_code(code).detail
-    return _capability_reason_fallback(capability)
+    return _capability_action_reason(capability).detail
 
 
 def _capability_reason_fallback(capability: ActionCapability) -> str:
@@ -1145,16 +1162,7 @@ def _start_action_reason(capability: HostProcessStartCapability) -> LifecycleAct
 
 
 def _start_capability_reason(capability: HostProcessStartCapability) -> str | None:
-    if capability.enabled:
-        return lifecycle_action_reason_for_code(
-            None,
-            enabled=True,
-            enabled_detail="Backend-authored start request is ready.",
-        ).detail
-    code = _start_reason_code(capability)
-    if code is not None:
-        return lifecycle_action_reason_for_code(code).detail
-    return _start_capability_reason_fallback(capability)
+    return _start_action_reason(capability).detail
 
 
 def _start_capability_reason_fallback(capability: HostProcessStartCapability) -> str:
@@ -1198,8 +1206,13 @@ def _active_reason(
 
 def _preflight_evidence(surface: OperatorSurface) -> str:
     if surface.configuration.verdict != "READY":
-        reasons = ", ".join(surface.configuration.reason_codes) or surface.configuration.verdict
-        return f"Configuration verdict is {surface.configuration.verdict}: {reasons}."
+        if surface.configuration.reason_codes:
+            count = len(surface.configuration.reason_codes)
+            return (
+                f"Configuration verdict is {surface.configuration.verdict}; "
+                f"{count} backend configuration receipt(s) require attention."
+            )
+        return f"Configuration verdict is {surface.configuration.verdict}."
     blocked_gate = next(
         (gate for gate in surface.readiness_gates if _operator_gate_status(gate) != "passed"),
         None,
@@ -1299,7 +1312,8 @@ def _account_owner_ts_ms(surface: OperatorSurface) -> int | None:
 
 def _configuration_evidence(surface: OperatorSurface) -> str:
     if surface.configuration.reason_codes:
-        return ", ".join(surface.configuration.reason_codes)
+        count = len(surface.configuration.reason_codes)
+        return f"{count} backend configuration receipt(s) require attention before this run is ready."
     return f"Configuration verdict is {surface.configuration.verdict}."
 
 
@@ -1326,5 +1340,6 @@ def _command_loop_evidence(surface: OperatorSurface) -> str:
         return "Runtime freshness is unavailable for this status snapshot."
     command_loop = freshness.command_loop
     if command_loop.stale_reason_codes:
-        return ", ".join(command_loop.stale_reason_codes)
+        count = len(command_loop.stale_reason_codes)
+        return f"Command-loop freshness is {command_loop.state}; {count} stale receipt(s) require attention."
     return f"Command loop freshness is {command_loop.state}."

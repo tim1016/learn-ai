@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -20,14 +19,12 @@ import type {
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
   OperatorSurfaceAttentionGroup,
-  OperatorSurfaceEvidenceFact,
   OperatorNotice,
   OperatorSurfaceControlPlane,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
-import { AuditTabComponent } from '../cockpit-v2/tabs/audit-tab.component';
 import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
 import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
 import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-v2/lib/start-host-process';
@@ -36,12 +33,12 @@ import {
   type RenderedAction,
   type RendererDispatch,
 } from '../cockpit-v2/lib/suggested-action-renderer';
-import { fmtTimestampNy } from '../format';
-import { bucketHelp, chipHelp, gateHelp, nodeHelp } from './concept-help.registry';
+import { chipHelp } from './concept-help.registry';
+import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 import { TraderGuidanceTimelineComponent } from './overview-tab/trader-guidance-timeline.component';
-import { NodeReceiptsPaneComponent } from './node-receipts-pane.component';
+import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
 
 const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
@@ -51,21 +48,6 @@ const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
 
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
-
-interface RedeploySettingField {
-  readonly id: string;
-  readonly label: string;
-  readonly value: string;
-  readonly detail: string;
-}
-
-interface LockedEvidenceField {
-  readonly id: string;
-  readonly label: string;
-  readonly value: string;
-  readonly source: string;
-  readonly receipt: string | null;
-}
 
 interface ControlPlaneBanner {
   readonly state: OperatorSurfaceControlPlane['state'];
@@ -105,7 +87,6 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
 @Component({
   selector: 'app-bot-control-page',
   imports: [
-    CommonModule,
     Accordion,
     AccordionPanel,
     AccordionHeader,
@@ -113,11 +94,11 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     RouterLink,
     OverviewTabComponent,
     ActivityTabComponent,
-    AuditTabComponent,
     TypedHaltConfirmComponent,
     OverviewActionsComponent,
     TraderGuidanceTimelineComponent,
-    NodeReceiptsPaneComponent,
+    NodeInspectorComponent,
+    WorkbenchAuditPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -146,6 +127,7 @@ export class BotControlPageComponent {
   readonly mutationError = signal<string | null>(null);
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
+  private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly activityPanelOpen = signal<boolean>(false);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
 
@@ -204,9 +186,6 @@ export class BotControlPageComponent {
   readonly attentionGroups = computed<OperatorSurfaceAttentionGroup[]>(
     () => this.traderGuidance()?.additional_attention_groups ?? [],
   );
-  readonly advancedEvidence = computed<OperatorSurfaceEvidenceFact[]>(
-    () => this.traderGuidance()?.advanced_evidence ?? [],
-  );
   readonly hasCriticalAttention = computed(() =>
     this.attentionGroups().some((group) => group.severity === 'critical'),
   );
@@ -223,100 +202,11 @@ export class BotControlPageComponent {
   readonly exposureLabel = computed(() =>
     this.status()?.operator_surface.current_risk.posture ?? 'UNKNOWN',
   );
-  readonly changeForNextRunFields = computed<RedeploySettingField[]>(() => {
-    const status = this.status();
-    if (!status) return [];
-    const startDefaults = status.start_defaults;
-    const dailyCap = status.operator_surface.daily_order_cap;
-    const sizing = status.sizing;
-    const actionPlan = status.operator_surface.action_plan;
-    return [
-      {
-        id: 'daily-order-cap',
-        label: 'Daily order cap',
-        value: dailyCap.limit === null ? 'Not recorded' : `${dailyCap.limit} orders per day`,
-        detail: `${dailyCap.used ?? 'unknown'} used today. Change the cap through redeploy.`,
-      },
-      {
-        id: 'sizing',
-        label: 'Sizing preset',
-        value: sizing?.preset ?? 'Not recorded',
-        detail: `Current sizing source: ${this.sizingSourceLabel(sizing?.sizing_provenance)}.`,
-      },
-      {
-        id: 'hydrate-policy',
-        label: 'Hydrate policy',
-        value: this.hydratePolicyLabel(startDefaults?.hydrate_policy),
-        detail: 'Controls how the next run restores prior engine state.',
-      },
-      {
-        id: 'action-plan',
-        label: 'Action plan',
-        value: actionPlan.consumption,
-        detail: `Anomaly verdict: ${actionPlan.anomaly_verdict}.`,
-      },
-      {
-        id: 'deploy-config',
-        label: 'Deploy/start config',
-        value: startDefaults?.strategy ?? 'Not recorded',
-        detail: `Order mode: ${this.orderMode(startDefaults?.readonly)}.`,
-      },
-    ];
-  });
-  readonly lockedEvidenceFields = computed<LockedEvidenceField[]>(() => {
-    const status = this.status();
-    if (!status) return [];
-    const surface = status.operator_surface;
-    return [
-      {
-        id: 'broker-proof',
-        label: 'Broker proof',
-        value: surface.broker.safety_verdict,
-        source: 'operator_surface.broker.safety_verdict',
-        receipt: surface.broker.connection,
-      },
-      {
-        id: 'submit-readiness',
-        label: 'Submit readiness',
-        value: surface.submit_readiness.label,
-        source: 'operator_surface.submit_readiness',
-        receipt: surface.submit_readiness.blocking_reason_codes.join(', ') || null,
-      },
-      {
-        id: 'reconciliation',
-        label: 'Reconciliation state',
-        value: surface.reconciliation?.state ?? 'NOT_AVAILABLE',
-        source: 'operator_surface.reconciliation',
-        receipt: surface.reconciliation?.failure_reason ?? null,
-      },
-      {
-        id: 'account-owner',
-        label: 'AccountOwner generation',
-        value: surface.account_owner?.generation === null || surface.account_owner === null
-          ? 'Unknown'
-          : String(surface.account_owner.generation),
-        source: surface.account_owner?.source ?? 'operator_surface.account_owner',
-        receipt: surface.account_owner?.phase ?? null,
-      },
-      {
-        id: 'runtime-freshness',
-        label: 'Runtime freshness',
-        value: surface.runtime_freshness === null
-          ? 'No live runtime evidence'
-          : surface.runtime_freshness.posture_demoted ? 'DEMOTED' : 'FRESH',
-        source: 'operator_surface.runtime_freshness',
-        receipt: surface.runtime_freshness?.stale_reason_codes.join(', ') || null,
-      },
-    ];
-  });
   readonly timelineRows = computed(() => this.lifecycleTimeline().rows);
   readonly timelineProjectionAvailable = computed(() => this.lifecycleTimeline().projectionAvailable);
   readonly timelineCanonicalFallbackRequired = computed(() => this.lifecycleTimeline().canonicalFallbackRequired);
   readonly timelineNotice = computed(() => this.lifecycleTimeline().notice);
   readonly chipHelp = chipHelp;
-  readonly bucketHelp = bucketHelp;
-  readonly gateHelp = gateHelp;
-  readonly nodeHelp = nodeHelp;
 
   private readonly primaryRemediationDispatch: RendererDispatch = {
     invokeCapability: (capability) => {
@@ -344,6 +234,8 @@ export class BotControlPageComponent {
       this.lifecycleTimeline.set(EMPTY_TIMELINE_STATE);
       this.selectedLifecycleNodeId.set(null);
       this.highlightedLifecycleNodeId.set(null);
+      this.typedHaltOpen.set(false);
+      this.typedHaltInstanceId.set(null);
       this.activityPanelOpen.set(false);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
@@ -372,10 +264,6 @@ export class BotControlPageComponent {
 
   selectLifecycleNode(node: LifecycleChartNode): void {
     this.selectedLifecycleNodeId.set(node.id);
-  }
-
-  nodeTimestamp(node: LifecycleChartNode): string {
-    return node.ts_ms_resolved ? fmtTimestampNy(node.ts_ms) : 'timestamp unresolved';
   }
 
   async dispatchResume(): Promise<void> {
@@ -488,67 +376,8 @@ export class BotControlPageComponent {
     this.activityPanelOpen.set(open);
   }
 
-  trackRedeployField(_: number, field: RedeploySettingField): string {
-    return field.id;
-  }
-
-  trackEvidenceField(_: number, field: LockedEvidenceField): string {
-    return field.id;
-  }
-
   trackAttention(_: number, group: OperatorSurfaceAttentionGroup): string {
     return group.code;
-  }
-
-  trackAdvancedEvidence(index: number, fact: OperatorSurfaceEvidenceFact): string {
-    return `${fact.label}:${fact.source ?? 'unknown'}:${index}`;
-  }
-
-  actionsForNode(nodeId: string): string {
-    const status = this.status();
-    if (!status) return 'None';
-    const labels = status.lifecycle_chart.actions
-      .filter((action) => action.target_node_id === nodeId)
-      .map((action) => action.label);
-    return labels.length ? labels.join(', ') : 'None';
-  }
-
-  orderMode(readonly: boolean | null | undefined): string {
-    return readonly ? 'Read-only observation' : 'Order placement allowed';
-  }
-
-  hydratePolicyLabel(policy: string | null | undefined): string {
-    switch (policy) {
-      case 'require':
-        return 'Require previous run state';
-      case 'allow_missing':
-        return 'Use previous state when available';
-      case 'ignore':
-        return 'Start without previous state';
-      case null:
-      case undefined:
-      case '':
-        return 'Not recorded';
-      default:
-        return policy;
-    }
-  }
-
-  sizingSourceLabel(value: string | null | undefined): string {
-    switch (value) {
-      case 'live_override':
-        return 'Live configuration override';
-      case 'strategy_default':
-        return 'Strategy default';
-      case 'pre_policy':
-        return 'Pre-policy run';
-      case null:
-      case undefined:
-      case '':
-        return 'not recorded';
-      default:
-        return value;
-    }
   }
 
   async dispatchReconcileNow(): Promise<void> {
@@ -585,19 +414,24 @@ export class BotControlPageComponent {
 
   openTypedHalt(): void {
     if (this.isActionDisabled('mark_poisoned')) return;
+    const id = this.instanceId();
+    if (!id) return;
+    this.typedHaltInstanceId.set(id);
     this.typedHaltOpen.set(true);
   }
 
   closeTypedHalt(): void {
     this.typedHaltOpen.set(false);
+    this.typedHaltInstanceId.set(null);
   }
 
   async confirmTypedHalt(): Promise<void> {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || id !== this.typedHaltInstanceId() || this.busyAction()) return;
     this.busyAction.set('mark_poisoned');
     this.mutationError.set(null);
     this.typedHaltOpen.set(false);
+    this.typedHaltInstanceId.set(null);
     try {
       await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
       await this.refreshStatus(id);
