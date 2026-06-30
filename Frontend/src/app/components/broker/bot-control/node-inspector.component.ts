@@ -6,6 +6,7 @@ import type {
   OperatorSurfaceEvidenceFact,
   OperatorSurfaceRuntimeFreshness,
 } from '../../../api/live-instances.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtTimestampNy } from '../format';
 import { bucketHelp, gateHelp, nodeHelp } from './concept-help.registry';
 import { NodeReceiptsPaneComponent } from './node-receipts-pane.component';
@@ -27,7 +28,7 @@ interface LockedEvidenceField {
 
 @Component({
   selector: 'app-node-inspector',
-  imports: [NodeReceiptsPaneComponent],
+  imports: [NodeReceiptsPaneComponent, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './node-inspector.component.html',
   styleUrl: './node-inspector.component.scss',

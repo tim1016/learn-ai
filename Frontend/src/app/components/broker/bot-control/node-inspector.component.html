@@ -69,7 +69,7 @@
         <strong>{{ field.value }}</strong>
         <small>{{ field.source }}</small>
         @if (field.receipt) {
-          <code data-receipt>{{ field.receipt }}</code>
+          <code data-receipt>{{ field.receipt | receiptLabel }}</code>
         }
       </article>
     }
@@ -88,7 +88,7 @@
             <small>{{ fact.source }}</small>
           }
           @if (fact.gate_id) {
-            <code data-receipt>{{ fact.gate_id }}</code>
+            <code data-receipt>{{ fact.gate_id | receiptLabel }}</code>
           }
         </dd>
       </div>

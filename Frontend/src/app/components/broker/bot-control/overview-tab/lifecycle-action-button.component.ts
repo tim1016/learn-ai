@@ -4,7 +4,20 @@ import type {
   LifecycleChartAction,
   LifecycleChartActionId,
 } from '../../../../api/live-instances.types';
-import { actionHelp } from '../concept-help.registry';
+
+const ACTION_ICON: Record<LifecycleChartActionId, string> = {
+  start_process: 'pi pi-play',
+  resume: 'pi pi-play',
+  pause: 'pi pi-pause',
+  flatten_and_pause: 'pi pi-stop-circle',
+  stop: 'pi pi-power-off',
+  mark_poisoned: 'pi pi-ban',
+  redeploy: 'pi pi-refresh',
+};
+
+const ACTION_LABEL: Partial<Record<LifecycleChartActionId, string>> = {
+  redeploy: 'Fresh run',
+};
 
 @Component({
   selector: 'app-lifecycle-action-button',
@@ -30,10 +43,15 @@ export class LifecycleActionButtonComponent {
   readonly statusDetail = computed(() =>
     this.isInteractionLocked() ? null : this.action().reason_detail,
   );
-
-  actionHelp(): string {
-    return actionHelp(this.action().id);
-  }
+  readonly displayLabel = computed(() => ACTION_LABEL[this.action().id] ?? this.action().label);
+  readonly iconClass = computed(() =>
+    this.busyAction() === this.action().id ? 'pi pi-spinner pi-spin' : ACTION_ICON[this.action().id],
+  );
+  readonly disabledTooltip = computed(() => {
+    if (!this.isDisabled()) return null;
+    const detail = this.statusDetail();
+    return detail ? `${this.statusHeadline()}. ${detail}` : this.statusHeadline();
+  });
 
   activateAction(): void {
     const action = this.action();

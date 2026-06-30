@@ -6,6 +6,7 @@ import {
   localDateString,
   markerTimeForActivityFill,
   markerTimeForEventMs,
+  visibleRangeToRestore,
 } from './bot-trade-chart-card.component';
 import type { ActivityFillMarker, IbkrMinuteBar } from './bot-trade-chart-card.types';
 
@@ -79,6 +80,22 @@ describe('markerTimeForEventMs', () => {
 
   it('preserves the event timestamp when no candles are available', () => {
     expect(markerTimeForEventMs(1_700_000, [])).toBe(1_700);
+  });
+});
+
+describe('visibleRangeToRestore', () => {
+  it('does not restore a manual range while the chart is following live', () => {
+    expect(visibleRangeToRestore(true, range(3, 8))).toBeNull();
+  });
+
+  it('restores the current range when the operator has panned away from live', () => {
+    const current = range(3, 8);
+
+    expect(visibleRangeToRestore(false, current)).toBe(current);
+  });
+
+  it('does not restore before lightweight-charts has emitted a range', () => {
+    expect(visibleRangeToRestore(false, null)).toBeNull();
   });
 });
 

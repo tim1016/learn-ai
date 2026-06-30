@@ -2,17 +2,22 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { LifecycleChartReceipt } from '../../../api/live-instances.types';
+import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtTimestampNy } from '../format';
 
 @Component({
   selector: 'app-node-receipts-pane',
-  imports: [CommonModule],
+  imports: [CommonModule, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './node-receipts-pane.component.html',
   styleUrl: './node-receipts-pane.component.scss',
 })
 export class NodeReceiptsPaneComponent {
   readonly receipts = input<LifecycleChartReceipt[]>([]);
+
+  receiptValue(receipt: LifecycleChartReceipt): string {
+    return formatReceiptValue(receipt.label, receipt.value);
+  }
 
   receiptTimestamp(receipt: LifecycleChartReceipt): string | null {
     if (receipt.ts_ms === null) return null;

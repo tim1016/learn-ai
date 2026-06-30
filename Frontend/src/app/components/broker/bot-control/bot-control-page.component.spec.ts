@@ -6,7 +6,7 @@ import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
 import { of, Subject } from 'rxjs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   FleetAccountSummary,
@@ -290,9 +290,27 @@ async function flush(fixture: { whenStable: () => Promise<unknown>; detectChange
   fixture.detectChanges();
 }
 
+function installLocalStorageStub(): void {
+  const store = new Map<string, string>();
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, value),
+      removeItem: (key: string) => store.delete(key),
+      clear: () => store.clear(),
+    },
+  });
+}
+
 describe('BotControlPageComponent', () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
+    window.localStorage.clear();
   });
 
   it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
@@ -344,6 +362,109 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('.decision-row')?.textContent).toContain('Broker proof');
   });
 
+  it('persists the attention panel collapsed per bot and situation code', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const liveRuns = {
+      getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+      getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+      getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+      startHostRunner: vi.fn(),
+      setInstanceDesiredState: vi.fn(),
+      flattenAndPause: vi.fn(),
+      issueInstanceCommand: vi.fn(),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: liveRuns,
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const panel = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
+    expect(panel?.open).toBe(true);
+    if (!panel) throw new Error('Expected attention panel.');
+    panel.open = false;
+    panel.dispatchEvent(new Event('toggle'));
+    fixture.detectChanges();
+    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven:noncritical'))
+      .toBe('closed');
+    fixture.destroy();
+
+    const second = TestBed.createComponent(BotControlPageComponent);
+    second.detectChanges();
+    await flush(second);
+
+    const reopened = (second.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
+    expect(reopened?.open).toBe(false);
+  });
+
+  it('reopens collapsed attention when critical findings appear for the same situation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    window.localStorage.setItem(
+      'bot-control-attention:sid-x:broker_state_unproven:noncritical',
+      'closed',
+    );
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'broker_safety',
+        severity: 'critical',
+        headline: 'Broker safety is unsafe',
+        explanation: 'Paper-safety evidence is unsafe.',
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const panel = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
+    expect(panel?.open).toBe(true);
+    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven:noncritical'))
+      .toBe('closed');
+  });
+
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     TestBed.configureTestingModule({
@@ -377,7 +498,11 @@ describe('BotControlPageComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Act now');
-    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Start bot process');
+    const startAction = el.querySelector(
+      '.top-action-banner .chart-action[aria-label="Start bot process"]',
+    ) as HTMLButtonElement | null;
+    expect(startAction).not.toBeNull();
+    expect(startAction?.textContent?.trim()).toBe('');
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
     expect(el.querySelector('app-overview-tab app-trader-guidance-pane')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
@@ -386,8 +511,7 @@ describe('BotControlPageComponent', () => {
       .toContain('Deploy or start');
 
     const dispatch = vi.spyOn(fixture.componentInstance, 'dispatchOverviewAction');
-    const topAction = el.querySelector('.top-action-banner .chart-action') as HTMLButtonElement;
-    topAction.click();
+    startAction?.click();
     expect(dispatch).toHaveBeenCalledWith('start_process');
 
     const recovery = fixture.componentInstance.status()
@@ -478,7 +602,7 @@ describe('BotControlPageComponent', () => {
       .querySelector('[data-testid="bot-control-execution-chip"]')).toBeNull();
   });
 
-  it('renders backend-authored action prose and raw codes only as receipts', async () => {
+  it('renders backend-authored disabled action prose only in the disabled tooltip', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.lifecycle_chart.actions = [
@@ -530,17 +654,21 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     const el = fixture.nativeElement as HTMLElement;
+    const actionButton = el.querySelector<HTMLButtonElement>('[aria-label="Flatten and pause"]');
+    expect(actionButton?.getAttribute('title')).toContain('No live binding');
+    expect(actionButton?.getAttribute('title')).toContain(
+      'The lifecycle action contract says the runner is not bound.',
+    );
+    expect(actionButton?.getAttribute('title')).not.toContain('NO_LIVE_BINDING');
     const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
       .map((node) => node.textContent ?? '')
       .join(' ');
     const receipts = Array.from(el.querySelectorAll('[data-receipt]'))
       .map((node) => node.textContent ?? '')
       .join(' ');
-    expect(traderCopy).toContain('No live binding');
-    expect(traderCopy).toContain('The lifecycle action contract says the runner is not bound.');
     expect(traderCopy).not.toContain('NO_LIVE_BINDING');
     expect(traderCopy).not.toContain('BROKER_SAFETY_UNSAFE');
-    expect(receipts).toContain('NO_LIVE_BINDING');
+    expect(receipts).not.toContain('NO_LIVE_BINDING');
     expect(receipts).not.toContain('BROKER_SAFETY_UNSAFE');
   });
 
@@ -593,10 +721,11 @@ describe('BotControlPageComponent', () => {
     fixture.componentInstance.selectLifecycleNode(recovery);
     fixture.detectChanges();
 
-    const pause = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.chart-action'))
-      .find((button) => button.textContent?.includes('Pause'));
+    const pause = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.chart-action[aria-label="Pause"]');
     expect(pause?.getAttribute('aria-disabled')).toBe('false');
-    expect(pause?.textContent).toContain('Backend gates currently allow this action.');
+    expect(pause?.getAttribute('title')).toBeNull();
+    expect(pause?.textContent?.trim()).toBe('');
   });
 
   it('renders unknown deploy order mode as not recorded', async () => {
@@ -685,7 +814,7 @@ describe('BotControlPageComponent', () => {
     expect(runtimeField?.textContent).toContain('ATTENTION');
     expect(runtimeField?.textContent).not.toContain('FRESH');
     expect(runtimeField?.querySelector('[data-receipt]')?.textContent)
-      .toContain('BAR_LOOP_LATEST_BAR_STALE');
+      .toContain('Bar Loop Latest Bar Stale');
   });
 
   it('renders the projection timeline below the fold as recent activity', async () => {
@@ -818,6 +947,15 @@ describe('BotControlPageComponent', () => {
         ts_ms: null,
         ts_ms_resolved: false,
       },
+      {
+        label: 'intent_id',
+        value: 'intent-7',
+        unit: null,
+        source: 'readiness',
+        gate_id: null,
+        ts_ms: null,
+        ts_ms_resolved: false,
+      },
     ];
     TestBed.configureTestingModule({
       providers: [
@@ -853,14 +991,18 @@ describe('BotControlPageComponent', () => {
     const receipts = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="bot-control-node-receipts"]');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Evidence time:');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('ET');
-    expect(receipts?.textContent).toContain('reconciliation.state');
-    expect(receipts?.textContent).toContain('FAILED');
-    expect(receipts?.textContent).toContain('failure_reason');
+    expect(receipts?.textContent).toContain('Reconciliation State');
+    expect(receipts?.textContent).toContain('Failed');
+    expect(receipts?.textContent).toContain('Failure Reason');
     expect(receipts?.textContent).toContain('Broker snapshot disagrees with the intent WAL.');
-    expect(receipts?.textContent).toContain('reconciliation_projection');
+    expect(receipts?.textContent).toContain('Reconciliation Projection');
+    expect(receipts?.textContent).toContain('Intent ID');
+    expect(receipts?.textContent).toContain('intent-7');
+    expect(receipts?.textContent).not.toContain('Intent 7');
+    expect(receipts?.textContent).toContain('Readiness');
   });
 
-  it('keeps raw lifecycle node codes in receipts instead of trader copy', async () => {
+  it('keeps lifecycle node codes out of trader copy and formats them in receipts', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     const hostState = status.lifecycle_chart.subgraphs['deploy'].nodes.find(
@@ -920,7 +1062,7 @@ describe('BotControlPageComponent', () => {
       .join(' ');
     expect(traderCopy).toContain('Host state requires one backend receipt');
     expect(traderCopy).not.toContain('HOST_SERVICE_OFFLINE');
-    expect(receipts).toContain('HOST_SERVICE_OFFLINE');
+    expect(receipts).toContain('Host Service Offline');
   });
 
   it('keeps the cockpit file-backed when the projection timeline is unavailable', async () => {

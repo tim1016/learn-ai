@@ -4,39 +4,37 @@
 }
 
 .chart-action {
-  display: grid;
-  gap: 0.2rem;
-  align-content: center;
-  min-width: 150px;
-  min-height: 44px;
-  padding: 0.45rem 0.65rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elevated);
   color: var(--text-primary);
-  text-align: left;
   cursor: pointer;
   font: inherit;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 
-  span,
-  small {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  small {
-    color: var(--text-secondary);
-    font-size: var(--fs-xs);
+  i {
+    font-size: 1rem;
+    line-height: 1;
   }
 
   &.is-disabled {
     cursor: not-allowed;
     background: var(--bg-sunken);
     color: var(--text-muted);
+  }
 
-    small {
-      color: var(--text-muted);
-    }
+  &:not(.is-disabled):hover {
+    transform: translateY(-1px);
+    border-color: var(--accent);
   }
 
   &:focus-visible {
@@ -53,8 +51,4 @@
 .tone-danger:not(.is-disabled) {
   border-color: var(--bear);
   background: var(--bear-soft);
-}
-
-.receipt {
-  font-family: var(--font-mono, monospace);
 }

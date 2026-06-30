@@ -74,7 +74,13 @@
             <p>{{ guidance.risk_explanation }}</p>
           </details>
           @if (attentionGroups().length > 0) {
-            <details class="attention-line" [open]="hasCriticalAttention()">
+            <details
+              #attentionPanel
+              class="attention-line"
+              data-testid="bot-control-attention-panel"
+              [open]="isAttentionOpen()"
+              (toggle)="setAttentionOpen(attentionPanel.open)"
+            >
               <summary>Attention ({{ attentionGroups().length }})</summary>
               <ul>
                 @for (group of attentionGroups(); track trackAttention($index, group)) {

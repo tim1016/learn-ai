@@ -3,11 +3,11 @@
   <dl>
     @for (receipt of receipts(); track trackNodeReceipt($index, receipt)) {
       <div>
-        <dt>{{ receipt.label }}</dt>
+        <dt>{{ receipt.label | receiptLabel }}</dt>
         <dd>
-          <span data-receipt>{{ receipt.value }}{{ receipt.unit ? ' ' + receipt.unit : '' }}</span>
+          <span data-receipt>{{ receiptValue(receipt) }}{{ receipt.unit ? ' ' + receipt.unit : '' }}</span>
           @if (receipt.source) {
-            <small>{{ receipt.source }}</small>
+            <small>{{ receipt.source | receiptLabel }}</small>
           }
           @if (receiptTimestamp(receipt); as receiptTime) {
             <small>{{ receiptTime }}</small>
