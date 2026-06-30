@@ -30,6 +30,10 @@ describe('operator_surface wire contract', () => {
     expect(STEADY.operator_surface.actions.pause.enabled).toBe(true);
     expect(STEADY.operator_surface.actions.resume.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.actions.pause.disabled_reason_code).toBeNull();
+    expect(STEADY.operator_surface.submit_readiness.code).toBe('broker_state_unproven');
+    expect(STEADY.operator_surface.trader_guidance.primary_remediation.kind).toBe(
+      'invoke_endpoint',
+    );
   });
 
   it('STOPPED fixture surfaces the host-process notice and reflects the unbound state', () => {
@@ -64,6 +68,9 @@ describe('operator_surface wire contract', () => {
       'current_risk',
       'daily_order_cap',
       'action_plan',
+      'account_owner',
+      'submit_readiness',
+      'trader_guidance',
       'actions',
       'trading_session',
       'readiness_gates',
@@ -85,6 +92,54 @@ describe('operator_surface wire contract', () => {
     const expected = new Set(['resume', 'pause', 'stop', 'flatten_and_pause', 'mark_poisoned']);
     for (const fixture of [STEADY, STOPPED]) {
       expect(new Set(Object.keys(fixture.operator_surface.actions))).toEqual(expected);
+    }
+  });
+
+  it('STOPPED fixture carries submit_readiness and trader_guidance with expected codes', () => {
+    expect(STOPPED.operator_surface.submit_readiness.code).toBe('safe_to_monitor');
+    expect(STOPPED.operator_surface.submit_readiness.can_submit).toBe(false);
+    expect(STOPPED.operator_surface.trader_guidance.situation_code).toBe('monitor_only');
+    expect(STOPPED.operator_surface.trader_guidance.primary_remediation.kind).toBe('none');
+  });
+
+  it('STOPPED fixture has null account_owner (host not running)', () => {
+    expect(STOPPED.operator_surface.account_owner).toBeNull();
+  });
+
+  it('STEADY fixture has null account_owner (broker state unproven scenario)', () => {
+    expect(STEADY.operator_surface.account_owner).toBeNull();
+  });
+
+  it('STEADY fixture submit_readiness carries blocking reason codes and template metadata', () => {
+    const sr = STEADY.operator_surface.submit_readiness;
+    expect(Array.isArray(sr.blocking_reason_codes)).toBe(true);
+    expect(sr.blocking_reason_codes.length).toBeGreaterThan(0);
+    expect(typeof sr.template_id).toBe('string');
+    expect(typeof sr.template_version).toBe('number');
+    expect(sr.label).toBeTruthy();
+    expect(sr.explanation).toBeTruthy();
+  });
+
+  it('STEADY fixture trader_guidance carries attention groups and advanced evidence', () => {
+    const tg = STEADY.operator_surface.trader_guidance;
+    expect(Array.isArray(tg.additional_attention_groups)).toBe(true);
+    expect(Array.isArray(tg.advanced_evidence)).toBe(true);
+    expect(tg.headline).toBeTruthy();
+    expect(tg.explanation).toBeTruthy();
+    expect(tg.risk_headline).toBeTruthy();
+    expect(tg.risk_explanation).toBeTruthy();
+    expect(typeof tg.template_id).toBe('string');
+    expect(typeof tg.template_version).toBe('number');
+  });
+
+  it('STOPPED fixture trader_guidance attention groups carry severity, headline and explanation', () => {
+    const groups = STOPPED.operator_surface.trader_guidance.additional_attention_groups;
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups) {
+      expect(['info', 'warning', 'critical']).toContain(group.severity);
+      expect(group.headline).toBeTruthy();
+      expect(group.explanation).toBeTruthy();
+      expect(group.code).toBeTruthy();
     }
   });
 });

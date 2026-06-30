@@ -84,6 +84,49 @@ function makeStatus(options: {
       },
       daily_order_cap: { used: null, limit: null },
       action_plan: { consumption: 'UNKNOWN', anomaly_verdict: 'UNKNOWN' },
+      account_owner: null,
+      submit_readiness: {
+        code: 'broker_state_unproven',
+        label: 'Broker state unproven',
+        explanation: 'The backend cannot prove the broker/session/reconciliation evidence required for a safe submit.',
+        can_submit: false,
+        blocking_reason_codes: ['BROKER_CONNECTION_DISCONNECTED'],
+        template_id: 'operator_surface.submit_readiness.broker_state_unproven',
+        template_version: 1,
+      },
+      trader_guidance: {
+        situation_code: 'broker_state_unproven',
+        headline: 'Broker state is not proven enough to submit.',
+        explanation: 'The backend cannot prove the broker/session/reconciliation facts needed before a submit.',
+        risk_headline: 'Do not treat stale or missing broker evidence as live truth',
+        risk_explanation: 'Reconnect or reconcile until the broker evidence is fresh and explicit.',
+        primary_remediation: {
+          kind: 'invoke_endpoint',
+          endpoint: 'reconcile_instance',
+          method: 'POST',
+          path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+        },
+        additional_attention_groups: [
+          {
+            code: 'broker_connection',
+            severity: 'warning',
+            headline: 'Broker session is disconnected',
+            explanation: 'The broker connection evidence is not connected.',
+          },
+        ],
+        advanced_evidence: [
+          {
+            label: 'broker.connection',
+            value: 'DISCONNECTED',
+            source: 'operator_surface',
+            gate_id: null,
+            ts_ms: null,
+            ts_ms_resolved: false,
+          },
+        ],
+        template_id: 'operator_surface.trader_guidance.broker_state_unproven',
+        template_version: 1,
+      },
       actions: {
         resume: {
           enabled: false,
@@ -312,6 +355,272 @@ describe('BotControlPageComponent', () => {
     expect(fixture.componentInstance.selectedTab()).toBe('audit');
     expect(el.querySelector('[data-testid="inner-tab-audit"]')?.classList.contains('selected'))
       .toBe(true);
+  });
+
+  it('routes the trader guidance reconcile action to the existing instance endpoint', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const reconcileInstance = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const action = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="trader-guidance-primary-remediation"]',
+    ) as HTMLButtonElement | null;
+    expect(action?.textContent).toContain('Reconcile now');
+    action?.click();
+    await flush(fixture);
+
+    expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
+  });
+
+  it('dispatchTraderGuidanceAction with none kind is a no-op', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    // none remediation should not change any state
+    fixture.componentInstance.dispatchTraderGuidanceAction({ kind: 'none', reason: 'READY' });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.mutationError()).toBeNull();
+    expect(fixture.componentInstance.busyAction()).toBeNull();
+  });
+
+  it('dispatchTraderGuidanceAction with focus_action kind selects the correct tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    fixture.componentInstance.dispatchTraderGuidanceAction({
+      kind: 'focus_action',
+      tab: 'audit',
+      action: 'mark_poisoned',
+    });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.selectedTab()).toBe('audit');
+  });
+
+  it('dispatchTraderGuidanceAction with invoke_capability for resume calls dispatchResume', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const setInstanceDesiredState = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState,
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    fixture.componentInstance.dispatchTraderGuidanceAction({
+      kind: 'invoke_capability',
+      capability: 'resume',
+    });
+    await flush(fixture);
+
+    expect(setInstanceDesiredState).toHaveBeenCalledWith('sid-x', expect.objectContaining({ action: 'resume' }));
+  });
+
+  it('dispatchTraderGuidanceAction with invoke_capability for pause calls dispatchPause', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const setInstanceDesiredState = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState,
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    fixture.componentInstance.dispatchTraderGuidanceAction({
+      kind: 'invoke_capability',
+      capability: 'pause',
+    });
+    await flush(fixture);
+
+    expect(setInstanceDesiredState).toHaveBeenCalledWith('sid-x', expect.objectContaining({ action: 'pause' }));
+  });
+
+  it('dispatchReconcileNow sets and clears busyAction and calls reconcileInstance', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const reconcileInstance = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    await fixture.componentInstance.dispatchReconcileNow();
+    fixture.detectChanges();
+
+    expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
+    expect(fixture.componentInstance.busyAction()).toBeNull();
+    expect(fixture.componentInstance.mutationError()).toBeNull();
+  });
+
+  it('dispatchReconcileNow surfaces errors in mutationError', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const reconcileInstance = vi.fn().mockRejectedValue(new Error('Reconcile failed'));
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    await fixture.componentInstance.dispatchReconcileNow();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.mutationError()).toContain('Reconcile failed');
+    expect(fixture.componentInstance.busyAction()).toBeNull();
   });
 
   it('re-derives selected lifecycle context from refreshed status data', async () => {

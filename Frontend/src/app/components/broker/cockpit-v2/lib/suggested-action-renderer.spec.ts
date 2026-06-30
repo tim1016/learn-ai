@@ -10,6 +10,7 @@ function makeDispatch(): RendererDispatch & {
     focus: [string, string][];
     redeploy: number;
     openRunbook: string[];
+    invokeEndpoint: string[];
   };
 } {
   const calls = {
@@ -17,6 +18,7 @@ function makeDispatch(): RendererDispatch & {
     focus: [] as [string, string][],
     redeploy: 0,
     openRunbook: [] as string[],
+    invokeEndpoint: [] as string[],
   };
   return {
     invokeCapability: vi.fn((cap) => calls.invokeCapability.push(cap)),
@@ -25,6 +27,7 @@ function makeDispatch(): RendererDispatch & {
       calls.redeploy += 1;
     }),
     openRunbook: vi.fn((slug) => calls.openRunbook.push(slug)),
+    invokeEndpoint: vi.fn((endpoint) => calls.invokeEndpoint.push(endpoint)),
     calls,
   };
 }
@@ -75,6 +78,46 @@ describe('renderSuggestedAction', () => {
     expect(dispatch.calls.openRunbook).toEqual(['broker-reconnect']);
   });
 
+  it('invoke_endpoint dispatches the stable backend endpoint name', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      {
+        kind: 'invoke_endpoint',
+        endpoint: 'reconcile_instance',
+        method: 'POST',
+        path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+      },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Reconcile now');
+    expect(rendered?.variant).toBe('primary');
+    rendered?.invoke();
+    expect(dispatch.calls.invokeEndpoint).toEqual(['reconcile_instance']);
+  });
+
+  it('fails closed for invoke_endpoint when the caller does not support endpoint dispatch', () => {
+    const dispatch: RendererDispatch = {
+      invokeCapability: vi.fn(),
+      focus: vi.fn(),
+      redeploy: vi.fn(),
+      openRunbook: vi.fn(),
+    };
+    const rendered = renderSuggestedAction(
+      {
+        kind: 'invoke_endpoint',
+        endpoint: 'reconcile_instance',
+        method: 'POST',
+        path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+      },
+      dispatch,
+    );
+    expect(rendered).toBe(null);
+  });
+
+  it('returns null for no primary remediation', () => {
+    expect(renderSuggestedAction({ kind: 'none', reason: 'READY' }, makeDispatch())).toBe(null);
+  });
+
   it('returns null for an unknown kind (fail closed visibly)', () => {
     const dispatch = makeDispatch();
     const rendered = renderSuggestedAction(
@@ -83,5 +126,77 @@ describe('renderSuggestedAction', () => {
       dispatch,
     );
     expect(rendered).toBe(null);
+  });
+
+  it('invoke_capability for pause returns the Pause label with primary variant', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'invoke_capability', capability: 'pause' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Pause');
+    expect(rendered?.variant).toBe('primary');
+    rendered?.invoke();
+    expect(dispatch.calls.invokeCapability).toEqual(['pause']);
+  });
+
+  it('focus_action for flatten_and_pause returns navigation hint with link variant', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'focus_action', tab: 'status', action: 'flatten_and_pause' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Flatten and pause →');
+    expect(rendered?.variant).toBe('link');
+    rendered?.invoke();
+    expect(dispatch.calls.focus).toEqual([['status', 'flatten_and_pause']]);
+  });
+
+  it('focus_action for stop returns navigation hint with link variant', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'focus_action', tab: 'status', action: 'stop' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Stop instance →');
+    expect(rendered?.variant).toBe('link');
+    rendered?.invoke();
+    expect(dispatch.calls.focus).toEqual([['status', 'stop']]);
+  });
+
+  it('redeploy returns a link-variant action', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction({ kind: 'redeploy' }, dispatch);
+    expect(rendered?.label).toBe('Redeploy →');
+    expect(rendered?.variant).toBe('link');
+    rendered?.invoke();
+    expect(dispatch.calls.redeploy).toBe(1);
+  });
+
+  it('open_runbook returns a link-variant action', () => {
+    const dispatch = makeDispatch();
+    const rendered = renderSuggestedAction(
+      { kind: 'open_runbook', slug: 'some-runbook' },
+      dispatch,
+    );
+    expect(rendered?.label).toBe('Open runbook →');
+    expect(rendered?.variant).toBe('link');
+    rendered?.invoke();
+    expect(dispatch.calls.openRunbook).toEqual(['some-runbook']);
+  });
+
+  it('invoke_endpoint does not share state between successive invocations', () => {
+    const dispatch = makeDispatch();
+    const action = {
+      kind: 'invoke_endpoint' as const,
+      endpoint: 'reconcile_instance' as const,
+      method: 'POST' as const,
+      path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+    };
+    const first = renderSuggestedAction(action, dispatch);
+    const second = renderSuggestedAction(action, dispatch);
+    first?.invoke();
+    second?.invoke();
+    expect(dispatch.calls.invokeEndpoint).toEqual(['reconcile_instance', 'reconcile_instance']);
   });
 });
