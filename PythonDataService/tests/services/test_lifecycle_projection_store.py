@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 
 from app.schemas.live_runs import BotLifecycleEvent, LifecycleEvidenceRef
+from app.services import lifecycle_projection_store as store_module
 from app.services.bot_lifecycle_projection import normalize_account_event
 from app.services.lifecycle_projection_store import (
     account_owner_status_snapshot_from_event,
     lifecycle_event_to_projection_row,
+    select_safety_triage,
 )
 
 
@@ -123,3 +127,44 @@ def test_account_owner_status_snapshot_ignores_unrelated_event() -> None:
     )
 
     assert account_owner_status_snapshot_from_event(event) is None
+
+
+@pytest.mark.asyncio
+async def test_select_safety_triage_applies_fleet_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeConnection:
+        async def fetch(self, query: str, *args: object) -> list[object]:
+            captured["query"] = query
+            captured["args"] = args
+            return []
+
+    @asynccontextmanager
+    async def fake_connection():
+        yield FakeConnection()
+
+    monkeypatch.setattr(store_module, "connection", fake_connection)
+
+    rows = await select_safety_triage(
+        account_id="DU123",
+        strategy_instance_id="bot-a",
+        run_id="run-1",
+        status="blocked",
+        event_type="BrokerOrderUncertain",
+        node_id="ack_or_reconcile",
+        severity="warning",
+        limit=25,
+    )
+
+    assert rows == []
+    assert "severity IN ('warning','critical')" in str(captured["query"])
+    assert captured["args"] == (
+        "DU123",
+        "bot-a",
+        "run-1",
+        "blocked",
+        "BrokerOrderUncertain",
+        "ack_or_reconcile",
+        "warning",
+        25,
+    )

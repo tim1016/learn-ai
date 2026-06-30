@@ -5,7 +5,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LiveRunsService } from './live-runs.service';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
-import type { LifecycleTimelineResponse } from '../api/live-instances.types';
+import type { LifecycleSafetyTriageResponse, LifecycleTimelineResponse } from '../api/live-instances.types';
 
 /**
  * Start/Stop/health all go through the data plane (`/api/live-instances/...`),
@@ -141,6 +141,41 @@ describe('LiveRunsService start/stop proxy', () => {
       && request.params.get('strategy_instance_id') === 'sid-x'
       && request.params.get('run_id') === 'run-x'
       && request.params.get('limit') === '5',
+    );
+    expect(req.request.method).toBe('GET');
+    expect(req.request.url.startsWith('http')).toBe(false);
+    req.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
+  });
+
+  it('reads filtered lifecycle safety triage through the data plane', async () => {
+    const response: LifecycleSafetyTriageResponse = {
+      projection_available: true,
+      canonical_fallback_required: false,
+      rows: [],
+    };
+    const promise = service.getLifecycleSafetyTriage({
+      account_id: 'DU123',
+      strategy_instance_id: 'sid-x',
+      run_id: 'run-x',
+      status: 'blocked',
+      event_type: 'BrokerOrderUncertain',
+      node_id: 'ack_or_reconcile',
+      severity: 'warning',
+      limit: 25,
+    });
+
+    const req = httpMock.expectOne((request) =>
+      request.url === '/api/lifecycle-projection/safety-triage'
+      && request.params.get('account_id') === 'DU123'
+      && request.params.get('strategy_instance_id') === 'sid-x'
+      && request.params.get('run_id') === 'run-x'
+      && request.params.get('status') === 'blocked'
+      && request.params.get('event_type') === 'BrokerOrderUncertain'
+      && request.params.get('node_id') === 'ack_or_reconcile'
+      && request.params.get('severity') === 'warning'
+      && request.params.get('limit') === '25',
     );
     expect(req.request.method).toBe('GET');
     expect(req.request.url.startsWith('http')).toBe(false);

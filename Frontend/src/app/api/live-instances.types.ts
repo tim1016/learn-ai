@@ -193,6 +193,7 @@ export interface BotLifecycleChartView {
 }
 
 export type LifecycleEventSeverity = 'info' | 'warning' | 'critical';
+export type LifecycleSafetySeverity = Extract<LifecycleEventSeverity, 'warning' | 'critical'>;
 export type LifecycleEventCategory =
   | 'decision'
   | 'risk_gate'
@@ -243,6 +244,8 @@ export interface LifecycleTimelineResponse {
   canonical_fallback_required: boolean;
   rows: LifecycleProjectionEventRow[];
 }
+
+export type LifecycleSafetyTriageResponse = LifecycleTimelineResponse;
 
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
