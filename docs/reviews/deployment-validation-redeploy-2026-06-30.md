@@ -94,6 +94,9 @@ NVDA -> SPY:
 
 - Enforce `strategy_instance_id` length against `order_ref` before deploy/start.
 - Surface restart-intensity remaining cooldown in the cockpit.
+- Show the delayed-order countdown/queue state in the cockpit while waiting for
+  next-bar fills.
+- Enforce the broker `orderRef` budget at ledger/deploy mint time.
 - Make action-plan trade targets first-class in the live preflight/operator
   surface, not only strategy-param plumbing.
 - Decide whether deployment specs should carry both signal symbol and trade

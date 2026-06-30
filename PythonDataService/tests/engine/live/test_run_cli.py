@@ -1504,6 +1504,190 @@ def test_deployment_validation_action_plan_routes_trade_symbol_offline(tmp_path:
     assert execs["symbol"].to_list() == ["NVDA", "NVDA"]
 
 
+def test_deployment_validation_unsupported_action_plan_fails_closed(tmp_path: Path) -> None:
+    import argparse as _argparse
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-unsupported-action",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "spy_short",
+                        "instrument": {"kind": "stock", "underlying": "SPY"},
+                        "position": "short",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "spy_short"}],
+            },
+        },
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=tmp_path / "artifacts",
+            broker=None,
+            bars=None,
+            client=None,
+        )
+    )
+
+    assert rc == 2
+
+
+def test_deployment_validation_cross_asset_requires_fixed_shares(tmp_path: Path) -> None:
+    import argparse as _argparse
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-price-dependent-cross-asset",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "SetHoldings", "fraction": "1.0"},
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "nvda_long",
+                        "instrument": {"kind": "stock", "underlying": "NVDA"},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
+            },
+        },
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=tmp_path / "artifacts",
+            broker=None,
+            bars=None,
+            client=None,
+        )
+    )
+
+    assert rc == 2
+
+
+def test_deployment_validation_position_gate_uses_trade_symbol(tmp_path: Path) -> None:
+    import argparse as _argparse
+    import json as _json
+
+    from app.broker.ibkr.models import IbkrPosition, IbkrPositionsSnapshot
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-position-gate-trade-symbol",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "nvda_long",
+                        "instrument": {"kind": "stock", "underlying": "NVDA"},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
+            },
+        },
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=1,
+                symbol="NVDA",
+                sec_type="STK",
+                quantity=1,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            )
+        ],
+        fetched_at_ms=1,
+    )
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=tmp_path / "artifacts",
+            broker=broker,
+            bars=iter_bars([]),
+            client=None,
+        )
+    )
+
+    assert rc == 0
+    status = _json.loads((run_dir / "run_status.json").read_text())
+    assert status["exit_reason"] == "normal"
+
+
 def test_account_durable_intents_project_account_owner_events() -> None:
     intents = _account_durable_intents_from_events(
         [

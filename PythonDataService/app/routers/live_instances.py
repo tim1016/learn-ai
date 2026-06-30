@@ -932,7 +932,7 @@ def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
                     "policy_kind": event.policy_kind or "",
                     "policy_value": event.policy_value or "",
                     "intended_qty": int(event.intended_qty or 0),
-                    "reference_price": event.reference_price or "",
+                    "reference_price": event.reference_price,
                     "sized_via": event.sized_via or "policy_set_holdings",
                     # VCR-0003 last-mile — surface the provenance stamp the
                     # engine mints at resolve time so the per-trade audit

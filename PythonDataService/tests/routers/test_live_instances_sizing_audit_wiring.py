@@ -54,7 +54,13 @@ def _seed_run_dir(root: Path, sid: str, run_id: str = "run-001") -> Path:
     return run_dir
 
 
-def _write_sizing_resolved(wal: IntentWal, *, symbol: str = "AAPL", ts_ms: int = 1_780_000_000_000) -> None:
+def _write_sizing_resolved(
+    wal: IntentWal,
+    *,
+    symbol: str = "AAPL",
+    ts_ms: int = 1_780_000_000_000,
+    reference_price: str | None = "100.00",
+) -> None:
     iid = mint_intent_id()
     wal.append(
         event_type=IntentEventType.SIZING_RESOLVED,
@@ -67,7 +73,7 @@ def _write_sizing_resolved(wal: IntentWal, *, symbol: str = "AAPL", ts_ms: int =
         policy_kind="SetHoldings",
         policy_value="1.0",
         intended_qty=10,
-        reference_price="100.00",
+        reference_price=reference_price,
         sizing_provenance_at_resolve_time="live_override",
         sized_via="policy_set_holdings",
         ts_ms=ts_ms,
@@ -123,6 +129,21 @@ def test_wal_fold_wins_over_sidecar(
 
     assert len(rows) == 1
     assert rows[0]["symbol"] == "FROM_WAL"
+
+
+def test_wal_fold_preserves_null_reference_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_settings(monkeypatch, tmp_path)
+    run_dir = _seed_run_dir(tmp_path, SID)
+    wal = IntentWal(run_dir / "intent_events.jsonl")
+    _write_sizing_resolved(wal, symbol="NVDA", reference_price=None)
+
+    rows = live_instances._sizing_audit_rows(SID)
+
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "NVDA"
+    assert rows[0]["reference_price"] is None
 
 
 def test_falls_back_to_sidecar_when_wal_empty(

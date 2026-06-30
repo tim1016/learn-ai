@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 EXPECTED_STRATEGY_KEYS = {
     # VCR-0004 / Phase 2 — registry keys are now module names so the runner
     # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
@@ -79,8 +81,10 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     assert strategy["display_name"] == "Deployment Validation"
     assert "minute" in strategy["supported_resolutions"]
     props = strategy["params_schema"]["properties"]
-    assert set(props) == {"symbol", "trade_symbol"}
-    assert props["trade_symbol"].get("default") is None
+    assert set(props) == {"symbol"}
+    from app.routers.engine import _STRATEGY_REGISTRY
+
+    assert _STRATEGY_REGISTRY["deployment_validation"].hidden_params == {"trade_symbol"}
     combined = " ".join(strategy["gotchas"]).lower()
     assert "next_bar_open" in combined
 
@@ -91,6 +95,23 @@ def test_deployment_validation_has_matching_spec_fixture():
     fixtures = {f.name: f for f in list_fixtures()}
     assert "deployment_validation" in fixtures
     assert fixtures["deployment_validation"].path.endswith("deployment_validation.spec.json")
+
+
+def test_deployment_validation_trade_symbol_is_live_only_for_engine_lab_backtests():
+    from fastapi import HTTPException
+
+    from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+
+    request = EngineBacktestRequest(
+        strategy_name="deployment_validation",
+        params={"symbol": "SPY", "trade_symbol": "NVDA"},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        execute_engine_backtest(request=request, on_phase=lambda _phase: None, on_log=lambda _line: None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["params_errors"][0]["loc"] == ["params", "trade_symbol"]
 
 
 def test_all_registered_strategies_have_algorithm_and_gotchas():

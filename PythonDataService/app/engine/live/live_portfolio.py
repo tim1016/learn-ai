@@ -687,7 +687,7 @@ class LivePortfolio:
                     policy_kind=policy.kind,
                     policy_value=_describe_policy_value(policy),
                     intended_qty=int(target_quantity),
-                    reference_price=str(price),
+                    reference_price=str(price) if price is not None else None,
                     sizing_provenance_at_resolve_time=default_sizing_provenance(policy),
                     sized_via="policy_set_holdings",
                     symbol=sym,
@@ -1110,7 +1110,7 @@ class LivePortfolio:
         policy_value: str,
         target_qty: int,
         current_qty: int,
-        reference_price: str,
+        reference_price: str | None,
         reason: str,
     ) -> None:
         """Phase 8 / VCR-0003 — durable SIZING_SKIP audit entry.

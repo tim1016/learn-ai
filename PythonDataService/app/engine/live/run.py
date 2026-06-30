@@ -83,6 +83,14 @@ from app.schemas.live_runs import DEFAULT_MAX_ORDERS_PER_DAY
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class StrategyParamResolution:
+    """Live-start strategy parameters plus the broker-facing trade symbol."""
+
+    kwargs: dict[str, object]
+    effective_trade_symbol: str
+
+
 def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
     """PRD #619-B B5 follow-up — return a factory the LiveEngine calls
     to construct a configured ``ChildWatchdog``.
@@ -750,7 +758,7 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     if unknown:
         raise ValueError(f"unknown live_config keys: {sorted(unknown)}")
 
-    kwargs: dict = {}
+    kwargs: dict[str, object] = {}
     if "symbol" in payload:
         kwargs["symbol"] = str(payload["symbol"])
     elif "action" in payload:
@@ -805,11 +813,11 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     return LiveConfig(**kwargs)
 
 
-def _strategy_param_kwargs_from_live_config(
+def _strategy_param_resolution_from_live_config(
     registration,
     live_config: LiveConfig,  # noqa: F821
     ledger_live_config: dict,
-) -> dict:
+) -> StrategyParamResolution:
     """Build strategy params from the hashed live config.
 
     ``live_config.symbol`` remains the signal/data stream. For strategies that
@@ -817,16 +825,26 @@ def _strategy_param_kwargs_from_live_config(
     leg is the trade target.
     """
     fields = registration.param_schema.model_fields
-    kwargs: dict = {}
+    kwargs: dict[str, object] = {}
+    effective_trade_symbol = live_config.symbol.upper()
     if "symbol" in fields:
         kwargs["symbol"] = live_config.symbol
     if "trade_symbol" in fields:
         from app.engine.live.config import stock_symbol_from_action_plan
 
-        trade_symbol = stock_symbol_from_action_plan(ledger_live_config.get("action"))
+        action_plan = ledger_live_config.get("action")
+        trade_symbol = stock_symbol_from_action_plan(action_plan)
+        if trade_symbol is None and action_plan is not None:
+            raise ValueError(
+                "live_config.action is present but is not a supported single long stock plan"
+            )
         if trade_symbol is not None:
-            kwargs["trade_symbol"] = trade_symbol
-    return kwargs
+            effective_trade_symbol = trade_symbol.upper()
+            kwargs["trade_symbol"] = effective_trade_symbol
+    return StrategyParamResolution(
+        kwargs=kwargs,
+        effective_trade_symbol=effective_trade_symbol,
+    )
 
 
 def _make_ibkr_client(spec_client_id: int | None):
@@ -1336,12 +1354,20 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        param_kwargs = _strategy_param_kwargs_from_live_config(
+        param_resolution = _strategy_param_resolution_from_live_config(
             registration,
             live_config,
             ledger_live_config,
         )
-        strategy_params = registration.param_schema(**param_kwargs)
+        if param_resolution.effective_trade_symbol != live_config.symbol.upper():
+            from app.engine.execution.order_sizer import FixedShares
+
+            if not isinstance(live_config.sizing, FixedShares):
+                raise ValueError(
+                    "cross-asset deployment_validation requires FixedShares sizing "
+                    "because only the signal symbol has a bar price stream"
+                )
+        strategy_params = registration.param_schema(**param_resolution.kwargs)
         strategy = registration.build(strategy_params)
     except Exception as exc:
         print(
@@ -1835,7 +1861,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                 else None
             )
             position_check = check_unexpected_position(
-                positions, expected_symbol=live_config.symbol, managed_symbols=managed_symbols
+                positions,
+                expected_symbol=param_resolution.effective_trade_symbol,
+                managed_symbols=managed_symbols,
             )
             # ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence
             # guard. The sibling symbol list is the same one --managed-symbols
@@ -1850,7 +1878,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 else None
             )
             coexistence_check = check_all_in_coexistence(
-                proposed_symbol=live_config.symbol,
+                proposed_symbol=param_resolution.effective_trade_symbol,
                 proposed_sizing=live_config.sizing,
                 broker_positions=positions,
                 sibling_all_in_symbols=sibling_all_in,
@@ -1875,7 +1903,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             if not position_check.passed:
                 print(
                     f"[START] HALT unexpected_position: {position_check.detail} "
-                    f"(expected long-only {live_config.symbol}; operator must "
+                    f"(expected long-only {param_resolution.effective_trade_symbol}; operator must "
                     f"reconcile the account before starting)",
                     file=sys.stderr,
                 )

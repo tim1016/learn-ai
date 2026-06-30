@@ -1173,12 +1173,13 @@ class OperatorSurfaceAccountOwner(BaseModel):
 class OperatorSurfaceActionPlan(BaseModel):
     """Server-authored action-plan consumption + anomaly verdict (#608).
 
-    Today ``consumption`` is ``DECLARATIVE_ONLY`` and ``anomaly_verdict``
-    is ``READY`` whenever an action plan is present (no detector exists
-    yet); PRD #593 Slice 4 will flip ``consumption`` to ``ACTIVE`` and
-    drive ``anomaly_verdict`` from real anomaly detection, with no
-    Frontend change required.  When the run's stored ``action_plan`` is
-    ``None``, both fields are ``UNKNOWN`` — a missing plan is evidence
+    ``consumption`` is ``ACTIVE`` when the stored action plan belongs to
+    deployment-validation and matches the stock-only shape that live runner
+    currently consumes (one long stock leg). Other present action plans remain
+    ``DECLARATIVE_ONLY`` until their resolver/runtime path ships.
+    ``anomaly_verdict`` is ``READY`` whenever an action plan is present
+    because no detector exists yet. When the run's stored ``action_plan``
+    is ``None``, both fields are ``UNKNOWN`` — a missing plan is evidence
     of nothing, not evidence of health.
     """
 
