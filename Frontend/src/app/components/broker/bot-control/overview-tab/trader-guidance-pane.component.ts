@@ -1,7 +1,12 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
-import type { OperatorSurface, TraderPrimaryRemediation } from '../../../../api/live-instances.types';
+import type {
+  LifecycleProjectionEventRow,
+  OperatorSurface,
+  TraderPrimaryRemediation,
+} from '../../../../api/live-instances.types';
+import { fmtTimestampNy } from '../../format';
 import {
   renderSuggestedAction,
   type RendererDispatch,
@@ -17,6 +22,10 @@ import {
 })
 export class TraderGuidancePaneComponent {
   readonly surface = input.required<OperatorSurface>();
+  readonly timelineRows = input<LifecycleProjectionEventRow[]>([]);
+  readonly timelineProjectionAvailable = input<boolean>(false);
+  readonly timelineCanonicalFallbackRequired = input<boolean>(true);
+  readonly timelineNotice = input<string | null>(null);
   readonly primaryRemediationSelected = output<TraderPrimaryRemediation>();
 
   readonly submitReadiness = computed(() => this.surface().submit_readiness);
@@ -42,6 +51,23 @@ export class TraderGuidancePaneComponent {
 
   trackAttention(index: number, group: { code: string }): string {
     return `${group.code}:${index}`;
+  }
+
+  trackTimelineRow(index: number, row: LifecycleProjectionEventRow): string {
+    return `${row.event_id}:${index}`;
+  }
+
+  timelineHeadline(row: LifecycleProjectionEventRow): string {
+    return row.rendered_headline ?? row.summary;
+  }
+
+  timelineTimestamp(row: LifecycleProjectionEventRow): string {
+    return row.ts_ms_resolved ? fmtTimestampNy(row.ts_ms) : 'timestamp unresolved';
+  }
+
+  timelineSource(row: LifecycleProjectionEventRow): string {
+    const seq = row.source_seq === null ? '' : ` #${row.source_seq}`;
+    return `${row.source_type}${seq}`;
   }
 
   private emitCurrentRemediation(): void {

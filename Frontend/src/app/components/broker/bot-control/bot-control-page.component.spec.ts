@@ -1,11 +1,16 @@
 import { Component, signal } from '@angular/core';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
 import { of, Subject } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { FleetAccountSummary, LiveInstanceStatus } from '../../../api/live-instances.types';
+import type {
+  FleetAccountSummary,
+  LifecycleTimelineResponse,
+  LiveInstanceStatus,
+} from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
@@ -224,6 +229,44 @@ function makeAccountSummary(): FleetAccountSummary {
   };
 }
 
+function makeLifecycleTimeline(): LifecycleTimelineResponse {
+  return {
+    projection_available: true,
+    canonical_fallback_required: false,
+    rows: [
+      {
+        id: 101,
+        account_id: 'DU1',
+        strategy_instance_id: 'sid-x',
+        run_id: 'run-x',
+        event_id: 'intent_wal:run-x:7:ACK_FAILED_UNCERTAIN',
+        event_type: 'BrokerOrderUncertain',
+        category: 'order',
+        node_id: 'ack_or_reconcile',
+        gate_id: null,
+        status: 'blocked',
+        severity: 'warning',
+        ts_ms: 1_700_000_001_000,
+        ts_ms_resolved: true,
+        source_artifact: 'intent_events.jsonl',
+        source_type: 'broker_ack',
+        source_seq: 7,
+        source_offset: null,
+        source_hash: null,
+        summary: 'Broker acknowledgement failed; submit outcome is uncertain.',
+        why: 'Probe broker before retrying this intent.',
+        operator_next_step: 'PROBE_BROKER_BEFORE_RETRY',
+        receipt_payload: { intent_id: 'intent-7', order_ref: 'learn-ai/sid-x/v1:intent-7' },
+        evidence_refs: [],
+        rendered_headline: null,
+        rendered_template_id: null,
+        inserted_at_ms: 1_700_000_001_100,
+        updated_at_ms: 1_700_000_001_100,
+      },
+    ],
+  };
+}
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -264,6 +307,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -310,6 +354,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -357,6 +402,92 @@ describe('BotControlPageComponent', () => {
       .toBe(true);
   });
 
+  it('renders the projection timeline in the trader guidance pane', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.account_owner = {
+      account_id: 'DU1',
+      generation: 4,
+      phase: 'accepting',
+      recorded_at_ms: 1_700_000_000_000,
+      source: 'account_owner',
+    };
+    const getLifecycleTimeline = vi.fn().mockResolvedValue(makeLifecycleTimeline());
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline,
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    expect(getLifecycleTimeline).toHaveBeenCalledWith({
+      account_id: 'DU1',
+      strategy_instance_id: 'sid-x',
+      run_id: null,
+      limit: 5,
+    });
+    const timeline = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="trader-guidance-timeline"]');
+    expect(timeline?.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+    expect(timeline?.textContent).toContain('broker_ack #7');
+  });
+
+  it('keeps the cockpit file-backed when the projection timeline is unavailable', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const getLifecycleTimeline = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 503 }));
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline,
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('app-overview-tab')).not.toBeNull();
+    expect(el.querySelector('[data-testid="trader-guidance-timeline"]')?.textContent)
+      .toContain('Projection unavailable; current snapshot remains file-backed.');
+    expect(el.querySelector('.error-banner')?.textContent ?? '').not.toContain('Projection unavailable');
+  });
+
   it('routes the trader guidance reconcile action to the existing instance endpoint', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const reconcileInstance = vi.fn().mockResolvedValue({});
@@ -373,6 +504,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -418,6 +550,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(firstStatus),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -461,6 +594,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus,
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -507,6 +641,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -544,6 +679,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus,
             getAccountSummary,
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -555,11 +691,15 @@ describe('BotControlPageComponent', () => {
 
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
-    await flush(fixture);
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
     expect(getAccountSummary).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(4_000);
-    await flush(fixture);
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
 
     expect(getInstanceStatus).toHaveBeenCalledTimes(2);
     expect(getAccountSummary).toHaveBeenCalledTimes(2);
@@ -587,6 +727,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus,
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
@@ -626,6 +767,7 @@ describe('BotControlPageComponent', () => {
           useValue: {
             getInstanceStatus: vi.fn().mockResolvedValue(makeStatus({ markPoisonedEnabled: true })),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),

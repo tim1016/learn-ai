@@ -33,6 +33,44 @@
     <p>{{ traderGuidance().risk_explanation }}</p>
   </section>
 
+  <section
+    class="timeline-band"
+    data-testid="trader-guidance-timeline"
+    [class.fallback]="timelineCanonicalFallbackRequired()"
+  >
+    <p class="eyebrow">What changed recently</p>
+    @if (timelineNotice(); as notice) {
+      <p class="timeline-notice">{{ notice }}</p>
+    }
+    @if (timelineRows().length > 0) {
+      <ol>
+        @for (row of timelineRows(); track trackTimelineRow($index, row)) {
+          <li [class]="'severity-' + row.severity">
+            <div class="timeline-row-header">
+              <span>{{ timelineTimestamp(row) }}</span>
+              <span>{{ row.status ?? row.category }}</span>
+            </div>
+            <strong>{{ timelineHeadline(row) }}</strong>
+            @if (row.why) {
+              <p>{{ row.why }}</p>
+            }
+            <div class="timeline-meta">
+              @if (row.node_id) {
+                <span>{{ row.node_id }}</span>
+              }
+              <span>{{ timelineSource(row) }}</span>
+              @if (row.operator_next_step) {
+                <span>{{ row.operator_next_step }}</span>
+              }
+            </div>
+          </li>
+        }
+      </ol>
+    } @else {
+      <p>No recent projection rows are available for this bot.</p>
+    }
+  </section>
+
   @if (accountOwner(); as owner) {
     <section class="owner-band">
       <p class="eyebrow">Account owner</p>

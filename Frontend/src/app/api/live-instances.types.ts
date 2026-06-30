@@ -192,6 +192,58 @@ export interface BotLifecycleChartView {
   actions: LifecycleChartAction[];
 }
 
+export type LifecycleEventSeverity = 'info' | 'warning' | 'critical';
+export type LifecycleEventCategory =
+  | 'decision'
+  | 'risk_gate'
+  | 'order'
+  | 'fill'
+  | 'position_change'
+  | 'account_balance'
+  | 'freeze'
+  | 'halt'
+  | 'poison'
+  | 'desired_state'
+  | 'lifecycle_transition'
+  | 'account_event'
+  | 'evidence';
+
+export interface LifecycleProjectionEventRow {
+  id: number | null;
+  account_id: string;
+  strategy_instance_id: string | null;
+  run_id: string | null;
+  event_id: string;
+  event_type: string;
+  category: LifecycleEventCategory;
+  node_id: string | null;
+  gate_id: string | null;
+  status: LifecycleChartStatus | null;
+  severity: LifecycleEventSeverity;
+  ts_ms: number | null;
+  ts_ms_resolved: boolean;
+  source_artifact: string;
+  source_type: string;
+  source_seq: number | null;
+  source_offset: number | null;
+  source_hash: string | null;
+  summary: string;
+  why: string | null;
+  operator_next_step: string | null;
+  receipt_payload: Record<string, unknown>;
+  evidence_refs: Record<string, unknown>[];
+  rendered_headline: string | null;
+  rendered_template_id: string | null;
+  inserted_at_ms: number | null;
+  updated_at_ms: number | null;
+}
+
+export interface LifecycleTimelineResponse {
+  projection_available: boolean;
+  canonical_fallback_required: boolean;
+  rows: LifecycleProjectionEventRow[];
+}
+
 export interface LiveInstanceStatus {
   strategy_instance_id: string;
   process: InstanceProcessView;

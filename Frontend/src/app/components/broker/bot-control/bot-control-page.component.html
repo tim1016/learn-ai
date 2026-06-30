@@ -127,6 +127,10 @@
         <app-overview-tab
           [status]="s"
           [selectedNodeId]="selectedLifecycleNodeId()"
+          [timelineRows]="timelineRows()"
+          [timelineProjectionAvailable]="timelineProjectionAvailable()"
+          [timelineCanonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
+          [timelineNotice]="timelineNotice()"
           (nodeSelected)="selectLifecycleNode($event)"
           (traderGuidanceAction)="dispatchTraderGuidanceAction($event)"
         />

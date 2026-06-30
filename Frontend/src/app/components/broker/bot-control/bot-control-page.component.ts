@@ -9,6 +9,7 @@ import {
   signal,
 } from '@angular/core';
 import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
+import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
@@ -16,6 +17,7 @@ import type {
   FleetAccountSummary,
   LifecycleChartActionId,
   LifecycleChartNode,
+  LifecycleProjectionEventRow,
   LiveInstanceStatus,
   OperatorNotice,
   OperatorSurfaceControlPlane,
@@ -35,8 +37,11 @@ import { OverviewActionsComponent } from './overview-tab/overview-actions.compon
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 
 const POLL_INTERVAL_MS = 4_000;
+const TIMELINE_LIMIT = 5;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
+const TIMELINE_PROJECTION_UNAVAILABLE =
+  'Projection unavailable; current snapshot remains file-backed.';
 
 type BotControlTab = InnerTab;
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
@@ -49,6 +54,20 @@ interface ControlPlaneBanner {
   readonly attemptText: string | null;
   readonly runbookSlug: string | null;
 }
+
+interface LifecycleTimelinePaneState {
+  readonly rows: LifecycleProjectionEventRow[];
+  readonly projectionAvailable: boolean;
+  readonly canonicalFallbackRequired: boolean;
+  readonly notice: string | null;
+}
+
+const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
+  rows: [],
+  projectionAvailable: false,
+  canonicalFallbackRequired: true,
+  notice: null,
+};
 
 @Component({
   selector: 'app-bot-control-page',
@@ -80,11 +99,13 @@ export class BotControlPageComponent {
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private pollToken = 0;
   private statusRequestSeq = 0;
+  private timelineRequestSeq = 0;
   private destroyed = false;
 
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
   readonly accountSummary = signal<FleetAccountSummary | null>(null);
+  readonly lifecycleTimeline = signal<LifecycleTimelinePaneState>(EMPTY_TIMELINE_STATE);
   readonly selectedTab = signal<BotControlTab>('status');
   readonly selectedLifecycleNodeId = signal<string | null>(null);
   readonly statusError = signal<string | null>(null);
@@ -144,6 +165,11 @@ export class BotControlPageComponent {
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
 
+  readonly timelineRows = computed(() => this.lifecycleTimeline().rows);
+  readonly timelineProjectionAvailable = computed(() => this.lifecycleTimeline().projectionAvailable);
+  readonly timelineCanonicalFallbackRequired = computed(() => this.lifecycleTimeline().canonicalFallbackRequired);
+  readonly timelineNotice = computed(() => this.lifecycleTimeline().notice);
+
   readonly selectedTabLabel = computed<string>(() => this.tabLabel(this.selectedTab()));
 
   constructor() {
@@ -153,6 +179,7 @@ export class BotControlPageComponent {
       this.clearPollTimer();
       this.instanceId.set(id);
       this.status.set(null);
+      this.lifecycleTimeline.set(EMPTY_TIMELINE_STATE);
       this.selectedTab.set('status');
       this.selectedLifecycleNodeId.set(null);
       if (id) {
@@ -411,9 +438,41 @@ export class BotControlPageComponent {
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.status.set(status);
       this.statusError.set(null);
+      void this.refreshLifecycleTimeline(id, status, seq);
     } catch (err) {
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.statusError.set(this.humanError(err));
+    }
+  }
+
+  private async refreshLifecycleTimeline(
+    id: string,
+    status: LiveInstanceStatus,
+    statusSeq: number,
+  ): Promise<void> {
+    const seq = ++this.timelineRequestSeq;
+    try {
+      const timeline = await this.liveRuns.getLifecycleTimeline({
+        account_id: status.operator_surface.account_owner?.account_id ?? this.accountSummary()?.account_id ?? null,
+        strategy_instance_id: status.strategy_instance_id,
+        run_id: status.live_binding?.run_id ?? status.evidence_binding?.run_id ?? null,
+        limit: TIMELINE_LIMIT,
+      });
+      if (this.instanceId() !== id || statusSeq !== this.statusRequestSeq || seq !== this.timelineRequestSeq) return;
+      this.lifecycleTimeline.set({
+        rows: timeline.rows,
+        projectionAvailable: timeline.projection_available,
+        canonicalFallbackRequired: timeline.canonical_fallback_required,
+        notice: timeline.canonical_fallback_required ? TIMELINE_PROJECTION_UNAVAILABLE : null,
+      });
+    } catch (err) {
+      if (this.instanceId() !== id || statusSeq !== this.statusRequestSeq || seq !== this.timelineRequestSeq) return;
+      this.lifecycleTimeline.set({
+        rows: [],
+        projectionAvailable: false,
+        canonicalFallbackRequired: true,
+        notice: this.timelineFallbackNotice(err),
+      });
     }
   }
 
@@ -451,6 +510,11 @@ export class BotControlPageComponent {
   private humanError(err: unknown): string {
     if (err instanceof Error && err.message) return err.message;
     return 'Could not load bot control data.';
+  }
+
+  private timelineFallbackNotice(err: unknown): string {
+    if (err instanceof HttpErrorResponse && err.status === 503) return TIMELINE_PROJECTION_UNAVAILABLE;
+    return 'Lifecycle projection timeline could not be loaded; current snapshot remains file-backed.';
   }
 
   private scheduleNextPoll(id: string, token: number): void {

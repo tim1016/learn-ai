@@ -1,12 +1,48 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type { OperatorSurface, TraderPrimaryRemediation } from '../../../../api/live-instances.types';
+import type {
+  LifecycleProjectionEventRow,
+  OperatorSurface,
+  TraderPrimaryRemediation,
+} from '../../../../api/live-instances.types';
 import { makeOperatorSurfaceFixture } from '../../../../testing/live-instance-status-fixtures';
 import { TraderGuidancePaneComponent } from './trader-guidance-pane.component';
 
 function makeSurface(overrides: Partial<OperatorSurface> = {}): OperatorSurface {
   return makeOperatorSurfaceFixture(overrides);
+}
+
+function makeTimelineRow(): LifecycleProjectionEventRow {
+  return {
+    id: 12,
+    account_id: 'DU123',
+    strategy_instance_id: 'sid-x',
+    run_id: 'run-x',
+    event_id: 'intent_wal:run-x:1:ACK_FAILED_UNCERTAIN',
+    event_type: 'BrokerOrderUncertain',
+    category: 'order',
+    node_id: 'ack_or_reconcile',
+    gate_id: null,
+    status: 'blocked',
+    severity: 'warning',
+    ts_ms: 1_700_000_001_000,
+    ts_ms_resolved: true,
+    source_artifact: 'intent_events.jsonl',
+    source_type: 'broker_ack',
+    source_seq: 1,
+    source_offset: null,
+    source_hash: null,
+    summary: 'Broker acknowledgement failed; submit outcome is uncertain.',
+    why: 'Probe broker before retrying this intent.',
+    operator_next_step: 'PROBE_BROKER_BEFORE_RETRY',
+    receipt_payload: { intent_id: 'intent-1' },
+    evidence_refs: [],
+    rendered_headline: null,
+    rendered_template_id: null,
+    inserted_at_ms: 1_700_000_001_100,
+    updated_at_ms: 1_700_000_001_100,
+  };
 }
 
 describe('TraderGuidancePaneComponent', () => {
@@ -89,5 +125,41 @@ describe('TraderGuidancePaneComponent', () => {
     });
 
     expect(screen.queryByTestId('trader-guidance-primary-remediation')).toBeNull();
+  });
+
+  it('renders backend-authored lifecycle timeline rows without deriving a verdict', async () => {
+    await render(TraderGuidancePaneComponent, {
+      inputs: {
+        surface: makeOperatorSurfaceFixture(),
+        timelineRows: [makeTimelineRow()],
+        timelineProjectionAvailable: true,
+        timelineCanonicalFallbackRequired: false,
+      },
+    });
+
+    const timeline = screen.getByTestId('trader-guidance-timeline');
+    expect(timeline.textContent).toContain('What changed recently');
+    expect(timeline.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+    expect(timeline.textContent).toContain('Probe broker before retrying this intent.');
+    expect(timeline.textContent).toContain('blocked');
+    expect(timeline.textContent).toContain('broker_ack #1');
+    expect(timeline.textContent).toContain('PROBE_BROKER_BEFORE_RETRY');
+    expect(timeline.textContent).toContain('ET');
+  });
+
+  it('surfaces projection fallback without hiding the file-backed snapshot', async () => {
+    await render(TraderGuidancePaneComponent, {
+      inputs: {
+        surface: makeOperatorSurfaceFixture(),
+        timelineRows: [],
+        timelineProjectionAvailable: false,
+        timelineCanonicalFallbackRequired: true,
+        timelineNotice: 'Projection unavailable; current snapshot remains file-backed.',
+      },
+    });
+
+    const timeline = screen.getByTestId('trader-guidance-timeline');
+    expect(timeline.textContent).toContain('Projection unavailable; current snapshot remains file-backed.');
+    expect(timeline.textContent).toContain('No recent projection rows are available for this bot.');
   });
 });
