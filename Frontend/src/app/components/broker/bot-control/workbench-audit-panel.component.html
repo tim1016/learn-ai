@@ -1,0 +1,85 @@
+<div class="workbench-audit-panel" data-testid="workbench-audit-panel">
+  @if (provenance(); as p) {
+    <section class="subsection" data-testid="workbench-audit-provenance">
+      <h3>Run identity</h3>
+      <dl class="provenance-grid">
+        <dt>run_id</dt>
+        <dd>
+          <code>{{ p.run_id }}</code>
+          <button type="button" class="copy" (click)="copy(p.run_id)" aria-label="Copy run_id">copy</button>
+        </dd>
+
+        <dt>schema_version</dt>
+        <dd><code>{{ p.schema_version || '-' }}</code></dd>
+
+        <dt>code_sha</dt>
+        <dd>
+          <code>{{ p.code_sha || '-' }}</code>
+          @if (p.code_sha) {
+            <button type="button" class="copy" (click)="copy(p.code_sha)" aria-label="Copy code_sha">copy</button>
+          }
+        </dd>
+
+        <dt>spec_path</dt>
+        <dd>
+          <code>{{ p.strategy_spec_path || '-' }}</code>
+          @if (p.strategy_spec_path) {
+            <button type="button" class="copy" (click)="copy(p.strategy_spec_path)" aria-label="Copy spec_path">copy</button>
+          }
+        </dd>
+
+        <dt>spec_sha256</dt>
+        <dd>
+          <code>{{ p.strategy_spec_sha256 || '-' }}</code>
+          @if (p.strategy_spec_sha256) {
+            <button type="button" class="copy" (click)="copy(p.strategy_spec_sha256)" aria-label="Copy spec_sha256">copy</button>
+          }
+        </dd>
+
+        <dt>qc_audit_copy_path</dt>
+        <dd>
+          <code>{{ p.qc_audit_copy_path || '-' }}</code>
+          @if (p.qc_audit_copy_path) {
+            <button type="button" class="copy" (click)="copy(p.qc_audit_copy_path)" aria-label="Copy audit_copy_path">copy</button>
+          }
+        </dd>
+
+        <dt>qc_audit_copy_sha256</dt>
+        <dd>
+          <code>{{ p.qc_audit_copy_sha256 || '-' }}</code>
+          @if (p.qc_audit_copy_sha256) {
+            <button type="button" class="copy" (click)="copy(p.qc_audit_copy_sha256)" aria-label="Copy audit_sha256">copy</button>
+          }
+        </dd>
+
+        <dt>qc_backtest_id</dt>
+        <dd>
+          <code>{{ p.qc_cloud_backtest_id || '-' }}</code>
+          @if (p.qc_cloud_backtest_id) {
+            <button type="button" class="copy" (click)="copy(p.qc_cloud_backtest_id)" aria-label="Copy backtest_id">copy</button>
+          }
+        </dd>
+
+        <dt>account_id</dt>
+        <dd><code>{{ p.account_id || '-' }}</code></dd>
+
+        <dt>start_date_ms</dt>
+        <dd><code>{{ formatTimestamp(p.start_date_ms) }}</code></dd>
+
+        <dt>created_at_ms</dt>
+        <dd><code>{{ formatTimestamp(p.created_at_ms) }}</code></dd>
+      </dl>
+    </section>
+
+    <section class="subsection" data-testid="workbench-audit-runtime-config">
+      <h3>Runtime configuration</h3>
+      <pre class="json">{{ runtimeConfigJson() }}</pre>
+    </section>
+  } @else {
+    <p class="empty">No provenance available; instance has not been deployed.</p>
+  }
+
+  <section class="subsection broker-evidence" data-testid="workbench-audit-broker-evidence">
+    <app-ibkr-api-evidence-panel />
+  </section>
+</div>

@@ -1,44 +1,93 @@
 <section class="bot-control-page" aria-labelledby="bot-control-title">
   <header class="page-header">
-    <div>
-      <p class="eyebrow">Bot control</p>
-      <h1 id="bot-control-title">{{ instanceId() ?? 'Bot' }}</h1>
-    </div>
-    @if (status()) {
-      <div class="control-actions" aria-label="Bot controls">
-        <button
-          type="button"
-          class="action-button"
-          [disabled]="isActionDisabled('resume')"
-          (click)="dispatchResume()"
-        >
-          Resume
-        </button>
-        <button
-          type="button"
-          class="action-button"
-          [disabled]="isActionDisabled('pause')"
-          (click)="dispatchPause()"
-        >
-          Pause
-        </button>
-        <button
-          type="button"
-          class="action-button"
-          [disabled]="isActionDisabled('flatten_and_pause')"
-          (click)="dispatchFlattenAndPause()"
-        >
-          Flatten &amp; pause
-        </button>
-        <button
-          type="button"
-          class="action-button"
-          [disabled]="isActionDisabled('stop')"
-          (click)="dispatchStop()"
-        >
-          Stop
-        </button>
+    <div class="identity-row">
+      <div>
+        <p class="eyebrow">Bot control</p>
+        <h1 id="bot-control-title">{{ instanceId() ?? 'Bot' }}</h1>
       </div>
+      @if (status(); as s) {
+        <p class="identity-meta">{{ s.symbol ?? 'Unknown symbol' }} · {{ s.process.state }}</p>
+      }
+    </div>
+
+    @if (status(); as s) {
+      <div class="decision-row" aria-label="Bot decision facts">
+        <span class="fact-chip" [attr.title]="chipHelp('broker_proof')">
+          Broker proof: <strong>{{ brokerProofLabel() }}</strong>
+        </span>
+        @if (executionPosture(); as posture) {
+          <span
+            class="fact-chip execution-chip"
+            data-testid="bot-control-execution-chip"
+            [class.execution-unsafe]="posture === 'UNSAFE'"
+            [attr.title]="chipHelp('execution')"
+          >
+            Execution: <strong>{{ posture }}</strong>
+          </span>
+        }
+        @if (submitReadiness(); as readiness) {
+          <span
+            class="fact-chip submit-chip"
+            data-trader-copy
+            [class.can-submit]="readiness.can_submit"
+            [attr.title]="chipHelp('submit')"
+          >
+            Submit:
+            <strong>{{ readiness.can_submit ? 'can submit' : 'cannot submit' }}</strong>
+            - {{ readiness.label }}
+          </span>
+        }
+        <span class="fact-chip" [attr.title]="chipHelp('exposure')">
+          Exposure: <strong>{{ exposureLabel() }}</strong>
+        </span>
+      </div>
+
+      <app-overview-actions
+        class="top-action-banner"
+        [actions]="s.lifecycle_chart.actions"
+        [busyAction]="busyAction()"
+        (actionInvoked)="dispatchOverviewAction($event)"
+        (disabledActionSelected)="selectActionTargetNode($event)"
+        (actionTargetHovered)="setHighlightedLifecycleNode($event)"
+      />
+
+      @if (traderGuidance(); as guidance) {
+        <section class="guidance-strip" aria-label="Next action guidance">
+          <div class="next-step" data-trader-copy>
+            <span class="strip-label">Next step</span>
+            @if (renderedPrimaryRemediation(); as action) {
+              <button
+                type="button"
+                class="primary-remediation"
+                data-testid="trader-guidance-primary-remediation"
+                (click)="invokePrimaryRemediation(action)"
+              >
+                {{ action.label }}
+              </button>
+            } @else {
+              <strong>No immediate action</strong>
+            }
+            <span class="why">why: {{ guidance.explanation }}</span>
+          </div>
+          <details class="risk-line" data-trader-copy>
+            <summary>Risk: {{ guidance.risk_headline }}</summary>
+            <p>{{ guidance.risk_explanation }}</p>
+          </details>
+          @if (attentionGroups().length > 0) {
+            <details class="attention-line" [open]="hasCriticalAttention()">
+              <summary>Attention ({{ attentionGroups().length }})</summary>
+              <ul>
+                @for (group of attentionGroups(); track trackAttention($index, group)) {
+                  <li [class]="'severity-' + group.severity" data-trader-copy>
+                    <strong>{{ group.headline }}</strong>
+                    <span>{{ group.explanation }}</span>
+                  </li>
+                }
+              </ul>
+            </details>
+          }
+        </section>
+      }
     }
   </header>
 
@@ -115,137 +164,54 @@
   }
 
   @if (status(); as s) {
-    <app-overview-actions
-      class="top-action-banner"
-      [actions]="s.lifecycle_chart.actions"
-      [busyAction]="busyAction()"
-      (actionInvoked)="dispatchOverviewAction($event)"
-    />
-
     <section class="control-workspace" aria-label="Bot lifecycle control workspace">
       <div class="lifecycle-pane">
         <app-overview-tab
           [status]="s"
           [selectedNodeId]="selectedLifecycleNodeId()"
-          [timelineRows]="timelineRows()"
-          [timelineProjectionAvailable]="timelineProjectionAvailable()"
-          [timelineCanonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
-          [timelineNotice]="timelineNotice()"
+          [highlightedNodeId]="highlightedLifecycleNodeId()"
           (nodeSelected)="selectLifecycleNode($event)"
-          (traderGuidanceAction)="dispatchTraderGuidanceAction($event)"
         />
       </div>
 
-      <section class="right-pane" aria-label="Lifecycle details and controls">
+      <section class="right-pane" aria-label="Lifecycle action and evidence inspector">
         @if (rightPaneNode(); as node) {
-          <header class="context-header" data-testid="bot-control-context-header">
-            <div>
-              <p class="eyebrow">{{ selectedLifecycleNodeId() ? 'Selected lifecycle step' : 'Current lifecycle focus' }}</p>
-              <h2>{{ selectedTabLabel() }}</h2>
-              <p class="context-status">{{ node.label }} · {{ node.lane }} · {{ node.status_label }}</p>
-            </div>
-          </header>
-
-          <section class="context-evidence" aria-label="Lifecycle step evidence">
-            @if (node.summary) {
-              <p>{{ node.summary }}</p>
-            }
-            @if (node.why) {
-              <p>{{ node.why }}</p>
-            }
-            @if (node.operator_next_step) {
-              <p>{{ node.operator_next_step }}</p>
-            }
-            @if (node.evidence_summary) {
-              <p>{{ node.evidence_summary }}</p>
-            }
-            <p class="context-timestamp">
-              Evidence time: {{ nodeTimestamp(node) }}
-            </p>
-            @if (node.receipts.length > 0) {
-              <app-node-receipts-pane [receipts]="node.receipts" />
-            }
-          </section>
+          <app-node-inspector
+            [node]="node"
+            [status]="s"
+            [hasExplicitSelection]="selectedLifecycleNodeId() !== null"
+            (redeployRequested)="onGateRedeploy()"
+          />
         }
-
-        <nav class="inner-tabs" aria-label="Bot control views" data-testid="bot-control-tabs">
-          <button
-            type="button"
-            class="inner-tab"
-            [class.selected]="selectedTab() === 'status'"
-            [attr.aria-current]="selectedTab() === 'status' ? 'page' : null"
-            data-testid="inner-tab-status"
-            (click)="selectTab('status')"
-          >
-            Status &amp; Risk
-          </button>
-          <button
-            type="button"
-            class="inner-tab"
-            [class.selected]="selectedTab() === 'activity'"
-            [attr.aria-current]="selectedTab() === 'activity' ? 'page' : null"
-            data-testid="inner-tab-activity"
-            (click)="selectTab('activity')"
-          >
-            Activity
-          </button>
-          <button
-            type="button"
-            class="inner-tab"
-            [class.selected]="selectedTab() === 'audit'"
-            [attr.aria-current]="selectedTab() === 'audit' ? 'page' : null"
-            data-testid="inner-tab-audit"
-            (click)="selectTab('audit')"
-          >
-            Audit
-          </button>
-          <button
-            type="button"
-            class="inner-tab"
-            [class.selected]="selectedTab() === 'configuration'"
-            [attr.aria-current]="selectedTab() === 'configuration' ? 'page' : null"
-            data-testid="inner-tab-configuration"
-            (click)="selectTab('configuration')"
-          >
-            Configuration
-          </button>
-        </nav>
-
-        <section class="active-panel" data-testid="bot-control-active-panel">
-          @switch (selectedTab()) {
-            @case ('status') {
-              <app-status-risk-tab
-                [status]="s"
-                (invokeResume)="dispatchResume()"
-                (invokePause)="dispatchPause()"
-                (invokeFlattenAndPause)="dispatchFlattenAndPause()"
-                (focusTab)="selectTab($event)"
-                (redeploy)="onGateRedeploy()"
-                (openRunbook)="onGateOpenRunbook($event)"
-              />
-            }
-            @case ('activity') {
-              <app-activity-tab [status]="s" />
-            }
-            @case ('audit') {
-              <app-audit-tab
-                [status]="s"
-                [busyAction]="busyAction()"
-                (markPoisonedRequested)="openTypedHalt()"
-              />
-            }
-            @case ('configuration') {
-              <app-configuration-tab
-                [status]="s"
-                [redeployQueryParams]="redeployQueryParams()"
-              />
-            }
-          }
-        </section>
       </section>
     </section>
+
+    <section class="below-fold-panels" aria-label="Additional bot evidence">
+      <details
+        #activityPanel
+        class="below-fold-panel"
+        data-testid="bot-control-recent-activity"
+        (toggle)="setActivityPanelOpen(activityPanel.open)"
+      >
+        <summary>Recent activity</summary>
+        <app-trader-guidance-timeline
+          [rows]="timelineRows()"
+          [projectionAvailable]="timelineProjectionAvailable()"
+          [canonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
+          [notice]="timelineNotice()"
+        />
+        @if (activityPanelOpen()) {
+          <app-activity-tab [status]="s" />
+        }
+      </details>
+
+      <details class="below-fold-panel" data-testid="bot-control-full-audit">
+        <summary>Full audit trail</summary>
+        <app-workbench-audit-panel [status]="s" />
+      </details>
+    </section>
   } @else if (!errorMessage()) {
-    <p class="loading">Loading bot control…</p>
+    <p class="loading">Loading bot control...</p>
   }
 
   <app-typed-halt-confirm

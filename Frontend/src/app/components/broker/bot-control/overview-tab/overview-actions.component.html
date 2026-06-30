@@ -1,28 +1,64 @@
-<section class="action-panel" aria-label="Available bot actions">
+<section class="action-panel" aria-label="Act now">
   <header>
-    <p class="eyebrow">Bot actions</p>
-    <h3>What you can do now</h3>
+    <p class="eyebrow">Act now</p>
+    <h3>Lifecycle controls</h3>
   </header>
 
-  <div class="action-list">
-    @for (action of actions(); track action.id) {
-      <button
-        type="button"
-        class="chart-action"
-        [class.tone-primary]="action.tone === 'primary'"
-        [class.tone-danger]="action.tone === 'danger'"
-        [disabled]="!action.enabled || busyAction() !== null"
-        (click)="invokeAction(action)"
-      >
-        <span>{{ action.label }}</span>
-        @if (action.enabled) {
-          <small>Available</small>
-        } @else if (action.reason) {
-          <small>{{ action.reason }}</small>
-        } @else {
-          <small>Unavailable</small>
-        }
-      </button>
+  <div class="action-groups">
+    <div class="action-list emergency-actions" aria-label="Emergency lifecycle controls">
+      @for (action of emergencyActions(); track trackAction($index, action)) {
+        <app-lifecycle-action-button
+          [action]="action"
+          [busyAction]="busyAction()"
+          (actionInvoked)="actionInvoked.emit($event)"
+          (disabledActionSelected)="disabledActionSelected.emit($event)"
+          (actionTargetHovered)="actionTargetHovered.emit($event)"
+        />
+      }
+    </div>
+
+    @if (redeployAction(); as action) {
+      <app-lifecycle-action-button
+        class="redeploy-action"
+        [action]="action"
+        [busyAction]="busyAction()"
+        (actionInvoked)="actionInvoked.emit($event)"
+        (disabledActionSelected)="disabledActionSelected.emit($event)"
+        (actionTargetHovered)="actionTargetHovered.emit($event)"
+      />
+    }
+
+    @if (overflowActions().length > 0) {
+      <div class="overflow-menu">
+        <button
+          type="button"
+          class="overflow-trigger"
+          aria-haspopup="menu"
+          [attr.aria-expanded]="overflowMenu.visible ? 'true' : 'false'"
+          (click)="overflowMenu.toggle($event)"
+        >
+          More
+        </button>
+        <p-menu
+          #overflowMenu
+          styleClass="lifecycle-overflow-menu"
+          [model]="overflowMenuItems()"
+          [popup]="true"
+          appendTo="body"
+          ariaLabel="More lifecycle actions"
+        >
+          <ng-template pTemplate="item" let-item>
+            @let action = item.action;
+            <app-lifecycle-action-button
+              [action]="action"
+              [busyAction]="busyAction()"
+              (actionInvoked)="actionInvoked.emit($event)"
+              (disabledActionSelected)="disabledActionSelected.emit($event)"
+              (actionTargetHovered)="actionTargetHovered.emit($event)"
+            />
+          </ng-template>
+        </p-menu>
+      </div>
     }
   </div>
 </section>

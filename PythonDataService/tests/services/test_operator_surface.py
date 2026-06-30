@@ -31,6 +31,7 @@ from app.schemas.live_runs import (
     ReadinessGate,
     ReadinessVector,
 )
+from app.services import operator_surface as operator_surface_module
 from app.services.operator_capability import REASON_CODES, evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -40,6 +41,7 @@ from app.services.resume_guard_state import (
     UncertainIntentArtifact,
     resolve_guard_state,
 )
+from app.services.runtime_freshness import DomainFreshness, RuntimeFreshness
 
 _PROC = InstanceProcessView(state="running")
 _IDLE_PROC = InstanceProcessView(state="idle")
@@ -84,6 +86,18 @@ def _owner(
         phase=phase,  # type: ignore[arg-type]
         recorded_at_ms=_NOW_MS - 10_000,
         source="account_owner",
+    )
+
+
+def _runtime_freshness(effective_posture: str = "PAPER_EXECUTION") -> RuntimeFreshness:
+    fresh = DomainFreshness(state="FRESH", age_ms=100)
+    return RuntimeFreshness(
+        command_loop=fresh,
+        broker=fresh,
+        bar_loop=fresh,
+        control_plane=fresh,
+        posture_demoted=False,
+        effective_posture=effective_posture,  # type: ignore[arg-type]
     )
 
 
@@ -427,6 +441,38 @@ def test_broker_connection_independent_of_safety(connection_state, expected_conn
             broker_connection_state=connection_state,
         )
         assert surface.broker.connection == expected_connection
+
+
+# ---------------------------------------------------------------------------
+# execution — backend-authored translation of engine effective_posture
+# ---------------------------------------------------------------------------
+
+
+def test_execution_absent_without_runtime_evidence() -> None:
+    assert _surface(runtime_freshness=None).execution is None
+
+
+@pytest.mark.parametrize(
+    ("engine_posture", "expected_trader_posture"),
+    [
+        ("PAPER_EXECUTION", "PAPER_EXECUTION"),
+        ("PAPER_OBSERVATION", "READ_ONLY"),
+        ("UNSAFE", "UNSAFE"),
+        ("UNKNOWN", "UNKNOWN"),
+    ],
+)
+def test_execution_posture_translates_engine_effective_posture(
+    engine_posture: str,
+    expected_trader_posture: str,
+) -> None:
+    surface = _surface(runtime_freshness=_runtime_freshness(engine_posture))
+    assert surface.execution is not None
+    assert surface.execution.posture == expected_trader_posture
+
+
+def test_execution_posture_unknown_engine_member_is_loud() -> None:
+    with pytest.raises(AssertionError, match="Unhandled engine effective posture"):
+        operator_surface_module._trader_execution_posture("LIVE_EXECUTION")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

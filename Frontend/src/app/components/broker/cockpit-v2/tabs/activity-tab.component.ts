@@ -1,4 +1,7 @@
 // Activity tab (unified projection).
+// Deprecated with the legacy cockpit-v2 tab surface. The per-bot lifecycle
+// workbench may embed it temporarily because this tab is read-only; new
+// workbench-specific behavior belongs in workbench-owned components.
 //
 // The backend-owned ``/activity`` projection is the canonical execution
 // view for this tab: chart fill markers, Orders Today, Broker Activity,

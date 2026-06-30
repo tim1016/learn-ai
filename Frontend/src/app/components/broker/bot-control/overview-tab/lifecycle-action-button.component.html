@@ -1,0 +1,23 @@
+<button
+  type="button"
+  class="chart-action"
+  [class.tone-primary]="action().tone === 'primary'"
+  [class.tone-danger]="action().tone === 'danger'"
+  [class.is-disabled]="isDisabled()"
+  [attr.aria-disabled]="isDisabled()"
+  [attr.title]="actionHelp()"
+  (click)="activateAction()"
+  (mouseenter)="hoverAction(true)"
+  (mouseleave)="hoverAction(false)"
+  (focus)="hoverAction(true)"
+  (blur)="hoverAction(false)"
+>
+  <span data-trader-copy>{{ action().label }}</span>
+  <small data-trader-copy>{{ statusHeadline() }}</small>
+  @if (statusDetail(); as detail) {
+    <small data-trader-copy>{{ detail }}</small>
+  }
+  @if (isBackendDisabled() && action().reason_code) {
+    <small class="receipt" data-receipt>Receipt: {{ action().reason_code }}</small>
+  }
+</button>

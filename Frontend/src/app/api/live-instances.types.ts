@@ -202,6 +202,11 @@ export type PriorRunClassification =
 export type BrokerSafetyVerdict = 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
 
 export type BrokerConnectionState = 'CONNECTED' | 'DISCONNECTED' | 'UNKNOWN';
+export type ExecutionPosture =
+  | 'PAPER_EXECUTION'
+  | 'READ_ONLY'
+  | 'UNSAFE'
+  | 'UNKNOWN';
 
 export type TradingSessionPhase =
   | 'PRE'
@@ -335,6 +340,10 @@ export interface OperatorSurfaceBroker {
    *  ``safety_verdict=PAPER_ONLY`` AND ``connection=DISCONNECTED``;
    *  composing them is forbidden. */
   connection: BrokerConnectionState;
+}
+
+export interface OperatorSurfaceExecution {
+  posture: ExecutionPosture;
 }
 
 export interface OperatorSurfaceTradingSession {
@@ -646,6 +655,9 @@ export interface OperatorSurface {
   host_process: OperatorSurfaceHostProcess;
   prior_run: OperatorSurfacePriorRun;
   broker: OperatorSurfaceBroker;
+  /** Slice 2: backend-authored execution posture. Missing/null means the
+   * frontend must not render an Execution chip or infer one locally. */
+  execution?: OperatorSurfaceExecution | null;
   configuration: OperatorSurfaceConfiguration;
   current_risk: OperatorSurfaceCurrentRisk;
   daily_order_cap: OperatorSurfaceDailyOrderCap;

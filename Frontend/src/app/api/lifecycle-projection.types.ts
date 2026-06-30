@@ -61,7 +61,9 @@ export interface LifecycleChartAction {
   id: LifecycleChartActionId;
   label: string;
   enabled: boolean;
-  reason: string | null;
+  reason_code: string | null;
+  reason_headline: string;
+  reason_detail: string;
   target_node_id: string | null;
   tone: 'primary' | 'secondary' | 'danger';
 }

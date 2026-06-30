@@ -29,6 +29,7 @@ from app.services.bot_lifecycle_projection import (
     project_intent_events,
 )
 from app.services.operator_surface import compute_operator_surface
+from app.services.runtime_freshness import DomainFreshness, RuntimeFreshness
 
 _NOW_MS = 1_700_000_000_000
 _RUN_ID = "run-clean-x"
@@ -218,6 +219,39 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert "not proof that R3 AccountOwner daemon/IPC single-writer authority is shipped" in (
         broker_writer.summary or ""
     )
+
+
+def test_chart_routes_raw_node_reason_codes_to_receipts() -> None:
+    runtime_freshness = RuntimeFreshness(
+        command_loop=DomainFreshness(
+            state="STALE",
+            age_ms=5_000,
+            stale_reason_codes=["COMMAND_LOOP_STALE"],
+        ),
+        broker=DomainFreshness(state="FRESH", age_ms=100),
+        bar_loop=DomainFreshness(state="FRESH", age_ms=100),
+        control_plane=DomainFreshness(state="FRESH", age_ms=100),
+        posture_demoted=True,
+    )
+    surface = _surface(start_defaults=None, runtime_freshness=runtime_freshness)
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+
+    preflight = next(node for node in chart.global_graph.nodes if node.id == "preflight")
+    configuration = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "configuration")
+    command_loop = next(node for node in chart.subgraphs["activate"].nodes if node.id == "command_loop")
+
+    for node, raw_code in (
+        (preflight, "STRATEGY_KEY_MISSING"),
+        (configuration, "STRATEGY_KEY_MISSING"),
+        (command_loop, "COMMAND_LOOP_STALE"),
+    ):
+        trader_text = " ".join(
+            value or ""
+            for value in (node.summary, node.why, node.evidence_summary)
+        )
+        receipt_text = " ".join(receipt.value for receipt in node.receipts)
+        assert raw_code not in trader_text
+        assert raw_code in receipt_text
     assert chart.subgraphs["submit_order"].nodes[2].technical_label == "Broker submit boundary"
 
 
@@ -593,9 +627,13 @@ def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
     start = next(action for action in chart.actions if action.id == "start_process")
     resume = next(action for action in chart.actions if action.id == "resume")
     assert start.enabled is False
-    assert start.reason == "ACCOUNT_FROZEN"
+    assert start.reason_code == "ACCOUNT_FROZEN"
+    assert start.reason_headline == "Account frozen"
+    assert "account-wide freeze" in start.reason_detail
     assert resume.enabled is False
-    assert resume.reason == "ACCOUNT_FROZEN"
+    assert resume.reason_code == "ACCOUNT_FROZEN"
+    assert resume.reason_headline == "Account frozen"
+    assert "account-wide freeze" in resume.reason_detail
 
 
 def test_account_safety_focuses_broker_connection_blocker() -> None:

@@ -1,6 +1,8 @@
 import { Component, signal } from '@angular/core';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
 import { HttpErrorResponse } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
 import { of, Subject } from 'rxjs';
@@ -299,6 +301,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -336,8 +340,8 @@ describe('BotControlPageComponent', () => {
     expect(runbookLinks).toContain('/runbooks/broker%20evidence%2Fhealth%3F');
     expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
-    expect(el.querySelector('[data-testid="bot-control-tabs"]')?.textContent)
-      .toContain('Status & Risk');
+    expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
+    expect(el.querySelector('.decision-row')?.textContent).toContain('Broker proof');
   });
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
@@ -346,6 +350,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -370,13 +376,12 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Bot actions');
+    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Act now');
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Start bot process');
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
+    expect(el.querySelector('app-overview-tab app-trader-guidance-pane')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Current lifecycle focus');
-    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
-      .toContain('Status & Risk');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Deploy or start');
 
@@ -395,15 +400,295 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Selected lifecycle step');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
-      .toContain('Audit');
-    expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Recovery lane');
-    expect(fixture.componentInstance.selectedTab()).toBe('audit');
-    expect(el.querySelector('[data-testid="inner-tab-audit"]')?.classList.contains('selected'))
-      .toBe(true);
+    expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 
-  it('renders the projection timeline in the trader guidance pane', async () => {
+  it('renders the Execution chip only from backend-authored execution posture', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.execution = { posture: 'UNSAFE' };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const chip = (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="bot-control-execution-chip"]');
+    expect(chip?.textContent).toContain('Execution:');
+    expect(chip?.textContent).toContain('UNSAFE');
+  });
+
+  it('does not render an Execution chip when the backend omits execution posture', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    expect((fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="bot-control-execution-chip"]')).toBeNull();
+  });
+
+  it('renders backend-authored action prose and raw codes only as receipts', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.lifecycle_chart.actions = [
+      {
+        id: 'flatten_and_pause',
+        label: 'Flatten and pause',
+        enabled: false,
+        reason_code: 'NO_LIVE_BINDING',
+        reason_headline: 'No live binding',
+        reason_detail: 'The lifecycle action contract says the runner is not bound.',
+        target_node_id: 'recovery',
+        tone: 'danger',
+      },
+    ];
+    status.operator_surface.actions.flatten_and_pause = {
+      enabled: false,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: 'BROKER_SAFETY_UNSAFE',
+      disabled_reasons: ['BROKER_SAFETY_UNSAFE'],
+      gate_results: [],
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
+      .map((node) => node.textContent ?? '')
+      .join(' ');
+    const receipts = Array.from(el.querySelectorAll('[data-receipt]'))
+      .map((node) => node.textContent ?? '')
+      .join(' ');
+    expect(traderCopy).toContain('No live binding');
+    expect(traderCopy).toContain('The lifecycle action contract says the runner is not bound.');
+    expect(traderCopy).not.toContain('NO_LIVE_BINDING');
+    expect(traderCopy).not.toContain('BROKER_SAFETY_UNSAFE');
+    expect(receipts).toContain('NO_LIVE_BINDING');
+    expect(receipts).not.toContain('BROKER_SAFETY_UNSAFE');
+  });
+
+  it('keeps node selection explanatory and never gates enabled emergency actions', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.lifecycle_chart.actions = [
+      {
+        id: 'pause',
+        label: 'Pause',
+        enabled: true,
+        reason_code: null,
+        reason_headline: 'Available',
+        reason_detail: 'Backend gates currently allow this action.',
+        target_node_id: 'active',
+        tone: 'secondary',
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const recovery = status.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
+    if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+
+    const pause = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.chart-action'))
+      .find((button) => button.textContent?.includes('Pause'));
+    expect(pause?.getAttribute('aria-disabled')).toBe('false');
+    expect(pause?.textContent).toContain('Backend gates currently allow this action.');
+  });
+
+  it('renders unknown deploy order mode as not recorded', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const deployConfig = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="redeploy-setting-field"]'),
+    ).find((field) => field.textContent?.includes('Deploy/start config'));
+    expect(deployConfig?.textContent).toContain('Order mode: Not recorded.');
+    expect(deployConfig?.textContent).not.toContain('Order placement allowed');
+  });
+
+  it('does not label stale runtime receipts as fresh evidence', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.runtime_freshness = {
+      posture_demoted: false,
+      stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
+      command_loop: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
+      broker: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
+      bar_loop: { state: 'STALE', age_ms: 90_000, stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'] },
+      control_plane: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
+      headline: null,
+      additional_reasons: [],
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const runtimeField = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="locked-evidence-field"]'),
+    ).find((field) => field.textContent?.includes('Runtime freshness'));
+    expect(runtimeField?.textContent).toContain('ATTENTION');
+    expect(runtimeField?.textContent).not.toContain('FRESH');
+    expect(runtimeField?.querySelector('[data-receipt]')?.textContent)
+      .toContain('BAR_LOOP_LATEST_BAR_STALE');
+  });
+
+  it('renders the projection timeline below the fold as recent activity', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.account_owner = {
@@ -418,6 +703,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -447,7 +734,8 @@ describe('BotControlPageComponent', () => {
       run_id: null,
       limit: 5,
     });
-    const timeline = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="trader-guidance-timeline"]');
+    const timeline = (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="bot-control-recent-activity"] [data-testid="trader-guidance-timeline"]');
     expect(timeline?.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
     expect(timeline?.textContent).toContain('broker_ack #7');
   });
@@ -469,6 +757,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -533,6 +823,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -568,6 +860,69 @@ describe('BotControlPageComponent', () => {
     expect(receipts?.textContent).toContain('reconciliation_projection');
   });
 
+  it('keeps raw lifecycle node codes in receipts instead of trader copy', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    const hostState = status.lifecycle_chart.subgraphs['deploy'].nodes.find(
+      (node) => node.id === 'host_state',
+    );
+    if (!hostState) throw new Error('Expected host-state lifecycle node in fixture.');
+    hostState.summary = 'Host state requires one backend receipt before this run is ready.';
+    hostState.evidence_summary = hostState.summary;
+    hostState.receipts = [
+      {
+        label: 'host_process.disabled_reason_code',
+        value: 'HOST_SERVICE_OFFLINE',
+        unit: null,
+        source: 'operator_surface.host_process',
+        gate_id: null,
+        ts_ms: null,
+        ts_ms_resolved: false,
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+    fixture.componentInstance.selectLifecycleNode(hostState);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
+      .map((node) => node.textContent ?? '')
+      .join(' ');
+    const receipts = Array.from(el.querySelectorAll('[data-receipt]'))
+      .map((node) => node.textContent ?? '')
+      .join(' ');
+    expect(traderCopy).toContain('Host state requires one backend receipt');
+    expect(traderCopy).not.toContain('HOST_SERVICE_OFFLINE');
+    expect(receipts).toContain('HOST_SERVICE_OFFLINE');
+  });
+
   it('keeps the cockpit file-backed when the projection timeline is unavailable', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const getLifecycleTimeline = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 503 }));
@@ -575,6 +930,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -600,7 +957,7 @@ describe('BotControlPageComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
-    expect(el.querySelector('[data-testid="trader-guidance-timeline"]')?.textContent)
+    expect(el.querySelector('[data-testid="bot-control-recent-activity"]')?.textContent)
       .toContain('Projection unavailable; current snapshot remains file-backed.');
     expect(el.querySelector('.error-banner')?.textContent ?? '').not.toContain('Projection unavailable');
   });
@@ -612,6 +969,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -658,6 +1017,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -695,13 +1056,16 @@ describe('BotControlPageComponent', () => {
     expect(text).toContain('Recovery evidence refreshed.');
   });
 
-  it('resets selected tab and lifecycle context when the route changes to another bot', async () => {
+  it('resets selected tab, lifecycle context, and typed HALT when the route changes to another bot', async () => {
     const paramMap = new Subject<ReturnType<typeof convertToParamMap>>();
-    const getInstanceStatus = vi.fn().mockResolvedValue(makeStatus());
+    const issueInstanceCommand = vi.fn().mockResolvedValue({});
+    const getInstanceStatus = vi.fn().mockResolvedValue(makeStatus({ markPoisonedEnabled: true }));
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap },
@@ -715,7 +1079,7 @@ describe('BotControlPageComponent', () => {
             startHostRunner: vi.fn(),
             setInstanceDesiredState: vi.fn(),
             flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
+            issueInstanceCommand,
           },
         },
       ],
@@ -730,15 +1094,19 @@ describe('BotControlPageComponent', () => {
       ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
     if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
     fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.componentInstance.openTypedHalt();
     fixture.detectChanges();
-    expect(fixture.componentInstance.selectedTab()).toBe('audit');
     expect(fixture.componentInstance.selectedLifecycleNodeId()).toBe('recovery');
+    expect(fixture.componentInstance.typedHaltOpen()).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
 
     paramMap.next(convertToParamMap({ id: 'bot-b' }));
     await flush(fixture);
 
-    expect(fixture.componentInstance.selectedTab()).toBe('status');
     expect(fixture.componentInstance.selectedLifecycleNodeId()).toBeNull();
+    expect(fixture.componentInstance.typedHaltOpen()).toBe(false);
+    await fixture.componentInstance.confirmTypedHalt();
+    expect(issueInstanceCommand).not.toHaveBeenCalled();
   });
 
   it('renders the active bot host-runner warning through the sidebar consumer', async () => {
@@ -748,6 +1116,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         {
           provide: ActivatedRoute,
@@ -787,6 +1157,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
@@ -834,6 +1206,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
         {
           provide: ActivatedRoute,
@@ -875,6 +1249,8 @@ describe('BotControlPageComponent', () => {
       providers: [
         provideZonelessChangeDetection(),
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         {
           provide: ActivatedRoute,
           useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },

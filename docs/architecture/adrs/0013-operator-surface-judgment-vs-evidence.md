@@ -143,3 +143,23 @@ This amendment permits that addition under the constraints below. It does **not*
 - `docs/design/bot-cockpit-trader-language-2026-06-22.md` — the design that motivates this addition. "Add a trader-guidance projection" defines the schema. "Guidance priority" defines the 13-step ranking. "Named hazardous collisions" defines the adversarial test set. "Exposure with no live binding" defines the `broker_manual_risk_reduction` remediation kind.
 - `docs/architecture/adrs/0006-deploy-control-plane-host-daemon-init-ledger.md` — the authenticated `POST /runs/{run_id}/start` path that `primary_remediation.start_bot_process` references.
 - `docs/architecture/adrs/0007-host-daemon-shared-secret-auth.md` — the `X-Live-Runner-Token` auth boundary that makes the start path safe for the cockpit to invoke through the data-plane proxy.
+
+## Amendment 2026-06-30 — per-bot lifecycle action prose
+
+**Context:** ADR 0017's per-bot lifecycle workbench found that disabled lifecycle actions could leak raw enum codes as primary trader copy. Slice 1 allowed a temporary frontend copy lookup keyed on the closed server action-code enum. Slice 3 removes that exception for the per-bot workbench: the backend now authors lifecycle action prose directly on `lifecycle_chart.actions[]`.
+
+**Permitted addition.** `lifecycle_chart.actions[]` may carry:
+
+- `reason_code` — a raw receipt code, nullable when the action is enabled or when no structured code exists;
+- `reason_headline` — short trader-facing copy authored by Python;
+- `reason_detail` — longer trader-facing explanation authored by Python.
+
+**Required constraints. Any one violation removes the permission.**
+
+1. **Action eligibility remains elsewhere.** `enabled` still comes from the canonical `ActionCapability` / host-start / redeploy proof paths, and mutation endpoints still re-evaluate the same gates before executing. `reason_headline` and `reason_detail` explain; they never gate.
+2. **Raw codes are receipts only.** Angular may render `reason_code` only in receipt/provenance regions. It may not render the code as primary trader copy, and it may not map the code through a per-bot frontend action-copy table.
+3. **Angular renders action prose verbatim.** The per-bot Act-now bar consumes `reason_headline` / `reason_detail` from `lifecycle_chart.actions[]`. It must not infer action prose from `operator_surface.actions[id].disabled_reason_code`, `host_process.start_capability.disabled_reason_code`, node status, or host state.
+4. **Frontend copy-map permission is narrowed.** ADR 0013 §4 still permits closed-enum presentation lookup for legacy cockpit-v2/fleet-console surfaces while they exist. That permission no longer applies to per-bot lifecycle action prose.
+5. **Coverage is backend-owned.** Every server-emitted lifecycle action reason code must have backend-authored headline/detail coverage. Adding a code requires updating the backend lifecycle-action reason table and tests.
+
+**Inclusion-test outcome (this ADR §5).** Lifecycle action reason prose passes test 1 because the cockpit displays it next to live command controls, and test 2 because `reason_code` is a stable classification over existing server-authored gates. It does not create a new evidence channel: raw evidence and gate receipts remain on their canonical surfaces, while the lifecycle action carries the presentation explanation for an already-authored action capability.

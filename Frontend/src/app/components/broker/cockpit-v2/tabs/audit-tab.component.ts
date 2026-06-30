@@ -1,3 +1,5 @@
+// Deprecated with the legacy cockpit-v2 tab surface. New workbench surfaces
+// should use workbench-owned components instead of adding mode flags here.
 // PRD #617 — Audit tab.  Provenance fields with copy buttons; the
 // ONLY canonical render site for Mark Poisoned (typed-HALT
 // confirmation lives on the cockpit shell).

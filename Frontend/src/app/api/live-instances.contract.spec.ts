@@ -31,6 +31,7 @@ describe('operator_surface wire contract', () => {
     expect(STEADY.operator_surface.actions.resume.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.actions.pause.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.submit_readiness.code).toBe('broker_state_unproven');
+    expect(STEADY.operator_surface.execution?.posture).toBe('UNKNOWN');
     expect(STEADY.operator_surface.trader_guidance.primary_remediation.kind).toBe(
       'invoke_endpoint',
     );
@@ -55,11 +56,11 @@ describe('operator_surface wire contract', () => {
     expect(STOPPED.operator_surface.actions.pause.enabled).toBe(true);
   });
 
-  it('exposes the same top-level keys on every fixture', () => {
+  it('exposes the expected top-level keys on every fixture', () => {
     // PRD #607 (cockpit revision) added ``trading_session``; PRD #616
     // added ``readiness_gates``.  Both fixtures must carry the full
     // set so the cockpit-v2 renderer cannot encounter a missing block.
-    const expected = new Set([
+    const expected = [
       'schema_version',
       'host_process',
       'prior_run',
@@ -74,9 +75,13 @@ describe('operator_surface wire contract', () => {
       'actions',
       'trading_session',
       'readiness_gates',
-    ]);
+    ];
     for (const fixture of [STEADY, STOPPED]) {
-      expect(new Set(Object.keys(fixture.operator_surface))).toEqual(expected);
+      const actual = Object.keys(fixture.operator_surface).sort();
+      const fixtureExpected = (
+        fixture === STEADY ? [...expected, 'execution'] : [...expected]
+      ).sort();
+      expect(actual).toEqual(fixtureExpected);
     }
   });
 

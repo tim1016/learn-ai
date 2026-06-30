@@ -106,6 +106,8 @@ REASON_CODES: frozenset[str] = (
             "ALREADY_STOPPED",
             # Child runtime evidence is stale / unavailable.
             "POSTURE_DEMOTED",
+            # Account-wide freeze overlay.
+            "ACCOUNT_FROZEN",
             # PRD #619-C5 — single-shot mutation transport returned an
             # ambiguous outcome (e.g. ReadTimeout after send): the
             # daemon may or may not have observed the request.  C5

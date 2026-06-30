@@ -7,7 +7,6 @@ import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
 import { makeOperatorSurfaceFixture } from '../../../../testing/operator-surface-fixtures';
 import { OverviewTabComponent } from './overview-tab.component';
-import { TraderGuidancePaneComponent } from './trader-guidance-pane.component';
 
 @Component({
   // eslint-disable-next-line @angular-eslint/component-selector
@@ -65,7 +64,6 @@ const OVERVIEW_TEST_IMPORTS = [
   NodeHtmlStubDirective,
   EdgeStubDirective,
   CustomTemplateEdgeStubDirective,
-  TraderGuidancePaneComponent,
 ];
 
 function makeStatus(id = 'sid-x'): LiveInstanceStatus {
@@ -196,53 +194,6 @@ describe('OverviewTabComponent', () => {
     fixture.componentInstance.expandNode(node);
     expect(nodeSelected).toHaveBeenCalledWith(node);
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
-  });
-
-  it('renders backend-authored trader guidance and emits its remediation action', () => {
-    TestBed.configureTestingModule({
-      imports: [OverviewTabComponent],
-      providers: [provideZonelessChangeDetection()],
-    });
-    TestBed.overrideComponent(OverviewTabComponent, {
-      set: { imports: OVERVIEW_TEST_IMPORTS },
-    });
-
-    const fixture = TestBed.createComponent(OverviewTabComponent);
-    const actionSelected = vi.fn();
-    const surface = makeOperatorSurfaceFixture({
-      submit_readiness: {
-        ...makeOperatorSurfaceFixture().submit_readiness,
-        code: 'broker_state_unproven',
-        label: 'Broker state unproven',
-        can_submit: false,
-        blocking_reason_codes: ['RECONCILIATION_NOT_AVAILABLE'],
-      },
-      trader_guidance: {
-        ...makeOperatorSurfaceFixture().trader_guidance,
-        situation_code: 'broker_state_unproven',
-        headline: 'Broker state is not proven enough to submit.',
-        primary_remediation: {
-          kind: 'invoke_endpoint',
-          endpoint: 'reconcile_instance',
-          method: 'POST',
-          path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
-        },
-      },
-    });
-    fixture.componentRef.setInput('status', {
-      ...makeStatus(),
-      operator_surface: surface,
-    });
-    fixture.componentInstance.traderGuidanceAction.subscribe(actionSelected);
-    fixture.detectChanges();
-
-    expect(renderedText(fixture)).toContain('Broker state is not proven enough to submit.');
-    const button = fixture.nativeElement.querySelector(
-      '[data-testid="trader-guidance-primary-remediation"]',
-    ) as HTMLButtonElement | null;
-    expect(button?.textContent).toContain('Reconcile now');
-    button?.click();
-    expect(actionSelected).toHaveBeenCalledWith(surface.trader_guidance.primary_remediation);
   });
 
   it('uses backend-authored handles for branch edges', () => {
