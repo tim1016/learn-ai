@@ -1,4 +1,14 @@
-import type { BotLifecycleChartView, OperatorSurface } from '../api/live-instances.types';
+import type {
+  BotLifecycleChartView,
+  LifecycleChartNode,
+  OperatorSurface,
+} from '../api/live-instances.types';
+
+const EMPTY_NODE_EVIDENCE: Pick<LifecycleChartNode, 'ts_ms' | 'ts_ms_resolved' | 'receipts'> = {
+  ts_ms: null,
+  ts_ms_resolved: false,
+  receipts: [],
+};
 
 export function makeOperatorSurfaceFixture(
   overrides: Partial<OperatorSurface> = {},
@@ -147,6 +157,7 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'deploy',
           evidence_summary: 'Backend start gate is ready.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'preflight',
@@ -158,6 +169,7 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'preflight',
           evidence_summary: 'Readiness is unknown.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'account_safety',
@@ -169,6 +181,7 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'account_safety',
           evidence_summary: 'Broker evidence is unavailable.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'reconcile',
@@ -180,6 +193,7 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'reconcile',
           evidence_summary: 'Reconciliation is blocked.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'activate',
@@ -191,6 +205,7 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'activate',
           evidence_summary: 'Desired state is unknown.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'active',
@@ -202,6 +217,7 @@ export function makeLifecycleChartFixture(
           expandable: false,
           subgraph_id: null,
           evidence_summary: 'Bot is not active.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'submit_order',
@@ -213,17 +229,19 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'submit_order',
           evidence_summary: 'Order path is waiting.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'broker_writer',
-          label: 'Broker writer',
-          technical_label: 'placeOrder boundary',
+          label: 'Broker activity',
+          technical_label: 'Publisher health',
           lane: 'broker',
           status: 'inactive',
           status_label: 'Waiting',
           expandable: true,
           subgraph_id: 'broker_writer',
-          evidence_summary: 'Broker writer is waiting.',
+          evidence_summary: 'Broker-activity publisher health is unavailable.',
+          ...EMPTY_NODE_EVIDENCE,
         },
         {
           id: 'recovery',
@@ -235,6 +253,7 @@ export function makeLifecycleChartFixture(
           expandable: true,
           subgraph_id: 'recovery',
           evidence_summary: 'Recovery is waiting.',
+          ...EMPTY_NODE_EVIDENCE,
         },
       ],
       edges: [],
@@ -255,6 +274,7 @@ export function makeLifecycleChartFixture(
             expandable: false,
             subgraph_id: null,
             evidence_summary: 'Daemon is reachable.',
+            ...EMPTY_NODE_EVIDENCE,
           },
         ],
         edges: [],

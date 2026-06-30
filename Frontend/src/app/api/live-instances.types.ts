@@ -120,6 +120,16 @@ export type LifecycleChartStatus =
 
 export type LifecycleChartLane = 'bot' | 'account' | 'broker' | 'recovery';
 
+export interface LifecycleChartReceipt {
+  label: string;
+  value: string;
+  unit: string | null;
+  source: string | null;
+  gate_id: string | null;
+  ts_ms: number | null;
+  ts_ms_resolved: boolean;
+}
+
 export interface LifecycleChartNode {
   id: string;
   label: string;
@@ -133,6 +143,9 @@ export interface LifecycleChartNode {
   expandable: boolean;
   subgraph_id: string | null;
   evidence_summary: string | null;
+  ts_ms: number | null;
+  ts_ms_resolved: boolean;
+  receipts: LifecycleChartReceipt[];
 }
 
 export interface LifecycleChartEdge {

@@ -1869,6 +1869,32 @@ LifecycleChartActionId = Literal[
 ]
 
 
+class LifecycleChartReceipt(BaseModel):
+    """One structured receipt behind a lifecycle node.
+
+    Receipts are evidence display rows only. They do not add authority beyond
+    the canonical artifacts and operator-surface facts that authored them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    value: str
+    unit: str | None = None
+    source: str | None = None
+    gate_id: str | None = None
+    ts_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    ts_ms_resolved: bool = False
+
+    @model_validator(mode="after")
+    def _timestamp_resolution_contract(self) -> LifecycleChartReceipt:
+        if self.ts_ms is None and self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved cannot be true when ts_ms is absent")
+        if self.ts_ms is not None and not self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved=false is reserved for absent timestamps")
+        return self
+
+
 class LifecycleChartNode(BaseModel):
     """One backend-authored node in the bot lifecycle overview chart.
 
@@ -1891,6 +1917,17 @@ class LifecycleChartNode(BaseModel):
     expandable: bool = False
     subgraph_id: str | None = None
     evidence_summary: str | None = None
+    ts_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    ts_ms_resolved: bool = False
+    receipts: list[LifecycleChartReceipt] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _timestamp_resolution_contract(self) -> LifecycleChartNode:
+        if self.ts_ms is None and self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved cannot be true when ts_ms is absent")
+        if self.ts_ms is not None and not self.ts_ms_resolved:
+            raise ValueError("ts_ms_resolved=false is reserved for absent timestamps")
+        return self
 
 
 class LifecycleChartEdge(BaseModel):

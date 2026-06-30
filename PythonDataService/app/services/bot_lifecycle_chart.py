@@ -25,6 +25,7 @@ from app.schemas.live_runs import (
     LifecycleChartGraph,
     LifecycleChartLane,
     LifecycleChartNode,
+    LifecycleChartReceipt,
     LifecycleChartStatus,
     OperatorGate,
     OperatorSurface,
@@ -74,6 +75,9 @@ class NodeFact:
     status_label: str | None = None
     why: str | None = None
     operator_next_step: str | None = None
+    ts_ms: int | None = None
+    ts_ms_resolved: bool = False
+    receipts: tuple[LifecycleChartReceipt, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -248,6 +252,9 @@ def _lifecycle_facts(
         "reconcile": NodeFact(
             _status_for("reconcile", base_statuses["reconcile"], primary_node_id),
             _reconcile_evidence(surface),
+            ts_ms=_reconcile_ts_ms(surface),
+            ts_ms_resolved=_reconcile_ts_resolved(surface),
+            receipts=_reconciliation_receipts(surface),
         ),
         "activate": NodeFact(
             _status_for("activate", base_statuses["activate"], primary_node_id),
@@ -300,7 +307,14 @@ def _lifecycle_facts(
             f"Posture is {surface.current_risk.posture}; pending orders: {surface.current_risk.pending_order_count}.",
             surface.current_risk.posture,
         ),
-        "receipt": NodeFact(_reconcile_status(surface), _reconcile_evidence(surface), _reconcile_label(surface)),
+        "receipt": NodeFact(
+            _reconcile_status(surface),
+            _reconcile_evidence(surface),
+            _reconcile_label(surface),
+            ts_ms=_reconcile_ts_ms(surface),
+            ts_ms_resolved=_reconcile_ts_resolved(surface),
+            receipts=_reconciliation_receipts(surface),
+        ),
         "broker_snapshot": NodeFact(
             "passed" if _reconcile_status(surface) in {"passed", "active"} else "blocked",
             "Broker evidence is compared against engine intent before resume.",
@@ -380,12 +394,16 @@ def _writer_guard_fact(surface: OperatorSurface, lifecycle_events: Sequence[BotL
             fallback_why=_account_owner_evidence(surface),
             include_event_source_label=True,
         )
+    account_owner_ts_ms = _account_owner_ts_ms(surface)
     return NodeFact(
         _account_owner_status(surface),
         _account_owner_evidence(surface),
         _account_owner_label(surface),
         status_label=lifecycle_status_label(_account_owner_status(surface)),
         why=_account_owner_evidence(surface),
+        ts_ms=account_owner_ts_ms,
+        ts_ms_resolved=account_owner_ts_ms is not None,
+        receipts=_account_owner_receipts(surface),
     )
 
 
@@ -412,7 +430,64 @@ def _node_fact_from_event(
         status_label=event.status_label or lifecycle_status_label(status),
         why=event.why,
         operator_next_step=event.operator_next_step,
+        ts_ms=event.ts_ms,
+        ts_ms_resolved=event.ts_ms_resolved,
+        receipts=_event_receipts(event),
     )
+
+
+def _receipt(
+    label: str,
+    value: object,
+    *,
+    unit: str | None = None,
+    source: str | None = None,
+    gate_id: str | None = None,
+    ts_ms: int | None = None,
+    ts_ms_resolved: bool | None = None,
+) -> LifecycleChartReceipt:
+    resolved = ts_ms is not None if ts_ms_resolved is None else ts_ms_resolved
+    return LifecycleChartReceipt(
+        label=label,
+        value=str(value),
+        unit=unit,
+        source=source,
+        gate_id=gate_id,
+        ts_ms=ts_ms,
+        ts_ms_resolved=resolved,
+    )
+
+
+def _event_receipts(event: BotLifecycleEvent) -> tuple[LifecycleChartReceipt, ...]:
+    receipts = [
+        _receipt(
+            "event_type",
+            event.event_type,
+            source=event.source,
+            ts_ms=event.ts_ms,
+            ts_ms_resolved=event.ts_ms_resolved,
+        ),
+        _receipt(
+            "source_seq",
+            event.source_local_seq,
+            source=event.source,
+            ts_ms=event.ts_ms,
+            ts_ms_resolved=event.ts_ms_resolved,
+        ),
+    ]
+    for key in ("intent_id", "order_ref", "order_id", "perm_id", "ts_ms_source"):
+        value = event.payload.get(key)
+        if value is not None:
+            receipts.append(
+                _receipt(
+                    key,
+                    value,
+                    source=event.source,
+                    ts_ms=event.ts_ms,
+                    ts_ms_resolved=event.ts_ms_resolved,
+                )
+            )
+    return tuple(receipts)
 
 
 def _build_graph(
@@ -464,6 +539,9 @@ def _build_node(node_def: NodeDef, facts: LifecycleFacts) -> LifecycleChartNode:
         why=fact.why,
         operator_next_step=fact.operator_next_step,
         evidence_summary=fact.evidence,
+        ts_ms=fact.ts_ms,
+        ts_ms_resolved=fact.ts_ms_resolved,
+        receipts=list(fact.receipts),
     )
 
 
@@ -981,6 +1059,46 @@ def _reconcile_evidence(surface: OperatorSurface) -> str:
     return f"Reconciliation state is {reconciliation.state}."
 
 
+def _reconcile_ts_ms(surface: OperatorSurface) -> int | None:
+    reconciliation = surface.reconciliation
+    return reconciliation.last_reconcile_ms if reconciliation is not None else None
+
+
+def _reconcile_ts_resolved(surface: OperatorSurface) -> bool:
+    return _reconcile_ts_ms(surface) is not None
+
+
+def _reconciliation_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    reconciliation = surface.reconciliation
+    if reconciliation is None:
+        return ()
+    ts_ms = reconciliation.last_reconcile_ms
+    receipts = [
+        _receipt("reconciliation.state", reconciliation.state, source="reconciliation_projection", ts_ms=ts_ms),
+        _receipt(
+            "adopted_intent_count",
+            len(reconciliation.adopted_intent_ids),
+            source="reconciliation_projection",
+            ts_ms=ts_ms,
+        ),
+    ]
+    if reconciliation.last_reconcile_ms is not None:
+        receipts.append(
+            _receipt(
+                "last_reconcile_ms",
+                reconciliation.last_reconcile_ms,
+                unit="ms UTC",
+                source="reconciliation_projection",
+                ts_ms=ts_ms,
+            )
+        )
+    if reconciliation.failure_reason:
+        receipts.append(
+            _receipt("failure_reason", reconciliation.failure_reason, source="reconciliation_projection", ts_ms=ts_ms)
+        )
+    return tuple(receipts)
+
+
 def _activate_evidence(desired_state: DesiredStateView | None) -> str:
     desired = _desired_value(desired_state)
     if desired is None:
@@ -1029,6 +1147,27 @@ def _account_owner_evidence(surface: OperatorSurface) -> str:
     return (
         f"AccountOwner phase is {owner.phase}; generation is {owner.generation}. This is generation "
         "evidence, not proof that R3 daemon/IPC single-writer authority is shipped."
+    )
+
+
+def _account_owner_ts_ms(surface: OperatorSurface) -> int | None:
+    owner = surface.account_owner
+    return owner.recorded_at_ms if owner is not None else None
+
+
+def _account_owner_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    owner = surface.account_owner
+    if owner is None:
+        return ()
+    ts_ms = owner.recorded_at_ms
+    return (
+        _receipt("account_owner.phase", owner.phase, source=owner.source, ts_ms=ts_ms),
+        _receipt(
+            "account_owner.generation",
+            owner.generation if owner.generation is not None else "unknown",
+            source=owner.source,
+            ts_ms=ts_ms,
+        ),
     )
 
 
