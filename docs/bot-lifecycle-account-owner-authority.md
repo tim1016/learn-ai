@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (reconciliation receipt evidence slice: operator-surface preservation and chart receipts for sidecar WAL seq, broker-observed timestamp, and last reconcile timestamp).
+> **Last reviewed:** 2026-06-30 (daily-order-cap evidence slice: submit-order chart receipts for durable drop reason and readiness-authored daily cap used/limit).
 
 ---
 
@@ -437,6 +437,12 @@ This tailer does not run from any GET route, does not make `/status` depend on P
 `OperatorSurfaceReconciliation` now preserves `sidecar_wal_seq` and `broker_observed_at_ms` from `reconciliation_receipt.json` alongside the existing `last_reconcile_ms`. `PythonDataService/app/services/bot_lifecycle_chart.py` renders those fields as backend-authored reconciliation receipts on the global `reconcile` node and the reconcile subgraph's `receipt` node.
 
 The receipt fields remain evidence, not verdicts. `sidecar_wal_seq` is the Intent WAL cursor the receipt folded, and `broker_observed_at_ms` / `last_reconcile_ms` are persisted and serialized as `int64 ms UTC`; Angular may format them for display only. Tests pin preservation in `PythonDataService/tests/services/test_operator_surface.py` and chart rendering in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
+
+### Daily Order Cap Evidence Snapshot
+
+`PythonDataService/app/services/bot_lifecycle_chart.py` now attaches daily-order-cap receipts to the `submit_order` lifecycle node when `operator_surface.daily_order_cap` has structured `used` or `limit` values from the readiness sidecar. Event-backed submit nodes also expose `drop_reason` from the lifecycle event payload, including `INTENT_DROPPED_BEFORE_SUBMIT(max_orders_per_day)`.
+
+This is evidence, not a frontend-authored block reason. Python authors the blocked submit event and daily cap counters; Angular renders receipt labels/values and may format timestamps only. The max-orders path is pinned in `PythonDataService/tests/services/test_bot_lifecycle_chart.py`.
 
 ## 10. Code Cross-Reference
 
