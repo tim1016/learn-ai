@@ -37,6 +37,8 @@ from app.engine.live.engine_runtime import (
     EngineRuntimeSnapshot,
     write_engine_runtime_snapshot,
 )
+from app.operator.incidents.store import IncidentStore
+from app.operator.incidents.watchdog_notices import watchdog_incident
 from app.routers import live_instances
 from tests._fixtures.daemon_transport import as_typed_get
 
@@ -464,6 +466,43 @@ async def test_status_uses_account_freeze_artifact_to_block_start_and_resume(
     assert surface["host_process"]["start_capability"]["gate_results"][0]["status"] == "freeze"
     assert surface["actions"]["resume"]["disabled_reason_code"] == "ACCOUNT_FROZEN"
     assert surface["actions"]["resume"]["gate_results"][0]["gate_id"] == "account.unresolved_exposure"
+
+
+async def test_status_projects_unresolved_watchdog_incident_into_recovery_chart(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    sid = "spy_watchdog_recovery"
+    run_id = "run-watchdog-recovery"
+    incident_started_at_ms = 1_700_000_000_000
+    _write_ledger(root, run_id, sid, incident_started_at_ms, account_id="DU123")
+    incident = watchdog_incident(reason="LEASE_EXPIRED", started_at_ms=incident_started_at_ms)
+    IncidentStore(root / run_id).append(incident)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    incident_headline = body["operator_surface"]["incident_headline"]
+    recovery_node = next(node for node in body["lifecycle_chart"]["global_graph"]["nodes"] if node["id"] == "recovery")
+    incident_node = next(
+        node for node in body["lifecycle_chart"]["subgraphs"]["recovery"]["nodes"] if node["id"] == "incident"
+    )
+    receipts = {receipt["label"]: receipt for receipt in incident_node["receipts"]}
+
+    assert incident_headline["code"] == "watchdog.flatten_failed"
+    assert incident_headline["occurred_at_ms"] == incident_started_at_ms
+    assert recovery_node["status"] == "blocked"
+    assert recovery_node["ts_ms"] == incident_started_at_ms
+    assert incident_node["status"] == "blocked"
+    assert incident_node["ts_ms"] == incident_started_at_ms
+    assert receipts["watchdog.outcome"]["value"] == "watchdog.flatten_failed"
+    assert receipts["watchdog.tier"]["value"] == "critical"
+    assert receipts["watchdog.runbook"]["value"] == "watchdog-halt"
+    assert receipts["watchdog.occurred_at_ms"]["value"] == str(incident_started_at_ms)
+    assert receipts["watchdog.occurred_at_ms"]["unit"] == "ms UTC"
 
 
 # ---------------------------------------------------------------------------

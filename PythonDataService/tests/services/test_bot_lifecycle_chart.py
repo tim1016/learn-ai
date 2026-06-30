@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.intent_events import DropReason, IntentEvent, IntentEventType
+from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
 from app.schemas.live_runs import (
     BotLifecycleChartView,
     DesiredStateView,
@@ -160,6 +161,18 @@ def _account_owner(
         phase=phase,  # type: ignore[arg-type]
         recorded_at_ms=_NOW_MS - 1_000,
         source="test",
+    )
+
+
+def _watchdog_notice() -> OperatorNotice:
+    return OperatorNotice(
+        code="watchdog.flatten_failed",
+        tier="critical",
+        title="Watchdog flatten failed",
+        message="The watchdog could not prove the account was flat before disconnect.",
+        action=OperatorNoticeAction(kind="open_runbook", label="Open runbook", target="watchdog-halt"),
+        runbook_slug="watchdog-halt",
+        occurred_at_ms=_NOW_MS - 7_000,
     )
 
 
@@ -350,6 +363,26 @@ def test_recovery_placeholders_are_unknown_when_recovery_requires_proof() -> Non
         assert nodes[node_id].operator_next_step == next_step
         assert nodes[node_id].ts_ms is None
         assert nodes[node_id].ts_ms_resolved is False
+
+
+def test_recovery_lane_surfaces_watchdog_incident_receipts() -> None:
+    surface = _surface(incident_headline_notice=_watchdog_notice())
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    recovery_node = next(node for node in chart.global_graph.nodes if node.id == "recovery")
+    incident_node = next(node for node in chart.subgraphs["recovery"].nodes if node.id == "incident")
+    receipts = {receipt.label: receipt for receipt in incident_node.receipts}
+
+    assert chart.global_graph.primary_node_id == "recovery"
+    assert recovery_node.status == "blocked"
+    assert recovery_node.ts_ms == _NOW_MS - 7_000
+    assert incident_node.status == "blocked"
+    assert incident_node.summary == "The watchdog could not prove the account was flat before disconnect."
+    assert incident_node.ts_ms == _NOW_MS - 7_000
+    assert receipts["watchdog.outcome"].value == "watchdog.flatten_failed"
+    assert receipts["watchdog.tier"].value == "critical"
+    assert receipts["watchdog.runbook"].value == "watchdog-halt"
+    assert receipts["watchdog.occurred_at_ms"].value == str(_NOW_MS - 7_000)
+    assert receipts["watchdog.occurred_at_ms"].unit == "ms UTC"
 
 
 def test_chart_missing_readiness_keeps_preflight_unknown() -> None:

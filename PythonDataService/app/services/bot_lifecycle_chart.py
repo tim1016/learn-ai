@@ -274,6 +274,9 @@ def _lifecycle_facts(
         "recovery": NodeFact(
             _status_for("recovery", base_statuses["recovery"], primary_node_id),
             _recovery_evidence(surface),
+            ts_ms=_incident_ts_ms(surface),
+            ts_ms_resolved=_incident_ts_ms(surface) is not None,
+            receipts=_incident_receipts(surface),
         ),
         "deploy.host_state": NodeFact(_deploy_status(surface), _host_evidence(surface), surface.host_process.state),
         "start_settings": NodeFact(
@@ -358,7 +361,13 @@ def _lifecycle_facts(
             "broker_ack",
             "No live broker acknowledgement evidence is available in this snapshot.",
         ),
-        "incident": NodeFact(recovery_status, _recovery_evidence(surface)),
+        "incident": NodeFact(
+            recovery_status,
+            _recovery_evidence(surface),
+            ts_ms=_incident_ts_ms(surface),
+            ts_ms_resolved=_incident_ts_ms(surface) is not None,
+            receipts=_incident_receipts(surface),
+        ),
         "flatten": _recovery_placeholder_fact("flatten", recovery_status),
         "reconcile_after": _recovery_placeholder_fact("reconcile_after", recovery_status),
         "fresh_run": _recovery_placeholder_fact("fresh_run", recovery_status),
@@ -532,6 +541,35 @@ def _recovery_placeholder_fact(node_id: str, recovery_status: LifecycleChartStat
         "fresh_run": "No active recovery incident requires a fresh run.",
     }
     return NodeFact("inactive", inactive_reasons[node_id])
+
+
+def _incident_ts_ms(surface: OperatorSurface) -> int | None:
+    notice = surface.incident_headline
+    return notice.occurred_at_ms if notice is not None else None
+
+
+def _incident_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    notice = surface.incident_headline
+    if notice is None:
+        return ()
+    ts_ms = notice.occurred_at_ms
+    receipts = [
+        _receipt("watchdog.outcome", notice.code, source="operator_incident", ts_ms=ts_ms),
+        _receipt("watchdog.tier", notice.tier, source="operator_incident", ts_ms=ts_ms),
+    ]
+    if notice.runbook_slug is not None:
+        receipts.append(_receipt("watchdog.runbook", notice.runbook_slug, source="operator_incident", ts_ms=ts_ms))
+    if ts_ms is not None:
+        receipts.append(
+            _receipt(
+                "watchdog.occurred_at_ms",
+                ts_ms,
+                unit="ms UTC",
+                source="operator_incident",
+                ts_ms=ts_ms,
+            )
+        )
+    return tuple(receipts)
 
 
 def _build_graph(

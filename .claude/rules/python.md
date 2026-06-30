@@ -55,7 +55,9 @@ When adding a dep:
 ## pandas
 
 - **Explicit dtypes** on DataFrame construction and reads. Avoid silent type coercion.
-- **`DatetimeIndex` with timezone**. Trading logic is `America/New_York`; storage is UTC. Never naive datetimes.
+- **`DatetimeIndex` with timezone**. Trading logic is `America/New_York`
+  when wall-clock semantics matter; storage, wire, and serialized artifacts
+  use `int64 ms UTC`. Never naive datetimes.
 - **Vectorized operations** preferred. Fall back to `.apply()` only when necessary and document why.
 - **Copy-on-write behavior** (pandas 2.x default): be explicit about when you're mutating vs returning a new DataFrame.
 
