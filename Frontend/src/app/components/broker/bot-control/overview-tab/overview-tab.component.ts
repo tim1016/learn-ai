@@ -17,6 +17,12 @@ interface Point {
   readonly y: number;
 }
 
+interface EdgeHandleLayout {
+  readonly sourceHandle?: string;
+  readonly targetHandle?: string;
+  readonly floating?: boolean;
+}
+
 interface VflowDataContext<T> {
   readonly data: Signal<T>;
 }
@@ -90,24 +96,28 @@ export class OverviewTabComponent {
     );
   });
   readonly edges = computed<Edge<LifecycleChartEdge>[]>(() => {
+    const graph = this.currentGraph();
     return createEdges(
-      this.currentGraph().edges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: 'template' as const,
-        curve: 'smooth-step' as const,
-        data: edge,
-        floating: true,
-        markers: {
-          end: {
-            type: 'arrow-closed' as const,
-            width: 18,
-            height: 18,
-            color: this.edgeColor(edge.status),
+      graph.edges.map((edge) => {
+        const handles = this.edgeHandles(graph, edge);
+        return {
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          type: 'template' as const,
+          curve: 'smooth-step' as const,
+          data: edge,
+          ...handles,
+          markers: {
+            end: {
+              type: 'arrow-closed' as const,
+              width: 18,
+              height: 18,
+              color: this.edgeColor(edge.status),
+            },
           },
-        },
-      })),
+        };
+      }),
       { useDefaults: true },
     );
   });
@@ -160,6 +170,35 @@ export class OverviewTabComponent {
 
   onTraderGuidanceAction(action: TraderPrimaryRemediation): void {
     this.traderGuidanceAction.emit(action);
+  }
+
+  private edgeHandles(graph: LifecycleChartGraph, edge: LifecycleChartEdge): EdgeHandleLayout {
+    if (graph.graph_id !== 'global') return { floating: true };
+
+    const sourceIndex = graph.nodes.findIndex((node) => node.id === edge.source);
+    const targetIndex = graph.nodes.findIndex((node) => node.id === edge.target);
+    if (sourceIndex < 0 || targetIndex < 0) return { floating: true };
+
+    const sourcePoint = this.nodeCenter(graph, graph.nodes[sourceIndex], sourceIndex);
+    const targetPoint = this.nodeCenter(graph, graph.nodes[targetIndex], targetIndex);
+    const dx = targetPoint.x - sourcePoint.x;
+    const dy = targetPoint.y - sourcePoint.y;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0
+        ? { sourceHandle: 's-right', targetHandle: 't-left' }
+        : { sourceHandle: 's-left', targetHandle: 't-right' };
+    }
+    return dy > 0
+      ? { sourceHandle: 's-bottom', targetHandle: 't-top' }
+      : { sourceHandle: 's-top', targetHandle: 't-bottom' };
+  }
+
+  private nodeCenter(graph: LifecycleChartGraph, node: LifecycleChartNode, index: number): Point {
+    const point = this.nodePoint(graph, node, index);
+    return {
+      x: point.x + NODE_WIDTH / 2,
+      y: point.y + NODE_HEIGHT / 2,
+    };
   }
 
   private nodePoint(graph: LifecycleChartGraph, node: LifecycleChartNode, index: number): Point {

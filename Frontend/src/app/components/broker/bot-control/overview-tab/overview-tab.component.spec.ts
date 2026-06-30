@@ -34,6 +34,7 @@ class VflowStubComponent {
   template: '',
 })
 class HandleStubComponent {
+  @Input() id: unknown;
   @Input() type: unknown;
   @Input() position: unknown;
 }
@@ -98,6 +99,29 @@ function makeStatus(id = 'sid-x'): LiveInstanceStatus {
 
 function renderedText(fixture: { nativeElement: HTMLElement }): string {
   return fixture.nativeElement.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
+function statusWithGlobalBranchEdges(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.lifecycle_chart.global_graph.edges = [
+    {
+      id: 'active_to_submit_order',
+      source: 'active',
+      target: 'submit_order',
+      status: 'active',
+      label: 'Signal arrives',
+      animated: true,
+    },
+    {
+      id: 'active_to_recovery',
+      source: 'active',
+      target: 'recovery',
+      status: 'blocked',
+      label: 'Safety incident',
+      animated: false,
+    },
+  ];
+  return status;
 }
 
 describe('OverviewTabComponent', () => {
@@ -217,6 +241,28 @@ describe('OverviewTabComponent', () => {
     expect(button?.textContent).toContain('Reconcile now');
     button?.click();
     expect(actionSelected).toHaveBeenCalledWith(surface.trader_guidance.primary_remediation);
+  });
+
+  it('anchors active branch edges to distinct source handles', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+    TestBed.overrideComponent(OverviewTabComponent, {
+      set: { imports: OVERVIEW_TEST_IMPORTS },
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    fixture.componentRef.setInput('status', statusWithGlobalBranchEdges());
+    fixture.detectChanges();
+
+    const edges = new Map(fixture.componentInstance.edges().map((edge) => [edge.id, edge]));
+    expect(edges.get('active_to_submit_order')?.sourceHandle).toBe('s-right');
+    expect(edges.get('active_to_submit_order')?.targetHandle).toBe('t-left');
+    expect(edges.get('active_to_recovery')?.sourceHandle).toBe('s-bottom');
+    expect(edges.get('active_to_recovery')?.targetHandle).toBe('t-top');
+    expect(edges.get('active_to_submit_order')?.sourceHandle)
+      .not.toBe(edges.get('active_to_recovery')?.sourceHandle);
   });
 
   it('returns to the global graph when the bot identity changes', () => {

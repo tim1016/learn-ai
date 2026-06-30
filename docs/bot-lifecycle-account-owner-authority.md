@@ -370,6 +370,10 @@ The Angular Overview tab now places the authentic lifecycle flowchart and the tr
 
 The new contract does not ship an AccountOwner daemon, does not move canonical truth to Postgres, and does not grant Angular permission to compose trader status. Tests pin the backend contract in `PythonDataService/tests/services/test_operator_surface.py` and `PythonDataService/tests/routers/test_live_instances_operator_surface.py`; frontend rendering/dispatch is pinned in `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.spec.ts`, `overview-tab.component.spec.ts`, `bot-control-page.component.spec.ts`, and `live-instances.contract.spec.ts`.
 
+### Lifecycle Layout Snapshot
+
+The Overview chart's node/edge meaning remains backend-authored through `lifecycle_chart`; Angular owns only fixed graph geometry. `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts` now resolves named ngx-vflow handles from the Angular-owned node coordinates so lateral branches and vertical branches leave a source node from different sides. This changes no Python contract and grants Angular no lifecycle authority. The fan-out guard is pinned in `overview-tab.component.spec.ts` by asserting `active -> submit_order` leaves `s-right` while `active -> recovery` leaves `s-bottom`.
+
 ### Postgres Projection Replay Snapshot
 
 `PythonDataService/app/services/lifecycle_projection_replay.py` is the shipped replay seam for the Postgres lifecycle read model. It consumes already-normalized Intent WAL and account-event inputs through the existing `bot_lifecycle_projection.py` chart projection functions, converts those events to `LifecycleProjectionEventRow` rows, routes bot-scoped rows to `bot_lifecycle_events`, routes account-only rows to `account_lifecycle_events`, and projects `account_owner_generation_recorded` evidence into `account_owner_status_snapshots`.
@@ -397,4 +401,5 @@ This replay seam does not read artifacts, schedule background work, mutate canon
 | Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
 | AccountOwner submit/reconnect lane | `PythonDataService/app/engine/live/account_owner.py` |
 | Operator trader guidance and submit-readiness | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/operator_surface.py`, `PythonDataService/app/routers/live_instances.py`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts` |
+| Lifecycle chart layout geometry | `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.html` |
 | Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
