@@ -44,6 +44,12 @@ DomainFreshnessState = Literal[
 ]
 
 SessionState = Literal["RTH_OPEN", "CLOSED", "HALTED"]
+EngineEffectivePosture = Literal[
+    "PAPER_EXECUTION",
+    "PAPER_OBSERVATION",
+    "UNSAFE",
+    "UNKNOWN",
+]
 
 
 class RuntimeFreshnessConfig(BaseModel):
@@ -87,6 +93,7 @@ class RuntimeFreshness:
     bar_loop: DomainFreshness
     control_plane: DomainFreshness
     posture_demoted: bool
+    effective_posture: EngineEffectivePosture = "UNKNOWN"
 
 
 def unavailable_runtime_freshness(
@@ -109,6 +116,7 @@ def unavailable_runtime_freshness(
         bar_loop=_unavailable_domain(),
         control_plane=_unavailable_domain(),
         posture_demoted=True,
+        effective_posture="UNKNOWN",
     )
 
 
@@ -281,4 +289,9 @@ def evaluate_runtime_freshness(
         bar_loop=bar_loop,
         control_plane=control_plane,
         posture_demoted=posture_demoted,
+        effective_posture=(
+            snapshot.broker.effective_posture
+            if broker.state == "FRESH"
+            else "UNKNOWN"
+        ),
     )

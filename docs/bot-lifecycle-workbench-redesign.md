@@ -19,7 +19,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 
 ```
 ┌─ BOT HEADER (sticky) ─────────────────────────────────────────────────────────────┐
-│ SPY-EMA · SPY · RUNNING                  Broker proof: PAPER_ONLY    Exposure: FLAT │   (Execution chip added in Slice 2)
+│ SPY-EMA · SPY · RUNNING                  Broker proof: PAPER_ONLY    Execution: PAPER_EXECUTION    Exposure: FLAT │
 │ Submit: ⛔ cannot submit — broker state unproven                                     │
 │ ── Act now ──────────────────────────────────────────────────────────────────────  │
 │ [Start] [Resume] [Pause] [Flatten & pause] [Stop]        [Redeploy fresh run] [⋯ ▾] │   ⋯ = Mark poisoned (typed confirm)
@@ -58,7 +58,7 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 |---|---|
 | **D1** | Sealed instruction, not a live config sheet. No in-place config mutation; three buckets above; `EditableReceiptField` → `RedeploySettingField`. Live mutation = future ADR. |
 | **D2** | Node selection is **explanatory only, never an eligibility gate**. Eligibility comes only from backend `ActionCapability`. One sticky Act-now bar; emergencies always one click. Hover → highlight node; click-disabled → select node + reason + receipt. Remove the legacy "What you can do now" banner (single canonical command surface). |
-| **D3** | "Posture" banned as a label → **Execution chip** (new `operator_surface.execution.posture`, no Angular derivation, ships Slice 2) + **Exposure chip** (`current_risk.posture`, ships now). |
+| **D3** | "Posture" banned as a label → **Execution chip** (new `operator_surface.execution.posture`, no Angular derivation, Slice 2; engine `UNSAFE` maps to trader `UNSAFE`) + **Exposure chip** (`current_risk.posture`, ships now). |
 | **D4** | Risk gets a persistent line (`risk_headline`) under Next Step; `risk_explanation` in a "▸ Why this risk matters" disclosure. Angular renders the backend-authored headline; it never classifies risk. |
 | **D5** | Attention is global (collapsed "Attention (N)" band, auto-expands on a critical group) **and** node-scoped (badges on related nodes + detail in the inspector on select). |
 | **D6** | (a) MVP: Act-now bar maps `disabled_reason_code` via `disabled-reason-copy.ts`, code shown only as a receipt; **never** render `lifecycle_chart.actions[].reason`. End-state: backend `reason_code` / `reason_headline` / `reason_detail`. (b) Tooltips = static concept registry + runbook links. |
@@ -103,13 +103,13 @@ No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all fo
 2. **Parity.** Extend `disabled-reason-copy.spec.ts` — every server code maps to copy; no reachable raw-fallback path.
 3. **Chart purity.** `trader-guidance-pane` is not a descendant of `overview-tab`; no tab-nav `role` in bot-control; chart and inspector panes do not overlap.
 4. **Node never gates actions.** Select a passed node → emergency action buttons keep their backend-driven enabled state.
-5. **Execution-chip honesty (Slice 2).** The Execution chip renders only when `operator_surface.execution` exists.
+5. **Execution-chip honesty (Slice 2).** The Execution chip renders only when `operator_surface.execution` exists; Angular never derives it.
 6. **Tooltip completeness.** Every stable node id / action id / chip / bucket has help text; unknown/dynamic gate ids fall back to a generic gate-help entry (never "no help available").
 
 ## Slices (D9)
 
 - **Slice 1 — frontend-only, ships now.** Full re-layout: relocate guidance out of the chart; header chips (broker proof, submit, exposure) + Act-now bar (Redeploy split, Mark-poisoned overflow); Next-Step / Risk / Attention rows; node-scoped inspector + Change-for-next-run; below-fold Activity / Audit (read-only mode) / Advanced; node attention badges; tooltip registry; **fix the raw-code bug** via table + receipt; tests 1–4, 6. **No Execution chip, no backend changes.**
-- **Slice 2 — backend.** `operator_surface.execution.posture` — an *authored translation* of engine `effective_posture` (⚠️ not 1:1: `PAPER_OBSERVATION` → `READ_ONLY`; engine `UNSAFE` has no slot in the trader enum — decide whether it maps to `UNKNOWN` with danger deferred to the broker-proof chip, or the trader enum gains an `UNSAFE` value). Add the Execution chip + test 5.
+- **Slice 2 — backend.** `operator_surface.execution.posture` — an *authored translation* of engine `effective_posture` (`PAPER_EXECUTION` → `PAPER_EXECUTION`; `PAPER_OBSERVATION` → `READ_ONLY`; `UNSAFE` → `UNSAFE`; stale/missing broker runtime proof → `UNKNOWN`). Add the Execution chip + test 5.
 - **Slice 3 — backend, end-state.** `reason_code` / `reason_headline` / `reason_detail` on `lifecycle_chart.actions[]`; retire the frontend copy table for this surface; amend ADR 0013.
 
 ## Out of scope

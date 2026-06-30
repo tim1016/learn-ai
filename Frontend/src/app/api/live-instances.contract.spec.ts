@@ -31,6 +31,7 @@ describe('operator_surface wire contract', () => {
     expect(STEADY.operator_surface.actions.resume.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.actions.pause.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.submit_readiness.code).toBe('broker_state_unproven');
+    expect(STEADY.operator_surface.execution?.posture).toBe('UNKNOWN');
     expect(STEADY.operator_surface.trader_guidance.primary_remediation.kind).toBe(
       'invoke_endpoint',
     );
@@ -55,7 +56,7 @@ describe('operator_surface wire contract', () => {
     expect(STOPPED.operator_surface.actions.pause.enabled).toBe(true);
   });
 
-  it('exposes the same top-level keys on every fixture', () => {
+  it('exposes the expected top-level keys on every fixture', () => {
     // PRD #607 (cockpit revision) added ``trading_session``; PRD #616
     // added ``readiness_gates``.  Both fixtures must carry the full
     // set so the cockpit-v2 renderer cannot encounter a missing block.
@@ -76,8 +77,13 @@ describe('operator_surface wire contract', () => {
       'readiness_gates',
     ]);
     for (const fixture of [STEADY, STOPPED]) {
-      expect(new Set(Object.keys(fixture.operator_surface))).toEqual(expected);
+      const actual = new Set(Object.keys(fixture.operator_surface));
+      for (const key of expected) {
+        expect(actual.has(key)).toBe(true);
+      }
     }
+    expect(Object.keys(STEADY.operator_surface)).toContain('execution');
+    expect(Object.keys(STOPPED.operator_surface)).not.toContain('execution');
   });
 
   it('every action capability carries the disabled_reasons list (PRD #616)', () => {

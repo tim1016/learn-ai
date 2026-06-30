@@ -15,6 +15,16 @@
         <span class="fact-chip" [attr.title]="chipHelp('broker_proof')">
           Broker proof: <strong>{{ brokerProofLabel() }}</strong>
         </span>
+        @if (executionPosture(); as posture) {
+          <span
+            class="fact-chip execution-chip"
+            data-testid="bot-control-execution-chip"
+            [class.execution-unsafe]="posture === 'UNSAFE'"
+            [attr.title]="chipHelp('execution')"
+          >
+            Execution: <strong>{{ posture }}</strong>
+          </span>
+        }
         @if (submitReadiness(); as readiness) {
           <span
             class="fact-chip submit-chip"

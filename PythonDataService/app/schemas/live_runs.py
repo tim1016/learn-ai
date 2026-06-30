@@ -1086,6 +1086,7 @@ HostProcessState = Literal[
 PriorRunClassification = Literal["CLEAN", "HALT_TRIGGERED", "EXITED_WITH_ERROR", "UNKNOWN"]
 BrokerSafetyVerdictEnum = Literal["PAPER_ONLY", "UNSAFE", "UNKNOWN"]
 BrokerConnectionState = Literal["CONNECTED", "DISCONNECTED", "UNKNOWN"]
+ExecutionPosture = Literal["PAPER_EXECUTION", "LIVE_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
 ActionPlanConsumption = Literal["ACTIVE", "DECLARATIVE_ONLY", "UNKNOWN"]
@@ -1266,6 +1267,20 @@ class OperatorSurfaceBroker(BaseModel):
 
     safety_verdict: BrokerSafetyVerdictEnum
     connection: BrokerConnectionState
+
+
+class OperatorSurfaceExecution(BaseModel):
+    """Backend-authored execution posture for trader-facing chips.
+
+    This is an authored translation of the engine runtime's
+    ``effective_posture``. Angular must render this field when present;
+    it must not infer execution posture from broker safety, readonly
+    flags, action effects, or host state.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    posture: ExecutionPosture
 
 
 class OperatorSurfaceTradingSession(BaseModel):
@@ -1801,6 +1816,7 @@ class OperatorSurface(BaseModel):
     host_process: OperatorSurfaceHostProcess
     prior_run: OperatorSurfacePriorRun
     broker: OperatorSurfaceBroker
+    execution: OperatorSurfaceExecution | None = None
     configuration: OperatorSurfaceConfiguration
     current_risk: OperatorSurfaceCurrentRisk
     daily_order_cap: OperatorSurfaceDailyOrderCap

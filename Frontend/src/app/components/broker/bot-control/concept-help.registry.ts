@@ -24,6 +24,7 @@ const NODE_HELP: Record<string, string> = {
 
 const CHIP_HELP: Record<string, string> = {
   broker_proof: 'Broker proof is the backend-authored safety verdict for the broker account evidence.',
+  execution: 'Execution is the backend-authored translation of the engine runtime posture.',
   submit: 'Submit is the backend-authored answer to whether the bot may place or manage the next trade.',
   exposure: 'Exposure is the current broker-reported position posture for this bot.',
 };

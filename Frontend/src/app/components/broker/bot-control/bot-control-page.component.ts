@@ -217,6 +217,9 @@ export class BotControlPageComponent {
   readonly brokerProofLabel = computed(() =>
     this.status()?.operator_surface.broker.safety_verdict ?? 'UNKNOWN',
   );
+  readonly executionPosture = computed(() =>
+    this.status()?.operator_surface.execution?.posture ?? null,
+  );
   readonly exposureLabel = computed(() =>
     this.status()?.operator_surface.current_risk.posture ?? 'UNKNOWN',
   );

@@ -84,6 +84,10 @@
   color: var(--warn);
 }
 
+.execution-chip.execution-unsafe strong {
+  color: var(--bear);
+}
+
 .top-action-banner {
   margin: 0 -1rem;
 }

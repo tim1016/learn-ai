@@ -115,6 +115,9 @@
       "connection": "UNKNOWN",
       "safety_verdict": "PAPER_ONLY"
     },
+    "execution": {
+      "posture": "UNKNOWN"
+    },
     "configuration": {
       "reason_codes": [
         "STRATEGY_KEY_MISSING",

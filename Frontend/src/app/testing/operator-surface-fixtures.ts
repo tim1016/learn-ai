@@ -19,6 +19,7 @@ export function makeOperatorSurfaceFixture(
     },
     prior_run: { classification: 'UNKNOWN' },
     broker: { safety_verdict: 'PAPER_ONLY', connection: 'CONNECTED' },
+    execution: { posture: 'PAPER_EXECUTION' },
     configuration: { verdict: 'READY', reason_codes: [] },
     current_risk: {
       posture: 'FLAT',

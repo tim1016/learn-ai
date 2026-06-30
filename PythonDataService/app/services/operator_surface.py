@@ -57,6 +57,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceCurrentRisk,
     OperatorSurfaceDailyOrderCap,
     OperatorSurfaceDomainFreshness,
+    OperatorSurfaceExecution,
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
     OperatorSurfaceReconciliation,
@@ -75,6 +76,7 @@ from app.services.operator_trader_guidance import author_submit_readiness, autho
 from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
 from app.services.runtime_freshness import (
     DomainFreshness,
+    EngineEffectivePosture,
     RuntimeFreshness,
     runtime_freshness_reason_codes,
 )
@@ -84,6 +86,7 @@ from app.services.runtime_freshness import (
 # available) the broker monitor's recovery overlay into one of these
 # tokens; the projection maps them to the wire-facing enums.
 BrokerConnectionStateInput = Literal["connected", "disconnected", "degraded", "unknown"]
+TraderExecutionPosture = Literal["PAPER_EXECUTION", "LIVE_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +331,37 @@ def _project_broker(
         safety_verdict=safety_verdict,  # type: ignore[arg-type]
         connection=connection,  # type: ignore[arg-type]
     )
+
+
+# ---------------------------------------------------------------------------
+# execution — authored translation of engine effective_posture
+# ---------------------------------------------------------------------------
+
+
+def _project_execution(runtime_freshness: RuntimeFreshness | None) -> OperatorSurfaceExecution | None:
+    """Translate engine posture into the trader-facing execution chip.
+
+    Slice 2 decision: engine ``UNSAFE`` stays visible as trader
+    ``UNSAFE`` instead of being collapsed into ``UNKNOWN``. Known danger
+    should not look like missing evidence.
+    """
+    if runtime_freshness is None:
+        return None
+    return OperatorSurfaceExecution(
+        posture=_trader_execution_posture(runtime_freshness.effective_posture),
+    )
+
+
+def _trader_execution_posture(posture: EngineEffectivePosture) -> TraderExecutionPosture:
+    match posture:
+        case "PAPER_EXECUTION":
+            return "PAPER_EXECUTION"
+        case "PAPER_OBSERVATION":
+            return "READ_ONLY"
+        case "UNSAFE":
+            return "UNSAFE"
+        case "UNKNOWN":
+            return "UNKNOWN"
 
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +1048,7 @@ def compute_operator_surface(
         host_process=host_process,
         prior_run=_project_prior_run(last_exit),
         broker=broker_projection,
+        execution=_project_execution(runtime_freshness),
         configuration=_project_configuration(start_defaults, sizing, instance_broker_self_consistent),
         current_risk=_project_current_risk(broker),
         daily_order_cap=daily_order_cap,

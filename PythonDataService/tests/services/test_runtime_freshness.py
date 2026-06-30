@@ -30,6 +30,7 @@ from app.engine.live.engine_runtime import (
     EngineRuntimeSnapshot,
 )
 from app.services.runtime_freshness import (
+    EngineEffectivePosture,
     RuntimeFreshnessConfig,
     evaluate_runtime_freshness,
     runtime_freshness_reason_codes,
@@ -48,6 +49,7 @@ def _snapshot(
     control_plane_lease_observed_ms: int | None = None,
     observed_daemon_boot_id: str | None = "daemon-001",
     expected_daemon_boot_id: str | None = "daemon-001",
+    effective_posture: EngineEffectivePosture = "PAPER_EXECUTION",
 ) -> EngineRuntimeSnapshot:
     base = written_at_ms
     return EngineRuntimeSnapshot(
@@ -65,7 +67,7 @@ def _snapshot(
         broker=BrokerBlock(
             identity="PAPER_VERIFIED",
             submission_capability="PAPER_ORDERS_ENABLED",
-            effective_posture="PAPER_EXECUTION",
+            effective_posture=effective_posture,
             connection_state="connected",
             connection_epoch=1,
             connected_account="DU1234567",
@@ -116,9 +118,40 @@ def test_config_rejects_zero_or_negative_thresholds() -> None:
 
 def test_command_loop_fresh_within_threshold() -> None:
     base = 1_700_000_000_000
-    snap = _snapshot(written_at_ms=base, command_loop_heartbeat_ms=base)
+    snap = _snapshot(
+        written_at_ms=base,
+        command_loop_heartbeat_ms=base,
+        broker_probe_completed_ms=base,
+    )
     result = evaluate_runtime_freshness(snap, now_ms=base + 2_000)
     assert result.command_loop.state == "FRESH"
+    assert result.effective_posture == "PAPER_EXECUTION"
+
+
+def test_broker_probe_stale_demotes_effective_posture_to_unknown() -> None:
+    base = 1_700_000_000_000
+    snap = _snapshot(written_at_ms=base, broker_probe_completed_ms=base)
+    result = evaluate_runtime_freshness(snap, now_ms=base + 25_001)
+    assert result.broker.state == "UNKNOWN"
+    assert result.effective_posture == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    "effective_posture",
+    ["PAPER_EXECUTION", "PAPER_OBSERVATION", "UNSAFE", "UNKNOWN"],
+)
+def test_broker_probe_fresh_preserves_engine_effective_posture(
+    effective_posture: EngineEffectivePosture,
+) -> None:
+    base = 1_700_000_000_000
+    snap = _snapshot(
+        written_at_ms=base,
+        broker_probe_completed_ms=base,
+        effective_posture=effective_posture,
+    )
+    result = evaluate_runtime_freshness(snap, now_ms=base + 2_000)
+    assert result.broker.state == "FRESH"
+    assert result.effective_posture == effective_posture
 
 
 def test_command_loop_stale_past_threshold_demotes_posture() -> None:

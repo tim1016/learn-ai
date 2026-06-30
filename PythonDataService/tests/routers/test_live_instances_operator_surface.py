@@ -252,6 +252,8 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "host_process",
         "prior_run",
         "broker",
+        # Workbench Slice 2 — backend-authored execution posture projection.
+        "execution",
         "configuration",
         "current_risk",
         "daily_order_cap",
@@ -281,6 +283,13 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     # Two independent enums now.
     assert surface["broker"]["safety_verdict"] in {"PAPER_ONLY", "UNSAFE", "UNKNOWN"}
     assert surface["broker"]["connection"] in {"CONNECTED", "DISCONNECTED", "UNKNOWN"}
+    assert surface["execution"]["posture"] in {
+        "PAPER_EXECUTION",
+        "LIVE_EXECUTION",
+        "READ_ONLY",
+        "UNSAFE",
+        "UNKNOWN",
+    }
     assert surface["configuration"]["verdict"] in {"READY", "ATTENTION", "UNKNOWN"}
     assert surface["current_risk"]["verdict"] in {"READY", "ATTENTION", "UNKNOWN"}
     assert surface["submit_readiness"]["code"] in {
