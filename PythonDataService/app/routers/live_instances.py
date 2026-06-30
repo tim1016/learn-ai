@@ -199,6 +199,17 @@ _INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 # Process states that mean a run is being actively written right now.
 _LIVE_STATES = frozenset({"running", "stopping"})
+_LIFECYCLE_ACTIVITY_ORDER_EVENT_TYPES = frozenset(
+    {
+        IntentEventType.PENDING_INTENT,
+        IntentEventType.SUBMITTED,
+        IntentEventType.ACK_FAILED_UNCERTAIN,
+        IntentEventType.SUBMITTED_RECOVERED,
+        IntentEventType.INTENT_NOT_ACCEPTED,
+        IntentEventType.SUBMIT_UNCERTAIN_HALTED,
+        IntentEventType.ADOPTED_BROKER_ORDER,
+    }
+)
 
 
 def _validate_instance_id(strategy_instance_id: str) -> str:
@@ -2824,6 +2835,132 @@ def _build_activity_projection(
     )
 
 
+def _activity_lifecycle_consistency_warnings(
+    *,
+    artifacts_root: Path,
+    sid: str,
+    day: date,
+    runs: list[dict],
+    live_binding: LiveBinding | None,
+    activity_rows: list,
+) -> list[ActivityReconciliationWarning]:
+    start_ms, end_ms = _ny_session_bounds_ms(day)
+    lifecycle_refs = _lifecycle_order_refs_for_activity(
+        artifacts_root=artifacts_root,
+        sid=sid,
+        day=day,
+        runs=runs,
+        live_binding=live_binding,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    activity_refs = {
+        row.order_ref
+        for row in activity_rows
+        if row.order_ref and start_ms <= _activity_row_time_ms(row) < end_ms
+    }
+
+    warnings: list[ActivityReconciliationWarning] = []
+    missing_activity = sorted(lifecycle_refs - activity_refs)
+    if missing_activity:
+        warnings.append(
+            ActivityReconciliationWarning(
+                code="lifecycle_order_missing_activity",
+                message=(
+                    "Lifecycle submit evidence exists for order refs that are absent from the Activity projection; "
+                    "treat broker capture as incomplete until reconciled."
+                ),
+                row_ids=missing_activity,
+            )
+        )
+    missing_lifecycle = sorted(activity_refs - lifecycle_refs)
+    if missing_lifecycle:
+        warnings.append(
+            ActivityReconciliationWarning(
+                code="activity_order_missing_lifecycle",
+                message=(
+                    "Activity has broker/order evidence for order refs that are absent from the lifecycle timeline; "
+                    "treat lifecycle capture as incomplete until reconciled."
+                ),
+                row_ids=missing_lifecycle,
+            )
+        )
+    return warnings
+
+
+def _lifecycle_order_refs_for_activity(
+    *,
+    artifacts_root: Path,
+    sid: str,
+    day: date,
+    runs: list[dict],
+    live_binding: LiveBinding | None,
+    start_ms: int,
+    end_ms: int,
+) -> set[str]:
+    refs: set[str] = set()
+    for run in _runs_active_on(runs, day, live_binding=live_binding):
+        run_dir = Path(run["run_dir"])
+        run_id = str(run.get("run_id") or run_dir.name)
+        intent_events = _read_intent_events_for_activity(run_dir, sid=sid)
+        namespace = next((event.bot_order_namespace for event in intent_events), None)
+        for event in intent_events:
+            ts_ms = event.appended_at_ms if event.appended_at_ms is not None else event.ts_ms
+            if event.event_type in _LIFECYCLE_ACTIVITY_ORDER_EVENT_TYPES and _ts_in_window(ts_ms, start_ms, end_ms):
+                refs.add(event.order_ref)
+
+        account_id = _run_account_id(run_dir)
+        for event in _project_instance_account_lifecycle_events(
+            artifacts_root,
+            account_id=account_id,
+            sid=sid,
+            run_id=run_id,
+            bot_order_namespace=namespace,
+        ):
+            if event.category != "order" or not _ts_in_window(event.ts_ms, start_ms, end_ms):
+                continue
+            order_ref = _order_ref_from_lifecycle_payload(event.payload)
+            if order_ref is not None:
+                refs.add(order_ref)
+    return refs
+
+
+def _read_intent_events_for_activity(run_dir: Path, *, sid: str) -> list[IntentEvent]:
+    wal_path = run_dir / "intent_events.jsonl"
+    if not wal_path.exists():
+        return []
+    try:
+        return IntentWal(wal_path).read_tail()
+    except IntentWalCorruptError as exc:
+        logger.warning(
+            "failed to read intent WAL while checking activity consistency",
+            extra={"strategy_instance_id": sid, "path": str(wal_path), "exception": repr(exc)},
+        )
+        return []
+
+
+def _run_account_id(run_dir: Path) -> str | None:
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _nonempty_str(ledger.get("account_id"))
+
+
+def _ts_in_window(ts_ms: int | None, start_ms: int, end_ms: int) -> bool:
+    return ts_ms is not None and start_ms <= ts_ms < end_ms
+
+
+def _order_ref_from_lifecycle_payload(payload: Mapping[str, object]) -> str | None:
+    order_ref = _nonempty_str(payload.get("order_ref"))
+    if order_ref is not None:
+        return order_ref
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, Mapping):
+        return _nonempty_str(diagnostics.get("order_ref"))
+    return None
+
+
 def _group_rows_by_order_key(rows: list) -> dict[str, list]:
     groups: dict[str, list] = {}
     for row in rows:
@@ -3007,15 +3144,28 @@ async def get_instance_activity(
         start_ms=start_ms,
         end_ms=end_ms,
     )
+    activity_rows = [*wal_rows, *repair_projection.broker_rows]
     projection = _build_activity_projection(
         sid=sid,
         day=day,
         symbol=symbol,
         resolution=resolution,
         bars=bars,
-        wal_rows=[*wal_rows, *repair_projection.broker_rows],
+        wal_rows=activity_rows,
         evidence_refs=evidence_refs,
     )
+    consistency_warnings = _activity_lifecycle_consistency_warnings(
+        artifacts_root=artifacts_root,
+        sid=sid,
+        day=day,
+        runs=runs,
+        live_binding=live_binding,
+        activity_rows=activity_rows,
+    )
+    if consistency_warnings:
+        projection = projection.model_copy(
+            update={"reconciliation_warnings": [*projection.reconciliation_warnings, *consistency_warnings]}
+        )
     return projection.model_copy(
         update={
             "broker_activity_rows": fold_activity_event_rows(
