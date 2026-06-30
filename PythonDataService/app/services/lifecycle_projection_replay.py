@@ -90,10 +90,15 @@ def batch_from_account_events(
     source_artifact: str = "account_events",
     source_hash: str | None = None,
     inserted_at_ms: int | None = None,
+    start_file_position: int = 1,
 ) -> LifecycleProjectionReplayBatch:
     """Author projection rows from raw account_events.jsonl rows."""
 
-    account_event_projections = project_account_events(rows, account_id=account_id)
+    account_event_projections = project_account_events(
+        rows,
+        account_id=account_id,
+        start_file_position=start_file_position,
+    )
     lifecycle_events = [
         _apply_bot_id(account_event_to_lifecycle_event(event), bot_id)
         for event in account_event_projections

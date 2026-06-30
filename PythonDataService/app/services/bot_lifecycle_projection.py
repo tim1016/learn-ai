@@ -248,12 +248,13 @@ def project_account_events(
     rows: Sequence[Mapping[str, Any]],
     *,
     account_id: str,
+    start_file_position: int = 1,
 ) -> list[AccountEventProjection]:
     """Return tolerant typed projections for raw account-event rows."""
 
     return [
         normalize_account_event(row, account_id=account_id, file_position=index)
-        for index, row in enumerate(rows, start=1)
+        for index, row in enumerate(rows, start=start_file_position)
     ]
 
 
