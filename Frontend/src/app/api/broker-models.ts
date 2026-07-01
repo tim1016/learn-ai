@@ -18,9 +18,11 @@ import type { components } from './broker.types';
 
 export type IbkrAccountSummary = components['schemas']['IbkrAccountSummary'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
-export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] & IbkrOrderEvidenceFields;
+export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
+  IbkrOrderEvidenceFields &
+  IbkrOrderRefFields;
 export type IbkrOrderAck = components['schemas']['IbkrOrderAck'] & IbkrOrderEvidenceFields;
-export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'];
+export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'] & IbkrOrderRefFields;
 export type IbkrPosition = components['schemas']['IbkrPosition'];
 export type IbkrPositionsSnapshot = components['schemas']['IbkrPositionsSnapshot'];
 
@@ -143,6 +145,10 @@ export interface IbkrApiEvidenceEvent {
 
 export interface IbkrOrderEvidenceFields {
   ibkr_evidence?: IbkrTradeEvidence | null;
+}
+
+export interface IbkrOrderRefFields {
+  order_ref?: string | null;
 }
 
 export type DataPlaneReloadMode =

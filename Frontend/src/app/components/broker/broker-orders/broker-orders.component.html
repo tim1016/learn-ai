@@ -211,6 +211,8 @@
         type="button"
         class="ghost-btn small"
         (click)="refreshOpenOrders()"
+        aria-label="Refresh open orders"
+        title="Refresh open orders"
       >
         <i class="pi pi-refresh" aria-hidden="true"></i>
       </button>
@@ -228,57 +230,64 @@
     } @else if (openOrders().length === 0) {
       <p class="muted">No open orders.</p>
     } @else {
-      <table class="orders-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Symbol</th>
-            <th>Side</th>
-            <th class="num">Qty</th>
-            <th>Type</th>
-            <th class="num">Limit</th>
-            <th>Status</th>
-            <th class="num">Filled</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (o of openOrders(); track trackOrder($index, o)) {
+      <div class="table-wrap">
+        <table class="orders-table">
+          <thead>
             <tr>
-              <td class="mono">{{ o.order_id }}</td>
-              <td class="mono">{{ o.symbol }}</td>
-              <td class="mono">{{ o.action }}</td>
-              <td class="num mono">{{ o.quantity }}</td>
-              <td class="mono">{{ o.order_type }}</td>
-              <td class="num mono">{{ fmtCurrency(o.limit_price) }}</td>
-              <td class="mono">{{ o.status }}</td>
-              <td class="num mono">
-                {{ o.cumulative_filled }} / {{ o.quantity }}
-              </td>
-              <td>
-                <button
-                  type="button"
-                  class="ghost-btn small"
-                  (click)="cancel(o.order_id)"
-                  [disabled]="o.remaining === 0 || !isPaperConnected()"
-                  [attr.title]="!isPaperConnected()
-                    ? 'Disabled until IBKR is connected to a paper account (DU…)'
-                    : null"
-                  aria-label="Cancel order"
-                >
-                  ✕
-                </button>
-                @if (hasIbkrEvidence(o)) {
-                  <details class="ibkr-evidence">
-                    <summary>IBKR</summary>
-                    <pre>{{ ibkrEvidenceJson(o) }}</pre>
-                  </details>
-                }
-              </td>
+              <th>ID</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th class="num">Qty</th>
+              <th>Type</th>
+              <th class="num">Limit</th>
+              <th>Status</th>
+              <th class="num">Filled</th>
+              <th></th>
             </tr>
-          }
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            @for (o of openOrders(); track trackOrder($index, o)) {
+              <tr>
+                <td class="mono">{{ o.order_id }}</td>
+                <td>
+                  <span class="mono symbol-main">{{ o.symbol }}</span>
+                  @if (o.order_ref; as ref) {
+                    <span class="ref-chip mono" title="Broker order_ref">{{ ref }}</span>
+                  }
+                </td>
+                <td class="mono">{{ o.action }}</td>
+                <td class="num mono">{{ o.quantity }}</td>
+                <td class="mono">{{ o.order_type }}</td>
+                <td class="num mono">{{ fmtCurrency(o.limit_price) }}</td>
+                <td class="mono">{{ o.status }}</td>
+                <td class="num mono">
+                  {{ o.cumulative_filled }} / {{ o.quantity }}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    class="ghost-btn small"
+                    (click)="cancel(o.order_id)"
+                    [disabled]="o.remaining === 0 || !isPaperConnected()"
+                    [attr.title]="!isPaperConnected()
+                      ? 'Disabled until IBKR is connected to a paper account (DU…)'
+                      : null"
+                    [attr.aria-label]="'Cancel order ' + o.order_id"
+                  >
+                    <i class="pi pi-times" aria-hidden="true"></i>
+                  </button>
+                  @if (hasIbkrEvidence(o)) {
+                    <details class="ibkr-evidence">
+                      <summary>IBKR</summary>
+                      <pre>{{ ibkrEvidenceJson(o) }}</pre>
+                    </details>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     }
   </article>
 
@@ -307,6 +316,9 @@
             <span class="event-type">{{ e.event_type }}</span>
             @if (e.status) {
               <span class="event-status">{{ e.status }}</span>
+            }
+            @if (e.order_ref) {
+              <span class="ref-chip mono" title="Broker order_ref">{{ e.order_ref }}</span>
             }
             @if (e.event_type === 'fill') {
               <span class="event-fill-detail">

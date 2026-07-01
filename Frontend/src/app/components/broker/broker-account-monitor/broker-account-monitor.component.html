@@ -105,44 +105,46 @@
         method="pnlSingle stream (per conId) · qty + market value + day P&L"
         freshness="updates ~1 s (server-side debounce)"
       />
-      <table class="positions-table">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Type</th>
-            <th>Strike</th>
-            <th>Right</th>
-            <th>Expiry</th>
-            <th class="num">Qty (live)</th>
-            <th class="num">Avg cost</th>
-            <th class="num">Mkt value</th>
-            <th class="num">Day P&amp;L</th>
-            <th class="num">Unrealized</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (row of rows(); track trackRow($index, row)) {
-            @let p = row.position;
-            @let pnl = row.pnl;
+      <div class="table-wrap">
+        <table class="positions-table">
+          <thead>
             <tr>
-              <td class="mono">{{ p.symbol }}</td>
-              <td class="mono">{{ p.sec_type }}</td>
-              <td class="mono">
-                {{ p.strike === null || p.strike === undefined ? '—' : fmtCurrency(p.strike) }}
-              </td>
-              <td class="mono">{{ p.right ?? '—' }}</td>
-              <td class="mono">{{ fmtDateNy(p.expiry_ms) }}</td>
-              <td class="mono num">
-                {{ pnl?.position === null || pnl?.position === undefined ? p.quantity : fmtSignedNumber(pnl?.position, 0) }}
-              </td>
-              <td class="mono num">{{ fmtCurrency(p.avg_cost) }}</td>
-              <td class="mono num">{{ fmtCurrency(pnl?.market_value) }}</td>
-              <td class="mono num">{{ fmtSignedCurrency(pnl?.daily_pnl) }}</td>
-              <td class="mono num">{{ fmtSignedCurrency(pnl?.unrealized_pnl) }}</td>
+              <th>Symbol</th>
+              <th>Type</th>
+              <th>Strike</th>
+              <th>Right</th>
+              <th>Expiry</th>
+              <th class="num">Qty (live)</th>
+              <th class="num">Avg cost</th>
+              <th class="num">Mkt value</th>
+              <th class="num">Day P&amp;L</th>
+              <th class="num">Unrealized</th>
             </tr>
-          }
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            @for (row of rows(); track trackRow($index, row)) {
+              @let p = row.position;
+              @let pnl = row.pnl;
+              <tr>
+                <td class="mono">{{ p.symbol }}</td>
+                <td class="mono">{{ p.sec_type }}</td>
+                <td class="mono">
+                  {{ p.strike === null || p.strike === undefined ? '—' : fmtCurrency(p.strike) }}
+                </td>
+                <td class="mono">{{ p.right ?? '—' }}</td>
+                <td class="mono">{{ fmtDateNy(p.expiry_ms) }}</td>
+                <td class="mono num">
+                  {{ pnl?.position === null || pnl?.position === undefined ? p.quantity : fmtSignedNumber(pnl?.position, 0) }}
+                </td>
+                <td class="mono num">{{ fmtCurrency(p.avg_cost) }}</td>
+                <td class="mono num">{{ fmtCurrency(pnl?.market_value) }}</td>
+                <td class="mono num">{{ fmtSignedCurrency(pnl?.daily_pnl) }}</td>
+                <td class="mono num">{{ fmtSignedCurrency(pnl?.unrealized_pnl) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     }
   </section>
 }
