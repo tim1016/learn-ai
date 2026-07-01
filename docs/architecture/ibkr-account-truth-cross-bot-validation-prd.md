@@ -39,9 +39,12 @@ TWS/Gateway remains the live authority. The first implementation uses `ib_async`
 The ownership ladder is strict:
 
 1. A bot-owned broker fact has an `order_ref` whose namespace exactly equals `learn-ai/{strategy_instance_id}/v1` for a known bot namespace. The namespace is the portion before the final colon.
-2. A manual operator action must be stamped with a reserved `manual/{operator_or_session}/v1` namespace before submit.
-3. A broker fact with no recognized namespace is classified as `foreign_or_unclaimed`.
-4. `execId` is the idempotency key for executions. `permId` is the broker order grouping key. `orderId` is not durable enough to identify historical intent by itself.
+2. A strong manual operator action is app-submitted and stamped before submit with a reserved `manual/{operator_or_session}/v1` namespace.
+3. A broker fact with no recognized namespace is classified as `foreign_or_unclaimed` by default. Hand-clicked TWS orders, including client-id `0` rows with no namespace, must not be auto-classified as manual.
+4. A weaker `adopted_manual` tier may be added by an explicit post-hoc adoption workflow. Adoption is an audited operator claim over raw broker facts, not a rewrite of broker identity.
+5. `execId` is the idempotency key for executions. `permId` is the broker order grouping key. `orderId` is not durable enough to identify historical intent by itself.
+
+Post-hoc adoption is a follow-up capability, not MVP classification. It exists because a single hand hedge in TWS would otherwise pin the account to `not_proven` forever. The design is explicit and append-only: the operator adopts one foreign/unclaimed fact at a time, keyed by durable identity (`permId` for an order, `execId` for an execution), with operator/session, `int64 ms UTC` timestamp, claimed manual namespace, optional reason, and correction records appended rather than mutated. Reclassification is derived by folding the adoption ledger over raw broker facts. A live working foreign order remains broker-foreign-by-identity with an operator claim overlaid; it needs stronger confirmation than a terminal historical execution because adoption can clear the unknown-open-order submit block. Broker `clientId` is decision support in the dialog, never machine ownership logic.
 
 Page responsibilities:
 
@@ -94,6 +97,11 @@ Flex Web Service is the delayed official audit source. A later slice imports Fle
 38. As a reviewer, I want the PRD sliced into independent vertical agent tasks, so that Orders repair, endpoint capture, account projection, UI wiring, and Flex import can ship separately.
 39. As an operator, I want a degraded but readable state when IBKR does not return one evidence source, so that partial outages do not produce false confidence.
 40. As a trader, I want final account truth to say "not proven" instead of "clean" whenever required broker evidence is stale, missing, or contradictory.
+41. As an operator, I want TWS-clicked orders with no namespace to default to `foreign_or_unclaimed`, so that the system does not invent manual ownership without evidence.
+42. As an operator, I want to adopt one foreign/unclaimed order or execution as manual after review, so that a deliberate hand hedge does not permanently block every bot.
+43. As an operator, I want adopted-manual rows distinguished from app-minted manual rows, so that weaker post-hoc claims are visible.
+44. As an auditor, I want adoption decisions stored in an append-only ledger keyed by `permId` or `execId`, so that corrections are traceable and no broker fact is rewritten.
+45. As a trader, I want live working foreign-order adoption to require stronger confirmation than adopting terminal history, so that clearing the bot-submit block is deliberate.
 
 ## Implementation Decisions
 
@@ -102,16 +110,19 @@ Flex Web Service is the delayed official audit source. A later slice imports Fle
 3. **Add missing broker primitives.** Expose curated FastAPI endpoints or service functions for completed orders, execution sweeps, commission reports, what-if previews, broker current time, and broker error evidence.
 4. **Do not bypass existing Activity truth.** Per-bot Activity remains the per-execution operator narrative for a bot. Account truth references it when available and classifies gaps when not available.
 5. **Ownership is exact namespace equality.** Never use prefix matching for `order_ref`. Cross-version support must be an explicit allowed-namespace set.
-6. **Manual orders get a namespace.** The Orders page must stop submitting orders without `order_ref`. Manual paper submits use a reserved manual namespace and explicit paper confirmation.
-7. **Order grouping uses broker identifiers carefully.** `permId` groups a broker order lifecycle, `execId` dedupes fills, and `order_ref` assigns ownership. `orderId` is displayed as evidence but is not the account-truth identity key.
-8. **Invariant verdicts are closed.** Initial invariant keys are `all_executions_assigned`, `positions_match_known_ownership`, `open_orders_known`, `completed_orders_known`, `commission_complete`, `broker_liveness_proven`, `flex_audit_match`, and `client_portal_cross_check_optional`.
-9. **Account Monitor is risk-first.** It shows liveness, buying power, margin, net liquidation, owner-class exposure, symbol exposure, and stale evidence. It does not become a raw IBKR dump.
-10. **Reconciliation is proof-first.** It shows verdicts, blockers, caveats, and links to evidence. It is the primary place to decide whether the account is safe for further bot submits.
-11. **Orders is ledger-first.** It shows order lifecycle and evidence across open and completed orders. Manual submit is secondary and guarded.
-12. **Flex is delayed official audit.** Flex import is a follow-up slice that validates settled executions, commissions, cash, and positions. It may lag live broker truth and must be labelled as delayed.
-13. **Client Portal is optional.** Client Portal endpoints may be explored behind a feature flag only after documenting session interaction risks. The first implementation does not depend on it.
-14. **Timestamp policy is unchanged.** Wire/storage fields remain `int64 ms UTC`; Angular formats display time at the edge.
-15. **Trader copy is backend-authored.** Angular may format, sort, filter, expand, and render. It must not compute ownership, verdict severity, risk posture, or reconciliation pass/fail.
+6. **Unknown defaults to foreign.** Missing namespace, client-id `0`, TWS hand clicks, other API sessions, and unparseable ownership evidence all default to `foreign_or_unclaimed`. Do not infer manual from client id, account id, timing, or absence of a namespace.
+7. **Manual orders get a namespace.** The Orders page must stop submitting orders without `order_ref`. Manual paper submits use a reserved manual namespace and explicit paper confirmation.
+8. **Adoption is audited overlay evidence.** A future post-hoc adoption workflow may classify one raw broker fact at a time as `adopted_manual`, but it must append to an adoption ledger and never mutate raw broker evidence or silently mark broker-foreign identity as safe.
+9. **Manual evidence tiers stay visible.** `app_minted_manual` and `adopted_manual` share the manual owner class for rollups, but UI and drill-downs must preserve the stronger/weaker evidence tier distinction.
+10. **Order grouping uses broker identifiers carefully.** `permId` groups a broker order lifecycle, `execId` dedupes fills, and `order_ref` assigns ownership. `orderId` is displayed as evidence but is not the account-truth identity key.
+11. **Invariant verdicts are closed.** Initial invariant keys are `all_executions_assigned`, `positions_match_known_ownership`, `open_orders_known`, `completed_orders_known`, `commission_complete`, `broker_liveness_proven`, `flex_audit_match`, and `client_portal_cross_check_optional`.
+12. **Account Monitor is risk-first.** It shows liveness, buying power, margin, net liquidation, owner-class exposure, symbol exposure, and stale evidence. It does not become a raw IBKR dump.
+13. **Reconciliation is proof-first.** It shows verdicts, blockers, caveats, and links to evidence. It is the primary place to decide whether the account is safe for further bot submits.
+14. **Orders is ledger-first.** It shows order lifecycle and evidence across open and completed orders. Manual submit is secondary and guarded.
+15. **Flex is delayed official audit.** Flex import is a follow-up slice that validates settled executions, commissions, cash, and positions. It may lag live broker truth and must be labelled as delayed.
+16. **Client Portal is optional.** Client Portal endpoints may be explored behind a feature flag only after documenting session interaction risks. The first implementation does not depend on it.
+17. **Timestamp policy is unchanged.** Wire/storage fields remain `int64 ms UTC`; Angular formats display time at the edge.
+18. **Trader copy is backend-authored.** Angular may format, sort, filter, expand, and render. It must not compute ownership, verdict severity, risk posture, or reconciliation pass/fail.
 
 ## Suggested Agent Slices
 
@@ -120,13 +131,15 @@ Flex Web Service is the delayed official audit source. A later slice imports Fle
 3. **Build account truth projection.** Join IBKR facts with known bot namespaces and manual namespaces. Emit invariant verdicts, owner classes, freshness, and drill-down evidence.
 4. **Wire Account Monitor and Reconciliation.** Render account truth summary, invariant verdicts, owner-class exposure, stale evidence, and links back to per-bot Activity.
 5. **Upgrade Orders ledger.** Show open and completed broker orders grouped by lifecycle, ownership, executions, commission, and status. Keep manual submit secondary.
-6. **Add Flex audit import.** Import official Flex statement data and reconcile settled executions, commissions, cash, and positions against the live projection.
-7. **Evaluate Client Portal cross-check.** Document session-safety findings before enabling any CP endpoint in operator surfaces.
+6. **Add post-hoc manual adoption.** Add an append-only adoption ledger and one-fact-at-a-time operator workflow for foreign/unclaimed orders or executions. Fold the ledger over account truth, keep `adopted_manual` distinct from app-minted manual, and require stronger confirmation for live working orders.
+7. **Add Flex audit import.** Import official Flex statement data and reconcile settled executions, commissions, cash, and positions against the live projection.
+8. **Evaluate Client Portal cross-check.** Document session-safety findings before enabling any CP endpoint in operator surfaces.
 
 ## Testing Decisions
 
 - **Broker layer tests:** use fake `ib_async` clients for `reqCompletedOrdersAsync`, `reqExecutionsAsync`, `whatIfOrderAsync`, `commissionReportEvent`, `errorEvent`, and current-time checks. CI must not require a live IBKR Gateway.
 - **Projection tests:** cover multi-bot ownership, manual ownership, foreign executions, unknown open orders, duplicate `execId`, partial fills, missing commission, stale evidence, reconnect sweeps, and current-position drift.
+- **Adoption tests:** cover default foreign/unclaimed classification for unstamped TWS clicks, one-fact adoption keyed by `permId` or `execId`, adopted-manual evidence tier rendering, correction-by-append semantics, and stronger confirmation for live working order adoption.
 - **Orders tests:** prove manual submits include an `order_ref`, paper confirmation remains required, what-if failures block submit unless explicitly degraded by backend policy, and completed orders remain visible after they leave open orders.
 - **Frontend tests:** assert rendered trader labels, invariant verdicts, degraded states, owner-class grouping, links to Activity/Audit, and that raw backend codes in primary UI pass through the shared `receiptLabel` path where applicable.
 - **Timestamp tests:** contract-test that new wire models expose milliseconds, not ISO strings, for event time, execution time, sweep time, current broker time, and freshness.
@@ -140,6 +153,7 @@ Flex Web Service is the delayed official audit source. A later slice imports Fle
 - Replacing the per-bot Activity/Audit model.
 - GraphQL transport for these surfaces.
 - Frontend-computed reconciliation math, ownership, or verdicts.
+- Auto-classifying TWS hand-clicks, client-id `0` orders, or unstamped broker facts as manual.
 - Client Portal brokerage-session use in the live validation path.
 - Portfolio optimization or new P&L math beyond displaying broker/account evidence and backend-authored comparisons.
 
