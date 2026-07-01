@@ -14,6 +14,10 @@ export function redeployQueryParamsForStatus(
     if (status.provenance.qc_cloud_backtest_id) {
       params['qc_backtest_id'] = status.provenance.qc_cloud_backtest_id;
     }
+    const signalStream = status.provenance.live_config?.['symbol'];
+    if (typeof signalStream === 'string' && signalStream.trim() !== '') {
+      params['signal_stream'] = signalStream.trim().toUpperCase();
+    }
     params['parent_run_id'] = status.provenance.run_id;
     params['instance_id'] = status.strategy_instance_id;
   }

@@ -178,16 +178,20 @@ export class BrokerDeployFormComponent {
   );
 
   readonly fixtureSymbols = computed<string[]>(() =>
-    (this.selectedFixture()?.symbols ?? [])
-      .map((symbol) => normalizedSymbol(symbol))
-      .filter((symbol) => symbol !== ''),
+    [
+      ...new Set(
+        (this.selectedFixture()?.symbols ?? [])
+          .map((symbol) => normalizedSymbol(symbol))
+          .filter((symbol) => symbol !== ''),
+      ),
+    ],
   );
 
   readonly resolvedSignalStream = computed<string>(() => {
     const explicit = normalizedSymbol(this.signalStream());
     const fixtures = this.fixtureSymbols();
     if (fixtures.length === 0) return explicit;
-    return fixtures.includes(explicit) ? explicit : fixtures[0];
+    return fixtures.includes(explicit) ? explicit : '';
   });
 
   /** ADR 0009 § 6 — the strategy's sizing surface. `"explicit"` (e.g.
@@ -349,6 +353,8 @@ export class BrokerDeployFormComponent {
     if (seedInstanceId) this.instanceId.set(seedInstanceId);
     const seedParent = qp.get('parent_run_id');
     if (seedParent) this.parentRunId.set(seedParent);
+    const seedSignalStream = qp.get('signal_stream');
+    if (seedSignalStream) this.signalStream.set(normalizedSymbol(seedSignalStream));
 
     effect(() => {
       if (this.manualSpecPath()) return;
@@ -358,7 +364,10 @@ export class BrokerDeployFormComponent {
       const fallback =
         strategy === 'deployment_validation' ? DEPLOYMENT_VALIDATION_SPEC_PATH : null;
       const nextPath = match?.path ?? fallback;
-      if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
+      if (nextPath && this.specPath() !== nextPath) {
+        this.specPath.set(nextPath);
+        this.seedSignalStreamFromFixturePath(nextPath);
+      }
     });
     effect(() => {
       this.accountId.set(this.brokerAccountId());
@@ -551,6 +560,29 @@ export class BrokerDeployFormComponent {
     return null;
   }
 
+  private fixtureSymbolsForPath(path: string): string[] {
+    const fixture = (this.specFixtures.value() ?? []).find((f) => f.path === path);
+    return [
+      ...new Set(
+        (fixture?.symbols ?? [])
+          .map((symbol) => normalizedSymbol(symbol))
+          .filter((symbol) => symbol !== ''),
+      ),
+    ];
+  }
+
+  private seedSignalStreamFromFixturePath(path: string): void {
+    const symbols = this.fixtureSymbolsForPath(path);
+    if (symbols.length === 1) {
+      this.signalStream.set(symbols[0]);
+      return;
+    }
+    const current = normalizedSymbol(this.signalStream());
+    if (symbols.length > 1 && !symbols.includes(current)) {
+      this.signalStream.set('');
+    }
+  }
+
   private shouldSyncRenderedValue(
     renderedValue: string | null,
     signalValue: string,
@@ -577,6 +609,7 @@ export class BrokerDeployFormComponent {
     const specPath = this.renderedFieldValue('specPath');
     if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty, onlyEmptySignals)) {
       this.specPath.set(specPath);
+      if (!this.manualSpecPath()) this.seedSignalStreamFromFixturePath(specPath);
     }
 
     const signalStream = this.renderedFieldValue('signalStream');
@@ -610,7 +643,9 @@ export class BrokerDeployFormComponent {
   }
   setSpecFixturePath(e: Event): void {
     this.manualSpecPath.set(false);
-    this.specPath.set(this.text(e));
+    const path = this.text(e);
+    this.specPath.set(path);
+    this.seedSignalStreamFromFixturePath(path);
   }
   setSignalStream(e: Event): void {
     this.signalStream.set(normalizedSymbol(this.text(e)));

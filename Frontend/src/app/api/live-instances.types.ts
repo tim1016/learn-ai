@@ -151,7 +151,8 @@ export interface LiveInstanceStatus {
   /** Why the most recent run ended; null while a run is live or nothing was
    * ever deployed. Drives the console's "why it stopped" surface. */
   last_exit: InstanceLastExit | null;
-  /** Traded symbol sourced from the ledger's ``live_config.symbol`` (Slice 2).
+  /** Monitor/chart symbol sourced from the action-plan traded stock when
+   * present, then ``live_config.symbol`` for legacy signal=trade runs.
    * ``null`` when nothing is deployed or the ledger predates the symbol field —
    * consumers must treat null as "unknown" and NOT fall back to a hardcoded
    * default (the prior 'SPY' default was the bug Slice 2 closes). */
@@ -202,7 +203,7 @@ export type PriorRunClassification =
 
 export type BrokerSafetyVerdict = 'PAPER_ONLY' | 'UNSAFE' | 'UNKNOWN';
 
-export type BrokerConnectionState = 'CONNECTED' | 'DISCONNECTED' | 'UNKNOWN';
+export type BrokerConnectionState = 'CONNECTED' | 'DISCONNECTED' | 'DEGRADED' | 'UNKNOWN';
 export type ExecutionPosture =
   | 'PAPER_EXECUTION'
   | 'READ_ONLY'

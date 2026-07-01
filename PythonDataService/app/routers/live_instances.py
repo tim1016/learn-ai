@@ -804,12 +804,13 @@ def _start_defaults(
 
 
 def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
-    """Traded symbol for the instance.
+    """Monitor/chart symbol for the instance.
 
     Resolution order:
-      1. ``ledger.live_config.symbol`` (operator-set, hashed into run_id)
-      2. ``strategy_spec.symbols[0]`` (the spec the ledger is reconciled to —
-         the canonical "this is what the algorithm trades")
+      1. ``ledger.live_config.action`` single stock target, when present
+      2. ``ledger.live_config.symbol`` (signal stream; legacy signal=trade runs)
+      3. ``strategy_spec.symbols[0]`` (the spec the ledger is reconciled to —
+         the canonical signal stream fallback)
 
     Slice 2: the operator console reads this on the chart card instead of
     hardcoding 'SPY'. Returns ``None`` only when nothing is deployed, the
@@ -838,12 +839,12 @@ def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dic
     except (OSError, ValueError, KeyError):
         return None
     live_config = ledger.get("live_config") or {}
-    symbol = live_config.get("symbol") if isinstance(live_config, dict) else None
-    if isinstance(symbol, str) and symbol:
-        return symbol
     if isinstance(live_config, dict):
         symbol = stock_symbol_from_action_plan(live_config.get("action"))
         if symbol is not None:
+            return symbol
+        symbol = live_config.get("symbol")
+        if isinstance(symbol, str) and symbol:
             return symbol
     # Spec fallback — read the strategy spec the ledger pins and pick the
     # first symbol. A multi-symbol strategy (none in the fleet today) would

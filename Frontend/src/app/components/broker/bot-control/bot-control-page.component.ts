@@ -218,7 +218,7 @@ export class BotControlPageComponent {
     return {
       symbol: status.symbol,
       state: formatReceiptLabel(connection),
-      tone: connection === 'CONNECTED' ? 'ok' : connection === 'DISCONNECTED' ? 'attention' : 'muted',
+      tone: connection === 'CONNECTED' ? 'ok' : connection === 'UNKNOWN' ? 'muted' : 'attention',
     };
   });
 

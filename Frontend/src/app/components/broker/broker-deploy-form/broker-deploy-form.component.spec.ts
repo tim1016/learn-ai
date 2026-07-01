@@ -34,6 +34,13 @@ function setup(
       description: string;
       sizing_surface: 'policy' | 'explicit';
     }[];
+    specFixtures?: {
+      name: string;
+      spec_name: string;
+      path: string;
+      symbols: string[];
+      description: string | null;
+    }[];
     accountPromise?: Promise<{ account_id: string } | null>;
   } = {},
 ) {
@@ -61,20 +68,22 @@ function setup(
       ],
     ),
     getSpecStrategyFixtures: vi.fn().mockResolvedValue([
-      {
-        name: 'spy_ema_crossover',
-        spec_name: 'SPY EMA Crossover',
-        path: 'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
-        symbols: ['SPY'],
-        description: null,
-      },
-      {
-        name: 'deployment_validation',
-        spec_name: 'Deployment Validation',
-        path: DEPLOYMENT_VALIDATION_SPEC_PATH,
-        symbols: ['SPY'],
-        description: null,
-      },
+      ...(opts.specFixtures ?? [
+        {
+          name: 'spy_ema_crossover',
+          spec_name: 'SPY EMA Crossover',
+          path: 'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
+          symbols: ['SPY'],
+          description: null,
+        },
+        {
+          name: 'deployment_validation',
+          spec_name: 'Deployment Validation',
+          path: DEPLOYMENT_VALIDATION_SPEC_PATH,
+          symbols: ['SPY'],
+          description: null,
+        },
+      ]),
     ]),
     getQcAuditCopies: vi
       .fn()
@@ -142,6 +151,7 @@ async function flush() {
 function fillRequired(component: BrokerDeployFormComponent) {
   component.strategyKey.set('spy_ema_crossover');
   component.specPath.set('PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json');
+  component.signalStream.set('SPY');
   component.accountId.set('DU123');
   component.qcBacktestId.set('bt-1');
   component.qcAuditCopyPath.set('references/qc-shadow/A.py');
@@ -190,6 +200,18 @@ function typeText(
   if (!(control instanceof HTMLInputElement)) throw new Error(`${labelText} is not an input`);
   control.value = value;
   control.dispatchEvent(new Event('input'));
+}
+
+function chooseExecutionCapability(
+  fixture: { nativeElement: HTMLElement },
+  value: 'read_only' | 'paper_orders',
+): void {
+  const control = fixture.nativeElement.querySelector<HTMLInputElement>(
+    `input[name="launch-mode"][value="${value}"]`,
+  );
+  if (!(control instanceof HTMLInputElement)) throw new Error(`missing execution capability: ${value}`);
+  control.checked = true;
+  control.dispatchEvent(new Event('change'));
 }
 
 afterEach(() => {
@@ -340,6 +362,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     component.strategyKey.set('spy_ema_crossover_options');
     component.specPath.set('PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json');
+    component.signalStream.set('SPY');
     component.accountId.set('DU123');
     component.qcBacktestId.set('bt-1');
     component.qcAuditCopyPath.set('references/qc-shadow/A.py');
@@ -660,10 +683,10 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('submits the selected signal stream separately from the traded action-plan instrument', async () => {
-    const { svc, component } = setup();
+    const { svc, component, fixture } = setup();
     await flush();
     fillRequired(component);
-    component.signalStream.set('spy');
+    changeSelect(fixture, 'Signal stream', 'SPY');
     component.actionPlan.set({
       on_enter: [
         {
@@ -693,12 +716,49 @@ describe('BrokerDeployFormComponent', () => {
     });
   });
 
+  it('requires an explicit signal stream for multi-symbol fixtures instead of picking the first one', async () => {
+    const { fixture, component } = setup({
+      strategies: [
+        {
+          name: 'multi_signal',
+          display_name: 'Multi Signal',
+          description: '',
+          sizing_surface: 'policy',
+        },
+      ],
+      specFixtures: [
+        {
+          name: 'multi_signal',
+          spec_name: 'Multi Signal',
+          path: 'PythonDataService/app/engine/strategy/spec/fixtures/multi_signal.spec.json',
+          symbols: ['spy', 'SPY', 'QQQ'],
+          description: null,
+        },
+      ],
+    });
+    await flush();
+
+    changeSelect(fixture, 'Strategy', 'multi_signal');
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.fixtureSymbols()).toEqual(['SPY', 'QQQ']);
+    expect(component.resolvedSignalStream()).toBe('');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Signal stream');
+
+    changeSelect(fixture, 'Signal stream', 'QQQ');
+    fixture.detectChanges();
+
+    expect(component.resolvedSignalStream()).toBe('QQQ');
+  });
+
   it('asks for confirmation before starting with paper order submission enabled', async () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    component.readonlyFlag.set(false);
+    fixture.detectChanges();
+    chooseExecutionCapability(fixture, 'paper_orders');
     fixture.detectChanges();
 
     await component.submit();
@@ -842,7 +902,7 @@ describe('BrokerDeployFormComponent', () => {
     const harness = await RouterTestingHarness.create();
     const component = await harness.navigateByUrl(
       '/broker/deploy?strategy_key=spy_ema_crossover&spec_path=spec%2Fpath.json' +
-        '&account_id=DU777&qc_backtest_id=bt-redeploy' +
+        '&signal_stream=aapl&account_id=DU777&qc_backtest_id=bt-redeploy' +
         '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst',
       BrokerDeployFormComponent,
     );
@@ -850,6 +910,8 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.strategyKey()).toBe('spy_ema_crossover');
     expect(component.specPath()).toBe('spec/path.json');
+    expect(component.signalStream()).toBe('AAPL');
+    expect(component.resolvedSignalStream()).toBe('AAPL');
     expect(component.qcBacktestId()).toBe('bt-redeploy');
     expect(component.qcAuditCopyPath()).toBe('audit/copy.py');
     expect(component.instanceId()).toBe('recovered_inst');

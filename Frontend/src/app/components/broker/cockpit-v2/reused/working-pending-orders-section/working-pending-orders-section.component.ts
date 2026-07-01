@@ -7,6 +7,11 @@ import type { ActivityOrderRow } from '../bot-trade-chart-card/bot-trade-chart-c
 
 type OrderGroup = 'active' | 'engine_pending' | 'resolved';
 
+const QUANTITY = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 6,
+});
+
 interface OrderDisplay {
   row: ActivityOrderRow;
   chartTs: string;
@@ -50,7 +55,7 @@ export class WorkingPendingOrdersSectionComponent {
 
   orderSummary(row: ActivityOrderRow): string {
     const orderType = row.order_type ? ` ${row.order_type}` : '';
-    return `${fmtNumber(row.quantity, 0)}${orderType}`;
+    return `${this.fmtQuantity(row.quantity)}${orderType}`;
   }
 
   orderDetail(row: ActivityOrderRow): string {
@@ -60,10 +65,14 @@ export class WorkingPendingOrdersSectionComponent {
   }
 
   filledSummary(row: ActivityOrderRow): string {
-    return `${fmtNumber(row.filled_quantity, 0)} / ${fmtNumber(row.quantity, 0)}`;
+    return `${this.fmtQuantity(row.filled_quantity)} / ${this.fmtQuantity(row.quantity)}`;
   }
 
   private rowsFor(group: OrderGroup): OrderDisplay[] {
     return this.displayRows().filter((p) => p.row.group === group);
+  }
+
+  private fmtQuantity(value: number | null | undefined): string {
+    return value == null ? '—' : QUANTITY.format(value);
   }
 }

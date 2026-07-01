@@ -67,7 +67,8 @@
         <label class="field" for="signal-stream">
           <span>Signal stream</span>
           @if (fixtureSymbols().length > 0) {
-            <select id="signal-stream" data-deploy-field="signalStream" [value]="resolvedSignalStream()" (change)="setSignalStream($event)" required>
+            <select id="signal-stream" data-deploy-field="signalStream" [value]="signalStream()" (change)="setSignalStream($event)" required>
+              <option value="" disabled>Select signal stream…</option>
               @for (symbol of fixtureSymbols(); track symbol) {
                 <option [value]="symbol">{{ symbol }}</option>
               }
