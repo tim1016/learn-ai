@@ -45,7 +45,7 @@ class _FakeStore:
                 source_type="broker_ack",
                 source_rank=50,
                 source_seq=2,
-                summary="Broker acknowledgement failed; submit outcome is uncertain.",
+                summary="Broker acknowledgment failed; submit outcome is uncertain.",
                 operator_next_step="PROBE_BROKER_BEFORE_RETRY",
                 receipt_payload={"intent_id": "intent-2"},
                 evidence_refs=[{"source": "intent_wal"}],
@@ -105,7 +105,7 @@ async def test_timeline_endpoint_renders_backend_authored_rows() -> None:
     payload = response.json()
     assert payload["projection_available"] is True
     assert payload["canonical_fallback_required"] is False
-    assert payload["rows"][0]["summary"] == "Broker acknowledgement failed; submit outcome is uncertain."
+    assert payload["rows"][0]["summary"] == "Broker acknowledgment failed; submit outcome is uncertain."
     assert payload["rows"][0]["operator_next_step"] == "PROBE_BROKER_BEFORE_RETRY"
     assert payload["rows"][0]["receipt_payload"]["intent_id"] == "intent-2"
 

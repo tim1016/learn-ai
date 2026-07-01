@@ -294,7 +294,7 @@ function makeLifecycleTimeline(): LifecycleTimelineResponse {
         source_seq: 7,
         source_offset: null,
         source_hash: null,
-        summary: 'Broker acknowledgement failed; submit outcome is uncertain.',
+        summary: 'Broker acknowledgment failed; submit outcome is uncertain.',
         why: 'Probe broker before retrying this intent.',
         operator_next_step: 'PROBE_BROKER_BEFORE_RETRY',
         receipt_payload: { intent_id: 'intent-7', order_ref: 'learn-ai/sid-x/v1:intent-7' },
@@ -535,7 +535,7 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Act now');
+    expect(el.querySelector('.top-action-banner')?.textContent).toContain('Controls');
     const startAction = el.querySelector(
       '.top-action-banner .chart-action[aria-label="Start bot process"]',
     ) as HTMLButtonElement | null;
@@ -547,6 +547,12 @@ describe('BotControlPageComponent', () => {
       .toContain('Current lifecycle focus');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Deploy or start');
+    expect(el.querySelector('[data-testid="locked-evidence-field"]')).toBeNull();
+    fixture.componentInstance.toggleBottomPanel('audit');
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="locked-evidence-field"]')).not.toBeNull();
+    fixture.componentInstance.closeBottomPanel();
+    fixture.detectChanges();
 
     const dispatch = vi.spyOn(fixture.componentInstance, 'dispatchOverviewAction');
     startAction?.click();
@@ -556,6 +562,7 @@ describe('BotControlPageComponent', () => {
       ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
     expect(recovery).toBeDefined();
     if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
+    recovery.operator_actionability = 'system-only';
     fixture.componentInstance.selectLifecycleNode(recovery);
     fixture.detectChanges();
 
@@ -563,6 +570,13 @@ describe('BotControlPageComponent', () => {
       .toContain('Selected lifecycle step');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Recovery lane');
+    expect(el.textContent).toContain('Internal gate - no operator action needed');
+    fixture.componentInstance.selectedLifecycleNodeId.set(null);
+    fixture.detectChanges();
+    recovery.operator_actionability = 'operator-actionable';
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Operator action is required for this lifecycle step.');
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 
@@ -860,6 +874,8 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
+    fixture.componentInstance.toggleBottomPanel('audit');
+    fixture.detectChanges();
 
     const runtimeField = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="locked-evidence-field"]'),
@@ -926,7 +942,7 @@ describe('BotControlPageComponent', () => {
 
     const timeline = (fixture.nativeElement as HTMLElement)
       .querySelector('[data-testid="bot-control-recent-activity"] [data-testid="trader-guidance-timeline"]');
-    expect(timeline?.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+    expect(timeline?.textContent).toContain('Broker acknowledgment failed; submit outcome is uncertain.');
     expect(timeline?.textContent).toContain('broker_ack #7');
   });
 
@@ -974,13 +990,13 @@ describe('BotControlPageComponent', () => {
     fixture.componentInstance.toggleBottomPanel('activity');
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).textContent)
-      .toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+      .toContain('Broker acknowledgment failed; submit outcome is uncertain.');
 
     await (fixture.componentInstance as unknown as { refreshStatus(id: string): Promise<void> }).refreshStatus('sid-x');
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).not.toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+    expect(text).not.toContain('Broker acknowledgment failed; submit outcome is uncertain.');
     expect(text).toContain('Lifecycle projection is unavailable for this bot.');
   });
 
@@ -995,6 +1011,8 @@ describe('BotControlPageComponent', () => {
       {
         label: 'reconciliation.state',
         value: 'FAILED',
+        headline: 'Reconciliation failed.',
+        detail: 'The backend says broker and engine state do not agree.',
         unit: null,
         source: 'reconciliation_projection',
         gate_id: null,
@@ -1004,6 +1022,8 @@ describe('BotControlPageComponent', () => {
       {
         label: 'failure_reason',
         value: 'Broker snapshot disagrees with the intent WAL.',
+        headline: 'Reconciliation is blocked by a broker and engine mismatch.',
+        detail: 'Broker snapshot disagrees with the intent WAL.',
         unit: null,
         source: 'reconciliation_projection',
         gate_id: null,
@@ -1013,6 +1033,8 @@ describe('BotControlPageComponent', () => {
       {
         label: 'intent_id',
         value: 'intent-7',
+        headline: 'Order intent intent-7 was recorded.',
+        detail: 'Intent ids are preserved exactly for audit.',
         unit: null,
         source: 'readiness',
         gate_id: null,
@@ -1054,10 +1076,11 @@ describe('BotControlPageComponent', () => {
     const receipts = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="bot-control-node-receipts"]');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Evidence checked');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('ET');
-    expect(receipts?.textContent).toContain('Technical proof details');
+    expect(receipts?.textContent).toContain('Node receipt details');
+    expect(receipts?.textContent).toContain('Reconciliation failed.');
     expect(receipts?.textContent).toContain('Reconciliation State is Failed.');
     expect(receipts?.textContent).toContain('Failure Reason is Broker snapshot disagrees with the intent WAL.');
-    expect(receipts?.textContent).not.toContain('Reconciliation Projection');
+    expect(receipts?.textContent).toContain('Reconciliation Projection');
     expect(receipts?.querySelector('[title*="Reconciliation Projection"]')).toBeTruthy();
     expect(receipts?.textContent).toContain('Intent ID is intent-7.');
     expect(receipts?.textContent).not.toContain('Intent 7');
@@ -1077,6 +1100,8 @@ describe('BotControlPageComponent', () => {
       {
         label: 'host_process.disabled_reason_code',
         value: 'HOST_SERVICE_OFFLINE',
+        headline: 'Host process is offline.',
+        detail: 'The backend disabled reason is preserved in the audit payload.',
         unit: null,
         source: 'operator_surface.host_process',
         gate_id: null,

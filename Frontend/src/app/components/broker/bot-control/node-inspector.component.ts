@@ -6,12 +6,14 @@ import { bucketHelp, nodeHelp } from './concept-help.registry';
 import { NodeReceiptsPaneComponent } from './node-receipts-pane.component';
 import {
   buildChangeForNextRunFields,
-  buildDiagnosticEvidenceLines,
-  buildProofLines,
-  type DiagnosticEvidenceLine,
-  type ProofLine,
   type RedeploySettingField,
 } from './node-inspector-presenter';
+
+const ACTIONABILITY_BANNERS: Record<LifecycleChartNode['operator_actionability'], string> = {
+  'operator-actionable': 'Operator action is required for this lifecycle step.',
+  'system-only': 'Internal gate - no operator action needed; it can still block the bar.',
+  'no-action-needed': 'No operator action is needed for this lifecycle step.',
+};
 
 @Component({
   selector: 'app-node-inspector',
@@ -27,15 +29,9 @@ export class NodeInspectorComponent {
 
   readonly redeployRequested = output();
 
-  readonly advancedEvidenceLines = computed<DiagnosticEvidenceLine[]>(
-    () => buildDiagnosticEvidenceLines(this.status().operator_surface.trader_guidance.advanced_evidence),
-  );
-
   readonly changeForNextRunFields = computed<RedeploySettingField[]>(
     () => buildChangeForNextRunFields(this.status()),
   );
-
-  readonly proofLines = computed<ProofLine[]>(() => buildProofLines(this.status()));
 
   readonly bucketHelp = bucketHelp;
   readonly nodeHelp = nodeHelp;
@@ -48,11 +44,7 @@ export class NodeInspectorComponent {
     return field.id;
   }
 
-  trackProofLine(_: number, line: ProofLine): string {
-    return line.id;
-  }
-
-  trackDiagnosticLine(_: number, line: DiagnosticEvidenceLine): string {
-    return line.id;
+  actionabilityBanner(node: LifecycleChartNode): string | null {
+    return ACTIONABILITY_BANNERS[node.operator_actionability];
   }
 }

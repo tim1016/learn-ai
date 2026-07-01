@@ -20,6 +20,7 @@ from app.schemas.live_runs import (
     GateResult,
     HostProcessStartCapability,
     LifecycleChartAction,
+    LifecycleChartActionability,
     LifecycleChartActionId,
     LifecycleChartEdge,
     LifecycleChartGraph,
@@ -32,13 +33,28 @@ from app.schemas.live_runs import (
 )
 from app.services.bot_lifecycle_projection import latest_event_for_node, lifecycle_status_label
 from app.services.bot_lifecycle_receipts import (
+    LifecycleReceiptContext,
+    account_freeze_receipts,
     account_owner_receipts,
+    account_safety_receipts,
+    broker_ack_gap_receipts,
+    broker_activity_receipts,
+    broker_connection_receipts,
+    broker_safety_receipts,
+    broker_snapshot_receipts,
+    capability_receipts,
     command_loop_receipts,
     configuration_receipts,
+    current_risk_receipts,
     daily_order_cap_receipts,
+    desired_state_receipts,
     event_receipts,
     incident_receipts,
+    monitor_receipts,
+    prior_halt_receipts,
+    readiness_gate_receipts,
     reconciliation_receipts,
+    signal_gap_receipts,
 )
 from app.services.lifecycle_action_reasons import (
     REDEPLOY_PROOF_MISSING,
@@ -62,6 +78,7 @@ class NodeDef:
     lane: LifecycleChartLane
     technical_label: str | None = None
     fact_id: str | None = None
+    operator_actionability: LifecycleChartActionability = "operator-actionable"
 
 
 @dataclass(frozen=True)
@@ -94,6 +111,7 @@ class NodeFact:
     ts_ms: int | None = None
     ts_ms_resolved: bool = False
     receipts: tuple[LifecycleChartReceipt, ...] = ()
+    operator_actionability: LifecycleChartActionability | None = None
 
 
 @dataclass(frozen=True)
@@ -205,9 +223,21 @@ SUBGRAPH_DEFS: Mapping[str, GraphDef] = {
         primary_node_id="signal",
         nodes=(
             NodeDef("signal", "Strategy signal", "bot", "Future engine state"),
-            NodeDef("intent_wal", "Intent WAL", "broker", "Durable order intent"),
-            NodeDef("place_order", "Broker submit", "broker", "Broker submit boundary"),
-            NodeDef("ack_or_reconcile", "Ack or reconcile", "recovery", "Uncertain outcome handling"),
+            NodeDef("intent_wal", "Intent WAL", "broker", "Durable order intent", operator_actionability="system-only"),
+            NodeDef(
+                "place_order",
+                "Broker submission",
+                "broker",
+                "Broker submission boundary",
+                operator_actionability="system-only",
+            ),
+            NodeDef(
+                "ack_or_reconcile",
+                "Acknowledgment or reconcile",
+                "recovery",
+                "Uncertain outcome handling",
+                operator_actionability="system-only",
+            ),
         ),
     ),
     "broker_writer": GraphDef(
@@ -215,9 +245,15 @@ SUBGRAPH_DEFS: Mapping[str, GraphDef] = {
         title="Broker activity internals",
         primary_node_id="publisher",
         nodes=(
-            NodeDef("publisher", "Activity publisher", "broker"),
-            NodeDef("writer_guard", "Owner generation", "broker", "R2 generation evidence"),
-            NodeDef("broker_ack", "Broker ack", "broker", "Execution evidence"),
+            NodeDef("publisher", "Activity publisher", "broker", operator_actionability="system-only"),
+            NodeDef(
+                "writer_guard",
+                "Owner generation",
+                "broker",
+                "R2 generation evidence",
+                operator_actionability="system-only",
+            ),
+            NodeDef("broker_ack", "Broker acknowledgment", "broker", "Execution evidence", operator_actionability="system-only"),
         ),
     ),
     "recovery": GraphDef(
@@ -241,10 +277,11 @@ def compose_bot_lifecycle_chart(
     desired_state: DesiredStateView | None = None,
     redeploy_available: bool = False,
     lifecycle_events: Sequence[BotLifecycleEvent] = (),
+    receipt_context: LifecycleReceiptContext | None = None,
 ) -> BotLifecycleChartView:
     """Compose the Overview-tab lifecycle graph from backend-authored facts."""
 
-    facts = _lifecycle_facts(surface, desired_state, lifecycle_events)
+    facts = _lifecycle_facts(surface, desired_state, lifecycle_events, receipt_context=receipt_context)
     subgraphs = {graph_id: _build_graph(graph_def, facts) for graph_id, graph_def in SUBGRAPH_DEFS.items()}
     global_graph = _build_graph(GLOBAL_GRAPH, facts, expandable_graph_ids=subgraphs.keys())
     return BotLifecycleChartView(
@@ -261,8 +298,11 @@ def _lifecycle_facts(
     surface: OperatorSurface,
     desired_state: DesiredStateView | None,
     lifecycle_events: Sequence[BotLifecycleEvent],
+    *,
+    receipt_context: LifecycleReceiptContext | None = None,
 ) -> LifecycleFacts:
-    recovery_fact = _recovery_fact(surface)
+    freeze_gate_result = _freeze_gate_result(surface)
+    recovery_fact = _recovery_fact(surface, receipt_context)
     base_statuses = {
         "deploy": _deploy_status(surface),
         "preflight": _preflight_status(surface),
@@ -284,11 +324,15 @@ def _lifecycle_facts(
         "preflight": NodeFact(
             _status_for("preflight", base_statuses["preflight"], primary_node_id),
             _preflight_evidence(surface),
-            receipts=configuration_receipts(surface),
+            receipts=configuration_receipts(surface, receipt_context),
         ),
         "account_safety": NodeFact(
             _status_for("account_safety", base_statuses["account_safety"], primary_node_id),
             _account_evidence(surface),
+            receipts=(
+                *account_freeze_receipts(freeze_gate_result),
+                *account_safety_receipts(surface),
+            ),
         ),
         "reconcile": NodeFact(
             _status_for("reconcile", base_statuses["reconcile"], primary_node_id),
@@ -300,16 +344,22 @@ def _lifecycle_facts(
         "activate": NodeFact(
             _status_for("activate", base_statuses["activate"], primary_node_id),
             _activate_evidence(desired_state),
+            receipts=desired_state_receipts(
+                desired_state,
+                effective_state=_effective_desired_value(desired_state),
+            ),
         ),
         "active": NodeFact(
             active_status,
             _active_evidence(active_status),
             why=_active_reason(surface, desired_state, active_status),
+            receipts=monitor_receipts(surface),
         ),
         "submit_order": _submit_order_fact(surface, submit_order_event, fallback_status=submit_order_status),
         "broker_writer": NodeFact(
             _status_for("broker_writer", base_statuses["broker_writer"], primary_node_id),
             _broker_writer_evidence(surface),
+            receipts=broker_activity_receipts(surface),
         ),
         "recovery": NodeFact(
             _status_for("recovery", base_statuses["recovery"], primary_node_id),
@@ -330,26 +380,30 @@ def _lifecycle_facts(
         "configuration": NodeFact(
             _configuration_status(surface),
             _configuration_evidence(surface),
-            receipts=configuration_receipts(surface),
+            receipts=configuration_receipts(surface, receipt_context),
         ),
         "account_freeze": NodeFact(
             _freeze_status(surface),
             _freeze_evidence(surface) or "No account freeze gate is active.",
+            receipts=account_freeze_receipts(freeze_gate_result),
         ),
         "broker_safety": NodeFact(
             _broker_safety_status(surface),
             f"Broker safety verdict is {surface.broker.safety_verdict}.",
             surface.broker.safety_verdict,
+            receipts=broker_safety_receipts(surface),
         ),
         "broker_connection": NodeFact(
             _broker_connection_status(surface),
             f"Broker connection is {surface.broker.connection}.",
             surface.broker.connection,
+            receipts=broker_connection_receipts(surface),
         ),
         "risk_posture": NodeFact(
             "passed" if surface.current_risk.verdict == "READY" else "unknown",
             f"Posture is {surface.current_risk.posture}; pending orders: {surface.current_risk.pending_order_count}.",
             surface.current_risk.posture,
+            receipts=current_risk_receipts(surface),
         ),
         "receipt": NodeFact(
             _reconcile_status(surface),
@@ -362,15 +416,21 @@ def _lifecycle_facts(
         "broker_snapshot": NodeFact(
             "passed" if _reconcile_status(surface) in {"passed", "active"} else "blocked",
             "Broker evidence is compared against engine intent before resume.",
+            receipts=broker_snapshot_receipts(),
         ),
         "desired_state": NodeFact(
             _activate_status(surface, desired_state),
             _activate_evidence(desired_state),
             _desired_label(desired_state),
+            receipts=desired_state_receipts(
+                desired_state,
+                effective_state=_effective_desired_value(desired_state),
+            ),
         ),
         "resume_gate": NodeFact(
             _capability_status(surface.actions.resume),
             _capability_reason(surface.actions.resume),
+            receipts=capability_receipts("resume", surface.actions.resume),
         ),
         "command_loop": NodeFact(
             _command_loop_status(surface),
@@ -380,7 +440,8 @@ def _lifecycle_facts(
         "signal": _event_or_unknown_fact(
             lifecycle_events,
             "signal",
-            "No signal evidence is available in this lifecycle projection.",
+            "No signal evidence emitted yet.",
+            absent_receipts=signal_gap_receipts(),
         ),
         "intent_wal": _event_or_unknown_fact(
             lifecycle_events,
@@ -395,16 +456,20 @@ def _lifecycle_facts(
         "ack_or_reconcile": _event_or_unknown_fact(
             lifecycle_events,
             "ack_or_reconcile",
-            "No broker acknowledgement or reconciliation event is available in this snapshot.",
+            "No broker acknowledgment or reconciliation event is available in this snapshot.",
         ),
         "publisher": NodeFact(
-            _broker_writer_status(surface), _broker_writer_evidence(surface), _broker_activity_label(surface)
+            _broker_writer_status(surface),
+            _broker_writer_evidence(surface),
+            _broker_activity_label(surface),
+            receipts=broker_activity_receipts(surface),
         ),
         "writer_guard": _writer_guard_fact(surface, lifecycle_events),
         "broker_ack": _event_or_unknown_fact(
             lifecycle_events,
             "broker_ack",
-            "No live broker acknowledgement evidence is available in this snapshot.",
+            "No direct broker acknowledgment evidence emitted yet.",
+            absent_receipts=broker_ack_gap_receipts(),
         ),
         "incident": recovery_fact,
         "flatten": _recovery_placeholder_fact(
@@ -431,6 +496,8 @@ def _event_or_unknown_fact(
     lifecycle_events: Sequence[BotLifecycleEvent],
     node_id: str,
     absent_reason: str,
+    *,
+    absent_receipts: tuple[LifecycleChartReceipt, ...] = (),
 ) -> NodeFact:
     return _node_fact_from_event(
         latest_event_for_node(lifecycle_events, node_id),
@@ -438,6 +505,8 @@ def _event_or_unknown_fact(
         fallback_evidence=absent_reason,
         fallback_why=absent_reason,
         include_event_source_label=True,
+        fallback_receipts=absent_receipts,
+        fallback_actionability="system-only",
     )
 
 
@@ -483,6 +552,8 @@ def _node_fact_from_event(
     fallback_evidence: str,
     fallback_why: str | None = None,
     include_event_source_label: bool = False,
+    fallback_receipts: tuple[LifecycleChartReceipt, ...] = (),
+    fallback_actionability: LifecycleChartActionability | None = None,
 ) -> NodeFact:
     if event is None:
         return NodeFact(
@@ -490,6 +561,8 @@ def _node_fact_from_event(
             fallback_evidence,
             status_label=lifecycle_status_label(fallback_status),
             why=fallback_why,
+            receipts=fallback_receipts,
+            operator_actionability=fallback_actionability,
         )
     status = event.status or "unknown"
     return NodeFact(
@@ -560,7 +633,10 @@ def _recovery_placeholder_fact(
     return NodeFact("inactive", inactive_reasons[node_id])
 
 
-def _recovery_fact(surface: OperatorSurface) -> NodeFact:
+def _recovery_fact(
+    surface: OperatorSurface,
+    receipt_context: LifecycleReceiptContext | None,
+) -> NodeFact:
     if surface.incident_headline is not None:
         ts_ms = surface.incident_headline.occurred_at_ms
         return NodeFact(
@@ -573,7 +649,11 @@ def _recovery_fact(surface: OperatorSurface) -> NodeFact:
     if _freeze_status(surface) == "freeze":
         return NodeFact("inactive", "No active recovery incident is present.")
     if surface.prior_run.classification == "HALT_TRIGGERED":
-        return NodeFact("poison", "Previous run halted for safety and requires recovery review.")
+        return NodeFact(
+            "poison",
+            "Previous run halted for safety and requires recovery review.",
+            receipts=prior_halt_receipts(receipt_context.last_exit if receipt_context is not None else None),
+        )
     if surface.host_process.state == "STOPPING":
         return NodeFact("active", "The bot process is currently stopping.")
     return NodeFact("inactive", "No active recovery incident is present.")
@@ -634,6 +714,7 @@ def _build_node(node_def: NodeDef, facts: LifecycleFacts) -> LifecycleChartNode:
         lane=node_def.lane,
         status=fact.status,
         status_label=fact.status_label or lifecycle_status_label(fact.status),
+        operator_actionability=fact.operator_actionability or node_def.operator_actionability,
         summary=fact.evidence,
         why=fact.why,
         operator_next_step=fact.operator_next_step,
@@ -749,6 +830,7 @@ def _readiness_gate_facts(readiness_gates: list[OperatorGate]) -> dict[str, Node
                 "unknown",
                 "No readiness vector is available for this bot status snapshot.",
                 "No readiness rows",
+                operator_actionability="system-only",
             )
         }
     return {
@@ -756,9 +838,20 @@ def _readiness_gate_facts(readiness_gates: list[OperatorGate]) -> dict[str, Node
             _operator_gate_status(gate),
             gate.gate_result.operator_reason or gate.detail,
             gate.name,
+            receipts=readiness_gate_receipts(gate),
+            operator_actionability=_readiness_gate_actionability(gate),
         )
         for index, gate in enumerate(readiness_gates, start=1)
     }
+
+
+def _readiness_gate_actionability(gate: OperatorGate) -> LifecycleChartActionability:
+    status = _operator_gate_status(gate)
+    if gate.suggested_action is not None or status in {"blocked", "freeze", "poison"}:
+        return "operator-actionable"
+    if status == "passed":
+        return "no-action-needed"
+    return "system-only"
 
 
 def _readiness_sort_key(fact_id: str) -> int:
@@ -936,7 +1029,11 @@ def _gate_status(gate_results: Iterable[GateResult]) -> LifecycleChartStatus:
 
 
 def _freeze_status(surface: OperatorSurface) -> LifecycleChartStatus:
-    return "freeze" if any(gate.status == "freeze" for gate in _all_gate_results(surface)) else "passed"
+    return "freeze" if _freeze_gate_result(surface) is not None else "passed"
+
+
+def _freeze_gate_result(surface: OperatorSurface) -> GateResult | None:
+    return next((gate for gate in _all_gate_results(surface) if gate.status == "freeze"), None)
 
 
 def _broker_safety_status(surface: OperatorSurface) -> LifecycleChartStatus:
@@ -1318,7 +1415,7 @@ def _configuration_evidence(surface: OperatorSurface) -> str:
 
 
 def _freeze_evidence(surface: OperatorSurface) -> str | None:
-    gate = next((gate for gate in _all_gate_results(surface) if gate.status == "freeze"), None)
+    gate = _freeze_gate_result(surface)
     if gate is None:
         return None
     return gate.operator_reason

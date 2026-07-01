@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-06-30 (thermonuclear review hardening: projection ordering/source receipts, replay/tailer atomicity, writer-guard/recovery fact ownership, NY-session activity consistency, and Angular render-only decomposition).
+> **Last reviewed:** 2026-07-01 (PRD-753 node-scoped cockpit receipts: backend-authored receipt prose, operator actionability, selected-node inspector scope, and honest empty evidence states).
 
 ---
 
@@ -88,6 +88,27 @@ The chart-status vocabulary is intentionally small and distinct from engine
 state: `passed`, `active`, `blocked`, `poison`, `freeze`, `inactive`, and
 `unknown`. Missing evidence is rendered as `unknown` with a server-authored
 reason, never as a fabricated pass.
+
+Each lifecycle node carries its own receipt list plus an
+`operator_actionability` classification: `operator-actionable`, `system-only`,
+or `no-action-needed`. Receipt rows are backend-authored operator copy with
+`headline` and optional `detail` fields. Raw receipt ids, source/gate ids,
+reason codes, values, and timestamps remain audit payload, not primary trader
+instructions. The cockpit right-pane inspector is selected-node scoped: it may
+show only the selected node's backend receipts and the node actionability
+banner. Whole-bot proof lines and advanced diagnostics belong in the lower
+audit panel so they do not imply that every selected node has direct evidence.
+
+When the backend does not yet fold an evidence family into a node, it must say
+so honestly with a node-scoped receipt rather than borrowing a whole-status or
+frontend-joined fact. Current intentionally-honest gaps include direct broker
+acknowledgment evidence, signal evidence before a decision artifact is present,
+full account cleanliness beyond the folded account-safety receipts, latest
+broker execution detail beyond broker-activity projection rows, fuller broker
+snapshot detail, and authoritative P&L. Account identity and broker observation
+consistency may be folded only from Python-authored status/readiness facts; the
+Frontend must not join `/status` to account-summary or other side channels to
+manufacture lifecycle meaning.
 
 | Canonical node id | Meaning | Primary source of truth |
 |---|---|---|

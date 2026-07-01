@@ -48,7 +48,7 @@ async def test_upsert_lifecycle_events_is_idempotent(monkeypatch: pytest.MonkeyP
             source="broker_ack",
             source_rank=50,
             source_local_seq=2,
-            summary="Broker acknowledgement failed; submit outcome is uncertain.",
+            summary="Broker acknowledgment failed; submit outcome is uncertain.",
             operator_next_step="PROBE_BROKER_BEFORE_RETRY",
             evidence_refs=[
                 LifecycleEvidenceRef(

@@ -4,7 +4,11 @@ import type {
 } from '../api/live-instances.types';
 export { makeOperatorSurfaceFixture } from './operator-surface-fixtures';
 
-const EMPTY_NODE_EVIDENCE: Pick<LifecycleChartNode, 'ts_ms' | 'ts_ms_resolved' | 'receipts'> = {
+const EMPTY_NODE_EVIDENCE: Pick<
+  LifecycleChartNode,
+  'operator_actionability' | 'ts_ms' | 'ts_ms_resolved' | 'receipts'
+> = {
+  operator_actionability: 'operator-actionable',
   ts_ms: null,
   ts_ms_resolved: false,
   receipts: [],

@@ -29,7 +29,7 @@ def test_lifecycle_event_to_projection_row_preserves_provenance_and_receipts() -
         source="broker_ack",
         source_rank=50,
         source_local_seq=2,
-        summary="Broker acknowledgement failed; submit outcome is uncertain.",
+        summary="Broker acknowledgment failed; submit outcome is uncertain.",
         why="IBKR timeout before acknowledgement.",
         operator_next_step="PROBE_BROKER_BEFORE_RETRY",
         evidence_refs=[

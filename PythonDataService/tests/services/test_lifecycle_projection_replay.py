@@ -48,7 +48,7 @@ def _projection_row(
         source_type="broker_ack",
         source_rank=50,
         source_seq=2,
-        summary="Broker acknowledgement failed; submit outcome is uncertain.",
+        summary="Broker acknowledgment failed; submit outcome is uncertain.",
         receipt_payload={"intent_id": "intent-2"},
         evidence_refs=[{"source": "intent_wal"}],
         inserted_at_ms=1_700_000_000_100,
@@ -81,7 +81,7 @@ def test_batch_from_intent_events_authors_bot_projection_rows() -> None:
     assert row.source_artifact == str(wal_path)
     assert row.source_hash == "a" * 64
     assert row.run_id == "run-1"
-    assert row.rendered_headline == "Broker acknowledgement failed; submit outcome is uncertain."
+    assert row.rendered_headline == "Broker acknowledgment failed; submit outcome is uncertain."
     assert row.rendered_template_id == "lifecycle_projection.intent_wal.ack_failed_uncertain.v1"
     assert row.receipt_payload["intent_id"] == "intent-2"
     assert row.evidence_refs[0]["source"] == "intent_wal"

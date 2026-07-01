@@ -13,6 +13,7 @@ from app.schemas.live_runs import (
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
+    InstanceProvenance,
     InstanceSizing,
     InstanceStartDefaults,
     LiveBinding,
@@ -28,6 +29,7 @@ from app.services.bot_lifecycle_projection import (
     project_account_events,
     project_intent_events,
 )
+from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
 from app.services.operator_surface import compute_operator_surface
 from app.services.runtime_freshness import DomainFreshness, RuntimeFreshness
 
@@ -221,6 +223,68 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     )
 
 
+def test_chart_authors_node_receipt_prose_and_actionability() -> None:
+    surface = _surface(account_owner=_account_owner())
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    submit_nodes = {node.id: node for node in chart.subgraphs["submit_order"].nodes}
+    broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
+    signal_receipts = {receipt.label: receipt for receipt in submit_nodes["signal"].receipts}
+    broker_ack_receipts = {receipt.label: receipt for receipt in broker_nodes["broker_ack"].receipts}
+    writer_receipts = {receipt.label: receipt for receipt in broker_nodes["writer_guard"].receipts}
+
+    assert submit_nodes["place_order"].label == "Broker submission"
+    assert submit_nodes["ack_or_reconcile"].label == "Acknowledgment or reconcile"
+    assert broker_nodes["broker_ack"].label == "Broker acknowledgment"
+    assert submit_nodes["signal"].operator_actionability == "system-only"
+    assert broker_nodes["broker_ack"].operator_actionability == "system-only"
+    assert signal_receipts["strategy_signal.evidence"].headline == "No signal evidence emitted yet."
+    assert (
+        broker_ack_receipts["broker_acknowledgment.evidence"].headline
+        == "No direct broker acknowledgment evidence emitted yet."
+    )
+    assert writer_receipts["account_owner.generation"].headline == "AccountOwner generation is 4."
+
+
+def test_chart_preflight_receipts_use_status_level_context_without_frontend_joining() -> None:
+    surface = _surface()
+    context = LifecycleReceiptContext(
+        symbol="SPY",
+        action_plan={"on_enter": [], "on_exit": []},
+        instrument_surface="explicit",
+        start_defaults=_start_defaults(),
+        provenance=InstanceProvenance(
+            run_id=_RUN_ID,
+            schema_version="2",
+            strategy_spec_path="references/specs/spy.json",
+            strategy_spec_sha256="abc",
+            qc_audit_copy_path="references/qc-shadow/spy.md",
+            qc_audit_copy_sha256="def",
+            qc_cloud_backtest_id="qc-123",
+            account_id="DU123",
+            created_at_ms=_NOW_MS - 10_000,
+            live_config={"consolidator_period_min": 15, "warmup_bars": 30},
+        ),
+        sizing=_sizing(),
+    )
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        surface,
+        desired_state=_desired("RUNNING"),
+        receipt_context=context,
+    )
+    configuration = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "configuration")
+    receipts = {receipt.label: receipt for receipt in configuration.receipts}
+
+    assert receipts["run.symbol"].value == "SPY"
+    assert receipts["run.symbol"].headline == "This bot is configured for SPY."
+    assert receipts["instrument_surface.plan"].value == "explicit"
+    assert receipts["action_plan.declared"].headline == "A committed action plan is present for this run."
+    assert receipts["run.provenance.run_id"].value == _RUN_ID
+    assert receipts["live_config.consolidator_period_min"].value == "15"
+    assert receipts["live_config.warmup_bars"].value == "30"
+    assert receipts["sizing.preset"].value == "safe_canary"
+
+
 def test_chart_routes_raw_node_reason_codes_to_receipts() -> None:
     runtime_freshness = RuntimeFreshness(
         command_loop=DomainFreshness(
@@ -252,7 +316,7 @@ def test_chart_routes_raw_node_reason_codes_to_receipts() -> None:
         receipt_text = " ".join(receipt.value for receipt in node.receipts)
         assert raw_code not in trader_text
         assert raw_code in receipt_text
-    assert chart.subgraphs["submit_order"].nodes[2].technical_label == "Broker submit boundary"
+    assert chart.subgraphs["submit_order"].nodes[2].technical_label == "Broker submission boundary"
 
 
 def test_chart_absent_desired_state_uses_effective_running_default() -> None:
@@ -436,7 +500,7 @@ def test_submit_uncertainty_reaches_submit_subgraph() -> None:
     assert nodes["ack_or_reconcile"].status == "blocked"
     assert nodes["ack_or_reconcile"].ts_ms == _NOW_MS + 1
     assert nodes["ack_or_reconcile"].ts_ms_resolved is True
-    assert nodes["ack_or_reconcile"].summary == "Broker acknowledgement failed; submit outcome is uncertain."
+    assert nodes["ack_or_reconcile"].summary == "Broker acknowledgment failed; submit outcome is uncertain."
     assert nodes["ack_or_reconcile"].operator_next_step == "PROBE_BROKER_BEFORE_RETRY"
     assert ack_receipts["event_type"].value == "BrokerOrderUncertain"
     assert ack_receipts["source_seq"].value == "1"
@@ -502,19 +566,32 @@ def test_recovery_placeholders_are_unknown_while_process_is_stopping() -> None:
 
 
 def test_recovery_placeholders_are_unknown_when_recovery_requires_proof() -> None:
-    surface = _surface(
-        last_exit=InstanceLastExit(
-            run_id="prior-run",
-            exit_code=1,
-            halt_trigger="OUTSIDE_MUTATION",
-            halt_at_ms=_NOW_MS - 6_000,
-        )
+    last_exit = InstanceLastExit(
+        run_id="prior-run",
+        exit_code=1,
+        halt_trigger="OUTSIDE_MUTATION",
+        halt_at_ms=_NOW_MS - 6_000,
     )
-    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    surface = _surface(
+        last_exit=last_exit,
+    )
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        surface,
+        desired_state=_desired("RUNNING"),
+        receipt_context=LifecycleReceiptContext(last_exit=last_exit),
+    )
     nodes = {node.id: node for node in chart.subgraphs["recovery"].nodes}
+    recovery_node = next(node for node in chart.global_graph.nodes if node.id == "recovery")
+    configuration_node = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "configuration")
+    incident_receipts = {receipt.label: receipt for receipt in nodes["incident"].receipts}
+    global_receipts = {receipt.label: receipt for receipt in recovery_node.receipts}
 
     assert chart.global_graph.primary_node_id == "recovery"
     assert nodes["incident"].status == "poison"
+    assert incident_receipts["prior_halt.trigger"].value == "OUTSIDE_MUTATION"
+    assert global_receipts["prior_halt.trigger"].value == "OUTSIDE_MUTATION"
+    assert all(receipt.label != "prior_halt.trigger" for receipt in configuration_node.receipts)
     expected = {
         "flatten": (
             "No backend-authored flatten proof is available for this recovery incident.",
@@ -607,6 +684,40 @@ def test_chart_missing_readiness_keeps_preflight_unknown() -> None:
     assert chart.global_graph.primary_node_id == "preflight"
     assert _node_status(chart, "preflight") == "unknown"
     assert chart.subgraphs["preflight"].primary_node_id == "readiness_1"
+    readiness_node = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "readiness_1")
+    assert readiness_node.operator_actionability == "system-only"
+
+
+def test_blocking_readiness_gate_without_structured_action_stays_operator_actionable() -> None:
+    readiness = ReadinessVector(
+        kind="live_readiness",
+        as_of_ms=_NOW_MS,
+        source="engine",
+        verdict="ATTENTION",
+        summary="Blocked",
+        gates=[
+            ReadinessGate(
+                name="manual_remediation",
+                status="fail",
+                severity="hard",
+                detail="Manual remediation is required.",
+                gate_result=GateResult(
+                    gate_id="manual_remediation",
+                    status="block",
+                    source="test",
+                    operator_reason="Manual remediation is required.",
+                    operator_next_step=None,
+                    evidence_at_ms=_NOW_MS,
+                ),
+            )
+        ],
+    )
+    surface = _surface(readiness=readiness)
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    readiness_node = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "readiness_1")
+
+    assert readiness_node.status == "blocked"
+    assert readiness_node.operator_actionability == "operator-actionable"
 
 
 def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
@@ -619,9 +730,16 @@ def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
     )
     surface = _surface(account_freeze=freeze)
     chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    account_safety_node = next(node for node in chart.global_graph.nodes if node.id == "account_safety")
+    account_freeze_node = next(node for node in chart.subgraphs["account_safety"].nodes if node.id == "account_freeze")
+    global_receipts = {receipt.label: receipt for receipt in account_safety_node.receipts}
+    freeze_receipts = {receipt.label: receipt for receipt in account_freeze_node.receipts}
 
     assert chart.global_graph.primary_node_id == "account_safety"
     assert _node_status(chart, "account_safety") == "freeze"
+    assert global_receipts["account_freeze.gate_id"].value == "account.unresolved_exposure"
+    assert freeze_receipts["account_freeze.gate_id"].value == "account.unresolved_exposure"
+    assert freeze_receipts["account_freeze.next_step"].value == "Flatten or reconcile before restarting."
     assert _node_status(chart, "active") == "inactive"
     assert _edge_status(chart, "preflight_to_account_safety") == "freeze"
     start = next(action for action in chart.actions if action.id == "start_process")
@@ -634,6 +752,35 @@ def test_chart_account_freeze_colors_edge_into_account_safety() -> None:
     assert resume.reason_code == "ACCOUNT_FROZEN"
     assert resume.reason_headline == "Account frozen"
     assert "account-wide freeze" in resume.reason_detail
+
+
+def test_global_activate_node_mirrors_desired_state_receipts() -> None:
+    desired_state = DesiredStateView(state="STOPPED", path_status="ok")
+    surface = _surface(desired_state=desired_state)
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=desired_state)
+    activate_node = next(node for node in chart.global_graph.nodes if node.id == "activate")
+    desired_node = next(node for node in chart.subgraphs["activate"].nodes if node.id == "desired_state")
+    global_receipts = {receipt.label: receipt for receipt in activate_node.receipts}
+    desired_receipts = {receipt.label: receipt for receipt in desired_node.receipts}
+
+    assert chart.global_graph.primary_node_id == "activate"
+    assert activate_node.status == "blocked"
+    assert global_receipts["desired_state.state"].value == "STOPPED"
+    assert desired_receipts["desired_state.state"].value == "STOPPED"
+
+
+def test_global_broker_writer_node_mirrors_publisher_receipts() -> None:
+    surface = _surface(activity_publisher=None)
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    broker_writer_node = next(node for node in chart.global_graph.nodes if node.id == "broker_writer")
+    publisher_node = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "publisher")
+    global_receipts = {receipt.label: receipt for receipt in broker_writer_node.receipts}
+    publisher_receipts = {receipt.label: receipt for receipt in publisher_node.receipts}
+
+    assert chart.global_graph.primary_node_id == "broker_writer"
+    assert broker_writer_node.status == "blocked"
+    assert global_receipts["broker_activity.health_state"].value == "unavailable"
+    assert publisher_receipts["broker_activity.health_state"].value == "unavailable"
 
 
 def test_account_safety_focuses_broker_connection_blocker() -> None:
