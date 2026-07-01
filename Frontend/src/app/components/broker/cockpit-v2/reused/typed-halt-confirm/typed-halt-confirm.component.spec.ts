@@ -139,5 +139,24 @@ describe('TypedHaltConfirmComponent', () => {
         h.el.querySelector('[data-testid="typed-halt-confirm-submit"]')?.textContent?.trim(),
       ).toBe('Flatten & pause');
     });
+
+    it('moves keyboard focus into the dialog (onto Cancel) when there is no token input', async () => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+      const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
+      fixture.componentRef.setInput('open', false);
+      fixture.componentRef.setInput('requiredToken', '');
+      document.body.appendChild(fixture.nativeElement);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+      await Promise.resolve();
+
+      const cancel = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="typed-halt-confirm-cancel"]',
+      );
+      expect(document.activeElement).toBe(cancel);
+      (fixture.nativeElement as HTMLElement).remove();
+    });
   });
 });

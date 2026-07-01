@@ -148,8 +148,8 @@ export class BotControlPageComponent {
   readonly flattenConfirmOpen = signal<boolean>(false);
   readonly attentionOpen = signal<boolean>(false);
   readonly bottomPanel = signal<BottomPanel | null>(null);
-  private readonly dismissedControlPlaneState = signal<string | null>(null);
-  private readonly dismissedBrokerEvidenceKey = signal<string | null>(null);
+  private readonly dismissedControlPlaneSig = signal<string | null>(null);
+  private readonly dismissedBrokerEvidenceSig = signal<string | null>(null);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
   readonly flattenConfirmMessage = FLATTEN_CONFIRM_MESSAGE;
 
@@ -189,12 +189,12 @@ export class BotControlPageComponent {
 
   readonly showControlPlaneBanner = computed<boolean>(() => {
     const banner = this.controlPlaneBanner();
-    return banner !== null && this.dismissedControlPlaneState() !== banner.state;
+    return banner !== null && this.dismissedControlPlaneSig() !== this.controlPlaneSignature(banner);
   });
 
   readonly showBrokerEvidenceBanner = computed<boolean>(() => {
     const notice = this.brokerEvidenceNotice();
-    return notice !== null && this.dismissedBrokerEvidenceKey() !== this.brokerEvidenceKey(notice);
+    return notice !== null && this.dismissedBrokerEvidenceSig() !== this.brokerEvidenceSignature(notice);
   });
 
   readonly hasSlimBanners = computed<boolean>(
@@ -280,26 +280,39 @@ export class BotControlPageComponent {
       this.attentionOpen.set(false);
       this.autoOpenedAttentionSituation = null;
       this.bottomPanel.set(null);
-      this.dismissedControlPlaneState.set(null);
-      this.dismissedBrokerEvidenceKey.set(null);
+      this.dismissedControlPlaneSig.set(null);
+      this.dismissedBrokerEvidenceSig.set(null);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
     });
     effect(() => {
-      // Safety: auto-open the attention dropdown once per situation when a
-      // critical group appears, so a critical finding is never hidden behind
-      // a closed dropdown. Re-keyed on situation_code so it does not fight the
-      // operator closing it within the same situation.
+      // Safety: auto-open the attention dropdown when a critical group appears,
+      // so a critical finding is never hidden behind a closed dropdown. The key
+      // is the situation_code plus the *set* of critical group codes, so a newly
+      // arrived critical finding reopens it — while an unchanged critical set
+      // does not fight the operator closing the dropdown.
       const guidance = this.traderGuidance();
       if (!guidance) return;
-      const hasCritical = guidance.additional_attention_groups.some(
-        (group) => group.severity === 'critical',
-      );
-      if (hasCritical && this.autoOpenedAttentionSituation !== guidance.situation_code) {
-        this.autoOpenedAttentionSituation = guidance.situation_code;
+      const criticalCodes = guidance.additional_attention_groups
+        .filter((group) => group.severity === 'critical')
+        .map((group) => group.code)
+        .sort();
+      if (criticalCodes.length === 0) return;
+      const key = `${guidance.situation_code}:${criticalCodes.join('|')}`;
+      if (this.autoOpenedAttentionSituation !== key) {
+        this.autoOpenedAttentionSituation = key;
         this.attentionOpen.set(true);
       }
+    });
+    effect(() => {
+      // A dismissed banner that clears (recovery) must not stay dismissed: a
+      // later re-failure — even to the same state — is a new outage and should
+      // reappear, per the PRD's session-dismiss rule.
+      if (this.controlPlaneBanner() === null) this.dismissedControlPlaneSig.set(null);
+    });
+    effect(() => {
+      if (this.brokerEvidenceNotice() === null) this.dismissedBrokerEvidenceSig.set(null);
     });
     effect(() => {
       const id = this.instanceId();
@@ -454,12 +467,12 @@ export class BotControlPageComponent {
 
   dismissControlPlaneBanner(): void {
     const banner = this.controlPlaneBanner();
-    if (banner) this.dismissedControlPlaneState.set(banner.state);
+    if (banner) this.dismissedControlPlaneSig.set(this.controlPlaneSignature(banner));
   }
 
   dismissBrokerEvidenceBanner(): void {
     const notice = this.brokerEvidenceNotice();
-    if (notice) this.dismissedBrokerEvidenceKey.set(this.brokerEvidenceKey(notice));
+    if (notice) this.dismissedBrokerEvidenceSig.set(this.brokerEvidenceSignature(notice));
   }
 
   trackAttention(_: number, group: OperatorSurfaceAttentionGroup): string {
@@ -481,8 +494,14 @@ export class BotControlPageComponent {
     }
   }
 
-  private brokerEvidenceKey(notice: OperatorNotice): string {
-    return notice.code ?? notice.message;
+  private controlPlaneSignature(banner: ControlPlaneBanner): string {
+    // Dismissal is keyed on the rendered content, not just the state enum, so a
+    // materially changed warning (new notice / attempt / runbook) reappears.
+    return [banner.state, banner.notice ?? '', banner.attemptText ?? '', banner.runbookSlug ?? ''].join('|');
+  }
+
+  private brokerEvidenceSignature(notice: OperatorNotice): string {
+    return [notice.code ?? '', notice.message, notice.runbook_slug ?? ''].join('|');
   }
 
   private brokerProofPill(verdict: BrokerSafetyVerdict): PosturePill {
@@ -532,6 +551,10 @@ export class BotControlPageComponent {
   async confirmFlatten(): Promise<void> {
     if (!this.flattenConfirmOpen()) return;
     this.flattenConfirmOpen.set(false);
+    // Re-check eligibility at confirm time: a poll may have disabled the action
+    // (lost live binding, positions already flat) while the dialog was open, so
+    // never fire the market-flattening mutation from a stale confirmation.
+    if (this.isActionDisabled('flatten_and_pause')) return;
     await this.dispatchFlattenAndPause();
   }
 

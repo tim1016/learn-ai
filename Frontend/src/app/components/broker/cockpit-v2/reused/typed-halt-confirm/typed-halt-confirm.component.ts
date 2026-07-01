@@ -58,6 +58,7 @@ export class TypedHaltConfirmComponent {
 
   private readonly _typed = signal<string>('');
   private readonly _input = viewChild<ElementRef<HTMLInputElement>>('tokenInput');
+  private readonly _cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
 
   readonly canConfirm = computed<boolean>(
     () => this.requiredToken() === '' || this._typed() === this.requiredToken(),
@@ -70,7 +71,12 @@ export class TypedHaltConfirmComponent {
       // value cannot bleed into a fresh confirmation flow.
       if (this.open()) {
         this._typed.set('');
-        queueMicrotask(() => this._input()?.nativeElement.focus());
+        // Focus the token input when present, otherwise (tokenless plain-confirm
+        // mode) the Cancel control, so keyboard focus enters the dialog instead
+        // of resting on the toolbar action behind the modal.
+        queueMicrotask(() =>
+          (this._input()?.nativeElement ?? this._cancelButton()?.nativeElement)?.focus(),
+        );
       }
     });
   }

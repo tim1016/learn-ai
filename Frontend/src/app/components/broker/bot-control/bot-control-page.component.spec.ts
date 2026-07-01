@@ -1587,4 +1587,222 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
     expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
   });
+
+  it('does not flatten when the action became disabled while the confirm dialog was open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.actions.flatten_and_pause = {
+      enabled: true,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: null,
+      disabled_reasons: [],
+      gate_results: [],
+    };
+    const flattenAndPause = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause,
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    fixture.componentInstance.dispatchOverviewAction('flatten_and_pause');
+    fixture.detectChanges();
+    expect(fixture.componentInstance.flattenConfirmOpen()).toBe(true);
+
+    // A poll disables the action while the dialog is still open.
+    const disabled = makeStatus();
+    disabled.operator_surface.actions.flatten_and_pause = {
+      enabled: false,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: 'NO_OWNED_POSITIONS',
+      disabled_reasons: ['NO_OWNED_POSITIONS'],
+      gate_results: [],
+    };
+    fixture.componentInstance.status.set(disabled);
+
+    await fixture.componentInstance.confirmFlatten();
+    expect(flattenAndPause).not.toHaveBeenCalled();
+  });
+
+  it('re-shows a dismissed control-plane banner when its rendered content changes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    fixture.componentInstance.dismissControlPlaneBanner();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+
+    // Same UNREACHABLE state but materially different notice content -> reappears.
+    const next = makeStatus();
+    const cp = next.operator_surface.control_plane;
+    if (cp) cp.notice = 'A newer, different command-channel failure notice.';
+    fixture.componentInstance.status.set(next);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
+  });
+
+  it('re-shows a dismissed control-plane banner after recovery and a later re-failure', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    fixture.componentInstance.dismissControlPlaneBanner();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+
+    // Recover: control plane CONNECTED -> banner clears and the dismissal resets.
+    const recovered = makeStatus();
+    const recoveredCp = recovered.operator_surface.control_plane;
+    if (recoveredCp) recoveredCp.state = 'CONNECTED';
+    fixture.componentInstance.status.set(recovered);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+
+    // Fail back to the same UNREACHABLE state -> new outage, banner reappears.
+    fixture.componentInstance.status.set(makeStatus());
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
+  });
+
+  it('reopens the attention dropdown when a new critical group arrives after being closed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'broker_safety',
+        severity: 'critical',
+        headline: 'Broker safety is unsafe',
+        explanation: 'Paper-safety evidence is unsafe.',
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    // Auto-opened for the initial critical group.
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).not.toBeNull();
+
+    // Operator closes it.
+    fixture.componentInstance.closeAttention();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+
+    // A different critical group arrives under the same situation_code -> reopens.
+    const next = makeStatus();
+    next.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'reconciliation',
+        severity: 'critical',
+        headline: 'Reconciliation failed',
+        explanation: 'The cold-start reconciliation receipt failed.',
+      },
+    ];
+    fixture.componentInstance.status.set(next);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).not.toBeNull();
+  });
 });
