@@ -1558,6 +1558,27 @@ class OperatorSurfaceAttentionGroup(BaseModel):
     explanation: str
 
 
+class OperatorSurfaceProofLine(BaseModel):
+    """Backend-authored read-only proof line for the operator UI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    message: str
+    detail: str
+    tone: Literal["neutral", "ok", "attention"]
+
+
+_OPERATOR_SURFACE_PROOF_LINE_IDS = (
+    "broker-proof",
+    "submit-readiness",
+    "account-owner",
+    "reconciliation",
+    "runtime-freshness",
+)
+
+
 class OperatorSurfaceSubmitReadiness(BaseModel):
     """Backend-authored answer to "Can this bot submit an order now?"."""
 
@@ -1584,9 +1605,22 @@ class OperatorSurfaceTraderGuidance(BaseModel):
     risk_explanation: str
     primary_remediation: TraderPrimaryRemediation
     additional_attention_groups: list[OperatorSurfaceAttentionGroup] = Field(default_factory=list)
+    proof_lines: list[OperatorSurfaceProofLine]
     advanced_evidence: list[OperatorSurfaceEvidenceFact] = Field(default_factory=list)
     template_id: str
     template_version: int = 1
+
+    @field_validator("proof_lines")
+    @classmethod
+    def _proof_lines_are_canonical(
+        cls,
+        proof_lines: list[OperatorSurfaceProofLine],
+    ) -> list[OperatorSurfaceProofLine]:
+        proof_line_ids = [line.id for line in proof_lines]
+        expected_ids = list(_OPERATOR_SURFACE_PROOF_LINE_IDS)
+        if proof_line_ids != expected_ids:
+            raise ValueError(f"proof_lines must contain canonical ids in order: {expected_ids}")
+        return proof_lines
 
 
 class OperatorGate(BaseModel):

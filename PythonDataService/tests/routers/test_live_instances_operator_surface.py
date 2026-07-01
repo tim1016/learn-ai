@@ -309,6 +309,14 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "invoke_endpoint",
         "none",
     }
+    assert surface["trader_guidance"]["proof_lines"]
+    assert {line["id"] for line in surface["trader_guidance"]["proof_lines"]} == {
+        "broker-proof",
+        "submit-readiness",
+        "account-owner",
+        "reconciliation",
+        "runtime-freshness",
+    }
     assert surface["daily_order_cap"]["used"] is None
     assert surface["daily_order_cap"]["limit"] is None
     # Trading-session projection is always present; phase + permission

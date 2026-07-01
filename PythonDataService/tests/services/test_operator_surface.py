@@ -484,6 +484,7 @@ def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
     surface = _surface(
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
+        runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
         account_owner=_owner(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
@@ -500,6 +501,53 @@ def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
     assert evidence["account_owner.generation"].value == "4"
     assert evidence["broker.safety_verdict"].value == "PAPER_ONLY"
     assert evidence["reconciliation.state"].value == "CLEAN"
+    proof_lines = {line.id: line for line in surface.trader_guidance.proof_lines}
+    assert list(proof_lines) == [
+        "broker-proof",
+        "submit-readiness",
+        "account-owner",
+        "reconciliation",
+        "runtime-freshness",
+    ]
+    assert proof_lines["broker-proof"].message == "Paper broker is connected."
+    assert proof_lines["broker-proof"].detail == "Paper-only account proof is present. Broker session is connected."
+    assert proof_lines["broker-proof"].tone == "ok"
+    assert proof_lines["runtime-freshness"].message == "Runtime evidence is fresh."
+    assert proof_lines["runtime-freshness"].tone == "ok"
+
+
+def test_trader_guidance_runtime_market_closed_uses_notice_copy() -> None:
+    fresh = DomainFreshness(state="FRESH", age_ms=100)
+    runtime = RuntimeFreshness(
+        command_loop=fresh,
+        broker=fresh,
+        bar_loop=DomainFreshness(
+            state="STALE",
+            age_ms=90_000,
+            stale_reason_codes=["BAR_LOOP_SESSION_CLOSED"],
+        ),
+        control_plane=fresh,
+        posture_demoted=False,
+    )
+
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=runtime,
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        now_ms=_RTH_MID,
+    )
+
+    proof_lines = {line.id: line for line in surface.trader_guidance.proof_lines}
+    runtime_line = proof_lines["runtime-freshness"]
+    assert (
+        runtime_line.message
+        == "The bot is idle until the regular trading session opens. No trading decision is being made."
+    )
+    assert runtime_line.detail == "Market closed"
+    assert runtime_line.tone == "neutral"
 
 
 def test_trader_guidance_account_freeze_is_never_collapsed() -> None:
@@ -563,6 +611,9 @@ def test_trader_guidance_missing_owner_generation_is_waiting_not_safe() -> None:
     assert "ACCOUNT_OWNER_GENERATION_UNPROVEN" in surface.submit_readiness.blocking_reason_codes
     assert surface.trader_guidance.situation_code == "waiting_for_owner_generation"
     assert any(group.code == "account_owner" for group in surface.trader_guidance.additional_attention_groups)
+    proof_lines = {line.id: line for line in surface.trader_guidance.proof_lines}
+    assert proof_lines["account-owner"].message == "Waiting for AccountOwner generation."
+    assert proof_lines["account-owner"].tone == "attention"
 
 
 def test_trader_guidance_reconciliation_not_available_cannot_be_safe_to_submit() -> None:

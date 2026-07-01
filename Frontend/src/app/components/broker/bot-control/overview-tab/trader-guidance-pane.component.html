@@ -18,13 +18,6 @@
       <strong>{{ submitReadiness().label }}</strong>
     </div>
     <p>{{ submitReadiness().explanation }}</p>
-    @if (submitReadiness().blocking_reason_codes.length > 0) {
-      <ul class="reason-list" aria-label="Blocking reason codes">
-        @for (code of submitReadiness().blocking_reason_codes; track code) {
-          <li>{{ code }}</li>
-        }
-      </ul>
-    }
   </section>
 
   <section class="risk-band">
@@ -91,20 +84,16 @@
     </section>
   }
 
-  <details class="advanced-evidence" data-testid="trader-guidance-advanced-evidence">
-    <summary>Advanced evidence</summary>
-    <dl>
-      @for (fact of advancedEvidence(); track trackEvidence($index, fact)) {
-        <div class="evidence-row">
-          <dt>{{ fact.label }}</dt>
-          <dd>
-            <span>{{ fact.value }}</span>
-            @if (fact.source) {
-              <small>{{ fact.source }}</small>
-            }
-          </dd>
-        </div>
-      }
-    </dl>
-  </details>
+  @if (diagnosticEvidence().length > 0) {
+    <details class="advanced-evidence" data-testid="trader-guidance-advanced-evidence">
+      <summary>Technical diagnostics</summary>
+      <ul>
+        @for (line of diagnosticEvidence(); track trackEvidence($index, line)) {
+          <li class="evidence-row" [attr.title]="line.detail">
+            <span data-receipt>{{ line.message }}</span>
+          </li>
+        }
+      </ul>
+    </details>
+  }
 </aside>

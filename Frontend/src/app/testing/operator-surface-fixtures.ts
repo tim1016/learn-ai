@@ -53,6 +53,43 @@ export function makeOperatorSurfaceFixture(
       risk_explanation: 'The surface is allowed to say safe to submit because the broker, submit lane, owner generation, and reconciliation proofs are all present.',
       primary_remediation: { kind: 'none', reason: 'READY' },
       additional_attention_groups: [],
+      proof_lines: [
+        {
+          id: 'broker-proof',
+          label: 'Broker',
+          message: 'Paper broker is connected.',
+          detail: 'Paper-only account proof is present. Broker session is connected.',
+          tone: 'ok',
+        },
+        {
+          id: 'submit-readiness',
+          label: 'Trade submit',
+          message: 'Safe to submit',
+          detail: 'Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.',
+          tone: 'ok',
+        },
+        {
+          id: 'account-owner',
+          label: 'Account owner',
+          message: 'Owner generation 4 is accepting commands.',
+          detail: 'Account DU123 owner phase is accepting commands. Generation 4.',
+          tone: 'ok',
+        },
+        {
+          id: 'reconciliation',
+          label: 'Reconciliation',
+          message: 'Broker and engine agree.',
+          detail: 'Latest reconciliation claim is clean.',
+          tone: 'ok',
+        },
+        {
+          id: 'runtime-freshness',
+          label: 'Runtime',
+          message: 'Runtime evidence is fresh.',
+          detail: 'No active runtime-freshness notices.',
+          tone: 'ok',
+        },
+      ],
       advanced_evidence: [
         {
           label: 'account_owner.generation',

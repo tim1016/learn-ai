@@ -10,27 +10,16 @@ const NODE_HELP: Record<string, string> = {
   recovery: 'Flatten, halt, poison, and redeploy recovery controls.',
 };
 
-const CHIP_HELP: Record<string, string> = {
-  broker_proof: 'Broker proof is the backend-authored safety verdict for the broker account evidence.',
-  execution: 'Execution is the backend-authored translation of the engine runtime posture.',
-  submit: 'Submit is the backend-authored answer to whether the bot may place or manage the next trade.',
-  exposure: 'Exposure is the current broker-reported position posture for this bot.',
-};
-
 const BUCKET_HELP: Record<string, string> = {
   act_now: 'Live lifecycle controls. Eligibility comes from backend action capabilities.',
   change_for_next_run: 'Deploy-time settings. Changes require a fresh run through redeploy.',
-  evidence: 'Read-only proof and provenance. Raw codes may appear here as receipts.',
+  evidence: 'Read-only proof and provenance. Raw codes stay in hidden diagnostics.',
 };
 
 const GENERIC_GATE_HELP = 'Gate evidence explains which backend proof allowed or blocked the lifecycle step.';
 
 export function nodeHelp(id: string): string {
   return NODE_HELP[id] ?? GENERIC_GATE_HELP;
-}
-
-export function chipHelp(id: keyof typeof CHIP_HELP): string {
-  return CHIP_HELP[id];
 }
 
 export function bucketHelp(id: keyof typeof BUCKET_HELP): string {

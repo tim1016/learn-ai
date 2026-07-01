@@ -1,19 +1,10 @@
 <details class="context-receipts" data-testid="bot-control-node-receipts">
-  <summary>Node receipts</summary>
-  <dl>
+  <summary>Technical proof details</summary>
+  <ul>
     @for (receipt of receipts(); track trackNodeReceipt($index, receipt)) {
-      <div>
-        <dt>{{ receipt.label | receiptLabel }}</dt>
-        <dd>
-          <span data-receipt>{{ receiptValue(receipt) }}{{ receipt.unit ? ' ' + receipt.unit : '' }}</span>
-          @if (receipt.source) {
-            <small>{{ receipt.source | receiptLabel }}</small>
-          }
-          @if (receiptTimestamp(receipt); as receiptTime) {
-            <small>{{ receiptTime }}</small>
-          }
-        </dd>
-      </div>
+      <li [attr.title]="receiptDetail(receipt)">
+        <span data-receipt>{{ receiptLine(receipt) }}</span>
+      </li>
     }
-  </dl>
+  </ul>
 </details>

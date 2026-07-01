@@ -89,46 +89,68 @@
   font-weight: 700;
 }
 
-.redeploy-fields,
-.locked-fields {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.redeploy-setting-field,
-.locked-evidence-field {
-  display: grid;
-  gap: 0.35rem;
-  padding: 0.65rem 0;
-  border-top: 1px solid var(--border-light);
+.redeploy-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
 }
 
 .redeploy-setting-field {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-height: 32px;
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--border-light);
 
-  p,
-  small {
-    margin: 0.15rem 0 0;
+  strong {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
   }
 }
 
-.locked-evidence-field {
-  grid-template-columns: minmax(130px, 0.6fr) minmax(0, 1fr);
+.proof-lines,
+.advanced-evidence ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 
-  small,
-  code {
-    grid-column: 2;
+.proof-line {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 0.35fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--border-light);
+
+  span {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    text-transform: uppercase;
   }
 
-  code {
-    width: fit-content;
-    max-width: 100%;
-    padding: 0.12rem 0.35rem;
-    border: 1px solid var(--border-light);
-    border-radius: 4px;
+  strong {
     color: var(--text-primary);
+    font-weight: 700;
     overflow-wrap: anywhere;
+  }
+
+  &.tone-neutral strong {
+    color: var(--text-primary);
+  }
+
+  &.tone-ok strong {
+    color: var(--success);
+  }
+
+  &.tone-attention strong {
+    color: var(--warn);
   }
 }
 
@@ -139,46 +161,26 @@
     font-weight: 700;
   }
 
-  dl {
-    display: grid;
-    gap: 0.5rem;
+  ul {
     margin: 0.75rem 0 0;
   }
 }
 
-.evidence-row {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
-  gap: 0.5rem;
-
-  dt {
-    color: var(--text-muted);
-    font-weight: 700;
-  }
-
-  dd {
-    display: grid;
-    gap: 0.15rem;
-    margin: 0;
-    min-width: 0;
-  }
-
-  code {
-    width: fit-content;
-    max-width: 100%;
-    overflow-wrap: anywhere;
-  }
+.diagnostic-line {
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 900px) {
-  .redeploy-setting-field,
-  .locked-evidence-field,
-  .evidence-row {
+  .proof-line {
     grid-template-columns: 1fr;
   }
 
-  .locked-evidence-field small,
-  .locked-evidence-field code {
-    grid-column: 1;
+  .redeploy-setting-field {
+    width: 100%;
+    padding-right: 0;
+    border-right: 0;
   }
 }

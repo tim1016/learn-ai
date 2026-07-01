@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.schemas.live_runs import (
@@ -16,7 +17,9 @@ from app.schemas.live_runs import (
     OperatorSurfaceDailyOrderCap,
     OperatorSurfaceEvidenceFact,
     OperatorSurfaceHostProcess,
+    OperatorSurfaceProofLine,
     OperatorSurfaceReconciliation,
+    OperatorSurfaceRuntimeFreshness,
     OperatorSurfaceSubmitReadiness,
     OperatorSurfaceTraderGuidance,
     OperatorSurfaceTradingSession,
@@ -178,6 +181,7 @@ def author_trader_guidance(
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
     readiness_gates: list[OperatorGate],
     daily_order_cap: OperatorSurfaceDailyOrderCap,
 ) -> OperatorSurfaceTraderGuidance:
@@ -203,6 +207,13 @@ def author_trader_guidance(
         risk_explanation=risk_explanation,
         primary_remediation=_primary_remediation(submit_readiness.code, findings),
         additional_attention_groups=_attention_groups(findings),
+        proof_lines=_proof_lines(
+            submit_readiness=submit_readiness,
+            broker=broker,
+            account_owner=account_owner,
+            reconciliation=reconciliation,
+            runtime_freshness=runtime_freshness,
+        ),
         advanced_evidence=_submit_readiness_evidence(
             host_process=host_process,
             broker=broker,
@@ -459,6 +470,222 @@ def _attention_groups(findings: list[SubmitReadinessFinding]) -> list[OperatorSu
             )
         )
     return groups
+
+
+def _proof_lines(
+    *,
+    submit_readiness: OperatorSurfaceSubmitReadiness,
+    broker: OperatorSurfaceBroker,
+    account_owner: OperatorSurfaceAccountOwner | None,
+    reconciliation: OperatorSurfaceReconciliation | None,
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
+) -> list[OperatorSurfaceProofLine]:
+    return [
+        _broker_proof_line(broker),
+        _submit_readiness_proof_line(submit_readiness),
+        _account_owner_proof_line(account_owner),
+        _reconciliation_proof_line(reconciliation),
+        _runtime_freshness_proof_line(runtime_freshness),
+    ]
+
+
+def _proof_line(
+    proof_id: str,
+    label: str,
+    message: str,
+    detail: str,
+    tone: Literal["neutral", "ok", "attention"],
+) -> OperatorSurfaceProofLine:
+    return OperatorSurfaceProofLine(
+        id=proof_id,
+        label=label,
+        message=message,
+        detail=detail,
+        tone=tone,
+    )
+
+
+def _broker_proof_line(broker: OperatorSurfaceBroker) -> OperatorSurfaceProofLine:
+    if broker.safety_verdict == "PAPER_ONLY" and broker.connection == "CONNECTED":
+        message = "Paper broker is connected."
+        tone: Literal["neutral", "ok", "attention"] = "ok"
+    elif broker.safety_verdict == "PAPER_ONLY" and broker.connection == "DISCONNECTED":
+        message = "Paper broker is configured, but the session is disconnected."
+        tone = "attention"
+    elif broker.safety_verdict == "PAPER_ONLY":
+        message = "Paper broker proof is available; connection is still unknown."
+        tone = "attention"
+    elif broker.connection == "CONNECTED":
+        message = "Broker is connected, but paper-only proof is missing."
+        tone = "attention"
+    elif broker.connection == "DISCONNECTED":
+        message = "Broker session is disconnected."
+        tone = "attention"
+    else:
+        message = "Broker proof is not available yet."
+        tone = "attention"
+    return _proof_line(
+        "broker-proof",
+        "Broker",
+        message,
+        f"{_broker_safety_detail(broker.safety_verdict)} {_broker_connection_detail(broker.connection)}",
+        tone,
+    )
+
+
+def _submit_readiness_proof_line(readiness: OperatorSurfaceSubmitReadiness) -> OperatorSurfaceProofLine:
+    detail = readiness.explanation
+    if readiness.blocking_reason_codes:
+        blocker_count = len(readiness.blocking_reason_codes)
+        plural = "proofs" if blocker_count != 1 else "proof"
+        detail = f"{detail} {blocker_count} blocking {plural} still need attention."
+    return _proof_line(
+        "submit-readiness",
+        "Trade submit",
+        readiness.label,
+        detail,
+        "ok" if readiness.can_submit else "attention",
+    )
+
+
+def _account_owner_proof_line(owner: OperatorSurfaceAccountOwner | None) -> OperatorSurfaceProofLine:
+    if owner is None:
+        return _proof_line(
+            "account-owner",
+            "Account owner",
+            "Waiting for AccountOwner proof.",
+            "No AccountOwner artifact is available for this bot.",
+            "attention",
+        )
+    if owner.generation is None:
+        message = "Waiting for AccountOwner generation."
+    elif owner.phase == "accepting":
+        message = f"Owner generation {owner.generation} is accepting commands."
+    elif owner.phase == "reconnecting":
+        message = f"Owner generation {owner.generation} is reconnecting."
+    elif owner.phase == "draining":
+        message = f"Owner generation {owner.generation} is draining open work."
+    elif owner.phase == "frozen":
+        message = f"Owner generation {owner.generation} is frozen."
+    else:
+        message = f"Owner generation {owner.generation} has unknown state."
+    detail_parts = [
+        f"Account {owner.account_id} owner phase is {_owner_phase_label(owner.phase)}.",
+        f"Generation {owner.generation}." if owner.generation is not None else "Generation is not recorded.",
+    ]
+    return _proof_line(
+        "account-owner",
+        "Account owner",
+        message,
+        ". ".join(part for part in detail_parts if part is not None),
+        "ok" if _account_owner_ready(owner) else "attention",
+    )
+
+
+def _reconciliation_proof_line(reconciliation: OperatorSurfaceReconciliation | None) -> OperatorSurfaceProofLine:
+    if reconciliation is None or reconciliation.state == "NOT_AVAILABLE":
+        return _proof_line(
+            "reconciliation",
+            "Reconciliation",
+            "Waiting for reconciliation proof.",
+            "No reconciliation claim has been produced for this run.",
+            "attention",
+        )
+    if reconciliation.state == "IN_PROGRESS":
+        message = "Reconciliation is running."
+    elif reconciliation.state == "CLEAN":
+        message = "Broker and engine agree."
+    elif reconciliation.state == "ADOPTED":
+        message = "Recovered prior intents into engine state."
+    elif reconciliation.state == "STALE":
+        message = "Reconciliation proof is stale."
+    else:
+        message = reconciliation.failure_reason or "Broker and engine do not agree."
+    detail_parts = [
+        _reconciliation_state_detail(reconciliation.state),
+        f"Reason: {reconciliation.failure_reason}" if reconciliation.failure_reason else None,
+        f"Adopted intents: {', '.join(reconciliation.adopted_intent_ids)}"
+        if reconciliation.adopted_intent_ids
+        else None,
+    ]
+    return _proof_line(
+        "reconciliation",
+        "Reconciliation",
+        message,
+        ". ".join(part for part in detail_parts if part is not None),
+        "ok" if _is_reconciliation_ready(reconciliation) else "attention",
+    )
+
+
+def _runtime_freshness_proof_line(
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
+) -> OperatorSurfaceProofLine:
+    if runtime_freshness is None:
+        return _proof_line(
+            "runtime-freshness",
+            "Runtime",
+            "No live runtime is bound yet.",
+            "No child runtime is currently bound to this instance.",
+            "attention",
+        )
+    notice = runtime_freshness.headline or (runtime_freshness.additional_reasons[0] if runtime_freshness.additional_reasons else None)
+    if notice is not None:
+        return _proof_line(
+            "runtime-freshness",
+            "Runtime",
+            notice.message,
+            notice.title,
+            "neutral" if notice.tier == "info" else "attention",
+        )
+    return _proof_line(
+        "runtime-freshness",
+        "Runtime",
+        "Runtime evidence is fresh.",
+        "No active runtime-freshness notices.",
+        "ok",
+    )
+
+
+def _broker_safety_detail(safety_verdict: str) -> str:
+    if safety_verdict == "PAPER_ONLY":
+        return "Paper-only account proof is present."
+    if safety_verdict == "UNSAFE":
+        return "Paper-only account proof is missing."
+    return "Account safety proof is not recorded."
+
+
+def _broker_connection_detail(connection: str) -> str:
+    if connection == "CONNECTED":
+        return "Broker session is connected."
+    if connection == "DISCONNECTED":
+        return "Broker session is disconnected."
+    return "Broker connection has not been proven."
+
+
+def _owner_phase_label(phase: str) -> str:
+    if phase == "accepting":
+        return "accepting commands"
+    if phase == "reconnecting":
+        return "reconnecting"
+    if phase == "draining":
+        return "draining open work"
+    if phase == "frozen":
+        return "frozen"
+    return "unknown"
+
+
+def _reconciliation_state_detail(state: ReconciliationState) -> str:
+    if state == "CLEAN":
+        return "Latest reconciliation claim is clean."
+    if state == "ADOPTED":
+        return "Latest reconciliation adopted prior broker work into engine state."
+    if state == "IN_PROGRESS":
+        return "Reconciliation is still running."
+    if state == "STALE":
+        return "Latest reconciliation proof is stale."
+    if state == "NOT_AVAILABLE":
+        return "No reconciliation claim has been produced for this run."
+    return "Latest reconciliation claim needs operator attention."
 
 
 def _situation_code_for_submit_readiness(

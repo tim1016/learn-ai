@@ -11,37 +11,6 @@
     </div>
 
     @if (status(); as s) {
-      <div class="decision-row" aria-label="Bot decision facts">
-        <span class="fact-chip" [attr.title]="chipHelp('broker_proof')">
-          Broker proof: <strong>{{ brokerProofLabel() }}</strong>
-        </span>
-        @if (executionPosture(); as posture) {
-          <span
-            class="fact-chip execution-chip"
-            data-testid="bot-control-execution-chip"
-            [class.execution-unsafe]="posture === 'UNSAFE'"
-            [attr.title]="chipHelp('execution')"
-          >
-            Execution: <strong>{{ posture }}</strong>
-          </span>
-        }
-        @if (submitReadiness(); as readiness) {
-          <span
-            class="fact-chip submit-chip"
-            data-trader-copy
-            [class.can-submit]="readiness.can_submit"
-            [attr.title]="chipHelp('submit')"
-          >
-            Submit:
-            <strong>{{ readiness.can_submit ? 'can submit' : 'cannot submit' }}</strong>
-            - {{ readiness.label }}
-          </span>
-        }
-        <span class="fact-chip" [attr.title]="chipHelp('exposure')">
-          Exposure: <strong>{{ exposureLabel() }}</strong>
-        </span>
-      </div>
-
       <app-overview-actions
         class="top-action-banner"
         [actions]="s.lifecycle_chart.actions"
