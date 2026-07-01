@@ -260,7 +260,7 @@ export interface IbkrOrderEvent {
   order_ref: string | null;
   symbol: string | null;
   side: OrderAction | null;
-  order_type: string | null;
+  order_type: OrderType | null;
   exec_id: string | null;
   client_id: number | null;
   fill_quantity: number | null;

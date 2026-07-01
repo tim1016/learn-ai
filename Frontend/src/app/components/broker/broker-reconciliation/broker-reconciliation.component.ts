@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
@@ -73,7 +73,7 @@ interface AccountReconcileRow {
 @Component({
   selector: 'app-broker-reconciliation',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, RouterLink, ReceiptLabelPipe],
+  imports: [PageHeaderComponent, RouterLink, AccountTruthBoardComponent],
   styleUrl: './broker-reconciliation.component.scss',
   templateUrl: './broker-reconciliation.component.html',
 })

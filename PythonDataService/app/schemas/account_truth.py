@@ -150,7 +150,7 @@ class AccountTruthExecutionRow(BaseModel):
     con_id: int | None = None
     symbol: str | None = None
     side: OrderAction | None = None
-    order_type: str | None = None
+    order_type: OrderType | None = None
     quantity: float | None = None
     price: float | None = None
     fee: float | None = None

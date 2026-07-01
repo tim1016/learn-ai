@@ -42,95 +42,22 @@
   </p>
 } @else {
   <section class="truth-section">
-    <article
-      class="card truth-card"
-      [class.truth-critical]="accountTruth()?.final_severity === 'critical'"
-      [class.truth-warning]="accountTruth()?.final_severity === 'warning'"
-    >
-      <header class="card-header">
-        Account truth
-        @if (accountTruth(); as truth) {
-          <span class="badge mono">{{ truth.status_label }}</span>
-        }
-      </header>
-
-      @if (truthError(); as err) {
-        <app-section-error
-          [error]="err"
-          contextWhat="We couldn't load account truth."
-          (retry)="loadTruth()"
-        />
-      } @else if (truthLoading()) {
-        <p class="muted">Loading account truth…</p>
-      } @else if (accountTruth(); as truth) {
-        <app-data-source
-          origin="IBKR"
-          method="account truth projection"
-          [freshness]="fmtTimestampNy(truth.generated_at_ms)"
-        />
-        <p class="truth-detail">{{ truth.status_detail }}</p>
-        <dl class="kv-grid">
-          <dt>Account</dt>
-          <dd class="mono">{{ truth.account_id ?? '—' }}</dd>
-          <dt>Net liquidation</dt>
-          <dd class="mono num">{{ fmtCurrency(truth.account?.net_liquidation) }}</dd>
-          <dt>Buying power</dt>
-          <dd class="mono num">{{ fmtCurrency(truth.account?.buying_power) }}</dd>
-          <dt>Maint margin</dt>
-          <dd class="mono num">{{ fmtCurrency(truth.account?.maint_margin) }}</dd>
-        </dl>
-
-        @if (truth.blockers.length > 0) {
-          <ul class="truth-list blockers">
-            @for (blocker of truth.blockers; track blocker.code) {
-              <li>
-                <strong>{{ blocker.title }}</strong>
-                <span>{{ blocker.message }}</span>
-              </li>
-            }
-          </ul>
-        }
-
-        @if (truth.owner_summaries.length > 0) {
-          <div class="table-wrap compact">
-            <table class="positions-table">
-              <thead>
-                <tr>
-                  <th>Owner</th>
-                  <th>Tier</th>
-                  <th class="num">Open</th>
-                  <th class="num">Execs</th>
-                  <th class="num">Positions</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (owner of truth.owner_summaries; track owner.owner_class + ':' + owner.owner_key) {
-                  <tr>
-                    <td>{{ owner.owner_label }}</td>
-                    <td>{{ owner.evidence_label }}</td>
-                    <td class="mono num">{{ owner.open_order_count }}</td>
-                    <td class="mono num">{{ owner.execution_count }}</td>
-                    <td class="mono num">{{ owner.position_count }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        }
-
-        @if (truth.symbol_exposures.length > 0) {
-          <div class="exposure-strip">
-            @for (exposure of truth.symbol_exposures; track exposure.symbol + ':' + exposure.owner_key + ':' + exposure.con_id) {
-              <span class="exposure-chip">
-                <span class="mono">{{ exposure.symbol }}</span>
-                <span>{{ exposure.owner_label }}</span>
-                <span class="mono">{{ fmtSignedNumber(exposure.quantity, 0) }}</span>
-              </span>
-            }
-          </div>
-        }
-      }
-    </article>
+    @if (truthError(); as err) {
+      <app-section-error
+        [error]="err"
+        contextWhat="We couldn't load account truth."
+        (retry)="loadTruth()"
+      />
+    } @else if (truthLoading()) {
+      <p class="muted">Loading account truth…</p>
+    } @else if (accountTruth(); as truth) {
+      <app-account-truth-board
+        [truth]="truth"
+        [showAccountMetrics]="true"
+        [showOwnerSummary]="true"
+        [showSymbolExposures]="true"
+      />
+    }
   </section>
 
   <section class="cards">

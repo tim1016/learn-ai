@@ -9,6 +9,7 @@ Orders.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 
@@ -46,7 +47,10 @@ from app.schemas.account_truth import (
 )
 from app.utils.timestamps import now_ms_utc
 
-_TERMINAL_CANCEL_STATUSES = frozenset({"Cancelled", "ApiCancelled", "Inactive"})
+logger = logging.getLogger(__name__)
+
+_TERMINAL_CANCEL_STATUSES = frozenset({"Cancelled", "ApiCancelled"})
+_REJECTED_STATUSES = frozenset({"Inactive", "Rejected"})
 _ACKNOWLEDGED_STATUSES = frozenset({"PreSubmitted", "Submitted"})
 _LIMBO_STATUSES = frozenset({"PendingSubmit", "ApiPending", "PendingCancel", "Unknown"})
 
@@ -90,6 +94,7 @@ async def _collect_account_summary(
     try:
         return await ibkr_account.fetch_account_summary(client)
     except BrokerError as exc:
+        _log_evidence_gap("account_summary", "critical", exc)
         gaps.append(
             AccountTruthEvidenceGap(
                 source="account_summary",
@@ -107,6 +112,7 @@ async def _collect_positions(
     try:
         return await ibkr_account.fetch_positions(client)
     except BrokerError as exc:
+        _log_evidence_gap("positions", "critical", exc)
         gaps.append(
             AccountTruthEvidenceGap(
                 source="positions",
@@ -124,6 +130,7 @@ async def _collect_open_orders(
     try:
         return await list_open_orders(client)
     except BrokerError as exc:
+        _log_evidence_gap("open_orders", "critical", exc)
         gaps.append(
             AccountTruthEvidenceGap(
                 source="open_orders",
@@ -140,7 +147,8 @@ async def _collect_completed_orders(
 ) -> list[IbkrOpenOrder]:
     try:
         return await list_completed_orders(client)
-    except (AttributeError, BrokerError) as exc:
+    except BrokerError as exc:
+        _log_evidence_gap("completed_orders", "warning", exc)
         gaps.append(
             AccountTruthEvidenceGap(
                 source="completed_orders",
@@ -158,6 +166,7 @@ async def _collect_executions(
     try:
         return await executions_for_reconnect_recovery(client)
     except BrokerError as exc:
+        _log_evidence_gap("executions", "warning", exc)
         gaps.append(
             AccountTruthEvidenceGap(
                 source="executions",
@@ -240,7 +249,11 @@ def compose_account_truth(
     )
     owner_summaries = _owner_summaries(order_rows, execution_rows, position_rows)
     symbol_exposures = _symbol_exposures(position_rows)
-    final_verdict, final_severity = _final_verdict(invariants)
+    final_verdict, final_severity = _final_verdict(
+        invariants,
+        blockers=blockers,
+        evidence_gaps=evidence_gaps,
+    )
     account_id = (
         account.account_id
         if account is not None
@@ -359,7 +372,7 @@ def _execution_rows(
 def _position_rows(
     positions_snapshot: IbkrPositionsSnapshot | None,
     *,
-    known_owners_by_con_id: dict[int, set[str]],
+    known_owners_by_con_id: dict[int, set[AccountTruthFactOwner]],
     foreign_con_ids: set[int],
 ) -> list[AccountTruthPositionRow]:
     if positions_snapshot is None:
@@ -371,7 +384,7 @@ def _position_rows(
         else:
             owner_keys = known_owners_by_con_id.get(position.con_id, set())
             if len(owner_keys) == 1:
-                owner = _known_position_owner(next(iter(owner_keys)))
+                owner = next(iter(owner_keys))
             elif len(owner_keys) > 1:
                 owner = AccountTruthFactOwner(
                     owner_class="mixed_known",
@@ -449,27 +462,6 @@ def _foreign_owner(reason: str, *, severity: AccountTruthSeverity = "warning") -
     )
 
 
-def _known_position_owner(owner_key: str) -> AccountTruthFactOwner:
-    if owner_key.startswith(f"{MANUAL_NAMESPACE_ROOT}{NAMESPACE_SEP}"):
-        operator = owner_key.split(NAMESPACE_SEP)[1]
-        return AccountTruthFactOwner(
-            owner_class="manual",
-            owner_key=operator,
-            owner_label=f"Manual {operator}",
-            evidence_tier="app_minted_manual",
-            evidence_label="App-minted manual order ref",
-            severity="ok",
-        )
-    return AccountTruthFactOwner(
-        owner_class="bot",
-        owner_key=owner_key,
-        owner_label=f"Bot {owner_key}",
-        evidence_tier="bot_order_ref",
-        evidence_label="Bot-stamped order ref",
-        severity="ok",
-    )
-
-
 def _namespace_or_none(order_ref: str | None) -> str | None:
     if order_ref is None:
         return None
@@ -496,10 +488,12 @@ def _strategy_instance_id_from_namespace(namespace: str) -> str:
 
 
 def _order_lifecycle(status: str, remaining: float) -> str:
-    if status == "Filled" or remaining == 0:
-        return "filled"
     if status in _TERMINAL_CANCEL_STATUSES:
         return "cancelled"
+    if status in _REJECTED_STATUSES:
+        return "rejected"
+    if status == "Filled" or remaining == 0:
+        return "filled"
     if status in _ACKNOWLEDGED_STATUSES:
         return "acknowledged"
     if status in _LIMBO_STATUSES:
@@ -538,20 +532,16 @@ def _execution_detail(event: IbkrOrderEvent, owner: AccountTruthFactOwner) -> st
 def _known_owners_by_con_id(
     order_rows: Iterable[AccountTruthOrderRow],
     execution_rows: Iterable[AccountTruthExecutionRow],
-) -> dict[int, set[str]]:
-    owners: dict[int, set[str]] = defaultdict(set)
+) -> dict[int, set[AccountTruthFactOwner]]:
+    owners: dict[int, set[AccountTruthFactOwner]] = defaultdict(set)
     for row in order_rows:
-        if row.owner.owner_class == "bot":
-            owners[row.con_id].add(row.owner.owner_key)
-        elif row.owner.owner_class == "manual":
-            owners[row.con_id].add(f"manual/{row.owner.owner_key}/v1")
+        if row.owner.owner_class in {"bot", "manual"}:
+            owners[row.con_id].add(row.owner)
     for row in execution_rows:
         if row.con_id is None:
             continue
-        if row.owner.owner_class == "bot":
-            owners[row.con_id].add(row.owner.owner_key)
-        elif row.owner.owner_class == "manual":
-            owners[row.con_id].add(f"manual/{row.owner.owner_key}/v1")
+        if row.owner.owner_class in {"bot", "manual"}:
+            owners[row.con_id].add(row.owner)
     return owners
 
 
@@ -880,7 +870,14 @@ def _symbol_exposures(
 
 def _final_verdict(
     invariants: Sequence[AccountTruthInvariant],
+    *,
+    blockers: Sequence[AccountTruthMessage],
+    evidence_gaps: Sequence[AccountTruthEvidenceGap],
 ) -> tuple[AccountTruthFinalVerdict, AccountTruthSeverity]:
+    if any(gap.severity == "critical" for gap in evidence_gaps) or any(
+        blocker.severity == "critical" for blocker in blockers
+    ):
+        return "not_proven", "critical"
     failing = [row for row in invariants if row.status == "fail"]
     if not failing:
         warning = any(row.status == "warn" for row in invariants)
@@ -901,3 +898,18 @@ def _status_detail(
     if final_severity == "critical":
         return "Bot submits should stay blocked until critical account truth blockers clear."
     return "Account truth is degraded and needs review before calling the account clean."
+
+
+def _log_evidence_gap(
+    source: str,
+    severity: AccountTruthSeverity,
+    exc: BrokerError,
+) -> None:
+    logger.warning(
+        "IBKR account truth evidence source unavailable",
+        extra={
+            "ibkr_source": source,
+            "account_truth_severity": severity,
+            "error": str(exc),
+        },
+    )

@@ -13,6 +13,7 @@ import { PageGuideComponent } from '../../../shared/page-guide/page-guide.compon
 import { RouterLink } from '@angular/router';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
+import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
@@ -27,7 +28,6 @@ import {
   fmtDateNy,
   fmtSignedCurrency,
   fmtSignedNumber,
-  fmtTimestampNy,
 } from '../format';
 
 interface PositionRow {
@@ -52,7 +52,14 @@ interface PositionRow {
 @Component({
   selector: 'app-broker-account-monitor',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, PageGuideComponent, DataSourceComponent, SectionErrorComponent, RouterLink],
+  imports: [
+    PageHeaderComponent,
+    PageGuideComponent,
+    DataSourceComponent,
+    SectionErrorComponent,
+    RouterLink,
+    AccountTruthBoardComponent,
+  ],
   styleUrl: './broker-account-monitor.component.scss',
   templateUrl: './broker-account-monitor.component.html',
 })
@@ -105,7 +112,6 @@ export class BrokerAccountMonitorComponent {
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly fmtSignedNumber = fmtSignedNumber;
   readonly fmtDateNy = fmtDateNy;
-  readonly fmtTimestampNy = fmtTimestampNy;
 
   constructor() {
     void this.refresh();

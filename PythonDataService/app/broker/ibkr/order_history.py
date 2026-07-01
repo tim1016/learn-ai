@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from pydantic import ValidationError
+
 from app.broker.ibkr.api_evidence import (
     evidence_request,
     evidence_response,
@@ -73,7 +75,7 @@ async def list_completed_orders(
                     response_callback="completedOrder",
                 )
             )
-        except Exception as exc:
+        except (AttributeError, TypeError, ValueError, ValidationError) as exc:
             logger.warning(
                 "Skipping unparseable completed order conId=%s: %s",
                 getattr(getattr(trade, "contract", None), "conId", "?"),

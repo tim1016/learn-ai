@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from app.broker.ibkr.account_truth import compose_account_truth
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.broker.ibkr import account_truth as account_truth_module
+from app.broker.ibkr.account_truth import compose_account_truth, fetch_account_truth
+from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import (
     IbkrConnectionHealth,
     IbkrOpenOrder,
@@ -10,6 +16,7 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.schemas.account_truth import AccountTruthEvidenceGap
 
 
 def _health() -> IbkrConnectionHealth:
@@ -163,6 +170,24 @@ def test_account_truth_keeps_app_minted_manual_distinct_from_bot() -> None:
     assert truth.manual_namespaces_observed == ["manual/operator/v1"]
 
 
+def test_account_truth_terminal_cancel_and_inactive_lifecycles_are_not_filled() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[
+            _open_order(order_id=1, perm_id=9001, status="Cancelled", remaining=0.0),
+            _open_order(order_id=2, perm_id=9002, status="Inactive", remaining=0.0),
+        ],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert [row.lifecycle for row in truth.orders] == ["cancelled", "rejected"]
+
+
 def test_account_truth_dedupes_exec_id_and_warns_on_missing_commission() -> None:
     truth = compose_account_truth(
         health=_health(),
@@ -186,3 +211,93 @@ def test_account_truth_dedupes_exec_id_and_warns_on_missing_commission() -> None
     assert {row.key: row.status for row in truth.invariants}[
         "commission_complete"
     ] == "warn"
+
+
+def test_account_truth_critical_account_summary_gap_forces_not_proven() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        evidence_gaps=[
+            AccountTruthEvidenceGap(
+                source="account_summary",
+                severity="critical",
+                message="IBKR account summary unavailable: timeout",
+            )
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
+    assert truth.status_label == "Not proven"
+    assert {row.code for row in truth.blockers} == {"evidence_gap_account_summary"}
+
+
+def test_account_truth_unclaimed_position_blocks_bot_submits() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(
+            _position(con_id=54321, symbol="QQQ", quantity=2.0)
+        ),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
+    assert truth.positions[0].owner.owner_class == "foreign_or_unclaimed"
+    assert truth.positions[0].owner.severity == "critical"
+    assert {row.code for row in truth.blockers} == {"unknown_positions"}
+    assert {row.key: row.status for row in truth.invariants}[
+        "positions_match_known_ownership"
+    ] == "fail"
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_truth_collects_account_summary_gap_into_final_verdict(monkeypatch) -> None:
+    client = object()
+    monkeypatch.setattr(
+        account_truth_module.ibkr_account,
+        "fetch_account_summary",
+        AsyncMock(side_effect=BrokerError("summary timeout")),
+    )
+    monkeypatch.setattr(
+        account_truth_module.ibkr_account,
+        "fetch_positions",
+        AsyncMock(return_value=_positions_snapshot()),
+    )
+    monkeypatch.setattr(
+        account_truth_module,
+        "list_open_orders",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        account_truth_module,
+        "list_completed_orders",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        account_truth_module,
+        "executions_for_reconnect_recovery",
+        AsyncMock(return_value=[]),
+    )
+
+    truth = await fetch_account_truth(
+        client,  # type: ignore[arg-type]
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
+    assert truth.evidence_gaps[0].source == "account_summary"
+    assert truth.blockers[0].code == "evidence_gap_account_summary"

@@ -91,6 +91,7 @@ from app.engine.live.order_identity import (
     build_order_ref,
     mint_intent_id,
 )
+from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
 from app.schemas.broker_search import OptionContractMatch, SymbolMatch
 from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
@@ -206,7 +207,7 @@ async def broker_health() -> IbkrConnectionHealth:
     s = get_settings()
     # Safety verdict is re-derived on every call so it reflects the latest
     # connection state. ADR 0011 §3 — no connect-time cache.
-    if _is_broker_disabled():
+    if is_broker_disabled():
         return synthetic_disconnected_health(
             state="disabled",
             disabled=True,
@@ -257,7 +258,7 @@ async def broker_diagnose() -> DiagnosticReport:
     When the broker is disabled (``IBKR_BROKER_ENABLED=false``) returns a
     :class:`DiagnosticReportDisabled` sentinel immediately without probing.
     """
-    if _is_broker_disabled():
+    if is_broker_disabled():
         return DiagnosticReportDisabled(
             disabled=True,
             reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
@@ -326,7 +327,7 @@ async def reconnect_endpoint() -> IbkrConnectionHealth:
 
 
 def _raise_if_disabled() -> None:
-    if _is_broker_disabled():
+    if is_broker_disabled():
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "IBKR broker is disabled (IBKR_BROKER_ENABLED=false). Cannot drive connection lifecycle.",
@@ -387,7 +388,7 @@ async def account_summary_endpoint() -> IbkrAccountSummary:
     Phase 2c — every snapshot is offered to the configured account
     writer (no-op unless ``IBKR_PERSIST_ACCOUNT=true``).
     """
-    client = _require_connected_or_503()
+    client = require_connected_client()
     try:
         snapshot = await ibkr_account.fetch_account_summary(client)
     except BrokerError as exc:
@@ -411,7 +412,7 @@ async def account_summary_endpoint() -> IbkrAccountSummary:
 @router.get("/positions", response_model=IbkrPositionsSnapshot)
 async def positions_endpoint() -> IbkrPositionsSnapshot:
     """All open positions for the connected account."""
-    client = _require_connected_or_503()
+    client = require_connected_client()
     try:
         return await ibkr_account.fetch_positions(client)
     except BrokerError as exc:
@@ -423,7 +424,7 @@ async def positions_endpoint() -> IbkrPositionsSnapshot:
 
 @router.get("/expirations/{symbol}")
 async def list_expirations_endpoint(symbol: str) -> dict:
-    client = _require_connected_or_503()
+    client = require_connected_client()
     try:
         expirations = await ibkr_contracts.list_expirations(client, symbol.upper())
     except ValueError as exc:
@@ -448,7 +449,7 @@ async def list_strikes_endpoint(
     """
     from datetime import UTC, datetime
 
-    client = _require_connected_or_503()
+    client = require_connected_client()
     sym = symbol.upper()
     try:
         strikes = await ibkr_contracts.list_qualified_strikes(client, sym, expiry_ms)
@@ -482,7 +483,7 @@ async def symbols_search_endpoint(
     # throttle slot, and treat an empty ``sec_type`` query string as
     # "no filter" (FastAPI will otherwise pass it through to the
     # wrapper as an empty literal that drops every row).
-    client = _require_connected_or_503()
+    client = require_connected_client()
     q_norm = q.strip()
     sec_type_norm = sec_type if sec_type else None
     key = (q_norm, sec_type_norm)
@@ -529,7 +530,7 @@ async def option_contracts_endpoint(
     alongside the declared leg. ``conId`` is the broker-canonical
     identity the Slice 4 resolver will key against.
     """
-    client = _require_connected_or_503()
+    client = require_connected_client()
     sym = symbol.upper()
     key = (sym, expiry_ms, float(strike), right)
     cached = _OPTION_CONTRACTS_CACHE.get(key)
@@ -589,7 +590,7 @@ async def option_chain_stream(
             "Strikes must be positive.",
         )
 
-    client = _require_connected_or_503()
+    client = require_connected_client()
     sym = symbol.upper()
     band = sorted(set(float(k) for k in strikes))
 
@@ -697,7 +698,7 @@ async def option_surface_stream(
             "strikes entries must be finite and positive.",
         )
 
-    client = _require_connected_or_503()
+    client = require_connected_client()
     sym = symbol.upper()
     band = sorted(set(float(k) for k in strikes))
     expiries = sorted(set(int(e) for e in expiry_ms))
@@ -746,7 +747,7 @@ async def pnl_account_stream(
     debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
 ) -> StreamingResponse:
     """Account-level P&L SSE stream."""
-    client = _require_connected_or_503()
+    client = require_connected_client()
     debounce_seconds = debounce_ms / 1000.0
     pnl_writer = make_pnl_writer(persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir)
 
@@ -788,7 +789,7 @@ async def pnl_positions_stream(
     if not con_ids:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "con_ids must be non-empty.")
 
-    client = _require_connected_or_503()
+    client = require_connected_client()
     debounce_seconds = debounce_ms / 1000.0
     pnl_writer = make_pnl_writer(persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir)
 
@@ -819,7 +820,7 @@ async def pnl_positions_stream(
 @router.post("/orders", response_model=IbkrOrderAck, status_code=status.HTTP_201_CREATED)
 async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
     """Place one paper order. Four safety layers run before any IBKR call."""
-    client = _require_connected_or_503()
+    client = require_connected_client()
     try:
         spec = _stamp_manual_order_ref_if_requested(spec)
         return await place_paper_order(client, spec)
@@ -837,7 +838,7 @@ async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
 @router.get("/orders/open", response_model=list[IbkrOpenOrder])
 async def list_open_orders_endpoint() -> list[IbkrOpenOrder]:
     """All open orders the connected paper-client has placed."""
-    client = _require_connected_or_503()
+    client = require_connected_client()
     try:
         return await list_open_orders(client)
     except BrokerError as exc:
@@ -851,7 +852,7 @@ async def list_open_orders_endpoint() -> list[IbkrOpenOrder]:
 )
 async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
     """Cancel one paper order by ``order_id``."""
-    client = _require_connected_or_503()
+    client = require_connected_client()
     try:
         return await cancel_paper_order(client, order_id)
     except OrderRefusedError as exc:
@@ -871,7 +872,7 @@ async def order_events_stream_endpoint(
     poll_ms: Annotated[int, Query(ge=100, le=5000)] = 500,
 ) -> StreamingResponse:
     """SSE stream of order lifecycle events: status, fill, cancel, error."""
-    client = _require_connected_or_503()
+    client = require_connected_client()
     poll_seconds = poll_ms / 1000.0
 
     async def event_source():
@@ -944,33 +945,6 @@ async def bars_5s_snapshot_endpoint(
 
 
 # ── helpers ────────────────────────────────────────────────────────────
-
-
-def _is_broker_disabled() -> bool:
-    from app.broker.ibkr.config import get_settings
-
-    return not get_settings().broker_enabled
-
-
-def _require_connected_or_503():
-    if _is_broker_disabled():
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "IBKR broker is disabled (IBKR_BROKER_ENABLED=false). Use /api/live-runs for paper-run status.",
-        )
-    try:
-        client = get_client()
-    except NotConnectedError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "IBKR client not initialised.",
-        ) from exc
-    if not client.is_connected():
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "IBKR client not connected to Gateway.",
-        )
-    return client
 
 
 def _stamp_manual_order_ref_if_requested(spec: IbkrOrderSpec) -> IbkrOrderSpec:

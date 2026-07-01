@@ -41,60 +41,10 @@
   }
 
   @if (accountTruth(); as truth) {
-    <section
-      class="truth-board"
-      [class.truth-critical]="truth.final_severity === 'critical'"
-      [class.truth-warning]="truth.final_severity === 'warning'"
-    >
-      <header class="truth-head">
-        <div>
-          <h2>{{ truth.status_label }}</h2>
-          <p>{{ truth.status_detail }}</p>
-        </div>
-        <span class="badge mono">{{ truth.final_severity | receiptLabel }}</span>
-      </header>
-
-      <div class="invariant-grid">
-        @for (invariant of truth.invariants; track invariant.key) {
-          <article
-            class="invariant-card"
-            [class.invariant-fail]="invariant.status === 'fail'"
-            [class.invariant-warn]="invariant.status === 'warn'"
-          >
-            <header>
-              <span>{{ invariant.label }}</span>
-              <span class="mono">{{ invariant.status | receiptLabel }}</span>
-            </header>
-            <strong>{{ invariant.headline }}</strong>
-            <p>{{ invariant.narrative }}</p>
-          </article>
-        }
-      </div>
-
-      @if (truth.blockers.length > 0) {
-        <section class="truth-messages">
-          <header>Blockers</header>
-          @for (blocker of truth.blockers; track blocker.code) {
-            <article class="truth-message blocker">
-              <strong>{{ blocker.title }}</strong>
-              <span>{{ blocker.message }}</span>
-            </article>
-          }
-        </section>
-      }
-
-      @if (truth.caveats.length > 0) {
-        <section class="truth-messages">
-          <header>Caveats</header>
-          @for (caveat of truth.caveats; track caveat.code) {
-            <article class="truth-message">
-              <strong>{{ caveat.title }}</strong>
-              <span>{{ caveat.message }}</span>
-            </article>
-          }
-        </section>
-      }
-    </section>
+    <app-account-truth-board
+      [truth]="truth"
+      [showInvariants]="true"
+    />
   }
 
   <div class="legend mono">
