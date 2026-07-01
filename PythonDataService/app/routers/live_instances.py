@@ -156,6 +156,7 @@ from app.services.bot_lifecycle_projection import (
     project_intent_events,
     sort_lifecycle_events,
 )
+from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -1381,6 +1382,19 @@ async def _resolve_instance_status_from_process(
         and start_defaults.qc_audit_copy_path
         and start_defaults.qc_cloud_backtest_id
     )
+    provenance = _provenance(root, live_binding, runs)
+    symbol = _resolve_symbol(root, live_binding, runs)
+    instrument_surface = _resolve_instrument_surface(root, live_binding, runs)
+    lineage = _resolve_lineage(root, live_binding, runs)
+    receipt_context = LifecycleReceiptContext(
+        symbol=symbol,
+        action_plan=action_plan,
+        instrument_surface=instrument_surface,
+        start_defaults=start_defaults,
+        provenance=provenance,
+        sizing=sizing,
+        last_exit=last_exit,
+    )
     live_run_dir = _resolve_live_run_dir(root, live_binding)
     live_state = _read_instance_live_state(root, sid)
     intent_projection_since_ms = _session_started_at_ms(process, live_binding)
@@ -1419,13 +1433,13 @@ async def _resolve_instance_status_from_process(
         decision_columns=decision_columns,
         broker=broker_view,
         start_defaults=start_defaults,
-        provenance=_provenance(root, live_binding, runs),
+        provenance=provenance,
         sizing=sizing,
         last_exit=last_exit,
-        symbol=_resolve_symbol(root, live_binding, runs),
+        symbol=symbol,
         action_plan=action_plan,
-        instrument_surface=_resolve_instrument_surface(root, live_binding, runs),
-        lineage=_resolve_lineage(root, live_binding, runs),
+        instrument_surface=instrument_surface,
+        lineage=lineage,
         operator_surface=operator_surface,
         lifecycle_chart=compose_bot_lifecycle_chart(
             sid,
@@ -1433,6 +1447,7 @@ async def _resolve_instance_status_from_process(
             desired_state=desired,
             redeploy_available=redeploy_available,
             lifecycle_events=lifecycle_events,
+            receipt_context=receipt_context,
         ),
         fetched_at_ms=observed_at_ms,
     )

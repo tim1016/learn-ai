@@ -20,12 +20,43 @@
   }
 
   li {
-    padding: 0.35rem 0;
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.5rem 0;
     border-top: 1px solid var(--border-light);
   }
 
-  span {
+  p {
+    margin: 0;
+  }
+
+  span,
+  p {
     color: var(--text-primary);
     overflow-wrap: anywhere;
+  }
+}
+
+.receipt-headline {
+  font-weight: 700;
+}
+
+.receipt-detail,
+.audit-detail {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.receipt-audit {
+  summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+  }
+
+  span {
+    display: block;
+    margin-top: 0.25rem;
   }
 }

@@ -2,6 +2,12 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { IbkrApiEvidencePanelComponent } from '../cockpit-v2/reused/ibkr-api-evidence-panel/ibkr-api-evidence-panel.component';
+import {
+  buildDiagnosticEvidenceLines,
+  buildProofLines,
+  type DiagnosticEvidenceLine,
+  type ProofLine,
+} from './node-inspector-presenter';
 
 @Component({
   selector: 'app-workbench-audit-panel',
@@ -13,6 +19,10 @@ import { IbkrApiEvidencePanelComponent } from '../cockpit-v2/reused/ibkr-api-evi
 export class WorkbenchAuditPanelComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly provenance = computed(() => this.status().provenance);
+  readonly proofLines = computed<ProofLine[]>(() => buildProofLines(this.status()));
+  readonly diagnosticEvidenceLines = computed<DiagnosticEvidenceLine[]>(
+    () => buildDiagnosticEvidenceLines(this.status().operator_surface.trader_guidance.advanced_evidence),
+  );
 
   copy(value: string | null | undefined): void {
     if (!value) return;
@@ -28,5 +38,13 @@ export class WorkbenchAuditPanelComponent {
     const provenance = this.provenance();
     if (!provenance) return '{}';
     return JSON.stringify(provenance.live_config ?? {}, null, 2);
+  }
+
+  trackProofLine(_: number, line: ProofLine): string {
+    return line.id;
+  }
+
+  trackDiagnosticLine(_: number, line: DiagnosticEvidenceLine): string {
+    return line.id;
   }
 }

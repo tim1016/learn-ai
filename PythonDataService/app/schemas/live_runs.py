@@ -1916,6 +1916,7 @@ LifecycleChartStatus = Literal[
 ]
 
 LifecycleChartLane = Literal["bot", "account", "broker", "recovery"]
+LifecycleChartActionability = Literal["operator-actionable", "system-only", "no-action-needed"]
 LifecycleChartActionId = Literal[
     "start_process",
     "resume",
@@ -1938,6 +1939,8 @@ class LifecycleChartReceipt(BaseModel):
 
     label: str
     value: str
+    headline: str | None = None
+    detail: str | None = None
     unit: str | None = None
     source: str | None = None
     gate_id: str | None = None
@@ -1969,6 +1972,7 @@ class LifecycleChartNode(BaseModel):
     lane: LifecycleChartLane
     status: LifecycleChartStatus
     status_label: str
+    operator_actionability: LifecycleChartActionability = "operator-actionable"
     summary: str | None = None
     why: str | None = None
     operator_next_step: str | None = None

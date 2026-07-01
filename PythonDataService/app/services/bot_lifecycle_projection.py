@@ -503,7 +503,7 @@ def _intent_event_mapping(
                 node_id="ack_or_reconcile",
                 status="blocked",
                 source="broker_ack",
-                summary="Broker acknowledgement failed; submit outcome is uncertain.",
+                summary="Broker acknowledgment failed; submit outcome is uncertain.",
                 operator_next_step="PROBE_BROKER_BEFORE_RETRY",
                 template_id="lifecycle_projection.intent_wal.ack_failed_uncertain.v1",
             )

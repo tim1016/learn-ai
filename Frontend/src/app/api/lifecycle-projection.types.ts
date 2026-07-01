@@ -8,10 +8,16 @@ export type LifecycleChartStatus =
   | 'unknown';
 
 export type LifecycleChartLane = 'bot' | 'account' | 'broker' | 'recovery';
+export type LifecycleChartActionability =
+  | 'operator-actionable'
+  | 'system-only'
+  | 'no-action-needed';
 
 export interface LifecycleChartReceipt {
   label: string;
   value: string;
+  headline: string | null;
+  detail: string | null;
   unit: string | null;
   source: string | null;
   gate_id: string | null;
@@ -26,6 +32,7 @@ export interface LifecycleChartNode {
   lane: LifecycleChartLane;
   status: LifecycleChartStatus;
   status_label: string;
+  operator_actionability: LifecycleChartActionability;
   summary?: string | null;
   why?: string | null;
   operator_next_step?: string | null;

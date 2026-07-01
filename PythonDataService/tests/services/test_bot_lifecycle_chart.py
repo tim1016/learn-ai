@@ -13,6 +13,7 @@ from app.schemas.live_runs import (
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
+    InstanceProvenance,
     InstanceSizing,
     InstanceStartDefaults,
     LiveBinding,
@@ -28,6 +29,7 @@ from app.services.bot_lifecycle_projection import (
     project_account_events,
     project_intent_events,
 )
+from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
 from app.services.operator_surface import compute_operator_surface
 from app.services.runtime_freshness import DomainFreshness, RuntimeFreshness
 
@@ -221,6 +223,68 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     )
 
 
+def test_chart_authors_node_receipt_prose_and_actionability() -> None:
+    surface = _surface(account_owner=_account_owner())
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    submit_nodes = {node.id: node for node in chart.subgraphs["submit_order"].nodes}
+    broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
+    signal_receipts = {receipt.label: receipt for receipt in submit_nodes["signal"].receipts}
+    broker_ack_receipts = {receipt.label: receipt for receipt in broker_nodes["broker_ack"].receipts}
+    writer_receipts = {receipt.label: receipt for receipt in broker_nodes["writer_guard"].receipts}
+
+    assert submit_nodes["place_order"].label == "Broker submission"
+    assert submit_nodes["ack_or_reconcile"].label == "Acknowledgment or reconcile"
+    assert broker_nodes["broker_ack"].label == "Broker acknowledgment"
+    assert submit_nodes["signal"].operator_actionability == "system-only"
+    assert broker_nodes["broker_ack"].operator_actionability == "system-only"
+    assert signal_receipts["strategy_signal.evidence"].headline == "No signal evidence emitted yet."
+    assert (
+        broker_ack_receipts["broker_acknowledgment.evidence"].headline
+        == "No direct broker acknowledgment evidence emitted yet."
+    )
+    assert writer_receipts["account_owner.generation"].headline == "AccountOwner generation is 4."
+
+
+def test_chart_preflight_receipts_use_status_level_context_without_frontend_joining() -> None:
+    surface = _surface()
+    context = LifecycleReceiptContext(
+        symbol="SPY",
+        action_plan={"on_enter": [], "on_exit": []},
+        instrument_surface="explicit",
+        start_defaults=_start_defaults(),
+        provenance=InstanceProvenance(
+            run_id=_RUN_ID,
+            schema_version="2",
+            strategy_spec_path="references/specs/spy.json",
+            strategy_spec_sha256="abc",
+            qc_audit_copy_path="references/qc-shadow/spy.md",
+            qc_audit_copy_sha256="def",
+            qc_cloud_backtest_id="qc-123",
+            account_id="DU123",
+            created_at_ms=_NOW_MS - 10_000,
+            live_config={"consolidator_period_min": 15, "warmup_bars": 30},
+        ),
+        sizing=_sizing(),
+    )
+    chart = compose_bot_lifecycle_chart(
+        _SID,
+        surface,
+        desired_state=_desired("RUNNING"),
+        receipt_context=context,
+    )
+    configuration = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "configuration")
+    receipts = {receipt.label: receipt for receipt in configuration.receipts}
+
+    assert receipts["run.symbol"].value == "SPY"
+    assert receipts["run.symbol"].headline == "This bot is configured for SPY."
+    assert receipts["instrument_surface.plan"].value == "explicit"
+    assert receipts["action_plan.declared"].headline == "A committed action plan is present for this run."
+    assert receipts["run.provenance.run_id"].value == _RUN_ID
+    assert receipts["live_config.consolidator_period_min"].value == "15"
+    assert receipts["live_config.warmup_bars"].value == "30"
+    assert receipts["sizing.preset"].value == "safe_canary"
+
+
 def test_chart_routes_raw_node_reason_codes_to_receipts() -> None:
     runtime_freshness = RuntimeFreshness(
         command_loop=DomainFreshness(
@@ -252,7 +316,7 @@ def test_chart_routes_raw_node_reason_codes_to_receipts() -> None:
         receipt_text = " ".join(receipt.value for receipt in node.receipts)
         assert raw_code not in trader_text
         assert raw_code in receipt_text
-    assert chart.subgraphs["submit_order"].nodes[2].technical_label == "Broker submit boundary"
+    assert chart.subgraphs["submit_order"].nodes[2].technical_label == "Broker submission boundary"
 
 
 def test_chart_absent_desired_state_uses_effective_running_default() -> None:
@@ -436,7 +500,7 @@ def test_submit_uncertainty_reaches_submit_subgraph() -> None:
     assert nodes["ack_or_reconcile"].status == "blocked"
     assert nodes["ack_or_reconcile"].ts_ms == _NOW_MS + 1
     assert nodes["ack_or_reconcile"].ts_ms_resolved is True
-    assert nodes["ack_or_reconcile"].summary == "Broker acknowledgement failed; submit outcome is uncertain."
+    assert nodes["ack_or_reconcile"].summary == "Broker acknowledgment failed; submit outcome is uncertain."
     assert nodes["ack_or_reconcile"].operator_next_step == "PROBE_BROKER_BEFORE_RETRY"
     assert ack_receipts["event_type"].value == "BrokerOrderUncertain"
     assert ack_receipts["source_seq"].value == "1"

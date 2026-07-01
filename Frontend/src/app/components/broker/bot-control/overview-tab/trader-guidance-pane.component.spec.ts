@@ -34,7 +34,7 @@ function makeTimelineRow(): LifecycleProjectionEventRow {
     source_seq: 1,
     source_offset: null,
     source_hash: null,
-    summary: 'Broker acknowledgement failed; submit outcome is uncertain.',
+    summary: 'Broker acknowledgment failed; submit outcome is uncertain.',
     why: 'Probe broker before retrying this intent.',
     operator_next_step: 'PROBE_BROKER_BEFORE_RETRY',
     receipt_payload: { intent_id: 'intent-1' },
@@ -143,7 +143,7 @@ describe('TraderGuidancePaneComponent', () => {
 
     const timeline = screen.getByTestId('trader-guidance-timeline');
     expect(timeline.textContent).toContain('What changed recently');
-    expect(timeline.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
+    expect(timeline.textContent).toContain('Broker acknowledgment failed; submit outcome is uncertain.');
     expect(timeline.textContent).toContain('Probe broker before retrying this intent.');
     expect(timeline.textContent).toContain('blocked');
     expect(timeline.textContent).toContain('broker_ack #1');

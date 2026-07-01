@@ -18,6 +18,10 @@ import { fmtTimestampNy } from '../format';
 export class NodeReceiptsPaneComponent {
   readonly receipts = input<LifecycleChartReceipt[]>([]);
 
+  receiptHeadline(receipt: LifecycleChartReceipt): string {
+    return receipt.headline?.trim() || this.receiptLine(receipt);
+  }
+
   receiptLine(receipt: LifecycleChartReceipt): string {
     return `${formatReceiptLabel(receipt.label)} is ${formatReceiptValue(receipt.label, receipt.value)}${receipt.unit ? ` ${receipt.unit}` : ''}.`;
   }
