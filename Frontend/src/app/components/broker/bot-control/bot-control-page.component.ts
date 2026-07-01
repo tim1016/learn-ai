@@ -7,22 +7,26 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
 import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import type {
+  BrokerSafetyVerdict,
   FleetAccountSummary,
   LifecycleChartActionId,
   LifecycleChartNode,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
   OperatorSurfaceAttentionGroup,
+  OperatorSurfaceCurrentRisk,
+  OperatorSurfaceSubmitReadiness,
   OperatorNotice,
   OperatorSurfaceControlPlane,
+  RiskPosture,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
 import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
@@ -43,11 +47,26 @@ const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
+const FLATTEN_CONFIRM_MESSAGE =
+  'Flatten & pause sends a market-flattening request for any owned positions and then pauses the bot. Positions may be closed at the next available price. Confirm to proceed.';
 const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
-const ATTENTION_STORAGE_PREFIX = 'bot-control-attention';
 
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
+type BottomPanel = 'activity' | 'audit';
+type PosturePillTone = 'ok' | 'attention' | 'warn' | 'neutral' | 'muted';
+
+interface PosturePill {
+  readonly label: string;
+  readonly value: string;
+  readonly tone: PosturePillTone;
+}
+
+interface ConnectionPill {
+  readonly symbol: string | null;
+  readonly state: string;
+  readonly tone: 'ok' | 'attention' | 'muted';
+}
 
 interface ControlPlaneBanner {
   readonly state: OperatorSurfaceControlPlane['state'];
@@ -84,21 +103,11 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
   notice: null,
 };
 
-function isStorageUnavailableError(error: unknown): boolean {
-  return (
-    error instanceof TypeError ||
-    (typeof DOMException !== 'undefined' && error instanceof DOMException)
-  );
-}
-
 @Component({
   selector: 'app-bot-control-page',
   imports: [
-    Accordion,
-    AccordionPanel,
-    AccordionHeader,
-    AccordionContent,
     RouterLink,
+    ReceiptLabelPipe,
     OverviewTabComponent,
     ActivityTabComponent,
     TypedHaltConfirmComponent,
@@ -122,6 +131,7 @@ export class BotControlPageComponent {
   private statusRequestSeq = 0;
   private timelineRequestSeq = 0;
   private destroyed = false;
+  private autoOpenedAttentionSituation: string | null = null;
 
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
@@ -135,9 +145,13 @@ export class BotControlPageComponent {
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
-  readonly activityPanelOpen = signal<boolean>(false);
-  private readonly attentionOpenStates = signal<Record<string, boolean>>({});
+  readonly flattenConfirmOpen = signal<boolean>(false);
+  readonly attentionOpen = signal<boolean>(false);
+  readonly bottomPanel = signal<BottomPanel | null>(null);
+  private readonly dismissedControlPlaneSig = signal<string | null>(null);
+  private readonly dismissedBrokerEvidenceSig = signal<string | null>(null);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
+  readonly flattenConfirmMessage = FLATTEN_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError() ?? this.accountSummaryError(),
@@ -145,10 +159,6 @@ export class BotControlPageComponent {
 
   readonly brokerEvidenceNotice = computed<OperatorNotice | null>(
     () => this.accountSummary()?.notice ?? null,
-  );
-
-  readonly hasTopWarnings = computed<boolean>(
-    () => this.brokerEvidenceNotice() !== null || this.controlPlaneBanner() !== null,
   );
 
   readonly hostRunnerNotice = computed(() => {
@@ -177,6 +187,41 @@ export class BotControlPageComponent {
     };
   });
 
+  readonly showControlPlaneBanner = computed<boolean>(() => {
+    const banner = this.controlPlaneBanner();
+    return banner !== null && this.dismissedControlPlaneSig() !== this.controlPlaneSignature(banner);
+  });
+
+  readonly showBrokerEvidenceBanner = computed<boolean>(() => {
+    const notice = this.brokerEvidenceNotice();
+    return notice !== null && this.dismissedBrokerEvidenceSig() !== this.brokerEvidenceSignature(notice);
+  });
+
+  readonly hasSlimBanners = computed<boolean>(
+    () => this.showControlPlaneBanner() || this.showBrokerEvidenceBanner(),
+  );
+
+  readonly posturePills = computed<PosturePill[]>(() => {
+    const os = this.status()?.operator_surface;
+    if (!os) return [];
+    return [
+      this.brokerProofPill(os.broker.safety_verdict),
+      this.submitPill(os.submit_readiness),
+      this.exposurePill(os.current_risk),
+    ];
+  });
+
+  readonly connectionPill = computed<ConnectionPill | null>(() => {
+    const status = this.status();
+    if (!status) return null;
+    const connection = status.operator_surface.broker.connection;
+    return {
+      symbol: status.symbol,
+      state: formatReceiptLabel(connection),
+      tone: connection === 'CONNECTED' ? 'ok' : connection === 'DISCONNECTED' ? 'attention' : 'muted',
+    };
+  });
+
   readonly rightPaneNode = computed<LifecycleChartNode | null>(() => {
     const status = this.status();
     if (!status) return null;
@@ -193,18 +238,7 @@ export class BotControlPageComponent {
   readonly attentionGroups = computed<OperatorSurfaceAttentionGroup[]>(
     () => this.traderGuidance()?.additional_attention_groups ?? [],
   );
-  readonly attentionStorageKey = computed(() => {
-    const id = this.instanceId();
-    const situationCode = this.traderGuidance()?.situation_code ?? null;
-    return id && situationCode
-      ? this.attentionKey(id, situationCode, this.attentionStateKey(this.attentionGroups()))
-      : null;
-  });
-  readonly isAttentionOpen = computed(() => {
-    const key = this.attentionStorageKey();
-    if (key === null) return false;
-    return this.attentionOpenStates()[key] ?? true;
-  });
+  readonly attentionCount = computed<number>(() => this.attentionGroups().length);
   readonly renderedPrimaryRemediation = computed<RenderedAction | null>(() => {
     const remediation = this.traderGuidance()?.primary_remediation ?? null;
     return renderTraderRemediation(remediation, this.primaryRemediationDispatch);
@@ -242,10 +276,43 @@ export class BotControlPageComponent {
       this.highlightedLifecycleNodeId.set(null);
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
-      this.activityPanelOpen.set(false);
+      this.flattenConfirmOpen.set(false);
+      this.attentionOpen.set(false);
+      this.autoOpenedAttentionSituation = null;
+      this.bottomPanel.set(null);
+      this.dismissedControlPlaneSig.set(null);
+      this.dismissedBrokerEvidenceSig.set(null);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
+    });
+    effect(() => {
+      // Safety: auto-open the attention dropdown when a critical group appears,
+      // so a critical finding is never hidden behind a closed dropdown. The key
+      // is the situation_code plus the *set* of critical group codes, so a newly
+      // arrived critical finding reopens it — while an unchanged critical set
+      // does not fight the operator closing the dropdown.
+      const guidance = this.traderGuidance();
+      if (!guidance) return;
+      const criticalCodes = guidance.additional_attention_groups
+        .filter((group) => group.severity === 'critical')
+        .map((group) => group.code)
+        .sort();
+      if (criticalCodes.length === 0) return;
+      const key = `${guidance.situation_code}:${criticalCodes.join('|')}`;
+      if (this.autoOpenedAttentionSituation !== key) {
+        this.autoOpenedAttentionSituation = key;
+        this.attentionOpen.set(true);
+      }
+    });
+    effect(() => {
+      // A dismissed banner that clears (recovery) must not stay dismissed: a
+      // later re-failure — even to the same state — is a new outage and should
+      // reappear, per the PRD's session-dismiss rule.
+      if (this.controlPlaneBanner() === null) this.dismissedControlPlaneSig.set(null);
+    });
+    effect(() => {
+      if (this.brokerEvidenceNotice() === null) this.dismissedBrokerEvidenceSig.set(null);
     });
     effect(() => {
       const id = this.instanceId();
@@ -343,7 +410,7 @@ export class BotControlPageComponent {
         void this.dispatchPause();
         break;
       case 'flatten_and_pause':
-        void this.dispatchFlattenAndPause();
+        this.openFlattenConfirm();
         break;
       case 'stop':
         void this.dispatchStop();
@@ -378,15 +445,34 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
-  setActivityPanelOpen(open: boolean): void {
-    this.activityPanelOpen.set(open);
+  toggleAttention(): void {
+    this.attentionOpen.update((open) => !open);
   }
 
-  setAttentionOpen(open: boolean): void {
-    const key = this.attentionStorageKey();
-    if (key === null) return;
-    this.attentionOpenStates.update((states) => ({ ...states, [key]: open }));
-    this.writeAttentionOpenState(key, open);
+  closeAttention(): void {
+    this.attentionOpen.set(false);
+  }
+
+  toggleBottomPanel(panel: BottomPanel): void {
+    this.bottomPanel.update((current) => (current === panel ? null : panel));
+  }
+
+  closeBottomPanel(): void {
+    this.bottomPanel.set(null);
+  }
+
+  isBottomPanelOpen(panel: BottomPanel): boolean {
+    return this.bottomPanel() === panel;
+  }
+
+  dismissControlPlaneBanner(): void {
+    const banner = this.controlPlaneBanner();
+    if (banner) this.dismissedControlPlaneSig.set(this.controlPlaneSignature(banner));
+  }
+
+  dismissBrokerEvidenceBanner(): void {
+    const notice = this.brokerEvidenceNotice();
+    if (notice) this.dismissedBrokerEvidenceSig.set(this.brokerEvidenceSignature(notice));
   }
 
   trackAttention(_: number, group: OperatorSurfaceAttentionGroup): string {
@@ -408,6 +494,34 @@ export class BotControlPageComponent {
     }
   }
 
+  private controlPlaneSignature(banner: ControlPlaneBanner): string {
+    // Dismissal is keyed on the rendered content, not just the state enum, so a
+    // materially changed warning (new notice / attempt / runbook) reappears.
+    return [banner.state, banner.notice ?? '', banner.attemptText ?? '', banner.runbookSlug ?? ''].join('|');
+  }
+
+  private brokerEvidenceSignature(notice: OperatorNotice): string {
+    return [notice.code ?? '', notice.message, notice.runbook_slug ?? ''].join('|');
+  }
+
+  private brokerProofPill(verdict: BrokerSafetyVerdict): PosturePill {
+    const tone: PosturePillTone =
+      verdict === 'PAPER_ONLY' ? 'ok' : verdict === 'UNSAFE' ? 'attention' : 'muted';
+    return { label: 'Broker proof', value: formatReceiptLabel(verdict), tone };
+  }
+
+  private submitPill(readiness: OperatorSurfaceSubmitReadiness): PosturePill {
+    // submit_readiness.label is backend-authored trader prose — rendered as-is.
+    return { label: 'Submit', value: readiness.label, tone: readiness.can_submit ? 'ok' : 'warn' };
+  }
+
+  private exposurePill(risk: OperatorSurfaceCurrentRisk): PosturePill {
+    const posture: RiskPosture = risk.posture;
+    const tone: PosturePillTone =
+      posture === 'UNKNOWN' ? 'muted' : posture === 'MIXED' ? 'warn' : 'neutral';
+    return { label: 'Exposure', value: formatReceiptLabel(posture), tone };
+  }
+
   private targetNodeForAction(actionId: string): string | null {
     const status = this.status();
     if (!status) return null;
@@ -423,6 +537,25 @@ export class BotControlPageComponent {
       if (subgraphNode) return subgraphNode;
     }
     return null;
+  }
+
+  openFlattenConfirm(): void {
+    if (this.isActionDisabled('flatten_and_pause')) return;
+    this.flattenConfirmOpen.set(true);
+  }
+
+  cancelFlattenConfirm(): void {
+    this.flattenConfirmOpen.set(false);
+  }
+
+  async confirmFlatten(): Promise<void> {
+    if (!this.flattenConfirmOpen()) return;
+    this.flattenConfirmOpen.set(false);
+    // Re-check eligibility at confirm time: a poll may have disabled the action
+    // (lost live binding, positions already flat) while the dialog was open, so
+    // never fire the market-flattening mutation from a stale confirmation.
+    if (this.isActionDisabled('flatten_and_pause')) return;
+    await this.dispatchFlattenAndPause();
   }
 
   openTypedHalt(): void {
@@ -477,7 +610,6 @@ export class BotControlPageComponent {
       const status = await this.liveRuns.getInstanceStatus(id);
       if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
       this.status.set(status);
-      this.ensureAttentionOpenState(id, status);
       this.statusError.set(null);
       const timelineContext = this.lifecycleTimelineContext(status);
       if (this.lifecycleTimeline().statusKey !== timelineContext.statusKey) {
@@ -546,50 +678,6 @@ export class BotControlPageComponent {
         limit: TIMELINE_LIMIT,
       },
     };
-  }
-
-  private ensureAttentionOpenState(instanceId: string, status: LiveInstanceStatus): void {
-    const guidance = status.operator_surface.trader_guidance;
-    const key = this.attentionKey(
-      instanceId,
-      guidance.situation_code,
-      this.attentionStateKey(guidance.additional_attention_groups),
-    );
-    if (Object.prototype.hasOwnProperty.call(this.attentionOpenStates(), key)) return;
-    const stored = this.readAttentionOpenState(key);
-    this.attentionOpenStates.update((states) => ({ ...states, [key]: stored ?? true }));
-  }
-
-  private attentionKey(instanceId: string, situationCode: string, attentionStateKey: string): string {
-    return `${ATTENTION_STORAGE_PREFIX}:${instanceId}:${situationCode}:${attentionStateKey}`;
-  }
-
-  private attentionStateKey(groups: readonly OperatorSurfaceAttentionGroup[]): string {
-    const criticalCodes = groups
-      .filter((group) => group.severity === 'critical')
-      .map((group) => group.code)
-      .sort();
-    return criticalCodes.length ? `critical:${criticalCodes.join('|')}` : 'noncritical';
-  }
-
-  private readAttentionOpenState(key: string): boolean | null {
-    try {
-      const value = window.localStorage.getItem(key);
-      if (value === 'open') return true;
-      if (value === 'closed') return false;
-    } catch (error) {
-      if (!isStorageUnavailableError(error)) throw error;
-    }
-    return null;
-  }
-
-  private writeAttentionOpenState(key: string, open: boolean): void {
-    try {
-      window.localStorage.setItem(key, open ? 'open' : 'closed');
-    } catch (error) {
-      if (!isStorageUnavailableError(error)) throw error;
-      // localStorage can be disabled; the signal state still handles this session.
-    }
   }
 
   private async setIntent(

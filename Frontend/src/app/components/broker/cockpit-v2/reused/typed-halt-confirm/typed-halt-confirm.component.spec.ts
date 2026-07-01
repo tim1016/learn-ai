@@ -12,13 +12,23 @@ interface Harness {
   cancelled: number;
 }
 
-function render(opts: { open: boolean }): Harness {
+function render(opts: {
+  open: boolean;
+  requiredToken?: string;
+  confirmLabel?: string;
+}): Harness {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [provideZonelessChangeDetection()],
   });
   const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
   fixture.componentRef.setInput('open', opts.open);
+  if (opts.requiredToken !== undefined) {
+    fixture.componentRef.setInput('requiredToken', opts.requiredToken);
+  }
+  if (opts.confirmLabel !== undefined) {
+    fixture.componentRef.setInput('confirmLabel', opts.confirmLabel);
+  }
   let confirmed = 0;
   let cancelled = 0;
   fixture.componentInstance.confirmed.subscribe(() => (confirmed += 1));
@@ -103,5 +113,50 @@ describe('TypedHaltConfirmComponent', () => {
       h.el.querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
         ?.disabled,
     ).toBe(true);
+  });
+
+  describe('plain confirm mode (no required token)', () => {
+    it('hides the token field and enables confirm immediately', () => {
+      const h = render({ open: true, requiredToken: '' });
+      expect(h.el.querySelector('[data-testid="typed-halt-confirm-input"]')).toBeNull();
+      expect(
+        h.el.querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
+          ?.disabled,
+      ).toBe(false);
+    });
+
+    it('emits confirmed on a single click with no typing', () => {
+      const h = render({ open: true, requiredToken: '' });
+      h.el
+        .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
+        ?.click();
+      expect(h.confirmed).toBe(1);
+    });
+
+    it('renders the supplied confirm label', () => {
+      const h = render({ open: true, requiredToken: '', confirmLabel: 'Flatten & pause' });
+      expect(
+        h.el.querySelector('[data-testid="typed-halt-confirm-submit"]')?.textContent?.trim(),
+      ).toBe('Flatten & pause');
+    });
+
+    it('moves keyboard focus into the dialog (onto Cancel) when there is no token input', async () => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+      const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
+      fixture.componentRef.setInput('open', false);
+      fixture.componentRef.setInput('requiredToken', '');
+      document.body.appendChild(fixture.nativeElement);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+      await Promise.resolve();
+
+      const cancel = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="typed-halt-confirm-cancel"]',
+      );
+      expect(document.activeElement).toBe(cancel);
+      (fixture.nativeElement as HTMLElement).remove();
+    });
   });
 });

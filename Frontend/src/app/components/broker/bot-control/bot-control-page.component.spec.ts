@@ -400,17 +400,8 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('.decision-row')).toBeNull();
   });
 
-  it('persists the attention panel collapsed per bot and situation code', async () => {
+  it('opens the attention dropdown on demand with folded why/risk and items', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const liveRuns = {
-      getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
-      getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-      getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-      startHostRunner: vi.fn(),
-      setInstanceDesiredState: vi.fn(),
-      flattenAndPause: vi.fn(),
-      issueInstanceCommand: vi.fn(),
-    };
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -423,7 +414,15 @@ describe('BotControlPageComponent', () => {
         },
         {
           provide: LiveRunsService,
-          useValue: liveRuns,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
         },
       ],
     });
@@ -432,32 +431,34 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
     await flush(fixture);
 
-    const panel = (fixture.nativeElement as HTMLElement)
-      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
-    expect(panel?.open).toBe(true);
-    if (!panel) throw new Error('Expected attention panel.');
-    panel.open = false;
-    panel.dispatchEvent(new Event('toggle'));
+    const el = fixture.nativeElement as HTMLElement;
+    // A non-critical situation leaves the dropdown closed by default.
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+    const toggle = el.querySelector<HTMLButtonElement>('[data-testid="bot-control-attention-toggle"]');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+
+    toggle?.click();
     fixture.detectChanges();
-    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven:noncritical'))
-      .toBe('closed');
-    fixture.destroy();
 
-    const second = TestBed.createComponent(BotControlPageComponent);
-    second.detectChanges();
-    await flush(second);
+    const panel = el.querySelector('[data-testid="bot-control-attention-panel"]');
+    expect(panel).not.toBeNull();
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    // Folded guidance: situation headline + why + risk headline.
+    expect(panel?.textContent).toContain('Broker state is not proven enough to submit.');
+    expect(panel?.textContent).toContain(
+      'The backend cannot prove the broker/session/reconciliation facts needed before a submit.',
+    );
+    expect(panel?.textContent).toContain('Do not treat stale or missing broker evidence as live truth');
+    // Attention item headline.
+    expect(panel?.textContent).toContain('Broker session is disconnected');
 
-    const reopened = (second.nativeElement as HTMLElement)
-      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
-    expect(reopened?.open).toBe(false);
+    toggle?.click();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
   });
 
-  it('reopens collapsed attention when critical findings appear for the same situation', async () => {
+  it('auto-opens the attention dropdown when a critical group is present', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    window.localStorage.setItem(
-      'bot-control-attention:sid-x:broker_state_unproven:noncritical',
-      'closed',
-    );
     const status = makeStatus();
     status.operator_surface.trader_guidance.additional_attention_groups = [
       {
@@ -497,10 +498,9 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     const panel = (fixture.nativeElement as HTMLElement)
-      .querySelector<HTMLDetailsElement>('[data-testid="bot-control-attention-panel"]');
-    expect(panel?.open).toBe(true);
-    expect(window.localStorage.getItem('bot-control-attention:sid-x:broker_state_unproven:noncritical'))
-      .toBe('closed');
+      .querySelector('[data-testid="bot-control-attention-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.textContent).toContain('Broker safety is unsafe');
   });
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
@@ -566,9 +566,10 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 
-  it('does not duplicate proof facts in the page header', async () => {
+  it('renders human-labelled posture pills in the header and omits the execution pill', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
+    // execution posture is optional and must never be rendered as a header pill.
     status.operator_surface.execution = { posture: 'UNSAFE' };
     TestBed.configureTestingModule({
       providers: [
@@ -600,12 +601,19 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     const el = fixture.nativeElement as HTMLElement;
-    const header = el.querySelector('.page-header');
-    expect(header?.textContent).not.toContain('Broker proof');
-    expect(header?.textContent).not.toContain('Execution:');
+    const header = el.querySelector('.header-strip');
+    // Broker proof / Submit / Exposure pills render as human labels.
+    expect(header?.textContent).toContain('Broker proof');
+    expect(header?.textContent).toContain('Submit');
+    expect(header?.textContent).toContain('Exposure');
+    // submit_readiness.label is backend prose; safety_verdict/posture UNKNOWN pipe to "Unknown".
+    expect(header?.textContent).toContain('Broker state unproven');
+    expect(header?.textContent).toContain('Unknown');
+    // No fourth "Execution" pill and no raw enum codes in the header.
+    expect(header?.textContent).not.toContain('Execution');
     expect(header?.textContent).not.toContain('UNSAFE');
-    expect(header?.textContent).not.toContain('Exposure:');
-    expect(header?.textContent).not.toContain('Submit:');
+    expect(header?.textContent).not.toContain('PAPER_ONLY');
+    expect(header?.textContent).not.toContain('FLAT');
   });
 
   it('renders backend-authored disabled action prose only in the disabled tooltip', async () => {
@@ -913,6 +921,9 @@ describe('BotControlPageComponent', () => {
       run_id: null,
       limit: 5,
     });
+    fixture.componentInstance.toggleBottomPanel('activity');
+    fixture.detectChanges();
+
     const timeline = (fixture.nativeElement as HTMLElement)
       .querySelector('[data-testid="bot-control-recent-activity"] [data-testid="trader-guidance-timeline"]');
     expect(timeline?.textContent).toContain('Broker acknowledgement failed; submit outcome is uncertain.');
@@ -960,6 +971,8 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
+    fixture.componentInstance.toggleBottomPanel('activity');
+    fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).textContent)
       .toContain('Broker acknowledgement failed; submit outcome is uncertain.');
 
@@ -1145,6 +1158,8 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
+    fixture.componentInstance.toggleBottomPanel('activity');
+    fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
@@ -1478,5 +1493,316 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
+  });
+
+  it('confirms Flatten & pause through a dialog before calling the mutation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.actions.flatten_and_pause = {
+      enabled: true,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: null,
+      disabled_reasons: [],
+      gate_results: [],
+    };
+    const flattenAndPause = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause,
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    // Dispatching flatten opens the confirm dialog and does not call the mutation yet.
+    fixture.componentInstance.dispatchOverviewAction('flatten_and_pause');
+    fixture.detectChanges();
+    expect(fixture.componentInstance.flattenConfirmOpen()).toBe(true);
+    expect(flattenAndPause).not.toHaveBeenCalled();
+
+    await fixture.componentInstance.confirmFlatten();
+    expect(flattenAndPause).toHaveBeenCalledWith('sid-x', {
+      action: 'pause',
+      reason: 'Flatten and pause',
+      updated_by: 'operator',
+    });
+  });
+
+  it('dismisses the control-plane banner for the session', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
+
+    fixture.componentInstance.dismissControlPlaneBanner();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+  });
+
+  it('does not flatten when the action became disabled while the confirm dialog was open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.actions.flatten_and_pause = {
+      enabled: true,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: null,
+      disabled_reasons: [],
+      gate_results: [],
+    };
+    const flattenAndPause = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause,
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    fixture.componentInstance.dispatchOverviewAction('flatten_and_pause');
+    fixture.detectChanges();
+    expect(fixture.componentInstance.flattenConfirmOpen()).toBe(true);
+
+    // A poll disables the action while the dialog is still open.
+    const disabled = makeStatus();
+    disabled.operator_surface.actions.flatten_and_pause = {
+      enabled: false,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: 'NO_OWNED_POSITIONS',
+      disabled_reasons: ['NO_OWNED_POSITIONS'],
+      gate_results: [],
+    };
+    fixture.componentInstance.status.set(disabled);
+
+    await fixture.componentInstance.confirmFlatten();
+    expect(flattenAndPause).not.toHaveBeenCalled();
+  });
+
+  it('re-shows a dismissed control-plane banner when its rendered content changes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    fixture.componentInstance.dismissControlPlaneBanner();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+
+    // Same UNREACHABLE state but materially different notice content -> reappears.
+    const next = makeStatus();
+    const cp = next.operator_surface.control_plane;
+    if (cp) cp.notice = 'A newer, different command-channel failure notice.';
+    fixture.componentInstance.status.set(next);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
+  });
+
+  it('re-shows a dismissed control-plane banner after recovery and a later re-failure', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    fixture.componentInstance.dismissControlPlaneBanner();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+
+    // Recover: control plane CONNECTED -> banner clears and the dismissal resets.
+    const recovered = makeStatus();
+    const recoveredCp = recovered.operator_surface.control_plane;
+    if (recoveredCp) recoveredCp.state = 'CONNECTED';
+    fixture.componentInstance.status.set(recovered);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+
+    // Fail back to the same UNREACHABLE state -> new outage, banner reappears.
+    fixture.componentInstance.status.set(makeStatus());
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
+  });
+
+  it('reopens the attention dropdown when a new critical group arrives after being closed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'broker_safety',
+        severity: 'critical',
+        headline: 'Broker safety is unsafe',
+        explanation: 'Paper-safety evidence is unsafe.',
+      },
+    ];
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    // Auto-opened for the initial critical group.
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).not.toBeNull();
+
+    // Operator closes it.
+    fixture.componentInstance.closeAttention();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+
+    // A different critical group arrives under the same situation_code -> reopens.
+    const next = makeStatus();
+    next.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'reconciliation',
+        severity: 'critical',
+        headline: 'Reconciliation failed',
+        explanation: 'The cold-start reconciliation receipt failed.',
+      },
+    ];
+    fixture.componentInstance.status.set(next);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).not.toBeNull();
   });
 });
