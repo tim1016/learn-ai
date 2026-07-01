@@ -4,24 +4,8 @@ This is the *only* place outside ``app.broker.*`` that touches IBKR.
 The .NET backend and Angular frontend reach IBKR via these endpoints —
 no tight coupling to ``ib_async`` types crosses this boundary.
 
-Endpoints (Phase 1 + Phase 2 + Phase 3):
-
-* ``GET /api/broker/health`` — connection + sentinel.
-* ``GET /api/broker/diagnose`` — layered self-test (read-only).
-* ``POST /api/broker/connect`` — establish IBKR connection (idempotent).
-* ``POST /api/broker/disconnect`` — drop the session (idempotent).
-* ``POST /api/broker/reconnect`` — disconnect-then-connect.
-* ``GET /api/broker/expirations/{symbol}`` — list expiries.
-* ``GET /api/broker/option-chain/{symbol}`` — SSE chain stream.
-* ``GET /api/broker/option-surface/{symbol}`` — SSE multi-expiry surface stream.
-* ``GET /api/broker/account`` — one-shot account summary (Phase 2a).
-* ``GET /api/broker/positions`` — open positions (Phase 2a).
-* ``GET /api/broker/pnl/stream`` — account-level P&L SSE (Phase 2b).
-* ``GET /api/broker/pnl/positions/stream?con_ids=...`` — per-position P&L SSE.
-* ``POST /api/broker/orders`` — place paper order (Phase 3a).
-* ``GET /api/broker/orders/open`` — list open orders (Phase 3b).
-* ``DELETE /api/broker/orders/{order_id}`` — cancel paper order (Phase 3b).
-* ``GET /api/broker/orders/stream`` — order event SSE (Phase 3b).
+Additional Account Truth and broker-ledger endpoints under the same
+``/api/broker`` prefix live in ``app.routers.broker_account_truth``.
 """
 
 from __future__ import annotations
@@ -102,6 +86,11 @@ from app.broker.ibkr.surface import (
     stream_option_surface,
 )
 from app.broker.ibkr.symbol_search import search_symbols
+from app.engine.live.order_identity import (
+    build_manual_order_namespace,
+    build_order_ref,
+    mint_intent_id,
+)
 from app.schemas.broker_search import OptionContractMatch, SymbolMatch
 from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
@@ -832,7 +821,10 @@ async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
     """Place one paper order. Four safety layers run before any IBKR call."""
     client = _require_connected_or_503()
     try:
+        spec = _stamp_manual_order_ref_if_requested(spec)
         return await place_paper_order(client, spec)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except OrderRefusedError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except BrokerError as exc:
@@ -979,6 +971,19 @@ def _require_connected_or_503():
             "IBKR client not connected to Gateway.",
         )
     return client
+
+
+def _stamp_manual_order_ref_if_requested(spec: IbkrOrderSpec) -> IbkrOrderSpec:
+    if not spec.manual_order:
+        return spec
+    if spec.order_ref is not None:
+        raise ValueError(
+            "manual_order requests must not provide order_ref; the broker API server-mints it."
+        )
+    namespace = build_manual_order_namespace("operator")
+    return spec.model_copy(
+        update={"order_ref": build_order_ref(namespace, mint_intent_id())}
+    )
 
 
 def _snapshot_to_json(snapshot: IbkrChainSnapshot) -> str:

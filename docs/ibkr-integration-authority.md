@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-06-04 (live-idempotent IBKR 5-second bar redelivery — `bars.py` gains `DuplicatePolicy` + `LiveBarCounters`; §4 surface row and §10 `test_bars.py` count updated. Prior: 2026-05-15 indicator-state persistence shipped — PR adds `indicator_state.py` / `nyse_calendar.py` to §6 surface table, flips §11 prereq row to SHIPPED, expands §12 item 3 with hydrate-policy expectations. See change log for full session.).
+> **Last reviewed:** 2026-07-01 (IBKR Account Truth MVP — account-wide ownership projection, completed-order sweep, what-if preview, server-minted manual order namespace, and Account Monitor/Reconciliation/Orders rendering updates. Flex import, Client Portal cross-checks, and post-hoc manual adoption remain follow-up slices.).
 
 ---
 
@@ -123,7 +123,7 @@ Defined in the TDD §3.3, implemented across `config.py`, `client.py`, and `orde
 
 ## 4. Broker module surface (`app/broker/ibkr/`)
 
-Twelve files. Public surface only — private helpers (prefix `_`) and the `models.py` Pydantic shapes are not in this table.
+Public surface only — private helpers (prefix `_`) and support modules are omitted unless they define an operator-facing contract.
 
 | Module | Public surface | Purpose |
 |---|---|---|
@@ -133,18 +133,21 @@ Twelve files. Public surface only — private helpers (prefix `_`) and the `mode
 | `bars.py` | `aggregate_realtime_bar`, `stream_minute_bars`, `LiveBarCounters`, `IBKRBarStreamError`, `IbkrMinuteBar` (model) | 5-second TRADES → closed 1-minute bar aggregation. Two duplicate policies: `strict` (default) fails fast on any duplicate/non-monotonic timestamp; `live_idempotent` (used by `stream_minute_bars`) absorbs IBKR redelivery of the most recent 5-second bar — exact redelivery skipped, different-valued redelivery corrects the still-open minute, both logged + counted on `LiveBarCounters`. A timestamp from an already-emitted minute is `< last_source_ms` and still fails fast as a regression. |
 | `market_data.py` | `stream_option_chain` | `reqMktData` with generic ticks `100,101,106` → debounced `IbkrChainSnapshot` SSE. Greeks selection: `model > bid > ask > last > none`. |
 | `account.py` | `fetch_account_summary`, `fetch_positions` | One-shot reads of NLV / cash / margin / per-position state. |
-| `orders.py` | `place_paper_order`, `list_open_orders`, `cancel_paper_order`, `stream_order_events`, `OrderRefusedError`, `OrderNotFoundError` | Layers 0+4 of paper safety. Idempotency cache keyed on `client_order_id` (process-local, not durable). Polling-based event stream (default 0.5s). |
+| `account_truth.py` | `fetch_account_truth`, `compose_account_truth` | Account-wide broker truth projection. Joins account summary, positions, open orders, completed orders, executions, known bot namespaces, app-minted manual namespaces, and foreign/unclaimed facts into backend-authored invariants and operator copy. |
+| `order_history.py` | `list_completed_orders` | `reqCompletedOrdersAsync(apiOnly=false)` sweep for recent terminal orders no longer present in the open-order list. This is live TWS evidence, not the delayed official statement. |
+| `order_previews.py` | `preview_paper_order` | Non-submitting `whatIfOrderAsync` preview for manual paper orders. Reuses paper-sentinel checks but does not require submit confirmation because it does not place an order. |
+| `orders.py` | `place_paper_order`, `list_open_orders`, `cancel_paper_order`, `stream_order_events`, `OrderRefusedError`, `OrderNotFoundError` | Layers 0+4 of paper safety. Idempotency cache keyed on `client_order_id` (process-local, not durable). Polling-based event stream (default 0.5s). Non-manual submits still need a namespace; router-level manual submits are server-stamped before this function is called. |
 | `pnl.py` | `stream_account_pnl`, `stream_position_pnl`, `DEFAULT_PNL_DEBOUNCE_S` | `reqPnL` / `reqPnLSingle` → debounced `IbkrPnLTick` SSE. |
 | `persistence.py` | `TickWriter`, `make_writer`, `AccountSnapshotWriter`, `make_account_writer`, `PnLTickWriter`, `make_pnl_writer` (+ Noop / Parquet implementations) | Optional Parquet archive of ticks / snapshots / P&L. Off by default. |
 | `diagnostics.py` | `run_diagnostics` | Self-test for the connection chain (8 checks). See §9. |
-| `models.py` | `IbkrAccountSummary`, `IbkrPositionsSnapshot`, `IbkrPosition`, `IbkrOptionQuote`, `IbkrChainSnapshot`, `IbkrStrikeList`, `IbkrMinuteBar`, `IbkrOrderSpec`, `IbkrOrderAck`, `IbkrOpenOrder`, `IbkrOrderEvent`, `IbkrPnLTick`, `IbkrConnectionHealth`, `DiagnosticCheck`, `DiagnosticReport` | Pydantic v2 wire models. **Every** boundary timestamp is `int64` ms UTC. NaN / `-1` IBKR sentinels become `None` via `_coerce_optional_float` / `_coerce_iv`. |
+| `models.py` | `IbkrAccountSummary`, `IbkrPositionsSnapshot`, `IbkrPosition`, `IbkrOptionQuote`, `IbkrChainSnapshot`, `IbkrStrikeList`, `IbkrMinuteBar`, `IbkrOrderSpec`, `IbkrOrderAck`, `IbkrOpenOrder`, `IbkrOrderEvent`, `IbkrOrderWhatIfPreview`, `IbkrPnLTick`, `IbkrConnectionHealth`, `DiagnosticCheck`, `DiagnosticReport` | Pydantic v2 wire models. **Every** boundary timestamp is `int64` ms UTC. NaN / `-1` IBKR sentinels become `None` via `_coerce_optional_float` / `_coerce_iv`. `IbkrOrderSpec.manual_order=true` means the router server-mints a reserved manual namespace; callers may not provide their own manual `order_ref`. |
 | `__init__.py` | (re-exports) | Curated entry points only. |
 
 ---
 
 ## 5. REST + SSE endpoints (`/api/broker/*`)
 
-All routes live in `app/routers/broker.py`, prefix `/api/broker`, tag `broker`.
+Routes live in `app/routers/broker.py` and `app/routers/broker_account_truth.py`, both under prefix `/api/broker`, tag `broker`.
 
 | Method | Path | Type | Response model | Purpose |
 |---|---|---|---|---|
@@ -152,13 +155,16 @@ All routes live in `app/routers/broker.py`, prefix `/api/broker`, tag `broker`.
 | GET | `/diagnose` | one-shot | `DiagnosticReport` | 8-check self-test (see §9). |
 | GET | `/account` | one-shot | `IbkrAccountSummary` | Cash, NLV, margin, account-level P&L. Optionally persisted via `persist_account`. |
 | GET | `/positions` | one-shot | `IbkrPositionsSnapshot` | Open positions across all symbols. |
+| GET | `/account-truth` | one-shot | `AccountTruthResponse` | Account-wide ownership and invariant projection for Account Monitor, Reconciliation, and Orders. Unknown live orders, executions, or current positions fail closed as `not_proven`. |
 | GET | `/expirations/{symbol}` | one-shot | `dict` | All listed option expiries for a symbol, `int64 ms UTC`. |
 | GET | `/strikes/{symbol}?expiry_ms=...` | one-shot | `IbkrStrikeList` | Strikes IBKR can actually qualify (call ∩ put). |
 | GET | `/option-chain/{symbol}` | SSE | `IbkrChainSnapshot` (per event) | Streaming option chain — debounced (default 250 ms). |
 | GET | `/pnl/stream` | SSE | `IbkrPnLTick` | Account-level P&L. Debounced (default 1 s). |
 | GET | `/pnl/positions/stream?con_ids=...` | SSE | `IbkrPnLTick` | Per-position P&L for the requested contract IDs. |
-| POST | `/orders` | one-shot (201) | `IbkrOrderAck` | Place a paper order. Layer 0+4 enforced; idempotent via `client_order_id`. |
+| POST | `/orders` | one-shot (201) | `IbkrOrderAck` | Place a paper order. Layer 0+4 enforced; idempotent via `client_order_id`. If `manual_order=true`, the router stamps `manual/operator/v1:{intent_id}` before submit; if `manual_order=false`, missing `order_ref` is still refused by `place_paper_order`. |
+| POST | `/orders/what-if` | one-shot | `IbkrOrderWhatIfPreview` | Non-submitting paper-order preview using IBKR what-if state. The Orders confirmation dialog requires a successful preview before submit. |
 | GET | `/orders/open` | one-shot | `list[IbkrOpenOrder]` | Currently-open orders the broker still tracks. |
+| GET | `/orders/completed` | one-shot | `list[IbkrOpenOrder]` | Recent completed/cancelled/rejected TWS orders from `reqCompletedOrdersAsync(apiOnly=false)`. Used by account truth and exposed for diagnostics. |
 | DELETE | `/orders/{order_id}` | one-shot | `IbkrOpenOrder` | Cancel a paper order. Refuses if mode is not paper or account is not DU. |
 | GET | `/orders/stream` | SSE | `IbkrOrderEvent` | Order lifecycle events. Polling-based (0.5 s default); status transitions can collapse — see §6. |
 
@@ -262,9 +268,9 @@ Standalone Angular 21 components, signal-driven, OnPush, gated by `BrokerHealthS
 |---|---|---|---|
 | `/broker` | `BrokerStatusComponent` | Connection card (mode, account, sentinel), account snapshot, positions table, **Diagnose** button (PR #77) with per-check pills + fix hints. | Always visible. Account/positions cards hide when disconnected. |
 | `/broker/options-chain` | `BrokerOptionsChainComponent` | SSE-driven chain table; multi-strike select, NBBO + greeks, debounce-coalesced. | Locked unless `isPaperConnected()`. |
-| `/broker/account-monitor` | `BrokerAccountMonitorComponent` | Account summary + per-position P&L SSE. | Locked unless connected. |
-| `/broker/orders` | `BrokerOrdersComponent` | Place / cancel paper orders, open-orders table, order-event SSE. Native confirmation dialog before submit. | Locked unless paper-connected (defense-in-depth on the four-layer safety). |
-| `/broker/reconciliation` | `BrokerReconciliationComponent` | Reconciliation table — broker truth vs engine view. | Locked unless connected. |
+| `/broker/account-monitor` | `BrokerAccountMonitorComponent` | Account summary, Account Truth verdict, owner rollups, symbol exposure, blockers, and per-position P&L SSE. | Locked unless connected. |
+| `/broker/orders` | `BrokerOrdersComponent` | Manual paper-order form with what-if preview, server-minted manual namespace, account-truth order ledger, cancel affordance for live working orders, and order-event SSE. | Locked unless paper-connected (defense-in-depth on the four-layer safety). |
+| `/broker/reconciliation` | `BrokerReconciliationComponent` | Proof-first account validation board: invariant verdict cards, blockers, caveats, and existing position/account reconciliation tables. | Locked unless connected. |
 
 **Shared services**:
 
@@ -272,7 +278,7 @@ Standalone Angular 21 components, signal-driven, OnPush, gated by `BrokerHealthS
 - `BrokerService` — `firstValueFrom`-wrapped REST client for the non-SSE endpoints.
 - `broker-sse.ts` — `EventSource` helper that each SSE-consuming page owns explicitly (no global SSE manager).
 
-**Type generation**: REST-shaped models in `Frontend/src/app/api/broker.types.ts` are regenerated from the Python service's OpenAPI spec. SSE-only payloads (`IbkrChainSnapshot`, `IbkrPnLTick`, `IbkrOrderEvent`) and recently-added types (`DiagnosticReport`) are hand-mirrored in `broker-models.ts` until the next regeneration. See `Frontend/AGENTS.md` for the regenerate command.
+**Type generation**: REST-shaped models in `Frontend/src/app/api/broker.types.ts` are regenerated from the Python service's OpenAPI spec. SSE-only payloads (`IbkrChainSnapshot`, `IbkrPnLTick`, `IbkrOrderEvent`) and recently-added broker/account-truth types (`DiagnosticReport`, `AccountTruthResponse`, `IbkrOrderWhatIfPreview`) are hand-mirrored in `broker-models.ts` until the next regeneration. See `Frontend/AGENTS.md` for the regenerate command.
 
 ---
 
@@ -311,11 +317,11 @@ Read-only: never calls `connect()` and never places orders. The frontend exposes
 
 ## 10. Test coverage
 
-As of 2026-06-04 (post live-idempotent redelivery fix):
+As of 2026-07-01 (post Account Truth MVP; historical rows retained from the prior reviewed snapshot):
 
 | Area | File | Tests |
 |---|---|---|
-| **Broker module — 112 tests** | | |
+| **Broker module — reviewed tests** | | |
 | | `tests/broker/ibkr/test_account.py` | 9 |
 | | `tests/broker/ibkr/test_bars.py` | 12 (incl. `open_` regression from PR #78 and 5 `live_idempotent`/policy tests) |
 | | `tests/broker/ibkr/test_client.py` | 14 |
@@ -324,15 +330,18 @@ As of 2026-06-04 (post live-idempotent redelivery fix):
 | | `tests/broker/ibkr/test_market_data.py` | 10 |
 | | `tests/broker/ibkr/test_models.py` | 5 |
 | | `tests/broker/ibkr/test_orders.py` | 18 |
+| | `tests/broker/ibkr/test_order_history_previews.py` | 3 |
 | | `tests/broker/ibkr/test_persistence.py` | 5 |
 | | `tests/broker/ibkr/test_pnl.py` | 7 |
-| | `tests/broker/ibkr/test_router.py` | 16 |
+| | `tests/broker/ibkr/test_account_truth.py` | 4 |
+| | `tests/broker/ibkr/test_router.py` | 25 |
 | **Live runtime — 15 tests** | | |
 | | `tests/engine/live/test_live_context.py` | 5 |
 | | `tests/engine/live/test_live_engine.py` | 3 (incl. force-flat fire + no-fire from PR #78) |
 | | `tests/engine/live/test_live_engine_collapse.py` | 2 (entry- + exit-side from PR #78) |
 | | `tests/engine/live/test_live_engine_replay.py` | 1 (HARD GATE; skipped on CI when `lean-cache/` absent) |
 | | `tests/engine/live/test_live_portfolio.py` | 4 |
+| | `tests/engine/live/test_order_identity.py` | 15 |
 
 Project-scope: `pytest tests/ -k "not slow"` reports **1797 passed, 3 skipped, 5 xpassed** on the post-PR-#78 tree. CI runs the same scope on every PR.
 
@@ -352,6 +361,10 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 | Phase 10 — actual paper week + reconciliation report | NOT STARTED | Operational; gated on the **Phase 10 prereqs** rows below. Earliest start is gated on (a) one full-RTH end-to-end dry-run pass that produces a populated `decisions.parquet` against a real IBKR Gateway, plus (b) the three small writer/state PRs called out below. |
 | Phase 10 prereq — full-RTH end-to-end dry-run pass | NOT YET RUN | The longest live-Gateway session attempted on 2026-05-13 was 30 min (container, then 20 min host-side). Neither produced `decisions.parquet` because indicator warmup didn't complete (≥ 3 h 45 m). We have not yet observed the full pipeline `init-ledger → pre-flight → start --readonly → reconcile` end-to-end on a single trading day, so the writer-schema + reconcile-loader contract is unverified against real artifacts. Operator action: start by 05:45 ET, run through 16:00 ET force-flat, run reconcile Step 4 with synthetic QC. ~10.5 h wall clock. |
 | Phase 10 prereq — `commissionReport` callback wiring | NOT SHIPPED | Real IBKR fills currently record `fee=0` because the `commissionReport` event isn't subscribed in `IbkrBrokerAdapter`. Reconcile receipts will look misleadingly clean on commissions until this lands. Without it, the Phase 10 receipt cannot honestly compare commission against the QC backtest. |
+| Account Truth post-hoc manual adoption | NOT SHIPPED | App-minted manual orders are supported through `manual/operator/v1`, but TWS hand-clicks remain `foreign_or_unclaimed`. The adoption workflow must be explicit, one fact at a time, append-only, and keyed by `permId` or `execId`; it is not a heuristic based on `clientId=0`. |
+| Account Truth operator-specific manual namespace | PARTIAL | The server mints a reserved manual namespace, currently `manual/operator/v1`, because this broker route has no authenticated operator/session principal. Before person-level audit claims, wire a real operator or session slug into the server mint. |
+| Flex delayed audit import | NOT SHIPPED | `flex_audit_match` is reported as `not_applicable`. Flex remains the delayed official statement source for settled executions, commissions, cash, and positions. |
+| Client Portal account-truth cross-check | NOT SHIPPED | No `/iserver` calls are made in the live validation path. Any Client Portal use requires a separately documented session-safety decision and experimental/disabled labelling. |
 | Phase 10 prereq — `equity_curve.parquet` writer | NOT SHIPPED | `equity_curve` lives in `LiveRunResult` in memory; `artifacts.py` has writers for decisions / executions / trades but no `EquityWriter`. Reconcile cannot compare equity-over-time against QC's equity series. |
 | Phase 10 prereq — indicator-state-persistence across restarts | **SHIPPED** (2026-05-15, PR #<TBD>) | Generic envelope + SpyEma-specific payload at `PythonDataService/artifacts/live_state/spy_ema_crossover/SPY_15m.json`. Three policies: `require` (default — paper-week gate), `optional` (seed-day cold-start), `disabled` (operator escape hatch). NYSE previous-completed-session staleness check. Per-run hydration receipt rolled into reconcile hash manifest. Design: `docs/superpowers/specs/2026-05-15-spy-ema-paper-dry-run-design.md`. |
 | Phase 10 prereq — end-to-end producer test (LiveEngine → reconcile) | NOT SHIPPED | All 25 reconcile unit tests use synthetic parquets. No CI test proves `LiveEngine`'s artifact writers (`DecisionRow`/`ExecutionRow`/`TradeRow`) match what `reconcile.load_python_decisions` / `load_python_executions` expect. A small producer-consumer integration test (run a minimal LiveEngine session against `FakeBroker`, assert reconcile's loaders parse the resulting parquets) would close the contract. |
@@ -396,6 +409,11 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 |---|---|---|
 | Paper safety boundary | `app/broker/ibkr/{config,client,orders}.py` | Layers 0-4 in §3. |
 | Boundary timestamp policy | `app/broker/ibkr/models.py` (`int64 ms UTC` everywhere) | See `.claude/rules/numerical-rigor.md` "Timestamp rigor." |
+| Account Truth projection | `app/broker/ibkr/account_truth.py`, `app/schemas/account_truth.py` | Backend-authored ownership, invariant, blocker, caveat, and ledger rows. |
+| Account Truth endpoints | `app/routers/broker_account_truth.py` | `/account-truth`, `/orders/what-if`, and `/orders/completed` under `/api/broker`. |
+| Manual order namespace | `app/engine/live/order_identity.py`, `app/routers/broker.py` | `manual/{operator_or_session}/v1:{intent_id}` is server-minted for `manual_order=true`. |
+| Completed order sweep | `app/broker/ibkr/order_history.py` | `reqCompletedOrdersAsync(apiOnly=false)` mapped to `IbkrOpenOrder` evidence rows. |
+| What-if preview | `app/broker/ibkr/order_previews.py` | Non-submitting `whatIfOrderAsync` preview for manual paper order confirmation. |
 | Strategy contract | `app/engine/strategy/base.py` (unchanged for live) | `LiveContext` mirrors `StrategyContext`. |
 | Backtest engine | `app/engine/engine.py` | The replay parity gate runs both engines from the same data source. |
 | Live engine | `app/engine/live/live_engine.py` | Per-bar loop driven by `_next_bar_or_shutdown` (race-helper from PR #231); per-minute `[BAR]` heartbeat (PR #229); force-flat from PR #78. |
@@ -408,6 +426,7 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 
 | Date | Reviewer | Notes |
 |---|---|---|
+| 2026-07-01 | Codex GPT-5 | Account Truth MVP landed: new account-wide projection (`account_truth.py` + schema), completed-order sweep (`order_history.py`), non-submitting what-if preview (`order_previews.py`), manual namespace builder + router-side manual order stamping, `/api/broker/account-truth`, `/orders/completed`, and `/orders/what-if`. Account Monitor now shows Account Truth status/owners/exposure, Reconciliation shows invariant verdicts/blockers/caveats, and Orders is a ledger over account-truth open+completed orders with manual submit requiring what-if preview. Follow-ups remain: adoption ledger/workflow, Flex import, Client Portal evaluation, and operator-specific manual namespace attribution. |
 | 2026-05-04 | Claude Opus 4.7 | Initial authority doc post PR #76, #77, #78. Captures Phase 1-7 live runtime, Diagnose endpoint + button, Phase 10 prereqs (`open_` fallback, force-flat, exit-side collapse). |
 | 2026-05-12 | Claude Opus 4.7 | Phase 8 hardening landed on `feat/ibkr-paper-runner-hardening`: `LiveEngine.shutdown_event` graceful exit, SIGINT/SIGTERM handlers in `cmd_start`, rotating file logger (`run_logging.py`, 10MB × 5 backups), unhandled-exception recovery flatten, `IbkrClient.connect()/disconnect()` wired. Phase 8 row in § 11 flipped from STUB → SHIPPED. Latent CLI bug (CLI never connected the client) fixed in the same commit. Deferred to follow-ups: equity-curve parquet writer, YAML config input, `LiveConfig` → `BaseSettings`. |
 | 2026-05-13 | Claude Opus 4.7 | Doc-rot refresh — three-way Phase 9 reconciliation pipeline (`reconcile.py`, per the 2026-05-08 shadow-deployment spec § 6) had shipped but this page still listed it as a stub. Updated § 6 surface table (`run.py`/`reconcile.py`/`run_logging.py`/`pre_flight.py`/`run_ledger.py` rows), § 6 force-flat residual paragraph (replaced "(when shipped)" with the actual classifier), § 11 status row (STUB → SHIPPED with note on deployment-plan's older paper-vs-backtest framing being superseded), and § 12 operational checklist item 7 (reconcile CLI command). Also surfaced the smoke-discovered `IbkrClient.disconnect()` latent bug (`ib_async.IB.disconnect` is synchronous; the code awaited a non-existent `disconnectAsync`) — fix landed in PR #225 commit `34ea0a1` and is regression-tested. |

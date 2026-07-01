@@ -21,8 +21,12 @@ export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth']
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
   IbkrOrderEvidenceFields &
   IbkrOrderRefFields;
-export type IbkrOrderAck = components['schemas']['IbkrOrderAck'] & IbkrOrderEvidenceFields;
-export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'] & IbkrOrderRefFields;
+export type IbkrOrderAck = components['schemas']['IbkrOrderAck'] &
+  IbkrOrderEvidenceFields &
+  IbkrOrderRefFields;
+export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'] &
+  IbkrOrderRefFields &
+  IbkrManualOrderFields;
 export type IbkrPosition = components['schemas']['IbkrPosition'];
 export type IbkrPositionsSnapshot = components['schemas']['IbkrPositionsSnapshot'];
 
@@ -60,6 +64,8 @@ export type IbkrApiRequestName =
   | 'cancelOrder'
   | 'qualifyContractsAsync'
   | 'reqAllOpenOrders'
+  | 'reqCompletedOrdersAsync'
+  | 'reqCurrentTimeAsync'
   | 'reqExecutionsAsync'
   | 'reqMatchingSymbolsAsync'
   | 'reqMktData'
@@ -67,10 +73,14 @@ export type IbkrApiRequestName =
   | 'reqPnLSingle'
   | 'reqPositionsAsync'
   | 'reqRealTimeBars'
-  | 'reqSecDefOptParamsAsync';
+  | 'reqSecDefOptParamsAsync'
+  | 'whatIfOrderAsync';
 export type IbkrApiCallbackName =
   | 'accountSummary'
+  | 'completedOrder'
   | 'contractDetails'
+  | 'currentTime'
+  | 'error'
   | 'openOrder'
   | 'orderStatus'
   | 'execDetails'
@@ -81,7 +91,8 @@ export type IbkrApiCallbackName =
   | 'realTimeBarList'
   | 'securityDefinitionOptionParameter'
   | 'symbolSamples'
-  | 'tickSnapshot';
+  | 'tickSnapshot'
+  | 'whatIfOrder';
 export type IbkrEvidenceScalar = string | number | boolean | null;
 export type IbkrEvidenceValue =
   | IbkrEvidenceScalar
@@ -149,6 +160,25 @@ export interface IbkrOrderEvidenceFields {
 
 export interface IbkrOrderRefFields {
   order_ref?: string | null;
+}
+
+export interface IbkrManualOrderFields {
+  manual_order?: boolean;
+}
+
+export interface IbkrOrderWhatIfPreview extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
+  account_id: string;
+  is_paper: boolean;
+  symbol: string;
+  action: OrderAction;
+  quantity: number;
+  order_type: OrderType;
+  init_margin_change: number | null;
+  maint_margin_change: number | null;
+  equity_with_loan_change: number | null;
+  commission: number | null;
+  warning_text: string | null;
+  previewed_at_ms: number;
 }
 
 export type DataPlaneReloadMode =
@@ -324,4 +354,166 @@ export interface OptionContractMatch {
 
 export interface OptionContractsResponse {
   matches: OptionContractMatch[];
+}
+
+// ── REST shape: /api/broker/account-truth ────────────────────────────
+
+export type AccountTruthFinalVerdict = 'clean' | 'not_proven';
+export type AccountTruthSeverity = 'ok' | 'info' | 'warning' | 'critical';
+export type AccountTruthInvariantStatus = 'pass' | 'warn' | 'fail' | 'not_applicable';
+export type AccountTruthOwnerClass =
+  | 'bot'
+  | 'manual'
+  | 'mixed_known'
+  | 'foreign_or_unclaimed';
+export type AccountTruthEvidenceTier =
+  | 'bot_order_ref'
+  | 'app_minted_manual'
+  | 'adopted_manual'
+  | 'mixed_known'
+  | 'foreign_or_unclaimed';
+export type AccountTruthLifecycle =
+  | 'submitted'
+  | 'acknowledged'
+  | 'filled'
+  | 'cancelled'
+  | 'rejected'
+  | 'limbo';
+
+export interface AccountTruthMessage {
+  code: string;
+  severity: AccountTruthSeverity;
+  title: string;
+  message: string;
+  forensic_facts: Record<string, IbkrEvidenceValue>;
+}
+
+export interface AccountTruthInvariant {
+  key: string;
+  label: string;
+  status: AccountTruthInvariantStatus;
+  severity: AccountTruthSeverity;
+  headline: string;
+  narrative: string;
+  checked_at_ms: number;
+  evidence_count: number;
+}
+
+export interface AccountTruthOwnerSummary {
+  owner_class: AccountTruthOwnerClass;
+  owner_key: string;
+  owner_label: string;
+  evidence_tier: AccountTruthEvidenceTier;
+  evidence_label: string;
+  open_order_count: number;
+  execution_count: number;
+  position_count: number;
+  gross_position_quantity: number;
+}
+
+export interface AccountTruthSymbolExposure {
+  symbol: string;
+  owner_class: AccountTruthOwnerClass;
+  owner_key: string;
+  owner_label: string;
+  quantity: number;
+  con_id: number | null;
+}
+
+export interface AccountTruthFactOwner {
+  owner_class: AccountTruthOwnerClass;
+  owner_key: string;
+  owner_label: string;
+  evidence_tier: AccountTruthEvidenceTier;
+  evidence_label: string;
+  severity: AccountTruthSeverity;
+}
+
+export interface AccountTruthOrderRow extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
+  fact_kind: 'open_order' | 'completed_order';
+  lifecycle_id: string;
+  lifecycle: AccountTruthLifecycle;
+  account_id: string;
+  order_id: number;
+  perm_id: number | null;
+  client_id: number;
+  con_id: number;
+  symbol: string;
+  sec_type: SecType;
+  action: OrderAction;
+  quantity: number;
+  order_type: OrderType;
+  limit_price: number | null;
+  status: OrderStatus;
+  cumulative_filled: number;
+  remaining: number;
+  avg_fill_price: number | null;
+  owner: AccountTruthFactOwner;
+  headline: string;
+  detail: string;
+  fetched_at_ms: number;
+}
+
+export interface AccountTruthExecutionRow extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
+  fact_kind: 'execution';
+  account_id: string;
+  exec_id: string;
+  order_id: number;
+  perm_id: number | null;
+  client_id: number | null;
+  con_id: number | null;
+  symbol: string | null;
+  side: OrderAction | null;
+  order_type: string | null;
+  quantity: number | null;
+  price: number | null;
+  fee: number | null;
+  exec_time_ms: number | null;
+  observed_at_ms: number;
+  owner: AccountTruthFactOwner;
+  headline: string;
+  detail: string;
+}
+
+export interface AccountTruthPositionRow {
+  fact_kind: 'position';
+  account_id: string;
+  con_id: number;
+  symbol: string;
+  sec_type: SecType;
+  quantity: number;
+  avg_cost: number;
+  market_value: number | null;
+  owner: AccountTruthFactOwner;
+  headline: string;
+  detail: string;
+  fetched_at_ms: number;
+}
+
+export interface AccountTruthEvidenceGap {
+  source: string;
+  severity: AccountTruthSeverity;
+  message: string;
+}
+
+export interface AccountTruthResponse {
+  account_id: string | null;
+  final_verdict: AccountTruthFinalVerdict;
+  final_severity: AccountTruthSeverity;
+  status_label: string;
+  status_detail: string;
+  generated_at_ms: number;
+  health: IbkrConnectionHealth;
+  account: IbkrAccountSummary | null;
+  known_bot_namespaces: string[];
+  manual_namespaces_observed: string[];
+  invariants: AccountTruthInvariant[];
+  blockers: AccountTruthMessage[];
+  caveats: AccountTruthMessage[];
+  owner_summaries: AccountTruthOwnerSummary[];
+  symbol_exposures: AccountTruthSymbolExposure[];
+  orders: AccountTruthOrderRow[];
+  executions: AccountTruthExecutionRow[];
+  positions: AccountTruthPositionRow[];
+  evidence_gaps: AccountTruthEvidenceGap[];
 }

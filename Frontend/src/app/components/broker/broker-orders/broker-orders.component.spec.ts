@@ -53,6 +53,20 @@ class FakeBrokerHealthService {
 
 class FakeBrokerService {
   openOrders = vi.fn().mockResolvedValue([]);
+  accountTruth = vi.fn().mockResolvedValue({
+    orders: [],
+    final_verdict: 'clean',
+    final_severity: 'ok',
+    status_label: 'Clean',
+    status_detail: 'Required live broker evidence is assigned to known ownership.',
+  });
+  orderWhatIf = vi.fn().mockResolvedValue({
+    init_margin_change: 10,
+    maint_margin_change: 5,
+    equity_with_loan_change: -10,
+    commission: 1,
+    warning_text: null,
+  });
   placeOrder = vi.fn();
   cancelOrder = vi.fn().mockResolvedValue(undefined);
   account = vi.fn();
@@ -62,6 +76,28 @@ class FakeBrokerService {
 function setup(openOrders: IbkrOpenOrder[] = []) {
   const broker = new FakeBrokerService();
   broker.openOrders.mockResolvedValue(openOrders);
+  broker.accountTruth.mockResolvedValue({
+    orders: openOrders.map((order) => ({
+      ...order,
+      fact_kind: 'open_order',
+      lifecycle_id: `perm:${order.perm_id ?? order.order_id}`,
+      lifecycle: 'acknowledged',
+      owner: {
+        owner_class: 'bot',
+        owner_key: 'test-bot',
+        owner_label: 'Bot test-bot',
+        evidence_tier: 'bot_order_ref',
+        evidence_label: 'Bot-stamped order ref',
+        severity: 'ok',
+      },
+      headline: 'Bot test-bot open order',
+      detail: 'Ownership is proven by bot-stamped order ref.',
+    })),
+    final_verdict: 'clean',
+    final_severity: 'ok',
+    status_label: 'Clean',
+    status_detail: 'Required live broker evidence is assigned to known ownership.',
+  });
   const health = new FakeBrokerHealthService();
   TestBed.configureTestingModule({
     providers: [
@@ -167,8 +203,8 @@ describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
 
 describe('BrokerOrdersComponent — broker provenance', () => {
   it('renders the broker order_ref for open orders when the backend provides it', async () => {
-    const { fixture } = setup([openOrderWithRef]);
-    await fixture.whenStable();
+    const { fixture, component } = setup([openOrderWithRef]);
+    await component.refreshOpenOrders();
     fixture.detectChanges();
 
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
@@ -197,6 +233,23 @@ describe('BrokerOrdersComponent — confirmPaper failure-reset', () => {
     component.confirmPaper.set(true);
     await component.submitOrder();
     expect(component.confirmPaper()).toBe(false);
+  });
+
+  it('marks form submits as manual orders so the server mints order_ref', async () => {
+    const { component, broker } = setup();
+    broker.placeOrder.mockResolvedValueOnce({
+      order_id: 1,
+      status: 'Submitted',
+      placed_at_ms: Date.now(),
+      order_ref: 'manual/operator/v1:intent-1',
+    });
+    component.confirmPaper.set(true);
+
+    await component.submitOrder();
+
+    const spec = broker.placeOrder.mock.calls[0][0];
+    expect(spec.manual_order).toBe(true);
+    expect(spec.order_ref).toBeUndefined();
   });
 
   it('refuses to submit when confirmPaper is false', async () => {

@@ -57,4 +57,86 @@ describe('BrokerService diagnostics endpoints', () => {
 
     await expect(promise).resolves.toEqual([]);
   });
+
+  it('loads account truth from the account-truth endpoint', async () => {
+    const promise = service.accountTruth();
+    const req = http.expectOne('/api/broker/account-truth');
+
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      account_id: 'DU1234567',
+      final_verdict: 'clean',
+      final_severity: 'ok',
+      status_label: 'Clean',
+      status_detail: 'Required live broker evidence is assigned to known ownership.',
+      generated_at_ms: 1_780_000_000_000,
+      health: {},
+      account: null,
+      known_bot_namespaces: [],
+      manual_namespaces_observed: [],
+      invariants: [],
+      blockers: [],
+      caveats: [],
+      owner_summaries: [],
+      symbol_exposures: [],
+      orders: [],
+      executions: [],
+      positions: [],
+      evidence_gaps: [],
+    });
+
+    await expect(promise).resolves.toMatchObject({
+      account_id: 'DU1234567',
+      final_verdict: 'clean',
+    });
+  });
+
+  it('loads completed orders from the completed-order endpoint', async () => {
+    const promise = service.completedOrders();
+    const req = http.expectOne('/api/broker/orders/completed');
+
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
+
+    await expect(promise).resolves.toEqual([]);
+  });
+
+  it('posts what-if previews to the non-submitting endpoint', async () => {
+    const spec = {
+      symbol: 'SPY',
+      sec_type: 'STK' as const,
+      action: 'BUY' as const,
+      quantity: 1,
+      order_type: 'MKT' as const,
+      time_in_force: 'DAY' as const,
+      multiplier: 100,
+      confirm_paper: false,
+      manual_order: true,
+    };
+    const promise = service.orderWhatIf(spec);
+    const req = http.expectOne('/api/broker/orders/what-if');
+
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual(spec);
+    req.flush({
+      account_id: 'DU1234567',
+      is_paper: true,
+      symbol: 'SPY',
+      action: 'BUY',
+      quantity: 1,
+      order_type: 'MKT',
+      init_margin_change: 10,
+      maint_margin_change: 5,
+      equity_with_loan_change: -10,
+      commission: 1,
+      warning_text: null,
+      order_ref: null,
+      previewed_at_ms: 1_780_000_000_000,
+    });
+
+    await expect(promise).resolves.toMatchObject({
+      init_margin_change: 10,
+      commission: 1,
+    });
+  });
 });

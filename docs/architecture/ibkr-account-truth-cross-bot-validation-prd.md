@@ -5,7 +5,9 @@
 **Design source:** Codex IBKR API research on 2026-07-01, focused on TWS/Gateway, Flex Web Service, and Client Portal API trade/account surfaces.
 **Data plane:** Python FastAPI broker adapter via `ib_async` and TWS/Gateway. Angular renders backend-authored verdicts and evidence. No GraphQL is introduced for this surface.
 **Implementation-snapshot DoD:** update `docs/ibkr-integration-authority.md`, `docs/references/ibkr-reconciliation.md`, and `docs/runbooks/live-trade-reconciliation.md` when the shipped behavior changes.
-**Status:** ready-for-agent.
+**Status:** MVP implementation in progress on `codex/ibkr-cross-bot-validation-prd`.
+
+**2026-07-01 implementation snapshot:** Slices 1-5 now have an MVP implementation in the PR branch: server-minted app manual order refs, what-if preview, completed-order sweep, account-truth projection, Account Monitor/Reconciliation rendering, and Orders ledger rendering. Follow-up slices remain for audited post-hoc manual adoption, Flex delayed audit import, Client Portal session-safety evaluation, operator/session-specific manual namespace attribution, and a durable commission-report event subscription.
 
 ---
 

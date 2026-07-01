@@ -20,6 +20,7 @@ from app.routers import (
     aggregates,
     baselines,
     broker,
+    broker_account_truth,
     chart,
     data_quality,
     dataset,
@@ -351,6 +352,8 @@ app.include_router(research_divergence.router)
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 app.include_router(broker.router)
+# Account Truth and account-wide broker ledger endpoints.
+app.include_router(broker_account_truth.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

@@ -88,6 +88,8 @@ IbkrApiRequestName = Literal[
     "placeOrder",
     "qualifyContractsAsync",
     "reqAllOpenOrders",
+    "reqCompletedOrdersAsync",
+    "reqCurrentTimeAsync",
     "reqExecutionsAsync",
     "reqMatchingSymbolsAsync",
     "reqMktData",
@@ -96,10 +98,14 @@ IbkrApiRequestName = Literal[
     "reqPositionsAsync",
     "reqRealTimeBars",
     "reqSecDefOptParamsAsync",
+    "whatIfOrderAsync",
 ]
 IbkrApiCallbackName = Literal[
     "accountSummary",
     "contractDetails",
+    "completedOrder",
+    "currentTime",
+    "error",
     "openOrder",
     "orderStatus",
     "execDetails",
@@ -111,6 +117,7 @@ IbkrApiCallbackName = Literal[
     "securityDefinitionOptionParameter",
     "symbolSamples",
     "tickSnapshot",
+    "whatIfOrder",
 ]
 
 
@@ -543,6 +550,14 @@ class IbkrOrderSpec(BaseModel):
         ),
         max_length=120,
     )
+    manual_order: bool = Field(
+        default=False,
+        description=(
+            "True only for the operator-facing manual paper-order endpoint path. "
+            "The router server-mints a reserved manual/{operator}/v1 order_ref "
+            "for this path; bots must provide their own learn-ai namespace."
+        ),
+    )
 
 
 OrderEventType = Literal["status", "fill", "cancel", "error"]
@@ -683,8 +698,30 @@ class IbkrOrderAck(BaseModel):
     order_type: OrderType
     limit_price: float | None = None
     status: OrderStatus
+    order_ref: str | None = None
     ibkr_evidence: IbkrTradeEvidence | None = None
     placed_at_ms: int
+
+
+class IbkrOrderWhatIfPreview(BaseModel):
+    """Non-submitting IBKR what-if preview for a paper order request."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    is_paper: bool
+    symbol: str
+    action: OrderAction
+    quantity: float
+    order_type: OrderType
+    init_margin_change: float | None = None
+    maint_margin_change: float | None = None
+    equity_with_loan_change: float | None = None
+    commission: float | None = None
+    warning_text: str | None = None
+    order_ref: str | None = None
+    ibkr_evidence: IbkrTradeEvidence | None = None
+    previewed_at_ms: int
 
 
 class IbkrPnLTick(BaseModel):
@@ -900,6 +937,7 @@ __all__ = [
     "IbkrOrderAck",
     "IbkrOrderEvent",
     "IbkrOrderSpec",
+    "IbkrOrderWhatIfPreview",
     "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",

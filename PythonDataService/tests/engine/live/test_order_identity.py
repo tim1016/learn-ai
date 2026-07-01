@@ -21,6 +21,7 @@ from app.engine.live.order_identity import (
     OrderRefTooLongError,
     OwnershipRung,
     build_bot_order_namespace,
+    build_manual_order_namespace,
     build_order_ref,
     classify_ownership,
     max_strategy_instance_id_len,
@@ -116,6 +117,15 @@ def test_order_ref_at_max_len_sid_builds_to_exactly_cap() -> None:
     ns = build_bot_order_namespace(sid)
     ref = build_order_ref(ns, mint_intent_id(), max_length=60)
     assert len(ref) == 60
+
+
+def test_manual_order_namespace_round_trips_with_order_ref() -> None:
+    ns = build_manual_order_namespace("operator")
+    intent_id = mint_intent_id()
+    ref = build_order_ref(ns, intent_id)
+
+    assert ns == "manual/operator/v1"
+    assert parse_order_ref(ref) == (ns, intent_id)
 
 
 def test_classify_ownership_ladder() -> None:

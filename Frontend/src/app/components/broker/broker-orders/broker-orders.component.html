@@ -1,7 +1,7 @@
 <app-page-header
   title="Orders"
   eyebrow="Phase 3a · Safety stack 4/4"
-  subtitle="Place market or limit paper orders against your DU account. Brackets, OCO, and bracket-children are deferred to a later phase."
+  subtitle="Review the broker order ledger and place app-stamped manual paper orders against your DU account. Brackets, OCO, and bracket-children are deferred."
 />
 
 @if (bannerState() === 'disabled-host-runner-active') {
@@ -27,7 +27,7 @@
 
 <section class="grid">
   <article class="card form-card">
-    <header class="card-header">Place a paper order</header>
+    <header class="card-header">Manual paper order</header>
 
     <form
       class="order-form"
@@ -183,7 +183,7 @@
           (click)="openConfirmDialog()"
           [disabled]="!canSubmit()"
         >
-          Review order…
+          Review manual order…
         </button>
       </div>
 
@@ -196,7 +196,11 @@
       @if (lastAck(); as ack) {
         <p class="ack" role="status">
           Placed order #{{ ack.order_id }} — status
-          <span class="mono">{{ ack.status }}</span> at
+          <span class="mono">{{ ack.status }}</span>
+          @if (ack.order_ref) {
+            <span class="ref-chip mono">{{ ack.order_ref }}</span>
+          }
+          at
           {{ fmtTimestampNy(ack.placed_at_ms) }}
         </p>
       }
@@ -205,8 +209,8 @@
 
   <article class="card orders-card">
     <header class="card-header">
-      Open orders
-      <span class="muted">({{ openOrders().length }})</span>
+      Order ledger
+      <span class="muted">({{ ledgerOrders().length }})</span>
       <button
         type="button"
         class="ghost-btn small"
@@ -226,9 +230,9 @@
       />
     }
     @if (openOrdersLoading()) {
-      <p class="muted">Loading…</p>
-    } @else if (openOrders().length === 0) {
-      <p class="muted">No open orders.</p>
+      <p class="muted">Loading ledger…</p>
+    } @else if (ledgerOrders().length === 0) {
+      <p class="muted">No broker orders in the current projection.</p>
     } @else {
       <div class="table-wrap">
         <table class="orders-table">
@@ -236,6 +240,8 @@
             <tr>
               <th>ID</th>
               <th>Symbol</th>
+              <th>Owner</th>
+              <th>Stage</th>
               <th>Side</th>
               <th class="num">Qty</th>
               <th>Type</th>
@@ -246,14 +252,24 @@
             </tr>
           </thead>
           <tbody>
-            @for (o of openOrders(); track trackOrder($index, o)) {
-              <tr>
+            @for (o of ledgerOrders(); track trackLedgerOrder($index, o)) {
+              <tr
+                [class.foreign-row]="o.owner.owner_class === 'foreign_or_unclaimed'"
+                [class.manual-row]="o.owner.owner_class === 'manual'"
+              >
                 <td class="mono">{{ o.order_id }}</td>
                 <td>
                   <span class="mono symbol-main">{{ o.symbol }}</span>
                   @if (o.order_ref; as ref) {
                     <span class="ref-chip mono" title="Broker order_ref">{{ ref }}</span>
                   }
+                </td>
+                <td>
+                  <span>{{ o.owner.owner_label }}</span>
+                  <span class="owner-tier">{{ o.owner.evidence_label }}</span>
+                </td>
+                <td>
+                  <span class="lifecycle-chip mono">{{ o.lifecycle | receiptLabel }}</span>
                 </td>
                 <td class="mono">{{ o.action }}</td>
                 <td class="num mono">{{ o.quantity }}</td>
@@ -268,7 +284,7 @@
                     type="button"
                     class="ghost-btn small"
                     (click)="cancel(o.order_id)"
-                    [disabled]="o.remaining === 0 || !isPaperConnected()"
+                    [disabled]="!canCancelLedgerOrder(o)"
                     [attr.title]="!isPaperConnected()
                       ? 'Disabled until IBKR is connected to a paper account (DU…)'
                       : null"
@@ -313,7 +329,7 @@
           <li class="event-line" [class]="eventColor(e)">
             <span class="event-ts">{{ e.displayTs }}</span>
             <span class="event-id">#{{ e.order_id }}</span>
-            <span class="event-type">{{ e.event_type }}</span>
+            <span class="event-type">{{ e.event_type | receiptLabel }}</span>
             @if (e.status) {
               <span class="event-status">{{ e.status }}</span>
             }
@@ -350,7 +366,7 @@
   (close)="onDialogClose()"
 >
   <header class="confirm-dialog-head">
-    <span class="confirm-eyebrow">Paper-mode confirmation</span>
+    <span class="confirm-eyebrow">Manual paper-mode confirmation</span>
     <h2 id="confirmDialogTitle" class="confirm-title">Review and confirm</h2>
   </header>
   <dl class="confirm-summary">
@@ -384,8 +400,34 @@
       (ngModelChange)="confirmCheckbox.set($event)"
       name="dialogConfirm"
     />
-    <span>I confirm this is a paper order on a paper account.</span>
+    <span>I confirm this is a manual paper order on a paper account.</span>
   </label>
+  <section class="what-if-panel">
+    <header>What-if preview</header>
+    @if (whatIfLoading()) {
+      <p class="muted">Loading preview…</p>
+    } @else if (whatIfError(); as err) {
+      <app-section-error
+        [error]="err"
+        contextWhat="IBKR couldn't preview this order."
+        [canRetry]="false"
+      />
+    } @else if (whatIfPreview(); as preview) {
+      <dl class="confirm-summary compact-summary">
+        <dt>Init margin</dt>
+        <dd class="mono">{{ fmtCurrency(preview.init_margin_change) }}</dd>
+        <dt>Maint margin</dt>
+        <dd class="mono">{{ fmtCurrency(preview.maint_margin_change) }}</dd>
+        <dt>Equity loan</dt>
+        <dd class="mono">{{ fmtCurrency(preview.equity_with_loan_change) }}</dd>
+        <dt>Commission</dt>
+        <dd class="mono">{{ fmtCurrency(preview.commission) }}</dd>
+      </dl>
+      @if (preview.warning_text) {
+        <p class="warning-text">{{ preview.warning_text }}</p>
+      }
+    }
+  </section>
   <div class="confirm-actions">
     <button
       type="button"
@@ -406,7 +448,7 @@
       } @else if (confirmCooldownMs() > 0) {
         Place in {{ (confirmCooldownMs() / 1000).toFixed(1) }}s
       } @else {
-        Place paper order
+        Place manual order
       }
     </button>
   </div>

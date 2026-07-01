@@ -17,6 +17,7 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
+  AccountTruthResponse,
   IbkrPnLTick,
   IbkrPosition,
   IbkrPositionsSnapshot,
@@ -26,6 +27,7 @@ import {
   fmtDateNy,
   fmtSignedCurrency,
   fmtSignedNumber,
+  fmtTimestampNy,
 } from '../format';
 
 interface PositionRow {
@@ -63,6 +65,9 @@ export class BrokerAccountMonitorComponent {
   readonly positionsLoading = signal(false);
   readonly positionsError = signal<unknown>(null);
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);
+  readonly truthLoading = signal(false);
+  readonly truthError = signal<unknown>(null);
+  readonly accountTruth = signal<AccountTruthResponse | null>(null);
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
   private readonly positionStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -100,9 +105,10 @@ export class BrokerAccountMonitorComponent {
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly fmtSignedNumber = fmtSignedNumber;
   readonly fmtDateNy = fmtDateNy;
+  readonly fmtTimestampNy = fmtTimestampNy;
 
   constructor() {
-    void this.loadPositions();
+    void this.refresh();
 
     // Fold per-conId ticks. The stream's ``data`` is a flat list across
     // all contracts (one entry per (con_id, debounce window)); we
@@ -123,6 +129,23 @@ export class BrokerAccountMonitorComponent {
         return next;
       });
     });
+  }
+
+  async refresh(): Promise<void> {
+    await Promise.all([this.loadTruth(), this.loadPositions()]);
+  }
+
+  async loadTruth(): Promise<void> {
+    if (!this.canStream()) return;
+    this.truthLoading.set(true);
+    this.truthError.set(null);
+    try {
+      this.accountTruth.set(await this.broker.accountTruth());
+    } catch (err) {
+      this.truthError.set(err);
+    } finally {
+      this.truthLoading.set(false);
+    }
   }
 
   async loadPositions(): Promise<void> {
@@ -172,4 +195,3 @@ export class BrokerAccountMonitorComponent {
 
   trackRow = (_: number, row: PositionRow): number => row.position.con_id;
 }
-

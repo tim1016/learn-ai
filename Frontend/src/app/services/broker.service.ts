@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type {
+  AccountTruthResponse,
   DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
@@ -11,6 +12,7 @@ import type {
   IbkrOpenOrder,
   IbkrOrderAck,
   IbkrOrderSpec,
+  IbkrOrderWhatIfPreview,
   IbkrPositionsSnapshot,
   IbkrStrikeList,
   OptionContractsResponse,
@@ -89,6 +91,12 @@ export class BrokerService {
     return firstValueFrom(this.http.get<IbkrPositionsSnapshot>(`${this.base}/positions`));
   }
 
+  accountTruth(): Promise<AccountTruthResponse> {
+    return firstValueFrom(
+      this.http.get<AccountTruthResponse>(`${this.base}/account-truth`),
+    );
+  }
+
   expirations(symbol: string): Promise<ExpirationsResponse> {
     return firstValueFrom(
       this.http.get<ExpirationsResponse>(`${this.base}/expirations/${symbol}`),
@@ -139,6 +147,18 @@ export class BrokerService {
 
   openOrders(): Promise<IbkrOpenOrder[]> {
     return firstValueFrom(this.http.get<IbkrOpenOrder[]>(`${this.base}/orders/open`));
+  }
+
+  completedOrders(): Promise<IbkrOpenOrder[]> {
+    return firstValueFrom(
+      this.http.get<IbkrOpenOrder[]>(`${this.base}/orders/completed`),
+    );
+  }
+
+  orderWhatIf(spec: IbkrOrderSpec): Promise<IbkrOrderWhatIfPreview> {
+    return firstValueFrom(
+      this.http.post<IbkrOrderWhatIfPreview>(`${this.base}/orders/what-if`, spec),
+    );
   }
 
   placeOrder(spec: IbkrOrderSpec): Promise<IbkrOrderAck> {

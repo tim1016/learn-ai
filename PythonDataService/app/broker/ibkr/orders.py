@@ -487,6 +487,7 @@ async def _place_and_build_ack(
         order_type=spec.order_type,
         limit_price=spec.limit_price,
         status=order_status,
+        order_ref=spec.order_ref,
         ibkr_evidence=ibkr_evidence,
         placed_at_ms=now_ms_utc(),
     )

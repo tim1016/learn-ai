@@ -11,10 +11,12 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
+  AccountTruthResponse,
   IbkrAccountSummary,
   IbkrPnLTick,
   IbkrPosition,
@@ -71,7 +73,7 @@ interface AccountReconcileRow {
 @Component({
   selector: 'app-broker-reconciliation',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, RouterLink],
+  imports: [PageHeaderComponent, RouterLink, ReceiptLabelPipe],
   styleUrl: './broker-reconciliation.component.scss',
   templateUrl: './broker-reconciliation.component.html',
 })
@@ -83,6 +85,7 @@ export class BrokerReconciliationComponent implements OnDestroy {
 
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);
   readonly account = signal<IbkrAccountSummary | null>(null);
+  readonly accountTruth = signal<AccountTruthResponse | null>(null);
   readonly loadError = signal<string | null>(null);
 
   private readonly pnlStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -189,12 +192,14 @@ export class BrokerReconciliationComponent implements OnDestroy {
     if (!this.canStream()) return;
     this.loadError.set(null);
     try {
-      const [positionsSnap, accountSummary] = await Promise.all([
+      const [positionsSnap, accountSummary, truth] = await Promise.all([
         this.broker.positions(),
         this.broker.account(),
+        this.broker.accountTruth(),
       ]);
       this.positionsSnapshot.set(positionsSnap);
       this.account.set(accountSummary);
+      this.accountTruth.set(truth);
       this.openPnLStream(positionsSnap.positions);
       void this.repriceAllPositions(positionsSnap.positions);
     } catch (err) {
