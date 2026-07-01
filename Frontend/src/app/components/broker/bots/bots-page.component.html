@@ -17,74 +17,91 @@
   </header>
 
   <section class="filters" aria-label="Bot filters">
-    <label class="filter-field">
-      <span>Name</span>
-      <input
-        pInputText
-        type="search"
-        placeholder="Search bot name"
-        [ngModel]="nameQuery()"
-        (ngModelChange)="nameQuery.set($event)"
-      />
-    </label>
-    <label class="filter-field">
-      <span>Symbol</span>
-      <input
-        pInputText
-        type="search"
-        placeholder="SPY, AAPL..."
-        [ngModel]="symbolQuery()"
-        (ngModelChange)="symbolQuery.set($event)"
-      />
+    <label class="filter-field search-field">
+      <span>Search</span>
+      <span class="search-input">
+        <i class="pi pi-search" aria-hidden="true"></i>
+        <input
+          pInputText
+          type="search"
+          placeholder="Name, symbol, readiness, engine..."
+          [value]="searchQuery()"
+          (input)="setSearchQuery($event)"
+        />
+      </span>
     </label>
 
-    <div class="segmented" aria-label="Error filter">
-      <button
-        type="button"
-        [class.active]="errorFilter() === 'all'"
-        (click)="setErrorFilter('all')"
-      >
-        All
-      </button>
-      <button
-        type="button"
-        [class.active]="errorFilter() === 'has-errors'"
-        (click)="setErrorFilter('has-errors')"
-      >
-        Has errors
-      </button>
-      <button
-        type="button"
-        [class.active]="errorFilter() === 'no-errors'"
-        (click)="setErrorFilter('no-errors')"
-      >
-        No errors
-      </button>
+    <div class="filter-group">
+      <span>Attention</span>
+      <div class="segmented" aria-label="Attention filter">
+        <button
+          type="button"
+          [class.active]="attentionFilter() === 'all'"
+          (click)="setAttentionFilter('all')"
+        >
+          All
+        </button>
+        <button
+          type="button"
+          [class.active]="attentionFilter() === 'needs-attention'"
+          (click)="setAttentionFilter('needs-attention')"
+        >
+          Attention
+        </button>
+        <button
+          type="button"
+          [class.active]="attentionFilter() === 'healthy'"
+          (click)="setAttentionFilter('healthy')"
+        >
+          Healthy
+        </button>
+      </div>
     </div>
 
-    <div class="segmented" aria-label="Trading mode filter">
-      <button
-        type="button"
-        [class.active]="tradingModeFilter() === 'all'"
-        (click)="setTradingModeFilter('all')"
-      >
-        All modes
-      </button>
-      <button
-        type="button"
-        [class.active]="tradingModeFilter() === 'paper'"
-        (click)="setTradingModeFilter('paper')"
-      >
-        Paper
-      </button>
-      <button
-        type="button"
-        [class.active]="tradingModeFilter() === 'live'"
-        (click)="setTradingModeFilter('live')"
-      >
-        Live
-      </button>
+    <div class="filter-group">
+      <span>Readiness</span>
+      <div class="segmented" aria-label="Readiness filter">
+        <button
+          type="button"
+          [class.active]="readinessFilter() === 'all'"
+          (click)="setReadinessFilter('all')"
+        >
+          All
+        </button>
+        <button
+          type="button"
+          [class.active]="readinessFilter() === 'READY'"
+          (click)="setReadinessFilter('READY')"
+        >
+          Ready
+        </button>
+        <button
+          type="button"
+          [class.active]="readinessFilter() === 'DEGRADED'"
+          (click)="setReadinessFilter('DEGRADED')"
+        >
+          Degraded
+        </button>
+        <button
+          type="button"
+          [class.active]="readinessFilter() === 'BLOCKED'"
+          (click)="setReadinessFilter('BLOCKED')"
+        >
+          Blocked
+        </button>
+      </div>
     </div>
+
+    <button
+      pButton
+      type="button"
+      severity="secondary"
+      [outlined]="true"
+      icon="pi pi-filter-slash"
+      (click)="clearFilters()"
+    >
+      <span class="p-button-label">Clear</span>
+    </button>
   </section>
 
   @if (errorMessage(); as message) {
@@ -92,155 +109,215 @@
   }
 
   <div class="result-summary" aria-live="polite">
-    {{ visibleBots().length }} bots
+    <span>{{ activeTabCount() }} bots in {{ activeModeTab() }} mode</span>
+    <span>{{ visibleBots().length }} total after filters</span>
   </div>
 
-  <p-dataview
-    class="bot-dataview"
-    layout="grid"
-    [value]="visibleBots()"
-    [paginator]="visibleBots().length > 9"
-    [rows]="9"
-    emptyMessage="No bots match these filters."
+  <p-tabs
+    class="bot-tabs"
+    [value]="activeModeTab()"
+    (valueChange)="setActiveModeTab($event)"
   >
-    <ng-template #grid let-cards>
-      <div class="bot-grid">
-        @for (bot of cards; track bot.strategy_instance_id) {
+    <p-tablist>
+      <p-tab value="live">
+        <span class="tab-label">
+          Live
+          <span>{{ liveBots().length }}</span>
+        </span>
+      </p-tab>
+      <p-tab value="paper">
+        <span class="tab-label">
+          Paper
+          <span>{{ paperBots().length }}</span>
+        </span>
+      </p-tab>
+      <p-tab value="unknown">
+        <span class="tab-label">
+          Other
+          <span>{{ unknownModeBots().length }}</span>
+        </span>
+      </p-tab>
+    </p-tablist>
+    <p-tabpanels>
+      <p-tabpanel value="live">
+        <ng-container
+          [ngTemplateOutlet]="botPanel"
+          [ngTemplateOutletContext]="{ $implicit: liveBots(), emptyMode: 'live' }"
+        />
+      </p-tabpanel>
+      <p-tabpanel value="paper">
+        <ng-container
+          [ngTemplateOutlet]="botPanel"
+          [ngTemplateOutletContext]="{ $implicit: paperBots(), emptyMode: 'paper' }"
+        />
+      </p-tabpanel>
+      <p-tabpanel value="unknown">
+        <ng-container
+          [ngTemplateOutlet]="botPanel"
+          [ngTemplateOutletContext]="{ $implicit: unknownModeBots(), emptyMode: 'other' }"
+        />
+      </p-tabpanel>
+    </p-tabpanels>
+  </p-tabs>
+
+  <ng-template #botPanel let-rows let-emptyMode="emptyMode">
+    <div class="bot-table-shell">
+      <p-table
+        class="bot-table-wrap"
+        styleClass="p-datatable-sm bot-table"
+        dataKey="id"
+        sortField="lastRunSortMs"
+        [sortOrder]="-1"
+        [value]="rows"
+        [loading]="isLoading()"
+        [showInitialSortBadge]="false"
+        [paginator]="rows.length > 25"
+        [rows]="25"
+        [rowHover]="true"
+        [rowTrackBy]="trackByBotId"
+        [tableStyle]="{ 'min-width': '68rem' }"
+      >
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="name" class="col-bot">
+              Bot
+              <p-sortIcon field="name" />
+            </th>
+            <th pSortableColumn="symbolsLabel">
+              Symbols
+              <p-sortIcon field="symbolsLabel" />
+            </th>
+            <th pSortableColumn="exposure">
+              Exposure
+              <p-sortIcon field="exposure" />
+            </th>
+            <th pSortableColumn="openPositions" class="numeric-cell">
+              Open Pos
+              <p-sortIcon field="openPositions" />
+            </th>
+            <th pSortableColumn="totalPnl" class="numeric-cell">
+              P&amp;L
+              <p-sortIcon field="totalPnl" />
+            </th>
+            <th pSortableColumn="errorCount" class="numeric-cell">
+              Errors
+              <p-sortIcon field="errorCount" />
+            </th>
+            <th pSortableColumn="readinessVerdict">
+              Readiness
+              <p-sortIcon field="readinessVerdict" />
+            </th>
+            <th pSortableColumn="lastRunSortMs">
+              Last Run
+              <p-sortIcon field="lastRunSortMs" />
+            </th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-row>
+          <tr
+            class="bot-row"
+            tabindex="0"
+            role="link"
+            [attr.aria-label]="'Open bot ' + row.name"
+            (click)="openBot(row.id)"
+            (keydown.enter)="openBot(row.id)"
+          >
+            <td class="bot-name-cell">
+              <strong>{{ row.name }}</strong>
+            </td>
+            <td>{{ row.symbolsLabel }}</td>
+            <td>{{ row.exposure }}</td>
+            <td class="numeric-cell">{{ formatCount(row.openPositions) }}</td>
+            <td class="numeric-cell">{{ formatMoney(row.totalPnl) }}</td>
+            <td class="numeric-cell">{{ formatCount(row.errorCount) }}</td>
+            <td>
+              <p-tag
+                [severity]="readinessSeverity(row.readinessVerdict)"
+                [value]="row.readinessVerdict"
+              />
+            </td>
+            <td
+              class="last-run-cell"
+              [title]="row.lastRunLabel + ' · ' + formatTimestamp(row.lastRunAtMs)"
+            >
+              {{ row.lastRunLabel }} · {{ formatTimestamp(row.lastRunAtMs) }}
+            </td>
+          </tr>
+        </ng-template>
+        <ng-template #emptymessage>
+          <tr>
+            <td [attr.colspan]="8" class="empty-cell">
+              @if (isLoading()) {
+                Loading bots...
+              } @else {
+                No {{ emptyMode }} bots match these filters.
+              }
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+
+      <div class="mobile-bot-list">
+        @for (row of rows; track row.id) {
           <article
             class="bot-card"
-            [class.needs-attention]="bot.needs_attention"
-            [attr.aria-labelledby]="'bot-' + bot.strategy_instance_id"
+            [class.live-card]="row.tradingMode === 'live'"
+            [class.needs-attention]="row.needsAttention"
+            tabindex="0"
+            role="link"
+            [attr.aria-label]="'Open bot ' + row.name"
+            (click)="openBot(row.id)"
+            (keydown.enter)="openBot(row.id)"
           >
             <div class="card-topline">
               <div>
-                <h2 [id]="'bot-' + bot.strategy_instance_id">{{ bot.name }}</h2>
-                @if (bot.symbols.length > 0) {
-                  <p class="symbol-line">{{ bot.symbols.join(', ') }}</p>
-                }
+                <h2>{{ row.name }}</h2>
+                <p>{{ row.symbolsLabel }}</p>
               </div>
-              <p-tag
-                [severity]="tagSeverity(bot.status_tone)"
-                [value]="bot.status_label"
-              />
             </div>
 
             <dl class="primary-meta">
               <div>
-                <dt>Assets</dt>
-                <dd>{{ formatSymbols(bot.symbols) }}</dd>
+                <dt>Readiness</dt>
+                <dd>
+                  <p-tag
+                    [severity]="readinessSeverity(row.readinessVerdict)"
+                    [value]="row.readinessVerdict"
+                  />
+                </dd>
               </div>
               <div>
-                <dt>Engine</dt>
-                <dd>{{ bot.engine ?? '—' }}</dd>
+                <dt>Exposure</dt>
+                <dd>{{ row.exposure }}</dd>
               </div>
               <div>
-                <dt>Engine asset class</dt>
-                <dd>{{ bot.engine_asset_class ?? '—' }}</dd>
+                <dt>Open positions</dt>
+                <dd>{{ formatCount(row.openPositions) }}</dd>
               </div>
               <div>
-                <dt>Last run result</dt>
-                <dd>{{ bot.last_run_label }}</dd>
+                <dt>Total P&amp;L</dt>
+                <dd>{{ formatMoney(row.totalPnl) }}</dd>
+              </div>
+              <div>
+                <dt>Errors</dt>
+                <dd>{{ formatCount(row.errorCount) }}</dd>
+              </div>
+              <div>
+                <dt>Last run</dt>
+                <dd>{{ row.lastRunLabel }} · {{ formatTimestamp(row.lastRunAtMs) }}</dd>
               </div>
             </dl>
-
-            @if (isExpanded(bot.strategy_instance_id)) {
-              <section class="expanded" aria-label="More bot metadata">
-                <div class="metric-grid" aria-label="Bot metrics">
-                  <div>
-                    <span>Realized P&L</span>
-                    <strong>{{ formatMoney(bot.metrics.pnl.realized) }}</strong>
-                  </div>
-                  <div>
-                    <span>Unrealized P&L</span>
-                    <strong>{{ formatMoney(bot.metrics.pnl.unrealized) }}</strong>
-                  </div>
-                  <div>
-                    <span>Total P&L</span>
-                    <strong>{{ formatMoney(bot.metrics.pnl.total) }}</strong>
-                  </div>
-                  <div>
-                    <span>Trades</span>
-                    <strong>{{ formatCount(bot.metrics.trade_count) }}</strong>
-                  </div>
-                  <div>
-                    <span>Exposure</span>
-                    <strong>{{ bot.metrics.current_exposure }}</strong>
-                  </div>
-                  <div>
-                    <span>Open positions</span>
-                    <strong>{{ formatCount(bot.metrics.open_positions) }}</strong>
-                  </div>
-                  <div>
-                    <span>Errors</span>
-                    <strong>{{ formatCount(bot.metrics.error_count) }}</strong>
-                  </div>
-                </div>
-                <dl>
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{{ formatTimestamp(bot.created_at_ms) }}</dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{{ formatTimestamp(bot.updated_at_ms) }}</dd>
-                  </div>
-                  <div>
-                    <dt>Last run time</dt>
-                    <dd>{{ formatTimestamp(bot.last_run_at_ms) }}</dd>
-                  </div>
-                  <div>
-                    <dt>Last run detail</dt>
-                    <dd>{{ bot.last_run_detail ?? bot.last_run_result }}</dd>
-                  </div>
-                  <div>
-                    <dt>Process</dt>
-                    <dd>{{ bot.process_state }}</dd>
-                  </div>
-                  <div>
-                    <dt>Desired state</dt>
-                    <dd>{{ bot.desired_state ?? '—' }}</dd>
-                  </div>
-                  <div>
-                    <dt>Readiness</dt>
-                    <dd>{{ bot.readiness_verdict }}</dd>
-                  </div>
-                  <div>
-                    <dt>Readiness detail</dt>
-                    <dd>{{ bot.status_detail ?? '—' }}</dd>
-                  </div>
-                  <div>
-                    <dt>Trading mode</dt>
-                    <dd>{{ bot.trading_mode }}</dd>
-                  </div>
-                </dl>
-              </section>
-            }
-
-            <footer class="card-actions">
-              <button
-                pButton
-                type="button"
-                severity="secondary"
-                [outlined]="true"
-                [icon]="isExpanded(bot.strategy_instance_id) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
-                (click)="toggleExpanded(bot.strategy_instance_id)"
-              >
-                <span class="p-button-label">
-                  {{ isExpanded(bot.strategy_instance_id) ? 'Show less' : 'View more' }}
-                </span>
-              </button>
-              <button
-                pButton
-                type="button"
-                icon="pi pi-external-link"
-                (click)="openBot(bot.strategy_instance_id)"
-              >
-                <span class="p-button-label">Visit bot</span>
-              </button>
-            </footer>
           </article>
+        } @empty {
+          <p class="mobile-empty">
+            @if (isLoading()) {
+              Loading bots...
+            } @else {
+              No {{ emptyMode }} bots match these filters.
+            }
+          </p>
         }
       </div>
-    </ng-template>
-  </p-dataview>
+    </div>
+  </ng-template>
 </section>

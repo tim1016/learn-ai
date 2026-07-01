@@ -10,29 +10,29 @@ import type {
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BotsPageComponent } from './bots-page.component';
 
-const OLD_CREATED = 1_700_000_000_000;
-const NEW_CREATED = 1_800_000_000_000;
+const OLD_RUN = 1_700_000_000_000;
+const NEW_RUN = 1_800_000_000_000;
 
 function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
   return {
-    strategy_instance_id: 'old-spy',
-    name: 'old-spy',
+    strategy_instance_id: 'live-idle-spy',
+    name: 'live-idle-spy',
     description: null,
     status_label: 'Ready for paper trading',
     status_detail: 'All readiness checks are passing.',
     status_tone: 'positive',
     needs_attention: false,
-    trading_mode: 'paper',
+    trading_mode: 'live',
     symbols: ['SPY'],
     engine: 'live-engine',
     engine_asset_class: 'equity',
-    created_at_ms: OLD_CREATED,
-    updated_at_ms: 1_700_000_000_100,
-    last_run_at_ms: 1_700_000_000_200,
+    created_at_ms: OLD_RUN - 1_000,
+    updated_at_ms: OLD_RUN - 500,
+    last_run_at_ms: OLD_RUN,
     last_run_label: 'Clean',
     last_run_result: 'CLEAN',
     last_run_detail: 'Previous run exited normally.',
-    process_state: 'RUNNING',
+    process_state: 'IDLE',
     desired_state: 'PAUSED',
     readiness_verdict: 'READY',
     metrics: {
@@ -60,17 +60,19 @@ async function setup() {
     bots: [
       bot(),
       bot({
-        strategy_instance_id: 'new-aapl',
-        name: 'new-aapl',
+        strategy_instance_id: 'live-running-aapl',
+        name: 'live-running-aapl',
         symbols: ['AAPL'],
-        created_at_ms: NEW_CREATED,
+        last_run_at_ms: NEW_RUN,
         needs_attention: true,
-        status_label: 'Degraded',
+        status_label: 'Needs operator review',
         status_detail: 'Desired state has no durable intent.',
         status_tone: 'danger',
         last_run_label: 'Exited with error',
         last_run_result: 'EXITED_WITH_ERROR',
         last_run_detail: 'Previous run exited with an error: runtime exception. Exit code 1.',
+        process_state: 'RUNNING',
+        readiness_verdict: 'DEGRADED',
         metrics: {
           pnl: { realized: null, unrealized: -4, total: null },
           trade_count: null,
@@ -78,6 +80,16 @@ async function setup() {
           open_positions: 1,
           error_count: 1,
         },
+      }),
+      bot({
+        strategy_instance_id: 'paper-msft',
+        name: 'paper-msft',
+        trading_mode: 'paper',
+        symbols: ['MSFT'],
+        last_run_at_ms: NEW_RUN,
+        process_state: 'RUNNING',
+        status_label: 'Monitoring only',
+        status_tone: 'neutral',
       }),
     ],
   });
@@ -107,70 +119,67 @@ describe('BotsPageComponent', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the backend catalog order without local resorting', async () => {
+  it('sorts live bots for operational triage', async () => {
     const { fixture } = await setup();
-    const cards = [...fixture.nativeElement.querySelectorAll('.bot-card h2')] as HTMLElement[];
-    expect(cards.map((el) => el.textContent?.trim())).toEqual(['old-spy', 'new-aapl']);
+
+    expect(fixture.componentInstance.liveBots().map((row) => row.name)).toEqual([
+      'live-running-aapl',
+      'live-idle-spy',
+    ]);
   });
 
-  it('filters by name and symbol from the catalog projection', async () => {
+  it('filters by global search and server-authored triage fields', async () => {
     const { fixture } = await setup();
-    fixture.componentInstance.nameQuery.set('old');
-    fixture.componentInstance.symbolQuery.set('SPY');
+    fixture.componentInstance.searchQuery.set('aapl');
+    fixture.componentInstance.setAttentionFilter('needs-attention');
+    fixture.componentInstance.setReadinessFilter('DEGRADED');
     fixture.detectChanges();
 
+    expect(fixture.componentInstance.liveBots().map((row) => row.name)).toEqual([
+      'live-running-aapl',
+    ]);
+    expect(fixture.componentInstance.paperBots()).toEqual([]);
+  });
+
+  it('separates live and paper bots into mode tabs', async () => {
+    const { fixture } = await setup();
+
+    expect(fixture.componentInstance.activeModeTab()).toBe('paper');
+    expect(fixture.componentInstance.activeTabCount()).toBe(1);
+    expect(fixture.componentInstance.paperBots().map((row) => row.name)).toEqual([
+      'paper-msft',
+    ]);
+
+    fixture.componentInstance.setActiveModeTab('live');
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.activeTabCount()).toBe(2);
+  });
+
+  it('renders table and mobile card views from the same bot rows', async () => {
+    const { fixture } = await setup();
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('old-spy');
-    expect(text).not.toContain('new-aapl');
+
+    expect(text).toContain('live-running-aapl');
+    expect(text).toContain('AAPL 10');
+    expect(text).toContain('DEGRADED');
+    expect(text).toContain('Exited with error');
+    expect(text).not.toContain('RUNNING');
+    expect(text).not.toContain('Needs operator review');
+    expect(text).not.toContain('Desired state has no durable intent.');
   });
 
-  it('filters by server-authored attention and trading mode fields', async () => {
-    const { fixture } = await setup();
-    fixture.componentInstance.setErrorFilter('has-errors');
-    fixture.componentInstance.setTradingModeFilter('paper');
-    fixture.detectChanges();
-
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('new-aapl');
-    expect(text).not.toContain('old-spy');
-  });
-
-  it('expands card metadata inline', async () => {
-    const { fixture } = await setup();
-    expect(fixture.nativeElement.querySelector('.expanded')).toBeNull();
-    const collapsedText = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(collapsedText).toContain('Degraded');
-    expect(collapsedText).toContain('Exited with error');
-    expect(collapsedText).not.toContain('Realized P&L');
-    expect(collapsedText).not.toContain('Desired state has no durable intent.');
-    expect(collapsedText).not.toContain('Previous run exited with an error');
-
-    fixture.componentInstance.toggleExpanded('new-aapl');
-    fixture.detectChanges();
-
-    const expanded = fixture.nativeElement.querySelector('.expanded') as HTMLElement | null;
-    expect(expanded?.textContent).toContain('Realized P&L');
-    expect(expanded?.textContent).toContain('Errors');
-    expect(expanded?.textContent).toContain('Created');
-    expect(expanded?.textContent).toContain('Trading mode');
-    expect(expanded?.textContent).toContain('Desired state has no durable intent.');
-    expect(expanded?.textContent).toContain('Previous run exited with an error');
-  });
-
-  it('navigates to the bot control page', async () => {
+  it('navigates to the bot control page when a row is clicked', async () => {
     const { fixture, router } = await setup();
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
-    const cards = Array.from(
-      fixture.nativeElement.querySelectorAll('.bot-card'),
-    ) as HTMLElement[];
-    const targetCard = cards.find((card) => card.textContent?.includes('new-aapl'));
-    const visitButton = Array.from(targetCard?.querySelectorAll('button') ?? [])
-      .find((button) => button.textContent?.includes('Visit bot'));
-    expect(visitButton).toBeDefined();
-    visitButton?.click();
+    const targetRow = fixture.nativeElement.querySelector(
+      '[aria-label="Open bot live-running-aapl"]',
+    ) as HTMLElement | null;
+    expect(targetRow).toBeDefined();
+    targetRow?.click();
     await settle(fixture);
 
-    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'new-aapl']);
+    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 });
