@@ -451,6 +451,10 @@ async def test_running_instance_fresh_runtime_keeps_actions_current(
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
+    assert surface["broker"]["connection"] == "CONNECTED"
+    assert "BROKER_CONNECTION_UNKNOWN" not in surface["submit_readiness"]["blocking_reason_codes"]
+    broker_proof = next(line for line in surface["trader_guidance"]["proof_lines"] if line["id"] == "broker-proof")
+    assert broker_proof["message"] == "Paper broker is connected."
     assert surface["runtime_freshness"]["posture_demoted"] is False
     assert surface["runtime_freshness"]["stale_reason_codes"] == []
     assert surface["runtime_freshness"]["bar_loop"]["state"] == "FRESH"

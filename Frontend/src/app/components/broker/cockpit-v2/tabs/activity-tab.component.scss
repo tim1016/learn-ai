@@ -5,11 +5,13 @@
   min-height: 0;
   overflow-y: auto;       // single vertical scroll owner
   padding: 1rem;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, 0.92fr);
+  align-items: start;
   gap: 1.25rem;
 
   .subsection {
+    min-width: 0;
     background: var(--surface-elev1, rgba(255, 255, 255, 0.03));
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
     border-radius: 4px;
@@ -21,6 +23,22 @@
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--text-muted, #7a89a9);
+    }
+  }
+
+  .full-row {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1080px) {
+  .activity-tab {
+    grid-template-columns: 1fr;
+
+    .chart-panel,
+    .orders-panel,
+    .full-row {
+      grid-column: 1;
     }
   }
 }

@@ -298,6 +298,7 @@ describe('BrokerDeployFormComponent', () => {
 
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.live_config).toEqual({
+      symbol: 'SPY',
       sizing: { kind: 'FixedShares', value: 1 },
       action: { on_enter: [], on_exit: [] },
     });
@@ -351,6 +352,7 @@ describe('BrokerDeployFormComponent', () => {
 
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.live_config).toEqual({
+      symbol: 'SPY',
       sizing: { kind: 'StrategyExplicit' },
       action: { on_enter: [], on_exit: [] },
     });
@@ -368,6 +370,7 @@ describe('BrokerDeployFormComponent', () => {
 
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.live_config).toEqual({
+      symbol: 'SPY',
       sizing: { kind: 'FixedShares', value: 25 },
       action: { on_enter: [], on_exit: [] },
     });
@@ -385,6 +388,7 @@ describe('BrokerDeployFormComponent', () => {
 
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.live_config).toEqual({
+      symbol: 'SPY',
       sizing: { kind: 'FixedNotional', value: '1500.50' },
       action: { on_enter: [], on_exit: [] },
     });
@@ -655,7 +659,41 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
-  it('asks for confirmation before starting in Live mode', async () => {
+  it('submits the selected signal stream separately from the traded action-plan instrument', async () => {
+    const { svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.signalStream.set('spy');
+    component.actionPlan.set({
+      on_enter: [
+        {
+          leg_id: 'aapl_long',
+          instrument: { kind: 'stock', underlying: 'AAPL' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
+    });
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.live_config?.symbol).toBe('SPY');
+    expect(req.live_config?.action).toEqual({
+      on_enter: [
+        {
+          leg_id: 'aapl_long',
+          instrument: { kind: 'stock', underlying: 'AAPL' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
+    });
+  });
+
+  it('asks for confirmation before starting with paper order submission enabled', async () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
@@ -667,11 +705,14 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(svc.deployInstance).not.toHaveBeenCalled();
-    expect(fixture.nativeElement.textContent).toContain('Start live trading?');
+    expect(fixture.nativeElement.textContent).toContain('Enable paper order submission?');
+    expect(fixture.nativeElement.textContent).toContain('PAPER_ORDERS_ENABLED');
 
     await component.confirmLiveAndSubmit();
 
     expect(svc.deployInstance).toHaveBeenCalledTimes(1);
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.start_options.readonly).toBe(false);
   });
 
   it('reuses a stable start_date_ms across retries (idempotency)', async () => {

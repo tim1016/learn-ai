@@ -1,5 +1,5 @@
 <div class="activity-tab" data-testid="activity-tab">
-  <section class="subsection" data-testid="activity-latest-signal" aria-label="Latest signal">
+  <section class="subsection full-row" data-testid="activity-latest-signal" aria-label="Latest signal">
     <h3>Latest signal</h3>
     <app-latest-signal-strip
       [decisionColumns]="status().decision_columns"
@@ -7,7 +7,12 @@
     />
   </section>
 
-  <section class="subsection" data-testid="activity-trade-chart" aria-label="Trade chart">
+  <section
+    class="subsection chart-panel"
+    [class.full-row]="ordersToday().length === 0"
+    data-testid="activity-trade-chart"
+    aria-label="Trade chart"
+  >
     <h3>Trade chart</h3>
     <app-bot-trade-chart-card
       [strategyInstanceId]="status().strategy_instance_id"
@@ -18,12 +23,12 @@
   </section>
 
   @if (ordersToday().length > 0) {
-    <section class="subsection" data-testid="activity-orders-today" aria-label="Orders Today">
+    <section class="subsection orders-panel" data-testid="activity-orders-today" aria-label="Orders Today">
       <app-working-pending-orders-section [orders]="ordersToday()" />
     </section>
   }
 
-  <section class="subsection" data-testid="activity-broker-activity" aria-label="Broker activity">
+  <section class="subsection full-row" data-testid="activity-broker-activity" aria-label="Broker activity">
     <app-broker-activity-table
       [rows]="[]"
       [eventRows]="brokerEventRows()"
@@ -35,7 +40,7 @@
     />
   </section>
 
-  <section class="subsection" data-testid="activity-incidents" aria-label="Incidents">
+  <section class="subsection full-row" data-testid="activity-incidents" aria-label="Incidents">
     <h3>Incidents</h3>
     <app-incidents-panel [runId]="chartRunId()" />
   </section>

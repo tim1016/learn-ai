@@ -37,15 +37,13 @@
   <table>
     <thead>
       <tr>
-        <th scope="col">TIME</th>
-        <th scope="col">SYMBOL</th>
-        <th scope="col">SIDE</th>
-        <th scope="col" class="num">ORDER QTY</th>
-        <th scope="col" class="num">FILLED</th>
-        <th scope="col" class="num">AVG FILL</th>
-        <th scope="col">TYPE</th>
-        <th scope="col">STATUS</th>
-        <th scope="col">POSITION EFFECT</th>
+        <th scope="col">Time</th>
+        <th scope="col">Symbol</th>
+        <th scope="col">Position</th>
+        <th scope="col">Side</th>
+        <th scope="col" class="num">Order</th>
+        <th scope="col" class="num">Average fill</th>
+        <th scope="col" class="num">Filled</th>
       </tr>
     </thead>
     <tbody>
@@ -53,9 +51,12 @@
         <tr [attr.data-testid]="'orders-today-row-' + p.row.order_key">
           <td class="ts">{{ p.chartTs }}</td>
           <td>{{ p.row.symbol }}</td>
+          <td>{{ p.row.position_effect ?? '—' }}</td>
           <td>{{ p.row.side }}</td>
-          <td class="num">{{ fmtNumber(p.row.quantity, 0) }}</td>
-          <td class="num">{{ fmtNumber(p.row.filled_quantity, 0) }}</td>
+          <td class="num stacked" [title]="orderDetail(p.row)">
+            <span class="primary-line">{{ orderSummary(p.row) }}</span>
+            <span class="detail-line">{{ orderDetail(p.row) }}</span>
+          </td>
           <td class="num">
             @if (p.row.avg_fill_price !== null) {
               {{ fmtNumber(p.row.avg_fill_price, 2) }}
@@ -63,14 +64,9 @@
               —
             }
           </td>
-          <td>{{ p.row.order_type }}</td>
-          <td>
-            {{ p.row.status }}
-            @if (p.row.replay_count > 1) {
-              · seen {{ p.row.replay_count }}x
-            }
+          <td class="num stacked">
+            <span class="primary-line">{{ filledSummary(p.row) }}</span>
           </td>
-          <td>{{ p.row.position_effect ?? '—' }}</td>
         </tr>
       }
     </tbody>

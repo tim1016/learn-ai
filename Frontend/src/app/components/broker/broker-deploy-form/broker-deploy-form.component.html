@@ -63,6 +63,30 @@
           </label>
           <button type="button" class="text-button" (click)="useManualSpecPath()">Enter path manually</button>
         }
+
+        <label class="field" for="signal-stream">
+          <span>Signal stream</span>
+          @if (fixtureSymbols().length > 0) {
+            <select id="signal-stream" data-deploy-field="signalStream" [value]="resolvedSignalStream()" (change)="setSignalStream($event)" required>
+              @for (symbol of fixtureSymbols(); track symbol) {
+                <option [value]="symbol">{{ symbol }}</option>
+              }
+            </select>
+          } @else {
+            <input
+              data-deploy-field="signalStream"
+              id="signal-stream"
+              type="text"
+              [value]="signalStream()"
+              (input)="setSignalStream($event)"
+              required
+              placeholder="SPY"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          }
+          <small>Feeds strategy data via <code>live_config.symbol</code>. The Action plan below controls the traded instrument.</small>
+        </label>
       </section>
 
       <section class="group" aria-labelledby="account-section">
@@ -199,17 +223,24 @@
             <span class="scope-note">Applies only when starting now</span>
           }
         </div>
-        <fieldset class="mode" [class.live-selected]="launchMode() === 'live'" [disabled]="!startNow()">
-          <legend>Mode</legend>
+        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [disabled]="!startNow()">
+          <legend>Execution capability</legend>
           <label>
-            <input type="radio" name="launch-mode" value="paper" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
-            <span>Paper</span>
+            <input type="radio" name="launch-mode" value="read_only" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
+            <span>
+              <strong>READ-ONLY OBSERVATION</strong>
+              <small>No broker orders are submitted.</small>
+            </span>
           </label>
           <label>
-            <input type="radio" name="launch-mode" value="live" [checked]="!readonlyFlag()" (change)="setReadonly($event)" />
-            <span>Live</span>
+            <input type="radio" name="launch-mode" value="paper_orders" [checked]="!readonlyFlag()" (change)="setReadonly($event)" />
+            <span>
+              <strong>PAPER ORDERS ENABLED</strong>
+              <small>Sets <code>readonly</code> false for this start.</small>
+            </span>
           </label>
         </fieldset>
+        <p class="capability-proof" [class.dimmed]="!startNow()">{{ executionCapabilityProof() }}</p>
 
         <div class="launch-fields" [class.dimmed]="!startNow()">
           <label class="field inline">
@@ -293,13 +324,14 @@
   @if (showLiveConfirm()) {
     <div class="dialog-backdrop" role="presentation">
       <section class="confirm" role="dialog" aria-modal="true" aria-labelledby="live-confirm-title">
-        <h2 id="live-confirm-title">Start live trading?</h2>
+        <h2 id="live-confirm-title">Enable paper order submission?</h2>
         <p>
-          This account ({{ accountId() || 'the selected account' }}) is configured for <strong>live mode</strong> — orders will hit a real broker account.
-          The paper-only enforcement stack (IBKR_MODE / IBKR_READONLY / paper-port / DU-prefix) does <strong>not</strong> apply to this run.
+          This start will send orders to the connected broker paper account ({{ accountId() || 'the selected account' }}) with
+          <strong>readonly_at_start: false</strong> and <strong>submission_capability: PAPER_ORDERS_ENABLED</strong>.
+          It is not real-money live trading while broker identity remains paper-only, but it can create paper fills.
         </p>
         <div class="confirm-actions">
-          <button type="button" class="danger" (click)="confirmLiveAndSubmit()">Deploy & start live</button>
+          <button type="button" class="danger" (click)="confirmLiveAndSubmit()">Deploy & enable paper orders</button>
           <button type="button" (click)="cancelLiveConfirm()">Cancel</button>
         </div>
       </section>

@@ -48,6 +48,21 @@ export class WorkingPendingOrdersSectionComponent {
 
   trackRow = (_i: number, p: OrderDisplay): string => p.row.order_key;
 
+  orderSummary(row: ActivityOrderRow): string {
+    const orderType = row.order_type ? ` ${row.order_type}` : '';
+    return `${fmtNumber(row.quantity, 0)}${orderType}`;
+  }
+
+  orderDetail(row: ActivityOrderRow): string {
+    const parts = [row.status];
+    if (row.replay_count > 1) parts.push(`seen ${row.replay_count}x`);
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  filledSummary(row: ActivityOrderRow): string {
+    return `${fmtNumber(row.filled_quantity, 0)} / ${fmtNumber(row.quantity, 0)}`;
+  }
+
   private rowsFor(group: OrderGroup): OrderDisplay[] {
     return this.displayRows().filter((p) => p.row.group === group);
   }
