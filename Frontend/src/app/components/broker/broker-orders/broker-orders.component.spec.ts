@@ -4,6 +4,7 @@ import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerOrdersComponent } from './broker-orders.component';
+import type { IbkrOpenOrder } from '../../../api/broker-models';
 
 // jsdom lacks EventSource and (across versions) HTMLDialogElement's
 // showModal / close. Stub once at module scope so the broker-orders
@@ -58,8 +59,9 @@ class FakeBrokerService {
   positions = vi.fn();
 }
 
-function setup() {
+function setup(openOrders: IbkrOpenOrder[] = []) {
   const broker = new FakeBrokerService();
+  broker.openOrders.mockResolvedValue(openOrders);
   const health = new FakeBrokerHealthService();
   TestBed.configureTestingModule({
     providers: [
@@ -71,6 +73,24 @@ function setup() {
   fixture.detectChanges();
   return { fixture, broker, health, component: fixture.componentInstance };
 }
+
+const openOrderWithRef: IbkrOpenOrder = {
+  account_id: 'DU1234567',
+  order_id: 42,
+  client_id: 1,
+  con_id: 756733,
+  symbol: 'SPY',
+  sec_type: 'STK',
+  action: 'BUY',
+  quantity: 1,
+  order_type: 'MKT',
+  time_in_force: 'DAY',
+  status: 'Submitted',
+  cumulative_filled: 0,
+  remaining: 1,
+  fetched_at_ms: 1,
+  order_ref: 'learn-ai/test-bot/v1:intent-42',
+};
 
 describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
   let showModal: ReturnType<typeof vi.spyOn>;
@@ -142,6 +162,18 @@ describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
     component.openConfirmDialog();
     fixture.detectChanges();
     expect(component['placeError']()).toBeNull();
+  });
+});
+
+describe('BrokerOrdersComponent — broker provenance', () => {
+  it('renders the broker order_ref for open orders when the backend provides it', async () => {
+    const { fixture } = setup([openOrderWithRef]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      'learn-ai/test-bot/v1:intent-42',
+    );
   });
 });
 
