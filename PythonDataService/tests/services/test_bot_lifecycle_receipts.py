@@ -22,6 +22,7 @@ from app.schemas.live_runs import (
     ReconciliationReceipt,
 )
 from app.services.bot_lifecycle_receipts import (
+    account_freeze_receipts,
     account_identity_receipts,
     account_owner_receipts,
     broker_ack_gap_receipts,
@@ -212,8 +213,29 @@ def test_account_identity_receipts_cover_fold_gap_and_populated_evidence() -> No
     assert empty["account_identity.fold"].headline == "Account identity proof has not been folded into this node yet."
     assert populated["account.account_id"].value == "DU123"
     assert populated["account_identity.verdict"].headline == "Broker account observations agree."
-    assert populated["account_identity.child_account"].value == "DU123"
-    assert populated["account_identity.data_plane_account"].value == "DU123"
+    assert populated["account_identity.child_account_id"].value == "DU123"
+    assert populated["account_identity.data_plane_account_id"].value == "DU123"
+
+
+def test_account_freeze_receipts_cover_gate_and_empty_state() -> None:
+    empty = _receipts_by_label(account_freeze_receipts(None))
+    frozen = _receipts_by_label(
+        account_freeze_receipts(
+            GateResult(
+                gate_id="account.unresolved_exposure",
+                status="freeze",
+                source="account_artifacts",
+                operator_reason="Unresolved exposure exists after a restart.",
+                operator_next_step="Flatten or reconcile before restarting.",
+                evidence_at_ms=_NOW_MS,
+            )
+        )
+    )
+
+    assert empty["account_freeze.gate"].headline == "No account freeze gate is active."
+    assert frozen["account_freeze.gate_id"].value == "account.unresolved_exposure"
+    assert frozen["account_freeze.gate_id"].gate_id == "account.unresolved_exposure"
+    assert frozen["account_freeze.next_step"].value == "Flatten or reconcile before restarting."
 
 
 def test_current_risk_receipts_distinguish_unknown_pending_orders_from_zero() -> None:

@@ -34,6 +34,7 @@ from app.schemas.live_runs import (
 from app.services.bot_lifecycle_projection import latest_event_for_node, lifecycle_status_label
 from app.services.bot_lifecycle_receipts import (
     LifecycleReceiptContext,
+    account_freeze_receipts,
     account_owner_receipts,
     account_safety_receipts,
     broker_ack_gap_receipts,
@@ -50,6 +51,7 @@ from app.services.bot_lifecycle_receipts import (
     event_receipts,
     incident_receipts,
     monitor_receipts,
+    prior_halt_receipts,
     readiness_gate_receipts,
     reconciliation_receipts,
     signal_gap_receipts,
@@ -299,7 +301,8 @@ def _lifecycle_facts(
     *,
     receipt_context: LifecycleReceiptContext | None = None,
 ) -> LifecycleFacts:
-    recovery_fact = _recovery_fact(surface)
+    freeze_gate_result = _freeze_gate_result(surface)
+    recovery_fact = _recovery_fact(surface, receipt_context)
     base_statuses = {
         "deploy": _deploy_status(surface),
         "preflight": _preflight_status(surface),
@@ -326,7 +329,10 @@ def _lifecycle_facts(
         "account_safety": NodeFact(
             _status_for("account_safety", base_statuses["account_safety"], primary_node_id),
             _account_evidence(surface),
-            receipts=account_safety_receipts(surface),
+            receipts=(
+                *account_freeze_receipts(freeze_gate_result),
+                *account_safety_receipts(surface),
+            ),
         ),
         "reconcile": NodeFact(
             _status_for("reconcile", base_statuses["reconcile"], primary_node_id),
@@ -338,6 +344,10 @@ def _lifecycle_facts(
         "activate": NodeFact(
             _status_for("activate", base_statuses["activate"], primary_node_id),
             _activate_evidence(desired_state),
+            receipts=desired_state_receipts(
+                desired_state,
+                effective_state=_effective_desired_value(desired_state),
+            ),
         ),
         "active": NodeFact(
             active_status,
@@ -349,6 +359,7 @@ def _lifecycle_facts(
         "broker_writer": NodeFact(
             _status_for("broker_writer", base_statuses["broker_writer"], primary_node_id),
             _broker_writer_evidence(surface),
+            receipts=broker_activity_receipts(surface),
         ),
         "recovery": NodeFact(
             _status_for("recovery", base_statuses["recovery"], primary_node_id),
@@ -374,7 +385,7 @@ def _lifecycle_facts(
         "account_freeze": NodeFact(
             _freeze_status(surface),
             _freeze_evidence(surface) or "No account freeze gate is active.",
-            receipts=account_safety_receipts(surface),
+            receipts=account_freeze_receipts(freeze_gate_result),
         ),
         "broker_safety": NodeFact(
             _broker_safety_status(surface),
@@ -622,7 +633,10 @@ def _recovery_placeholder_fact(
     return NodeFact("inactive", inactive_reasons[node_id])
 
 
-def _recovery_fact(surface: OperatorSurface) -> NodeFact:
+def _recovery_fact(
+    surface: OperatorSurface,
+    receipt_context: LifecycleReceiptContext | None,
+) -> NodeFact:
     if surface.incident_headline is not None:
         ts_ms = surface.incident_headline.occurred_at_ms
         return NodeFact(
@@ -635,7 +649,11 @@ def _recovery_fact(surface: OperatorSurface) -> NodeFact:
     if _freeze_status(surface) == "freeze":
         return NodeFact("inactive", "No active recovery incident is present.")
     if surface.prior_run.classification == "HALT_TRIGGERED":
-        return NodeFact("poison", "Previous run halted for safety and requires recovery review.")
+        return NodeFact(
+            "poison",
+            "Previous run halted for safety and requires recovery review.",
+            receipts=prior_halt_receipts(receipt_context.last_exit if receipt_context is not None else None),
+        )
     if surface.host_process.state == "STOPPING":
         return NodeFact("active", "The bot process is currently stopping.")
     return NodeFact("inactive", "No active recovery incident is present.")
@@ -820,10 +838,19 @@ def _readiness_gate_facts(readiness_gates: list[OperatorGate]) -> dict[str, Node
             gate.gate_result.operator_reason or gate.detail,
             gate.name,
             receipts=readiness_gate_receipts(gate),
-            operator_actionability="operator-actionable" if gate.suggested_action is not None else "system-only",
+            operator_actionability=_readiness_gate_actionability(gate),
         )
         for index, gate in enumerate(readiness_gates, start=1)
     }
+
+
+def _readiness_gate_actionability(gate: OperatorGate) -> LifecycleChartActionability:
+    status = _operator_gate_status(gate)
+    if gate.suggested_action is not None or status in {"blocked", "freeze", "poison"}:
+        return "operator-actionable"
+    if status == "passed":
+        return "no-action-needed"
+    return "system-only"
 
 
 def _readiness_sort_key(fact_id: str) -> int:
@@ -1001,7 +1028,11 @@ def _gate_status(gate_results: Iterable[GateResult]) -> LifecycleChartStatus:
 
 
 def _freeze_status(surface: OperatorSurface) -> LifecycleChartStatus:
-    return "freeze" if any(gate.status == "freeze" for gate in _all_gate_results(surface)) else "passed"
+    return "freeze" if _freeze_gate_result(surface) is not None else "passed"
+
+
+def _freeze_gate_result(surface: OperatorSurface) -> GateResult | None:
+    return next((gate for gate in _all_gate_results(surface) if gate.status == "freeze"), None)
 
 
 def _broker_safety_status(surface: OperatorSurface) -> LifecycleChartStatus:
@@ -1383,7 +1414,7 @@ def _configuration_evidence(surface: OperatorSurface) -> str:
 
 
 def _freeze_evidence(surface: OperatorSurface) -> str | None:
-    gate = next((gate for gate in _all_gate_results(surface) if gate.status == "freeze"), None)
+    gate = _freeze_gate_result(surface)
     if gate is None:
         return None
     return gate.operator_reason

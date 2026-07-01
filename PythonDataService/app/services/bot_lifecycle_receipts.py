@@ -10,6 +10,7 @@ from app.schemas.live_runs import (
     ActionCapability,
     BotLifecycleEvent,
     DesiredStateView,
+    GateResult,
     InstanceLastExit,
     InstanceProvenance,
     InstanceSizing,
@@ -305,6 +306,38 @@ def account_safety_receipts(surface: OperatorSurface) -> tuple[LifecycleChartRec
     )
 
 
+def account_freeze_receipts(gate_result: GateResult | None) -> tuple[LifecycleChartReceipt, ...]:
+    if gate_result is None:
+        return (
+            honest_empty_receipt(
+                "account_freeze.gate",
+                headline="No account freeze gate is active.",
+                detail="The backend found no freeze gate in this account-safety snapshot.",
+                source="operator_surface.account_freeze",
+            ),
+        )
+    return (
+        chart_receipt(
+            "account_freeze.gate_id",
+            gate_result.gate_id,
+            headline="Account freeze gate evidence is present.",
+            detail=gate_result.operator_reason,
+            source=gate_result.source,
+            gate_id=gate_result.gate_id,
+            ts_ms=gate_result.evidence_at_ms,
+        ),
+        chart_receipt(
+            "account_freeze.next_step",
+            gate_result.operator_next_step or "review_account_freeze",
+            headline="The backend authored the account-freeze next step.",
+            detail="The raw next-step token is preserved in the audit payload.",
+            source=gate_result.source,
+            gate_id=gate_result.gate_id,
+            ts_ms=gate_result.evidence_at_ms,
+        ),
+    )
+
+
 def account_identity_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
     receipts: list[LifecycleChartReceipt] = []
     owner = surface.account_owner
@@ -334,7 +367,7 @@ def account_identity_receipts(surface: OperatorSurface) -> tuple[LifecycleChartR
         if consistency.child_account is not None:
             receipts.append(
                 chart_receipt(
-                    "account_identity.child_account",
+                    "account_identity.child_account_id",
                     consistency.child_account,
                     headline=f"The child runtime reports account {consistency.child_account}.",
                     source="operator_surface.broker_observation_consistency",
@@ -344,7 +377,7 @@ def account_identity_receipts(surface: OperatorSurface) -> tuple[LifecycleChartR
         if consistency.data_plane_account is not None:
             receipts.append(
                 chart_receipt(
-                    "account_identity.data_plane_account",
+                    "account_identity.data_plane_account_id",
                     consistency.data_plane_account,
                     headline=f"The data plane reports account {consistency.data_plane_account}.",
                     source="operator_surface.broker_observation_consistency",
@@ -529,6 +562,28 @@ def desired_state_receipts(
             )
         )
     return tuple(receipts)
+
+
+def prior_halt_receipts(last_exit: InstanceLastExit | None) -> tuple[LifecycleChartReceipt, ...]:
+    if last_exit is None or last_exit.halt_trigger is None:
+        return (
+            honest_empty_receipt(
+                "prior_halt.trigger",
+                headline="Prior halt trigger evidence is not available.",
+                detail="The prior-run classifier reported a halt, but no specific halt trigger was folded into this snapshot.",
+                source="last_exit.poisoned_flag",
+            ),
+        )
+    return (
+        chart_receipt(
+            "prior_halt.trigger",
+            last_exit.halt_trigger,
+            headline="The previous run left a safety halt trigger.",
+            detail="This comes from the last-exit poison flag; the prior-run field alone is only a coarse classification.",
+            source="last_exit.poisoned_flag",
+            ts_ms=last_exit.halt_at_ms,
+        ),
+    )
 
 
 def capability_receipts(name: str, capability: ActionCapability) -> tuple[LifecycleChartReceipt, ...]:
@@ -716,17 +771,6 @@ def _preflight_context_receipts(
                 source="run_ledger.live_config.sizing",
             )
         )
-    if context.last_exit is not None and context.last_exit.halt_trigger is not None:
-        receipts.append(
-            chart_receipt(
-                "prior_halt.trigger",
-                context.last_exit.halt_trigger,
-                headline="The previous run left a safety halt trigger.",
-                detail="This comes from the last-exit poison flag; the prior-run field alone is only a coarse classification.",
-                source="last_exit.poisoned_flag",
-                ts_ms=context.last_exit.halt_at_ms,
-            )
-        )
     return receipts
 
 
@@ -765,6 +809,7 @@ def _stable_config_value(value: object) -> str:
 
 __all__ = [
     "LifecycleReceiptContext",
+    "account_freeze_receipts",
     "account_owner_receipts",
     "account_safety_receipts",
     "broker_ack_gap_receipts",
@@ -782,6 +827,7 @@ __all__ = [
     "honest_empty_receipt",
     "incident_receipts",
     "monitor_receipts",
+    "prior_halt_receipts",
     "readiness_gate_receipts",
     "reconciliation_receipts",
     "signal_gap_receipts",
