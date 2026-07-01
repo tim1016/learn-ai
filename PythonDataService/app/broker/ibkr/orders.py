@@ -25,6 +25,7 @@ from app.broker.ibkr.api_evidence import (
     get_ibkr_api_evidence_recorder,
 )
 from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
+from app.broker.ibkr.config import LIVE_PORTS
 from app.broker.ibkr.contracts import expiry_ms_to_yyyymmdd
 from app.broker.ibkr.models import (
     IbkrApiCallbackName,
@@ -175,6 +176,61 @@ def _check_reconnect_recovery_halt() -> None:
         )
 
 
+def _enforce_paper_account_context(client: IbkrClient, *, operation: str) -> str:
+    """Run paper-account safety layers shared by submit and what-if preview.
+
+    Any failure raises ``OrderRefusedError`` *before* any contract or order
+    is constructed. We never want to come close to broker order surfaces under
+    a bad account/mode/port combination.
+
+    Layers:
+      0. ``IBKR_READONLY`` kill switch (operator-controlled lockdown).
+      1. ``IBKR_MODE`` env var = paper.
+      2. Connected port is a paper port.
+      3. Connected account id begins with ``DU``.
+    """
+    settings = client.settings
+    account_id = client.connected_account
+    if account_id is None:
+        raise OrderRefusedError("No account id on connected client.")
+
+    # Layer 0: operator kill switch. ib_async's connect-time `readonly`
+    # flag only suppresses startup queries (open/completed orders); it does
+    # NOT prevent placeOrder at the IBKR protocol layer. We enforce it here
+    # in our own code so flipping IBKR_READONLY=true reliably stops trades.
+    if settings.readonly:
+        raise OrderRefusedError(
+            f"Refusing to {operation}: IBKR_READONLY=true (operator lockdown). "
+            "Set IBKR_READONLY=false in .env and restart the service to enable "
+            "paper broker order surfaces."
+        )
+
+    # Layer 1: env-var mode
+    if settings.mode != "paper":
+        raise OrderRefusedError(
+            f"Refusing to {operation}: IBKR_MODE is {settings.mode!r}, must be "
+            "'paper'."
+        )
+
+    # Layer 2: port validator already ran at config time, but cross-check
+    # the actually-connected port for paranoia.
+    if settings.port in LIVE_PORTS:
+        raise OrderRefusedError(
+            f"Refusing to {operation}: connected port {settings.port} is a "
+            "LIVE Gateway port. Paper-mode env said paper but port disagrees."
+        )
+
+    # Layer 3: account-id sentinel (re-check; client.connect already enforced)
+    if not _is_paper_account(account_id):
+        raise OrderRefusedError(
+            f"Refusing to {operation}: account {account_id!r} does NOT begin "
+            "with 'DU'. Paper-mode env said paper but the broker connected "
+            "us to a non-paper account."
+        )
+
+    return account_id
+
+
 def _enforce_paper_safety(client: IbkrClient, spec: IbkrOrderSpec) -> str:
     """Run the paper-mode safety checks. Returns the validated account id.
 
@@ -189,46 +245,7 @@ def _enforce_paper_safety(client: IbkrClient, spec: IbkrOrderSpec) -> str:
       3. Connected account id begins with ``DU``.
       4. Per-request ``confirm_paper=true``.
     """
-    settings = client.settings
-    account_id = client.connected_account
-    if account_id is None:
-        raise OrderRefusedError("No account id on connected client.")
-
-    # Layer 0: operator kill switch. ib_async's connect-time `readonly`
-    # flag only suppresses startup queries (open/completed orders); it does
-    # NOT prevent placeOrder at the IBKR protocol layer. We enforce it here
-    # in our own code so flipping IBKR_READONLY=true reliably stops trades.
-    if settings.readonly:
-        raise OrderRefusedError(
-            "Refusing to place order: IBKR_READONLY=true (operator lockdown). "
-            "Set IBKR_READONLY=false in .env and restart the service to enable "
-            "order placement."
-        )
-
-    # Layer 1: env-var mode
-    if settings.mode != "paper":
-        raise OrderRefusedError(
-            f"Refusing to place order: IBKR_MODE is {settings.mode!r}, must be "
-            "'paper' for Phase 3a."
-        )
-
-    # Layer 2: port validator already ran at config time, but cross-check
-    # the actually-connected port for paranoia.
-    from app.broker.ibkr.config import LIVE_PORTS
-
-    if settings.port in LIVE_PORTS:
-        raise OrderRefusedError(
-            f"Refusing to place order: connected port {settings.port} is a "
-            "LIVE Gateway port. Paper-mode env said paper but port disagrees."
-        )
-
-    # Layer 3: account-id sentinel (re-check; client.connect already enforced)
-    if not _is_paper_account(account_id):
-        raise OrderRefusedError(
-            f"Refusing to place order: account {account_id!r} does NOT begin "
-            "with 'DU'. Paper-mode env said paper but the broker connected "
-            "us to a non-paper account."
-        )
+    account_id = _enforce_paper_account_context(client, operation="place order")
 
     # Layer 4: per-request confirm_paper
     if not spec.confirm_paper:
@@ -487,6 +504,7 @@ async def _place_and_build_ack(
         order_type=spec.order_type,
         limit_price=spec.limit_price,
         status=order_status,
+        order_ref=spec.order_ref,
         ibkr_evidence=ibkr_evidence,
         placed_at_ms=now_ms_utc(),
     )

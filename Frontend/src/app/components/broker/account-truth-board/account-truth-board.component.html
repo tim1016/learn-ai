@@ -1,0 +1,117 @@
+@let accountTruth = truth();
+
+<section
+  class="truth-board"
+  [class.truth-critical]="accountTruth.final_severity === 'critical'"
+  [class.truth-warning]="accountTruth.final_severity === 'warning'"
+>
+  <header class="truth-head">
+    <div>
+      <span class="eyebrow">Account truth</span>
+      <h2>{{ accountTruth.status_label }}</h2>
+      <p>{{ accountTruth.status_detail }}</p>
+    </div>
+    <span class="verdict-pill mono">{{ accountTruth.final_severity | receiptLabel }}</span>
+  </header>
+
+  <app-data-source
+    origin="IBKR"
+    method="account truth projection"
+    [freshness]="fmtTimestampNy(accountTruth.generated_at_ms)"
+  />
+
+  @if (showAccountMetrics()) {
+    <dl class="kv-grid">
+      <dt>Account</dt>
+      <dd class="mono">{{ accountTruth.account_id ?? '—' }}</dd>
+      <dt>Net liquidation</dt>
+      <dd class="mono num">{{ fmtCurrency(accountTruth.account?.net_liquidation) }}</dd>
+      <dt>Buying power</dt>
+      <dd class="mono num">{{ fmtCurrency(accountTruth.account?.buying_power) }}</dd>
+      <dt>Maint margin</dt>
+      <dd class="mono num">{{ fmtCurrency(accountTruth.account?.maint_margin) }}</dd>
+    </dl>
+  }
+
+  @if (showInvariants() && accountTruth.invariants.length > 0) {
+    <div class="invariant-grid">
+      @for (invariant of accountTruth.invariants; track trackInvariant($index, invariant)) {
+        <article
+          class="invariant-card"
+          [class.invariant-fail]="invariant.status === 'fail'"
+          [class.invariant-warn]="invariant.status === 'warn'"
+        >
+          <header>
+            <span>{{ invariant.label }}</span>
+            <span class="mono">{{ invariant.status | receiptLabel }}</span>
+          </header>
+          <strong>{{ invariant.headline }}</strong>
+          <p>{{ invariant.narrative }}</p>
+        </article>
+      }
+    </div>
+  }
+
+  @if (accountTruth.blockers.length > 0) {
+    <section class="truth-messages">
+      <header>Blockers</header>
+      @for (blocker of accountTruth.blockers; track trackMessage($index, blocker)) {
+        <article class="truth-message blocker">
+          <strong>{{ blocker.title }}</strong>
+          <span>{{ blocker.message }}</span>
+        </article>
+      }
+    </section>
+  }
+
+  @if (showCaveats() && accountTruth.caveats.length > 0) {
+    <section class="truth-messages">
+      <header>Caveats</header>
+      @for (caveat of accountTruth.caveats; track trackMessage($index, caveat)) {
+        <article class="truth-message">
+          <strong>{{ caveat.title }}</strong>
+          <span>{{ caveat.message }}</span>
+        </article>
+      }
+    </section>
+  }
+
+  @if (showOwnerSummary() && accountTruth.owner_summaries.length > 0) {
+    <div class="table-wrap compact">
+      <table class="owner-table">
+        <thead>
+          <tr>
+            <th>Owner</th>
+            <th>Tier</th>
+            <th class="num">Open</th>
+            <th class="num">Execs</th>
+            <th class="num">Positions</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (owner of accountTruth.owner_summaries; track trackOwner($index, owner)) {
+            <tr>
+              <td>{{ owner.owner_label }}</td>
+              <td>{{ owner.evidence_label }}</td>
+              <td class="mono num">{{ owner.open_order_count }}</td>
+              <td class="mono num">{{ owner.execution_count }}</td>
+              <td class="mono num">{{ owner.position_count }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+
+  @if (showSymbolExposures() && accountTruth.symbol_exposures.length > 0) {
+    <div class="exposure-strip">
+      @for (exposure of accountTruth.symbol_exposures; track trackExposure($index, exposure)) {
+        <span class="exposure-chip">
+          <span class="mono">{{ exposure.symbol }}</span>
+          <span>{{ exposure.owner_label }}</span>
+          <span class="mono">{{ fmtSignedNumber(exposure.quantity, 0) }}</span>
+        </span>
+      }
+    </div>
+  }
+</section>

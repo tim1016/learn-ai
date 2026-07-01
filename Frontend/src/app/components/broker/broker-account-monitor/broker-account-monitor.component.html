@@ -1,24 +1,24 @@
 <app-page-header
   title="Account Monitor"
-  subtitle="Continuous account-level and per-position P&L. Account snapshot lives on the Status page; this page is the streaming counterpart."
+  subtitle="Account truth, owner exposure, buying power, margin, and streaming P&L for the connected IBKR paper account."
 >
   <button
     slot="actions"
     type="button"
     class="ghost-btn"
-    (click)="loadPositions()"
+    (click)="refresh()"
   >
     <i class="pi pi-refresh" aria-hidden="true"></i>
-    Refresh positions
+    Refresh
   </button>
   <app-page-guide
     slot="guide"
-    pulls="Two SSE streams: /api/broker/pnl/stream (account-level Day / Unrealized / Realized) and /api/broker/pnl/positions/stream (per-conId mark + day P&L)."
-    why="The Status page shows a one-shot snapshot; this page is the live counterpart so you can watch Day P&L move while a paper position is open."
+    pulls="Account truth from /api/broker/account-truth plus two SSE streams: /api/broker/pnl/stream and /api/broker/pnl/positions/stream."
+    why="This page is the risk-first monitor: confirm ownership, margin, buying power, and P&L before bots submit again."
     [steps]="[
       'Confirm the broker is paper-connected on the Status page.',
-      'Open this page; the streams open automatically.',
-      'Refresh positions if you placed a new order to pick up its conId.'
+      'Read the Account Truth verdict and blockers first.',
+      'Refresh positions after a new order to pick up its conId.'
     ]"
     [related]="[
       { label: 'Broker Status', route: '/broker' },
@@ -41,6 +41,25 @@
     refresh.
   </p>
 } @else {
+  <section class="truth-section">
+    @if (truthError(); as err) {
+      <app-section-error
+        [error]="err"
+        contextWhat="We couldn't load account truth."
+        (retry)="loadTruth()"
+      />
+    } @else if (truthLoading()) {
+      <p class="muted">Loading account truth…</p>
+    } @else if (accountTruth(); as truth) {
+      <app-account-truth-board
+        [truth]="truth"
+        [showAccountMetrics]="true"
+        [showOwnerSummary]="true"
+        [showSymbolExposures]="true"
+      />
+    }
+  </section>
+
   <section class="cards">
     <article class="card">
       <header class="card-header">

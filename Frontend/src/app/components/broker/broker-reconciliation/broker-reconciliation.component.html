@@ -40,6 +40,13 @@
     <p class="error">{{ err }}</p>
   }
 
+  @if (accountTruth(); as truth) {
+    <app-account-truth-board
+      [truth]="truth"
+      [showInvariants]="true"
+    />
+  }
+
   <div class="legend mono">
     Tolerance bands:
     <span class="legend-cell band-green">≤ 50 bps</span>

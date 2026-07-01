@@ -13,10 +13,12 @@ import { PageGuideComponent } from '../../../shared/page-guide/page-guide.compon
 import { RouterLink } from '@angular/router';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
+import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
+  AccountTruthResponse,
   IbkrPnLTick,
   IbkrPosition,
   IbkrPositionsSnapshot,
@@ -50,7 +52,14 @@ interface PositionRow {
 @Component({
   selector: 'app-broker-account-monitor',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, PageGuideComponent, DataSourceComponent, SectionErrorComponent, RouterLink],
+  imports: [
+    PageHeaderComponent,
+    PageGuideComponent,
+    DataSourceComponent,
+    SectionErrorComponent,
+    RouterLink,
+    AccountTruthBoardComponent,
+  ],
   styleUrl: './broker-account-monitor.component.scss',
   templateUrl: './broker-account-monitor.component.html',
 })
@@ -63,6 +72,9 @@ export class BrokerAccountMonitorComponent {
   readonly positionsLoading = signal(false);
   readonly positionsError = signal<unknown>(null);
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);
+  readonly truthLoading = signal(false);
+  readonly truthError = signal<unknown>(null);
+  readonly accountTruth = signal<AccountTruthResponse | null>(null);
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
   private readonly positionStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -102,7 +114,7 @@ export class BrokerAccountMonitorComponent {
   readonly fmtDateNy = fmtDateNy;
 
   constructor() {
-    void this.loadPositions();
+    void this.refresh();
 
     // Fold per-conId ticks. The stream's ``data`` is a flat list across
     // all contracts (one entry per (con_id, debounce window)); we
@@ -123,6 +135,23 @@ export class BrokerAccountMonitorComponent {
         return next;
       });
     });
+  }
+
+  async refresh(): Promise<void> {
+    await Promise.all([this.loadTruth(), this.loadPositions()]);
+  }
+
+  async loadTruth(): Promise<void> {
+    if (!this.canStream()) return;
+    this.truthLoading.set(true);
+    this.truthError.set(null);
+    try {
+      this.accountTruth.set(await this.broker.accountTruth());
+    } catch (err) {
+      this.truthError.set(err);
+    } finally {
+      this.truthLoading.set(false);
+    }
   }
 
   async loadPositions(): Promise<void> {
@@ -172,4 +201,3 @@ export class BrokerAccountMonitorComponent {
 
   trackRow = (_: number, row: PositionRow): number => row.position.con_id;
 }
-

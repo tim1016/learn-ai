@@ -136,6 +136,40 @@ async def test_positions_returns_503_when_disabled():
     assert response.status_code == 503
 
 
+async def test_account_truth_returns_canonical_503_when_disabled():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/broker/account-truth")
+
+    assert response.status_code == 503
+    assert "IBKR_BROKER_ENABLED=false" in response.text
+
+
+async def test_completed_orders_returns_canonical_503_when_disabled():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/broker/orders/completed")
+
+    assert response.status_code == 503
+    assert "IBKR_BROKER_ENABLED=false" in response.text
+
+
+async def test_order_what_if_returns_canonical_503_when_disabled():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/broker/orders/what-if",
+            json={
+                "symbol": "SPY",
+                "sec_type": "STK",
+                "action": "BUY",
+                "quantity": 1,
+                "order_type": "MKT",
+                "confirm_paper": True,
+            },
+        )
+
+    assert response.status_code == 503
+    assert "IBKR_BROKER_ENABLED=false" in response.text
+
+
 # ---------------------------------------------------------------------------
 # get_client() raises NotConnectedError when disabled
 # ---------------------------------------------------------------------------

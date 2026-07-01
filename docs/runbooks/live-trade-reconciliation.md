@@ -5,6 +5,28 @@
 
 The Activity tab shows one row per IBKR execution (and, once the pending-row gap below is closed, per unacked pending intent), authored server-side. The frontend renders verbatim — it does not derive verdicts, compose narratives, or compute lag chips. Every chip color and every word was decided by the backend when the row was written.
 
+## Account Truth board
+
+The broker pages now expose an account-wide Account Truth projection in addition to the per-bot Activity tab. Use it when the question is "is the whole IBKR account safe for bots to submit again?"
+
+| Page | What to check first |
+|---|---|
+| Account Monitor | Overall Account Truth verdict, blockers, owner rollups, symbol exposure, buying power, margin, NLV, and P&L. |
+| Reconciliation | Invariant cards: broker liveness, open orders known, completed orders known, executions assigned, positions explained, commission complete, Flex audit status. |
+| Orders | Broker order ledger with open and recently completed/cancelled/rejected orders, owner label, evidence tier, lifecycle stage, `order_ref`, and IBKR evidence. |
+| Per-bot Activity | The bot-specific intent and fill narrative after Account Truth says a row belongs to a bot namespace. |
+
+If a trade is "in limbo":
+
+1. Start on **Orders**. A live broker order whose lifecycle is `submitted`, `acknowledged`, or `limbo` remains visible in the ledger even before it fills. If it has no known namespace, it is `foreign_or_unclaimed`.
+2. Check **Reconciliation**. `open_orders_known` fails critical for unknown live working orders. `all_executions_assigned` fails critical for an unknown execution. `positions_match_known_ownership` fails critical for unexplained current exposure.
+3. Check **Account Monitor** for whether the unowned fact affects current exposure, margin, or buying power.
+4. If the row is bot-owned, drill into that bot's Activity/Audit trail. If it is manual, the row should show app-minted manual evidence. If it is foreign/unclaimed, treat it as unresolved broker risk.
+
+A hand-clicked TWS order is not automatically manual. If it has no app-minted `manual/{operator_or_session}/v1` `order_ref`, it remains foreign/unclaimed until the future audited adoption workflow ships. This is intentional: `clientId=0` tells you where the order was seen, not who meant to own it.
+
+Completed/cancelled/rejected orders come from TWS/Gateway's completed-order surface. That surface helps the live ledger remember terminal orders after they leave the open-order list, but it is not the delayed official statement. Flex import remains the future official audit for settled executions, commissions, cash, and positions; until then `flex_audit_match` is `not_applicable`.
+
 ## What you see by default
 
 Every row carries a single **verdict chip**. There are four values:
@@ -66,6 +88,9 @@ For the verdicts that require action (`unexpected`) or attention (`expected_with
 
 ## Where the data lives
 
+- **Account Truth projection:** `GET /api/broker/account-truth` — backend-authored account-wide invariants, blockers, caveats, owner summaries, order rows, execution rows, and position rows.
+- **Completed-order sweep:** `GET /api/broker/orders/completed` — recent terminal TWS orders from `reqCompletedOrdersAsync(apiOnly=false)`.
+- **What-if preview:** `POST /api/broker/orders/what-if` — non-submitting paper preview used by the Orders confirmation dialog before manual paper submit.
 - **Raw broker-callback record:** `<run_dir>/broker_callbacks.jsonl` — host-runner-owned append-only WAL and first-capture authority for broker callbacks (ADR 0014 amendment 2026-06-25). The data-plane publisher must be able to rebuild authored activity from this file.
 - **Authored operator-view record:** `<run_dir>/broker_activity.jsonl` — append-only projection WAL carrying backend-authored `BrokerActivityRow`s. Rows projected from a raw callback carry `source_callback_seq`, `source_callback_type`, and the raw idempotency key; pending rows with no callback carry `source_callback_seq = null`.
 - **Projection cursors:** `LiveStateEnvelope.last_broker_callbacks_wal_seq` is the highest raw callback `seq` projected into authored rows; `LiveStateEnvelope.last_broker_activity_wal_seq` is the highest authored row `seq` exposed through REST/SSE. If the authored projection is rebuilt, reset both cursors to `0`, replay `broker_callbacks.jsonl`, and recreate `broker_activity.jsonl`.

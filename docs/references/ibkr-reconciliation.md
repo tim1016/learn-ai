@@ -38,6 +38,47 @@ ADR 0008 §1 is non-negotiable here: `order_ref` is `{bot_order_namespace}:{inte
 
 Do not relax this to `startswith` for "`/v2` rollouts" — cross-version recognition is handled by an explicit dual-read allowed-namespace *set* per ADR 0008 §7; equality on each element still holds.
 
+## Account Truth projection
+
+The Account Truth board is the account-wide sibling of the per-bot Activity stream. It lives in `PythonDataService/app/broker/ibkr/account_truth.py`, is exposed as `GET /api/broker/account-truth`, and emits the `AccountTruthResponse` schema in `PythonDataService/app/schemas/account_truth.py`.
+
+Its job is different from Activity:
+
+| Surface | Unit of truth | Primary question |
+|---|---|---|
+| Per-bot Activity | One broker callback/execution joined to one bot's intent evidence | Did this bot's broker outcome match its intended order? |
+| Account Truth | The whole connected IBKR account joined against every known bot namespace and manual namespace | Is every live account fact assigned, or should bot submits stay blocked? |
+
+The projection gathers live TWS/Gateway evidence from account summary, positions, open orders, completed orders, and execution sweeps. Orders and executions classify as bot/manual/foreign-or-unclaimed; current positions can additionally classify as mixed-known when more than one known owner has filled evidence for the same contract:
+
+| Owner class | Evidence accepted |
+|---|---|
+| `bot` | `order_ref` namespace exactly equals one active known `learn-ai/{strategy_instance_id}/v1` namespace. |
+| `manual` | App-submitted manual paper order with a reserved `manual/{operator_or_session}/v1:{intent_id}` `order_ref`. The current MVP uses `manual/operator/v1` until an authenticated operator/session principal exists at this route. |
+| `mixed_known` | Positions only: a current position is explained by more than one known bot/manual owner for the same contract. |
+| `foreign_or_unclaimed` | Missing `order_ref`, unparseable `order_ref`, unknown namespace, TWS hand-click, other API session, stale process, or any broker fact not proved by a known namespace. |
+
+`clientId` is forensic context only. A TWS click on `clientId=0` with no namespace is still `foreign_or_unclaimed`; it is not auto-classified as manual. This preserves the same fail-closed contract as the broker-activity reconciler: absence of identity is evidence of uncertainty, not evidence of safety.
+
+Account Truth emits backend-authored invariant rows rather than leaving Angular to infer pass/fail:
+
+| Invariant | Failure meaning |
+|---|---|
+| `broker_liveness_proven` | The connected broker session is not live enough to prove account truth. |
+| `open_orders_known` | At least one live working broker order is foreign/unclaimed, or the open-order sweep is unavailable. Critical. |
+| `completed_orders_known` | Recent terminal order evidence is incomplete or contains unclaimed rows. Warning in the MVP because terminal history is lower live-risk than working orders. |
+| `all_executions_assigned` | At least one execution sweep row is foreign/unclaimed, or execution evidence is unavailable. Critical. |
+| `positions_match_known_ownership` | A current position is not explained by known bot/manual evidence. Critical. |
+| `commission_complete` | One or more executions are missing IBKR `commissionReport` evidence. Warning; missing fees stay `None`, never fabricated as zero. |
+| `flex_audit_match` | `not_applicable` until the delayed Flex import slice ships. |
+| `duplicate_exec_id_suppressed` | IBKR redelivered an `execId`; the projection keeps the first observation, backfills missing fields from later observations, and reports the duplicate as a caveat. |
+
+Rows preserve broker identifiers for audit: `execId` dedupes executions, `permId` groups an order lifecycle when available, `order_ref` assigns ownership, and `orderId` is displayed only as broker evidence.
+
+### Manual adoption boundary
+
+Post-hoc adoption of foreign/unclaimed rows is deliberately not part of the MVP projection. When it ships, it must be an append-only adoption ledger folded over raw broker facts, keyed by durable identity (`permId` for orders, `execId` for executions). Adoption is a human claim layered over broker-foreign identity; it must not rewrite raw broker evidence or silently mark a row safe. Live-working order adoption is especially sensitive because it can clear the unknown-open-order bot-submit block.
+
 ## Divergence taxonomy — live vs. backtest
 
 The live surface has its own divergence vocabulary, `ReasonCode` (`schemas/broker_activity.py:50`), a 12-value closed `StrEnum` driving template selection. The backtest reconciler has a separate vocabulary, `DivergenceCategory` (`app/research/parity/qc_reconciler.py`), 8 values per `.claude/rules/numerical-rigor.md` § "Trade-level reconciliation taxonomy".
@@ -88,6 +129,9 @@ If you find yourself reading CP Web API docs while extending the reconciler, you
 | Stateful publisher | `PythonDataService/app/services/broker_activity_publisher.py` |
 | WAL writer | `PythonDataService/app/services/broker_activity_wal.py` |
 | Row schemas + enums | `PythonDataService/app/schemas/broker_activity.py` |
+| Account-wide truth projection | `PythonDataService/app/broker/ibkr/account_truth.py` |
+| Account Truth schema | `PythonDataService/app/schemas/account_truth.py` |
+| Account Truth REST surface | `GET /api/broker/account-truth` in `PythonDataService/app/routers/broker_account_truth.py` |
 | Resume cursor | `PythonDataService/app/engine/live/live_state_sidecar.py` (`last_broker_activity_wal_seq`) |
 | SSE + REST surface | `PythonDataService/app/routers/broker_activity.py` |
 | Operator runbook | `docs/runbooks/live-trade-reconciliation.md` |

@@ -12,7 +12,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.client import set_client
+from app.broker.ibkr.models import IbkrOrderSpec
 from app.main import app
+from app.routers.broker import _stamp_manual_order_ref_if_requested
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
 
@@ -240,6 +242,36 @@ async def test_post_orders_rejects_missing_confirm_paper_field() -> None:
 
     # FastAPI validates required fields before the handler runs.
     assert resp.status_code == 422
+
+
+def test_manual_order_request_is_server_stamped_with_manual_namespace() -> None:
+    spec = IbkrOrderSpec(
+        symbol="SPY",
+        sec_type="STK",
+        action="BUY",
+        quantity=1,
+        order_type="MKT",
+        confirm_paper=True,
+        manual_order=True,
+    )
+
+    stamped = _stamp_manual_order_ref_if_requested(spec)
+
+    assert stamped.order_ref is not None
+    assert stamped.order_ref.startswith("manual/operator/v1:")
+
+
+def test_non_manual_order_request_does_not_silently_repair_missing_order_ref() -> None:
+    spec = IbkrOrderSpec(
+        symbol="SPY",
+        sec_type="STK",
+        action="BUY",
+        quantity=1,
+        order_type="MKT",
+        confirm_paper=True,
+    )
+
+    assert _stamp_manual_order_ref_if_requested(spec).order_ref is None
 
 
 # ── Phase 3b endpoints ─────────────────────────────────────────────────

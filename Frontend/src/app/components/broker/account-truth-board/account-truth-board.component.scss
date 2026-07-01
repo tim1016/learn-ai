@@ -1,0 +1,221 @@
+:host {
+  display: block;
+}
+
+.truth-board {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border: 1px solid rgba(46, 160, 67, 0.45);
+  border-radius: 8px;
+  background: var(--bg-surface, #131722);
+  color: var(--text-primary, #f0f3fa);
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.truth-board.truth-warning {
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
+.truth-board.truth-critical {
+  border-color: rgba(239, 68, 68, 0.65);
+}
+
+.truth-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+
+  h2 {
+    margin: 0.1rem 0 0.2rem;
+    font-size: 1.05rem;
+    color: var(--text-primary, #f0f3fa);
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-secondary, #b2b5be);
+    font-size: 0.9rem;
+  }
+}
+
+.eyebrow {
+  color: var(--text-subtle, #9598a1);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.verdict-pill {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-light, #2a2e39);
+  background: var(--bg-sunken, #070a11);
+  color: var(--text-primary, #f0f3fa);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.kv-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 1.25rem;
+  row-gap: 0.4rem;
+  margin: 0;
+
+  dt {
+    color: var(--text-subtle, #9598a1);
+    font-size: 0.85rem;
+  }
+
+  dd {
+    margin: 0;
+    color: var(--text-primary, #f0f3fa);
+    font-size: 1rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.invariant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.65rem;
+}
+
+.invariant-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem;
+  border-radius: 6px;
+  border: 1px solid rgba(46, 160, 67, 0.38);
+  background: rgba(46, 160, 67, 0.1);
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: var(--text-secondary, #b2b5be);
+    font-size: 0.76rem;
+  }
+
+  strong {
+    color: var(--text-primary, #f0f3fa);
+    font-size: 0.9rem;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-secondary, #b2b5be);
+    font-size: 0.82rem;
+  }
+}
+
+.invariant-card.invariant-warn {
+  border-color: rgba(245, 158, 11, 0.48);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.invariant-card.invariant-fail {
+  border-color: rgba(239, 68, 68, 0.56);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.truth-messages {
+  display: grid;
+  gap: 0.45rem;
+
+  header {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-secondary, #b2b5be);
+    text-transform: uppercase;
+  }
+}
+
+.truth-message {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light, #2a2e39);
+  background: var(--bg-sunken, #070a11);
+
+  strong {
+    color: var(--text-primary, #f0f3fa);
+  }
+
+  span {
+    color: var(--text-secondary, #b2b5be);
+    font-size: 0.84rem;
+  }
+}
+
+.truth-message.blocker {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 8px;
+}
+
+.compact .owner-table {
+  min-width: 620px;
+}
+
+.owner-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+
+  th,
+  td {
+    padding: 0.5rem 0.65rem;
+    border-bottom: 1px solid var(--border-light, #2a2e39);
+    text-align: left;
+    color: var(--text-secondary, #b2b5be);
+  }
+
+  th {
+    background: var(--bg-sunken, #070a11);
+    font-weight: 600;
+    color: var(--text-primary, #f0f3fa);
+  }
+
+  td.num,
+  th.num {
+    text-align: right;
+  }
+}
+
+.exposure-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.exposure-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light, #2a2e39);
+  color: var(--text-secondary, #b2b5be);
+  background: var(--bg-sunken, #070a11);
+  font-size: 0.8rem;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.num {
+  text-align: right;
+}

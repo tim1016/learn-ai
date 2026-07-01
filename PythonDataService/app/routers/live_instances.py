@@ -1959,9 +1959,9 @@ async def _fetch_net_positions() -> dict[str, int] | None:
     """
     try:
         from app.broker.ibkr import account as ibkr_account
-        from app.routers.broker import _require_connected_or_503
+        from app.routers.broker_dependencies import require_connected_client
 
-        client = _require_connected_or_503()
+        client = require_connected_client()
         snapshot = await ibkr_account.fetch_positions(client)
     except Exception as exc:
         logger.info("fleet net-position fetch unavailable: %s", exc)

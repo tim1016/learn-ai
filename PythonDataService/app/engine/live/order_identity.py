@@ -19,6 +19,7 @@ from enum import StrEnum
 
 # ── Wire-format constants ────────────────────────────────────────────────────
 NAMESPACE_ROOT = "learn-ai"
+MANUAL_NAMESPACE_ROOT = "manual"
 NAMESPACE_VERSION = "v1"
 NAMESPACE_SEP = "/"
 ORDER_REF_SEP = ":"
@@ -105,6 +106,17 @@ def build_bot_order_namespace(strategy_instance_id: str) -> str:
     """``learn-ai/{strategy_instance_id}/v1`` — the per-instance ownership scope."""
     return (
         f"{NAMESPACE_ROOT}{NAMESPACE_SEP}{strategy_instance_id}"
+        f"{NAMESPACE_SEP}{NAMESPACE_VERSION}"
+    )
+
+
+def build_manual_order_namespace(operator_or_session: str) -> str:
+    """``manual/{operator_or_session}/v1`` — app-minted manual ownership scope."""
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    safe_segment = validate_strategy_instance_id(operator_or_session)
+    return (
+        f"{MANUAL_NAMESPACE_ROOT}{NAMESPACE_SEP}{safe_segment}"
         f"{NAMESPACE_SEP}{NAMESPACE_VERSION}"
     )
 

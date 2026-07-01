@@ -16,15 +16,19 @@ import { PageHeaderComponent } from '../../../shared/page-header/page-header.com
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { RouterLink } from '@angular/router';
 import { PaperOnlyDirective } from '../../../shared/directives/paper-only.directive';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
+  AccountTruthOrderRow,
+  AccountTruthResponse,
   IbkrOpenOrder,
   IbkrOrderAck,
   IbkrOrderEvidenceFields,
   IbkrOrderEvent,
   IbkrOrderSpec,
+  IbkrOrderWhatIfPreview,
   OrderAction,
   OrderTimeInForce,
   OrderType,
@@ -58,7 +62,7 @@ interface OrderEventLine extends IbkrOrderEvent {
 @Component({
   selector: 'app-broker-orders',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, PageHeaderComponent, SectionErrorComponent, PaperOnlyDirective, RouterLink],
+  imports: [FormsModule, PageHeaderComponent, SectionErrorComponent, PaperOnlyDirective, RouterLink, ReceiptLabelPipe],
   styleUrl: './broker-orders.component.scss',
   templateUrl: './broker-orders.component.html',
 })
@@ -85,6 +89,11 @@ export class BrokerOrdersComponent {
   readonly submitting = signal(false);
   readonly placeError = signal<unknown>(null);
   readonly lastAck = signal<IbkrOrderAck | null>(null);
+  readonly whatIfLoading = signal(false);
+  readonly whatIfError = signal<unknown>(null);
+  readonly whatIfPreview = signal<IbkrOrderWhatIfPreview | null>(null);
+  private readonly whatIfPreviewKey = signal<string | null>(null);
+  private whatIfRequestId = 0;
 
   // Confirm-paper modal — layer 4 of the safety stack, mirrored from
   // the server-side ``confirm_paper`` requirement. Submit opens the
@@ -107,6 +116,9 @@ export class BrokerOrdersComponent {
       this.confirmDialogOpen() &&
       this.confirmCheckbox() &&
       this.confirmCooldownMs() === 0 &&
+      this.hasCurrentWhatIfPreview() &&
+      this.whatIfError() === null &&
+      !this.whatIfLoading() &&
       !this.submitting() &&
       this.isPaperConnected(),
   );
@@ -115,6 +127,10 @@ export class BrokerOrdersComponent {
   readonly openOrdersLoading = signal(false);
   readonly openOrdersError = signal<unknown>(null);
   readonly openOrders = signal<IbkrOpenOrder[]>([]);
+  readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  readonly ledgerOrders = computed<AccountTruthOrderRow[]>(
+    () => this.accountTruth()?.orders ?? [],
+  );
 
   // Order events SSE
   private readonly eventStream = signal<SseStream<IbkrOrderEvent> | null>(null);
@@ -187,8 +203,10 @@ export class BrokerOrdersComponent {
     this.placeError.set(null);
     this.confirmCheckbox.set(false);
     this.confirmCooldownMs.set(CONFIRM_DIALOG_COOLDOWN_MS);
+    this.clearWhatIfPreview();
     this.confirmDialogOpen.set(true);
     this.startConfirmTick();
+    void this.loadWhatIfPreview();
   }
 
   cancelConfirmDialog(): void {
@@ -199,6 +217,9 @@ export class BrokerOrdersComponent {
     // sticky true value left behind by a previous open.
     this.confirmPaper.set(false);
     this.confirmCooldownMs.set(0);
+    this.whatIfRequestId += 1;
+    this.whatIfLoading.set(false);
+    this.clearWhatIfPreview();
     this.clearConfirmTick();
   }
 
@@ -247,8 +268,12 @@ export class BrokerOrdersComponent {
     this.openOrdersLoading.set(true);
     this.openOrdersError.set(null);
     try {
-      const orders = await this.broker.openOrders();
+      const [orders, truth] = await Promise.all([
+        this.broker.openOrders(),
+        this.broker.accountTruth(),
+      ]);
       this.openOrders.set(orders);
+      this.accountTruth.set(truth);
     } catch (err) {
       this.openOrdersError.set(err);
     } finally {
@@ -257,26 +282,16 @@ export class BrokerOrdersComponent {
   }
 
   async submitOrder(): Promise<void> {
-    if (!this.isPaperConnected() || !this.confirmPaper() || this.submitting()) return;
+    if (
+      !this.isPaperConnected() ||
+      !this.confirmPaper() ||
+      this.submitting() ||
+      !this.hasCurrentWhatIfPreview()
+    ) return;
 
     this.submitting.set(true);
     this.placeError.set(null);
-
-    const spec: IbkrOrderSpec = {
-      symbol: this.symbol().toUpperCase(),
-      sec_type: this.secType(),
-      action: this.action(),
-      quantity: this.quantity(),
-      order_type: this.orderType(),
-      limit_price: this.orderType() === 'LMT' ? this.limitPrice() : null,
-      time_in_force: this.tif(),
-      confirm_paper: this.confirmPaper(),
-      client_order_id: cryptoUuid(),
-      multiplier: 100,
-      expiry_ms: this.secType() === 'OPT' ? this.expiryMs() : null,
-      strike: this.secType() === 'OPT' ? this.strike() : null,
-      right: this.secType() === 'OPT' ? this.right() : null,
-    };
+    const spec = this.buildOrderSpec(true);
 
     try {
       const ack = await this.broker.placeOrder(spec);
@@ -302,7 +317,53 @@ export class BrokerOrdersComponent {
     }
   }
 
+  async loadWhatIfPreview(): Promise<void> {
+    if (!this.isPaperConnected()) return;
+    const previewKey = this.currentWhatIfKey();
+    const requestId = ++this.whatIfRequestId;
+    this.whatIfLoading.set(true);
+    this.whatIfError.set(null);
+    this.whatIfPreview.set(null);
+    this.whatIfPreviewKey.set(null);
+    try {
+      const preview = await this.broker.orderWhatIf(this.buildOrderSpec(false));
+      if (requestId === this.whatIfRequestId && previewKey === this.currentWhatIfKey()) {
+        this.whatIfPreview.set(preview);
+        this.whatIfPreviewKey.set(previewKey);
+      }
+    } catch (err) {
+      if (requestId === this.whatIfRequestId) {
+        this.whatIfError.set(err);
+        this.whatIfPreviewKey.set(null);
+      }
+    } finally {
+      if (requestId === this.whatIfRequestId) {
+        this.whatIfLoading.set(false);
+      }
+    }
+  }
+
+  private buildOrderSpec(confirmPaper: boolean): IbkrOrderSpec {
+    return {
+      symbol: this.symbol().toUpperCase(),
+      sec_type: this.secType(),
+      action: this.action(),
+      quantity: this.quantity(),
+      order_type: this.orderType(),
+      limit_price: this.orderType() === 'LMT' ? this.limitPrice() : null,
+      time_in_force: this.tif(),
+      confirm_paper: confirmPaper,
+      client_order_id: confirmPaper ? cryptoUuid() : null,
+      multiplier: 100,
+      expiry_ms: this.secType() === 'OPT' ? this.expiryMs() : null,
+      strike: this.secType() === 'OPT' ? this.strike() : null,
+      right: this.secType() === 'OPT' ? this.right() : null,
+      manual_order: true,
+    };
+  }
+
   trackOrder = (_: number, o: IbkrOpenOrder): number => o.order_id;
+  trackLedgerOrder = (_: number, o: AccountTruthOrderRow): string => o.lifecycle_id;
   trackEvent = (_: number, e: OrderEventLine): string =>
     `${e.order_id}:${e.ts_ms}:${e.event_type}`;
 
@@ -328,8 +389,62 @@ export class BrokerOrdersComponent {
     return Boolean(value.ibkr_evidence);
   }
 
+  canCancelLedgerOrder(row: AccountTruthOrderRow): boolean {
+    return this.cancelDisabledReason(row) === null;
+  }
+
+  cancelDisabledReason(row: AccountTruthOrderRow): string | null {
+    if (!this.isPaperConnected()) {
+      return 'Disabled until IBKR is connected to a paper account (DU account).';
+    }
+    if (row.fact_kind !== 'open_order') {
+      return 'Only live open broker orders can be cancelled.';
+    }
+    if (row.owner.owner_class === 'foreign_or_unclaimed') {
+      return 'Foreign or unclaimed orders require explicit adoption before app-side cancel.';
+    }
+    if (row.remaining <= 0 || ['filled', 'cancelled', 'rejected'].includes(row.lifecycle)) {
+      return 'Order is already terminal at IBKR.';
+    }
+    return null;
+  }
+
+  cancelButtonLabel(row: AccountTruthOrderRow): string {
+    const reason = this.cancelDisabledReason(row);
+    if (reason === null) return `Cancel order ${row.order_id}`;
+    return `Cannot cancel order ${row.order_id}: ${reason}`;
+  }
+
   ibkrEvidenceJson(value: IbkrOrderEvidenceFields | IbkrOrderEvent): string {
     return JSON.stringify(value.ibkr_evidence ?? null, null, 2);
+  }
+
+  private clearWhatIfPreview(): void {
+    this.whatIfPreview.set(null);
+    this.whatIfPreviewKey.set(null);
+    this.whatIfError.set(null);
+  }
+
+  private hasCurrentWhatIfPreview(): boolean {
+    return this.whatIfPreview() !== null && this.whatIfPreviewKey() === this.currentWhatIfKey();
+  }
+
+  private currentWhatIfKey(): string {
+    const spec = this.buildOrderSpec(false);
+    return JSON.stringify({
+      symbol: spec.symbol,
+      sec_type: spec.sec_type,
+      action: spec.action,
+      quantity: spec.quantity,
+      order_type: spec.order_type,
+      limit_price: spec.limit_price,
+      time_in_force: spec.time_in_force,
+      multiplier: spec.multiplier,
+      expiry_ms: spec.expiry_ms,
+      strike: spec.strike,
+      right: spec.right,
+      manual_order: spec.manual_order ?? false,
+    });
   }
 
   private openEventStream(): void {
