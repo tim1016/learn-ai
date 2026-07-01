@@ -12,16 +12,18 @@ describe('redeployQueryParamsForStatus', () => {
         qc_cloud_backtest_id: 'bt-123',
         account_id: 'DU123',
         run_id: 'parent-run',
+        live_config: { symbol: 'dia' },
       },
       start_defaults: {
         strategy: 'deployment_validation',
       },
-    } as LiveInstanceStatus;
+    } as unknown as LiveInstanceStatus;
 
     expect(redeployQueryParamsForStatus(status)).toEqual({
       spec_path: 'specs/dia.json',
       qc_audit_copy_path: 'audits/dia.json',
       qc_backtest_id: 'bt-123',
+      signal_stream: 'DIA',
       parent_run_id: 'parent-run',
       instance_id: 'DEPVAL-DIA-20260626',
       strategy_key: 'deployment_validation',
@@ -33,7 +35,7 @@ describe('redeployQueryParamsForStatus', () => {
       strategy_instance_id: 'BOT',
       provenance: null,
       start_defaults: null,
-    } as LiveInstanceStatus;
+    } as unknown as LiveInstanceStatus;
 
     expect(redeployQueryParamsForStatus(status)).toEqual({});
   });

@@ -142,11 +142,12 @@ small code {
 }
 
 .mode {
-  display: flex;
-  gap: 0.4rem;
-  width: fit-content;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  width: 100%;
   margin: 0;
-  padding: 0.25rem;
+  padding: 0.35rem;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 6px;
 
@@ -164,6 +165,7 @@ small code {
 
   label {
     display: flex;
+    min-width: 0;
   }
 
   input {
@@ -172,21 +174,46 @@ small code {
   }
 
   span {
-    min-width: 4.5rem;
-    padding: 0.35rem 0.65rem;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    min-height: 4.1rem;
+    padding: 0.5rem 0.65rem;
     border-radius: 4px;
-    text-align: center;
+    border: 1px solid transparent;
+    text-align: left;
     cursor: pointer;
+
+    strong {
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+    }
+
+    small {
+      font-size: 0.72rem;
+      line-height: 1.25;
+    }
   }
 
   input:checked + span {
-    background: #2563eb;
+    border-color: #7dd3fc;
+    background: rgba(37, 99, 235, 0.22);
     color: #fff;
   }
 }
 
-.mode.live-selected input:checked + span {
-  background: #b91c1c;
+.mode.orders-selected input:checked + span {
+  border-color: #f59e0b;
+  background: rgba(217, 119, 6, 0.18);
+}
+
+.capability-proof {
+  margin: -0.2rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .launch-fields {
@@ -448,6 +475,10 @@ small code {
   }
 
   .field.inline {
+    grid-template-columns: 1fr;
+  }
+
+  .mode {
     grid-template-columns: 1fr;
   }
 }

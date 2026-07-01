@@ -429,7 +429,7 @@ def test_broker_safety_verdict_consumes_reactive_final_verdict(safety_verdict_fi
     [
         ("connected", "CONNECTED"),
         ("disconnected", "DISCONNECTED"),
-        ("degraded", "DISCONNECTED"),  # collapses until richer health channel
+        ("degraded", "DEGRADED"),
         ("unknown", "UNKNOWN"),
         (None, "UNKNOWN"),
     ],
@@ -645,6 +645,27 @@ def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> No
     assert "RECONCILIATION_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
     assert surface.trader_guidance.primary_remediation.kind == "open_runbook"
     assert surface.trader_guidance.primary_remediation.slug == "broker-reconnect"
+
+
+def test_trader_guidance_degraded_broker_preserves_recovering_copy() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="degraded",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    assert surface.broker.connection == "DEGRADED"
+    assert "BROKER_CONNECTION_DEGRADED" in surface.submit_readiness.blocking_reason_codes
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "broker_connection"
+    )
+    assert attention.headline == "Broker connection is recovering"
+    broker_proof = next(line for line in surface.trader_guidance.proof_lines if line.id == "broker-proof")
+    assert broker_proof.message == "Paper broker is configured, but the session is recovering."
 
 
 # ---------------------------------------------------------------------------

@@ -292,14 +292,19 @@ def build_submit_readiness_findings(
             )
         )
     if broker.connection != "CONNECTED":
+        connection_headline = (
+            "Broker connection is recovering"
+            if broker.connection == "DEGRADED"
+            else "Broker disconnected or unknown"
+        )
         findings.append(
             _finding(
                 "broker_state_unproven",
                 f"BROKER_CONNECTION_{broker.connection}",
                 "broker_connection",
                 "warning",
-                "Broker disconnected or unknown",
-                f"Connection is {broker.connection}.",
+                connection_headline,
+                _broker_connection_detail(broker.connection),
                 OpenRunbookAction(kind="open_runbook", slug="broker-reconnect"),
             )
         )
@@ -512,6 +517,9 @@ def _broker_proof_line(broker: OperatorSurfaceBroker) -> OperatorSurfaceProofLin
     elif broker.safety_verdict == "PAPER_ONLY" and broker.connection == "DISCONNECTED":
         message = "Paper broker is configured, but the session is disconnected."
         tone = "attention"
+    elif broker.safety_verdict == "PAPER_ONLY" and broker.connection == "DEGRADED":
+        message = "Paper broker is configured, but the session is recovering."
+        tone = "attention"
     elif broker.safety_verdict == "PAPER_ONLY":
         message = "Paper broker proof is available; connection is still unknown."
         tone = "attention"
@@ -520,6 +528,9 @@ def _broker_proof_line(broker: OperatorSurfaceBroker) -> OperatorSurfaceProofLin
         tone = "attention"
     elif broker.connection == "DISCONNECTED":
         message = "Broker session is disconnected."
+        tone = "attention"
+    elif broker.connection == "DEGRADED":
+        message = "Broker connection is recovering."
         tone = "attention"
     else:
         message = "Broker proof is not available yet."
@@ -659,6 +670,8 @@ def _broker_connection_detail(connection: str) -> str:
         return "Broker session is connected."
     if connection == "DISCONNECTED":
         return "Broker session is disconnected."
+    if connection == "DEGRADED":
+        return "Broker session is reconnecting or partially degraded."
     return "Broker connection has not been proven."
 
 

@@ -78,6 +78,34 @@ describe('WorkingPendingOrdersSectionComponent', () => {
     expect(text).toContain('seen 3x');
   });
 
+  it('uses the compact Orders Today columns for the monitor side panel', () => {
+    const el = render([order()]);
+    const headers = Array.from(el.querySelectorAll('th')).map((th) => th.textContent?.trim());
+
+    expect(headers).toEqual([
+      'Time',
+      'Symbol',
+      'Position',
+      'Side',
+      'Order',
+      'Average fill',
+      'Filled',
+    ]);
+  });
+
+  it('preserves fractional quantities in compact order summaries', () => {
+    const el = render([
+      order({
+        quantity: 1.5,
+        filled_quantity: 0.25,
+      }),
+    ]);
+
+    const text = el.textContent ?? '';
+    expect(text).toContain('1.5 MKT');
+    expect(text).toContain('0.25 / 1.5');
+  });
+
   it('orders and displays rows by chart time instead of broker update time', () => {
     const el = render([
       order({

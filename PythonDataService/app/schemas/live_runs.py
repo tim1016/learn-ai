@@ -1090,7 +1090,7 @@ HostProcessState = Literal[
 ]
 PriorRunClassification = Literal["CLEAN", "HALT_TRIGGERED", "EXITED_WITH_ERROR", "UNKNOWN"]
 BrokerSafetyVerdictEnum = Literal["PAPER_ONLY", "UNSAFE", "UNKNOWN"]
-BrokerConnectionState = Literal["CONNECTED", "DISCONNECTED", "UNKNOWN"]
+BrokerConnectionState = Literal["CONNECTED", "DISCONNECTED", "DEGRADED", "UNKNOWN"]
 ExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
@@ -1265,10 +1265,10 @@ class OperatorSurfaceBroker(BaseModel):
     ``safety_verdict`` is whether the cockpit is allowed to trade
     against this account (ADR-0011: paper-only vs unsafe vs unknown).
     ``connection`` is whether the broker session is up.  They are
-    independent: a paper-only account whose IBKR session has dropped
-    is ``safety_verdict=PAPER_ONLY`` AND ``connection=DISCONNECTED``;
-    composing them into a single enum collapses two facts the
-    operator needs to read separately.
+    independent: a paper-only account whose IBKR session is reconnecting
+    is ``safety_verdict=PAPER_ONLY`` AND ``connection=DEGRADED``;
+    composing them into a single enum collapses two facts the operator
+    needs to read separately.
     """
 
     safety_verdict: BrokerSafetyVerdictEnum
@@ -2078,11 +2078,10 @@ class LiveInstanceStatus(BaseModel):
     # live or when nothing was ever deployed. Lets the console explain a STOPPED
     # instance instead of leaving the operator to read run_status.json by hand.
     last_exit: InstanceLastExit | None = None
-    # The traded symbol, sourced from the ledger's ``live_config.symbol`` so the
-    # operator console (chart card, etc.) doesn't fall back to a hardcoded 'SPY'
-    # for a non-SPY strategy. ``None`` when nothing is deployed or when the
-    # ledger predates the symbol field — the UI must treat null as "unknown"
-    # rather than substituting a default.
+    # The monitor/chart symbol, sourced from the action-plan traded stock when
+    # present, then ``live_config.symbol`` for legacy signal=trade runs. ``None``
+    # when nothing is deployed or when the ledger predates both fields — the UI
+    # must treat null as "unknown" rather than substituting a default.
     symbol: str | None = None
     # PRD #593 Slice 1A — the operator-declared instrument plan for the
     # bound (or evidence) run, sourced from ``ledger.live_config.action``.

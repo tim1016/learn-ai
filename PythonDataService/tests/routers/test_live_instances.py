@@ -69,13 +69,13 @@ def _append_watchdog_incident(run_dir: Path, *, incident_id: str, message: str, 
     )
 
 
-def test_resolve_symbol_prefers_stock_action_plan_over_spec_fixture(tmp_path: Path) -> None:
+def test_resolve_symbol_prefers_stock_action_plan_over_signal_stream_and_spec_fixture(tmp_path: Path) -> None:
     """A deployed TSLA action plan must not chart the SPY fixture symbol.
 
     The deployment-validation spec fixture is pinned to SPY, but live deploys
     can carry the operator-selected stock in ``live_config.action``. The
     cockpit chart/activity resolver must use that stock before falling back to
-    the fixture.
+    the signal stream or fixture.
     """
     root = tmp_path / "live_runs"
     run_dir = root / "run-tsla"
@@ -90,6 +90,7 @@ def test_resolve_symbol_prefers_stock_action_plan_over_spec_fixture(tmp_path: Pa
                 "created_at_ms": 100,
                 "strategy_spec_path": str(spec_path),
                 "live_config": {
+                    "symbol": "SPY",
                     "action": {
                         "on_enter": [
                             {

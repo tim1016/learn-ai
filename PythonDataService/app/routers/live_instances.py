@@ -44,6 +44,7 @@ from app.engine.live.daemon_connectivity_monitor import (
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
+    EngineRuntimeSnapshot,
     read_engine_runtime_snapshot,
 )
 from app.engine.live.fleet import (
@@ -653,28 +654,79 @@ def _resolve_runtime_freshness(
     surfaced explicitly rather than falling back to process-registry
     liveness.
     """
+    _, freshness = _resolve_engine_runtime_snapshot_and_freshness(
+        root,
+        live_binding,
+        now_ms=now_ms,
+    )
+    return freshness
+
+
+def _resolve_engine_runtime_snapshot_and_freshness(
+    root: Path,
+    live_binding: LiveBinding | None,
+    *,
+    now_ms: int,
+) -> tuple[EngineRuntimeSnapshot | None, RuntimeFreshness | None]:
+    """Read child-authored runtime evidence once and evaluate freshness."""
     if live_binding is None:
-        return None
+        return None, None
     run_dir = _visible_live_run_dir(root, live_binding)
     if run_dir is None:
-        return unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
+        return None, unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
     path = run_dir / ENGINE_RUNTIME_FILENAME
     if not path.is_file():
-        return unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
+        return None, unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
     snapshot = read_engine_runtime_snapshot(path)
     if snapshot is None:
-        return unavailable_runtime_freshness("ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE")
-    return evaluate_runtime_freshness(
+        return None, unavailable_runtime_freshness("ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE")
+    return snapshot, evaluate_runtime_freshness(
         snapshot,
         now_ms=now_ms,
         session_state=nyse_session_state_at_ms(now_ms),
     )
 
 
+def _safety_verdict_final_from_engine_runtime(
+    snapshot: EngineRuntimeSnapshot | None,
+) -> Literal["paper-only", "unsafe", "unknown"] | None:
+    """Resolve ADR-0011 safety from fresh child-authored broker identity."""
+    if snapshot is None:
+        return None
+    if snapshot.broker.identity == "PAPER_VERIFIED":
+        return "paper-only"
+    if snapshot.broker.identity == "LIVE_DETECTED":
+        return "unsafe"
+    return "unknown"
+
+
+def _broker_connection_state_from_engine_runtime(
+    snapshot: EngineRuntimeSnapshot | None,
+) -> Literal["connected", "disconnected", "degraded", "unknown"] | None:
+    """Resolve broker connection from fresh child-authored runtime evidence.
+
+    Readiness is still the engine's readiness-gate contract, but it can be
+    absent while the child process is running and publishing a fresh
+    ``engine_runtime.json`` broker probe. In that case, prefer the fresh
+    runtime broker block so the operator surface does not report an unknown
+    broker while the child has just proven the session state.
+    """
+    if snapshot is None:
+        return None
+    state = snapshot.broker.connection_state
+    if state == "connected":
+        return "connected"
+    if state in {"soft_lost", "subscriptions_stale", "degraded_data_farm", "reconnecting", "recovering"}:
+        return "degraded"
+    if state in {"disconnected", "disabled"}:
+        return "disconnected"
+    return "unknown"
+
+
 def _resolve_broker_observation_consistency(
-    root: Path,
     live_binding: LiveBinding | None,
     *,
+    runtime_snapshot: EngineRuntimeSnapshot | None,
     configured_mode: Literal["paper", "live"] | None,
     now_ms: int,
 ) -> BrokerObservationConsistency | None:
@@ -694,12 +746,7 @@ def _resolve_broker_observation_consistency(
 
     if live_binding is None:
         return None
-    child_block = None
-    run_dir = _visible_live_run_dir(root, live_binding)
-    if run_dir is not None:
-        snapshot = read_engine_runtime_snapshot(run_dir / ENGINE_RUNTIME_FILENAME)
-        if snapshot is not None:
-            child_block = snapshot.broker
+    child_block = runtime_snapshot.broker if runtime_snapshot is not None else None
     return evaluate_broker_observation_consistency(
         child=child_block,
         data_plane=snapshot_data_plane_broker(),
@@ -757,12 +804,13 @@ def _start_defaults(
 
 
 def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
-    """Traded symbol for the instance.
+    """Monitor/chart symbol for the instance.
 
     Resolution order:
-      1. ``ledger.live_config.symbol`` (operator-set, hashed into run_id)
-      2. ``strategy_spec.symbols[0]`` (the spec the ledger is reconciled to —
-         the canonical "this is what the algorithm trades")
+      1. ``ledger.live_config.action`` single stock target, when present
+      2. ``ledger.live_config.symbol`` (signal stream; legacy signal=trade runs)
+      3. ``strategy_spec.symbols[0]`` (the spec the ledger is reconciled to —
+         the canonical signal stream fallback)
 
     Slice 2: the operator console reads this on the chart card instead of
     hardcoding 'SPY'. Returns ``None`` only when nothing is deployed, the
@@ -791,12 +839,12 @@ def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dic
     except (OSError, ValueError, KeyError):
         return None
     live_config = ledger.get("live_config") or {}
-    symbol = live_config.get("symbol") if isinstance(live_config, dict) else None
-    if isinstance(symbol, str) and symbol:
-        return symbol
     if isinstance(live_config, dict):
         symbol = stock_symbol_from_action_plan(live_config.get("action"))
         if symbol is not None:
+            return symbol
+        symbol = live_config.get("symbol")
+        if isinstance(symbol, str) and symbol:
             return symbol
     # Spec fallback — read the strategy spec the ledger pins and pick the
     # first symbol. A multi-symbol strategy (none in the fleet today) would
@@ -1304,8 +1352,6 @@ async def _resolve_instance_status_from_process(
     readiness = _resolve_readiness(root, live_binding, runs, desired.state)
     raw_mode = getattr(settings, "mode", None)
     configured_mode = raw_mode if raw_mode in ("paper", "live") else None
-    safety_verdict_final = _resolve_safety_verdict_final(configured_mode)
-    broker_connection_state = _broker_connection_state_from_readiness(readiness)
     broker_view = _instance_broker(root, sid)
     start_defaults = _start_defaults(root, live_binding, runs, readonly_default=_resolve_readonly_default(settings))
     sizing = _sizing(root, live_binding, runs, sid)
@@ -1315,17 +1361,30 @@ async def _resolve_instance_status_from_process(
     control_plane_state = daemon_monitor.state if daemon_monitor is not None else None
     guard_state = _resolve_resume_guard_state_for(root, live_binding, runs)
     observed_at_ms = _now_ms()
-    runtime_freshness = _resolve_runtime_freshness(
+    runtime_snapshot, runtime_freshness = _resolve_engine_runtime_snapshot_and_freshness(
         root,
         live_binding,
         now_ms=observed_at_ms,
+    )
+    fresh_runtime_snapshot = (
+        runtime_snapshot
+        if runtime_freshness is not None and runtime_freshness.broker.state == "FRESH"
+        else None
+    )
+    safety_verdict_final = (
+        _safety_verdict_final_from_engine_runtime(fresh_runtime_snapshot)
+        or _resolve_safety_verdict_final(configured_mode)
+    )
+    broker_connection_state = (
+        _broker_connection_state_from_engine_runtime(fresh_runtime_snapshot)
+        or _broker_connection_state_from_readiness(readiness)
     )
     instance_account_id = _instance_ledger_account_id(root, sid)
     account_owner = _resolve_account_owner_surface(root.parent, instance_account_id)
     latest_mutation = _resolve_latest_mutation(root, sid)
     broker_observation_consistency = _resolve_broker_observation_consistency(
-        root,
         live_binding,
+        runtime_snapshot=runtime_snapshot,
         configured_mode=configured_mode,
         now_ms=observed_at_ms,
     )

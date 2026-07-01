@@ -314,11 +314,7 @@ def _project_broker(
     elif connection_state == "disconnected":
         connection = "DISCONNECTED"
     elif connection_state == "degraded":
-        # Currently unreachable from the live readiness gate (pass/fail
-        # only).  When a richer health channel lands on the wire we
-        # surface this honestly as DISCONNECTED-with-recovery rather
-        # than inventing a third enum value for the cockpit.
-        connection = "DISCONNECTED"
+        connection = "DEGRADED"
     else:
         connection = "UNKNOWN"
 

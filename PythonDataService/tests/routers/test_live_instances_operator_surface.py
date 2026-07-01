@@ -90,6 +90,53 @@ def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, process: dict | None = None)
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
 
 
+def _write_runtime_snapshot(
+    root: Path,
+    run_id: str,
+    sid: str,
+    now_ms: int,
+    *,
+    connection_state: str = "connected",
+) -> None:
+    write_engine_runtime_snapshot(
+        root / run_id,
+        EngineRuntimeSnapshot(
+            strategy_instance_id=sid,
+            run_id=run_id,
+            pid=123,
+            process_start_identity="child-1",
+            expected_daemon_boot_id="boot-1",
+            snapshot_seq=1,
+            written_at_ms=now_ms,
+            command_loop=CommandLoopBlock(
+                heartbeat_at_ms=now_ms,
+                state="PAUSED",
+            ),
+            broker=BrokerBlock(
+                identity="PAPER_VERIFIED",
+                submission_capability="PAPER_ORDERS_ENABLED",
+                effective_posture="PAPER_EXECUTION",
+                connection_state=connection_state,
+                connection_epoch=1,
+                connected_account="DU123",
+                port_class="paper_port",
+                observation_at_ms=now_ms,
+                probe_completed_at_ms=now_ms,
+                reconnect_attempt=0,
+            ),
+            bar_loop=BarLoopBlock(
+                heartbeat_at_ms=now_ms,
+                latest_source_bar_ms=now_ms,
+                expected_interval_ms=60_000,
+            ),
+            control_plane=ControlPlaneBlock(
+                lease_observed_at_ms=now_ms,
+                observed_daemon_boot_id="boot-1",
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cycle 1 — tracer bullet: operator_surface field with schema_version: 1
 # ---------------------------------------------------------------------------
@@ -282,7 +329,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     assert surface["prior_run"]["classification"] == "UNKNOWN"
     # Two independent enums now.
     assert surface["broker"]["safety_verdict"] in {"PAPER_ONLY", "UNSAFE", "UNKNOWN"}
-    assert surface["broker"]["connection"] in {"CONNECTED", "DISCONNECTED", "UNKNOWN"}
+    assert surface["broker"]["connection"] in {"CONNECTED", "DISCONNECTED", "DEGRADED", "UNKNOWN"}
     assert surface["execution"]["posture"] in {
         "PAPER_EXECUTION",
         "READ_ONLY",
@@ -451,9 +498,53 @@ async def test_running_instance_fresh_runtime_keeps_actions_current(
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
+    assert surface["broker"]["connection"] == "CONNECTED"
+    assert "BROKER_CONNECTION_UNKNOWN" not in surface["submit_readiness"]["blocking_reason_codes"]
+    broker_proof = next(line for line in surface["trader_guidance"]["proof_lines"] if line["id"] == "broker-proof")
+    assert broker_proof["message"] == "Paper broker is connected."
     assert surface["runtime_freshness"]["posture_demoted"] is False
     assert surface["runtime_freshness"]["stale_reason_codes"] == []
     assert surface["runtime_freshness"]["bar_loop"]["state"] == "FRESH"
+
+
+async def test_status_preserves_recovering_runtime_broker_connection(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    now_ms = 1_700_000_000_000
+    _write_ledger(root, "run-recovering", "spy_ema_paper", 100)
+    _write_runtime_snapshot(
+        root,
+        "run-recovering",
+        "spy_ema_paper",
+        now_ms,
+        connection_state="recovering",
+    )
+    _set_daemon(
+        monkeypatch,
+        process={
+            "state": "running",
+            "run_id": "run-recovering",
+            "pid": 123,
+            "started_at_ms": now_ms,
+        },
+    )
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["broker"]["connection"] == "DEGRADED"
+    assert "BROKER_CONNECTION_DEGRADED" in surface["submit_readiness"]["blocking_reason_codes"]
+    assert "BROKER_CONNECTION_DISCONNECTED" not in surface["submit_readiness"]["blocking_reason_codes"]
+    broker_attention = next(
+        group
+        for group in surface["trader_guidance"]["additional_attention_groups"]
+        if group["code"] == "broker_connection"
+    )
+    assert broker_attention["headline"] == "Broker connection is recovering"
 
 
 async def test_status_uses_account_freeze_artifact_to_block_start_and_resume(

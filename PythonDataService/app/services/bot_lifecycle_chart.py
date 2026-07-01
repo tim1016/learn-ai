@@ -1047,7 +1047,7 @@ def _broker_safety_status(surface: OperatorSurface) -> LifecycleChartStatus:
 def _broker_connection_status(surface: OperatorSurface) -> LifecycleChartStatus:
     if surface.broker.connection == "CONNECTED":
         return "passed"
-    if surface.broker.connection == "DISCONNECTED":
+    if surface.broker.connection in {"DISCONNECTED", "DEGRADED"}:
         return "blocked"
     return "unknown"
 

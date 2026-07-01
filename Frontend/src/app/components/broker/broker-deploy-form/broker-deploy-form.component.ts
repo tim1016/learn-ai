@@ -45,6 +45,10 @@ const DEPLOYMENT_VALIDATION_SPEC_PATH =
 // to the preset's all-in fraction needs to land in exactly one place.
 const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '1.0' };
 
+function normalizedSymbol(value: string | null | undefined): string {
+  return value?.trim().toUpperCase() ?? '';
+}
+
 /**
  * Deploy form for a live strategy instance. The UI uses plain operator words,
  * while the request still maps exactly to ADR 0006: create the run on the host,
@@ -89,6 +93,7 @@ export class BrokerDeployFormComponent {
   // Form fields.
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
+  readonly signalStream = signal<string>('');
   readonly manualSpecPath = signal<boolean>(false);
   readonly accountId = signal<string>('');
   readonly qcBacktestId = signal<string>('');
@@ -172,6 +177,23 @@ export class BrokerDeployFormComponent {
     () => this.specFixtures.value()?.find((f) => f.path === this.specPath()) ?? null,
   );
 
+  readonly fixtureSymbols = computed<string[]>(() =>
+    [
+      ...new Set(
+        (this.selectedFixture()?.symbols ?? [])
+          .map((symbol) => normalizedSymbol(symbol))
+          .filter((symbol) => symbol !== ''),
+      ),
+    ],
+  );
+
+  readonly resolvedSignalStream = computed<string>(() => {
+    const explicit = normalizedSymbol(this.signalStream());
+    const fixtures = this.fixtureSymbols();
+    if (fixtures.length === 0) return explicit;
+    return fixtures.includes(explicit) ? explicit : '';
+  });
+
   /** ADR 0009 § 6 — the strategy's sizing surface. `"explicit"` (e.g.
    * `spy_ema_crossover_options`) means the algorithm sizes itself via internal
    * accounting (contracts_per_trade / market_order) and the live policy must
@@ -200,7 +222,18 @@ export class BrokerDeployFormComponent {
     () => (this.account.hasValue() ? (this.account.value()?.account_id ?? '') : ''),
   );
 
-  readonly launchMode = computed<'paper' | 'live'>(() => (this.readonlyFlag() ? 'paper' : 'live'));
+  readonly executionCapability = computed<'read_only' | 'paper_orders'>(() =>
+    this.readonlyFlag() ? 'read_only' : 'paper_orders',
+  );
+  readonly executionCapabilityProof = computed<string>(() =>
+    this.readonlyFlag()
+      ? 'readonly_at_start: true · submission_capability: READ_ONLY_OBSERVATION'
+      : 'readonly_at_start: false · submission_capability: PAPER_ORDERS_ENABLED',
+  );
+
+  readonly actionPlanTradeSymbol = computed<string | null>(() =>
+    BrokerDeployFormComponent.singleLongStockActionSymbol(this.actionPlan()),
+  );
 
   /** True when the typed deployment name already has a live host runner. A
    * start-immediately deploy onto it would hit the daemon's 409 "Host runner
@@ -226,6 +259,7 @@ export class BrokerDeployFormComponent {
     const missing: string[] = [];
     if (this.strategyKey().trim() === '') missing.push('Strategy');
     if (this.specPath().trim() === '') missing.push('Strategy settings file');
+    if (this.resolvedSignalStream() === '') missing.push('Signal stream');
     if (this.accountId().trim() === '') missing.push('Connected broker account');
     if (this.qcBacktestId().trim() === '') missing.push('Backtest ID');
     if (this.qcAuditCopyPath().trim() === '') missing.push('Algorithm audit copy');
@@ -319,6 +353,8 @@ export class BrokerDeployFormComponent {
     if (seedInstanceId) this.instanceId.set(seedInstanceId);
     const seedParent = qp.get('parent_run_id');
     if (seedParent) this.parentRunId.set(seedParent);
+    const seedSignalStream = qp.get('signal_stream');
+    if (seedSignalStream) this.signalStream.set(normalizedSymbol(seedSignalStream));
 
     effect(() => {
       if (this.manualSpecPath()) return;
@@ -328,7 +364,10 @@ export class BrokerDeployFormComponent {
       const fallback =
         strategy === 'deployment_validation' ? DEPLOYMENT_VALIDATION_SPEC_PATH : null;
       const nextPath = match?.path ?? fallback;
-      if (nextPath && this.specPath() !== nextPath) this.specPath.set(nextPath);
+      if (nextPath && this.specPath() !== nextPath) {
+        this.specPath.set(nextPath);
+        this.seedSignalStreamFromFixturePath(nextPath);
+      }
     });
     effect(() => {
       this.accountId.set(this.brokerAccountId());
@@ -373,6 +412,7 @@ export class BrokerDeployFormComponent {
     () =>
       this.strategyKey().trim() !== '' &&
       this.specPath().trim() !== '' &&
+      this.resolvedSignalStream() !== '' &&
       this.accountId().trim() !== '' &&
       this.qcBacktestId().trim() !== '' &&
       this.qcAuditCopyPath().trim() !== '' &&
@@ -389,7 +429,7 @@ export class BrokerDeployFormComponent {
    */
   readonly allInCoexistenceBlock = computed<string | null>(() => {
     if (this.sizingPreset() !== 'reference_parity') return null;
-    const symbol = this.selectedFixture()?.symbols?.[0]?.toUpperCase();
+    const symbol = this.actionPlanTradeSymbol() ?? this.resolvedSignalStream();
     if (!symbol) return null;
     const snap = this.positions.value();
     if (!snap) return null;
@@ -450,6 +490,7 @@ export class BrokerDeployFormComponent {
       strategy_instance_id: this.instanceId().trim(),
       strategy_key: strategyKey,
       live_config: {
+        symbol: this.resolvedSignalStream(),
         sizing: this.resolveSizingPolicy(),
         action: this.actionPlan(),
       },
@@ -504,6 +545,7 @@ export class BrokerDeployFormComponent {
     field:
       | 'strategyKey'
       | 'specPath'
+      | 'signalStream'
       | 'accountId'
       | 'qcBacktestId'
       | 'qcAuditCopyPath'
@@ -516,6 +558,29 @@ export class BrokerDeployFormComponent {
       return control.value;
     }
     return null;
+  }
+
+  private fixtureSymbolsForPath(path: string): string[] {
+    const fixture = (this.specFixtures.value() ?? []).find((f) => f.path === path);
+    return [
+      ...new Set(
+        (fixture?.symbols ?? [])
+          .map((symbol) => normalizedSymbol(symbol))
+          .filter((symbol) => symbol !== ''),
+      ),
+    ];
+  }
+
+  private seedSignalStreamFromFixturePath(path: string): void {
+    const symbols = this.fixtureSymbolsForPath(path);
+    if (symbols.length === 1) {
+      this.signalStream.set(symbols[0]);
+      return;
+    }
+    const current = normalizedSymbol(this.signalStream());
+    if (symbols.length > 1 && !symbols.includes(current)) {
+      this.signalStream.set('');
+    }
   }
 
   private shouldSyncRenderedValue(
@@ -544,6 +609,12 @@ export class BrokerDeployFormComponent {
     const specPath = this.renderedFieldValue('specPath');
     if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty, onlyEmptySignals)) {
       this.specPath.set(specPath);
+      if (!this.manualSpecPath()) this.seedSignalStreamFromFixturePath(specPath);
+    }
+
+    const signalStream = this.renderedFieldValue('signalStream');
+    if (this.shouldSyncRenderedValue(signalStream, this.signalStream(), includeEmpty, onlyEmptySignals)) {
+      this.signalStream.set(normalizedSymbol(signalStream));
     }
 
     const qcBacktestId = this.renderedFieldValue('qcBacktestId');
@@ -572,7 +643,12 @@ export class BrokerDeployFormComponent {
   }
   setSpecFixturePath(e: Event): void {
     this.manualSpecPath.set(false);
-    this.specPath.set(this.text(e));
+    const path = this.text(e);
+    this.specPath.set(path);
+    this.seedSignalStreamFromFixturePath(path);
+  }
+  setSignalStream(e: Event): void {
+    this.signalStream.set(normalizedSymbol(this.text(e)));
   }
   useManualSpecPath(): void {
     this.manualSpecPath.set(true);
@@ -592,7 +668,7 @@ export class BrokerDeployFormComponent {
   }
   setReadonly(e: Event): void {
     if (e.target instanceof HTMLInputElement) {
-      this.readonlyFlag.set(e.target.value !== 'live');
+      this.readonlyFlag.set(e.target.value !== 'paper_orders');
       this.liveConfirmed.set(false);
     }
   }
@@ -699,5 +775,13 @@ export class BrokerDeployFormComponent {
     if (e.target instanceof HTMLInputElement) {
       this.customValue.set(e.target.value);
     }
+  }
+
+  private static singleLongStockActionSymbol(action: ActionPlan): string | null {
+    if (action.on_enter.length !== 1) return null;
+    const [leg] = action.on_enter;
+    if (leg.position !== 'long' || leg.instrument.kind !== 'stock') return null;
+    const symbol = normalizedSymbol(leg.instrument.underlying);
+    return symbol || null;
   }
 }
