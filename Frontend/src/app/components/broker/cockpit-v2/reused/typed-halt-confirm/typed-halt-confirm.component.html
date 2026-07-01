@@ -19,17 +19,19 @@
       <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>
     </header>
     <p class="message">{{ message() }}</p>
-    <label class="field">
-      <span class="label">Type <code>{{ requiredToken() }}</code> to confirm</span>
-      <input
-        #tokenInput
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        data-testid="typed-halt-confirm-input"
-        (input)="onTyped(($any($event.target)).value)"
-      />
-    </label>
+    @if (requiredToken()) {
+      <label class="field">
+        <span class="label">Type <code>{{ requiredToken() }}</code> to confirm</span>
+        <input
+          #tokenInput
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          data-testid="typed-halt-confirm-input"
+          (input)="onTyped(($any($event.target)).value)"
+        />
+      </label>
+    }
     <footer>
       <button
         type="button"
@@ -46,7 +48,7 @@
         [disabled]="!canConfirm()"
         (click)="onConfirm()"
       >
-        Mark POISONED
+        {{ confirmLabel() }}
       </button>
     </footer>
   </aside>

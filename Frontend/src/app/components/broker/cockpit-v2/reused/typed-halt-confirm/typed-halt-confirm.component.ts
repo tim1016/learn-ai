@@ -44,8 +44,14 @@ export class TypedHaltConfirmComponent {
   readonly message = input<string>(
     'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.',
   );
-  /** Token the operator must type to enable the confirm button. */
+  /** Token the operator must type to enable the confirm button. An empty
+   *  string disables the typing gate entirely, turning this into a plain
+   *  confirm dialog (the token field is hidden and confirm is always
+   *  enabled) — the "plain confirm" surface anticipated above. */
   readonly requiredToken = input<string>('HALT');
+  /** Confirm button label. Defaults to the poison verb for the
+   *  friction-gated MARK_POISONED flow; plain confirms override it. */
+  readonly confirmLabel = input<string>('Mark POISONED');
 
   readonly confirmed = output();
   readonly cancelled = output();
@@ -53,7 +59,9 @@ export class TypedHaltConfirmComponent {
   private readonly _typed = signal<string>('');
   private readonly _input = viewChild<ElementRef<HTMLInputElement>>('tokenInput');
 
-  readonly canConfirm = computed<boolean>(() => this._typed() === this.requiredToken());
+  readonly canConfirm = computed<boolean>(
+    () => this.requiredToken() === '' || this._typed() === this.requiredToken(),
+  );
 
   constructor() {
     inject(ElementRef); // ensure DI parity with other dialog components
