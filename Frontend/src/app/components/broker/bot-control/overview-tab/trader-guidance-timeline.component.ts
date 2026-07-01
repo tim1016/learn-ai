@@ -26,7 +26,7 @@ export class TraderGuidanceTimelineComponent {
   }
 
   timelineTimestamp(row: LifecycleProjectionEventRow): string {
-    return row.ts_ms_resolved ? fmtTimestampNy(row.ts_ms) : 'timestamp unresolved';
+    return row.ts_ms_resolved ? fmtTimestampNy(row.ts_ms) : 'Time not available';
   }
 
   timelineSource(row: LifecycleProjectionEventRow): string {

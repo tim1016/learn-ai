@@ -64,6 +64,43 @@
           "explanation": "The broker connection evidence is UNKNOWN."
         }
       ],
+      "proof_lines": [
+        {
+          "id": "broker-proof",
+          "label": "Broker",
+          "message": "Paper broker proof is available; connection is still unknown.",
+          "detail": "Paper-only account proof is present. Broker connection has not been proven.",
+          "tone": "attention"
+        },
+        {
+          "id": "submit-readiness",
+          "label": "Trade submit",
+          "message": "Broker state unproven",
+          "detail": "The backend cannot prove the broker/session/reconciliation evidence required for a safe submit. 3 blocking proofs still need attention.",
+          "tone": "attention"
+        },
+        {
+          "id": "account-owner",
+          "label": "Account owner",
+          "message": "Waiting for AccountOwner proof.",
+          "detail": "No AccountOwner artifact is available for this bot.",
+          "tone": "attention"
+        },
+        {
+          "id": "reconciliation",
+          "label": "Reconciliation",
+          "message": "Waiting for reconciliation proof.",
+          "detail": "No reconciliation claim has been produced for this run.",
+          "tone": "attention"
+        },
+        {
+          "id": "runtime-freshness",
+          "label": "Runtime",
+          "message": "No live runtime is bound yet.",
+          "detail": "No child runtime is currently bound to this instance.",
+          "tone": "attention"
+        }
+      ],
       "advanced_evidence": [
         {
           "label": "broker.connection",

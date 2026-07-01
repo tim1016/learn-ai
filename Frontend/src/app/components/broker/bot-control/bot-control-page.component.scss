@@ -20,7 +20,6 @@
 }
 
 .identity-row,
-.decision-row,
 .guidance-strip,
 .next-step {
   display: flex;
@@ -52,36 +51,6 @@
   font-size: var(--fs-xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.decision-row {
-  flex-wrap: wrap;
-}
-
-.fact-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  max-width: 100%;
-  padding: 0 0.55rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-canvas);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-
-  strong {
-    margin-left: 0.25rem;
-    color: var(--text-primary);
-  }
-}
-
-.submit-chip:not(.can-submit) strong {
-  color: var(--warn);
-}
-
-.execution-chip.execution-unsafe strong {
-  color: var(--bear);
 }
 
 .top-action-banner {

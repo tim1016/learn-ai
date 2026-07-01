@@ -16,6 +16,7 @@ describe('formatReceiptLabel', () => {
   it('preserves known acronyms', () => {
     expect(formatReceiptLabel('ibkr_api_evidence')).toBe('IBKR API Evidence');
     expect(formatReceiptLabel('intent_wal_pnl')).toBe('Intent WAL P&L');
+    expect(formatReceiptLabel('RTH')).toBe('RTH');
   });
 
   it('formats comma-separated code lists', () => {

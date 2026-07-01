@@ -33,7 +33,6 @@ import {
   type RenderedAction,
   type RendererDispatch,
 } from '../cockpit-v2/lib/suggested-action-renderer';
-import { chipHelp } from './concept-help.registry';
 import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
@@ -190,7 +189,6 @@ export class BotControlPageComponent {
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
 
-  readonly submitReadiness = computed(() => this.status()?.operator_surface.submit_readiness ?? null);
   readonly traderGuidance = computed(() => this.status()?.operator_surface.trader_guidance ?? null);
   readonly attentionGroups = computed<OperatorSurfaceAttentionGroup[]>(
     () => this.traderGuidance()?.additional_attention_groups ?? [],
@@ -211,20 +209,10 @@ export class BotControlPageComponent {
     const remediation = this.traderGuidance()?.primary_remediation ?? null;
     return renderTraderRemediation(remediation, this.primaryRemediationDispatch);
   });
-  readonly brokerProofLabel = computed(() =>
-    this.status()?.operator_surface.broker.safety_verdict ?? 'UNKNOWN',
-  );
-  readonly executionPosture = computed(() =>
-    this.status()?.operator_surface.execution?.posture ?? null,
-  );
-  readonly exposureLabel = computed(() =>
-    this.status()?.operator_surface.current_risk.posture ?? 'UNKNOWN',
-  );
   readonly timelineRows = computed(() => this.lifecycleTimeline().rows);
   readonly timelineProjectionAvailable = computed(() => this.lifecycleTimeline().projectionAvailable);
   readonly timelineCanonicalFallbackRequired = computed(() => this.lifecycleTimeline().canonicalFallbackRequired);
   readonly timelineNotice = computed(() => this.lifecycleTimeline().notice);
-  readonly chipHelp = chipHelp;
 
   private readonly primaryRemediationDispatch: RendererDispatch = {
     invokeCapability: (capability) => {

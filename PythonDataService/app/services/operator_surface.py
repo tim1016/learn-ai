@@ -1034,6 +1034,7 @@ def compute_operator_surface(
         ttl_ms=reconciliation_ttl_ms,
         now_ms=now_ms,
     )
+    runtime_freshness_projection = _project_runtime_freshness(runtime_freshness)
     submit_readiness = author_submit_readiness(
         host_process=host_process,
         broker=broker_projection,
@@ -1053,6 +1054,7 @@ def compute_operator_surface(
         account_freeze=account_freeze,
         guard_state=resolved_guards,
         reconciliation=reconciliation_projection,
+        runtime_freshness=runtime_freshness_projection,
         readiness_gates=readiness_gates,
         daily_order_cap=daily_order_cap,
     )
@@ -1072,7 +1074,7 @@ def compute_operator_surface(
         actions=actions,
         trading_session=trading_session,
         readiness_gates=readiness_gates,
-        runtime_freshness=_project_runtime_freshness(runtime_freshness),
+        runtime_freshness=runtime_freshness_projection,
         control_plane=_project_control_plane(control_plane_state),
         broker_observation_consistency=broker_observation_consistency,
         reconciliation=reconciliation_projection,

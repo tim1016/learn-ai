@@ -7,6 +7,7 @@ const ACRONYMS = new Map<string, string>([
   ['id', 'ID'],
   ['nyse', 'NYSE'],
   ['pnl', 'P&L'],
+  ['rth', 'RTH'],
   ['sse', 'SSE'],
   ['ui', 'UI'],
   ['utc', 'UTC'],

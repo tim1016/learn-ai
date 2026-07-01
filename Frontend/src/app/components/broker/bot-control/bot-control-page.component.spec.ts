@@ -121,6 +121,44 @@ function makeStatus(options: {
             explanation: 'The broker connection evidence is not connected.',
           },
         ],
+        proof_lines: [
+          {
+            id: 'broker-proof',
+            label: 'Broker',
+            message: 'Broker session is disconnected.',
+            detail: 'Account safety proof is not recorded. Broker session is disconnected.',
+            tone: 'attention',
+          },
+          {
+            id: 'submit-readiness',
+            label: 'Trade submit',
+            message: 'Broker state unproven',
+            detail:
+              'The backend cannot prove the broker/session/reconciliation evidence required for a safe submit. 1 blocking proof still needs attention.',
+            tone: 'attention',
+          },
+          {
+            id: 'account-owner',
+            label: 'Account owner',
+            message: 'Waiting for AccountOwner proof.',
+            detail: 'No AccountOwner artifact is available for this bot.',
+            tone: 'attention',
+          },
+          {
+            id: 'reconciliation',
+            label: 'Reconciliation',
+            message: 'Waiting for reconciliation proof.',
+            detail: 'No reconciliation claim has been produced for this run.',
+            tone: 'attention',
+          },
+          {
+            id: 'runtime-freshness',
+            label: 'Runtime',
+            message: 'No live runtime is bound yet.',
+            detail: 'No child runtime is currently bound to this instance.',
+            tone: 'attention',
+          },
+        ],
         advanced_evidence: [
           {
             label: 'broker.connection',
@@ -359,7 +397,7 @@ describe('BotControlPageComponent', () => {
     expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
-    expect(el.querySelector('.decision-row')?.textContent).toContain('Broker proof');
+    expect(el.querySelector('.decision-row')).toBeNull();
   });
 
   it('persists the attention panel collapsed per bot and situation code', async () => {
@@ -528,7 +566,7 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 
-  it('renders the Execution chip only from backend-authored execution posture', async () => {
+  it('does not duplicate proof facts in the page header', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.execution = { posture: 'UNSAFE' };
@@ -561,45 +599,13 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
     await flush(fixture);
 
-    const chip = (fixture.nativeElement as HTMLElement)
-      .querySelector('[data-testid="bot-control-execution-chip"]');
-    expect(chip?.textContent).toContain('Execution:');
-    expect(chip?.textContent).toContain('UNSAFE');
-  });
-
-  it('does not render an Execution chip when the backend omits execution posture', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-          },
-        },
-      ],
-    });
-
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
-    expect((fixture.nativeElement as HTMLElement)
-      .querySelector('[data-testid="bot-control-execution-chip"]')).toBeNull();
+    const el = fixture.nativeElement as HTMLElement;
+    const header = el.querySelector('.page-header');
+    expect(header?.textContent).not.toContain('Broker proof');
+    expect(header?.textContent).not.toContain('Execution:');
+    expect(header?.textContent).not.toContain('UNSAFE');
+    expect(header?.textContent).not.toContain('Exposure:');
+    expect(header?.textContent).not.toContain('Submit:');
   });
 
   it('renders backend-authored disabled action prose only in the disabled tooltip', async () => {
@@ -728,8 +734,26 @@ describe('BotControlPageComponent', () => {
     expect(pause?.textContent?.trim()).toBe('');
   });
 
-  it('renders unknown deploy order mode as not recorded', async () => {
+  it('renders redeploy settings as one concise row and hides raw strategy keys', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.start_defaults = {
+      strategy: 'deployment_validation',
+      readonly: true,
+      hydrate_policy: 'optional',
+      max_orders_per_day: 2,
+      ibkr_host: '127.0.0.1',
+    };
+    status.operator_surface.trader_guidance.advanced_evidence = [
+      {
+        label: 'strategy',
+        value: 'deployment_validation',
+        source: 'operator_surface',
+        gate_id: null,
+        ts_ms: null,
+        ts_ms_resolved: false,
+      },
+    ];
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -743,7 +767,7 @@ describe('BotControlPageComponent', () => {
         {
           provide: LiveRunsService,
           useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
             getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
             getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
             startHostRunner: vi.fn(),
@@ -759,26 +783,47 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
     await flush(fixture);
 
-    const deployConfig = Array.from(
+    const el = fixture.nativeElement as HTMLElement;
+    const settings = Array.from(
+      el.querySelectorAll('[data-testid="redeploy-setting-field"]'),
+    );
+    const orderMode = settings.find((field) => field.textContent?.includes('Order mode'));
+    expect(orderMode?.textContent).toContain('Read-only observation');
+    expect(orderMode?.getAttribute('title')).toContain('fresh redeploy');
+    expect(
       (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="redeploy-setting-field"]'),
-    ).find((field) => field.textContent?.includes('Deploy/start config'));
-    expect(deployConfig?.textContent).toContain('Order mode: Not recorded.');
-    expect(deployConfig?.textContent).not.toContain('Order placement allowed');
+    ).toHaveLength(5);
+    expect(el.querySelectorAll('button.link-button')).toHaveLength(1);
+    expect(el.textContent).not.toContain('deployment_validation');
   });
 
-  it('does not label stale runtime receipts as fresh evidence', async () => {
+  it('renders backend-authored closed-session runtime proof as trader-friendly evidence', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
+    status.operator_surface.trading_session.phase = 'CLOSED';
     status.operator_surface.runtime_freshness = {
       posture_demoted: false,
-      stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
+      stale_reason_codes: ['BAR_LOOP_SESSION_CLOSED'],
       command_loop: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
       broker: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
-      bar_loop: { state: 'STALE', age_ms: 90_000, stale_reason_codes: ['BAR_LOOP_LATEST_BAR_STALE'] },
+      bar_loop: { state: 'STALE', age_ms: 90_000, stale_reason_codes: ['BAR_LOOP_SESSION_CLOSED'] },
       control_plane: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
       headline: null,
       additional_reasons: [],
     };
+    status.operator_surface.trader_guidance.proof_lines =
+      status.operator_surface.trader_guidance.proof_lines.map((line) =>
+        line.id === 'runtime-freshness'
+          ? {
+              id: 'runtime-freshness',
+              label: 'Runtime',
+              message:
+                'The bot is idle until the regular trading session opens. No trading decision is being made.',
+              detail: 'Market closed',
+              tone: 'neutral',
+            }
+          : line,
+      );
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -810,11 +855,16 @@ describe('BotControlPageComponent', () => {
 
     const runtimeField = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="locked-evidence-field"]'),
-    ).find((field) => field.textContent?.includes('Runtime freshness'));
-    expect(runtimeField?.textContent).toContain('ATTENTION');
+    ).find((field) => field.textContent?.includes('Runtime'));
+    expect(runtimeField?.textContent).toContain(
+      'The bot is idle until the regular trading session opens. No trading decision is being made.',
+    );
+    expect(runtimeField?.getAttribute('title')).toContain('Market closed');
+    expect(runtimeField?.classList.contains('tone-neutral')).toBe(true);
+    expect(runtimeField?.classList.contains('tone-attention')).toBe(false);
+    expect(runtimeField?.textContent).not.toContain('ATTENTION');
     expect(runtimeField?.textContent).not.toContain('FRESH');
-    expect(runtimeField?.querySelector('[data-receipt]')?.textContent)
-      .toContain('Bar Loop Latest Bar Stale');
+    expect(runtimeField?.textContent).not.toContain('BAR_LOOP_SESSION_CLOSED');
   });
 
   it('renders the projection timeline below the fold as recent activity', async () => {
@@ -989,17 +1039,16 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
 
     const receipts = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="bot-control-node-receipts"]');
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Evidence time:');
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Evidence checked');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('ET');
-    expect(receipts?.textContent).toContain('Reconciliation State');
-    expect(receipts?.textContent).toContain('Failed');
-    expect(receipts?.textContent).toContain('Failure Reason');
-    expect(receipts?.textContent).toContain('Broker snapshot disagrees with the intent WAL.');
-    expect(receipts?.textContent).toContain('Reconciliation Projection');
-    expect(receipts?.textContent).toContain('Intent ID');
-    expect(receipts?.textContent).toContain('intent-7');
+    expect(receipts?.textContent).toContain('Technical proof details');
+    expect(receipts?.textContent).toContain('Reconciliation State is Failed.');
+    expect(receipts?.textContent).toContain('Failure Reason is Broker snapshot disagrees with the intent WAL.');
+    expect(receipts?.textContent).not.toContain('Reconciliation Projection');
+    expect(receipts?.querySelector('[title*="Reconciliation Projection"]')).toBeTruthy();
+    expect(receipts?.textContent).toContain('Intent ID is intent-7.');
     expect(receipts?.textContent).not.toContain('Intent 7');
-    expect(receipts?.textContent).toContain('Readiness');
+    expect(receipts?.textContent).not.toContain('timestamp unresolved');
   });
 
   it('keeps lifecycle node codes out of trader copy and formats them in receipts', async () => {

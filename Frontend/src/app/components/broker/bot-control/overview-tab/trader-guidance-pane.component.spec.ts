@@ -47,7 +47,7 @@ function makeTimelineRow(): LifecycleProjectionEventRow {
 }
 
 describe('TraderGuidancePaneComponent', () => {
-  it('renders backend-authored trader guidance and advanced evidence verbatim', async () => {
+  it('renders backend-authored trader guidance with friendly technical diagnostics', async () => {
     const base = makeOperatorSurfaceFixture();
     await render(TraderGuidancePaneComponent, {
       inputs: {
@@ -77,10 +77,13 @@ describe('TraderGuidancePaneComponent', () => {
     expect(screen.getByText('The backend cannot prove the broker/session/reconciliation facts needed before a submit.')).toBeTruthy();
     expect(screen.getByText('Do not treat stale or missing broker evidence as live truth')).toBeTruthy();
     expect(screen.getByText('Reconnect or reconcile until the broker evidence is fresh and explicit.')).toBeTruthy();
-    expect(screen.getByTestId('trader-guidance-advanced-evidence').textContent)
-      .toContain('reconciliation.state');
-    expect(screen.getByTestId('trader-guidance-advanced-evidence').textContent)
-      .toContain('NOT_AVAILABLE');
+    const diagnostics = screen.getByTestId('trader-guidance-advanced-evidence');
+    expect(diagnostics.textContent).toContain('Technical diagnostics');
+    expect(diagnostics.textContent).toContain('Reconciliation is not available.');
+    expect(diagnostics.textContent).not.toContain('reconciliation.state');
+    expect(diagnostics.textContent).not.toContain('NOT_AVAILABLE');
+    expect(diagnostics.querySelector('.evidence-row')?.getAttribute('title'))
+      .toContain('Source: Reconcile Receipt. Gate: Latest Reconcile');
   });
 
   it('emits the backend remediation object for invoke_endpoint actions', async () => {

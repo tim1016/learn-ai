@@ -11,6 +11,10 @@ import {
   type RendererDispatch,
   type RenderedAction,
 } from '../../cockpit-v2/lib/suggested-action-renderer';
+import {
+  buildDiagnosticEvidenceLines,
+  type DiagnosticEvidenceLine,
+} from '../node-inspector-presenter';
 import { TraderGuidanceTimelineComponent } from './trader-guidance-timeline.component';
 
 @Component({
@@ -32,7 +36,9 @@ export class TraderGuidancePaneComponent {
   readonly traderGuidance = computed(() => this.surface().trader_guidance);
   readonly accountOwner = computed(() => this.surface().account_owner);
   readonly attentionGroups = computed(() => this.traderGuidance().additional_attention_groups);
-  readonly advancedEvidence = computed(() => this.traderGuidance().advanced_evidence);
+  readonly diagnosticEvidence = computed<DiagnosticEvidenceLine[]>(() =>
+    buildDiagnosticEvidenceLines(this.traderGuidance().advanced_evidence),
+  );
   readonly renderedPrimary = computed<RenderedAction | null>(() =>
     renderTraderRemediation(this.traderGuidance().primary_remediation, this.dispatch),
   );
@@ -45,8 +51,8 @@ export class TraderGuidancePaneComponent {
     invokeEndpoint: () => this.emitCurrentRemediation(),
   };
 
-  trackEvidence(index: number, fact: { label: string; source: string | null }): string {
-    return `${fact.label}:${fact.source ?? 'unknown'}:${index}`;
+  trackEvidence(index: number, line: DiagnosticEvidenceLine): string {
+    return `${line.id}:${index}`;
   }
 
   trackAttention(index: number, group: { code: string }): string {

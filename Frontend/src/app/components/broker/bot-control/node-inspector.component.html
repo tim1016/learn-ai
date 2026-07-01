@@ -13,12 +13,11 @@
     {{ currentNode.summary ?? currentNode.why ?? currentNode.evidence_summary ?? 'No trader-language meaning is available yet.' }}
   </p>
   @if (currentNode.operator_next_step) {
-    <p data-trader-copy><strong>Action guidance:</strong> {{ currentNode.operator_next_step }}</p>
+    <p data-trader-copy><strong>Next:</strong> {{ currentNode.operator_next_step }}</p>
   }
-  <p data-trader-copy><strong>Related action:</strong> {{ actionsForNode(currentNode.id) }} -> Act-now bar</p>
-  <p class="context-timestamp">
-    Evidence time: {{ nodeTimestamp(currentNode) }}
-  </p>
+  @if (nodeCheckedAt(currentNode); as checkedAt) {
+    <p class="context-timestamp">{{ checkedAt }}</p>
+  }
   @if (currentNode.receipts.length > 0) {
     <app-node-receipts-pane [receipts]="currentNode.receipts" />
   }
@@ -40,15 +39,16 @@
     </p>
     <div class="redeploy-fields">
       @for (field of changeForNextRunFields(); track trackRedeployField($index, field)) {
-        <article class="redeploy-setting-field" data-testid="redeploy-setting-field">
-          <div>
-            <strong>{{ field.label }}</strong>
-            <p>{{ field.value }}</p>
-            <small>{{ field.detail }}</small>
-          </div>
-          <button type="button" class="link-button" (click)="redeployRequested.emit()">Change via redeploy</button>
-        </article>
+        <span
+          class="redeploy-setting-field"
+          data-testid="redeploy-setting-field"
+          [attr.title]="field.detail"
+        >
+          <strong>{{ field.label }}</strong>
+          {{ field.value }}
+        </span>
       }
+      <button type="button" class="link-button" (click)="redeployRequested.emit()">Change via redeploy</button>
     </div>
   </section>
 }
@@ -62,36 +62,32 @@
     <p class="eyebrow">Evidence</p>
     <h3>Read-only proof</h3>
   </header>
-  <div class="locked-fields">
-    @for (field of lockedEvidenceFields(); track trackEvidenceField($index, field)) {
-      <article class="locked-evidence-field" data-testid="locked-evidence-field">
-        <span>{{ field.label }}</span>
-        <strong>{{ field.value }}</strong>
-        <small>{{ field.source }}</small>
-        @if (field.receipt) {
-          <code data-receipt>{{ field.receipt | receiptLabel }}</code>
-        }
-      </article>
+  <ul class="proof-lines">
+    @for (line of proofLines(); track trackProofLine($index, line)) {
+      <li
+        class="proof-line"
+        data-testid="locked-evidence-field"
+        [class.tone-neutral]="line.tone === 'neutral'"
+        [class.tone-ok]="line.tone === 'ok'"
+        [class.tone-attention]="line.tone === 'attention'"
+        [attr.title]="line.detail"
+      >
+        <span>{{ line.label }}</span>
+        <strong data-trader-copy>{{ line.message }}</strong>
+      </li>
     }
-  </div>
+  </ul>
 </section>
 
-<details class="inspector-section advanced-evidence" data-testid="trader-guidance-advanced-evidence">
-  <summary>Advanced evidence</summary>
-  <dl>
-    @for (fact of advancedEvidence(); track trackAdvancedEvidence($index, fact)) {
-      <div class="evidence-row" [attr.title]="fact.gate_id ? gateHelp() : null">
-        <dt>{{ fact.label }}</dt>
-        <dd>
-          <span>{{ fact.value }}</span>
-          @if (fact.source) {
-            <small>{{ fact.source }}</small>
-          }
-          @if (fact.gate_id) {
-            <code data-receipt>{{ fact.gate_id | receiptLabel }}</code>
-          }
-        </dd>
-      </div>
-    }
-  </dl>
-</details>
+@if (advancedEvidenceLines().length > 0) {
+  <details class="inspector-section advanced-evidence" data-testid="trader-guidance-advanced-evidence">
+    <summary>Technical diagnostics</summary>
+    <ul>
+      @for (line of advancedEvidenceLines(); track trackDiagnosticLine($index, line)) {
+        <li class="diagnostic-line" [attr.title]="line.detail">
+          {{ line.message }}
+        </li>
+      }
+    </ul>
+  </details>
+}

@@ -17,6 +17,7 @@ import type {
   LiveInstanceSummary,
   OperatorGate,
   OperatorNotice,
+  OperatorSurfaceProofLine,
   OperatorSurface,
   OperatorSurfaceRuntimeFreshness,
 } from '../app/api/live-instances.types';
@@ -54,6 +55,45 @@ const _capability = (
     ),
   ],
 });
+
+const DEFAULT_PROOF_LINES: OperatorSurfaceProofLine[] = [
+  {
+    id: 'broker-proof',
+    label: 'Broker',
+    message: 'Broker proof is not available yet.',
+    detail: 'Account safety proof is not recorded. Broker connection has not been proven.',
+    tone: 'attention',
+  },
+  {
+    id: 'submit-readiness',
+    label: 'Trade submit',
+    message: 'Safe to monitor',
+    detail:
+      'The cockpit can observe this bot, but order submission is not currently active or appropriate. 1 blocking proof still needs attention.',
+    tone: 'attention',
+  },
+  {
+    id: 'account-owner',
+    label: 'Account owner',
+    message: 'Waiting for AccountOwner proof.',
+    detail: 'No AccountOwner artifact is available for this bot.',
+    tone: 'attention',
+  },
+  {
+    id: 'reconciliation',
+    label: 'Reconciliation',
+    message: 'Waiting for reconciliation proof.',
+    detail: 'No reconciliation claim has been produced for this run.',
+    tone: 'attention',
+  },
+  {
+    id: 'runtime-freshness',
+    label: 'Runtime',
+    message: 'No live runtime is bound yet.',
+    detail: 'No child runtime is currently bound to this instance.',
+    tone: 'attention',
+  },
+];
 
 /**
  * A benign all-defaults projection useful for fixtures that don't care
@@ -112,6 +152,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
     risk_explanation: 'Keep watching the bot, but do not interpret the Overview as a trade-permission signal.',
     primary_remediation: { kind: 'none', reason: 'MONITOR_ONLY' },
     additional_attention_groups: [],
+    proof_lines: DEFAULT_PROOF_LINES,
     advanced_evidence: [],
     template_id: 'operator_surface.trader_guidance.monitor_only',
     template_version: 1,

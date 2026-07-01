@@ -458,6 +458,14 @@ export interface OperatorSurfaceAttentionGroup {
   explanation: string;
 }
 
+export interface OperatorSurfaceProofLine {
+  id: string;
+  label: string;
+  message: string;
+  detail: string;
+  tone: 'neutral' | 'ok' | 'attention';
+}
+
 export interface OperatorSurfaceSubmitReadiness {
   code: SubmitReadinessCode;
   label: string;
@@ -476,6 +484,7 @@ export interface OperatorSurfaceTraderGuidance {
   risk_explanation: string;
   primary_remediation: TraderPrimaryRemediation;
   additional_attention_groups: OperatorSurfaceAttentionGroup[];
+  proof_lines: OperatorSurfaceProofLine[];
   advanced_evidence: OperatorSurfaceEvidenceFact[];
   template_id: string;
   template_version: number;
