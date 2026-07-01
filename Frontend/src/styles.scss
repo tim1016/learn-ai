@@ -81,21 +81,6 @@ p {
   }
 }
 
-.bots-page .bot-dataview {
-  .p-dataview,
-  .p-dataview-content,
-  .p-dataview-emptymessage {
-    background: var(--bg-canvas);
-    color: var(--text-primary);
-  }
-
-  .p-paginator {
-    border-color: var(--border-light);
-    background: var(--bg-surface);
-    color: var(--text-primary);
-  }
-}
-
 /* Inline code uses the mono stack but stays a "chip" — small bg, padding,
    rounded. Scoped to <code> only; .mono is the bare utility. */
 code {

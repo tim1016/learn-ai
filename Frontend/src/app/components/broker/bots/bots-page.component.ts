@@ -6,33 +6,51 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
-import { DataViewModule } from 'primeng/dataview';
 import { InputTextModule } from 'primeng/inputtext';
+import { TableModule } from 'primeng/table';
+import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
 
 import type {
   BotCatalogRow,
   BotCatalogTradingMode,
-  BotCatalogTone,
+  ReadinessVerdictEnum,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 
-type ErrorFilter = 'all' | 'has-errors' | 'no-errors';
-type TradingModeFilter = 'all' | BotCatalogTradingMode;
+type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
+type BotModeTab = BotCatalogTradingMode;
+type ReadinessFilter = 'all' | ReadinessVerdictEnum;
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
+
+interface BotTableRow {
+  id: string;
+  name: string;
+  needsAttention: boolean;
+  tradingMode: BotCatalogTradingMode;
+  symbolsLabel: string;
+  readinessVerdict: ReadinessVerdictEnum;
+  exposure: string;
+  openPositions: number | null;
+  totalPnl: number | null;
+  errorCount: number;
+  lastRunSortMs: number;
+  lastRunAtMs: number | null;
+  lastRunLabel: string;
+  searchText: string;
+}
 
 @Component({
   selector: 'app-bots-page',
   imports: [
     CommonModule,
-    FormsModule,
     ButtonModule,
-    DataViewModule,
     InputTextModule,
+    TableModule,
+    TabsModule,
     TagModule,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -44,33 +62,51 @@ export class BotsPageComponent {
   private readonly router = inject(Router);
 
   readonly bots = signal<BotCatalogRow[]>([]);
-  readonly expanded = signal<Record<string, boolean>>({});
   readonly isLoading = signal<boolean>(true);
   readonly errorMessage = signal<string | null>(null);
-  readonly nameQuery = signal<string>('');
-  readonly symbolQuery = signal<string>('');
-  readonly errorFilter = signal<ErrorFilter>('all');
-  readonly tradingModeFilter = signal<TradingModeFilter>('all');
+  readonly searchQuery = signal<string>('');
+  readonly attentionFilter = signal<AttentionFilter>('all');
+  readonly readinessFilter = signal<ReadinessFilter>('all');
+  readonly activeModeTab = signal<BotModeTab>('paper');
 
-  readonly visibleBots = computed<BotCatalogRow[]>(() => {
-    const nameQuery = normalize(this.nameQuery());
-    const symbolQuery = normalize(this.symbolQuery());
-    const errorFilter = this.errorFilter();
-    const tradingModeFilter = this.tradingModeFilter();
+  readonly visibleBots = computed<BotTableRow[]>(() => {
+    const query = normalize(this.searchQuery());
+    const attentionFilter = this.attentionFilter();
+    const readinessFilter = this.readinessFilter();
 
-    return this.bots().filter((bot) => {
-      if (nameQuery && !normalize(bot.name).includes(nameQuery)) return false;
-      if (
-        symbolQuery &&
-        !bot.symbols.some((symbol) => normalize(symbol).includes(symbolQuery))
-      ) {
-        return false;
-      }
-      if (errorFilter === 'has-errors' && !bot.needs_attention) return false;
-      if (errorFilter === 'no-errors' && bot.needs_attention) return false;
-      if (tradingModeFilter !== 'all' && bot.trading_mode !== tradingModeFilter) return false;
-      return true;
-    });
+    return this.bots()
+      .map(toTableRow)
+      .filter((row) => {
+        if (query && !row.searchText.includes(query)) return false;
+        if (attentionFilter === 'needs-attention' && !row.needsAttention) return false;
+        if (attentionFilter === 'healthy' && row.needsAttention) return false;
+        if (readinessFilter !== 'all' && row.readinessVerdict !== readinessFilter) return false;
+        return true;
+      })
+      .sort(compareRowsForTriage);
+  });
+
+  readonly liveBots = computed<BotTableRow[]>(() =>
+    this.visibleBots().filter((bot) => bot.tradingMode === 'live'),
+  );
+
+  readonly paperBots = computed<BotTableRow[]>(() =>
+    this.visibleBots().filter((bot) => bot.tradingMode === 'paper'),
+  );
+
+  readonly unknownModeBots = computed<BotTableRow[]>(() =>
+    this.visibleBots().filter((bot) => bot.tradingMode === 'unknown'),
+  );
+
+  readonly activeTabCount = computed(() => {
+    switch (this.activeModeTab()) {
+      case 'live':
+        return this.liveBots().length;
+      case 'paper':
+        return this.paperBots().length;
+      case 'unknown':
+        return this.unknownModeBots().length;
+    }
   });
 
   constructor() {
@@ -90,35 +126,46 @@ export class BotsPageComponent {
     }
   }
 
-  toggleExpanded(id: string): void {
-    this.expanded.update((value) => ({ ...value, [id]: !value[id] }));
+  setSearchQuery(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) {
+      this.searchQuery.set(target.value);
+    }
   }
 
-  setErrorFilter(value: ErrorFilter): void {
-    this.errorFilter.set(value);
+  setAttentionFilter(value: AttentionFilter): void {
+    this.attentionFilter.set(value);
   }
 
-  setTradingModeFilter(value: TradingModeFilter): void {
-    this.tradingModeFilter.set(value);
+  setReadinessFilter(value: ReadinessFilter): void {
+    this.readinessFilter.set(value);
   }
 
-  isExpanded(id: string): boolean {
-    return this.expanded()[id] === true;
+  setActiveModeTab(value: string | number | undefined): void {
+    if (value === 'live' || value === 'paper' || value === 'unknown') {
+      this.activeModeTab.set(value);
+    }
+  }
+
+  clearFilters(): void {
+    this.searchQuery.set('');
+    this.attentionFilter.set('all');
+    this.readinessFilter.set('all');
   }
 
   async openBot(id: string): Promise<void> {
     await this.router.navigate(['/broker/bots', id]);
   }
 
-  tagSeverity(tone: BotCatalogTone): TagSeverity {
-    switch (tone) {
-      case 'positive':
+  readinessSeverity(verdict: ReadinessVerdictEnum): TagSeverity {
+    switch (verdict) {
+      case 'READY':
         return 'success';
-      case 'warning':
+      case 'DEGRADED':
         return 'warn';
-      case 'danger':
+      case 'BLOCKED':
         return 'danger';
-      case 'neutral':
+      case 'UNKNOWN':
         return 'secondary';
     }
   }
@@ -135,9 +182,7 @@ export class BotsPageComponent {
     return fmtTimestampLocal(value);
   }
 
-  formatSymbols(symbols: string[]): string {
-    return symbols.length > 0 ? symbols.join(', ') : '—';
-  }
+  readonly trackByBotId = (_index: number, row: BotTableRow): string => row.id;
 
   private humanError(err: unknown): string {
     if (err instanceof Error && err.message) return err.message;
@@ -147,4 +192,47 @@ export class BotsPageComponent {
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function toTableRow(bot: BotCatalogRow): BotTableRow {
+  const symbolsLabel = bot.symbols.length > 0 ? bot.symbols.join(', ') : '—';
+
+  return {
+    id: bot.strategy_instance_id,
+    name: bot.name,
+    needsAttention: bot.needs_attention,
+    tradingMode: bot.trading_mode,
+    symbolsLabel,
+    readinessVerdict: bot.readiness_verdict,
+    exposure: bot.metrics.current_exposure,
+    openPositions: bot.metrics.open_positions,
+    totalPnl: bot.metrics.pnl.total,
+    errorCount: bot.metrics.error_count,
+    lastRunSortMs: bot.last_run_at_ms ?? 0,
+    lastRunAtMs: bot.last_run_at_ms,
+    lastRunLabel: bot.last_run_label,
+    searchText: normalize([
+      bot.name,
+      bot.strategy_instance_id,
+      symbolsLabel,
+      bot.status_label,
+      bot.status_detail,
+      bot.trading_mode,
+      bot.engine,
+      bot.engine_asset_class,
+      bot.desired_state,
+      bot.readiness_verdict,
+      bot.last_run_label,
+      bot.last_run_result,
+      bot.last_run_detail,
+      bot.metrics.current_exposure,
+    ].filter((value): value is string => typeof value === 'string').join(' ')),
+  };
+}
+
+function compareRowsForTriage(a: BotTableRow, b: BotTableRow): number {
+  return (
+    b.lastRunSortMs - a.lastRunSortMs ||
+    a.name.localeCompare(b.name)
+  );
 }
