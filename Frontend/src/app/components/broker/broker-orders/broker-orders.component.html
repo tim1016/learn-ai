@@ -280,15 +280,14 @@
                   {{ o.cumulative_filled }} / {{ o.quantity }}
                 </td>
                 <td>
+                  @let cancelReason = cancelDisabledReason(o);
                   <button
                     type="button"
                     class="ghost-btn small"
                     (click)="cancel(o.order_id)"
-                    [disabled]="!canCancelLedgerOrder(o)"
-                    [attr.title]="!isPaperConnected()
-                      ? 'Disabled until IBKR is connected to a paper account (DU…)'
-                      : null"
-                    [attr.aria-label]="'Cancel order ' + o.order_id"
+                    [disabled]="cancelReason !== null"
+                    [attr.title]="cancelReason"
+                    [attr.aria-label]="cancelButtonLabel(o)"
                   >
                     <i class="pi pi-times" aria-hidden="true"></i>
                   </button>

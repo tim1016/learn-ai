@@ -49,13 +49,13 @@ Its job is different from Activity:
 | Per-bot Activity | One broker callback/execution joined to one bot's intent evidence | Did this bot's broker outcome match its intended order? |
 | Account Truth | The whole connected IBKR account joined against every known bot namespace and manual namespace | Is every live account fact assigned, or should bot submits stay blocked? |
 
-The projection gathers live TWS/Gateway evidence from account summary, positions, open orders, completed orders, and execution sweeps. It then classifies each order, execution, and current position into one of four owner classes:
+The projection gathers live TWS/Gateway evidence from account summary, positions, open orders, completed orders, and execution sweeps. Orders and executions classify as bot/manual/foreign-or-unclaimed; current positions can additionally classify as mixed-known when more than one known owner has filled evidence for the same contract:
 
 | Owner class | Evidence accepted |
 |---|---|
 | `bot` | `order_ref` namespace exactly equals one active known `learn-ai/{strategy_instance_id}/v1` namespace. |
 | `manual` | App-submitted manual paper order with a reserved `manual/{operator_or_session}/v1:{intent_id}` `order_ref`. The current MVP uses `manual/operator/v1` until an authenticated operator/session principal exists at this route. |
-| `mixed_known` | A current position is explained by more than one known bot/manual owner for the same contract. |
+| `mixed_known` | Positions only: a current position is explained by more than one known bot/manual owner for the same contract. |
 | `foreign_or_unclaimed` | Missing `order_ref`, unparseable `order_ref`, unknown namespace, TWS hand-click, other API session, stale process, or any broker fact not proved by a known namespace. |
 
 `clientId` is forensic context only. A TWS click on `clientId=0` with no namespace is still `foreign_or_unclaimed`; it is not auto-classified as manual. This preserves the same fail-closed contract as the broker-activity reconciler: absence of identity is evidence of uncertainty, not evidence of safety.
@@ -69,9 +69,9 @@ Account Truth emits backend-authored invariant rows rather than leaving Angular 
 | `completed_orders_known` | Recent terminal order evidence is incomplete or contains unclaimed rows. Warning in the MVP because terminal history is lower live-risk than working orders. |
 | `all_executions_assigned` | At least one execution sweep row is foreign/unclaimed, or execution evidence is unavailable. Critical. |
 | `positions_match_known_ownership` | A current position is not explained by known bot/manual evidence. Critical. |
-| `commission_complete` | One or more executions are missing IBKR commission evidence. Warning; fees stay `None`, never fabricated as zero. |
+| `commission_complete` | One or more executions are missing IBKR `commissionReport` evidence. Warning; missing fees stay `None`, never fabricated as zero. |
 | `flex_audit_match` | `not_applicable` until the delayed Flex import slice ships. |
-| `duplicate_exec_id_suppressed` | IBKR redelivered an `execId`; the projection kept the first observation and reports the duplicate as a caveat. |
+| `duplicate_exec_id_suppressed` | IBKR redelivered an `execId`; the projection keeps the first observation, backfills missing fields from later observations, and reports the duplicate as a caveat. |
 
 Rows preserve broker identifiers for audit: `execId` dedupes executions, `permId` groups an order lifecycle when available, `order_ref` assigns ownership, and `orderId` is displayed only as broker evidence.
 

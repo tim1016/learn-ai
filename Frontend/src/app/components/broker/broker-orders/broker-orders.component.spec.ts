@@ -4,7 +4,11 @@ import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerOrdersComponent } from './broker-orders.component';
-import type { IbkrOpenOrder } from '../../../api/broker-models';
+import type {
+  AccountTruthOrderRow,
+  IbkrOpenOrder,
+  IbkrOrderWhatIfPreview,
+} from '../../../api/broker-models';
 
 // jsdom lacks EventSource and (across versions) HTMLDialogElement's
 // showModal / close. Stub once at module scope so the broker-orders
@@ -73,6 +77,38 @@ class FakeBrokerService {
   positions = vi.fn();
 }
 
+function whatIfPreview(overrides: Partial<IbkrOrderWhatIfPreview> = {}): IbkrOrderWhatIfPreview {
+  return {
+    account_id: 'DU1234567',
+    is_paper: true,
+    symbol: 'SPY',
+    action: 'BUY',
+    quantity: 1,
+    order_type: 'MKT',
+    init_margin_change: 10,
+    maint_margin_change: 5,
+    equity_with_loan_change: -10,
+    commission: 1,
+    warning_text: null,
+    previewed_at_ms: 1,
+    ...overrides,
+  };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function setup(openOrders: IbkrOpenOrder[] = []) {
   const broker = new FakeBrokerService();
   broker.openOrders.mockResolvedValue(openOrders);
@@ -127,6 +163,33 @@ const openOrderWithRef: IbkrOpenOrder = {
   fetched_at_ms: 1,
   order_ref: 'learn-ai/test-bot/v1:intent-42',
 };
+
+function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): AccountTruthOrderRow {
+  return {
+    ...openOrderWithRef,
+    fact_kind: 'open_order',
+    lifecycle_id: 'perm:9001',
+    lifecycle: 'acknowledged',
+    perm_id: 9001,
+    limit_price: null,
+    avg_fill_price: null,
+    owner: {
+      owner_class: 'bot',
+      owner_key: 'test-bot',
+      owner_label: 'Bot test-bot',
+      evidence_tier: 'bot_order_ref',
+      evidence_label: 'Bot-stamped order ref',
+      severity: 'ok',
+    },
+    headline: 'Bot test-bot open order',
+    detail: 'Ownership is proven by bot-stamped order ref.',
+    ...overrides,
+  };
+}
+
+async function primeWhatIf(component: BrokerOrdersComponent): Promise<void> {
+  await component.loadWhatIfPreview();
+}
 
 describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
   let showModal: ReturnType<typeof vi.spyOn>;
@@ -217,6 +280,7 @@ describe('BrokerOrdersComponent — confirmPaper failure-reset', () => {
   it('clears confirmPaper after a failed place even though placeError is set', async () => {
     const { component, broker } = setup();
     broker.placeOrder.mockRejectedValueOnce(new Error('rejected'));
+    await primeWhatIf(component);
     component.confirmPaper.set(true);
     await component.submitOrder();
     expect(component.confirmPaper()).toBe(false);
@@ -230,6 +294,7 @@ describe('BrokerOrdersComponent — confirmPaper failure-reset', () => {
       status: 'submitted',
       placed_at_ms: Date.now(),
     });
+    await primeWhatIf(component);
     component.confirmPaper.set(true);
     await component.submitOrder();
     expect(component.confirmPaper()).toBe(false);
@@ -243,6 +308,7 @@ describe('BrokerOrdersComponent — confirmPaper failure-reset', () => {
       placed_at_ms: Date.now(),
       order_ref: 'manual/operator/v1:intent-1',
     });
+    await primeWhatIf(component);
     component.confirmPaper.set(true);
 
     await component.submitOrder();
@@ -257,5 +323,64 @@ describe('BrokerOrdersComponent — confirmPaper failure-reset', () => {
     component.confirmPaper.set(false);
     await component.submitOrder();
     expect(broker.placeOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('BrokerOrdersComponent — what-if preview gate', () => {
+  it('ignores stale what-if responses', async () => {
+    const { component, broker } = setup();
+    const first = deferred<IbkrOrderWhatIfPreview>();
+    const second = deferred<IbkrOrderWhatIfPreview>();
+    broker.orderWhatIf
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const firstLoad = component.loadWhatIfPreview();
+    component.quantity.set(2);
+    const secondLoad = component.loadWhatIfPreview();
+
+    second.resolve(whatIfPreview({ commission: 2, quantity: 2 }));
+    await secondLoad;
+    first.resolve(whatIfPreview({ commission: 1, quantity: 1 }));
+    await firstLoad;
+
+    expect(component.whatIfPreview()?.commission).toBe(2);
+  });
+
+  it('disables confirmation when the form changes after preview', async () => {
+    const { component } = setup();
+    await primeWhatIf(component);
+
+    component.confirmDialogOpen.set(true);
+    component.confirmCheckbox.set(true);
+    component.confirmCooldownMs.set(0);
+    expect(component.confirmCanPlace()).toBe(true);
+
+    component.quantity.set(2);
+    expect(component.confirmCanPlace()).toBe(false);
+  });
+});
+
+describe('BrokerOrdersComponent — cancel reasons', () => {
+  it('explains disabled foreign and terminal ledger cancels', () => {
+    const { component } = setup();
+
+    const foreignReason = component.cancelDisabledReason(accountTruthOrder({
+      owner: {
+        owner_class: 'foreign_or_unclaimed',
+        owner_key: 'foreign_or_unclaimed',
+        owner_label: 'Foreign or unclaimed',
+        evidence_tier: 'foreign_or_unclaimed',
+        evidence_label: 'No known ownership evidence',
+        severity: 'critical',
+      },
+    }));
+    const terminalReason = component.cancelDisabledReason(accountTruthOrder({
+      lifecycle: 'filled',
+      remaining: 0,
+    }));
+
+    expect(foreignReason).toContain('Foreign or unclaimed');
+    expect(terminalReason).toContain('terminal');
   });
 });

@@ -92,6 +92,8 @@ export class BrokerOrdersComponent {
   readonly whatIfLoading = signal(false);
   readonly whatIfError = signal<unknown>(null);
   readonly whatIfPreview = signal<IbkrOrderWhatIfPreview | null>(null);
+  private readonly whatIfPreviewKey = signal<string | null>(null);
+  private whatIfRequestId = 0;
 
   // Confirm-paper modal — layer 4 of the safety stack, mirrored from
   // the server-side ``confirm_paper`` requirement. Submit opens the
@@ -114,7 +116,7 @@ export class BrokerOrdersComponent {
       this.confirmDialogOpen() &&
       this.confirmCheckbox() &&
       this.confirmCooldownMs() === 0 &&
-      this.whatIfPreview() !== null &&
+      this.hasCurrentWhatIfPreview() &&
       this.whatIfError() === null &&
       !this.whatIfLoading() &&
       !this.submitting() &&
@@ -201,8 +203,7 @@ export class BrokerOrdersComponent {
     this.placeError.set(null);
     this.confirmCheckbox.set(false);
     this.confirmCooldownMs.set(CONFIRM_DIALOG_COOLDOWN_MS);
-    this.whatIfPreview.set(null);
-    this.whatIfError.set(null);
+    this.clearWhatIfPreview();
     this.confirmDialogOpen.set(true);
     this.startConfirmTick();
     void this.loadWhatIfPreview();
@@ -216,8 +217,9 @@ export class BrokerOrdersComponent {
     // sticky true value left behind by a previous open.
     this.confirmPaper.set(false);
     this.confirmCooldownMs.set(0);
-    this.whatIfPreview.set(null);
-    this.whatIfError.set(null);
+    this.whatIfRequestId += 1;
+    this.whatIfLoading.set(false);
+    this.clearWhatIfPreview();
     this.clearConfirmTick();
   }
 
@@ -280,7 +282,12 @@ export class BrokerOrdersComponent {
   }
 
   async submitOrder(): Promise<void> {
-    if (!this.isPaperConnected() || !this.confirmPaper() || this.submitting()) return;
+    if (
+      !this.isPaperConnected() ||
+      !this.confirmPaper() ||
+      this.submitting() ||
+      !this.hasCurrentWhatIfPreview()
+    ) return;
 
     this.submitting.set(true);
     this.placeError.set(null);
@@ -312,15 +319,27 @@ export class BrokerOrdersComponent {
 
   async loadWhatIfPreview(): Promise<void> {
     if (!this.isPaperConnected()) return;
+    const previewKey = this.currentWhatIfKey();
+    const requestId = ++this.whatIfRequestId;
     this.whatIfLoading.set(true);
     this.whatIfError.set(null);
     this.whatIfPreview.set(null);
+    this.whatIfPreviewKey.set(null);
     try {
-      this.whatIfPreview.set(await this.broker.orderWhatIf(this.buildOrderSpec(false)));
+      const preview = await this.broker.orderWhatIf(this.buildOrderSpec(false));
+      if (requestId === this.whatIfRequestId && previewKey === this.currentWhatIfKey()) {
+        this.whatIfPreview.set(preview);
+        this.whatIfPreviewKey.set(previewKey);
+      }
     } catch (err) {
-      this.whatIfError.set(err);
+      if (requestId === this.whatIfRequestId) {
+        this.whatIfError.set(err);
+        this.whatIfPreviewKey.set(null);
+      }
     } finally {
-      this.whatIfLoading.set(false);
+      if (requestId === this.whatIfRequestId) {
+        this.whatIfLoading.set(false);
+      }
     }
   }
 
@@ -371,11 +390,61 @@ export class BrokerOrdersComponent {
   }
 
   canCancelLedgerOrder(row: AccountTruthOrderRow): boolean {
-    return row.fact_kind === 'open_order' && row.remaining > 0 && this.isPaperConnected();
+    return this.cancelDisabledReason(row) === null;
+  }
+
+  cancelDisabledReason(row: AccountTruthOrderRow): string | null {
+    if (!this.isPaperConnected()) {
+      return 'Disabled until IBKR is connected to a paper account (DU account).';
+    }
+    if (row.fact_kind !== 'open_order') {
+      return 'Only live open broker orders can be cancelled.';
+    }
+    if (row.owner.owner_class === 'foreign_or_unclaimed') {
+      return 'Foreign or unclaimed orders require explicit adoption before app-side cancel.';
+    }
+    if (row.remaining <= 0 || ['filled', 'cancelled', 'rejected'].includes(row.lifecycle)) {
+      return 'Order is already terminal at IBKR.';
+    }
+    return null;
+  }
+
+  cancelButtonLabel(row: AccountTruthOrderRow): string {
+    const reason = this.cancelDisabledReason(row);
+    if (reason === null) return `Cancel order ${row.order_id}`;
+    return `Cannot cancel order ${row.order_id}: ${reason}`;
   }
 
   ibkrEvidenceJson(value: IbkrOrderEvidenceFields | IbkrOrderEvent): string {
     return JSON.stringify(value.ibkr_evidence ?? null, null, 2);
+  }
+
+  private clearWhatIfPreview(): void {
+    this.whatIfPreview.set(null);
+    this.whatIfPreviewKey.set(null);
+    this.whatIfError.set(null);
+  }
+
+  private hasCurrentWhatIfPreview(): boolean {
+    return this.whatIfPreview() !== null && this.whatIfPreviewKey() === this.currentWhatIfKey();
+  }
+
+  private currentWhatIfKey(): string {
+    const spec = this.buildOrderSpec(false);
+    return JSON.stringify({
+      symbol: spec.symbol,
+      sec_type: spec.sec_type,
+      action: spec.action,
+      quantity: spec.quantity,
+      order_type: spec.order_type,
+      limit_price: spec.limit_price,
+      time_in_force: spec.time_in_force,
+      multiplier: spec.multiplier,
+      expiry_ms: spec.expiry_ms,
+      strike: spec.strike,
+      right: spec.right,
+      manual_order: spec.manual_order ?? false,
+    });
   }
 
   private openEventStream(): void {

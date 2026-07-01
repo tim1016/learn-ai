@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.broker.ibkr.order_history import list_completed_orders
@@ -122,6 +123,26 @@ async def test_list_completed_orders_filters_other_accounts() -> None:
     rows = await list_completed_orders(client)
 
     assert [row.order_id for row in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_list_completed_orders_reports_missing_api_as_broker_error() -> None:
+    client = _client()
+    delattr(client.ib, "reqCompletedOrdersAsync")
+
+    with pytest.raises(BrokerError, match="reqCompletedOrdersAsync"):
+        await list_completed_orders(client)
+
+
+@pytest.mark.asyncio
+async def test_list_completed_orders_reports_unparseable_rows_as_broker_error() -> None:
+    client = _client()
+    bad_trade = _trade()
+    bad_trade.contract.conId = "not-an-int"
+    client.ib.reqCompletedOrdersAsync = AsyncMock(return_value=[bad_trade])
+
+    with pytest.raises(BrokerError, match="unparseable row"):
+        await list_completed_orders(client)
 
 
 @pytest.mark.asyncio

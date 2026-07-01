@@ -196,18 +196,19 @@ def compose_account_truth(
     )
     known_namespace_set = set(known_bot_namespaces)
 
-    order_rows = [
+    open_order_rows = [
         _order_row(order, fact_kind="open_order", known_bot_namespaces=known_namespace_set)
         for order in open_orders
     ]
-    order_rows.extend(
+    completed_order_rows = [
         _order_row(
             order,
             fact_kind="completed_order",
             known_bot_namespaces=known_namespace_set,
         )
         for order in completed_orders
-    )
+    ]
+    order_rows = [*open_order_rows, *completed_order_rows]
 
     execution_rows, duplicate_exec_count = _execution_rows(
         executions,
@@ -239,8 +240,8 @@ def compose_account_truth(
     )
     invariants = _invariants(
         health=health,
-        open_orders=order_rows,
-        completed_orders=order_rows,
+        open_orders=open_order_rows,
+        completed_orders=completed_order_rows,
         executions=execution_rows,
         positions=position_rows,
         evidence_gaps=evidence_gaps,
@@ -296,7 +297,11 @@ def _order_row(
         owner = owner.model_copy(update={"severity": "critical"})
     elif fact_kind == "completed_order" and owner.owner_class == "foreign_or_unclaimed":
         owner = owner.model_copy(update={"severity": "warning"})
-    lifecycle_id = f"perm:{order.perm_id}" if order.perm_id is not None else f"order:{order.order_id}"
+    lifecycle_id = (
+        f"perm:{order.perm_id}"
+        if order.perm_id is not None
+        else f"account:{order.account_id}:client:{order.client_id}:order:{order.order_id}"
+    )
     return AccountTruthOrderRow(
         fact_kind=fact_kind,  # type: ignore[arg-type]
         lifecycle_id=lifecycle_id,
@@ -330,43 +335,87 @@ def _execution_rows(
     *,
     known_bot_namespaces: set[str],
 ) -> tuple[list[AccountTruthExecutionRow], int]:
-    rows: list[AccountTruthExecutionRow] = []
-    seen_exec_ids: set[str] = set()
+    rows_by_exec_id: dict[str, AccountTruthExecutionRow] = {}
+    ordered_exec_ids: list[str] = []
     duplicate_count = 0
     for event in executions:
         if not event.exec_id:
             continue
-        if event.exec_id in seen_exec_ids:
+        row = _execution_row(event, known_bot_namespaces=known_bot_namespaces)
+        existing = rows_by_exec_id.get(event.exec_id)
+        if existing is not None:
             duplicate_count += 1
+            rows_by_exec_id[event.exec_id] = _merge_execution_row(existing, row)
             continue
-        seen_exec_ids.add(event.exec_id)
-        owner = _owner_for_order_ref(event.order_ref, known_bot_namespaces)
-        if owner.owner_class == "foreign_or_unclaimed":
-            owner = owner.model_copy(update={"severity": "critical"})
-        rows.append(
-            AccountTruthExecutionRow(
-                account_id=event.account_id,
-                exec_id=event.exec_id,
-                order_id=event.order_id,
-                perm_id=event.perm_id,
-                client_id=event.client_id,
-                con_id=event.con_id,
-                symbol=event.symbol,
-                side=event.side,
-                order_type=event.order_type,
-                quantity=event.fill_quantity,
-                price=event.last_fill_price or event.avg_fill_price,
-                fee=event.fee,
-                exec_time_ms=event.exec_time_ms,
-                observed_at_ms=event.ts_ms,
-                order_ref=event.order_ref,
-                owner=owner,
-                headline=_fact_headline(owner, "execution"),
-                detail=_execution_detail(event, owner),
-                ibkr_evidence=event.ibkr_evidence,
-            )
-        )
-    return rows, duplicate_count
+        rows_by_exec_id[event.exec_id] = row
+        ordered_exec_ids.append(event.exec_id)
+    return [rows_by_exec_id[exec_id] for exec_id in ordered_exec_ids], duplicate_count
+
+
+def _execution_row(
+    event: IbkrOrderEvent,
+    *,
+    known_bot_namespaces: set[str],
+) -> AccountTruthExecutionRow:
+    owner = _owner_for_order_ref(event.order_ref, known_bot_namespaces)
+    if owner.owner_class == "foreign_or_unclaimed":
+        owner = owner.model_copy(update={"severity": "critical"})
+    return AccountTruthExecutionRow(
+        account_id=event.account_id,
+        exec_id=event.exec_id,
+        order_id=event.order_id,
+        perm_id=event.perm_id,
+        client_id=event.client_id,
+        con_id=event.con_id,
+        symbol=event.symbol,
+        side=event.side,
+        order_type=event.order_type,
+        quantity=event.fill_quantity,
+        price=event.last_fill_price or event.avg_fill_price,
+        fee=event.fee,
+        exec_time_ms=event.exec_time_ms,
+        observed_at_ms=event.ts_ms,
+        order_ref=event.order_ref,
+        owner=owner,
+        headline=_fact_headline(owner, "execution"),
+        detail=_execution_detail(event, owner),
+        ibkr_evidence=event.ibkr_evidence,
+    )
+
+
+def _merge_execution_row(
+    existing: AccountTruthExecutionRow,
+    incoming: AccountTruthExecutionRow,
+) -> AccountTruthExecutionRow:
+    updates: dict[str, object] = {}
+    for field_name in (
+        "perm_id",
+        "client_id",
+        "con_id",
+        "symbol",
+        "side",
+        "order_type",
+        "quantity",
+        "price",
+        "fee",
+        "exec_time_ms",
+        "order_ref",
+        "ibkr_evidence",
+    ):
+        if getattr(existing, field_name) is None and getattr(incoming, field_name) is not None:
+            updates[field_name] = getattr(incoming, field_name)
+
+    if (
+        existing.owner.owner_class == "foreign_or_unclaimed"
+        and incoming.owner.owner_class != "foreign_or_unclaimed"
+    ):
+        updates["owner"] = incoming.owner
+        updates["headline"] = incoming.headline
+        updates["detail"] = incoming.detail
+
+    if not updates:
+        return existing
+    return existing.model_copy(update=updates)
 
 
 def _position_rows(
@@ -535,7 +584,7 @@ def _known_owners_by_con_id(
 ) -> dict[int, set[AccountTruthFactOwner]]:
     owners: dict[int, set[AccountTruthFactOwner]] = defaultdict(set)
     for row in order_rows:
-        if row.owner.owner_class in {"bot", "manual"}:
+        if row.cumulative_filled > 0 and row.owner.owner_class in {"bot", "manual"}:
             owners[row.con_id].add(row.owner)
     for row in execution_rows:
         if row.con_id is None:
@@ -551,7 +600,7 @@ def _foreign_con_ids(
 ) -> set[int]:
     out: set[int] = set()
     for row in order_rows:
-        if row.owner.owner_class == "foreign_or_unclaimed":
+        if row.cumulative_filled > 0 and row.owner.owner_class == "foreign_or_unclaimed":
             out.add(row.con_id)
     for row in execution_rows:
         if row.con_id is not None and row.owner.owner_class == "foreign_or_unclaimed":
@@ -628,7 +677,10 @@ def _messages(
                 code="duplicate_exec_id_suppressed",
                 severity="info",
                 title="Duplicate execution redelivery suppressed",
-                message="IBKR redelivered one or more execIds; account truth kept the first observation.",
+                message=(
+                    "IBKR redelivered one or more execIds; account truth kept the first "
+                    "observation and backfilled missing fields from later observations."
+                ),
                 forensic_facts={"count": duplicate_exec_count},
             )
         )
@@ -673,7 +725,11 @@ def _invariants(
     ]
     missing_commissions = [row for row in executions if row.fee is None]
     gap_sources = {gap.source: gap for gap in evidence_gaps}
-    liveness_ok = health.connected and not health.connection_lost
+    liveness_ok = (
+        health.connected
+        and not health.connection_lost
+        and health.connection_state == "connected"
+    )
     return [
         _invariant(
             "broker_liveness_proven",
@@ -701,7 +757,7 @@ def _invariants(
             ok=not unknown_completed and "completed_orders" not in gap_sources,
             fail_severity="warning",
             checked_at_ms=checked_at_ms,
-            evidence_count=len([row for row in completed_orders if row.fact_kind == "completed_order"]),
+            evidence_count=len(completed_orders),
             fail_text="Completed-order history is incomplete or has unclaimed rows.",
             pass_text="Recent completed orders have known ownership.",
         ),

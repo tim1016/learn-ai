@@ -39,11 +39,18 @@ async def list_completed_orders(
         raise BrokerError("connected client has no account_id")
 
     request = evidence_request("reqCompletedOrdersAsync", api_only=api_only)
+    completed_orders_call = getattr(client.ib, "reqCompletedOrdersAsync", None)
+    if not callable(completed_orders_call):
+        raise BrokerError("IBKR reqCompletedOrdersAsync is unavailable on this client.")
     try:
         trades = await asyncio.wait_for(
-            client.ib.reqCompletedOrdersAsync(api_only),
+            completed_orders_call(api_only),
             timeout=_COMPLETED_ORDERS_TIMEOUT_S,
         )
+    except AttributeError as exc:
+        raise BrokerError(
+            f"IBKR reqCompletedOrdersAsync is unavailable on this client: {exc}"
+        ) from exc
     except TimeoutError as exc:
         raise BrokerError(
             f"IBKR reqCompletedOrdersAsync timed out after "
@@ -62,6 +69,7 @@ async def list_completed_orders(
     )
 
     out: list[IbkrOpenOrder] = []
+    parse_error_count = 0
     for trade in trades:
         if not order_belongs_to_account(trade, account_id):
             continue
@@ -76,9 +84,15 @@ async def list_completed_orders(
                 )
             )
         except (AttributeError, TypeError, ValueError, ValidationError) as exc:
+            parse_error_count += 1
             logger.warning(
                 "Skipping unparseable completed order conId=%s: %s",
                 getattr(getattr(trade, "contract", None), "conId", "?"),
                 exc,
             )
+    if parse_error_count:
+        raise BrokerError(
+            "IBKR completed-order sweep contained "
+            f"{parse_error_count} unparseable row(s); completed-order evidence is degraded."
+        )
     return out

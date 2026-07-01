@@ -213,6 +213,112 @@ def test_account_truth_dedupes_exec_id_and_warns_on_missing_commission() -> None
     ] == "warn"
 
 
+def test_account_truth_duplicate_exec_backfills_later_commission() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[
+            _execution(exec_id="dup-1", fee=None),
+            _execution(exec_id="dup-1", fee=1.25, ts_ms=1_780_000_000_350),
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert len(truth.executions) == 1
+    assert truth.executions[0].fee == 1.25
+    assert {row.code for row in truth.caveats} == {"duplicate_exec_id_suppressed"}
+    assert {row.key: row.status for row in truth.invariants}[
+        "commission_complete"
+    ] == "pass"
+
+
+def test_account_truth_open_and_completed_evidence_counts_are_separate() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order(order_id=1, perm_id=9001)],
+        completed_orders=[
+            _open_order(
+                order_id=2,
+                perm_id=9002,
+                status="Filled",
+                cumulative_filled=1.0,
+                remaining=0.0,
+            )
+        ],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    counts = {row.key: row.evidence_count for row in truth.invariants}
+    assert counts["open_orders_known"] == 1
+    assert counts["completed_orders_known"] == 1
+
+
+def test_account_truth_unfilled_known_order_does_not_explain_position() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(_position()),
+        open_orders=[_open_order(cumulative_filled=0.0, remaining=1.0)],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
+    assert truth.positions[0].owner.owner_class == "foreign_or_unclaimed"
+    assert {row.code for row in truth.blockers} == {"unknown_positions"}
+
+
+def test_account_truth_fallback_lifecycle_id_includes_account_and_client() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[
+            _open_order(order_id=42, perm_id=None, client_id=7),
+            _open_order(order_id=42, perm_id=None, client_id=8),
+        ],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert [row.lifecycle_id for row in truth.orders] == [
+        "account:DU1234567:client:7:order:42",
+        "account:DU1234567:client:8:order:42",
+    ]
+
+
+def test_account_truth_recovering_connection_fails_liveness() -> None:
+    truth = compose_account_truth(
+        health=_health().model_copy(update={"connection_state": "recovering"}),
+        known_strategy_instance_ids=["bot-a"],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
+    assert {row.key: row.status for row in truth.invariants}[
+        "broker_liveness_proven"
+    ] == "fail"
+
+
 def test_account_truth_critical_account_summary_gap_forces_not_proven() -> None:
     truth = compose_account_truth(
         health=_health(),
