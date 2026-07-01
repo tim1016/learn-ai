@@ -158,6 +158,7 @@ def configuration_receipts(
     receipts: list[LifecycleChartReceipt] = []
     if context is not None:
         receipts.extend(_preflight_context_receipts(surface, context))
+    reason_codes = surface.configuration.reason_codes
     receipts.extend(
         chart_receipt(
             "configuration.reason_code",
@@ -166,9 +167,9 @@ def configuration_receipts(
             detail="This backend configuration check must clear before pre-flight is ready.",
             source="operator_surface.configuration",
         )
-        for code in surface.configuration.reason_codes
+        for code in reason_codes
     )
-    if not receipts:
+    if not reason_codes:
         receipts.append(
             chart_receipt(
                 "configuration.verdict",

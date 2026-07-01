@@ -830,6 +830,7 @@ def _readiness_gate_facts(readiness_gates: list[OperatorGate]) -> dict[str, Node
                 "unknown",
                 "No readiness vector is available for this bot status snapshot.",
                 "No readiness rows",
+                operator_actionability="system-only",
             )
         }
     return {

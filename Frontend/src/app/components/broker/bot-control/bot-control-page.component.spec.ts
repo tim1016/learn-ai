@@ -571,6 +571,12 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Recovery lane');
     expect(el.textContent).toContain('Internal gate - no operator action needed');
+    fixture.componentInstance.selectedLifecycleNodeId.set(null);
+    fixture.detectChanges();
+    recovery.operator_actionability = 'operator-actionable';
+    fixture.componentInstance.selectLifecycleNode(recovery);
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Operator action is required for this lifecycle step.');
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 

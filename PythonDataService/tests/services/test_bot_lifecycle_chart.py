@@ -684,6 +684,8 @@ def test_chart_missing_readiness_keeps_preflight_unknown() -> None:
     assert chart.global_graph.primary_node_id == "preflight"
     assert _node_status(chart, "preflight") == "unknown"
     assert chart.subgraphs["preflight"].primary_node_id == "readiness_1"
+    readiness_node = next(node for node in chart.subgraphs["preflight"].nodes if node.id == "readiness_1")
+    assert readiness_node.operator_actionability == "system-only"
 
 
 def test_blocking_readiness_gate_without_structured_action_stays_operator_actionable() -> None:

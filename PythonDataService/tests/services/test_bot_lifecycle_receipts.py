@@ -22,6 +22,7 @@ from app.schemas.live_runs import (
     ReconciliationReceipt,
 )
 from app.services.bot_lifecycle_receipts import (
+    LifecycleReceiptContext,
     account_freeze_receipts,
     account_identity_receipts,
     account_owner_receipts,
@@ -304,10 +305,15 @@ def test_reconciliation_receipts_cover_failure_next_step() -> None:
 
 def test_configuration_receipts_cover_verdict_and_reason_code() -> None:
     ready = _receipts_by_label(configuration_receipts(_surface()))
+    ready_with_context = _receipts_by_label(
+        configuration_receipts(_surface(), LifecycleReceiptContext(symbol="SPY"))
+    )
     missing_strategy = configuration_receipts(_surface(start_defaults=None))
     reason_codes = {receipt.value for receipt in missing_strategy if receipt.label == "configuration.reason_code"}
 
     assert ready["configuration.verdict"].headline == "Configuration is ready."
+    assert ready_with_context["configuration.verdict"].headline == "Configuration is ready."
+    assert ready_with_context["run.symbol"].value == "SPY"
     assert "STRATEGY_KEY_MISSING" in reason_codes
     assert "MAX_ORDERS_CAP_UNSET" in reason_codes
     assert {

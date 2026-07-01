@@ -9,7 +9,8 @@ import {
   type RedeploySettingField,
 } from './node-inspector-presenter';
 
-const ACTIONABILITY_BANNERS: Partial<Record<LifecycleChartNode['operator_actionability'], string>> = {
+const ACTIONABILITY_BANNERS: Record<LifecycleChartNode['operator_actionability'], string> = {
+  'operator-actionable': 'Operator action is required for this lifecycle step.',
   'system-only': 'Internal gate - no operator action needed; it can still block the bar.',
   'no-action-needed': 'No operator action is needed for this lifecycle step.',
 };
@@ -44,6 +45,6 @@ export class NodeInspectorComponent {
   }
 
   actionabilityBanner(node: LifecycleChartNode): string | null {
-    return ACTIONABILITY_BANNERS[node.operator_actionability] ?? null;
+    return ACTIONABILITY_BANNERS[node.operator_actionability];
   }
 }
