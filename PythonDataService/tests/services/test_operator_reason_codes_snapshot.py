@@ -2,7 +2,7 @@
 vocabulary.
 
 The snapshot at
-``Frontend/src/app/components/broker/cockpit-v2/lib/operator-reason-codes.snapshot.json``
+``Frontend/src/app/components/broker/bot-control/lib/operator-reason-codes.snapshot.json``
 is anchored by two parity tests:
 
 - This one (pytest) asserts the live Python
@@ -51,7 +51,7 @@ FRONTEND_SNAPSHOT_PATH = (
     / "app"
     / "components"
     / "broker"
-    / "cockpit-v2"
+    / "bot-control"
     / "lib"
     / "operator-reason-codes.snapshot.json"
 )

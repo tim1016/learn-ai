@@ -2,7 +2,7 @@
 server-authored vocabulary across the Python + Frontend boundary.
 
 The Frontend operator-language copy map
-(``Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.ts``)
+(``Frontend/src/app/components/broker/bot-control/lib/disabled-reason-copy.ts``)
 maintains a TypeScript ``OperatorReasonCode`` union that must cover
 every code the server can emit on
 ``ActionCapability.disabled_reason_code`` /
@@ -66,7 +66,7 @@ _FRONTEND_SNAPSHOT_PATH: Final[Path] = (
     / "app"
     / "components"
     / "broker"
-    / "cockpit-v2"
+    / "bot-control"
     / "lib"
     / "operator-reason-codes.snapshot.json"
 )
@@ -79,7 +79,7 @@ _SNAPSHOT_COMMENT: Final[str] = (
     "PythonDataService/tests/services/test_operator_reason_codes_snapshot.py "
     "reads the Python-tree copy and asserts equality with the live "
     "REASON_CODES frozenset. Vitest "
-    "Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.spec.ts "
+    "Frontend/src/app/components/broker/bot-control/lib/disabled-reason-copy.spec.ts "
     "reads the Frontend-tree copy and asserts equality with the "
     "ALL_OPERATOR_REASON_CODES export. Adding a code on the server "
     "requires (a) updating REASON_CODES / RESUME_REASON_CODES, (b) "

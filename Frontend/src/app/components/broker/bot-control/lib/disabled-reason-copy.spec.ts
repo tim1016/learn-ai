@@ -35,7 +35,7 @@ interface ReasonCodesSnapshot {
   readonly codes: readonly string[];
 }
 
-const snapshot = snapshotJson as ReasonCodesSnapshot;
+const snapshot = snapshotJson satisfies ReasonCodesSnapshot;
 
 describe('disabled-reason-copy parity with server closed vocabulary (cross-stack)', () => {
   it('loads the committed snapshot file', () => {
