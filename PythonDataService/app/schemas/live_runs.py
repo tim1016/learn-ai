@@ -942,6 +942,9 @@ class DecisionColumnDescriptor(BaseModel):
     semantic: str = ""
 
 
+SignalTone = Literal["ok", "warn", "neutral"]
+
+
 class InstanceBrokerView(BaseModel):
     """The instance's namespace-attributed broker slice (ADR 0005, #398).
 
@@ -2103,6 +2106,7 @@ class LiveInstanceStatus(BaseModel):
     desired_state: DesiredStateView | None = None
     readiness: ReadinessVector | None = None
     latest_decision: dict | None = None
+    latest_signal_tone: SignalTone = "neutral"
     decision_columns: list[DecisionColumnDescriptor] = Field(default_factory=list)
     broker: InstanceBrokerView | None = None
     # Pre-filled Start-card values (#416); None when the instance has no run to

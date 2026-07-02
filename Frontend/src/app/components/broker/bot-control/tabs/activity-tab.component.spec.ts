@@ -41,6 +41,7 @@ function status(
     },
     readiness: null,
     latest_decision: null,
+    latest_signal_tone: 'neutral',
     decision_columns: [],
     broker: null,
     start_defaults: null,
