@@ -24,7 +24,7 @@ Three services run in `podman compose`:
 
 | Service       | URL                          | Purpose                                                                     |
 |---------------|------------------------------|-----------------------------------------------------------------------------|
-| `frontend`    | http://localhost:4200        | Angular 21 SPA — broker cockpit, strategy lab, snapshots                    |
+| `frontend`    | http://localhost:4200        | Angular 21 SPA — Bot Control, strategy lab, snapshots                           |
 | `backend`     | http://localhost:5000/graphql| .NET 10 GraphQL — portfolio, snapshots, valuation, options strategy reads   |
 | `python`      | http://localhost:8000        | FastAPI — Polygon proxy, indicators, backtests, **live engine**             |
 | `postgres`    | localhost:5432               | PortfolioSnapshot, Position, Trade, StrategyExecution                       |
@@ -45,7 +45,7 @@ artifacts/live_runs/<run_id>/
   ...
 ```
 
-The cockpit reads these artifacts (plus the runner-process status) via FastAPI endpoints. Postgres is for research and backtest persistence, not live state.
+The bot control page reads these artifacts (plus the runner-process status) via FastAPI endpoints. Postgres is for research and backtest persistence, not live state.
 
 ---
 
@@ -97,7 +97,7 @@ The bit-exact LEAN reference is at `references/lean/7986ed0aade3ae5de06121682409
 A live deploy crosses four layers:
 
 ```
-Broker cockpit (Angular)
+Broker bot control (Angular)
         │  Deploy form (broker-deploy-form.component)
         ▼
 GraphQL mutation runDeployLiveRunner  ─→  .NET Backend  ─→  POST /api/host-runner/deploy
@@ -113,7 +113,7 @@ GraphQL mutation runDeployLiveRunner  ─→  .NET Backend  ─→  POST /api/ho
 
 Each layer enforces an explicit slice of the contract:
 
-1. **Cockpit deploy form** — UI picks `strategy_key` (= module name, see §3) and `sizing` (Safe canary / Reference parity / Custom). Per ADR 0009 the safe default is `FixedShares(1)`; the operator must consciously choose otherwise.
+1. **Deploy form** — UI picks `strategy_key` (= module name, see §3) and `sizing` (Safe canary / Reference parity / Custom). Per ADR 0009 the safe default is `FixedShares(1)`; the operator must consciously choose otherwise.
 2. **GraphQL → FastAPI deploy** — validates the request shape with the Pydantic `HostRunnerDeployRequest` model. Phase 1 of the remediation makes the `sizing` field mandatory (VCR-0001); empty `live_config` is rejected with HTTP 422 before reaching the host daemon.
 3. **Host daemon `/deploy`** — authoritatively writes the deploy ledger at `artifacts/live_runs/<run_id>/live_config.json`, hashed into `run_id` per ADR 0006. The shared-secret token in the `X-Live-Runner-Token` header is verified by `host_daemon._verify_token` using `hmac.compare_digest` (Phase 7C closure of VCR-0011).
 4. **Runner `start`** — Phase 3 (#495) compares `ledger.account_id` against `IbkrClient.connected_account` using the strict normalization at `account_identity.py`. Mismatch refuses to start and surfaces the raw values in the failure entry. Reconnect re-validation (PRD §11 C) is the deferred VCR-0006 follow-up.
@@ -131,13 +131,13 @@ Per ADR 0011, the runner re-runs these gates at start (not only at deploy) and w
 
 ### 4.2 Mandatory sizing (VCR-0001 closure)
 
-`live_config.sizing` cannot be omitted. The deploy boundary refuses an empty `live_config`, an unknown sibling key (the allow-list is `LIVE_CONFIG_LEDGER_KEYS`), or a missing `sizing` field. Legacy pre-policy ledgers may be **viewed** in the cockpit but `cmd_start` refuses to start them — the only forward path is redeploy with an explicit sizing.
+`live_config.sizing` cannot be omitted. The deploy boundary refuses an empty `live_config`, an unknown sibling key (the allow-list is `LIVE_CONFIG_LEDGER_KEYS`), or a missing `sizing` field. Legacy pre-policy ledgers may be **viewed** in the bot control page but `cmd_start` refuses to start them — the only forward path is redeploy with an explicit sizing.
 
 ---
 
-## 5. Cockpit states and commands
+## 5. Bot Control states and commands
 
-The cockpit surfaces the desired-state machine + one-shot commands separately. Phase 6A of the remediation (closure of VCR-0007) hardened the contract so every button has one documented effect.
+The bot control page surfaces the desired-state machine + one-shot commands separately. Phase 6A of the remediation (closure of VCR-0007) hardened the contract so every button has one documented effect.
 
 ### 5.1 Desired-state intents
 
@@ -147,7 +147,7 @@ The cockpit surfaces the desired-state machine + one-shot commands separately. P
 | `PAUSED` | The runner is alive but refuses to enter new positions.                   |
 | `STOPPED`| The runner process exits. Subsequent operations require a redeploy.       |
 
-Resume from `PAUSED` is a **guarded write** (Phase 7A): the runner consults the broker safety verdict and refuses to flip to `RUNNING` unless `final_verdict == "paper-only"`. The cockpit surfaces the blocking gate.
+Resume from `PAUSED` is a **guarded write** (Phase 7A): the runner consults the broker safety verdict and refuses to flip to `RUNNING` unless `final_verdict == "paper-only"`. The bot control page surfaces the blocking gate.
 
 ### 5.2 One-shot commands
 
@@ -158,13 +158,13 @@ Resume from `PAUSED` is a **guarded write** (Phase 7A): the runner consults the 
 | `STOP`               | Graceful shutdown with optional flatten only if `--with-flatten` is explicitly set. Returns                  |
 |                      | `still_running_after_2s` when the SIGTERM is not honored (Phase 6B / VCR-0018-B).                            |
 | `EMERGENCY_FLATTEN`  | Out-of-process force-flat path; requires operator confirmation. Phase 5C's `force=True` carve-out (gated).  |
-| `RECONCILE`          | **Runtime no-op** (Phase 4 / VCR-0008). The cockpit banner explains that restart safety is not fully wired  |
+| `RECONCILE`          | **Runtime no-op** (Phase 4 / VCR-0008). The bot control page banner explains that restart safety is not fully wired  |
 |                      | until ADR 0008 Phases 5C/5D/5E ship. The CLI verb still exists for forward compatibility; the runtime       |
 |                      | handler returns `{result: "accepted_noop", reason: "runtime_reconcile_not_wired"}`.                          |
 
 ### 5.3 The broker safety verdict (Phase 7A)
 
-The verdict is computed server-side and shown as the cockpit hero band:
+The verdict is computed server-side and shown as the bot control page hero band:
 
 | Verdict        | Hero color | Operator interpretation                                                              |
 |----------------|------------|--------------------------------------------------------------------------------------|
@@ -218,7 +218,7 @@ Before a paper deploy:
 - [ ] The Provenance card shows the audit-copy SHA verified against the on-disk audit copy. The QC Cloud backtest ID is operator-recorded — it is **not** automatically verified (Phase 7D closure of VCR-0014); do not treat it as a positive proof of QC approval.
 - [ ] Working tree is clean if the strategy requires it (`clean_tree_required = true` in the live config).
 - [ ] No existing `halt.flag` is present in the run dir.
-- [ ] **The cockpit env chip in the page utility row reads `PAPER` AND the identity-strip `SAFETY` indicator reads `PAPER_ONLY`.** They are driven by the same server-authored `operator_surface.broker.safety_verdict` (ADR-0011 + ADR-0013 §1, locked in by P1-001 of the 2026-06-22 audit). If either one reads `UNSAFE` or `UNKNOWN`, stop and resolve before deploying — the verdict is fail-closed.
+- [ ] **The bot control page env chip in the page utility row reads `PAPER` AND the identity-strip `SAFETY` indicator reads `PAPER_ONLY`.** They are driven by the same server-authored `operator_surface.broker.safety_verdict` (ADR-0011 + ADR-0013 §1, locked in by P1-001 of the 2026-06-22 audit). If either one reads `UNSAFE` or `UNKNOWN`, stop and resolve before deploying — the verdict is fail-closed.
 
 ---
 
@@ -226,7 +226,7 @@ Before a paper deploy:
 
 ### 8.1 "Flatten and pause"
 
-The cockpit's primary panic button. Two steps composed:
+The bot control page's primary panic button. Two steps composed:
 
 1. Persists `desired_state = PAUSED` to the run-dir sidecar.
 2. Enqueues `FLATTEN_NOW` one-shot.
@@ -235,7 +235,7 @@ The runner keeps the process alive (PAUSED, not STOPPED) so the operator can ins
 
 ### 8.2 Emergency flatten without ownership proof
 
-This is an explicit out-of-process path with operator confirmation. Today it is gated by Phase 5C — the durable-submit ownership-query work hasn't shipped. The CLI variant exists; the cockpit-confirmed button is deferred.
+This is an explicit out-of-process path with operator confirmation. Today it is gated by Phase 5C — the durable-submit ownership-query work hasn't shipped. The CLI variant exists; the bot control page-confirmed button is deferred.
 
 When invoked with `force=True`, it liquidates broker-account-net positions and writes an `EMERGENCY_FLATTEN_WITHOUT_OWNERSHIP_PROOF` audit event. Use only as a last resort — without ownership proof, foreign positions could also be touched.
 
@@ -247,7 +247,7 @@ This *does* cancel-then-liquidate today and is the safer of the two paths. It is
 
 ### 8.4 Hard stop
 
-If the cockpit / daemon paths are unresponsive:
+If the bot control page / daemon paths are unresponsive:
 
 ```
 podman exec polygon-data-service pkill -TERM -f "engine.live.run start"
@@ -269,13 +269,13 @@ Phase 1 (VCR-0001) made `sizing` mandatory. Open the deploy form and pick a sizi
 
 ### 9.3 Strategy key not found
 
-Phase 2 (VCR-0004) makes the deploy key the canonical module name. If the cockpit dropdown shows it but the runner can't import it, the registry is out of sync with `algorithms/`. The intersection check at registry load time will fail noisily; check the runner logs.
+Phase 2 (VCR-0004) makes the deploy key the canonical module name. If the bot control page dropdown shows it but the runner can't import it, the registry is out of sync with `algorithms/`. The intersection check at registry load time will fail noisily; check the runner logs.
 
 ### 9.4 "Re-sync now" / `RECONCILE` returns `accepted_noop`
 
 Expected behavior. Phase 4 (VCR-0008 closure) removed the runtime affordance because the durable-submit reconciler (Phases 5C/5D/5E) hasn't shipped. The banner explains the gap. If you need cold-start reconciliation, stop the runner cleanly and start it again — `ColdStartReconciler.verify()` (Phase 5B, #aae1cf2c) runs at every start.
 
-### 9.5 Cockpit `SAFETY` indicator reads `UNKNOWN` (page utility env chip also reads `UNKNOWN`)
+### 9.5 Bot Control `SAFETY` indicator reads `UNKNOWN` (page utility env chip also reads `UNKNOWN`)
 
 One or more gates of the broker safety verdict is not positively verifiable:
 
@@ -290,9 +290,9 @@ The env chip and the identity-strip `SAFETY` indicator always agree (both projec
 
 ### 9.6 Action button is disabled and the tooltip is a code I don't recognize
 
-If an action button (Resume, Pause, Flatten and pause, Stop, Mark POISONED) shows a tooltip starting with `Unrecognized reason code:` followed by a raw `SCREAMING_SNAKE_CASE` string, the server returned a reason code the cockpit does not have copy for yet. The raw code is preserved verbatim in the tooltip so it is visibly diagnosable (no silent generic-success copy — see P2-002 audit closure and `Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.ts`).
+If an action button (Resume, Pause, Flatten and pause, Stop, Mark POISONED) shows a tooltip starting with `Unrecognized reason code:` followed by a raw `SCREAMING_SNAKE_CASE` string, the server returned a reason code the bot control page does not have copy for yet. The raw code is preserved verbatim in the tooltip so it is visibly diagnosable (no silent generic-success copy — see `Frontend/src/app/components/broker/bot-control/lib/disabled-reason-copy.ts`, which is shared by the current bot control implementation).
 
-Resolution: add the code to `OperatorReasonCode` in `disabled-reason-copy.ts` and an operator-language entry to `OPERATOR_REASON_COPY` in the same file. The parity test `disabled-reason-copy.spec.ts` fails on any drift between the cockpit map and the server's closed vocabulary (`REASON_CODES ∪ RESUME_REASON_CODES`).
+Resolution: add the code to `OperatorReasonCode` in `disabled-reason-copy.ts` and an operator-language entry to `OPERATOR_REASON_COPY` in the same file. The parity test `disabled-reason-copy.spec.ts` fails on any drift between the bot control page map and the server's closed vocabulary (`REASON_CODES ∪ RESUME_REASON_CODES`).
 
 ### 9.7 Pre-existing failure: `halt.flag` from a prior run
 
@@ -302,7 +302,7 @@ Phase 6D (VCR-P3-P/Q closure) re-runs the `halt.flag` pre-flight check at every 
 
 ## 10. Known gaps (PRD §9 done definition)
 
-These are the in-flight remediations the cockpit and runtime do not yet enforce. Each is tracked by a VCR finding so the audit trail is honest about what is and isn't shipped.
+These are the in-flight remediations the bot control page and runtime do not yet enforce. Each is tracked by a VCR finding so the audit trail is honest about what is and isn't shipped.
 
 | Gap                                                                             | Tracked under          | Status                                          |
 |----------------------------------------------------------------------------------|------------------------|-------------------------------------------------|

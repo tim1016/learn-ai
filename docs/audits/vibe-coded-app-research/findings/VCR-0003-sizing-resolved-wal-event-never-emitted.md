@@ -35,7 +35,7 @@ What does exist in its place: `live_state_sidecar.py:81` declares `sizing_resolu
 1. **No `intent_id` linkage**: the sidecar `sizing_resolutions` rows do not carry `intent_id`, so they cannot be joined to broker fills the way the ADR's "per-trade audit list" requires.
 2. **No `sizing_provenance_at_resolve_time`**: the ADR explicitly names this field on the WAL event (so a later policy mutation is forensically attributable). The sidecar dict does not currently capture it.
 
-The Sizing card's per-trade audit table on the cockpit therefore renders sidecar best-effort snapshots, not durable WAL evidence. Survives crash because the sidecar is periodic, but cannot reconstruct an arbitrary `(fill → policy at the moment of order construction)` join.
+The Sizing card's per-trade audit table on the bot control page therefore renders sidecar best-effort snapshots, not durable WAL evidence. Survives crash because the sidecar is periodic, but cannot reconstruct an arbitrary `(fill → policy at the moment of order construction)` join.
 
 ## Where
 

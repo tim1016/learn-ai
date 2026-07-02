@@ -105,7 +105,7 @@ The page keeps the governing principle from #718: **decision → explanation →
 ## Out of Scope
 
 - **Backend changes.** All data and mutations already exist in the Python service; this is a frontend reshape. No new endpoints, schemas, or GraphQL.
-- **The fleet console** (`broker/instances`, cockpit-v2). This PRD touches the **per-bot** workbench only.
+- **The bot catalog** (`broker/bots`). This PRD touches the **per-bot** workbench only.
 - **In-place config mutation.** Settings remain a "change for next run" (redeploy) flow per #718 decision D1; live config editing is a future ADR.
 - **The mock's linear rail-timeline** as a literal left-pane layout — deliberately not adopted; the branching chart is retained.
 - **A fourth "Execution posture" header pill** — noted as a cheap follow-up, not shipped in this slice.

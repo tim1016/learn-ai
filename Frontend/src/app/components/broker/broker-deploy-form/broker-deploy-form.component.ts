@@ -166,6 +166,11 @@ export class BrokerDeployFormComponent {
   readonly busy = signal<boolean>(false);
   readonly error = signal<OperationError | null>(null);
   readonly deployed = signal<HostRunnerDeployResponse | null>(null);
+  readonly deployedInstanceId = signal<string | null>(null);
+  readonly deployedBotControlLink = computed(() => {
+    const id = this.deployedInstanceId();
+    return id ? ['/broker/bots', id] : ['/broker/bots'];
+  });
 
   // Captured once when the form opens, NOT per-submit: start_date_ms is part of
   // the content-addressed run_id hash, so a retry with identical inputs must
@@ -481,6 +486,7 @@ export class BrokerDeployFormComponent {
     this.busy.set(true);
     this.error.set(null);
     this.deployed.set(null);
+    this.deployedInstanceId.set(null);
     const strategyKey = this.strategyKey().trim();
     const request: HostRunnerDeployRequest = {
       strategy_spec_path: this.specPath().trim(),
@@ -514,6 +520,7 @@ export class BrokerDeployFormComponent {
     try {
       const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
+      this.deployedInstanceId.set(request.strategy_instance_id);
       // A start-immediately deploy just made this instance live; refresh so the
       // guard blocks an immediate second start rather than waiting on a 409.
       this.instances.reload();

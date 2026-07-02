@@ -1,7 +1,7 @@
 # Broker Instance Operator Surface — Runbook
 
 Status: shipping with #565 PR 13 (cleanup); IA revised 2026-06-17 via `grill-with-docs` (see "IA revision 2026-06-17" below).  
-Audience: operators (traders) running paper / live bots from `/broker/instances/:id`.  
+Audience: operators (traders) running paper / live bots from `/broker/bots/:id`.
 Engineer view: keep this in lockstep with the per-card disclosures and the Detective section tabs.
 
 ## What this page answers
@@ -59,7 +59,7 @@ The 13-PR sequence intentionally defers the following beyond #565:
 
 Once PRs 4 – 12 land, the following surfaces become reachable-but-redundant and should be removed in a follow-up sweep:
 
-- The inline "Managed Positions" card in `broker-instances.component.html` is now redundant with the Current Risk card (PR9). Remove the inline section and the `brokerPositions()` helper.
+- The inline "Managed Positions" card in `bot-control.component.html` is now redundant with the Current Risk card (PR9). Remove the inline section and the `brokerPositions()` helper.
 - The inline "Latest Strategy Signal" card is now redundant with the Latest Signal strip (PR8). Remove the inline section.
 - The static `Why It Stopped` heading was already removed by PR10's switch to `<app-last-session-card>`; double-check the inline last-exit-card block in the parent is gone end-to-end after PR10 merges.
 - The legacy `bot-failures-table` folder was deleted by PR6; spot-check no stale imports or routes reference it after PR6 merges.
@@ -81,7 +81,7 @@ A `grill-with-docs` session resolved a set of operator-feedback proposals agains
 
 These changes are net-additive to the runbook's "five trader questions" framing — the framing is now six. The IA revision honours every contract in ADRs 0010 and 0011 unchanged; no ADR revisions came out of this grilling.
 
-## PRD #607 cockpit revision (2026-06-21)
+## PRD #607 bot control revision (2026-06-21)
 
 The Slices 1–8 contract below is amended with the following
 **non-additive** changes; ``schema_version`` stays at ``1`` because the
@@ -92,8 +92,8 @@ revision lands before any external consumer ships against it.
   daemon is reachable but no subprocess is tracked for this instance.
   ``WAITING_FOR_HOST`` is derived: ``IDLE`` PLUS durable intent
   ``RUNNING`` — the operator has expressed intent and is waiting for
-  the subprocess to be started outside the cockpit.  Distinct from
-  ``STARTING`` (which the cockpit does NOT emit — it cannot start
+  the subprocess to be started outside the bot control page.  Distinct from
+  ``STARTING`` (which the bot control page does NOT emit — it cannot start
   anything; ADR-0003 / ADR-0007).
 - ``broker`` carries **two independent enums**:
   - ``safety_verdict``: ``PAPER_ONLY / UNSAFE / UNKNOWN`` (ADR-0011).
@@ -112,7 +112,7 @@ revision lands before any external consumer ships against it.
 
 ### Sticky-header behavior
 
-The cockpit page renders a single ``<header class="cockpit-sticky">``
+The bot control page renders a single sticky header wrapper
 wrapping {bot tab-strip + sticky-control-bar + attention strip}.  The
 wrapper owns ``position: sticky; top: 0``; inner children must not
 redeclare sticky.  Fixed via a Playwright assertion that scrolls the
@@ -124,7 +124,7 @@ The legacy hero, ``panel-toolbar`` View Run Log row, ``system-health``
 card, ``behavior-card``, ``strategy-state`` card,
 ``broker-card`` (Managed Positions), ``advanced-card``, and
 ``<app-broker-start-stop-card>`` reference are deleted from the
-broker-instances template.  Their information is subsumed by the
+bot-control template.  Their information is subsumed by the
 sticky banner + host-process notice + verdict-bordered cards.
 
 ## PRD #607 / Slices 1–8 — `operator_surface` projection (2026-06-20)
@@ -180,9 +180,9 @@ operator_surface: {
    polish, and the single-boolean operator override on READY cards.
    On attention verdicts the collapse toggle is absent from the DOM
    (Option A).
-4. **Host-process lifecycle is outside the cockpit's authority**
+4. **Host-process lifecycle is outside the bot control page's authority**
    (ADR-0003 + ADR-0007).  The host runner is operator-owned.  The
-   cockpit writes durable intent (Resume / Pause are always available
+   bot control writes durable intent (Resume / Pause are always available
    and gate the next host start) and actuates on bound runs (when
    `actions.<verb>.effect === 'LIVE_ACTUATION'`).  It does NOT expose
    Start / Stop / process-control affordances — the legacy
@@ -191,7 +191,7 @@ operator_surface: {
    the orphaned directory was deleted by the 2026-06-22 audit
    P3-007 after the route-table / import-graph proof of
    non-reference).  When the
-   daemon is idle, the cockpit surfaces the server-authored
+   daemon is idle, the bot control page surfaces the server-authored
    `host_process.notice` and (only if server-authored) a copyable
    safe command.  REDEPLOY is a separate surface for creating a new
    run configuration; it is NOT a restart path.
@@ -220,15 +220,15 @@ The full closed set, source of truth on the server:
 Deliberately removed (pre-PRD #616 vocabulary): `SAFETY_BLOCK_HALT`,
 `RECONCILE_NOT_WIRED`, `BUSY_VERB_IN_FLIGHT`, `NOT_RUNNING`.
 
-**Frontend copy map.** The cockpit's operator-language lookup lives
+**Frontend copy map.** The bot control page's operator-language lookup lives
 at
-`Frontend/src/app/components/broker/cockpit-v2/lib/disabled-reason-copy.ts`
+`Frontend/src/app/components/broker/bot-control/lib/disabled-reason-copy.ts`
 (landed by the 2026-06-22 audit's P2-002 fix). Adding a new code is
 a typed addition to the closed Python enum + an entry in the
 TypeScript `OperatorReasonCode` union + an operator-language string
 in `OPERATOR_REASON_COPY`. The Vitest parity test
 `disabled-reason-copy.spec.ts` fails on any drift between the
-cockpit map and the Python source-of-truth set. Unknown codes are
+Bot Control map and the Python source-of-truth set. Unknown codes are
 rendered as ``Unrecognized reason code: <code>`` so a gap is
 visibly diagnosable rather than silent — the operator can still
 read the raw token and search the runbook.
@@ -236,16 +236,16 @@ read the raw token and search the runbook.
 Two Frontend-only codes live alongside the server set and are
 clearly prefixed `LOCAL_*` so they cannot pretend to be server
 authority: `LOCAL_TRANSPORT_STALE` (control-plane transport is not
-CONNECTED — the cockpit refuses local dispatch fail-closed) and
+CONNECTED — the bot control page refuses local dispatch fail-closed) and
 `LOCAL_REQUEST_IN_FLIGHT` (a previous request is still pending).
 
 ### Open shortcomings carried forward
 
-- **`order_mode` field** — not yet declarative.  Cockpit does not
+- **`order_mode` field** — not yet declarative.  Bot Control does not
   surface it; a future ADR + multi-stack PRD adds it.
 - **`action_plan.anomaly_verdict`** — server returns `READY` while no
   detector exists.  PRD #593 Slice 4 wires a real detector; the
-  cockpit consumes the same field, no Frontend change.
+  bot control page consumes the same field, no Frontend change.
 - **`broker.safety_verdict === 'DEGRADED'`** — currently unreachable
   through the live readiness gate (pass/fail only).  Surfaces when a
   richer `BrokerConnectionState` channel lands on the wire; the
@@ -269,11 +269,11 @@ If any of those land wrong, the corresponding PR in the series is the place to l
 
 ## PRD #619-D mutation uncertainty + recovery (2026-06-22)
 
-### Reconcile procedure (no cockpit button yet)
+### Reconcile procedure (no bot control button yet)
 
-**There is no Reconcile button in the cockpit-v2 UI today** — the visible `RECONCILE · NOT WIRED` hazard banner is the honest statement of that gap. The 2026-06-22 audit found the cockpit's earlier tooltip copy directed operators to "Use Reconcile on the Audit tab," which would have sent them looking for a control that does not exist. The corrected tooltip points to this runbook section.
+**There is no Reconcile button in the bot-control UI today** — the visible `RECONCILE · NOT WIRED` hazard banner is the honest statement of that gap. The 2026-06-22 audit found the bot control page's earlier tooltip copy directed operators to "Use Reconcile on the Audit tab," which would have sent them looking for a control that does not exist. The corrected tooltip points to this runbook section.
 
-The reconcile endpoint is server-authored (`POST /api/live-instances/{strategy_instance_id}/reconcile-mutation`, defined in `PythonDataService/app/routers/live_instances.py`); the cockpit just hasn't wired a button. Until it does, the operator procedure is:
+The reconcile endpoint is server-authored (`POST /api/live-instances/{strategy_instance_id}/reconcile-mutation`, defined in `PythonDataService/app/routers/live_instances.py`); the bot control page just hasn't wired a button. Until it does, the operator procedure is:
 
 ```bash
 # Inspect the most recent mutation_attempt for the instance
@@ -283,13 +283,13 @@ curl -s http://localhost:8000/api/live-instances/<id>/status | jq '.operator_sur
 curl -s -X POST http://localhost:8000/api/live-instances/<id>/reconcile-mutation | jq
 ```
 
-The response carries the `MutationAttempt.dispatch_state` advanced to one of the four terminals below (`EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE`). When the attempt becomes `EFFECT_CONFIRMED`, the action-conflict matrix disengages and the cockpit's Resume / Stop / Flatten button re-enables on the next status poll.
+The response carries the `MutationAttempt.dispatch_state` advanced to one of the four terminals below (`EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE`). When the attempt becomes `EFFECT_CONFIRMED`, the action-conflict matrix disengages and the bot control page's Resume / Stop / Flatten button re-enables on the next status poll.
 
-Wiring this into the cockpit UI is a follow-up. The action-conflict-matrix tooltips were corrected in this audit; the button itself is the deferred work.
+Wiring this into the bot control page UI is a follow-up. The action-conflict-matrix tooltips were corrected in this audit; the button itself is the deferred work.
 
 ### Incident vocabulary
 
-This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The cockpit renders operator-language strings via the shared `disabled-reason-copy.ts` map (2026-06-22 audit P2-002); the runbook entry below carries the deep procedural detail.
+This section pins the operator-facing copy for every new reason / state code introduced by 619-D. The bot control page renders operator-language strings via the shared `disabled-reason-copy.ts` map (2026-06-22 audit P2-002); the runbook entry below carries the deep procedural detail.
 
 #### `OUTCOME_UNKNOWN` (PRD #619-C5, durable in 619-D1)
 
@@ -312,11 +312,11 @@ This section pins the operator-facing copy for every new reason / state code int
 
 #### `EFFECT_CONFIRMED` / `EFFECT_NOT_OBSERVED` / `EVIDENCE_CONFLICT` / `NOT_PROVABLE` (PRD #619-D3)
 
-These are Reconcile outcomes, not standalone reason codes. They appear on the Reconcile response and on the durable `MutationAttempt.dispatch_state`. The Reconcile button surfaces them; the cockpit's action-conflict matrix reads them.
+These are Reconcile outcomes, not standalone reason codes. They appear on the Reconcile response and on the durable `MutationAttempt.dispatch_state`. The Reconcile button surfaces them; the bot control page's action-conflict matrix reads them.
 
 #### `ACCOUNTS_MATCH` / `ACCOUNTS_DIVERGE` / `CHILD_OBSERVATION_MISSING` / `DATA_PLANE_OBSERVATION_MISSING` / `DATA_PLANE_DISCONNECTED` / `CONFIGURED_MODES_DIVERGE` (PRD #619-D4)
 
-**Where shown.** Backend-authored on `OperatorSurface.broker_observation_consistency.reason_codes`. The cockpit renders the divergence card on `CONFLICTING` prominently — but the card never overwrites the child's authoritative posture on the broker hero.
+**Where shown.** Backend-authored on `OperatorSurface.broker_observation_consistency.reason_codes`. The bot control page renders the divergence card on `CONFLICTING` prominently — but the card never overwrites the child's authoritative posture on the broker hero.
 
 | Code | What it means | What to do |
 |---|---|---|

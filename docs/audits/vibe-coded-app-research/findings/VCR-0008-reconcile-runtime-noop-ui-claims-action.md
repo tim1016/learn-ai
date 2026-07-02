@@ -15,7 +15,7 @@ confidence: high
 
 ## Remediation (#496 / Phase 4)
 
-Closed by issue #496. The cockpit no longer renders the "Re-sync now"
+Closed by issue #496. The bot control page no longer renders the "Re-sync now"
 button or routes the per-gate "Fix this" affordance through ``RECONCILE``;
 the runtime verb on ``command_channel`` is kept as a backend-compat
 surface but its dispatcher returns the structured no-op the PRD
@@ -34,7 +34,7 @@ dashboard repeating the same wording so an operator who does not click
 
 > Runtime reconcile is not wired yet. After a crash / restart or any
 > suspected broker drift, stop the bot, verify the broker positions
-> match the cockpit, and only then restart.
+> match the bot control page, and only then restart.
 
 Phase 5B will promote this to a real durable "Schedule reconcile on
 next restart" affordance once ``ColdStartReconciler.verify()`` is
@@ -44,7 +44,7 @@ wired into ``cmd_start``.
 
 ## What
 
-The cockpit exposes a "Re-sync now" / "Re-sync account balance with broker" action that dispatches `RECONCILE` through the command channel. The cockpit's success notice reads *"the bot refreshes account balances on its next loop"*, and the per-gate "Fix this" wiring also routes through the same verb.
+The bot control page exposes a "Re-sync now" / "Re-sync account balance with broker" action that dispatches `RECONCILE` through the command channel. The bot control page's success notice reads *"the bot refreshes account balances on its next loop"*, and the per-gate "Fix this" wiring also routes through the same verb.
 
 `live_engine.py:1086` reads, verbatim:
 
@@ -52,7 +52,7 @@ The cockpit exposes a "Re-sync now" / "Re-sync account balance with broker" acti
 
 The runtime ACKs the command (`accepted=true`), persists nothing, and changes no broker- or engine-side state. The reconciliation envelope the UI promises is the cold-start path (ADR 0005), which only runs on engine boot — not in response to a runtime command. So the operator presses "Re-sync now", sees a green tick, and the system has done nothing.
 
-This is paired with related VCR-0002 (the cold-start reconciler itself is not wired to actually run at boot either). But the UI claim here stands independently: even if the cold-start path were wired, the runtime verb the cockpit dispatches would still be a no-op.
+This is paired with related VCR-0002 (the cold-start reconciler itself is not wired to actually run at boot either). But the UI claim here stands independently: even if the cold-start path were wired, the runtime verb the bot control page dispatches would still be a no-op.
 
 ## Where
 

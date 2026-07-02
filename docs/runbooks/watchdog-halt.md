@@ -34,7 +34,7 @@ The halt ran cleanly. All positions were flattened and the broker was disconnect
 in an orderly fashion. **No manual action is required.** The account is in a
 clean state.
 
-**Recovery:** Start a new run from the cockpit. The post-halt gate will not block.
+**Recovery:** Start a new run from the bot control page. The post-halt gate will not block.
 
 ---
 
@@ -43,7 +43,7 @@ clean state.
 The halt ran cleanly. The account held no open positions, so no flatten was
 needed. **No manual action is required.**
 
-**Recovery:** Start a new run from the cockpit. The post-halt gate will not block.
+**Recovery:** Start a new run from the bot control page. The post-halt gate will not block.
 
 ---
 
@@ -57,7 +57,7 @@ IBKR account.**
 1. Log into Trader Workstation (TWS) or IBKR web portal.
 2. Check the account's open positions for the strategy's symbol.
 3. If residual positions exist, close them manually.
-4. Return to the cockpit and click **Reconcile now**.
+4. Return to the bot control page and click **Reconcile now**.
 5. Once reconciliation passes, start a new run.
 
 The post-halt gate in `cmd_start` will refuse to start trading until the
@@ -99,17 +99,17 @@ blocking incident:
   (prior watchdog halt left broker state uncertain). Use Reconcile-now before restarting.
   ```
 
-- The cockpit surfaces a `reconciliation.required_after_uncertain_flatten` notice.
+- The bot control page surfaces a `reconciliation.required_after_uncertain_flatten` notice.
 
 **Clearing the gate:**
 
 1. Verify and close any residual IBKR positions manually (see critical-tier
    recovery above).
-2. Click **Reconcile now** in the cockpit.  The reconciliation orchestrator
+2. Click **Reconcile now** in the bot control page.  The reconciliation orchestrator
    (`reconciliation_orchestrator.reconcile`) runs and writes a receipt.
 3. Once the receipt shows `passed`, the `OperatorIncident` is marked resolved
    by the reconciliation service and the gate clears.
-4. Start a new run from the cockpit.
+4. Start a new run from the bot control page.
 
 ---
 

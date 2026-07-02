@@ -161,7 +161,7 @@ Findings: #722, #723, #729, #730.
   components with their own tests.
 - Frontend operator-surface fixtures have one canonical home with named builders
   for monitor-only and ready-to-submit states.
-- Trader remediation rendering is split from cockpit gate suggested-action
+- Trader remediation rendering is split from bot control gate suggested-action
   rendering, and endpoint dispatch is explicit for trader remediations.
 - Angular flow edges rely on `ngx-vflow` floating closest-handle routing instead
   of a bespoke coordinate-to-handle router.

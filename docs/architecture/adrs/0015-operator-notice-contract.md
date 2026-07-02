@@ -8,7 +8,7 @@
 ## Context
 
 ADR-0014 established that broker-activity narratives are backend-authored.
-Three live-cockpit failure modes (#656, #657, #658) still ship raw enum
+Three live Bot Control failure modes (#656, #657, #658) still ship raw enum
 strings to traders or — worse — ship nothing while the bot silently does
 the wrong thing. The repair is one contract for every operator-facing
 failure surface.
@@ -16,7 +16,7 @@ failure surface.
 ## Decision
 
 All operator-facing failure surfaces emit typed `OperatorNotice` objects
-composed in the Python service. The cockpit renders `title`, `message`,
+composed in the Python service. The bot control page renders `title`, `message`,
 and `action` verbatim and is structurally incapable of composing safety
 copy from operational enums.
 
@@ -30,7 +30,7 @@ of truth for:
   `watchdog.*`, `activity.*`, `reconciliation.*`); all PR 1–6 slots
   declared upfront.
 - `OperatorNoticeAction.kind = Literal["none", "wait", "open_runbook",
-  "focus_cockpit_action", "renew_control_plane_lease",
+  "focus_bot control_action", "renew_control_plane_lease",
   "external_manual_check", "redeploy"]`
 - `OperatorNotice` — `code`, `tier`, `title`, `message`, `source_codes`,
   `forensic_facts`, `action`, `runbook_slug`, `occurred_at_ms`.
@@ -59,16 +59,16 @@ of truth for:
 ### Action semantics
 
 `OperatorNoticeAction.kind` separates finished notice copy from the
-closed affordance the cockpit may expose:
+closed affordance the bot control page may expose:
 
-- Navigation/focus affordances: `focus_cockpit_action`, `open_runbook`,
+- Navigation/focus affordances: `focus_bot control_action`, `open_runbook`,
   `redeploy`. `redeploy` routes to the existing deploy/configuration
   flow; it never silently redeploys.
 - Bounded remediation affordances: `renew_control_plane_lease`. These
   actions must be explicitly named in this contract, routed through the
   data plane, and implemented as one-shot backend-authored operations.
 - Non-clickable explicit non-automation: `external_manual_check`.
-  "Check positions in IBKR" must not look like the cockpit performed
+  "Check positions in IBKR" must not look like the bot control page performed
   reconciliation.
 - `none` / `wait` carry no affordance.
 
@@ -83,7 +83,7 @@ closed affordance the cockpit may expose:
 
 ### Exhaustiveness gate
 
-Every closed enum reaching the cockpit through a notice is
+Every closed enum reaching the bot control page through a notice is
 parametrized-tested against the rules table. A snapshot test pins the
 `OperatorNoticeCode` union; frontend types cannot drift silently.
 

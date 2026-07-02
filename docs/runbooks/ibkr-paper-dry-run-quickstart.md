@@ -113,8 +113,7 @@ consolidator, decision logger, and writer pipeline all work end-to-end.
 IBKR_HOST=127.0.0.1 PYTHONPATH=PythonDataService python -m app.engine.live.run start --run-dir PythonDataService/artifacts/live_runs/$RUN_ID --readonly
 ```
 
-Or launch the local UI daemon once and use `/broker/paper-run` → **Host
-Runner**:
+Or launch the local UI daemon once and use `/broker/bots` to open the bot, then use its **Host Runner** controls:
 
 ```powershell
 $env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .
@@ -132,7 +131,7 @@ $env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --rep
 > proceed.
 
 > **Observer UI note:** keep `python-service` up with
-> `IBKR_BROKER_ENABLED=false` if you want `/broker/paper-run` available while
+> `IBKR_BROKER_ENABLED=false` if you want the bot control UI available while
 > the host runner owns the IBKR session.
 
 ---

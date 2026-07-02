@@ -27,7 +27,7 @@ The test suite therefore gives a green build for a `strategy_key` value that pro
 - `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.spec.ts:39-60` — mock data with module-name values.
 - `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.spec.ts:136-175` — fillRequired sets `'spy_ema_crossover'`; deploy assertion expects same.
 - `Frontend/src/app/components/broker/broker-start-stop-card/broker-start-stop-card.component.ts:18-21` — `const FALLBACK_STRATEGY = 'spy_ema_crossover';`
-- `Frontend/src/app/components/broker/broker-instances/broker-instances.component.spec.ts:645` — `strategy_key: 'spy_ema_crossover'` mock.
+- `Frontend/src/app/components/broker/bot-control/bot-control.component.spec.ts:645` — `strategy_key: 'spy_ema_crossover'` mock.
 
 ## Why this severity
 

@@ -4,7 +4,7 @@
       <h1>Deploy a strategy</h1>
       <p class="subtitle">Create a live strategy instance and bind it to the QuantConnect backtest that approved it.</p>
     </div>
-    <a routerLink="/broker/instances" class="back">Instances</a>
+    <a routerLink="/broker/bots" class="back">Bots</a>
   </header>
 
   <app-broker-connectivity-strip />
@@ -25,7 +25,7 @@
         <summary>Run id</summary>
         <code>{{ d.run_id }}</code>
       </details>
-      <a routerLink="/broker/instances" class="goto">View deployment</a>
+      <a [routerLink]="deployedBotControlLink()" class="goto">View deployment</a>
     </div>
   }
 

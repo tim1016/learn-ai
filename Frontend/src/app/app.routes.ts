@@ -212,19 +212,14 @@ export const routes: Routes = [
       ).then((m) => m.BrokerReconciliationComponent),
   },
   {
-    // Cutover (#400): the run-spine paper-run page is retired; the
-    // instance-addressed control room is the operator console. The old
-    // component is kept for reference but no longer routed.
     path: "broker/paper-run",
-    redirectTo: "broker/instances",
+    redirectTo: "broker/bots",
     pathMatch: "full",
   },
   {
     path: "broker/instances",
-    loadComponent: () =>
-      import(
-        "./components/broker/cockpit-v2/cockpit-shell.component"
-      ).then((m) => m.CockpitShellComponent),
+    redirectTo: "broker/bots",
+    pathMatch: "full",
   },
   {
     path: "broker/bots",
@@ -248,15 +243,9 @@ export const routes: Routes = [
       ).then((m) => m.BotControlPageComponent),
   },
   {
-    // Deep-linkable per-bot URL (#565 PR 3). The component resolves
-    // ``:id`` against the loaded fleet on every tick; bad / deleted /
-    // missing ids fall back to the same component-resolved default
-    // used when no ``:id`` is supplied.
     path: "broker/instances/:id",
-    loadComponent: () =>
-      import(
-        "./components/broker/cockpit-v2/cockpit-shell.component"
-      ).then((m) => m.CockpitShellComponent),
+    redirectTo: "broker/bots/:id",
+    pathMatch: "full",
   },
   {
     // Deploy form — stage 1 of the deploy pipeline (ADR 0006, #417).

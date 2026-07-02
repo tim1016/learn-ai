@@ -53,7 +53,7 @@ typed `order_ref`.
 
 P0 because this is the **operator's documented escape hatch when
 everything else is on fire**. The bot can be poisoned, the engine can
-refuse to start, the cockpit's Stop/Pause/Resume can all be unavailable —
+refuse to start, the bot control page's Stop/Pause/Resume can all be unavailable —
 and the contractually-promised cleanup path is `live run emergency-flatten
 --confirm --account <DU>`. Today that contractually-promised path
 **always exits 3** in production with `OrderRefusedError`. The operator

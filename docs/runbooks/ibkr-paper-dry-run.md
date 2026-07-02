@@ -192,7 +192,7 @@ bind mount — no manual sync. To pin your own secret instead, set
 `polygon-data-service` container. A direct `curl` against the daemon now
 needs `-H "X-Live-Runner-Token: $(cat PythonDataService/artifacts/.host-daemon-token)"`.
 
-Then open `/broker/paper-run`. The **Host Runner** panel calls the
+Then open `/broker/bots`, choose the bot, and use the **Host Runner** panel. It calls the
 daemon at `http://127.0.0.1:8765` and starts/stops the same
 `app.engine.live.run start` subprocess from the host. The run artifacts
 still land under `PythonDataService/artifacts/live_runs/<run_id>/`, so

@@ -201,7 +201,7 @@ These are decisions only the user can make — none of them are AFK-doable:
 - **Phase glossary:** `docs/audits/vibe-coded-app-remediation-prd.md` — defines Phase 5A through Phase 12 and their acceptance gates.
 - **ADR 0008 (durable submit protocol):** `docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md` — the contract behind Gap 1.
 - **ADR 0009 (live sizing authority):** `docs/architecture/adrs/0009-live-sizing-authority-and-provenance.md` — the contract behind Gap 2.
-- **Prior handoff (deploy-validation focus):** `docs/handoffs/2026-06-15-vcr-remediation-deploy-validation-handoff.md` — still accurate for §3-§5 (deploy procedure), §6 (cockpit checks), §7 (rollback). Updated this session to point at current master.
+- **Prior handoff (deploy-validation focus):** `docs/handoffs/2026-06-15-vcr-remediation-deploy-validation-handoff.md` — still accurate for §3-§5 (deploy procedure), §6 (bot control checks), §7 (rollback). Updated this session to point at current master.
 
 ---
 

@@ -29,15 +29,15 @@ import type {
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
-import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
-import { TypedHaltConfirmComponent } from '../cockpit-v2/reused/typed-halt-confirm/typed-halt-confirm.component';
-import { redeployQueryParamsForStatus } from '../cockpit-v2/lib/redeploy-query-params';
-import { canStartHostProcess, startHostProcessFromCapability } from '../cockpit-v2/lib/start-host-process';
+import { ActivityTabComponent } from './tabs/activity-tab.component';
+import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
+import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
+import { canStartHostProcess, startHostProcessFromCapability } from './lib/start-host-process';
 import {
   renderTraderRemediation,
   type RenderedAction,
   type RendererDispatch,
-} from '../cockpit-v2/lib/suggested-action-renderer';
+} from './lib/suggested-action-renderer';
 import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';

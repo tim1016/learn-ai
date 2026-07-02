@@ -44,7 +44,7 @@ Beyond those two, the audit surfaces 11 individually-tracked findings and ~17 ro
 | [VCR-0007](vibe-coded-app-research/findings/VCR-0007-flatten-aliases-stop-ui-claims-immediate-close.md) | P1 | `FLATTEN` aliases to STOP; UI promises "Close all open positions immediately" | Operator surprise on panic flatten; no flatten-and-keep-running primitive | none |
 | [VCR-0008](vibe-coded-app-research/findings/VCR-0008-reconcile-runtime-noop-ui-claims-action.md) | P1 | `RECONCILE` is a runtime no-op (`live_engine.py:1086` verbatim); UI shows success | Stale view masquerading as fresh; "Fix this" links lie | companion to VCR-0002 |
 | [VCR-0009](vibe-coded-app-research/findings/VCR-0009-emergency-flatten-no-cancel-open-orders.md) | P1 | `cmd_emergency_flatten` places liquidation without cancelling open orders | Race: open SELL limit + emergency SELL → double-sell | none |
-| [VCR-0010](vibe-coded-app-research/findings/VCR-0010-paper-mode-hero-hardcoded.md) | P1 | broker-instances hero hardcodes "Paper trading mode — no real money at risk" | Future live-mode work would silently keep showing paper banner | none |
+| [VCR-0010](vibe-coded-app-research/findings/VCR-0010-paper-mode-hero-hardcoded.md) | P1 | bot-control hero hardcodes "Paper trading mode — no real money at risk" | Future live-mode work would silently keep showing paper banner | none |
 | [VCR-0011](vibe-coded-app-research/findings/VCR-0011-non-constant-time-daemon-token-compare.md) | P1 | Host-daemon shared-secret compare uses `!=` (not `hmac.compare_digest`) | Timing side-channel on daemon auth surface (loopback / LAN attack model) | none |
 | [VCR-0012](vibe-coded-app-research/findings/VCR-0012-cross-restart-fill-desync-perm-id-orphan.md) | P1 | `_convert_ibkr_fill` drops `perm_id`-bot-owned fills missing from `_order_meta` | Cross-restart position drift; subsequent `set_holdings` against stale view | companion to VCR-0002 |
 | [VCR-0013](vibe-coded-app-research/findings/VCR-0013-frontend-vitest-mocks-mask-registry-mismatch.md) | P2 | Vitest mocks return module-name shape that production never emits | Masks VCR-0004 from CI signal | none |
@@ -111,7 +111,7 @@ The lens audits found a lot of correct, well-defended code. Documenting it makes
 - `pre_flight.py` clean_tree / ntp_offset / unexpected_position / run_state_intact / no_halt_flag / yesterday_artifacts / all_in_coexistence — each returns a `CheckResult`.
 - `readiness.py` distinct `live_readiness` vs `start_readiness` kinds; UNKNOWN for missing gates; BLOCKED iff hard FAIL.
 - `process_registry.py` SIGTERM-with-timeout then SIGKILL fallback; crash recovery before AlreadyRunningError.
-- `broker-paper-run` distinct DESIRED / RUN / PROCESS state pills; poisoned.flag and halt.flag rendered as separate pills.
+- `bot-control` distinct DESIRED / RUN / PROCESS state pills; poisoned.flag and halt.flag rendered as separate pills.
 - `MARK_POISONED` writes a structured schema-validated flag so boot-time parser loads cleanly.
 - `emergency-flatten` CLI requires `--confirm`, `--account` match check (refuses on mismatch), paper-only via DU sentinel.
 
@@ -148,7 +148,7 @@ The audit was time-boxed; these are areas where the surface read was confident b
 2. **`cmd_emergency_flatten`** — VCR-0009 likewise from prose; verify the function body and compare against `recovery_flatten` / `force_flat` to confirm the asymmetry.
 3. **`_convert_ibkr_fill`** — VCR-0012 surfaced from prose; verify the gate condition and what happens when `perm_id` is known but `order_id` is absent.
 4. **`daemon_auth.py` token compare** — VCR-0011 needs the literal line.
-5. **`broker-instances` hero label component** — VCR-0010 needs the specific component / line.
+5. **`bot-control` hero label component** — VCR-0010 needs the specific component / line.
 6. **Sentinel pill, stop 2s timeout, ReadinessGate labels** (VCR-0018 § A, B, C) — surfaced from prose; each item should be re-grounded.
 7. **`_fatal_halt` and `_persist_desired_state` exception handlers** (VCR-0018 § G) — confirm the swallow-on-write pattern and what happens to the next start.
 8. **TOCTOU race in `RunnerProcessManager.start`** (VCR-P3 § P) — verify the lock granularity.
@@ -187,7 +187,7 @@ Sequence chosen to (a) close P0 bypass paths first, (b) close UI/runtime mismatc
    - PR ζ: move `reconcile.py` to delegate to `reconciliation_classifier.classify`.
    - PR η: companion fix for VCR-0012 (`_convert_ibkr_fill` consults classifier).
 
-   Until that work lands, gate the cockpit's "Live & trading" verdict with a "ADR 0008 not wired — restart requires manual reconciliation" banner.
+   Until that work lands, gate the bot control page's "Live & trading" verdict with a "ADR 0008 not wired — restart requires manual reconciliation" banner.
 
 ### Stage B — Close the deploy-flow integrity gaps
 
@@ -199,7 +199,7 @@ Sequence chosen to (a) close P0 bypass paths first, (b) close UI/runtime mismatc
 5. **VCR-0008**: change the verb's UI label to "Mark for re-sync at next restart" until the runtime reconcile path is wired (VCR-0002 PR γ). Remove "Fix this" routes that point to RECONCILE for gates that need runtime mutation.
 6. **VCR-0007**: add a true FLATTEN-without-STOP primitive, OR rename the UI to "Stop and close all open positions". Add confirmation modal distinguishing the two outcomes.
 7. **VCR-0009**: add `await broker.cancel_open_orders(owned_only=True)` as the first step of `cmd_emergency_flatten`.
-8. **VCR-0010**: bind the broker-instances hero to a server-side mode verdict (structured `{mode, port_class, readonly, account_prefix}`). Same pattern for VCR-0018 § A sentinel pill.
+8. **VCR-0010**: bind the bot-control hero to a server-side mode verdict (structured `{mode, port_class, readonly, account_prefix}`). Same pattern for VCR-0018 § A sentinel pill.
 9. **VCR-0014**: split the Provenance card proof row into "Audit copy verified" + "Operator-recorded QC backtest" (the second labeled as not auto-verified).
 
 ### Stage D — Finish ADR 0009 wiring
@@ -242,7 +242,7 @@ Run as a one-off research workstream outside the `auto-research-tick` state mach
 - **F-0023** (closed) dataset-service forward-fill gaps: no overlap.
 - **F-0026** (deferred): fixture coverage gap, multi-week; out of scope here.
 - **F-0027** (closed) provenance blocks: ADR 0009 surface confirmed provenance blocks present; no new P1.
-- **F-0034** (deferred P2): frontend naive `Date` parse rollup; the live-trading wire path (this audit's scope) is clean. VCR-P3 § J / K identify new manifestations specific to recent cockpit additions, not F-0034 reopenings.
+- **F-0034** (deferred P2): frontend naive `Date` parse rollup; the live-trading wire path (this audit's scope) is clean. VCR-P3 § J / K identify new manifestations specific to recent bot control additions, not F-0034 reopenings.
 - **F-0035 / F-0036** (closed) frontend snake_case bugs: distinct from the registry-key issue (VCR-0004).
 - **ML-V-001..004**: distinct from this audit's scope (ML predictions vs live trading).
 - **BA-V** (Build Alpha validation): distinct.

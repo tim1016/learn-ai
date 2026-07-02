@@ -142,10 +142,10 @@ algorithm that emits orders directly.
 
 > **Updated 2026-06-13.** A second `grill-with-docs` session re-opened ADR 0009
 > for a **UI re-think** after the broker control panel grew (provenance card,
-> instance console, paper-run, candlestick + trades, run-log "Fix this"). The
+> bot control panel, paper-run, candlestick + trades, run-log "Fix this"). The
 > ADR's **substance — engine, allow-list mechanism, provenance stamps, presets,
 > `FixedShares(1)` default — is unchanged.** The deltas are: a **dedicated Sizing
-> card** on the instance console (in addition to the deploy form selector); a
+> card** on the bot control panel (in addition to the deploy form selector); a
 > **per-trade audit list** backed by a new `SIZING_RESOLVED` WAL event; the
 > allow-list pinned to **`docs/references/audit-copy-sizing-allow-list.json`**
 > (single indexed file, sha-verified at load); the coexistence guard **narrowed
@@ -157,7 +157,7 @@ algorithm that emits orders directly.
 > **ADR 0009 § "Updated 2026-06-13 — UI re-think"** for the full deltas.
 > Load-bearing code claims (no `live_config.sizing` field today, allow-list at
 > `run.py:540` still rejects unknown keys, `LivePortfolio.sizing_model` still
-> never overridden, broker cockpit doesn't touch sizing) were re-verified
+> never overridden, Bot Control doesn't touch sizing) were re-verified
 > against the current code before this update.
 
 > This section was rewritten after a `grill-with-docs` session walked the full

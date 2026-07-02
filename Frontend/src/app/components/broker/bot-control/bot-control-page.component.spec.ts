@@ -23,7 +23,7 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { makeLifecycleChartFixture } from '../../../testing/live-instance-status-fixtures';
-import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
+import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { BotControlPageComponent } from './bot-control-page.component';
 import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
 
@@ -1238,7 +1238,7 @@ describe('BotControlPageComponent', () => {
     expect(receipts).toContain('Host Service Offline');
   });
 
-  it('keeps the cockpit file-backed when the projection timeline is unavailable', async () => {
+  it('keeps Bot Control file-backed when the projection timeline is unavailable', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const getLifecycleTimeline = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 503 }));
     TestBed.configureTestingModule({

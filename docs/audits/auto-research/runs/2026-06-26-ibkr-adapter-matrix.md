@@ -2,7 +2,7 @@
 
 **Slice:** full IBKR adapter matrix after fixing F-0037 through F-0039.  
 **Git base:** PR #690 merge commit `2f86597d`; fixes on `codex/fix-ibkr-activity-evidence`.  
-**Scope:** `PythonDataService/app/broker/ibkr/*`, broker/live-instance routers, Bot Cockpit Activity/Audit/Status/Configuration surfaces.
+**Scope:** `PythonDataService/app/broker/ibkr/*`, broker/live-instance routers, Bot Control Activity/Audit/Status/Configuration surfaces.
 
 ## Legend
 
@@ -15,7 +15,7 @@
 
 | IBKR request / callback | Adapter entry point | Raw evidence | Normalized schema | Persistence | API surface | UI display | Status |
 |---|---|---|---|---|---|---|---|
-| `accountSummaryAsync` / `accountSummary` | `account.fetch_account_summary` | Captured with account id and raw row objects | `IbkrAccountSummary` | `make_account_writer` can persist account snapshots when stream/router caller wires it | `GET /api/broker/account`; cockpit account summary poll | Cockpit account banner/summary; Audit raw evidence panel; generic Activity evidence row when session evidence is in range | Displayed, raw detail available |
+| `accountSummaryAsync` / `accountSummary` | `account.fetch_account_summary` | Captured with account id and raw row objects | `IbkrAccountSummary` | `make_account_writer` can persist account snapshots when stream/router caller wires it | `GET /api/broker/account`; bot control account summary poll | Bot Control account banner/summary; Audit raw evidence panel; generic Activity evidence row when session evidence is in range | Displayed, raw detail available |
 | `reqPositionsAsync` / `position` | `account.fetch_positions` | Captured with position objects | `IbkrPositionsSnapshot`; Activity position-lifecycle annotations derive from fills, not positions | Account writer can persist snapshots; Activity uses broker WAL for fills | `GET /api/broker/positions`; live-instance status/current risk; Activity projection | Status/Risk owned positions; Activity broker evidence row; Audit raw evidence panel | Displayed, raw detail available |
 | `qualifyContractsAsync` / `contractDetails` for stocks/options | `contracts.qualify_stock`, `contracts.qualify_option`, option drill-down helpers, order preflight qualification | Captured in several qualification paths | Qualified contract-derived search/contract models | Usually request-scoped/in-memory; no dedicated durable qualification artifact | Broker option contract/search endpoints; order placement preflight | Deploy option picker / option-chain workflows; Audit raw evidence panel | Displayed through downstream domain surfaces; raw detail available |
 | `reqSecDefOptParamsAsync` / `securityDefinitionOptionParameter` | `contracts.fetch_option_expirations`, strike/chain helpers | Captured with option parameter objects | `IbkrStrikeList` and option-chain helper outputs | Request-scoped/in-memory | `GET /api/broker/expirations/{symbol}` and option-chain helpers | Deploy/option picker and chain flows; Audit raw evidence panel | Displayed through option-selection surfaces; raw detail available |
@@ -36,7 +36,7 @@
 | Layer | Current implementation |
 |---|---|
 | Raw IBKR evidence API | `/api/broker/ibkr/evidence` backfills the bounded in-process recorder; `/api/broker/ibkr/evidence/stream` streams future events. |
-| Raw IBKR evidence UI | Bot Cockpit Audit tab renders `app-ibkr-api-evidence-panel`, including data-plane health, broker health, diagnostics, evidence backfill, and evidence SSE. |
+| Raw IBKR evidence UI | Bot Control Audit tab renders `app-ibkr-api-evidence-panel`, including data-plane health, broker health, diagnostics, evidence backfill, and evidence SSE. |
 | Activity normalized API | `/api/live-instances/{sid}/activity` returns bars, fill markers, position annotations, orders today, broker activity rows, warnings, and evidence refs from one backend-authored projection. |
 | Activity normalized UI | Activity tab renders price chart, orders, and broker activity rows from that one projection. This PR adds expandable evidence drawers for normalized event rows. |
 | Row-level evidence identity | `ActivityEvidenceRef` now carries `order_ref`, `order_id`, `perm_id`, `exec_id`, and `symbol`. Matching uses concrete broker identity and does not attach unrelated session evidence to order/fill rows. |
@@ -54,5 +54,5 @@
 ## Verification
 
 - `PythonDataService/.venv/bin/pytest PythonDataService/tests/routers/test_live_instances.py -k activity_projection_matches_evidence_to_specific_order` — passed, 1 selected.
-- `podman exec my-frontend npm test -- --watch=false --include src/app/components/broker/cockpit-v2/reused/broker-activity-table/broker-activity-table.component.spec.ts --include src/app/components/broker/cockpit-v2/tabs/configuration-tab.component.spec.ts` — passed, 24 tests.
+- `podman exec my-frontend npm test -- --watch=false --include src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.spec.ts --include src/app/components/broker/bot-control/tabs/configuration-tab.component.spec.ts` — passed, 24 tests.
 - `podman exec polygon-data-service python -c "from app.services.activity_evidence_matching import activity_evidence_ref_from_event, matching_evidence_refs; print('activity evidence helper import ok')"` — passed.

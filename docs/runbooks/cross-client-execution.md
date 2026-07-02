@@ -34,15 +34,15 @@ Possible causes:
 1. **Do not restart the bot** until you understand the source of the fill.
 2. **Check Trader Workstation (TWS) or the IBKR web portal:**
    - Open the Account → Portfolio view.
-   - Confirm the positions match what the bot's cockpit shows.
+   - Confirm the positions match what the bot's bot control shows.
    - Review the Trades log for the fill's `exec_id` (shown in the
-     cockpit's forensic-facts panel under "Broker activity").
+     bot control's forensic-facts panel under "Broker activity").
 3. **Identify the source:**
    - If it was your own manual trade: close or reconcile the position
-     manually, then use the cockpit **Reconcile now** button.
+     manually, then use the bot control page **Reconcile now** button.
    - If it was another bot instance on the same account: verify the other
      instance's activity log and confirm the fill belongs to it.
-   - If the source is unknown: **halt the bot immediately** (cockpit →
+   - If the source is unknown: **halt the bot immediately** (bot control →
      Stop) and escalate.
 
 ---
@@ -52,11 +52,11 @@ Possible causes:
 After you have identified and resolved the fill's source:
 
 1. Ensure the bot's IBKR positions match what you expect.
-2. In the cockpit, click **Reconcile now**.  The reconciliation
+2. In the bot control page, click **Reconcile now**.  The reconciliation
    orchestrator runs and writes a receipt.
 3. Once the receipt shows `passed`, the incident is marked resolved and
    the incident headline clears.
-4. Resume or restart the run from the cockpit.
+4. Resume or restart the run from the bot control page.
 
 ---
 
@@ -66,12 +66,12 @@ After you have identified and resolved the fill's source:
   so you can see the fill's forensic detail (exec_id, symbol, side,
   quantity, price, discovery timestamp).
 - **Does:** Persist a critical `OperatorIncident` that surfaces in the
-  cockpit's operator-surface headline.
-- **Does NOT:** Silently correct the cockpit's position view.
+  bot control's operator-surface headline.
+- **Does NOT:** Silently correct the bot control page's position view.
 - **Does NOT:** Cancel or reverse the fill automatically.
 - **Does NOT:** Block new orders — the periodic sweep is background
   bookkeeping, not a submission halt.  If you want to halt submissions
-  while investigating, use the cockpit's Stop action.
+  while investigating, use the bot control page's Stop action.
 
 ---
 

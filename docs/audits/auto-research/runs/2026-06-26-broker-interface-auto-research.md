@@ -3,7 +3,7 @@
 **Mode:** ad-hoc broker/interface auto-research after PR #690 merge.  
 **Started:** 2026-06-25T23:20:35-0500 local / 2026-06-26 UTC.  
 **Git:** `master` at `2f86597d` (`tim1016/learn-ai#690`, merged 2026-06-26T04:18:18Z).  
-**Scope:** Interactive Brokers request/response coverage, Bot Cockpit Activity projection, deploy/configuration docs, and post-PR #690 trader/operator visibility.  
+**Scope:** Interactive Brokers request/response coverage, Bot Control Activity projection, deploy/configuration docs, and post-PR #690 trader/operator visibility.
 **Constraints:** read-only outside `docs/audits/auto-research/`; no production code, tests, fixtures, branches, commits, or dependency changes.
 
 ## Executive verdict
@@ -57,7 +57,7 @@ Follow-up branch `codex/fix-ibkr-activity-evidence` fixed F-0037 through F-0039 
 
 - `docs/audits/auto-research/runs/2026-06-26-ibkr-adapter-matrix.md`
 - `PythonDataService/app/services/activity_evidence_matching.py`
-- `Frontend/src/app/components/broker/cockpit-v2/reused/broker-activity-table/*`
-- `Frontend/src/app/components/broker/cockpit-v2/tabs/configuration-tab.component.*`
+- `Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/*`
+- `Frontend/src/app/components/broker/bot-control/tabs/configuration-tab.component.*`
 
 The matrix now traces every typed IBKR request/callback currently in `IbkrApiRequestName` and `IbkrApiCallbackName` through raw evidence, normalized schema, persistence, API, and UI display. It also records the remaining full-interface gaps for `reqCurrentTimeAsync`, `errorEvent`, and durable raw-evidence retention.

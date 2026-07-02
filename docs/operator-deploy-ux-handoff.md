@@ -1,10 +1,9 @@
 # Handoff — operator deploy/operations UX gap
 
 **Date:** 2026-05-31
-**Status of the console redesign:** DONE. The 9-issue operator-console redesign
-(the grilling-session findings → ADR 0004/0005) shipped: 8 AFK slices merged
-(PRs #401–#409), plus the HITL cutover staged as **PR #410** (`ready-for-human`,
-not merged). See `CONTEXT.md` + `docs/architecture/adrs/0004-*.md` / `0005-*.md`.
+**Status:** Superseded by the current bot catalog (`/broker/bots`), per-bot
+control panel (`/broker/bots/:id`), and deploy form (`/broker/deploy`). Kept only
+for the control-plane decisions that led to ADR 0006.
 
 This handoff is about the **gap that redesign did NOT cover**: deploying and
 operating a strategy *from the UI*, with first-class error messaging.
@@ -13,9 +12,9 @@ operating a strategy *from the UI*, with first-class error messaging.
 
 ## The gap, precisely
 
-The instance console (`/broker/instances`, `broker-instances` component) is an
-**observe + control** surface for instances that already exist. It cannot
-**deploy** (create) or, after the cutover, **launch** a strategy.
+The bot control panel (`/broker/bots/:id`, `bot-control-page.component`) is an
+**observe + control** surface for instances that already exist. Creating a new
+bot belongs to `/broker/deploy`.
 
 Deploy is a **3-stage pipeline**; the UI only ever covered stage 2, and PR #410
 retires even that:
@@ -23,12 +22,12 @@ retires even that:
 | Stage | Mechanism | UI today |
 |---|---|---|
 | 1. Create the run (`init-ledger`) | CLI `python -m app.engine.live.run init-ledger …` — writes `run_ledger.json` (spec + account + QC backtest ref + `strategy_instance_id`) | **None — CLI only, no API** |
-| 2. Launch the process | host daemon `POST /runs/{run_id}/start` | Had a **Start button** on the old `broker/paper-run` page; **PR #410 redirects that page away and did NOT port Start/Stop to the console** |
-| 3. Observe/control | the instance console | ✅ built (intent knob, one-shot commands, readiness, broker slice, fleet contamination) |
+| 2. Launch the process | host daemon `POST /runs/{run_id}/start` | Per-bot Host Runner controls when a run binding exists |
+| 3. Observe/control | the bot control panel | ✅ built (intent knob, one-shot commands, readiness, broker slice, fleet contamination) |
 
 Also: the **host daemon is a host process, not in compose** — `python -m
 app.engine.live.host_daemon` must be running. It wasn't during the last session,
-which is why `/broker/instances` showed "No strategies found" (`GET
+which is why the bot catalog showed "No strategies found" (`GET
 /api/live-instances` → `[]`, zero run dirs, daemon unreachable). **That empty
 state is correct, not a bug.**
 
@@ -43,13 +42,11 @@ three-way reconciliation. So "deploy" is *not* one-click; it is reconciliation-g
 
 ## What to build (two pieces)
 
-**A) Port Start/Stop into the console (fixes PR #410).** Small. The service
+**A) Keep Start/Stop on the per-bot control panel.** Small. The service
 methods already exist: `LiveRunsService.startHostRunner(runId, request)` /
-`stopHostRunner` / `getHostRunnerHealth`. The old page's "Host Runner" card
-(`broker-paper-run.component.html` ~line 99/143) is the reference UI: Start with
+`stopHostRunner` / `getHostRunnerHealth`. The Host Runner controls start with
 `{strategy, readonly, hydrate_policy, max_orders_per_day, ibkr_host}`, Stop,
-daemon-health display. **#410 should not merge until this is ported**, or the
-console loses the only Start affordance.
+daemon-health display.
 
 **B) Deploy form + a server-side create endpoint (the real gap).** New work:
 - A new `POST /api/live-instances` (or `/api/live-instances/{id}` create) that
@@ -76,7 +73,7 @@ console loses the only Start affordance.
   the QC reference come from in the UI? (manual entry? a new QC-cloud listing
   integration? relax the requirement for paper/shadow?) — a key grill question.
 - **No centralized frontend error pattern.** No `MessageService`/toast/global
-  `ErrorHandler` in the broker components; the old page used ad-hoc `writeError`
+  `ErrorHandler` in the broker components; prior implementations used ad-hoc `writeError`
   signals. "Good error messaging" needs a *deliberate* pattern — there is no
   existing one to follow.
 
@@ -162,11 +159,11 @@ Decisions reached. These supersede the open questions above where they conflict.
   re-derivation.
 - Rollout shape (big-bang vs incremental) left open; default to building the
   error-map util + connectivity strip + inline-result component as shared pieces,
-  wired into the operation-bearing pages (`broker-instances`, `broker-orders`)
+  wired into the operation-bearing pages (`bot-control`, `broker-orders`)
   first, then adopted elsewhere on touch.
 
 **Start/Stop port (piece B):**
-- Port the old "Host Runner" card (all five fields: `strategy`, `readonly`,
+- Keep the "Host Runner" controls (all five fields: `strategy`, `readonly`,
   `hydrate_policy`, `max_orders_per_day`, `ibkr_host`) into the console, **but
   default each field from the selected instance's ledger** rather than from blank /
   hardcoded constants.
@@ -189,11 +186,9 @@ Decisions reached. These supersede the open questions above where they conflict.
 
 ## Pointers
 
-- Console: `Frontend/src/app/components/broker/broker-instances/` (component +
+- Bot control: `Frontend/src/app/components/broker/bot-control/` (component +
   template + spec); service `Frontend/src/app/services/live-runs.service.ts`;
   types `Frontend/src/app/api/live-instances.types.ts`.
-- Old page (Start/Stop reference, retired by #410):
-  `Frontend/src/app/components/broker/broker-paper-run/`.
 - Backend: `PythonDataService/app/routers/live_instances.py`;
   `app/engine/live/host_daemon.py` (the daemon + start/stop);
   `app/engine/live/run.py` (`init-ledger` / `start` CLI subcommands).

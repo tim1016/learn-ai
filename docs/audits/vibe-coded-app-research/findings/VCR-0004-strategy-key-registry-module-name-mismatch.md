@@ -19,7 +19,7 @@ The broker deploy dropdown is fed from `GET /api/engine/strategies`, which lists
 
 But the algorithm modules in `app/engine/strategy/algorithms/` are: `sma_crossover.py`, `rsi_mean_reversion.py`, `deployment_validation.py`, `spy_ema_crossover.py`, `spy_ema_crossover_options.py`, `spy_orb.py`, `spy_strategy_a/b/c.py`, plus unregistered `buy_and_hold.py` and `spy_vwap_reversion.py`.
 
-Intersection: only `sma_crossover`, `rsi_mean_reversion`, and `deployment_validation` map 1:1. So **7 of 10 advertised strategies** (`ema_crossover`, `daily_sma_crossover`, `orb`, `ema_crossover_options`, `rsi_range_a`, `rsi_range_b`, `rsi_range_c`) will fail at start with `ModuleNotFoundError`. The ledger is already written with the broken key; the runner exits rc=2; a redeploy from the instance console re-submits the same broken key (`broker-start-stop-card.component.ts` re-seeds from `ledger.strategy_key`).
+Intersection: only `sma_crossover`, `rsi_mean_reversion`, and `deployment_validation` map 1:1. So **7 of 10 advertised strategies** (`ema_crossover`, `daily_sma_crossover`, `orb`, `ema_crossover_options`, `rsi_range_a`, `rsi_range_b`, `rsi_range_c`) will fail at start with `ModuleNotFoundError`. The ledger is already written with the broken key; the runner exits rc=2; a redeploy from the bot control panel re-submits the same broken key (`broker-start-stop-card.component.ts` re-seeds from `ledger.strategy_key`).
 
 The codebase has a partial workaround in two ADR 0009 hooks — `_lookup_sizing_surface` (run.py:543-546) and `_enforce_explicit_surface_policy` (deploy.py:145-150) — that strip a leading `spy_` so they can resolve the registry row. The actual `import_module` call (run.py:898) has no such workaround. The asymmetry is the smoking gun: someone knew the registry-key / module-name divergence existed and patched the sizing-policy lookups, but not the import path.
 
@@ -47,7 +47,7 @@ Operator selects "Strategy A — EMA-gap + MACD + RSI-range" → fills required 
 Effects:
 - The content-addressed `run_id` is permanent — the operator must re-deploy under a fresh `run_id` after manually editing the ledger to `spy_strategy_a` (the actual module).
 - `spy_ema_crossover.spec.json` auto-fill never matches `ema_crossover` either (see VCR-P3-rollup), so the spec path also fails to auto-populate.
-- The deploy-dropdown UX silently degrades to "only deployment_validation reliably works", undermining the entire post-PR1 cockpit.
+- The deploy-dropdown UX silently degrades to "only deployment_validation reliably works", undermining the entire post-PR1 bot control.
 
 ## Reproduction
 

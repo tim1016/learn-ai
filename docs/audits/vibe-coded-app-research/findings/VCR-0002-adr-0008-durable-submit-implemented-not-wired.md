@@ -187,7 +187,7 @@ Without this patch, the production cmd_start path crashes on construction with `
 ### Operational notes observed during capture
 
 - **IBKR Gateway disconnect frequency.** During the ~60-minute capture window the IBKR session dropped twice (`Error 1100: Connectivity between IBKR and Trader Workstation has been lost`) at roughly 20-25 minute intervals. The `IBKRBarStreamError` is raised fatally at the bar-stream source and is not intercepted by Phase 3 reconnect re-validation (#542). Daemon restarted the engine each time. Worth investigating Gateway settings (`Auto restart`, idle timeout) before flipping `durable_submit_enabled=true`, since the cascade is more sensitive to mid-position restarts.
-- **VCR-P3-K timestamp drift.** The cockpit Failures panel displayed event timestamps offset by 5 hours (CDT host time parsed as UTC, then re-converted to CDT for display). Cosmetic only; the engine's `live.log` timestamps were correct. Tracked separately as VCR-P3-K.
+- **VCR-P3-K timestamp drift.** The bot control page Failures panel displayed event timestamps offset by 5 hours (CDT host time parsed as UTC, then re-converted to CDT for display). Cosmetic only; the engine's `live.log` timestamps were correct. Tracked separately as VCR-P3-K.
 - **No `halt.flag` written**, no `poisoned.flag` written, no `ACK_FAILED_UNCERTAIN` events — the durable submit cascade behaved exactly as ADR 0008 specifies on the happy path.
 
 ### Sidecar projection

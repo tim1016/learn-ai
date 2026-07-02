@@ -12,7 +12,7 @@ Deploying a strategy is a **three-stage pipeline**. The operator console (ADR 00
 |---|---|
 | 1. Create the run | CLI `python -m app.engine.live.run init-ledger …` — writes `run_ledger.json`. **No API.** |
 | 2. Launch the process | host daemon `POST /runs/{run_id}/start` (console Start/Stop port lands this in the UI). |
-| 3. Observe/control | instance console (ADR 0004/0005). |
+| 3. Observe/control | bot control panel (ADR 0004/0005). |
 
 Stage 1 is the gap. Three properties of `init-ledger` make it fundamentally a control-plane operation rather than a CRUD endpoint:
 

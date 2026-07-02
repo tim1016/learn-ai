@@ -615,7 +615,7 @@ This section converts the PRD-A-through-D control-plane work into a UI plan. "Ac
 
 #### Current UI truth table
 
-As of PR #387 / PR-D, the shipped Angular surface is `Frontend/src/app/components/broker/broker-paper-run/broker-paper-run.component.*` backed by `Frontend/src/app/services/live-runs.service.ts`.
+As of PR #387 / PR-D, the shipped Angular surface is `Frontend/src/app/components/broker/bot-control/bot-control.component.*` backed by `Frontend/src/app/services/live-runs.service.ts`.
 
 | UI area | What it currently shows | Source of truth | Accuracy constraint |
 |---|---|---|---|
@@ -677,7 +677,7 @@ As of PR #387 / PR-D, the shipped Angular surface is `Frontend/src/app/component
 |---|---|---|
 | **UI-0 — Identity binding** | Persist `strategy_instance_id` in `run_ledger.json` at `init-ledger`; update `LiveRunLedger`, run-id hash/version semantics, CLI args, host-daemon start assumptions, and legacy-read behavior. | A fresh pre-decision run has an O(1) `run_id -> strategy_instance_id` binding; legacy runs are explicit `unknown`, not guessed from parquet. **✅ Implemented 2026-05-29** (decision: `schema_version` 1.1, `strategy_instance_id` **NOT** in the `run_id` hash → existing run_ids stay valid): `LiveRunLedger.strategy_instance_id` + `build_ledger`/`init-ledger --strategy-instance-id` (optional, empty = legacy/unknown) + `start` prefers `ledger.strategy_instance_id`, falling back to `--strategy` with a warning on legacy ledgers, and keys the desired-state path off the resolved id. `host_daemon` unaffected (it only passes `--strategy` + `run_dir`). Router/UI surfacing remains UI-1+. |
 | **UI-1 — Status contract** | Add desired-state fields and command summary to `app.schemas.live_runs`, `app.routers.live_runs`, TS types, and service tests. | API returns accurate absent/PAUSED/STOPPED/corrupt states; no timestamp strings; existing observer UI still renders. |
-| **UI-2 — Read-only clarity pass** | Update Paper Run Observer top strip and cards to distinguish process state, run state, desired state, flags, and data provenance. | Playwright/Vitest assertions cover each operator state; no control writes yet. |
+| **UI-2 — Read-only clarity pass** | Update Bot Control top strip and cards to distinguish process state, run state, desired state, flags, and data provenance. | Playwright/Vitest assertions cover each operator state; no control writes yet. |
 | **UI-3 — Durable intent controls** | Add Pause / Resume / Stop strategy controls backed by durable desired-state write API. | Button click writes the sidecar, UI reloads to the new state, corrupt sidecar blocks with clear error. |
 | **UI-4 — Per-run command controls** | Add Pause / Resume / Stop / Flatten / Mark Poisoned / Reconcile command-channel writes plus pending/ack timeline. | UI shows queued then acked outcomes using real command files; stale pending commands are obvious. |
 | **UI-5 — Execution-aware exposure panel** | Branch exposure copy and tables by `execution_source`, `submit_mode`, and PR-G commission fields. | Executing broker fills, shadow fills, and readonly/simulated rows are labeled differently; no frontend fee/P&L computation. |

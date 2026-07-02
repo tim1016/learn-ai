@@ -220,7 +220,7 @@ Rules:
 - Post-launch proof must show all of:
   - `readonly_at_start: false`
   - `submission_capability: PAPER_ORDERS_ENABLED`
-  - cockpit execution posture: `PAPER_EXECUTION` or trader copy **Live paper / paper execution**
+  - bot control execution posture: `PAPER_EXECUTION` or trader copy **Live paper / paper execution**
 
 ### 7.6 Live Monitoring Activity Layout Contract
 
@@ -304,7 +304,7 @@ Implementation guidance:
 - Keep Action plan as traded asset selection and show signal/traded-asset side by side in deploy review.
 - Replace ambiguous Paper/Live launch wording with explicit Execution capability states.
 - Require confirmation before submitting with `PAPER_ORDERS_ENABLED`.
-- Add post-launch proof rows for `readonly_at_start`, `submission_capability`, and cockpit execution posture.
+- Add post-launch proof rows for `readonly_at_start`, `submission_capability`, and bot control execution posture.
 - Add tests for `SPY -> SPY` and `SPY -> AAPL` deploy payloads, asserting `live_config.symbol` and action-plan stock target are distinct fields.
 
 ### PR 7 — Live Monitoring Activity Panel Density
@@ -329,7 +329,7 @@ Implementation guidance:
 - `SPY -> AAPL` is representable without changing strategy settings by setting signal stream `SPY` and Action plan asset `AAPL`.
 - Enabling paper order submission is shown as **PAPER ORDERS ENABLED**, not hidden behind Paper/Live wording.
 - The deploy form no longer presents `readonly=false` as generic **Live** for a `submit_mode=live_paper` strategy.
-- A post-launch proof panel shows `readonly_at_start: false`, `submission_capability: PAPER_ORDERS_ENABLED`, and cockpit execution posture `PAPER_EXECUTION` or trader copy **Live paper / paper execution**.
+- A post-launch proof panel shows `readonly_at_start: false`, `submission_capability: PAPER_ORDERS_ENABLED`, and bot control execution posture `PAPER_EXECUTION` or trader copy **Live paper / paper execution**.
 - The live monitoring Recent activity panel shows Price & Trades, compact Orders Today, Broker Activity, and Recent Incidents in one monitoring surface.
 - Orders Today renders the compact headers `Time`, `Symbol`, `Position`, `Side`, `Order`, `Average fill`, and `Filled`, and fits in a half-page-width lane without horizontal scrolling at the target desktop breakpoint.
 - Broker activity remains available as a reusable component for other broker-information surfaces.

@@ -39,7 +39,7 @@ Today the host daemon spawns one OS process per `strategy_instance_id`. Each run
 
 ```mermaid
 flowchart TD
-    ui["Bot Cockpit / FastAPI"]
+    ui["Bot Control / FastAPI"]
     daemon["Host daemon<br/>RunnerProcessManager"]
     r1["Runner A process<br/>LiveEngine + LivePortfolio"]
     r2["Runner B process<br/>LiveEngine + LivePortfolio"]
@@ -79,7 +79,7 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 
 ### 3.1 Canonical Lifecycle Observability Model
 
-The cockpit lifecycle chart is a **projection**, not a separate state machine.
+The bot control page lifecycle chart is a **projection**, not a separate state machine.
 Its node ids are the stable public vocabulary for operator observability. Each
 node must be backed by server-authored evidence; Angular may choose layout and
 styling, but it must not infer lifecycle meaning from raw process fields.
@@ -94,7 +94,7 @@ Each lifecycle node carries its own receipt list plus an
 or `no-action-needed`. Receipt rows are backend-authored operator copy with
 `headline` and optional `detail` fields. Raw receipt ids, source/gate ids,
 reason codes, values, and timestamps remain audit payload, not primary trader
-instructions. The cockpit right-pane inspector is selected-node scoped: it may
+instructions. The bot control page right-pane inspector is selected-node scoped: it may
 show only the selected node's backend receipts and the node actionability
 banner. Whole-bot proof lines and advanced diagnostics belong in the lower
 audit panel so they do not imply that every selected node has direct evidence.
@@ -225,7 +225,7 @@ under a file lock, and records a hash of the same byte snapshot used for
 parsing.
 
 If `LIFECYCLE_PROJECTION_ENABLED=false`, `POSTGRES_URL` is empty, the database
-is stale, or the projection is down, the cockpit must use the existing
+is stale, or the projection is down, the bot control page must use the existing
 file-backed path (`compute_operator_surface` and
 `compose_bot_lifecycle_chart`). Postgres unavailability means "projection
 unavailable", not "bot state unknown."
@@ -414,7 +414,7 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 
 The only shipped `submit_readiness.code` allowed to claim order submission is safe is `safe_to_submit`. It requires broker safety `PAPER_ONLY`, broker connection `CONNECTED`, submission capability `SATISFIED`, no unresolved uncertain intent, AccountOwner phase `accepting` with a known generation, fresh `CLEAN` or `ADOPTED` reconciliation, no account freeze, no hard readiness gate failure, a running host process, and a trading session that permits strategy activity. All other codes are non-submit states: `safe_to_monitor`, `blocked_before_submit`, `broker_state_unproven`, `account_frozen`, `waiting_for_owner_generation`, and `submit_outcome_uncertain`.
 
-The Angular Overview tab now places the authentic lifecycle flowchart and the trader-guidance pane side by side. `trader-guidance-pane.component.*` renders backend-authored `headline`, `explanation`, `risk_*`, `submit_readiness`, `additional_attention_groups`, `advanced_evidence`, and timeline rows verbatim. Trader remediations render through the trader-specific `renderTraderRemediation` helper, separate from cockpit gate suggested actions. Clicking an `invoke_endpoint/reconcile_instance` remediation emits the backend remediation object to the page, where `BotControlPageComponent` calls the existing `/api/live-instances/{strategy_instance_id}/reconcile` client method.
+The Angular Overview tab now places the authentic lifecycle flowchart and the trader-guidance pane side by side. `trader-guidance-pane.component.*` renders backend-authored `headline`, `explanation`, `risk_*`, `submit_readiness`, `additional_attention_groups`, `advanced_evidence`, and timeline rows verbatim. Trader remediations render through the trader-specific `renderTraderRemediation` helper, separate from bot control gate suggested actions. Clicking an `invoke_endpoint/reconcile_instance` remediation emits the backend remediation object to the page, where `BotControlPageComponent` calls the existing `/api/live-instances/{strategy_instance_id}/reconcile` client method.
 
 The new contract does not ship an AccountOwner daemon, does not move canonical truth to Postgres, and does not grant Angular permission to compose trader status. Tests pin the backend contract in `PythonDataService/tests/services/test_operator_surface.py` and `PythonDataService/tests/routers/test_live_instances_operator_surface.py`; frontend rendering/dispatch is pinned in `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.spec.ts`, `overview-tab.component.spec.ts`, `bot-control-page.component.spec.ts`, and `live-instances.contract.spec.ts`.
 
@@ -442,7 +442,7 @@ The receipt sources are intentionally narrow:
 
 The Overview trader-guidance pane now renders the latest bounded rows from `GET /api/lifecycle-projection/timeline`. `LiveRunsService.getLifecycleTimeline(...)` queries by account id, strategy instance id, optional run id, and limit. `BotControlPageComponent` fetches those rows after the canonical file-backed status snapshot loads, then passes them into `TraderGuidancePaneComponent` as display data.
 
-The pane renders backend-authored timeline row `summary` / `rendered_headline`, `why`, `status`, `node_id`, `source_type`, `source_seq`, and `operator_next_step` verbatim through `TraderGuidanceTimelineComponent`, and formats `ts_ms` for display only. Timeline rows are keyed to the loaded status identity; when the status identity changes, stale rows are cleared before the next projection request can complete. If the projection endpoint is unavailable or returns the canonical-fallback flag, the cockpit keeps the existing file-backed status/chart/trader guidance visible and shows a local timeline notice instead of treating Postgres failure as bot-state failure.
+The pane renders backend-authored timeline row `summary` / `rendered_headline`, `why`, `status`, `node_id`, `source_type`, `source_seq`, and `operator_next_step` verbatim through `TraderGuidanceTimelineComponent`, and formats `ts_ms` for display only. Timeline rows are keyed to the loaded status identity; when the status identity changes, stale rows are cleared before the next projection request can complete. If the projection endpoint is unavailable or returns the canonical-fallback flag, the bot control page keeps the existing file-backed status/chart/trader guidance visible and shows a local timeline notice instead of treating Postgres failure as bot-state failure.
 
 This slice does not ship a background projector, does not make `/status` depend on Postgres, and does not let Angular derive lifecycle or submit-safety claims from timeline rows.
 

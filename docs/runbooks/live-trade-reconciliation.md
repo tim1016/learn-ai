@@ -1,6 +1,6 @@
 # Live-trade reconciliation — operator runbook
 
-**Audience:** operators monitoring a live-paper bot via the cockpit-v2 Activity tab.
+**Audience:** operators monitoring a live-paper bot via the bot control Activity view at `/broker/bots/:id`.
 **Pairs with:** `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md` (decision), `docs/references/ibkr-reconciliation.md` (engineer-facing reference).
 
 The Activity tab shows one row per IBKR execution (and, once the pending-row gap below is closed, per unacked pending intent), authored server-side. The frontend renders verbatim — it does not derive verdicts, compose narratives, or compute lag chips. Every chip color and every word was decided by the backend when the row was written.
