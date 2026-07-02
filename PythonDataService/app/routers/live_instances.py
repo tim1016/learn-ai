@@ -126,6 +126,7 @@ from app.schemas.live_runs import (
     ReconcileMutationResponse,
     SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
+    SignalTone,
     SizingAuditRow,
 )
 from app.services.activity_evidence_matching import (
@@ -477,7 +478,24 @@ def _nonempty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> tuple[dict | None, list[dict]]:
+def _latest_signal_tone(latest_decision: dict | None) -> SignalTone:
+    signal = latest_decision.get("signal") if latest_decision is not None else None
+    if not isinstance(signal, str) or not signal:
+        return "neutral"
+    match signal.upper():
+        case "ENTER" | "BUY" | "LONG":
+            return "ok"
+        case "EXIT" | "SELL" | "SHORT":
+            return "warn"
+        case _:
+            return "neutral"
+
+
+def _strategy_state(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+) -> tuple[dict | None, SignalTone, list[dict]]:
     """Latest decision row + spec-derived column descriptors for the instance.
 
     Reads from the live run when visible, else the latest evidence run. The
@@ -490,7 +508,7 @@ def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dic
     if run_dir is None and runs:
         run_dir = Path(runs[0]["run_dir"])
     if run_dir is None:
-        return None, []
+        return None, "neutral", []
 
     decisions_path = run_dir / "decisions.parquet"
     # Guard existence: _read_parquet_tail's except tuple references a pyarrow
@@ -510,7 +528,7 @@ def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dic
         descriptors = decision_column_descriptors(spec)
     except (OSError, ValueError, KeyError):
         descriptors = []
-    return latest_decision, descriptors
+    return latest_decision, _latest_signal_tone(latest_decision), descriptors
 
 
 def _resolve_readonly_default(settings: object) -> bool:
@@ -1351,7 +1369,7 @@ async def _resolve_instance_status_from_process(
     account_freeze = _resolve_account_freeze(root.parent, runs)
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
     desired = _resolve_desired_state(root, sid)
-    latest_decision, decision_columns = _strategy_state(root, live_binding, runs)
+    latest_decision, latest_signal_tone, decision_columns = _strategy_state(root, live_binding, runs)
     last_exit = _instance_last_exit(runs)
     readiness = _resolve_readiness(root, live_binding, runs, desired.state)
     raw_mode = getattr(settings, "mode", None)
@@ -1493,6 +1511,7 @@ async def _resolve_instance_status_from_process(
         desired_state=desired,
         readiness=readiness,
         latest_decision=latest_decision,
+        latest_signal_tone=latest_signal_tone,
         decision_columns=decision_columns,
         broker=broker_view,
         start_defaults=start_defaults,

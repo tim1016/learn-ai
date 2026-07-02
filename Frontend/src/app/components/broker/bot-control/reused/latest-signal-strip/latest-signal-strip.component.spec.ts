@@ -1,7 +1,10 @@
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DecisionColumnDescriptor } from '../../../../../api/live-instances.types';
+import type {
+  DecisionColumnDescriptor,
+  LatestSignalTone,
+} from '../../../../../api/live-instances.types';
 import { LatestSignalStripComponent } from './latest-signal-strip.component';
 
 function makeCol(overrides: Partial<DecisionColumnDescriptor> = {}): DecisionColumnDescriptor {
@@ -18,6 +21,7 @@ function makeCol(overrides: Partial<DecisionColumnDescriptor> = {}): DecisionCol
 function render(opts: {
   decisionColumns: DecisionColumnDescriptor[];
   latestDecision: Record<string, unknown> | null;
+  signalTone?: LatestSignalTone;
 }): HTMLElement {
   TestBed.configureTestingModule({
     providers: [provideZonelessChangeDetection()],
@@ -25,6 +29,7 @@ function render(opts: {
   const fixture = TestBed.createComponent(LatestSignalStripComponent);
   fixture.componentRef.setInput('decisionColumns', opts.decisionColumns);
   fixture.componentRef.setInput('latestDecision', opts.latestDecision);
+  fixture.componentRef.setInput('signalTone', opts.signalTone ?? 'neutral');
   fixture.detectChanges();
   return fixture.nativeElement as HTMLElement;
 }
@@ -38,26 +43,29 @@ describe('LatestSignalStripComponent', () => {
     expect(el.querySelector('[data-testid="latest-signal-strip"]')).toBeNull();
   });
 
-  it('renders the ENTER signal pill in the ok tone', () => {
+  it('renders the signal pill with the backend-authored tone', () => {
     const el = render({
       decisionColumns: [],
-      latestDecision: { signal: 'ENTER' },
+      latestDecision: { signal: 'HOLD' },
+      signalTone: 'ok',
     });
 
     const pill = el.querySelector<HTMLElement>('[data-testid="latest-signal-pill"]');
     expect(pill).not.toBeNull();
-    expect(pill?.textContent ?? '').toContain('ENTER');
+    expect(pill?.textContent ?? '').toContain('HOLD');
     expect(pill?.classList.contains('ok')).toBe(true);
   });
 
-  it('renders the EXIT signal pill in the warn tone', () => {
+  it('does not derive tone from the signal text in Angular', () => {
     const el = render({
       decisionColumns: [],
       latestDecision: { signal: 'EXIT' },
+      signalTone: 'neutral',
     });
 
     const pill = el.querySelector<HTMLElement>('[data-testid="latest-signal-pill"]');
-    expect(pill?.classList.contains('warn')).toBe(true);
+    expect(pill?.classList.contains('neutral')).toBe(true);
+    expect(pill?.classList.contains('warn')).toBe(false);
   });
 
   it('renders an empty-state pill when columns are present but no signal yet', () => {

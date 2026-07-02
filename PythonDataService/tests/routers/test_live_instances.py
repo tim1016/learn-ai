@@ -2228,6 +2228,33 @@ async def test_status_includes_spec_derived_decision_column_descriptors(
     assert cols["ema5"]["format"] == "decimal"
     # No decisions.parquet written -> latest_decision is None, descriptors still resolve.
     assert body["latest_decision"] is None
+    assert body["latest_signal_tone"] == "neutral"
+
+
+async def test_status_includes_backend_authored_latest_signal_tone(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    app, root = app_with_root
+    run_dir = root / "run-signal-tone"
+    _write_ledger(root, "run-signal-tone", "spy_ema_paper", 100)
+    table = pa.table(
+        {
+            "bar_close_ms": pa.array([1_700_000_000_000, 1_700_000_060_000], type=pa.int64()),
+            "signal": pa.array(["HOLD", "EXIT"], type=pa.string()),
+        }
+    )
+    pq.write_table(table, run_dir / "decisions.parquet")
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    body = response.json()
+    assert body["latest_decision"]["signal"] == "EXIT"
+    assert body["latest_signal_tone"] == "warn"
 
 
 async def test_set_desired_state_actuates_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

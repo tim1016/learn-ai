@@ -88,6 +88,8 @@ export interface DecisionColumnDescriptor {
   semantic?: string;
 }
 
+export type LatestSignalTone = 'ok' | 'warn' | 'neutral';
+
 /** The instance's namespace-attributed broker slice (ADR 0005, #398). */
 export interface InstanceBrokerView {
   bot_order_namespace: string;
@@ -137,6 +139,7 @@ export interface LiveInstanceStatus {
   desired_state: DesiredStateView | null;
   readiness: ReadinessVector | null;
   latest_decision: Record<string, unknown> | null;
+  latest_signal_tone: LatestSignalTone;
   decision_columns: DecisionColumnDescriptor[];
   broker: InstanceBrokerView | null;
   /** Pre-filled Start-card values (#416); null when nothing is deployed. */

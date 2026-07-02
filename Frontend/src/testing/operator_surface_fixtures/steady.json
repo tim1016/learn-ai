@@ -19,6 +19,7 @@
   "instrument_surface": null,
   "last_exit": null,
   "latest_decision": null,
+  "latest_signal_tone": "neutral",
   "lineage": null,
   "live_binding": {
     "run_dir": "/Users/inkant/learn-ai/PythonDataService/scripts/_capture_steady_root/live_runs/run-steady",

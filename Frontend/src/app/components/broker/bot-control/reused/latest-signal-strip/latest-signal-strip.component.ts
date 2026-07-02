@@ -1,5 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import type { DecisionColumnDescriptor } from '../../../../../api/live-instances.types';
+import type {
+  DecisionColumnDescriptor,
+  LatestSignalTone,
+} from '../../../../../api/live-instances.types';
 
 interface SignalCell {
   name: string;
@@ -18,8 +21,9 @@ interface SignalCell {
  * backend declares them. Reasoning + next-evaluation timestamp are deferred
  * to a future contract change (User Story #24).
  *
- * Reads only fields already emitted by the status contract (decision_columns
- * + latest_decision). No new backend math.
+ * Reads only backend-authored fields from the status contract
+ * (decision_columns, latest_decision, latest_signal_tone). No frontend signal
+ * classification.
  */
 @Component({
   selector: 'app-latest-signal-strip',
@@ -30,19 +34,11 @@ interface SignalCell {
 export class LatestSignalStripComponent {
   readonly decisionColumns = input.required<DecisionColumnDescriptor[]>();
   readonly latestDecision = input.required<Record<string, unknown> | null>();
+  readonly signalTone = input.required<LatestSignalTone>();
 
   readonly signal = computed<string | null>(() => {
     const value = this.latestDecision()?.['signal'];
     return typeof value === 'string' ? value : null;
-  });
-
-  readonly signalTone = computed<'ok' | 'warn' | 'neutral'>(() => {
-    const s = this.signal();
-    if (!s) return 'neutral';
-    const upper = s.toUpperCase();
-    if (upper === 'ENTER' || upper === 'BUY' || upper === 'LONG') return 'ok';
-    if (upper === 'EXIT' || upper === 'SELL' || upper === 'SHORT') return 'warn';
-    return 'neutral';
   });
 
   readonly cells = computed<SignalCell[]>(() => {

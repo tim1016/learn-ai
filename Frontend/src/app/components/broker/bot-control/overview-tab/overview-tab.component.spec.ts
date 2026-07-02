@@ -16,6 +16,7 @@ function makeStatus(id = 'sid-x'): LiveInstanceStatus {
     desired_state: null,
     readiness: null,
     latest_decision: null,
+    latest_signal_tone: 'neutral',
     decision_columns: [],
     broker: null,
     start_defaults: null,

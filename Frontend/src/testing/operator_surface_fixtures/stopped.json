@@ -19,6 +19,7 @@
   "instrument_surface": null,
   "last_exit": null,
   "latest_decision": null,
+  "latest_signal_tone": "neutral",
   "lineage": null,
   "live_binding": null,
   "operator_surface": {
