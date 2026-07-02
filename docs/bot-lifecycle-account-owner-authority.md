@@ -276,6 +276,8 @@ Runner-side owner mode is available through:
 
 Structured diagnostics include trace id, bot/instance id, account id, run id, intent id, order ref, owner generation, broker client id, order id, perm id, and exec id when available.
 
+On runner startup, `run.py` initializes the V1 `AccountOwner` from the persisted `owner_generation.json` record when one exists. If the persisted phase is `accepting`, or if no record exists yet, startup writes the current accepting generation to `owner_generation.json` and appends `account_owner_generation_recorded`. If the persisted phase is non-accepting (`reconnecting`, `draining`, or `frozen`), startup preserves that phase and does not rewrite it as accepting. The operator surface may therefore continue to treat missing generation evidence as `unknown`; the accepting proof must be emitted by the runner, not inferred by a status read.
+
 `AccountOwner.handle_reconnect(...)` ships the current generation/reconnect drain behavior inside the V1 lane. It persists `owner_generation.json`, moves phases through `reconnecting`, `draining`, `accepting`, or `frozen`, rejects new submit intents while non-accepting, rotates client ids on IBKR client-id-in-use code `326`, records reconnect drain outcomes for prepared-without-terminal account events via the supplied classifier, and resumes only after the supplied account classifier gate passes. `AccountOwner.reconnect_gate_result()` projects the current phase into `gate_id=account_owner.reconnect`.
 
 On successful reconnect, `account_owner_reconnect_resumed` carries the accepting phase, current owner generation, and `recorded_at_ms` from the same `AccountOwnerGeneration` record written by the phase transition. Missing generation evidence still projects as `unknown`; the fix is to persist the evidence at the emitter, not to mark all resume events as passing.
@@ -401,7 +403,7 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 | Account-scoped classifier over registry-known owners | Shipped in `engine/live/account_classifier.py` as pure V1 classifier with GateResult projection. |
 | AccountOwner daemon child process | Not shipped. V1 submit lane exists in `engine/live/account_owner.py`, but no long-lived child process/IPC intake owns it yet. |
 | Runner no-broker-write mode | Shipped when `LivePortfolio.account_owner_submitter` / `LiveEngine.account_owner_submitter` is configured. |
-| AccountOwner generation/fencing token | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_owner.py`. |
+| AccountOwner generation/fencing token | Shipped in `engine/live/account_artifacts.py`, `engine/live/account_owner.py`, and runner startup wiring in `engine/live/run.py`. |
 | Existing readiness, Start, and action capability rows generated from enforcement `GateResult` values | Shipped in `schemas/live_runs.py`, `engine/live/readiness.py`, and `services/operator_surface.py`. Account-level gate board rows are not shipped. |
 | Restart intensity fold over account events | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, and `engine/live/run.py`. |
 | Audited operator override for unreachable broker proof | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_classifier.py`. |

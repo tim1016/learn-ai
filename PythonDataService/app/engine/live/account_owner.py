@@ -25,6 +25,8 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_classifier import AccountClassifierDecision
 from app.schemas.live_runs import GateResult
 
+AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
+
 
 class AccountOwnerSubmitIntent(BaseModel):
     """Durable runner intent accepted by AccountOwner intake."""
@@ -97,6 +99,7 @@ class AccountOwner:
         owner_generation_provider: Callable[[], int],
         owner_generation_advancer: Callable[[], int] | None = None,
         classifier: Callable[[AccountOwnerSubmitIntent], AccountClassifierDecision],
+        initial_phase: AccountOwnerRuntimePhase = "accepting",
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
@@ -105,8 +108,8 @@ class AccountOwner:
         self._owner_generation_advancer = owner_generation_advancer
         self._classifier = classifier
         self._lock = asyncio.Lock()
-        self._accepting = True
-        self._phase = "accepting"
+        self._accepting = initial_phase == "accepting"
+        self._phase: AccountOwnerRuntimePhase = initial_phase
 
     @property
     def accepting(self) -> bool:
@@ -139,6 +142,11 @@ class AccountOwner:
             operator_next_step="WAIT_FOR_RECONNECT_DRAIN",
             evidence_at_ms=time.time_ns() // 1_000_000,
         )
+
+    def record_accepting_generation(self, *, recorded_at_ms: int | None = None) -> AccountOwnerGeneration:
+        if self._phase != "accepting":
+            raise RuntimeError(f"cannot record accepting AccountOwner generation while phase is {self._phase!r}")
+        return self._write_generation("accepting", recorded_at_ms=recorded_at_ms)
 
     async def submit(self, intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
         if not self._accepting:
@@ -378,14 +386,22 @@ class AccountOwner:
             "exec_id": None,
         }
 
-    def _set_phase(self, phase: str) -> AccountOwnerGeneration:
+    def _set_phase(self, phase: AccountOwnerRuntimePhase) -> AccountOwnerGeneration:
         self._phase = phase
         self._accepting = phase == "accepting"
+        return self._write_generation(phase)
+
+    def _write_generation(
+        self,
+        phase: AccountOwnerRuntimePhase,
+        *,
+        recorded_at_ms: int | None = None,
+    ) -> AccountOwnerGeneration:
         generation = AccountOwnerGeneration(
             account_id=self._account_id,
             generation=self._owner_generation_provider(),
-            phase=phase,  # type: ignore[arg-type]
-            recorded_at_ms=time.time_ns() // 1_000_000,
+            phase=phase,
+            recorded_at_ms=recorded_at_ms if recorded_at_ms is not None else time.time_ns() // 1_000_000,
             source="account_owner",
         )
         write_account_owner_generation(

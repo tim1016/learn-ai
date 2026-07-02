@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -126,6 +127,7 @@ def _owner(
     classifier=None,
     generation: int = GENERATION,
     owner_generation_advancer=None,
+    initial_phase: Literal["accepting", "reconnecting", "draining", "frozen"] = "accepting",
 ) -> AccountOwner:
     write_account_instance_binding(tmp_path, _binding())
     return AccountOwner(
@@ -135,6 +137,7 @@ def _owner(
         owner_generation_provider=lambda: generation,
         owner_generation_advancer=owner_generation_advancer,
         classifier=classifier or (lambda _intent: _continue_decision()),
+        initial_phase=initial_phase,
     )
 
 
@@ -153,6 +156,40 @@ def test_account_owner_generation_persists_and_rejects_stale_intent(tmp_path: Pa
 
     assert loaded is not None
     assert loaded.generation == GENERATION
+
+
+def test_account_owner_records_accepting_generation_for_startup(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker, generation=0)
+
+    recorded = owner.record_accepting_generation(recorded_at_ms=1_700_000_005_000)
+
+    assert recorded.account_id == ACCOUNT
+    assert recorded.generation == 0
+    assert recorded.phase == "accepting"
+    assert recorded.recorded_at_ms == 1_700_000_005_000
+    loaded = read_account_owner_generation(tmp_path, ACCOUNT)
+    assert loaded == recorded
+    events = read_account_events(tmp_path, ACCOUNT)
+    assert events[-1]["event_type"] == "account_owner_generation_recorded"
+    assert events[-1]["generation"] == 0
+    assert events[-1]["phase"] == "accepting"
+
+
+@pytest.mark.asyncio
+async def test_account_owner_preserves_initial_frozen_phase(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker, initial_phase="frozen")
+
+    assert owner.accepting is False
+    gate = owner.reconnect_gate_result()
+    assert gate.status == "freeze"
+    with pytest.raises(RuntimeError, match="cannot record accepting AccountOwner generation"):
+        owner.record_accepting_generation(recorded_at_ms=1_700_000_005_000)
+    with pytest.raises(AccountOwnerSubmitRejected) as exc:
+        await owner.submit(_intent())
+    assert exc.value.reason == "ACCOUNT_OWNER_RECONNECTING"
+    assert broker.calls == []
 
 
 @pytest.mark.asyncio
