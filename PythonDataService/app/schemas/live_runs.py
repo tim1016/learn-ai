@@ -6,6 +6,7 @@ trades, and artifacts. All timestamps are int64 milliseconds UTC.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -14,6 +15,28 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.operator.notices.schema import OperatorNotice, RuntimeFreshnessReasonCode
+
+_DEFAULT_IBKR_HOST_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+        "host.containers.internal",
+        "host.docker.internal",
+    }
+)
+
+
+def _allowed_ibkr_hosts() -> set[str]:
+    configured = {
+        host.strip().lower()
+        for host in os.environ.get("IBKR_HOST_ALLOWLIST", "").split(",")
+        if host.strip()
+    }
+    env_host = os.environ.get("IBKR_HOST", "").strip()
+    if env_host:
+        configured.add(env_host.lower())
+    return set(_DEFAULT_IBKR_HOST_ALLOWLIST) | configured
 
 
 class RunState(StrEnum):
@@ -351,6 +374,23 @@ class HostRunnerStartRequest(BaseModel):
     strategy: str = Field(default="spy_ema_crossover", pattern=r"^[a-z][a-z0-9_]{0,63}$")
     max_orders_per_day: int = Field(default=DEFAULT_MAX_ORDERS_PER_DAY, ge=0, le=100_000)
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
+
+    @field_validator("ibkr_host")
+    @classmethod
+    def _validate_ibkr_host(cls, value: str) -> str:
+        host = value.strip()
+        if host != value or not host:
+            raise ValueError("ibkr_host must not contain surrounding whitespace")
+        lowered = host.lower()
+        if any(token in lowered for token in ("://", "/", "\\", "@")):
+            raise ValueError("ibkr_host must be a bare host name or IP address")
+        allowed = _allowed_ibkr_hosts()
+        if lowered not in allowed:
+            raise ValueError(
+                "ibkr_host is not in the configured allow-list "
+                "(IBKR_HOST_ALLOWLIST / IBKR_HOST)"
+            )
+        return host
 
 
 class HostRunnerStopRequest(BaseModel):

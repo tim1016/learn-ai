@@ -897,7 +897,7 @@ def _start_defaults(**overrides) -> InstanceStartDefaults:
         "readonly": False,
         "hydrate_policy": "optional",
         "max_orders_per_day": 50,
-        "ibkr_host": "host",
+        "ibkr_host": "127.0.0.1",
     }
     base.update(overrides)
     return InstanceStartDefaults(**base)  # type: ignore[arg-type]

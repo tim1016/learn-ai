@@ -33,12 +33,23 @@ services:
     image: docker.io/library/redis:7-alpine
     container_name: my-redis
     restart: always
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-local-dev-redis-password}
     ports:
       # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
       - "127.0.0.1:6379:6379"
-    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "no",
+        "--save",
+        "",
+        "--requirepass",
+        "${REDIS_PASSWORD:-local-dev-redis-password}",
+      ]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
       interval: 5s
       # A full `./restart.sh` saturates host CPU/IO, so the `redis-cli`
       # exec can be slow to spawn even though redis answers PONG instantly.
@@ -123,7 +134,7 @@ services:
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
       - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:-local-dev-control-secret}
       - BACKEND_URL=http://backend:8080
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0
       # Data lake writer root (Slice 1b). Container path of the host-bind mount above.
       - LEAN_DATA_WRITE_ROOT=/lean-data-writer
       # Data lake catalog — asyncpg URL; same host/db/creds as the backend.
@@ -222,7 +233,7 @@ services:
     environment:
       - ConnectionStrings__DefaultConnection=Host=db;Database=postgres;Username=postgres;Password=${POSTGRES_PASSWORD}
       - PolygonService__BaseUrl=http://python-service:8000
-      - REDIS_URL=redis:6379
+      - REDIS_URL=redis:6379,password=${REDIS_PASSWORD:-local-dev-redis-password}
       - DOTNET_USE_POLLING_FILE_WATCHER=true
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
