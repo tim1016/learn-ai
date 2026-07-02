@@ -26,14 +26,18 @@ Reuses the canonical-JSON SHA-256 helper at
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.research.runs.hashing import canonical_json, hash_payload
 
 
@@ -277,13 +281,36 @@ def write_ledger(path: Path, ledger: LiveRunLedger) -> None:
     Uses the same canonical-JSON formatter as ``compute_run_id`` so the
     on-disk bytes are identical across runs with identical inputs — this
     means the SHA-256 of ``run_ledger.json`` (which appears in the daily
-    Markdown's hash manifest, § 6.5) is deterministic.
+    Markdown's hash manifest, § 6.5) is deterministic. The file is
+    published through a sibling temp file, fsync, atomic replace, and
+    parent-directory fsync so a crash cannot leave a torn ledger.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = ledger.model_dump(mode="json")
-    path.write_text(canonical_json(payload), encoding="utf-8")
+    _atomic_write_text(path, canonical_json(payload))
 
 
 def read_ledger(path: Path) -> LiveRunLedger:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return LiveRunLedger.model_validate(payload)
+
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        text=False,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload.encode("utf-8"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        _fsync_parent_dir(path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise

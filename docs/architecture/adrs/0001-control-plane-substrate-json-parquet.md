@@ -10,8 +10,8 @@ The pre-implementation design draft for the persistent paper-trading bot propose
 
 Reconnaissance against `master` at the time of the design lock surfaced that Phases 1–9 of the deployment plan had already shipped, with a different substrate:
 
-- `run_ledger.json` — deterministic, hashed run identity (`run_id = sha256(canonical_json(payload))`), per PR #176 / Phase C-1.
-- `decisions.parquet` (intent + indicator snapshot per bar), `executions.parquet` (broker fill events), `trades.parquet` (closed-trade ledger) — per `app/engine/live/artifacts.py`.
+- `run_ledger.json` — deterministic, hashed run identity (`run_id = sha256(canonical_json(payload))`), written by tmp+fsync+atomic replace.
+- `decisions.parquet` (intent + indicator snapshot per bar), `executions.parquet` (broker fill events), `trades.parquet` (closed-trade ledger) — stable artifact paths that may be single parquet files for legacy runs or parquet dataset directories with one atomically-published `part-*.parquet` segment per flush, per `app/engine/live/artifacts.py`.
 - `halt.flag` / `poisoned.flag` — atomic kill-switch / refuse-resume signals — per PRs #190, #193.
 - `day-N.{md,json,parquet,hashes.json}` — daily three-way reconciliation report bundle with SHA-256 manifest of uncommitted artifacts — per PR #175 / Phase 9.
 - Per-strategy stable indicator-state sidecar (`artifacts/live_state/spy_ema_crossover/SPY_15m.json`) for warmup skipping — per PR #239.
@@ -34,6 +34,7 @@ This decision is independent of — and does not constrain — any future Postgr
 - Zero migration cost. The next work targets the actual gaps (order-idempotency sidecar, shadow adapter, divergence taxonomies) instead of re-substrating a working system.
 - Scientific posture preserved: deterministic run identity, hash-sealed artifact bundles, replayable evidence. A run is reproducible from a tarball of its `run_dir` plus the strategy spec hash.
 - Schema growth is per-strategy parquet driven by `StrategySpec` (see deployment plan § 16 Resolution 5), not a Postgres migration with cross-strategy lock-step.
+- Live decision/execution/trade artifact writes are crash-safe at the segment boundary: a failed flush can leave an unpublished temp file, but it cannot corrupt previously published parquet parts.
 - The command channel (file-based per ADR-implied Resolution 7) composes naturally with the substrate: command files are themselves auditable artifacts hashable into the daily manifest.
 
 **Negative:**

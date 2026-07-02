@@ -483,11 +483,26 @@ def summarize_day(
 
 
 def file_sha256(path: Path) -> str:
-    """Return the lowercase 64-char hex SHA-256 of the file's bytes."""
+    """Return a stable lowercase SHA-256 for a file or artifact directory."""
+    if path.is_dir():
+        return _directory_sha256(path)
     h = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
+    return h.hexdigest()
+
+
+def _directory_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    for child in sorted(p for p in path.rglob("*") if p.is_file()):
+        rel = child.relative_to(path).as_posix().encode("utf-8")
+        h.update(rel)
+        h.update(b"\0")
+        with child.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        h.update(b"\0")
     return h.hexdigest()
 
 

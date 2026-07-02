@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from app.engine.live import artifacts as artifacts_module
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
     DECISION_COLUMNS,
@@ -163,6 +164,67 @@ def test_decision_writer_appends_across_two_flushes(tmp_path: Path) -> None:
     df = pd.read_parquet(tmp_path / "decisions.parquet")
     assert len(df) == 4
     assert list(df["signal"]) == ["HOLD", "HOLD", "HOLD", "ENTER"]
+
+
+def test_decision_writer_flushes_to_segmented_parquet_dataset(tmp_path: Path) -> None:
+    writer = DecisionWriter(tmp_path / "decisions.parquet")
+    writer.append_row(
+        _ema_decision(
+            bar_close_ms=1_700_000_000_000,
+            signal="HOLD",
+            intended_price=501.0,
+        )
+    )
+    writer.flush()
+
+    dataset_dir = tmp_path / "decisions.parquet"
+    assert dataset_dir.is_dir()
+    assert sorted(p.name for p in dataset_dir.iterdir()) == ["part-000001.parquet"]
+
+
+def test_decision_writer_interrupted_segment_publish_keeps_prior_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "decisions.parquet"
+    writer = DecisionWriter(path)
+    writer.append_row(
+        _ema_decision(
+            bar_close_ms=1_700_000_000_000,
+            signal="HOLD",
+            intended_price=501.0,
+        )
+    )
+    writer.flush()
+
+    writer.append_row(
+        _ema_decision(
+            bar_close_ms=1_700_000_900_000,
+            signal="ENTER",
+            intended_price=502.0,
+        )
+    )
+    real_replace = artifacts_module.os.replace
+
+    def crash_before_publish(src: object, dst: object) -> None:
+        if Path(dst).name == "part-000002.parquet":
+            raise OSError("simulated crash before segment publish")
+        real_replace(src, dst)
+
+    with monkeypatch.context() as m:
+        m.setattr(artifacts_module.os, "replace", crash_before_publish)
+        with pytest.raises(OSError, match="simulated crash"):
+            writer.flush()
+
+    df = pd.read_parquet(path)
+    assert len(df) == 1
+    assert list(df["signal"]) == ["HOLD"]
+    assert writer.buffered == 1
+
+    writer.flush()
+    recovered = pd.read_parquet(path)
+    assert len(recovered) == 2
+    assert list(recovered["signal"]) == ["HOLD", "ENTER"]
 
 
 def test_decision_writer_round_trips_through_reconcile_loader(tmp_path: Path) -> None:
@@ -372,9 +434,9 @@ def test_execution_writer_shadow_fill_persists_null_exec_time_ms_vcr_p3_l(tmp_pa
 
 def test_execution_writer_round_trips_exec_time_ms_through_concat_vcr_p3_l(tmp_path: Path) -> None:
     """Appending across two flushes (the live runtime's actual append
-    cadence: read existing → concat → rewrite) preserves ``exec_time_ms``
+    cadence: one atomic parquet segment per flush) preserves ``exec_time_ms``
     on every row, with the second flush's broker time independent of the
-    first row's. Guards the writer's per-flush rewrite path."""
+    first row's. Guards the writer's per-flush append path."""
     path = tmp_path / "executions.parquet"
     writer = ExecutionWriter(path)
     writer.append_row(

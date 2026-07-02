@@ -196,10 +196,10 @@ def _run_specs_with_repair_artifacts(runs: Iterable[dict[str, Any]]) -> Iterable
         if (run_dir / "broker_callbacks.jsonl").is_file():
             yield run
             continue
-        if (run_dir / "executions.parquet").is_file():
+        if _parquet_artifact_exists(run_dir / "executions.parquet"):
             yield run
             continue
-        if (run_dir / "trades.parquet").is_file():
+        if _parquet_artifact_exists(run_dir / "trades.parquet"):
             yield run
             continue
 
@@ -301,13 +301,17 @@ def _file_lock(path: Path) -> Iterable[None]:
 
 
 def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
+    if not _parquet_artifact_exists(path):
         return []
     try:
         return pq.read_table(path).to_pylist()
     except (OSError, pa.ArrowException) as exc:
         logger.warning("activity repair parquet read failed for %s: %s", path, exc, exc_info=True)
         return []
+
+
+def _parquet_artifact_exists(path: Path) -> bool:
+    return path.is_file() or path.is_dir()
 
 
 def _first_symbol(rows: list[dict[str, Any]]) -> str | None:
