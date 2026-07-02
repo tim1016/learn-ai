@@ -170,13 +170,14 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     """Return the confined account artifact directory for one account id.
 
     ``account_id`` can arrive from URL path segments on operator recovery
-    endpoints. Validate to a single canonical account-id segment, reconstruct
+    endpoints. Require the already-canonical account-id spelling, reconstruct
     the path component from the regex match, then resolve and assert it remains
     below ``<artifacts_root>/accounts``. The match-group reconstruction plus
     containment check mirrors the repo's CodeQL-clean path-injection barrier.
     """
-    canonical = account_id.strip().upper()
-    match = _ACCOUNT_ID_RE.fullmatch(canonical)
+    if account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
     if match is None:
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     safe_account_id = match.group(0)

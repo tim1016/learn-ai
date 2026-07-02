@@ -58,13 +58,9 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
     assert account_artifacts_root(tmp_path, "DU123456") == tmp_path / "accounts" / "DU123456"
 
 
-def test_account_artifacts_root_canonicalizes_account_id(tmp_path: Path) -> None:
-    assert account_artifacts_root(tmp_path, "  du123456  ") == tmp_path / "accounts" / "DU123456"
-
-
 @pytest.mark.parametrize(
     "account_id",
-    ["DU.123456", "DU-123456", "DU 123456", "DU/123456", "../DU123456"],
+    ["du123456", " DU123456 ", "DU.123456", "DU-123456", "DU 123456", "DU/123456", "../DU123456"],
 )
 def test_account_artifacts_root_rejects_path_like_account_id(
     tmp_path: Path,
