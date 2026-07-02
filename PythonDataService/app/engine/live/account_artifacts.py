@@ -482,6 +482,9 @@ def read_account_instance_registry(
         ) from exc
     if common != root:
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    root_prefix = root if root.endswith(os.sep) else f"{root}{os.sep}"
+    if not path.startswith(root_prefix):
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     try:
         with open(path, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
