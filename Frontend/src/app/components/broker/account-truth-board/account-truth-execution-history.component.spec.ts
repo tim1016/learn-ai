@@ -16,6 +16,20 @@ const BOT_OWNER: AccountTruthFactOwner = {
   severity: 'ok',
 };
 
+const LOCAL_DAY_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function localDayLabel(ms: number): string {
+  const parts = LOCAL_DAY_FORMATTER.formatToParts(new Date(ms));
+  const year = parts.find((part) => part.type === 'year')?.value ?? '0000';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '00';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '00';
+  return `${year}-${month}-${day}`;
+}
+
 function execution(
   overrides: Partial<AccountTruthExecutionRow> = {},
 ): AccountTruthExecutionRow {
@@ -46,9 +60,10 @@ function execution(
 
 describe('AccountTruthExecutionHistoryComponent', () => {
   it('renders broker execution details grouped by owner and day', () => {
+    const row = execution();
     TestBed.configureTestingModule({});
     const fixture = TestBed.createComponent(AccountTruthExecutionHistoryComponent);
-    fixture.componentRef.setInput('executions', [execution()]);
+    fixture.componentRef.setInput('executions', [row]);
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
@@ -57,7 +72,7 @@ describe('AccountTruthExecutionHistoryComponent', () => {
     expect(text).toContain('Bot attribution');
     expect(text).toContain('Stamped and echoed');
     expect(text).toContain('Bot A');
-    expect(text).toContain('2026-07-01');
+    expect(text).toContain(localDayLabel(row.exec_time_ms ?? row.observed_at_ms));
     expect(text).toContain('SPY');
     expect(text).toContain('$450.25');
     expect(text).toContain('Broker order ID');

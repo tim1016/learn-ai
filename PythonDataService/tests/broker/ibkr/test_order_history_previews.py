@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -130,6 +131,26 @@ async def test_list_completed_orders_falls_back_to_order_filled_quantity() -> No
     assert rows[0].quantity == 1.0
     assert rows[0].cumulative_filled == 1.0
     assert rows[0].remaining == 0.0
+
+
+@pytest.mark.asyncio
+async def test_list_completed_orders_rejects_non_finite_quantity_fallbacks() -> None:
+    client = _client()
+    client.ib.reqCompletedOrdersAsync = AsyncMock(
+        return_value=[
+            _trade(
+                total_quantity=math.nan,
+                filled_quantity=math.nan,
+                status_filled=math.nan,
+            )
+        ]
+    )
+
+    rows = await list_completed_orders(client)
+
+    assert len(rows) == 1
+    assert rows[0].quantity == 0.0
+    assert rows[0].cumulative_filled == 0.0
 
 
 @pytest.mark.asyncio
