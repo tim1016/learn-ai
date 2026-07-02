@@ -208,3 +208,15 @@ def test_seq_continues_across_reopen(tmp_path: Path) -> None:
     # A fresh writer (new process) on the same file resumes the seq.
     second = IntentWal(path)
     assert _pending(second).seq == 3
+
+
+def test_cached_writer_refreshes_after_external_append(tmp_path: Path) -> None:
+    path = tmp_path / "intent_events.jsonl"
+    portfolio_wal = IntentWal(path)
+    _pending(portfolio_wal)
+
+    reconcile_wal = IntentWal(path)
+    assert _pending(reconcile_wal).seq == 2
+
+    assert _pending(portfolio_wal).seq == 3
+    assert [event.seq for event in portfolio_wal.read_tail()] == [1, 2, 3]
