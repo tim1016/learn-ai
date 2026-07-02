@@ -36,7 +36,7 @@ The layout is now ranked by the six trader questions above. Cards default to a o
 
 ## Honest contracts
 
-- **Timestamps** — wire and storage are `int64 ms UTC` end-to-end. Display-side strings render in `America/New_York` for the operator. See `numerical-rigor.md` § Timestamp rigor.
+- **Timestamps** — wire and storage are Unix epoch milliseconds UTC (`int64 ms UTC`) end-to-end. Display-side strings render in the viewer/operator's local timezone by default; ET/exchange-time displays must be explicitly labeled. See `numerical-rigor.md` § Timestamp rigor.
 - **Position posture** — Current Risk (PR9) filters zero-qty entries out before deciding `Flat / Long / Short / Mixed`. A residual stale entry can't flip the posture silently.
 - **Daily cap** — the count is read verbatim from `readiness.gates` where `name === 'orders_cap'`. When the engine has not emitted a typed cap, the card says so honestly ("Daily cap status not reported by the engine") — no fabricated counter.
 - **Incidents** — backend `IncidentCategory` enum + `parse_incidents` classifier (#565 PR 1, #566) is the single source of truth. The frontend `INCIDENT_COPY` map (PR6) is operator-language presentation only; unknown categories degrade to "Unknown error — see raw traceback."

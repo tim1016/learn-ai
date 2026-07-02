@@ -170,7 +170,7 @@ Routes live in `app/routers/broker.py` and `app/routers/broker_account_truth.py`
 
 **SSE format**: every event line is JSON-encoded payload prefixed with `data: `. The frontend uses `EventSource` via `Frontend/src/app/services/broker-sse.ts`. The TDD §3.5 explains why SSE rather than WebSocket.
 
-**Timestamp policy**: every payload field literally named `timestamp`, `ts`, `time`, `*_ms`, or `*_at_ms` is `int64 ms UTC`. `string` / `DateTime` typing on these fields is banned at the model layer. See [`numerical-rigor.md`](../.claude/rules/numerical-rigor.md) "Timestamp rigor."
+**Timestamp policy**: every payload field literally named `timestamp`, `ts`, `time`, `*_ms`, or `*_at_ms` is Unix epoch milliseconds UTC (`int64 ms UTC`). `string` / `DateTime` typing on these fields is banned at the model layer. Frontend presentation renders those timestamps in the viewer/user's local timezone by default; any ET/exchange-time view must say so explicitly. See [`numerical-rigor.md`](../.claude/rules/numerical-rigor.md) "Timestamp rigor."
 
 ---
 

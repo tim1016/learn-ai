@@ -157,7 +157,6 @@ These are the rules most likely to be violated; full text is in `.claude/rules/`
   - `port-indicator` — porting math from a reference into `PythonDataService/`
   - `reconcile-backtest` — diffing two backtest runs, divergence taxonomy
   - `extract-math-from-paper` — turning a PDF paper into testable Python
-  - `trading-domain` — auto-loads; defines bar/timestamp/signal vocabulary
 
 ## Anti-patterns to reject on sight
 

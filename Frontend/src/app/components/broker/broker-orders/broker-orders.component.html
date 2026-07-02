@@ -214,90 +214,119 @@
       <button
         type="button"
         class="ghost-btn small"
-        (click)="refreshOpenOrders()"
-        aria-label="Refresh open orders"
-        title="Refresh open orders"
+        (click)="refreshLedger()"
+        aria-label="Refresh order ledger"
+        title="Refresh order ledger"
       >
         <i class="pi pi-refresh" aria-hidden="true"></i>
       </button>
     </header>
 
-    @if (openOrdersError(); as err) {
+    @if (ledgerSourceNotices().length > 0) {
+      <div class="ledger-source-notices" aria-label="Order ledger source notices">
+        @for (notice of ledgerSourceNotices(); track trackLedgerNotice($index, notice)) {
+          <section class="ledger-source-notice" [class.warn]="notice.tone === 'warn'">
+            <strong>{{ notice.headline }}</strong>
+            <span>{{ notice.detail }}</span>
+          </section>
+        }
+      </div>
+    }
+
+    @if (ledgerError(); as err) {
       <app-section-error
         [error]="err"
-        contextWhat="We couldn't load open orders."
-        (retry)="refreshOpenOrders()"
+        contextWhat="We couldn't load the order ledger."
+        (retry)="refreshLedger()"
       />
     }
-    @if (openOrdersLoading()) {
+    @if (ledgerLoading() && ledgerOrders().length === 0) {
       <p class="muted">Loading ledger…</p>
     } @else if (ledgerOrders().length === 0) {
       <p class="muted">No broker orders in the current projection.</p>
     } @else {
+      @if (ledgerLoading()) {
+        <p class="muted">Refreshing ledger…</p>
+      }
+      <div class="source-legend" aria-label="Order ledger field source legend">
+        <span class="source-pill source-broker">Broker direct</span>
+        <span class="source-pill source-mixed">Stamped and echoed</span>
+      </div>
       <div class="table-wrap">
         <table class="orders-table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Symbol</th>
-              <th>Owner</th>
-              <th>Stage</th>
-              <th>Side</th>
-              <th class="num">Qty</th>
-              <th>Type</th>
-              <th class="num">Limit</th>
-              <th>Status</th>
-              <th class="num">Filled</th>
-              <th></th>
+              <th class="source-broker">Symbol</th>
+              <th class="source-mixed">Order ref</th>
+              <th class="source-broker">Side</th>
+              <th class="source-broker">Type</th>
+              <th class="num source-broker">Limit</th>
+              <th class="num source-broker">Fill</th>
+              <th class="source-broker">Broker order</th>
+              <th class="source-broker">Broker exec ID</th>
+              @if (hasCancellableLedgerOrders()) {
+                <th></th>
+              }
             </tr>
           </thead>
           <tbody>
-            @for (o of ledgerOrders(); track trackLedgerOrder($index, o)) {
+            @for (row of ledgerRows(); track trackLedgerRow($index, row)) {
+              @let o = row.order;
               <tr
                 [class.foreign-row]="o.owner.owner_class === 'foreign_or_unclaimed'"
                 [class.manual-row]="o.owner.owner_class === 'manual'"
               >
-                <td class="mono">{{ o.order_id }}</td>
-                <td>
-                  <span class="mono symbol-main">{{ o.symbol }}</span>
+                <td class="mono source-broker">{{ o.symbol }}</td>
+                <td class="mono token source-mixed">
                   @if (o.order_ref; as ref) {
-                    <span class="ref-chip mono" title="Broker order_ref">{{ ref }}</span>
+                    {{ ref }}
+                  } @else {
+                    —
                   }
                 </td>
-                <td>
-                  <span>{{ o.owner.owner_label }}</span>
-                  <span class="owner-tier">{{ o.owner.evidence_label }}</span>
+                <td class="mono source-broker">{{ o.action }}</td>
+                <td class="mono source-broker">{{ o.order_type }}</td>
+                <td class="num mono source-broker">{{ fmtCurrency(o.limit_price) }}</td>
+                <td class="num mono source-broker">
+                  {{ formatQuantity(o.cumulative_filled) }}/{{ formatQuantity(o.quantity) }}
                 </td>
-                <td>
-                  <span class="lifecycle-chip mono">{{ o.lifecycle | receiptLabel }}</span>
-                </td>
-                <td class="mono">{{ o.action }}</td>
-                <td class="num mono">{{ o.quantity }}</td>
-                <td class="mono">{{ o.order_type }}</td>
-                <td class="num mono">{{ fmtCurrency(o.limit_price) }}</td>
-                <td class="mono">{{ o.status }}</td>
-                <td class="num mono">
-                  {{ o.cumulative_filled }} / {{ o.quantity }}
-                </td>
-                <td>
-                  @let cancelReason = cancelDisabledReason(o);
-                  <button
-                    type="button"
-                    class="ghost-btn small"
-                    (click)="cancel(o.order_id)"
-                    [disabled]="cancelReason !== null"
-                    [attr.title]="cancelReason"
-                    [attr.aria-label]="cancelButtonLabel(o)"
-                  >
-                    <i class="pi pi-times" aria-hidden="true"></i>
-                  </button>
-                  @if (hasIbkrEvidence(o)) {
-                    <details class="ibkr-evidence">
-                      <summary>IBKR</summary>
-                      <pre>{{ ibkrEvidenceJson(o) }}</pre>
-                    </details>
+                <td class="mono token source-broker">
+                  @if (o.perm_id !== null) {
+                    Perm {{ o.perm_id }}
+                  } @else {
+                    —
                   }
                 </td>
+                <td class="mono token source-broker">
+                  @if (row.executionIds.length > 0) {
+                    @for (execId of row.executionIds; track execId; let last = $last) {
+                      <span class="exec-id">{{ execId }}</span>
+                      @if (!last) {
+                        <span>, </span>
+                      }
+                    }
+                  } @else {
+                    —
+                  }
+                </td>
+                @if (hasCancellableLedgerOrders()) {
+                  <td>
+                    @if (canCancelLedgerOrder(o)) {
+                      <button
+                        type="button"
+                        class="ghost-btn small action-btn"
+                        (click)="cancel(o.order_id)"
+                        [attr.aria-label]="cancelButtonLabel(o)"
+                        title="Cancel order"
+                      >
+                        <i class="pi pi-times" aria-hidden="true"></i>
+                        <span>Cancel</span>
+                      </button>
+                    } @else {
+                      <span class="muted mono">—</span>
+                    }
+                  </td>
+                }
               </tr>
             }
           </tbody>

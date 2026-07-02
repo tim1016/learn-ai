@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -67,6 +68,10 @@ def _trade(
     order_id: int = 42,
     status: str = "Filled",
     order_ref: str | None = "learn-ai/bot-a/v1:intent-a",
+    total_quantity: float = 1.0,
+    filled_quantity: float | None = None,
+    status_filled: float = 1.0,
+    remaining: float = 0.0,
 ) -> SimpleNamespace:
     contract = SimpleNamespace(secType="STK", conId=12345, symbol="SPY")
     order = SimpleNamespace(
@@ -74,15 +79,16 @@ def _trade(
         orderId=order_id,
         permId=9001,
         action="BUY",
-        totalQuantity=1.0,
+        totalQuantity=total_quantity,
         lmtPrice=0.0,
         tif="DAY",
         orderRef=order_ref or "",
+        filledQuantity=filled_quantity if filled_quantity is not None else total_quantity,
     )
     order_status = SimpleNamespace(
         status=status,
-        filled=1.0,
-        remaining=0.0,
+        filled=status_filled,
+        remaining=remaining,
         avgFillPrice=450.0,
     )
     return SimpleNamespace(
@@ -108,6 +114,43 @@ async def test_list_completed_orders_returns_terminal_order_evidence() -> None:
     assert rows[0].ibkr_evidence.request.call == "reqCompletedOrdersAsync"
     assert rows[0].ibkr_evidence.response is not None
     assert rows[0].ibkr_evidence.response.callback == "completedOrder"
+
+
+@pytest.mark.asyncio
+async def test_list_completed_orders_falls_back_to_order_filled_quantity() -> None:
+    client = _client()
+    client.ib.reqCompletedOrdersAsync = AsyncMock(
+        return_value=[
+            _trade(total_quantity=0.0, filled_quantity=1.0, status_filled=0.0)
+        ]
+    )
+
+    rows = await list_completed_orders(client)
+
+    assert len(rows) == 1
+    assert rows[0].quantity == 1.0
+    assert rows[0].cumulative_filled == 1.0
+    assert rows[0].remaining == 0.0
+
+
+@pytest.mark.asyncio
+async def test_list_completed_orders_rejects_non_finite_quantity_fallbacks() -> None:
+    client = _client()
+    client.ib.reqCompletedOrdersAsync = AsyncMock(
+        return_value=[
+            _trade(
+                total_quantity=math.nan,
+                filled_quantity=math.nan,
+                status_filled=math.nan,
+            )
+        ]
+    )
+
+    rows = await list_completed_orders(client)
+
+    assert len(rows) == 1
+    assert rows[0].quantity == 0.0
+    assert rows[0].cumulative_filled == 0.0
 
 
 @pytest.mark.asyncio

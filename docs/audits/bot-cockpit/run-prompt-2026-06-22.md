@@ -23,7 +23,6 @@ This is an implementation task, not a read-only audit. Find bugs, write regressi
 - `AGENTS.md`
 - `CONTEXT.md`
 - `CLAUDE.md` and `.claude/CLAUDE.md`
-- `.claude/skills/trading-domain/SKILL.md`
 - `.claude/skills/auto-research-tick/SKILL.md` (methodology only; do not inherit its read-only restrictions and do not modify its `state.json`)
 - `.claude/rules/angular.md`
 - `.claude/rules/python.md`

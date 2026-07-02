@@ -9,10 +9,15 @@ import type {
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtCurrency, fmtSignedNumber, fmtTimestampNy } from '../format';
+import { AccountTruthExecutionHistoryComponent } from './account-truth-execution-history.component';
 
 @Component({
   selector: 'app-account-truth-board',
-  imports: [DataSourceComponent, ReceiptLabelPipe],
+  imports: [
+    DataSourceComponent,
+    ReceiptLabelPipe,
+    AccountTruthExecutionHistoryComponent,
+  ],
   templateUrl: './account-truth-board.component.html',
   styleUrl: './account-truth-board.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -22,6 +27,7 @@ export class AccountTruthBoardComponent {
   readonly showAccountMetrics = input(false);
   readonly showOwnerSummary = input(false);
   readonly showSymbolExposures = input(false);
+  readonly showExecutionHistory = input(false);
   readonly showInvariants = input(false);
   readonly showCaveats = input(true);
 

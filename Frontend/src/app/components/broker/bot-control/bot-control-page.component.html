@@ -207,71 +207,75 @@
       </section>
     </div>
 
-    <!-- ── BOTTOM BAR + OVERLAYS ── -->
-    <div class="bottom-bar">
-      <button
-        type="button"
-        class="bottom-tab"
-        [class.active]="isBottomPanelOpen('activity')"
-        [attr.aria-expanded]="isBottomPanelOpen('activity')"
-        aria-controls="bottom-panel"
-        (click)="toggleBottomPanel('activity')"
+    <!-- ── INLINE WORKBENCH ── -->
+    <section class="workbench" aria-label="Recent activity and audit trail">
+      <p-tabs
+        class="workbench-tabs"
+        data-testid="bot-control-workbench-tabs"
+        [value]="activeWorkbenchTab()"
+        (valueChange)="setActiveWorkbenchTab($event)"
       >
-        <i class="pi pi-history" aria-hidden="true"></i>Recent activity
-      </button>
-      <button
-        type="button"
-        class="bottom-tab"
-        [class.active]="isBottomPanelOpen('audit')"
-        [attr.aria-expanded]="isBottomPanelOpen('audit')"
-        aria-controls="bottom-panel"
-        (click)="toggleBottomPanel('audit')"
-      >
-        <i class="pi pi-book" aria-hidden="true"></i>Full audit trail
-      </button>
-      <div class="bottom-spacer"></div>
-      <span class="bottom-meta">{{ s.symbol ?? 'Unknown symbol' }} · {{ s.process.state }}</span>
-    </div>
-
-    @if (bottomPanel(); as panel) {
-      <div
-        class="bottom-panel"
-        id="bottom-panel"
-        role="region"
-        [attr.aria-label]="panel === 'activity' ? 'Recent activity' : 'Full audit trail'"
-      >
-        <div class="bottom-panel-head">
-          <span class="bottom-panel-title">
-            {{ panel === 'activity' ? 'Recent activity' : 'Full audit trail' }}
-          </span>
-          <button
-            type="button"
-            class="bottom-panel-close"
-            aria-label="Close panel"
-            (click)="closeBottomPanel()"
-          >
-            <i class="pi pi-times" aria-hidden="true"></i>
-          </button>
-        </div>
-        <div class="bottom-panel-body">
-          @if (panel === 'activity') {
-            <div data-testid="bot-control-recent-activity">
-              <app-trader-guidance-timeline
-                [rows]="timelineRows()"
-                [projectionAvailable]="timelineProjectionAvailable()"
-                [canonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
-                [notice]="timelineNotice()"
-              />
-              <app-activity-tab [status]="s" />
-            </div>
-          } @else {
-            <div data-testid="bot-control-full-audit">
-              <app-workbench-audit-panel [status]="s" />
-            </div>
-          }
-        </div>
-      </div>
-    }
+        <p-tablist>
+          <p-tab value="activity">
+            <span class="workbench-tab-label">
+              <i class="pi pi-history" aria-hidden="true"></i>
+              Recent activity
+            </span>
+          </p-tab>
+          <p-tab value="audit">
+            <span class="workbench-tab-label">
+              <i class="pi pi-book" aria-hidden="true"></i>
+              Full audit trail
+            </span>
+          </p-tab>
+        </p-tablist>
+        <p-tabpanels>
+          <p-tabpanel value="activity" lazy>
+            <ng-template #content>
+              @if (activeWorkbenchTab() === 'activity') {
+                <section
+                  class="workbench-panel"
+                  data-testid="bot-control-recent-activity"
+                  aria-labelledby="recent-activity-heading"
+                >
+                  <header class="workbench-panel-head">
+                    <h2 id="recent-activity-heading">Recent activity</h2>
+                    <span class="workbench-meta">{{ s.symbol ?? 'Unknown symbol' }} · {{ s.process.state }}</span>
+                  </header>
+                  <div class="workbench-panel-body">
+                    <app-trader-guidance-timeline
+                      [rows]="timelineRows()"
+                      [projectionAvailable]="timelineProjectionAvailable()"
+                      [canonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
+                      [notice]="timelineNotice()"
+                    />
+                    <app-activity-tab [status]="s" />
+                  </div>
+                </section>
+              }
+            </ng-template>
+          </p-tabpanel>
+          <p-tabpanel value="audit" lazy>
+            <ng-template #content>
+              @if (activeWorkbenchTab() === 'audit') {
+                <section
+                  class="workbench-panel"
+                  data-testid="bot-control-full-audit"
+                  aria-labelledby="full-audit-heading"
+                >
+                  <header class="workbench-panel-head">
+                    <h2 id="full-audit-heading">Full audit trail</h2>
+                  </header>
+                  <div class="workbench-panel-body">
+                    <app-workbench-audit-panel [status]="s" />
+                  </div>
+                </section>
+              }
+            </ng-template>
+          </p-tabpanel>
+        </p-tabpanels>
+      </p-tabs>
+    </section>
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>
   }

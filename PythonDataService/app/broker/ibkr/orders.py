@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import AsyncIterator
 
 from app.broker.ibkr.api_evidence import (
@@ -78,6 +79,14 @@ _QUALIFY_TIMEOUT_S = 10.0
 # publisher's ``finally`` clears the halt and the next reconnect cycle
 # can retry the sweep cleanly.
 _RECOVERY_EXECUTIONS_TIMEOUT_S = 30.0
+
+
+def _finite_float(value: object, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) else default
 
 
 # Process-level idempotency cache: maps client_order_id → previously-issued
@@ -528,6 +537,15 @@ def _trade_to_open_order(
 
     sec_type = contract.secType
     order_type = "LMT" if order.lmtPrice and order.lmtPrice > 0 else "MKT"
+    total_quantity = _finite_float(getattr(order, "totalQuantity", 0.0))
+    filled_quantity = _finite_float(getattr(order, "filledQuantity", 0.0))
+    status_filled = _finite_float(getattr(status_obj, "filled", 0.0))
+    cumulative_filled = status_filled or filled_quantity
+    # Completed-order snapshots from IBKR can zero ``totalQuantity`` and
+    # ``orderStatus.filled`` while still preserving the actual fill size on
+    # ``Order.filledQuantity``. Keep normal open-order fields authoritative,
+    # but fall back so completed order rows match execution evidence.
+    quantity = total_quantity or filled_quantity or cumulative_filled
     return IbkrOpenOrder(
         account_id=account_id,
         order_id=int(order.orderId),
@@ -537,12 +555,12 @@ def _trade_to_open_order(
         symbol=contract.symbol,
         sec_type=sec_type,
         action=order.action,
-        quantity=float(order.totalQuantity),
+        quantity=quantity,
         order_type=order_type,
         limit_price=float(order.lmtPrice) if order.lmtPrice else None,
         time_in_force=order.tif or "DAY",
         status=getattr(status_obj, "status", "Unknown") or "Unknown",
-        cumulative_filled=float(getattr(status_obj, "filled", 0.0) or 0.0),
+        cumulative_filled=cumulative_filled,
         remaining=float(getattr(status_obj, "remaining", 0.0) or 0.0),
         avg_fill_price=(
             float(status_obj.avgFillPrice)
