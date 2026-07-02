@@ -12,6 +12,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -20,15 +21,20 @@ from app.broker.ibkr.models import (
     IbkrConnectionHealth,
     IbkrOpenOrder,
     IbkrOrderEvent,
+    IbkrPosition,
     IbkrPositionsSnapshot,
 )
 from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import executions_for_reconnect_recovery, list_open_orders
+from app.engine.live.account_artifacts import (
+    ACTIVE_INSTANCE_BINDING_STATES,
+    AccountInstanceBinding,
+)
 from app.engine.live.order_identity import (
     MANUAL_NAMESPACE_ROOT,
+    NAMESPACE_ROOT,
     NAMESPACE_SEP,
     NAMESPACE_VERSION,
-    build_bot_order_namespace,
     parse_order_ref,
 )
 from app.schemas.account_truth import (
@@ -39,6 +45,7 @@ from app.schemas.account_truth import (
     AccountTruthInvariant,
     AccountTruthMessage,
     AccountTruthOrderRow,
+    AccountTruthOwnerBindingState,
     AccountTruthOwnerSummary,
     AccountTruthPositionRow,
     AccountTruthResponse,
@@ -55,14 +62,29 @@ _ACKNOWLEDGED_STATUSES = frozenset({"PreSubmitted", "Submitted"})
 _LIMBO_STATUSES = frozenset({"PendingSubmit", "ApiPending", "PendingCancel", "Unknown"})
 
 
+@dataclass(frozen=True)
+class _NamespaceOwner:
+    strategy_instance_id: str
+    binding_state: AccountTruthOwnerBindingState
+
+
+@dataclass(frozen=True)
+class _NamespaceViews:
+    attribution_by_namespace: dict[str, _NamespaceOwner]
+    active_by_namespace: dict[str, _NamespaceOwner]
+    duplicate_active_namespaces: frozenset[str]
+    registry_unavailable: bool = False
+
+
 async def fetch_account_truth(
     client: IbkrClient,
     *,
     health: IbkrConnectionHealth,
-    known_strategy_instance_ids: Sequence[str],
+    account_instance_bindings: Sequence[AccountInstanceBinding],
+    initial_evidence_gaps: Sequence[AccountTruthEvidenceGap] = (),
 ) -> AccountTruthResponse:
     """Collect broker facts and project them into account truth."""
-    evidence_gaps: list[AccountTruthEvidenceGap] = []
+    evidence_gaps = list(initial_evidence_gaps)
 
     account_summary, positions_snapshot, open_orders, completed_orders, executions = (
         await asyncio.gather(
@@ -76,7 +98,7 @@ async def fetch_account_truth(
 
     return compose_account_truth(
         health=health,
-        known_strategy_instance_ids=known_strategy_instance_ids,
+        account_instance_bindings=account_instance_bindings,
         account=account_summary,
         positions_snapshot=positions_snapshot,
         open_orders=open_orders,
@@ -180,7 +202,7 @@ async def _collect_executions(
 def compose_account_truth(
     *,
     health: IbkrConnectionHealth,
-    known_strategy_instance_ids: Sequence[str],
+    account_instance_bindings: Sequence[AccountInstanceBinding],
     account: IbkrAccountSummary | None,
     positions_snapshot: IbkrPositionsSnapshot | None,
     open_orders: Sequence[IbkrOpenOrder],
@@ -191,20 +213,34 @@ def compose_account_truth(
 ) -> AccountTruthResponse:
     """Pure account-truth projection for tests and the live endpoint."""
     checked_at_ms = generated_at_ms or now_ms_utc()
-    known_bot_namespaces = sorted(
-        build_bot_order_namespace(sid) for sid in set(known_strategy_instance_ids)
+    account_id, account_scope_gap = _account_id_from_sources(
+        health=health,
+        account=account,
+        positions_snapshot=positions_snapshot,
+        open_orders=open_orders,
+        completed_orders=completed_orders,
+        executions=executions,
     )
-    known_namespace_set = set(known_bot_namespaces)
+    projection_gaps = list(evidence_gaps)
+    if account_scope_gap is not None:
+        projection_gaps.append(account_scope_gap)
+    registry_unavailable = any(gap.source == "instance_registry" for gap in projection_gaps)
+    namespace_views = _namespace_views(
+        account_instance_bindings,
+        account_id=account_id,
+        registry_unavailable=registry_unavailable,
+    )
+    known_bot_namespaces = sorted(namespace_views.attribution_by_namespace)
 
     open_order_rows = [
-        _order_row(order, fact_kind="open_order", known_bot_namespaces=known_namespace_set)
+        _order_row(order, fact_kind="open_order", namespace_views=namespace_views)
         for order in open_orders
     ]
     completed_order_rows = [
         _order_row(
             order,
             fact_kind="completed_order",
-            known_bot_namespaces=known_namespace_set,
+            namespace_views=namespace_views,
         )
         for order in completed_orders
     ]
@@ -212,7 +248,7 @@ def compose_account_truth(
 
     execution_rows, duplicate_exec_count = _execution_rows(
         executions,
-        known_bot_namespaces=known_namespace_set,
+        namespace_views=namespace_views,
     )
     position_rows = _position_rows(
         positions_snapshot,
@@ -235,8 +271,9 @@ def compose_account_truth(
         order_rows=order_rows,
         execution_rows=execution_rows,
         position_rows=position_rows,
-        evidence_gaps=evidence_gaps,
+        evidence_gaps=projection_gaps,
         duplicate_exec_count=duplicate_exec_count,
+        duplicate_active_namespaces=namespace_views.duplicate_active_namespaces,
     )
     invariants = _invariants(
         health=health,
@@ -244,7 +281,7 @@ def compose_account_truth(
         completed_orders=completed_order_rows,
         executions=execution_rows,
         positions=position_rows,
-        evidence_gaps=evidence_gaps,
+        evidence_gaps=projection_gaps,
         duplicate_exec_count=duplicate_exec_count,
         checked_at_ms=checked_at_ms,
     )
@@ -253,14 +290,7 @@ def compose_account_truth(
     final_verdict, final_severity = _final_verdict(
         invariants,
         blockers=blockers,
-        evidence_gaps=evidence_gaps,
-    )
-    account_id = (
-        account.account_id
-        if account is not None
-        else positions_snapshot.account_id
-        if positions_snapshot is not None
-        else health.account_id
+        evidence_gaps=projection_gaps,
     )
     return AccountTruthResponse(
         account_id=account_id,
@@ -281,7 +311,97 @@ def compose_account_truth(
         orders=order_rows,
         executions=execution_rows,
         positions=position_rows,
-        evidence_gaps=list(evidence_gaps),
+        evidence_gaps=projection_gaps,
+    )
+
+
+def _account_id_from_sources(
+    *,
+    health: IbkrConnectionHealth,
+    account: IbkrAccountSummary | None,
+    positions_snapshot: IbkrPositionsSnapshot | None,
+    open_orders: Sequence[IbkrOpenOrder],
+    completed_orders: Sequence[IbkrOpenOrder],
+    executions: Sequence[IbkrOrderEvent],
+) -> tuple[str | None, AccountTruthEvidenceGap | None]:
+    account_ids: list[str] = []
+    if account is not None and account.account_id:
+        account_ids.append(account.account_id)
+    if positions_snapshot is not None and positions_snapshot.account_id:
+        account_ids.append(positions_snapshot.account_id)
+    if health.account_id:
+        account_ids.append(health.account_id)
+    account_ids.extend(order.account_id for order in open_orders if order.account_id)
+    account_ids.extend(order.account_id for order in completed_orders if order.account_id)
+    account_ids.extend(event.account_id for event in executions if event.account_id)
+
+    by_normalized = {account_id.upper(): account_id for account_id in account_ids}
+    if len(by_normalized) == 1:
+        return next(iter(by_normalized.values())), None
+    if not by_normalized:
+        return None, None
+    return (
+        None,
+        AccountTruthEvidenceGap(
+            source="account_scope",
+            severity="critical",
+            message="Broker evidence contains conflicting account ids; account registry ownership cannot be proven.",
+        ),
+    )
+
+
+def _namespace_views(
+    bindings: Sequence[AccountInstanceBinding],
+    *,
+    account_id: str | None,
+    registry_unavailable: bool,
+) -> _NamespaceViews:
+    matching_bindings = sorted(
+        (binding for binding in bindings if _binding_matches_account(binding, account_id)),
+        key=lambda binding: (binding.recorded_at_ms, binding.strategy_instance_id, binding.run_id),
+    )
+    latest_by_namespace: dict[str, AccountInstanceBinding] = {}
+    latest_by_instance: dict[str, AccountInstanceBinding] = {}
+    for binding in matching_bindings:
+        latest_by_namespace[binding.bot_order_namespace] = binding
+        latest_by_instance[binding.strategy_instance_id] = binding
+
+    attribution_by_namespace = {
+        namespace: _namespace_owner(binding)
+        for namespace, binding in latest_by_namespace.items()
+    }
+    active_bindings_by_namespace: dict[str, list[AccountInstanceBinding]] = defaultdict(list)
+    for binding in latest_by_instance.values():
+        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES:
+            active_bindings_by_namespace[binding.bot_order_namespace].append(binding)
+    duplicate_active_namespaces = frozenset(
+        namespace
+        for namespace, namespace_bindings in active_bindings_by_namespace.items()
+        if len(namespace_bindings) > 1
+    )
+    active_by_namespace = {
+        namespace: _namespace_owner(namespace_bindings[0])
+        for namespace, namespace_bindings in active_bindings_by_namespace.items()
+        if len(namespace_bindings) == 1
+    }
+    return _NamespaceViews(
+        attribution_by_namespace=attribution_by_namespace,
+        active_by_namespace=active_by_namespace,
+        duplicate_active_namespaces=duplicate_active_namespaces,
+        registry_unavailable=registry_unavailable,
+    )
+
+
+def _binding_matches_account(binding: AccountInstanceBinding, account_id: str | None) -> bool:
+    if account_id is None:
+        return False
+    return binding.account_id.upper() == account_id.upper()
+
+
+def _namespace_owner(binding: AccountInstanceBinding) -> _NamespaceOwner:
+    return _NamespaceOwner(
+        strategy_instance_id=binding.strategy_instance_id,
+        binding_state=binding.lifecycle_state,
     )
 
 
@@ -289,12 +409,12 @@ def _order_row(
     order: IbkrOpenOrder,
     *,
     fact_kind: str,
-    known_bot_namespaces: set[str],
+    namespace_views: _NamespaceViews,
 ) -> AccountTruthOrderRow:
-    owner = _owner_for_order_ref(order.order_ref, known_bot_namespaces)
+    owner = _owner_for_order_ref(order.order_ref, namespace_views)
     lifecycle = _order_lifecycle(order.status, order.remaining)
-    if fact_kind == "open_order" and owner.owner_class == "foreign_or_unclaimed":
-        owner = owner.model_copy(update={"severity": "critical"})
+    if fact_kind == "open_order":
+        owner = _live_risk_owner(owner)
     elif fact_kind == "completed_order" and owner.owner_class == "foreign_or_unclaimed":
         owner = owner.model_copy(update={"severity": "warning"})
     lifecycle_id = (
@@ -333,7 +453,7 @@ def _order_row(
 def _execution_rows(
     executions: Sequence[IbkrOrderEvent],
     *,
-    known_bot_namespaces: set[str],
+    namespace_views: _NamespaceViews,
 ) -> tuple[list[AccountTruthExecutionRow], int]:
     rows_by_exec_id: dict[str, AccountTruthExecutionRow] = {}
     ordered_exec_ids: list[str] = []
@@ -341,7 +461,7 @@ def _execution_rows(
     for event in executions:
         if not event.exec_id:
             continue
-        row = _execution_row(event, known_bot_namespaces=known_bot_namespaces)
+        row = _execution_row(event, namespace_views=namespace_views)
         existing = rows_by_exec_id.get(event.exec_id)
         if existing is not None:
             duplicate_count += 1
@@ -355,9 +475,9 @@ def _execution_rows(
 def _execution_row(
     event: IbkrOrderEvent,
     *,
-    known_bot_namespaces: set[str],
+    namespace_views: _NamespaceViews,
 ) -> AccountTruthExecutionRow:
-    owner = _owner_for_order_ref(event.order_ref, known_bot_namespaces)
+    owner = _owner_for_order_ref(event.order_ref, namespace_views)
     if owner.owner_class == "foreign_or_unclaimed":
         owner = owner.model_copy(update={"severity": "critical"})
     return AccountTruthExecutionRow(
@@ -433,15 +553,17 @@ def _position_rows(
         else:
             owner_keys = known_owners_by_con_id.get(position.con_id, set())
             if len(owner_keys) == 1:
-                owner = next(iter(owner_keys))
+                owner = _live_risk_owner(next(iter(owner_keys)))
             elif len(owner_keys) > 1:
+                owner_binding_state = _mixed_owner_binding_state(owner_keys)
                 owner = AccountTruthFactOwner(
                     owner_class="mixed_known",
                     owner_key="mixed",
                     owner_label="Mixed known owners",
                     evidence_tier="mixed_known",
                     evidence_label="Mixed known evidence",
-                    severity="warning",
+                    owner_binding_state=owner_binding_state,
+                    severity="critical" if owner_binding_state == "RETIRED" else "warning",
                 )
             else:
                 owner = _foreign_owner("unclaimed broker exposure", severity="critical")
@@ -456,11 +578,7 @@ def _position_rows(
                 market_value=position.market_value,
                 owner=owner,
                 headline=_fact_headline(owner, "position"),
-                detail=(
-                    f"{position.symbol} position is attributed to {owner.owner_label}."
-                    if owner.owner_class != "foreign_or_unclaimed"
-                    else f"{position.symbol} position has no known bot/manual evidence."
-                ),
+                detail=_position_detail(position, owner),
                 fetched_at_ms=position.fetched_at_ms,
             )
         )
@@ -469,7 +587,7 @@ def _position_rows(
 
 def _owner_for_order_ref(
     order_ref: str | None,
-    known_bot_namespaces: set[str],
+    namespace_views: _NamespaceViews,
 ) -> AccountTruthFactOwner:
     if order_ref is None:
         return _foreign_owner("missing order_ref")
@@ -477,15 +595,41 @@ def _owner_for_order_ref(
         namespace, _intent_id = parse_order_ref(order_ref)
     except ValueError:
         return _foreign_owner("unparseable order_ref")
-    if namespace in known_bot_namespaces:
-        sid = _strategy_instance_id_from_namespace(namespace)
+    if namespace in namespace_views.duplicate_active_namespaces:
+        return AccountTruthFactOwner(
+            owner_class="mixed_known",
+            owner_key="duplicate_active_namespace",
+            owner_label="Duplicate active namespace",
+            evidence_tier="mixed_known",
+            evidence_label="Ambiguous active registry namespace",
+            owner_binding_state="UNKNOWN",
+            severity="critical",
+        )
+    namespace_owner = namespace_views.active_by_namespace.get(
+        namespace,
+        namespace_views.attribution_by_namespace.get(namespace),
+    )
+    if namespace_owner is not None:
+        sid = namespace_owner.strategy_instance_id
         return AccountTruthFactOwner(
             owner_class="bot",
             owner_key=sid,
             owner_label=f"Bot {sid}",
             evidence_tier="bot_order_ref",
             evidence_label="Bot-stamped order ref",
+            owner_binding_state=namespace_owner.binding_state,
             severity="ok",
+        )
+    if namespace_views.registry_unavailable and _is_bot_namespace(namespace):
+        sid = _strategy_instance_id_from_bot_namespace(namespace)
+        return AccountTruthFactOwner(
+            owner_class="bot",
+            owner_key=sid,
+            owner_label=f"Bot {sid}",
+            evidence_tier="bot_order_ref",
+            evidence_label="Bot-stamped order ref; registry unavailable",
+            owner_binding_state="UNKNOWN",
+            severity="critical",
         )
     if _is_manual_namespace(namespace):
         operator = namespace.split(NAMESPACE_SEP)[1]
@@ -495,9 +639,35 @@ def _owner_for_order_ref(
             owner_label=f"Manual {operator}",
             evidence_tier="app_minted_manual",
             evidence_label="App-minted manual order ref",
+            owner_binding_state="UNKNOWN",
             severity="ok",
         )
     return _foreign_owner("namespace is not registered")
+
+
+def _live_risk_owner(owner: AccountTruthFactOwner) -> AccountTruthFactOwner:
+    if owner.owner_class == "foreign_or_unclaimed":
+        return owner.model_copy(update={"severity": "critical"})
+    if _is_retired_owner(owner):
+        return owner.model_copy(update={"severity": "critical"})
+    return owner
+
+
+def _is_retired_owner(owner: AccountTruthFactOwner) -> bool:
+    return owner.owner_class in {"bot", "mixed_known"} and owner.owner_binding_state == "RETIRED"
+
+
+def _mixed_owner_binding_state(
+    owners: set[AccountTruthFactOwner],
+) -> AccountTruthOwnerBindingState:
+    states = {owner.owner_binding_state for owner in owners}
+    if "ACTIVE" in states:
+        return "ACTIVE"
+    if "DEPLOYED" in states:
+        return "DEPLOYED"
+    if states == {"RETIRED"}:
+        return "RETIRED"
+    return "UNKNOWN"
 
 
 def _foreign_owner(reason: str, *, severity: AccountTruthSeverity = "warning") -> AccountTruthFactOwner:
@@ -507,6 +677,7 @@ def _foreign_owner(reason: str, *, severity: AccountTruthSeverity = "warning") -
         owner_label="Foreign or unclaimed",
         evidence_tier="foreign_or_unclaimed",
         evidence_label="No known ownership evidence",
+        owner_binding_state="UNKNOWN",
         severity=severity,
     )
 
@@ -531,9 +702,18 @@ def _is_manual_namespace(namespace: str) -> bool:
     )
 
 
-def _strategy_instance_id_from_namespace(namespace: str) -> str:
+def _is_bot_namespace(namespace: str) -> bool:
     parts = namespace.split(NAMESPACE_SEP)
-    return parts[1] if len(parts) >= 3 else namespace
+    return (
+        len(parts) == 3
+        and parts[0] == NAMESPACE_ROOT
+        and parts[1] != ""
+        and parts[2] == NAMESPACE_VERSION
+    )
+
+
+def _strategy_instance_id_from_bot_namespace(namespace: str) -> str:
+    return namespace.split(NAMESPACE_SEP)[1]
 
 
 def _order_lifecycle(status: str, remaining: float) -> str:
@@ -554,7 +734,11 @@ def _fact_headline(owner: AccountTruthFactOwner, label: str) -> str:
     if owner.owner_class == "foreign_or_unclaimed":
         return f"Unclaimed broker {label}"
     if owner.owner_class == "mixed_known":
+        if owner.owner_binding_state == "RETIRED":
+            return f"Retired mixed-owner {label}"
         return f"Known mixed-owner {label}"
+    if _is_retired_owner(owner):
+        return f"Retired {owner.owner_label} {label}"
     return f"{owner.owner_label} {label}"
 
 
@@ -565,6 +749,16 @@ def _order_detail(order: IbkrOpenOrder, owner: AccountTruthFactOwner) -> str:
     )
     if owner.owner_class == "foreign_or_unclaimed":
         return f"{base} No exact known namespace proves ownership."
+    if _is_retired_owner(owner) and owner.severity == "critical":
+        return (
+            f"{base} Ownership is proven by {owner.evidence_tier}, "
+            "but the owning binding is retired while exposure remains live."
+        )
+    if _is_retired_owner(owner):
+        return (
+            f"{base} Ownership is proven by {owner.evidence_tier}; "
+            "the historical owner binding is retired."
+        )
     return f"{base} Ownership is proven by {owner.evidence_tier}."
 
 
@@ -575,7 +769,20 @@ def _execution_detail(event: IbkrOrderEvent, owner: AccountTruthFactOwner) -> st
     )
     if owner.owner_class == "foreign_or_unclaimed":
         return f"{base} No exact known namespace proves ownership."
+    if _is_retired_owner(owner):
+        return (
+            f"{base} Ownership is proven by {owner.evidence_tier}; "
+            "the historical owner binding is retired."
+        )
     return f"{base} Ownership is proven by {owner.evidence_tier}."
+
+
+def _position_detail(position: IbkrPosition, owner: AccountTruthFactOwner) -> str:
+    if _is_retired_owner(owner):
+        return f"{position.symbol} position is attributed to retired {owner.owner_label}."
+    if owner.owner_class != "foreign_or_unclaimed":
+        return f"{position.symbol} position is attributed to {owner.owner_label}."
+    return f"{position.symbol} position has no known bot/manual evidence."
 
 
 def _known_owners_by_con_id(
@@ -615,9 +822,26 @@ def _messages(
     position_rows: Sequence[AccountTruthPositionRow],
     evidence_gaps: Sequence[AccountTruthEvidenceGap],
     duplicate_exec_count: int,
+    duplicate_active_namespaces: frozenset[str],
 ) -> tuple[list[AccountTruthMessage], list[AccountTruthMessage]]:
     blockers: list[AccountTruthMessage] = []
     caveats: list[AccountTruthMessage] = []
+    if duplicate_active_namespaces:
+        blockers.append(
+            AccountTruthMessage(
+                code="duplicate_active_namespace",
+                severity="critical",
+                title="Duplicate active bot namespace",
+                message=(
+                    "The account instance registry has more than one active binding for "
+                    "the same bot order namespace."
+                ),
+                forensic_facts={
+                    "namespaces": sorted(duplicate_active_namespaces),
+                    "count": len(duplicate_active_namespaces),
+                },
+            )
+        )
     unknown_open = [
         row for row in order_rows
         if row.fact_kind == "open_order" and row.owner.owner_class == "foreign_or_unclaimed"
@@ -644,6 +868,30 @@ def _messages(
                 title="Unknown current broker positions",
                 message="At least one current IBKR position is not explained by known bot/manual evidence.",
                 forensic_facts={"count": len(unknown_positions)},
+            )
+        )
+    retired_live_orders = [
+        row for row in order_rows
+        if row.fact_kind == "open_order" and _is_retired_owner(row.owner)
+    ]
+    retired_live_positions = [
+        row for row in position_rows
+        if _is_retired_owner(row.owner)
+    ]
+    if retired_live_orders or retired_live_positions:
+        blockers.append(
+            AccountTruthMessage(
+                code="retired_owner_live_exposure",
+                severity="critical",
+                title="Retired owner still has live exposure",
+                message=(
+                    "A known retired bot owns a live broker order or current position; "
+                    "the exposure is attributable but no active binding is managing it."
+                ),
+                forensic_facts={
+                    "open_order_count": len(retired_live_orders),
+                    "position_count": len(retired_live_positions),
+                },
             )
         )
     unknown_execs = [
@@ -723,6 +971,13 @@ def _invariants(
     unknown_positions = [
         row for row in positions if row.owner.owner_class == "foreign_or_unclaimed"
     ]
+    retired_open = [
+        row for row in open_orders
+        if row.fact_kind == "open_order" and _is_retired_owner(row.owner)
+    ]
+    retired_positions = [
+        row for row in positions if _is_retired_owner(row.owner)
+    ]
     missing_commissions = [row for row in executions if row.fee is None]
     gap_sources = {gap.source: gap for gap in evidence_gaps}
     liveness_ok = (
@@ -744,11 +999,11 @@ def _invariants(
         _invariant(
             "open_orders_known",
             "Open orders known",
-            ok=not unknown_open and "open_orders" not in gap_sources,
+            ok=not unknown_open and not retired_open and "open_orders" not in gap_sources,
             fail_severity="critical",
             checked_at_ms=checked_at_ms,
             evidence_count=len(open_orders),
-            fail_text="One or more live open orders are foreign or unclaimed.",
+            fail_text="One or more live open orders are foreign, unclaimed, or owned by a retired binding.",
             pass_text="Every live open order has known ownership.",
         ),
         _invariant(
@@ -774,11 +1029,11 @@ def _invariants(
         _invariant(
             "positions_match_known_ownership",
             "Positions match known ownership",
-            ok=not unknown_positions and "positions" not in gap_sources,
+            ok=not unknown_positions and not retired_positions and "positions" not in gap_sources,
             fail_severity="critical",
             checked_at_ms=checked_at_ms,
             evidence_count=len(positions),
-            fail_text="One or more current positions are not explained by known evidence.",
+            fail_text="One or more current positions are unexplained or owned by a retired binding.",
             pass_text="Current positions are explained by known ownership evidence.",
         ),
         AccountTruthInvariant(
@@ -858,7 +1113,7 @@ def _owner_summaries(
     execution_rows: Sequence[AccountTruthExecutionRow],
     position_rows: Sequence[AccountTruthPositionRow],
 ) -> list[AccountTruthOwnerSummary]:
-    aggregate: dict[tuple[str, str, str, str, str], dict[str, float]] = defaultdict(
+    aggregate: dict[tuple[str, str, str, str, str, str], dict[str, float]] = defaultdict(
         lambda: {
             "open_order_count": 0,
             "execution_count": 0,
@@ -883,6 +1138,7 @@ def _owner_summaries(
             owner_label=owner_label,
             evidence_tier=evidence_tier,  # type: ignore[arg-type]
             evidence_label=evidence_label,
+            owner_binding_state=owner_binding_state,  # type: ignore[arg-type]
             open_order_count=int(values["open_order_count"]),
             execution_count=int(values["execution_count"]),
             position_count=int(values["position_count"]),
@@ -894,17 +1150,19 @@ def _owner_summaries(
             owner_label,
             evidence_tier,
             evidence_label,
+            owner_binding_state,
         ), values in sorted(aggregate.items())
     ]
 
 
-def _summary_key(owner: AccountTruthFactOwner) -> tuple[str, str, str, str, str]:
+def _summary_key(owner: AccountTruthFactOwner) -> tuple[str, str, str, str, str, str]:
     return (
         owner.owner_class,
         owner.owner_key,
         owner.owner_label,
         owner.evidence_tier,
         owner.evidence_label,
+        owner.owner_binding_state,
     )
 
 

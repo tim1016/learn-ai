@@ -372,6 +372,7 @@ export type AccountTruthEvidenceTier =
   | 'adopted_manual'
   | 'mixed_known'
   | 'foreign_or_unclaimed';
+export type AccountTruthOwnerBindingState = 'DEPLOYED' | 'ACTIVE' | 'RETIRED' | 'UNKNOWN';
 export type AccountTruthLifecycle =
   | 'submitted'
   | 'acknowledged'
@@ -405,6 +406,7 @@ export interface AccountTruthOwnerSummary {
   owner_label: string;
   evidence_tier: AccountTruthEvidenceTier;
   evidence_label: string;
+  owner_binding_state: AccountTruthOwnerBindingState;
   open_order_count: number;
   execution_count: number;
   position_count: number;
@@ -426,6 +428,7 @@ export interface AccountTruthFactOwner {
   owner_label: string;
   evidence_tier: AccountTruthEvidenceTier;
   evidence_label: string;
+  owner_binding_state: AccountTruthOwnerBindingState;
   severity: AccountTruthSeverity;
 }
 

@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-01 (PRD-753 node-scoped cockpit receipts: backend-authored receipt prose, operator actionability, selected-node inspector scope, and honest empty evidence states).
+> **Last reviewed:** 2026-07-01 (Account Truth registry attribution update: durable account instance registry now owns account-truth bot namespace attribution; retired-owner live exposure is a read-side blocker distinct from foreign/unclaimed evidence).
 
 ---
 
@@ -168,6 +168,8 @@ state to guess around.
 | `accounts/<account_id>/owner_generation.json` | account | Current AccountOwner fencing generation and phase (`accepting`, `reconnecting`, `draining`, `frozen`). |
 | `accounts/<account_id>/account_events.jsonl` | account | Append-only audit events for account freeze recorded/cleared transitions, recovery proofs, audited overrides, owner generation/reconnect, submit lane evidence, instance registry writes, and restart-intensity breaches. |
 | Postgres lifecycle projection tables | rebuildable read model | Queryable projection over canonical artifacts for operator timelines and safety triage. Not canonical; safe to truncate and rebuild from files. |
+
+Account Truth reads `instance_registry.jsonl` as its bot ownership source. Its attribution namespace view includes every namespace ever recorded for the account, including retired bindings, so stopped bots keep ownership of terminal completed orders and historical executions. Its active-known/current-risk namespace view is limited to currently-bound `DEPLOYED` or `ACTIVE` bindings; a live working order or current position under a retired binding is emitted as `retired_owner_live_exposure`, not as clean bot-owned exposure and not as `foreign_or_unclaimed`.
 
 ### 4.1 Postgres Lifecycle Projection Read Model
 

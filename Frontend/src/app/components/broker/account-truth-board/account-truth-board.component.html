@@ -82,6 +82,7 @@
         <thead>
           <tr>
             <th>Owner</th>
+            <th>Binding</th>
             <th>Tier</th>
             <th class="num">Open</th>
             <th class="num">Execs</th>
@@ -92,6 +93,7 @@
           @for (owner of accountTruth.owner_summaries; track trackOwner($index, owner)) {
             <tr>
               <td>{{ owner.owner_label }}</td>
+              <td>{{ owner.owner_binding_state | receiptLabel }}</td>
               <td>{{ owner.evidence_label }}</td>
               <td class="mono num">{{ owner.open_order_count }}</td>
               <td class="mono num">{{ owner.execution_count }}</td>

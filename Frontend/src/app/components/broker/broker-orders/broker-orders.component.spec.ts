@@ -124,6 +124,7 @@ function setup(openOrders: IbkrOpenOrder[] = []) {
         owner_label: 'Bot test-bot',
         evidence_tier: 'bot_order_ref',
         evidence_label: 'Bot-stamped order ref',
+        owner_binding_state: 'ACTIVE',
         severity: 'ok',
       },
       headline: 'Bot test-bot open order',
@@ -179,6 +180,7 @@ function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): Accou
       owner_label: 'Bot test-bot',
       evidence_tier: 'bot_order_ref',
       evidence_label: 'Bot-stamped order ref',
+      owner_binding_state: 'ACTIVE',
       severity: 'ok',
     },
     headline: 'Bot test-bot open order',
@@ -372,6 +374,7 @@ describe('BrokerOrdersComponent — cancel reasons', () => {
         owner_label: 'Foreign or unclaimed',
         evidence_tier: 'foreign_or_unclaimed',
         evidence_label: 'No known ownership evidence',
+        owner_binding_state: 'UNKNOWN',
         severity: 'critical',
       },
     }));

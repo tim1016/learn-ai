@@ -70,6 +70,7 @@ function truth(overrides: Partial<AccountTruthResponse> = {}): AccountTruthRespo
         owner_label: 'Foreign or unclaimed',
         evidence_tier: 'foreign_or_unclaimed',
         evidence_label: 'No known ownership evidence',
+        owner_binding_state: 'UNKNOWN',
         open_order_count: 1,
         execution_count: 0,
         position_count: 0,
@@ -120,6 +121,7 @@ describe('AccountTruthBoardComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Net liquidation');
     expect(text).toContain('Foreign or unclaimed');
+    expect(text).toContain('Unknown');
     expect(text).toContain('SPY');
   });
 });
