@@ -496,7 +496,11 @@ def _strategy_state(root: Path, live_binding: LiveBinding | None, runs: list[dic
     # Guard existence: _read_parquet_tail's except tuple references a pyarrow
     # symbol absent in this version, so it raises on a missing file rather than
     # returning []. A run with no decisions yet is normal (pre-warmup).
-    rows = _read_parquet_tail(decisions_path, 1) if decisions_path.is_file() else []
+    rows = (
+        _read_parquet_tail(decisions_path, 1)
+        if _parquet_artifact_exists(decisions_path)
+        else []
+    )
     latest_decision = rows[0] if rows else None
 
     descriptors: list[dict] = []
@@ -2453,7 +2457,7 @@ def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_m
     500-ing the chart — but the warning makes corruption visible during
     incident response (PR #483 review).
     """
-    if not path.is_file():
+    if not _parquet_artifact_exists(path):
         return []
     try:
         rows = pq.read_table(path).to_pylist()
@@ -2463,6 +2467,10 @@ def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_m
     if since_ms is not None:
         rows = [r for r in rows if int(r.get(key, 0)) > since_ms]
     return rows
+
+
+def _parquet_artifact_exists(path: Path) -> bool:
+    return path.is_file() or path.is_dir()
 
 
 def _filter_rows_to_utc_day(rows: list[dict], day: date, key: str = "ts_ms") -> list[dict]:
