@@ -12,14 +12,15 @@ Three writer classes:
 Each writer is a thin file-backed buffer:
   * ``append(...)`` validates the row dict against the pinned column
     set and queues it in memory.
-  * ``flush()`` materializes the queued rows into the on-disk parquet,
-    appending to any existing rows (cumulative across the run).
+  * ``flush()`` materializes the queued rows into a new on-disk parquet
+    segment under the stable ``*.parquet`` dataset path.
   * ``close()`` final flush; safe to call multiple times.
 
-The writers are intentionally simple: per-bar append cost is negligible
-(microseconds), so we don't worry about chunked writes inside the
-day. The end-of-session ``close()`` is the only path that touches the
-file system in the steady state.
+The writers publish one atomically-replaced segment per flush so a crash
+mid-write cannot corrupt previously durable rows. Pandas/pyarrow reads
+``decisions.parquet`` / ``executions.parquet`` / ``trades.parquet`` as
+dataset directories, preserving the public artifact paths while avoiding
+whole-file in-place rewrites.
 
 Phase C-2a (this PR) ships the writers as a standalone module with
 unit tests. Wiring them into ``LiveEngine`` is Phase C-2b — see the
@@ -28,14 +29,20 @@ TODO in ``app/engine/live/live_engine.py``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
+import os
+import shutil
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
+
+from app.engine.live.live_state_sidecar import _fsync_parent_dir
 
 if TYPE_CHECKING:
     from app.engine.strategy.spec.schema import StrategySpec
@@ -111,6 +118,8 @@ TRADE_COLUMNS = (
     "pnl_points",
 )
 SIGNAL_VALUES = {"ENTER", "EXIT", "HOLD"}
+_SEGMENT_PREFIX = "part-"
+_SEGMENT_SUFFIX = ".parquet"
 
 
 class ArtifactSchemaError(ValueError):
@@ -318,12 +327,10 @@ class _ParquetAppendWriter:
     """File-backed buffered writer.
 
     Rows are appended to an in-memory list; ``flush()`` materializes
-    them to disk. If the parquet already exists the writer reads the
-    existing rows, concatenates, and rewrites — pyarrow's parquet
-    format does not support O(1) row append, so this is the simplest
-    correct implementation. For the live runtime's append cadence
-    (≤ 26 decision rows + a handful of executions per RTH day),
-    rewriting per flush is cheap.
+    them to disk as a new parquet dataset segment. The stable public
+    path remains ``*.parquet`` because pyarrow can read a directory of
+    parquet parts at that path. Legacy single-file parquet paths are
+    still appendable through an atomic read-concat-replace fallback.
 
     Subclasses provide the pinned column set; the writer enforces
     column completeness on ``append`` and column ordering on flush.
@@ -335,6 +342,7 @@ class _ParquetAppendWriter:
         self._path = path
         self._buffer: list[dict] = []
         self._closed = False
+        self._next_segment_index: int | None = None
 
     @property
     def path(self) -> Path:
@@ -364,14 +372,23 @@ class _ParquetAppendWriter:
         if not self._buffer:
             return
         new_df = pd.DataFrame(self._buffer, columns=list(self.columns))
-        if self._path.exists():
+        if self._path.is_file():
             existing = pd.read_parquet(self._path)
             combined = pd.concat([existing, new_df], ignore_index=True)
+            _write_parquet_file_atomic(self._path, combined)
         else:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            combined = new_df
-        combined.to_parquet(self._path, index=False)
+            segment_name = self._next_segment_name()
+            _write_parquet_segment_atomic(self._path, segment_name, new_df)
         self._buffer.clear()
+
+    def _next_segment_name(self) -> str:
+        if self._next_segment_index is None:
+            self._next_segment_index = _max_segment_index(self._path) + 1
+        while True:
+            segment_name = f"{_SEGMENT_PREFIX}{self._next_segment_index:06d}{_SEGMENT_SUFFIX}"
+            self._next_segment_index += 1
+            if not (self._path / segment_name).exists():
+                return segment_name
 
     def close(self) -> None:
         if self._closed:
@@ -446,6 +463,101 @@ class TradeWriter(_ParquetAppendWriter):
                 "pnl_points": float(row.pnl_points),
             }
         )
+
+
+# ──────────────────────────── Atomic parquet publish ─────────────────
+
+
+def _max_segment_index(dataset_dir: Path) -> int:
+    if not dataset_dir.is_dir():
+        return 0
+    max_index = 0
+    for child in dataset_dir.iterdir():
+        name = child.name
+        if not (
+            name.startswith(_SEGMENT_PREFIX)
+            and name.endswith(_SEGMENT_SUFFIX)
+            and child.is_file()
+        ):
+            continue
+        index_text = name[len(_SEGMENT_PREFIX) : -len(_SEGMENT_SUFFIX)]
+        if index_text.isdecimal():
+            max_index = max(max_index, int(index_text))
+    return max_index
+
+
+def _write_parquet_file_atomic(path: Path, frame: pd.DataFrame) -> None:
+    """Crash-safe fallback for appending to a legacy single-file parquet."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        frame.to_parquet(tmp_path, index=False)
+        _fsync_file(tmp_path)
+        os.replace(tmp_path, path)
+        _fsync_parent_dir(path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+def _write_parquet_segment_atomic(
+    dataset_dir: Path,
+    segment_name: str,
+    frame: pd.DataFrame,
+) -> None:
+    dataset_dir.parent.mkdir(parents=True, exist_ok=True)
+    if dataset_dir.exists():
+        _write_segment_into_existing_dataset(dataset_dir, segment_name, frame)
+        return
+
+    tmp_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{dataset_dir.name}.",
+            suffix=".tmp",
+            dir=str(dataset_dir.parent),
+        )
+    )
+    try:
+        segment_path = tmp_dir / segment_name
+        frame.to_parquet(segment_path, index=False)
+        _fsync_file(segment_path)
+        _fsync_parent_dir(segment_path)
+        os.replace(tmp_dir, dataset_dir)
+        _fsync_parent_dir(dataset_dir)
+    except Exception:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(tmp_dir)
+        raise
+
+
+def _write_segment_into_existing_dataset(
+    dataset_dir: Path,
+    segment_name: str,
+    frame: pd.DataFrame,
+) -> None:
+    tmp_path = dataset_dir.parent / f".{dataset_dir.name}.{segment_name}.tmp"
+    final_path = dataset_dir / segment_name
+    try:
+        frame.to_parquet(tmp_path, index=False)
+        _fsync_file(tmp_path)
+        os.replace(tmp_path, final_path)
+        _fsync_parent_dir(final_path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as fh:
+        os.fsync(fh.fileno())
 
 
 # ──────────────────────────── Bundle ─────────────────────────────────

@@ -448,6 +448,20 @@ def test_file_sha256_is_deterministic_for_same_bytes(tmp_path: Path) -> None:
     assert file_sha256(p1) == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
 
+def test_file_sha256_is_deterministic_for_directory_artifacts(tmp_path: Path) -> None:
+    a = tmp_path / "a.parquet"
+    b = tmp_path / "b.parquet"
+    for root in (a, b):
+        root.mkdir()
+        (root / "part-000002.parquet").write_bytes(b"second")
+        (root / "part-000001.parquet").write_bytes(b"first")
+
+    assert file_sha256(a) == file_sha256(b)
+
+    (b / "part-000003.parquet").write_bytes(b"third")
+    assert file_sha256(a) != file_sha256(b)
+
+
 def test_build_hash_manifest_returns_none_for_missing_files(tmp_path: Path) -> None:
     json_path = tmp_path / "x.json"
     json_path.write_text("{}")

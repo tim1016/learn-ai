@@ -256,14 +256,14 @@ Per day:
 artifact_hashes:
   reconcile_json:           "<sha256 of day-N.json>"
   reconcile_parquet:        "<sha256 of day-N.parquet>"
-  python_executions_parquet:"<sha256 of live_runs/<run_id>/executions.parquet (cumulative through day N)>"
-  python_trades_parquet:    "<sha256 of live_runs/<run_id>/trades.parquet (cumulative)>"
+  python_executions_parquet:"<sha256 of live_runs/<run_id>/executions.parquet file or dataset directory (cumulative through day N)>"
+  python_trades_parquet:    "<sha256 of live_runs/<run_id>/trades.parquet file or dataset directory (cumulative)>"
   qc_export_trades:         "<sha256 of artifacts/qc/<date>/trades.csv>"
   qc_export_indicators:     "<sha256 of artifacts/qc/<date>/indicators.csv>"
   run_ledger:               "<sha256 of live_runs/<run_id>/run_ledger.json (immutable after run-start)>"
 ```
 
-Hashes are computed by the reconciliation script on the bytes-as-written and embedded in the Markdown front matter or a fenced YAML block. The reconciliation script also writes a sidecar `live_runs/<run_id>/reconcile/day-N.hashes.json` containing the same hashes for machine verification — downstream tooling (and the next-morning pre-flight halt rule § 6.4 #6, #7) can verify the committed Markdown's hashes match the artifacts on disk.
+Hashes are computed by the reconciliation script on the bytes-as-written for files, or on the sorted relative path + bytes of every file in an artifact directory, and embedded in the Markdown front matter or a fenced YAML block. The reconciliation script also writes a sidecar `live_runs/<run_id>/reconcile/day-N.hashes.json` containing the same hashes for machine verification — downstream tooling (and the next-morning pre-flight halt rule § 6.4 #6, #7) can verify the committed Markdown's hashes match the artifacts on disk.
 
 Week-end `week.md` rollup includes the day-by-day hash manifest plus its own SHA-256 manifest of any week-aggregate artifacts.
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.live import run_ledger as run_ledger_module
 from app.engine.live.run_ledger import (
     LiveRunLedger,
     build_ledger,
@@ -166,6 +167,42 @@ def test_write_ledger_produces_canonical_bytes(tmp_path: Path) -> None:
     write_ledger(p1, ledger)
     write_ledger(p2, ledger)
     assert p1.read_bytes() == p2.read_bytes()
+
+
+def test_write_ledger_interrupted_replace_keeps_prior_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    ledger = build_ledger(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+    )
+    out = tmp_path / "live_runs" / ledger.run_id / "run_ledger.json"
+    write_ledger(out, ledger)
+    prior_bytes = out.read_bytes()
+
+    changed = ledger.model_copy(update={"code_sha": "def456"})
+    real_replace = run_ledger_module.os.replace
+
+    def crash_before_publish(src: object, dst: object) -> None:
+        if Path(dst) == out:
+            raise OSError("simulated crash before ledger publish")
+        real_replace(src, dst)
+
+    with monkeypatch.context() as m:
+        m.setattr(run_ledger_module.os, "replace", crash_before_publish)
+        with pytest.raises(OSError, match="simulated crash"):
+            write_ledger(out, changed)
+
+    assert out.read_bytes() == prior_bytes
+    assert read_ledger(out).code_sha == "abc123"
+    assert not list(out.parent.glob(f".{out.name}.*.tmp"))
 
 
 # ──────────────────── UI-0 identity binding (strategy_instance_id) ─────
