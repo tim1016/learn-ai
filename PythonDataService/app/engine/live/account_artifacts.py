@@ -167,8 +167,22 @@ class RestartIntensityPolicy(BaseModel):
 
 
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
+    """Return the confined account artifact directory for one account id.
+
+    ``account_id`` can arrive from URL path segments on operator recovery
+    endpoints. Validate to a single canonical account-id segment, reconstruct
+    the path component from the regex match, then resolve and assert it remains
+    below ``<artifacts_root>/accounts``. The match-group reconstruction plus
+    containment check mirrors the repo's CodeQL-clean path-injection barrier.
+    """
     safe_account_id = _validate_account_id(account_id)
-    return artifacts_root / "accounts" / safe_account_id
+    accounts_root = (artifacts_root / "accounts").resolve()
+    candidate = (accounts_root / safe_account_id).resolve()
+    try:
+        candidate.relative_to(accounts_root)
+    except ValueError as exc:
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}") from exc
+    return candidate
 
 
 def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:
@@ -674,9 +688,10 @@ def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
 
 def _validate_account_id(account_id: str) -> str:
     canonical = account_id.strip().upper()
-    if _ACCOUNT_ID_RE.fullmatch(canonical) is None:
+    match = _ACCOUNT_ID_RE.fullmatch(canonical)
+    if match is None:
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    return canonical
+    return match.group(0)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
