@@ -123,6 +123,31 @@ def test_deploy_run_rejects_instance_id_with_space(
     assert not run_root.exists()
 
 
+def test_deploy_run_rejects_instance_id_that_exceeds_order_ref_budget(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(InvalidInstanceIdError, match=r"order_ref cap"):
+        deploy_run(
+            DeployParams(
+                repo_root=tmp_path / "repo-does-not-need-to-exist",
+                strategy_spec_path=tmp_path / "spec.json",
+                qc_audit_copy_path=tmp_path / "audit.py",
+                qc_cloud_backtest_id="bt-1",
+                account_id="DU111",
+                start_date_ms=1700000000000,
+                run_root=run_root,
+                live_config={
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                },
+                strategy_instance_id="a" * 26,
+            )
+        )
+    assert not run_root.exists()
+
+
 @requires_git
 def test_deploy_run_accepts_valid_instance_id(
     repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path

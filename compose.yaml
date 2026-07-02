@@ -8,7 +8,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -33,7 +34,8 @@ services:
     container_name: my-redis
     restart: always
     ports:
-      - "6379:6379"
+      # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
+      - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "no", "--save", ""]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -62,7 +64,8 @@ services:
     container_name: polygon-data-service
     restart: always
     ports:
-      - "8000:8000"
+      # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./PythonDataService/app:/app/app:z
       # Development liveness diagnostics: the image can receive GIT_SHA at
@@ -211,7 +214,8 @@ services:
     restart: always
     working_dir: /src
     ports:
-      - "5000:8080"
+      # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
+      - "127.0.0.1:5000:8080"
     volumes:
       - ./Backend:/src:z
     environment:
@@ -276,7 +280,8 @@ services:
     container_name: my-frontend
     restart: always
     ports:
-      - "4200:4200"
+      # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
+      - "127.0.0.1:4200:4200"
     volumes:
       - ./Frontend/src:/app/src:z
       - ./Frontend/proxy.conf.json:/app/proxy.conf.json:z

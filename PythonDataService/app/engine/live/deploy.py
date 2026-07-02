@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.engine.live.identity import validate_strategy_instance_id
+from app.engine.live.order_identity import validate_broker_owned_instance_id
 from app.engine.live.pre_flight import check_clean_tree
 from app.engine.live.run_ledger import (
     LiveRunLedger,
@@ -377,6 +378,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
     if params.strategy_instance_id:
         try:
             validate_strategy_instance_id(params.strategy_instance_id)
+            validate_broker_owned_instance_id(params.strategy_instance_id)
         except ValueError as exc:
             raise InvalidInstanceIdError(str(exc)) from exc
 

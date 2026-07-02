@@ -2374,6 +2374,8 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     from datetime import datetime as _datetime
 
     from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.intent_events import IntentEventType, IntentKind
+    from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import (
         build_bot_order_namespace,
         build_order_ref,
@@ -2398,6 +2400,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     emergency_namespace = build_bot_order_namespace(f"eflat-{args.account}")
 
     log_path = args.run_dir / "emergency_flatten.log"
+    audit_wal = IntentWal(args.run_dir / "emergency_flatten_audit.jsonl")
     args.run_dir.mkdir(parents=True, exist_ok=True)
 
     def _log(message: str) -> None:
@@ -2503,6 +2506,8 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                 # the spec. Without this, ``place_paper_order`` refuses the
                 # request with OrderRefusedError and the operator's documented
                 # panic surface fails on the very first attempt.
+                intent_id = mint_intent_id()
+                order_ref = build_order_ref(emergency_namespace, intent_id)
                 spec = IbkrOrderSpec(
                     symbol=pos.symbol,
                     sec_type=pos.sec_type,
@@ -2512,9 +2517,28 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     time_in_force="DAY",
                     confirm_paper=True,
                     client_order_id=f"emergency-flatten-{pos.symbol}-{int(_datetime.now(UTC).timestamp() * 1000)}",
-                    order_ref=build_order_ref(emergency_namespace, mint_intent_id()),
+                    order_ref=order_ref,
+                )
+                audit_wal.append(
+                    event_type=IntentEventType.PENDING_INTENT,
+                    intent_id=intent_id,
+                    bot_order_namespace=emergency_namespace,
+                    order_ref=order_ref,
+                    intent_kind=IntentKind.EMERGENCY_FLATTEN,
+                    reason="emergency_flatten_liquidation",
+                    order_spec=spec.model_dump(mode="json"),
                 )
                 ack = await broker.place_order(spec)
+                audit_wal.append(
+                    event_type=IntentEventType.SUBMITTED,
+                    intent_id=intent_id,
+                    bot_order_namespace=emergency_namespace,
+                    order_ref=order_ref,
+                    intent_kind=IntentKind.EMERGENCY_FLATTEN,
+                    reason="emergency_flatten_ack",
+                    order_id=ack.order_id,
+                    perm_id=ack.perm_id,
+                )
                 _log(f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} order_id={ack.order_id}")
                 liquidated += 1
             _log(f"complete: liquidated={liquidated}")
