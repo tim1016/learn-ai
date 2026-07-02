@@ -35,9 +35,24 @@
 }
 
 .ack {
-  color: var(--bull, #26a69a);
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 152, 0, 0.42);
+  background: rgba(255, 152, 0, 0.12);
+  color: #ffe0b5;
   font-size: 0.85rem;
   margin: 0.5rem 0 0;
+}
+
+.ack-headline {
+  color: var(--text-primary, #f0f3fa);
+  font-weight: 700;
+}
+
+.ack-detail,
+.ack-meta {
+  margin: 0;
 }
 
 .mono {

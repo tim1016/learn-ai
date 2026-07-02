@@ -1471,6 +1471,132 @@ describe('BotControlPageComponent', () => {
     expect(error?.textContent).not.toContain('Could not load bot control data');
   });
 
+  it('derives destructive action completion from refreshed backend status', async () => {
+    const initial = makeStatus({ markPoisonedEnabled: true });
+    initial.operator_surface.actions.flatten_and_pause = {
+      enabled: true,
+      effect: 'LIVE_ACTUATION',
+      disabled_reason_code: null,
+      disabled_reasons: [],
+      gate_results: [],
+    };
+    const refreshed = makeStatus({ markPoisonedEnabled: true });
+    refreshed.symbol = 'QQQ';
+    const getInstanceStatus = vi.fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(refreshed);
+    const setInstanceDesiredState = vi.fn().mockResolvedValue({});
+    const flattenAndPause = vi.fn().mockResolvedValue({});
+    const issueInstanceCommand = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus,
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState,
+            flattenAndPause,
+            issueInstanceCommand,
+            reconcileInstance: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    await fixture.componentInstance.dispatchStop();
+    await flush(fixture);
+    await fixture.componentInstance.dispatchFlattenAndPause();
+    await flush(fixture);
+    fixture.componentInstance.openTypedHalt();
+    await fixture.componentInstance.confirmTypedHalt();
+    await flush(fixture);
+
+    expect(setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'stop',
+      reason: 'Stop',
+      updated_by: 'operator',
+    });
+    expect(flattenAndPause).toHaveBeenCalledWith('sid-x', {
+      action: 'pause',
+      reason: 'Flatten and pause',
+      updated_by: 'operator',
+    });
+    expect(issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
+    expect(getInstanceStatus).toHaveBeenCalledTimes(4);
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('QQQ');
+    expect(text).not.toContain('Stop succeeded');
+    expect(text).not.toContain('Flatten succeeded');
+    expect(text).not.toContain('Marked poisoned successfully');
+  });
+
+  it('renders OUTCOME_UNKNOWN destructive mutation results as an alert', async () => {
+    const setInstanceDesiredState = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'OUTCOME_UNKNOWN',
+            message: 'Stop outcome is unknown. Reconcile before retrying.',
+          },
+        },
+      }),
+    );
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState,
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    await fixture.componentInstance.dispatchStop();
+    await flush(fixture);
+
+    const error = (fixture.nativeElement as HTMLElement).querySelector('.error-banner');
+    expect(error?.textContent).toContain('Stop outcome is unknown');
+    expect(error?.textContent).toContain('OUTCOME_UNKNOWN');
+    expect(error?.textContent).not.toContain('Stop succeeded');
+  });
+
   it('keeps runbook slugs on broker routes instead of falling through to the default page', () => {
     TestBed.configureTestingModule({
       providers: [

@@ -195,13 +195,18 @@
       }
       @if (lastAck(); as ack) {
         <p class="ack" role="status">
-          Placed order #{{ ack.order_id }} — status
-          <span class="mono">{{ ack.status }}</span>
-          @if (ack.order_ref) {
-            <span class="ref-chip mono">{{ ack.order_ref }}</span>
-          }
-          at
-          {{ fmtTimestampNy(ack.placed_at_ms) }}
+          <span class="ack-headline">Order request acknowledged by IBKR API.</span>
+          <span class="ack-detail">
+            Verify the terminal state in the order ledger or live order events.
+          </span>
+          <span class="ack-meta">
+            Order #{{ ack.order_id }} · status
+            <span class="mono">{{ ack.status }}</span>
+            @if (ack.order_ref) {
+              <span class="ref-chip mono">{{ ack.order_ref }}</span>
+            }
+            · {{ fmtTimestampNy(ack.placed_at_ms) }}
+          </span>
         </p>
       }
     </form>

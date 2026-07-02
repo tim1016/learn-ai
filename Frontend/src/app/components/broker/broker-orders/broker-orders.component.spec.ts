@@ -533,6 +533,26 @@ describe('BrokerOrdersComponent — confirmPaper failure-reset', () => {
     expect(component.confirmPaper()).toBe(false);
   });
 
+  it('renders the place response as non-terminal acknowledgement copy', async () => {
+    const { fixture, component, broker } = setup();
+    broker.placeOrder.mockResolvedValueOnce({
+      order_id: 1,
+      status: 'Submitted',
+      placed_at_ms: 1_780_000_000_000,
+      order_ref: 'manual/operator/v1:intent-1',
+    });
+    await primeWhatIf(component);
+    component.confirmPaper.set(true);
+
+    await component.submitOrder();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Order request acknowledged by IBKR API.');
+    expect(text).toContain('Verify the terminal state in the order ledger or live order events.');
+    expect(text).not.toContain('Placed order');
+  });
+
   it('marks form submits as manual orders so the server mints order_ref', async () => {
     const { component, broker } = setup();
     broker.placeOrder.mockResolvedValueOnce({
