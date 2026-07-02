@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.engine.live.account_artifacts import (
+    AccountArtifactError,
     AccountInstanceBinding,
     account_artifacts_root,
     append_account_event,
@@ -30,6 +34,7 @@ from app.utils.timestamps import now_ms_utc
 
 ACCOUNT_RECONCILIATION_RECEIPT_FILENAME = "account_reconciliation_receipt.json"
 DEFAULT_ACCOUNT_RECONCILIATION_TTL_MS = 60_000
+MAX_EVIDENCE_REF_DETAIL_LENGTH = 512
 
 
 class AccountReconciliationService:
@@ -136,7 +141,11 @@ class AccountReconciliationService:
         generated_at_ms = now_ms_utc() if now_ms is None else now_ms
         canonical_account_id = normalize_account_id(account_id)
         receipt = self.read_latest_receipt(canonical_account_id)
-        bindings = read_account_instance_registry(self._artifacts_root, canonical_account_id)
+        bindings, registry_gap = _read_triage_registry(
+            artifacts_root=self._artifacts_root,
+            account_id=canonical_account_id,
+            generated_at_ms=generated_at_ms,
+        )
         active_bindings = [
             binding
             for binding in _latest_bindings(bindings)
@@ -152,6 +161,8 @@ class AccountReconciliationService:
             affected_bindings=active_bindings,
         )
         gate_rows.append(reconciliation_gate)
+        if registry_gap is not None:
+            gate_rows.append(registry_gap)
         if freeze is not None:
             gate_rows.append(
                 AccountTriageGateRow(
@@ -271,7 +282,7 @@ def _evidence_refs(account_truth: AccountTruthResponse) -> list[AccountReconcili
         AccountReconciliationEvidenceRef(
             source="account_truth",
             ref=f"account_truth:{account_truth.generated_at_ms}",
-            detail=account_truth.status_label,
+            detail=_evidence_detail(account_truth.status_label),
         )
     ]
     for blocker in account_truth.blockers:
@@ -279,7 +290,7 @@ def _evidence_refs(account_truth: AccountTruthResponse) -> list[AccountReconcili
             AccountReconciliationEvidenceRef(
                 source="account_truth.blocker",
                 ref=blocker.code,
-                detail=blocker.title,
+                detail=_evidence_detail(blocker.title),
             )
         )
     for gap in account_truth.evidence_gaps:
@@ -287,10 +298,39 @@ def _evidence_refs(account_truth: AccountTruthResponse) -> list[AccountReconcili
             AccountReconciliationEvidenceRef(
                 source="account_truth.evidence_gap",
                 ref=gap.source,
-                detail=gap.message,
+                detail=_evidence_detail(gap.message),
             )
         )
     return refs
+
+
+def _evidence_detail(detail: str | None) -> str | None:
+    if detail is None or len(detail) <= MAX_EVIDENCE_REF_DETAIL_LENGTH:
+        return detail
+    return f"{detail[: MAX_EVIDENCE_REF_DETAIL_LENGTH - 3]}..."
+
+
+def _read_triage_registry(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+    generated_at_ms: int,
+) -> tuple[list[AccountInstanceBinding], AccountTriageGateRow | None]:
+    try:
+        return read_account_instance_registry(artifacts_root, account_id), None
+    except (AccountArtifactError, OSError, json.JSONDecodeError, ValidationError) as exc:
+        return [], AccountTriageGateRow(
+            gate_id="account.instance_registry",
+            status="unknown",
+            scope="account",
+            severity="warning",
+            title="Account instance registry unavailable",
+            detail=f"Account instance registry for {account_id} could not be read: {exc}",
+            operator_next_step="REPAIR_ACCOUNT_INSTANCE_REGISTRY",
+            source="instance_registry",
+            evidence_at_ms=generated_at_ms,
+            primary_remediation="open_account_monitor",
+        )
 
 
 def _latest_bindings(bindings: list[AccountInstanceBinding]) -> list[AccountInstanceBinding]:

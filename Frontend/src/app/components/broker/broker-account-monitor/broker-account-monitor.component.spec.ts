@@ -59,6 +59,50 @@ describe('BrokerAccountMonitorComponent', () => {
       expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
     });
     expect(await screen.findByText('Account Truth is clean.')).toBeTruthy();
+    expect(screen.getAllByText('Clean').length).toBeGreaterThan(0);
+    expect(screen.getByText('Pass')).toBeTruthy();
+    expect(screen.queryByText('CLEAN')).toBeNull();
+  });
+
+  it('marks an expired latest receipt as stale', async () => {
+    const broker = new FakeBrokerService();
+    broker.latestAccountReconciliation.mockResolvedValue(
+      accountReconciliationReceipt({ expiresAtMs: Date.now() - 1_000 }),
+    );
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+      ],
+    });
+
+    expect(await screen.findByText('Stale')).toBeTruthy();
+    expect(screen.getByText('Unknown')).toBeTruthy();
+    expect(
+      screen.getByText('Receipt expired before this account monitor snapshot. Run account reconcile again.'),
+    ).toBeTruthy();
+  });
+
+  it('runs fail-closed reconciliation from broker health account when truth account is unknown', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTruth.mockResolvedValue(
+      accountTruthResponse({ accountId: null, healthAccountId: 'DU1234567' }),
+    );
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+      ],
+    });
+
+    const button = await screen.findByRole('button', {
+      name: /run account reconcile/i,
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
+    });
   });
 });
 
@@ -74,8 +118,11 @@ function gateResult(overrides: Partial<GateResult> = {}): GateResult {
   };
 }
 
-function accountReconciliationReceipt(): AccountReconciliationReceipt {
+function accountReconciliationReceipt(
+  overrides: { expiresAtMs?: number } = {},
+): AccountReconciliationReceipt {
   const truth = accountTruthResponse();
+  const generatedAtMs = Date.now();
   return {
     schema_version: 1,
     receipt_id: 'acct-recon-DU1234567-1',
@@ -88,16 +135,21 @@ function accountReconciliationReceipt(): AccountReconciliationReceipt {
     final_gate_result: gateResult(),
     account_truth: truth,
     evidence_refs: [],
-    generated_at_ms: 1_780_000_002_000,
+    generated_at_ms: generatedAtMs,
     account_truth_generated_at_ms: truth.generated_at_ms,
-    expires_at_ms: 1_780_000_062_000,
+    expires_at_ms: overrides.expiresAtMs ?? generatedAtMs + 60_000,
     ttl_ms: 60_000,
   };
 }
 
-function accountTruthResponse(): AccountTruthResponse {
+function accountTruthResponse(
+  overrides: { accountId?: string | null; healthAccountId?: string | null } = {},
+): AccountTruthResponse {
+  const accountId = overrides.accountId === undefined ? 'DU1234567' : overrides.accountId;
+  const healthAccountId =
+    overrides.healthAccountId === undefined ? 'DU1234567' : overrides.healthAccountId;
   return {
-    account_id: 'DU1234567',
+    account_id: accountId,
     final_verdict: 'clean',
     final_severity: 'ok',
     status_label: 'Clean',
@@ -111,7 +163,7 @@ function accountTruthResponse(): AccountTruthResponse {
       connected: true,
       disabled: false,
       reason: null,
-      account_id: 'DU1234567',
+      account_id: healthAccountId,
       is_paper: true,
       server_version: 178,
       fetched_at_ms: 1_780_000_000_000,

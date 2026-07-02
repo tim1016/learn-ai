@@ -69,7 +69,7 @@
           <button
             type="button"
             class="ghost-btn"
-            [disabled]="accountReconciliationLoading() || !truth.account_id"
+            [disabled]="accountReconciliationLoading() || !accountReconciliationAccountId()"
             (click)="runAccountReconciliation()"
           >
             <i class="pi pi-shield" aria-hidden="true"></i>
@@ -86,15 +86,15 @@
         } @else if (accountReconciliation(); as receipt) {
           <dl class="kv-grid receipt-grid">
             <dt>State</dt>
-            <dd class="mono">{{ receipt.state }}</dd>
+            <dd class="mono">{{ accountReconciliationDisplayState() | receiptLabel }}</dd>
             <dt>Final gate</dt>
-            <dd class="mono">{{ receipt.final_gate_result.status }}</dd>
+            <dd class="mono">{{ accountReconciliationDisplayGate() | receiptLabel }}</dd>
             <dt>Generated</dt>
             <dd class="mono">{{ fmtDateNy(receipt.generated_at_ms) }}</dd>
             <dt>Expires</dt>
             <dd class="mono">{{ fmtDateNy(receipt.expires_at_ms) }}</dd>
           </dl>
-          <p class="receipt-reason">{{ receipt.final_gate_result.operator_reason }}</p>
+          <p class="receipt-reason">{{ accountReconciliationReason() }}</p>
         } @else {
           <p class="muted">
             No account-level reconciliation receipt has been recorded for this account.

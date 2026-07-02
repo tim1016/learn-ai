@@ -9,9 +9,11 @@ from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountInstanceBinding,
+    account_artifacts_root,
     write_account_freeze,
     write_account_instance_binding,
 )
+from app.schemas.account_truth import AccountTruthEvidenceGap
 from app.services.account_reconciliation import AccountReconciliationService
 
 
@@ -31,7 +33,12 @@ def _health(*, account_id: str = "DU1234567", connected: bool = True) -> IbkrCon
     )
 
 
-def _truth(*, account_id: str = "DU1234567", connected: bool = True):
+def _truth(
+    *,
+    account_id: str = "DU1234567",
+    connected: bool = True,
+    evidence_gaps: list[AccountTruthEvidenceGap] | None = None,
+):
     return compose_account_truth(
         health=_health(account_id=account_id, connected=connected),
         account_instance_bindings=[],
@@ -40,6 +47,7 @@ def _truth(*, account_id: str = "DU1234567", connected: bool = True):
         open_orders=[],
         completed_orders=[],
         executions=[],
+        evidence_gaps=evidence_gaps or [],
         generated_at_ms=1_780_000_001_000,
     )
 
@@ -115,6 +123,30 @@ def test_receipt_blocks_broker_liveness_failure(tmp_path: Path) -> None:
     assert receipt.final_gate_result.status == "block"
 
 
+def test_receipt_bounds_long_evidence_gap_details(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    long_message = "registry failure: " + ("x" * 700)
+
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(
+            evidence_gaps=[
+                AccountTruthEvidenceGap(
+                    source="instance_registry",
+                    severity="critical",
+                    message=long_message,
+                )
+            ]
+        ),
+        now_ms=1_780_000_002_000,
+    )
+
+    gap_ref = next(ref for ref in receipt.evidence_refs if ref.source == "account_truth.evidence_gap")
+    assert gap_ref.detail is not None
+    assert len(gap_ref.detail) == 512
+    assert gap_ref.detail.endswith("...")
+
+
 def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
 
@@ -123,6 +155,25 @@ def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     assert triage.overall_gate_result.status == "unknown"
     assert triage.gate_rows[0].gate_id == "account.reconciliation"
     assert triage.gate_rows[0].status == "unknown"
+
+
+def test_triage_marks_corrupt_instance_registry_unknown(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    account_root = account_artifacts_root(tmp_path, "DU1234567")
+    account_root.mkdir(parents=True, exist_ok=True)
+    (account_root / "instance_registry.jsonl").write_text("{not-json\n", encoding="utf-8")
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_000)
+
+    assert triage.overall_gate_result.status == "unknown"
+    registry_row = next(row for row in triage.gate_rows if row.gate_id == "account.instance_registry")
+    assert registry_row.status == "unknown"
+    assert registry_row.operator_next_step == "REPAIR_ACCOUNT_INSTANCE_REGISTRY"
 
 
 def test_triage_marks_expired_receipt_unknown(tmp_path: Path) -> None:

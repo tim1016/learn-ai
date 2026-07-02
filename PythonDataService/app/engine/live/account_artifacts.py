@@ -181,12 +181,16 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     if match is None:
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     safe_account_id = match.group(0)
-    accounts_root = (artifacts_root / "accounts").resolve()
-    candidate = (accounts_root / safe_account_id).resolve()
+    accounts_root = (artifacts_root / "accounts").resolve(strict=False)
+    candidate = (accounts_root / safe_account_id).resolve(strict=False)
     try:
-        candidate.relative_to(accounts_root)
+        common = os.path.commonpath([str(candidate), str(accounts_root)])
     except ValueError as exc:
-        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}") from exc
+        raise AccountArtifactError(
+            f"account artifact path {candidate} cannot share a root with {accounts_root}"
+        ) from exc
+    if common != str(accounts_root):
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     return candidate
 
 
