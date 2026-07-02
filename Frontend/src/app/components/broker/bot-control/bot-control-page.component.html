@@ -46,58 +46,12 @@
       <div class="toolbar-spacer"></div>
 
       @if (traderGuidance(); as guidance) {
-        <div class="attention-wrap">
-          <button
-            type="button"
-            class="attention-badge"
-            [class.is-open]="attentionOpen()"
-            [attr.aria-expanded]="attentionOpen()"
-            aria-haspopup="true"
-            aria-controls="attention-dropdown"
-            data-testid="bot-control-attention-toggle"
-            (click)="toggleAttention()"
-          >
-            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-            Attention
-            @if (attentionCount() > 0) {
-              <span class="attention-count">{{ attentionCount() }}</span>
-            }
-          </button>
-
-          @if (attentionOpen()) {
-            <button
-              type="button"
-              class="dropdown-backdrop"
-              aria-label="Close attention"
-              (click)="closeAttention()"
-            ></button>
-            <div
-              class="attention-dropdown"
-              id="attention-dropdown"
-              role="region"
-              aria-label="Attention and guidance"
-              data-testid="bot-control-attention-panel"
-            >
-              <div class="attention-guidance" data-trader-copy>
-                <p class="attention-situation">{{ guidance.headline }}</p>
-                <p class="attention-why">{{ guidance.explanation }}</p>
-                <p class="attention-risk">
-                  <span class="risk-tag">Risk</span> {{ guidance.risk_headline }}
-                </p>
-              </div>
-              @if (attentionGroups().length > 0) {
-                <ul class="attention-list">
-                  @for (group of attentionGroups(); track trackAttention($index, group)) {
-                    <li [class]="'severity-' + group.severity" data-trader-copy>
-                      <strong>{{ group.headline }}</strong>
-                      <span>{{ group.explanation }}</span>
-                    </li>
-                  }
-                </ul>
-              }
-            </div>
-          }
-        </div>
+        <app-attention-dropdown
+          [guidance]="guidance"
+          [groups]="attentionGroups()"
+          [(open)]="attentionOpen"
+          (remediationSelected)="handleTraderRemediation($event)"
+        />
       }
 
       @if (renderedPrimaryRemediation(); as action) {
@@ -125,9 +79,9 @@
             <span class="slim-detail">{{ notice.message }}</span>
             <a class="warning-link" [routerLink]="['/broker/account-monitor']">Open Account Monitor</a>
             @if (notice.runbook_slug) {
-              <a class="warning-link" [href]="runbookHref(notice.runbook_slug)" target="_blank" rel="noopener">
-                Open runbook
-              </a>
+              @if (runbookHref(notice.runbook_slug); as href) {
+                <a class="warning-link" [href]="href">Open runbook</a>
+              }
             }
             <div class="slim-spacer"></div>
             <button
@@ -160,9 +114,9 @@
             }
             <a class="warning-link" [routerLink]="['/broker']">Open Broker Status</a>
             @if (banner.runbookSlug) {
-              <a class="warning-link" [href]="runbookHref(banner.runbookSlug)" target="_blank" rel="noopener">
-                Open runbook
-              </a>
+              @if (runbookHref(banner.runbookSlug); as href) {
+                <a class="warning-link" [href]="href">Open runbook</a>
+              }
             }
             <div class="slim-spacer"></div>
             <button

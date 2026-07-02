@@ -55,7 +55,12 @@
           "code": "host_process",
           "severity": "info",
           "headline": "Host process is idle",
-          "explanation": "This bot has no active process."
+          "explanation": "This bot has no active process.",
+          "operator_next_step": "Use this as context for broker/runtime proof, not as a separate broker problem.",
+          "remediation": {
+            "kind": "none",
+            "reason": "MONITOR_ONLY"
+          }
         }
       ],
       "proof_lines": [

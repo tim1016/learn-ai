@@ -132,6 +132,7 @@ class SubmitReadinessFinding:
     attention_severity: TraderAttentionSeverity
     attention_headline: str
     attention_explanation: str
+    operator_next_step: str
     remediation: TraderPrimaryRemediation
 
 
@@ -251,6 +252,7 @@ def build_submit_readiness_findings(
                 "critical",
                 "Account freeze active",
                 account_freeze.reason,
+                "Open the freeze/runbook evidence and clear the account only after broker exposure is proven.",
                 OpenRunbookAction(kind="open_runbook", slug="watchdog-halt"),
             )
         )
@@ -264,6 +266,7 @@ def build_submit_readiness_findings(
                 "critical",
                 "Submit outcome uncertain",
                 f"Unresolved intents: {intents}.",
+                "Run runtime reconciliation before retrying any submit.",
                 InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance"),
             )
         )
@@ -276,6 +279,7 @@ def build_submit_readiness_findings(
                 "warning",
                 "Uncertain intent state unknown",
                 "The durable Intent WAL uncertain-state proof is unavailable.",
+                "Run runtime reconciliation when a live process is bound, or inspect the intent WAL before retrying.",
                 InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance"),
             )
         )
@@ -288,6 +292,7 @@ def build_submit_readiness_findings(
                 "critical",
                 "Broker safety is not paper-only",
                 f"Safety verdict is {broker.safety_verdict}.",
+                "Inspect broker/account safety evidence before any trading action.",
                 OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
@@ -297,6 +302,11 @@ def build_submit_readiness_findings(
             if broker.connection == "DEGRADED"
             else "Broker disconnected or unknown"
         )
+        connection_remediation: TraderPrimaryRemediation = (
+            OpenRunbookAction(kind="open_runbook", slug="broker-reconnect")
+            if host_process.state == "RUNNING"
+            else NoPrimaryRemediationAction(kind="none", reason="WAITING_FOR_LIVE_RUNTIME")
+        )
         findings.append(
             _finding(
                 "broker_state_unproven",
@@ -304,8 +314,13 @@ def build_submit_readiness_findings(
                 "broker_connection",
                 "warning",
                 connection_headline,
-                _broker_connection_detail(broker.connection),
-                OpenRunbookAction(kind="open_runbook", slug="broker-reconnect"),
+                _broker_connection_detail(broker.connection, host_process.state),
+                (
+                    "Reconnect the broker session, then refresh broker evidence."
+                    if host_process.state == "RUNNING"
+                    else "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound."
+                ),
+                connection_remediation,
             )
         )
     if guard_state.submission_capability.state != "SATISFIED":
@@ -317,6 +332,7 @@ def build_submit_readiness_findings(
                 "warning",
                 "Submission capability is blocked",
                 f"Submission capability is {guard_state.submission_capability.state}.",
+                "Inspect the submit guard evidence before attempting another order.",
                 OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
@@ -335,20 +351,39 @@ def build_submit_readiness_findings(
                 "warning",
                 "AccountOwner not proven accepting",
                 f"AccountOwner phase is {phase}.",
+                "Wait for AccountOwner accepting/generation proof before expecting submit readiness to clear.",
                 OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
     if not _is_reconciliation_ready(reconciliation):
         state = "NOT_AVAILABLE" if reconciliation is None else reconciliation.state
+        reconciliation_remediation: TraderPrimaryRemediation = (
+            InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance")
+            if host_process.state == "RUNNING"
+            else NoPrimaryRemediationAction(kind="none", reason="WAITING_FOR_LIVE_RUNTIME")
+        )
         findings.append(
             _finding(
                 "broker_state_unproven",
                 f"RECONCILIATION_{state}",
                 "reconciliation",
                 "warning",
-                "Reconciliation is not fresh-clean",
-                f"Reconciliation state is {state}.",
-                InvokeEndpointAction(kind="invoke_endpoint", endpoint="reconcile_instance"),
+                (
+                    "Reconciliation is not fresh-clean"
+                    if host_process.state == "RUNNING"
+                    else "Runtime reconciliation is waiting for a live bot process"
+                ),
+                (
+                    f"Reconciliation state is {state}."
+                    if host_process.state == "RUNNING"
+                    else f"Reconciliation state is {state}; runtime reconciliation cannot run until a bot process is bound."
+                ),
+                (
+                    "Run reconciliation and wait for a clean or adopted receipt."
+                    if host_process.state == "RUNNING"
+                    else "Manually verify IBKR first; then start/redeploy the bot so runtime reconciliation can produce a receipt."
+                ),
+                reconciliation_remediation,
             )
         )
     for gate in _hard_blocking_readiness_gates(readiness_gates):
@@ -360,6 +395,7 @@ def build_submit_readiness_findings(
                 "warning",
                 gate.name.replace("_", " ").capitalize(),
                 gate.detail,
+                gate.gate_result.operator_next_step or "Inspect this readiness gate before retrying.",
                 OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
@@ -370,8 +406,9 @@ def build_submit_readiness_findings(
                 f"HOST_PROCESS_{host_process.state}",
                 "host_process",
                 "info",
-                "Bot process is not running",
-                f"Host process is {host_process.state}.",
+                "No live runtime is bound",
+                f"Host process is {host_process.state}; live-only commands cannot execute until a bot process is started.",
+                "Use this as context for the blocked broker/reconciliation proofs, not as a separate broker problem.",
                 NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY"),
             )
         )
@@ -384,6 +421,7 @@ def build_submit_readiness_findings(
                 "info",
                 "Trading session not accepting strategy activity",
                 trading_session.phase,
+                "Wait for the strategy session window before expecting submit readiness to clear.",
                 NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY"),
             )
         )
@@ -397,6 +435,7 @@ def _finding(
     attention_severity: TraderAttentionSeverity,
     attention_headline: str,
     attention_explanation: str,
+    operator_next_step: str,
     remediation: TraderPrimaryRemediation,
 ) -> SubmitReadinessFinding:
     return SubmitReadinessFinding(
@@ -406,6 +445,7 @@ def _finding(
         attention_severity=attention_severity,
         attention_headline=attention_headline,
         attention_explanation=attention_explanation,
+        operator_next_step=operator_next_step,
         remediation=remediation,
     )
 
@@ -472,6 +512,8 @@ def _attention_groups(findings: list[SubmitReadinessFinding]) -> list[OperatorSu
                 severity=finding.attention_severity,
                 headline=finding.attention_headline,
                 explanation=finding.attention_explanation,
+                operator_next_step=finding.operator_next_step,
+                remediation=finding.remediation,
             )
         )
     return groups
@@ -665,7 +707,9 @@ def _broker_safety_detail(safety_verdict: str) -> str:
     return "Account safety proof is not recorded."
 
 
-def _broker_connection_detail(connection: str) -> str:
+def _broker_connection_detail(connection: str, host_state: str = "RUNNING") -> str:
+    if host_state != "RUNNING" and connection == "UNKNOWN":
+        return "Broker connection has not been proven because no live runtime is currently bound."
     if connection == "CONNECTED":
         return "Broker session is connected."
     if connection == "DISCONNECTED":

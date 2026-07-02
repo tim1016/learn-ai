@@ -458,6 +458,8 @@ export interface OperatorSurfaceAttentionGroup {
   severity: TraderAttentionSeverity;
   headline: string;
   explanation: string;
+  operator_next_step: string;
+  remediation: TraderPrimaryRemediation;
 }
 
 export interface OperatorSurfaceProofLine {

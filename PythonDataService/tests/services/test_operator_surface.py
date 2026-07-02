@@ -594,7 +594,13 @@ def test_trader_guidance_submit_uncertainty_routes_to_reconcile_endpoint() -> No
     assert "UNRESOLVED_UNCERTAIN_INTENT" in surface.submit_readiness.blocking_reason_codes
     assert surface.trader_guidance.primary_remediation.kind == "invoke_endpoint"
     assert surface.trader_guidance.primary_remediation.endpoint == "reconcile_instance"
-    assert any(group.code == "submit_outcome_uncertain" for group in surface.trader_guidance.additional_attention_groups)
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "submit_outcome_uncertain"
+    )
+    assert attention.remediation.kind == "invoke_endpoint"
+    assert attention.remediation.endpoint == "reconcile_instance"
 
 
 def test_trader_guidance_missing_owner_generation_is_waiting_not_safe() -> None:
@@ -629,6 +635,33 @@ def test_trader_guidance_reconciliation_not_available_cannot_be_safe_to_submit()
     assert surface.submit_readiness.can_submit is False
     assert "RECONCILIATION_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
     assert surface.trader_guidance.primary_remediation.kind == "invoke_endpoint"
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "reconciliation"
+    )
+    assert attention.remediation.kind == "invoke_endpoint"
+    assert attention.remediation.endpoint == "reconcile_instance"
+
+
+def test_trader_guidance_reconciliation_waits_for_live_runtime_when_process_exited() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="exited"),
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "reconciliation"
+    )
+    assert attention.headline == "Runtime reconciliation is waiting for a live bot process"
+    assert attention.remediation.kind == "none"
+    assert "runtime reconciliation cannot run" in attention.explanation
 
 
 def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> None:
@@ -645,6 +678,32 @@ def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> No
     assert "RECONCILIATION_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
     assert surface.trader_guidance.primary_remediation.kind == "open_runbook"
     assert surface.trader_guidance.primary_remediation.slug == "broker-reconnect"
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "broker_connection"
+    )
+    assert attention.remediation.kind == "open_runbook"
+    assert attention.remediation.slug == "broker-reconnect"
+
+
+def test_trader_guidance_broker_connection_unknown_has_no_action_without_live_runtime() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="exited"),
+        safety_verdict_final="paper-only",
+        broker_connection_state="unknown",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+    )
+
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "broker_connection"
+    )
+    assert attention.remediation.kind == "none"
+    assert "no live runtime" in attention.explanation
 
 
 def test_trader_guidance_degraded_broker_preserves_recovering_copy() -> None:

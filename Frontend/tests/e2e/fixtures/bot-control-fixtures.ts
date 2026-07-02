@@ -30,14 +30,14 @@ const capability = (
   gate_results: [],
 });
 
-type ScenarioReadinessGate = {
+interface ScenarioReadinessGate {
   name: string;
   status: 'pass' | 'fail' | 'unknown';
   severity: 'hard' | 'soft';
   detail: string;
   suggested_action: GateSuggestedAction | null;
   suggested_action_unavailable_reason: string | null;
-};
+}
 
 export interface BotControlScenarioOptions {
   strategyInstanceId: string;
@@ -88,14 +88,24 @@ export function buildScenarioStatus(opts: BotControlScenarioOptions): LiveInstan
           severity: 'warning' as const,
           headline: 'Readiness needs attention',
           explanation: 'The backend readiness vector is not ready for live submission.',
+          operator_next_step: 'Inspect the readiness gates before attempting submit.',
+          remediation: { kind: 'none' as const, reason: 'MONITOR_ONLY' },
         }]),
     ...(brokerConnection === 'CONNECTED'
       ? []
       : [{
           code: 'broker_connection',
           severity: 'warning' as const,
-          headline: 'Broker session is disconnected',
-          explanation: 'The backend cannot prove an active broker session for this bot.',
+          headline: processState === 'running' ? 'Broker disconnected or unknown' : 'Broker proof waits for a live runtime',
+          explanation: processState === 'running'
+            ? 'The backend cannot prove an active broker session for this bot.'
+            : 'Broker connection has not been proven because no live runtime is currently bound.',
+          operator_next_step: processState === 'running'
+            ? 'Reconnect the broker session, then refresh broker evidence.'
+            : 'Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound.',
+          remediation: processState === 'running'
+            ? { kind: 'open_runbook' as const, slug: 'broker-reconnect' }
+            : { kind: 'none' as const, reason: 'WAITING_FOR_LIVE_RUNTIME' },
         }]),
   ];
   const chart = makeLifecycleChartFixture({

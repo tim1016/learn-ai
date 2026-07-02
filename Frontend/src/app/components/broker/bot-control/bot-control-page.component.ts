@@ -19,12 +19,12 @@ import type {
   LifecycleChartNode,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
-  OperatorSurfaceAttentionGroup,
   OperatorSurfaceCurrentRisk,
   OperatorSurfaceSubmitReadiness,
   OperatorNotice,
   OperatorSurfaceControlPlane,
   RiskPosture,
+  TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -33,12 +33,14 @@ import type { ActiveBotSidebarNotice } from '../../../shell/active-bot-sidebar-n
 import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
+import { resolveOperatorRunbookRoute } from './lib/operator-runbook-routes';
 import { canStartHostProcess, startHostProcessFromCapability } from './lib/start-host-process';
 import {
   renderTraderRemediation,
   type RenderedAction,
   type RendererDispatch,
 } from './lib/suggested-action-renderer';
+import { AttentionDropdownComponent } from './attention-dropdown.component';
 import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
@@ -115,6 +117,7 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     ActivityTabComponent,
     TypedHaltConfirmComponent,
     OverviewActionsComponent,
+    AttentionDropdownComponent,
     TraderGuidanceTimelineComponent,
     NodeInspectorComponent,
     WorkbenchAuditPanelComponent,
@@ -259,7 +262,7 @@ export class BotControlPageComponent {
   });
 
   readonly traderGuidance = computed(() => this.status()?.operator_surface.trader_guidance ?? null);
-  readonly attentionGroups = computed<OperatorSurfaceAttentionGroup[]>(
+  readonly attentionGroups = computed(
     () => this.traderGuidance()?.additional_attention_groups ?? [],
   );
   readonly attentionCount = computed<number>(() => this.attentionGroups().length);
@@ -418,11 +421,18 @@ export class BotControlPageComponent {
   }
 
   onGateOpenRunbook(slug: string): void {
-    window.open(this.runbookHref(slug), '_blank', 'noopener');
+    const route = resolveOperatorRunbookRoute(slug, this.instanceId());
+    if (route === null) {
+      this.mutationError.set(`No operator route is registered for runbook: ${slug}`);
+      return;
+    }
+    void this.router.navigate(route.commands);
   }
 
-  runbookHref(slug: string): string {
-    return `/runbooks/${encodeURIComponent(slug)}`;
+  runbookHref(slug: string): string | null {
+    const route = resolveOperatorRunbookRoute(slug, this.instanceId());
+    if (route === null) return null;
+    return route.commands.map((part) => encodeURI(part)).join('/');
   }
 
   dispatchOverviewAction(action: LifecycleChartActionId): void {
@@ -472,6 +482,12 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
+  handleTraderRemediation(remediation: TraderPrimaryRemediation): void {
+    const action = renderTraderRemediation(remediation, this.primaryRemediationDispatch);
+    if (action === null) return;
+    action.invoke();
+  }
+
   toggleAttention(): void {
     this.attentionOpen.update((open) => !open);
   }
@@ -494,10 +510,6 @@ export class BotControlPageComponent {
   dismissBrokerEvidenceBanner(): void {
     const notice = this.brokerEvidenceNotice();
     if (notice) this.dismissedBrokerEvidenceSig.set(this.brokerEvidenceSignature(notice));
-  }
-
-  trackAttention(_: number, group: OperatorSurfaceAttentionGroup): string {
-    return group.code;
   }
 
   async dispatchReconcileNow(): Promise<void> {
@@ -724,6 +736,25 @@ export class BotControlPageComponent {
   }
 
   private humanError(err: unknown): string {
+    if (err instanceof HttpErrorResponse) {
+      const detail = err.error && typeof err.error === 'object'
+        ? (err.error as { detail?: unknown }).detail
+        : null;
+      if (typeof detail === 'string') return detail;
+      if (detail && typeof detail === 'object') {
+        const body = detail as { message?: unknown; reason_code?: unknown; disabled_reason_code?: unknown };
+        const message = typeof body.message === 'string' ? body.message : null;
+        const reason = typeof body.reason_code === 'string'
+          ? body.reason_code
+          : typeof body.disabled_reason_code === 'string'
+            ? body.disabled_reason_code
+            : null;
+        if (message && reason) return `${message} (${reason})`;
+        if (message) return message;
+        if (reason) return reason;
+      }
+      if (err.message) return err.message;
+    }
     if (err instanceof Error && err.message) return err.message;
     return 'Could not load bot control data.';
   }
