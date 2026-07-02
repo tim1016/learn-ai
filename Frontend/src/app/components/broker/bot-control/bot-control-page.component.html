@@ -231,39 +231,43 @@
         </p-tablist>
         <p-tabpanels>
           <p-tabpanel value="activity">
-            <section
-              class="workbench-panel"
-              data-testid="bot-control-recent-activity"
-              aria-labelledby="recent-activity-heading"
-            >
-              <header class="workbench-panel-head">
-                <h2 id="recent-activity-heading">Recent activity</h2>
-                <span class="workbench-meta">{{ s.symbol ?? 'Unknown symbol' }} · {{ s.process.state }}</span>
-              </header>
-              <div class="workbench-panel-body">
-                <app-trader-guidance-timeline
-                  [rows]="timelineRows()"
-                  [projectionAvailable]="timelineProjectionAvailable()"
-                  [canonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
-                  [notice]="timelineNotice()"
-                />
-                <app-activity-tab [status]="s" />
-              </div>
-            </section>
+            @if (activeWorkbenchTab() === 'activity') {
+              <section
+                class="workbench-panel"
+                data-testid="bot-control-recent-activity"
+                aria-labelledby="recent-activity-heading"
+              >
+                <header class="workbench-panel-head">
+                  <h2 id="recent-activity-heading">Recent activity</h2>
+                  <span class="workbench-meta">{{ s.symbol ?? 'Unknown symbol' }} · {{ s.process.state }}</span>
+                </header>
+                <div class="workbench-panel-body">
+                  <app-trader-guidance-timeline
+                    [rows]="timelineRows()"
+                    [projectionAvailable]="timelineProjectionAvailable()"
+                    [canonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
+                    [notice]="timelineNotice()"
+                  />
+                  <app-activity-tab [status]="s" />
+                </div>
+              </section>
+            }
           </p-tabpanel>
           <p-tabpanel value="audit">
-            <section
-              class="workbench-panel"
-              data-testid="bot-control-full-audit"
-              aria-labelledby="full-audit-heading"
-            >
-              <header class="workbench-panel-head">
-                <h2 id="full-audit-heading">Full audit trail</h2>
-              </header>
-              <div class="workbench-panel-body">
-                <app-workbench-audit-panel [status]="s" />
-              </div>
-            </section>
+            @if (activeWorkbenchTab() === 'audit') {
+              <section
+                class="workbench-panel"
+                data-testid="bot-control-full-audit"
+                aria-labelledby="full-audit-heading"
+              >
+                <header class="workbench-panel-head">
+                  <h2 id="full-audit-heading">Full audit trail</h2>
+                </header>
+                <div class="workbench-panel-body">
+                  <app-workbench-audit-panel [status]="s" />
+                </div>
+              </section>
+            }
           </p-tabpanel>
         </p-tabpanels>
       </p-tabs>

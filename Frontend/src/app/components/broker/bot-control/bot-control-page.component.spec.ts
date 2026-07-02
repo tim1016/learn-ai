@@ -593,6 +593,9 @@ describe('BotControlPageComponent', () => {
       .toContain('Current lifecycle focus');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Deploy or start');
+
+    fixture.componentInstance.setActiveWorkbenchTab('audit');
+    fixture.detectChanges();
     expect(el.querySelector('[data-testid="locked-evidence-field"]')).not.toBeNull();
 
     const dispatch = vi.spyOn(fixture.componentInstance, 'dispatchOverviewAction');
@@ -915,6 +918,8 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
+    fixture.componentInstance.setActiveWorkbenchTab('audit');
+    fixture.detectChanges();
 
     const runtimeField = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="locked-evidence-field"]'),
@@ -985,6 +990,48 @@ describe('BotControlPageComponent', () => {
       .querySelector('[data-testid="bot-control-recent-activity"] [data-testid="trader-guidance-timeline"]');
     expect(timeline?.textContent).toContain('Broker acknowledgment failed; submit outcome is uncertain.');
     expect(timeline?.textContent).toContain('broker_ack #7');
+  });
+
+  it('only instantiates the selected workbench tab body', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="activity-tab-stub"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="workbench-audit-panel"]')).toBeNull();
+
+    fixture.componentInstance.setActiveWorkbenchTab('audit');
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="activity-tab-stub"]')).toBeNull();
+    expect(el.querySelector('[data-testid="workbench-audit-panel"]')).not.toBeNull();
   });
 
   it('clears lifecycle timeline rows when refreshed status changes run context', async () => {
