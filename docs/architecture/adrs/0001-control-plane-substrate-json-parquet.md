@@ -1,7 +1,7 @@
 # ADR 0001 — Control-plane substrate stays JSON + Parquet + hash sidecars; Postgres is a future projection layer, not a substrate
 
 **Status:** Accepted 2026-05-28
-**Decision drivers:** persistent IBKR paper bot work (`docs/ibkr-paper-deployment-plan.md`); shadow VWAP strategy roadmap; Angular Paper Run control surface.
+**Decision drivers:** persistent IBKR paper bot work (`docs/ibkr-paper-deployment-plan.md`); shadow VWAP strategy roadmap; Angular bot control control surface.
 **Related:** ADR 0002 (shadow mode), ADR 0003 (operational topology), `docs/ibkr-paper-deployment-plan.md` § 16.
 
 ## Context
@@ -24,7 +24,7 @@ The question was whether to (a) migrate to Postgres, (b) leave substrate alone a
 
 **Keep JSON + Parquet + hash-sidecar artifacts canonical.** No Postgres in the live-runtime control plane.
 
-If — and only if — the local file / SSE read-models for the Angular Paper Run nav become genuinely painful (specific named pain, not anticipated convenience), introduce Postgres as a **projection layer**: a downstream read-replica derived from the canonical artifacts, never the source of truth. Postgres never owns desired state, never owns the run ledger, never owns the audit trail. The artifacts remain the only thing that has to be backed up, reproduced, or restored.
+If — and only if — the local file / SSE read-models for the Angular bot control nav become genuinely painful (specific named pain, not anticipated convenience), introduce Postgres as a **projection layer**: a downstream read-replica derived from the canonical artifacts, never the source of truth. Postgres never owns desired state, never owns the run ledger, never owns the audit trail. The artifacts remain the only thing that has to be backed up, reproduced, or restored.
 
 This decision is independent of — and does not constrain — any future Postgres-backed app concerns that are not part of the live-runtime control plane (auth, multi-user identity, command audit log under an authenticated UI).
 

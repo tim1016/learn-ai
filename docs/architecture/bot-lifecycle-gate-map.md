@@ -4,7 +4,7 @@
 **Created:** 2026-06-27
 **Deepened codebase review:** 2026-06-28
 **Input:** codebase review plus design notes summarized in "Design Source Summary" below.
-**Related:** `docs/architecture/bot-cockpit-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/ibkr-integration-authority.md`
+**Related:** `docs/architecture/bot-control-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/ibkr-integration-authority.md`
 
 This document makes the bot lifecycle gates visible as a chart and a set of tables.
 For current implementation authority, load
@@ -155,7 +155,7 @@ flowchart LR
 | Operator action | Gate sequence today | Blocks on | Current owner | Proposed change |
 |---|---|---|---|---|
 | Deploy bot | Deploy route and package/deploy guardrails; broker account evidence is derived from connected broker session per PRD. | Missing/ambiguous account, invalid package/settings, account proof unavailable. | Deploy/data-plane code and host daemon. | Add account-scoped `GATE.PREFLIGHT` before run creation or before spawn. |
-| Start bot process | Data-plane `_assert_start_allowed` then daemon/runtime pre-flight then cold-start reconciliation. | `poisoned.flag`, STOPPED, host offline, already running/stopping, run pre-flight failure, reconcile poison. | `live_instances.py`, daemon, `pre_flight.py`, `reconciliation_orchestrator.py`. | Make account preflight explicit before daemon spawn; show it as a gate group in cockpit. |
+| Start bot process | Data-plane `_assert_start_allowed` then daemon/runtime pre-flight then cold-start reconciliation. | `poisoned.flag`, STOPPED, host offline, already running/stopping, run pre-flight failure, reconcile poison. | `live_instances.py`, daemon, `pre_flight.py`, `reconciliation_orchestrator.py`. | Make account preflight explicit before daemon spawn; show it as a gate group in bot control. |
 | Enter ACTIVE bar loop | Runtime only after reconcile passed and engine constructs live runtime. | Broker/reconcile failure, poisoned run, invalid runtime config, paused desired state. | `run.py`, `live_engine.py`, `readiness.py`. | Add explicit `receipt.boot_id == current_boot_id` and lease/fencing token to `GATE.ACTIVATE`. |
 | Submit broker order | LivePortfolio WAL/id gate, broker safety verdict, submit state machine, `place_paper_order` paper safety. | Non-paper verdict, missing `order_ref`, reconnect recovery, disconnected broker, readonly, wrong mode/port/account, missing confirm, ambiguous submit not provable. | `live_portfolio.py`, `orders.py`. | Collapse all real broker submission into one named `PROC.SUBMIT` with submit lock + fencing token. |
 | Resume | Shared capability evaluator plus resume guard state. | Already running, STOPPED, poisoned, broker safety unsafe/unknown, submit capability blocked/unknown, reconciliation failed/stale/missing/unknown, unresolved uncertain intent, mutation conflict. | `operator_capability.py`, `resume_guard_state.py`, router revalidation. | Re-run reconcile before transition to ACTIVE; account freeze also blocks. |
@@ -238,7 +238,7 @@ Claude's follow-up closes several gaps in this plan:
 
 ## Recommended Design Shape
 
-Use one manually reviewable "gate board" data model for the cockpit and docs:
+Use one manually reviewable "gate board" data model for the bot control page and docs:
 
 | Field | Meaning |
 |---|---|

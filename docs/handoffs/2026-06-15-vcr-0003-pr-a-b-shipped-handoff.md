@@ -115,7 +115,7 @@ Severity-ordered:
 - **Where:** `PythonDataService/app/routers/live_instances.py:_sizing_audit_rows` (PR B's wiring path).
 - **Symptom:** `live_state.json` is keyed by INSTANCE, not by run. When the latest run's WAL+skip log are both empty (e.g., Run B just started), the fallback returns Run A's audit rows labeled as Run B's.
 - **Fix:** stamp `run_id` into the response shape, OR gate the fallback on "run dir is older than this engine's start time", OR scope `live_state.json` per-run.
-- **Effort:** ~20 lines depending on approach; coordinate with the cockpit UI.
+- **Effort:** ~20 lines depending on approach; coordinate with the bot control page UI.
 
 ### F-9 — Sidecar fallback suppressed by skip-only WAL fold
 - **Where:** same as F-8.

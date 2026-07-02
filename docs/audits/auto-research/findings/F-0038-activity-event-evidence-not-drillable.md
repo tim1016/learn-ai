@@ -3,8 +3,8 @@ id: F-0038
 severity: P2
 status: fixed-verified
 area: frontend-consumption
-canonical_file: Frontend/src/app/components/broker/cockpit-v2/reused/broker-activity-table/broker-activity-table.component.html
-reference: docs/architecture/adrs/0016-bot-cockpit-trader-authored-activity-and-deploy-packages.md
+canonical_file: Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.html
+reference: docs/architecture/adrs/0016-bot-control-trader-authored-activity-and-deploy-packages.md
 first_seen: 2026-06-26
 last_seen: 2026-06-26
 fixed_in: codex/fix-ibkr-activity-evidence
@@ -19,8 +19,8 @@ The new normalized Activity event rows expose an evidence count but no row-level
 
 - `PythonDataService/app/schemas/live_runs.py:1848-1872` defines `ActivityBrokerEventRow.evidence`.
 - `PythonDataService/app/routers/live_instances.py:2474-2490` creates folded broker-evidence event rows with evidence refs.
-- `Frontend/src/app/components/broker/cockpit-v2/reused/broker-activity-table/broker-activity-table.component.html:71-117` renders event rows and prints only `row.evidence.length`.
-- `Frontend/src/app/components/broker/cockpit-v2/reused/broker-activity-table/broker-activity-table.component.html:160-203` opens a detail drawer only for legacy `BrokerActivityRow` rows, not `ActivityBrokerEventRow` rows.
+- `Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.html:71-117` renders event rows and prints only `row.evidence.length`.
+- `Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.html:160-203` opens a detail drawer only for legacy `BrokerActivityRow` rows, not `ActivityBrokerEventRow` rows.
 
 ## Why this severity
 
@@ -37,11 +37,11 @@ Implemented in `codex/fix-ibkr-activity-evidence`.
 - Activity event rows are now keyboard/click expandable.
 - Expanded rows show the row-linked IBKR evidence refs: sequence, timestamp, request call, response callback, source, and captured identity (`order_ref`, `order_id`, `perm_id`, `exec_id`, `symbol`).
 - The collapsed row stays trader-facing; raw request/callback details are visible only in the drill-down.
-- Regression coverage: `Frontend/src/app/components/broker/cockpit-v2/reused/broker-activity-table/broker-activity-table.component.spec.ts`.
+- Regression coverage: `Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.spec.ts`.
 
 Validation:
 
-- `podman exec my-frontend npm test -- --watch=false --include src/app/components/broker/cockpit-v2/reused/broker-activity-table/broker-activity-table.component.spec.ts --include src/app/components/broker/cockpit-v2/tabs/configuration-tab.component.spec.ts` — passed, 24 tests.
+- `podman exec my-frontend npm test -- --watch=false --include src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.spec.ts --include src/app/components/broker/bot-control/tabs/configuration-tab.component.spec.ts` — passed, 24 tests.
 
 ## Suggested resolution (historical)
 

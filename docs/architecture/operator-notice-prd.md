@@ -3,7 +3,7 @@
 **Status**: Draft — ready for implementation
 **Owner**: Inkant
 **Created**: 2026-06-23
-**Closes**: #656 (watchdog silent exit), #657 (raw freshness enum strings in cockpit), #658 (Activity tab stuck loading)
+**Closes**: #656 (watchdog silent exit), #657 (raw freshness enum strings in bot control), #658 (Activity tab stuck loading)
 **Architectural anchor**: ADR-0015 (Operator Notice Contract) — ships in PR 1 of this initiative
 **Related ADRs**: ADR-0013 (operator surface: judgment vs evidence), ADR-0014 (broker-authored operator view: backend-rendered narratives)
 
@@ -11,29 +11,29 @@
 
 ## 1. Problem
 
-Three live-cockpit failure modes ship operational enum strings to traders, or worse, ship nothing while the bot silently does the wrong thing.
+Three live Bot Control failure modes ship operational enum strings to traders, or worse, ship nothing while the bot silently does the wrong thing.
 
-- **#657** — `OperatorSurfaceRuntimeFreshness.stale_reason_codes: list[str]` is rendered raw in the cockpit. The trader sees `BAR_LOOP_HEARTBEAT_STALE` and cannot tell whether the bot is safe, degraded, or unsafe.
-- **#656** — When the host watchdog detects lease loss it exits the engine without a confirmed flatten. The cockpit sees a clean exit; broker exposure persists; no incident artifact survives the restart.
+- **#657** — `OperatorSurfaceRuntimeFreshness.stale_reason_codes: list[str]` is rendered raw in the bot control page. The trader sees `BAR_LOOP_HEARTBEAT_STALE` and cannot tell whether the bot is safe, degraded, or unsafe.
+- **#656** — When the host watchdog detects lease loss it exits the engine without a confirmed flatten. The bot control page sees a clean exit; broker exposure persists; no incident artifact survives the restart.
 - **#658** — The Activity tab can render "Loading history…" forever when the broker activity publisher is missing, mis-registered, or blind to the bot's own order events (cross-API-client visibility gap).
 
-The repair is not three independent copy fixes. The repair is **one contract** for backend-authored, typed operator notices that the cockpit renders verbatim, plus three application sites.
+The repair is not three independent copy fixes. The repair is **one contract** for backend-authored, typed operator notices that the bot control page renders verbatim, plus three application sites.
 
 ADR-0014 already established the principle: broker-activity narratives are backend-authored. ADR-0015 generalizes the principle to every operator-facing failure surface — runtime freshness, watchdog incidents, activity health — and pins the schema, the persistence model, the tier policy, and the exhaustiveness gate.
 
 ## 2. Goals
 
-- Every operator-facing failure ships as a typed `OperatorNotice` composed by the backend; the cockpit renders `title`/`message`/`action` verbatim and never composes safety copy.
-- Operational enums (`RuntimeFreshnessReasonCode`, watchdog outcomes, activity health states) remain for code, logs, tests, and forensics. They never reach the cockpit string surface.
+- Every operator-facing failure ships as a typed `OperatorNotice` composed by the backend; the bot control page renders `title`/`message`/`action` verbatim and never composes safety copy.
+- Operational enums (`RuntimeFreshnessReasonCode`, watchdog outcomes, activity health states) remain for code, logs, tests, and forensics. They never reach the bot control page string surface.
 - Watchdog-driven halt produces a typed two-phase shutdown and a durable incident artifact. Restart cannot trade until reconciliation confirms broker state.
 - Activity tab has explicit `ready | starting | degraded | unavailable` states; "loading forever" is unrepresentable.
 - Notices fan out into ephemeral projections (recomputed each poll) or incident artifacts (persisted) — never both, never neither.
-- Every enum reaching the cockpit surface is exhaustiveness-tested. Adding a new value without a notice fails CI.
+- Every enum reaching the bot control page surface is exhaustiveness-tested. Adding a new value without a notice fails CI.
 
 ## 3. Non-goals
 
 - Backfilling notices onto historical UI surfaces that already render fine (PnL, equity curve, account balance).
-- Rewriting `OperatorSurfaceRuntimeFreshness` consumers other than the cockpit shell.
+- Rewriting `OperatorSurfaceRuntimeFreshness` consumers other than the bot control page shell.
 - Internationalization. All copy ships English; the schema does not pretend otherwise.
 - Replacing the existing operator-surface poll transport. Notices ride the same 4 s status poll.
 - Replacing the SSE channel for broker-activity rows. Health rides the status poll; rows still SSE.
@@ -79,7 +79,7 @@ class OperatorNoticeAction(BaseModel):
         "none",
         "wait",
         "open_runbook",
-        "focus_cockpit_action",
+        "focus_bot control_action",
         "renew_control_plane_lease",
         "external_manual_check",
         "redeploy",
@@ -102,7 +102,7 @@ class OperatorNotice(BaseModel):
 **Invariants**:
 
 - `title` and `message` are finished English. The frontend never interpolates copy.
-- `forensic_facts` is typed-but-generic; cockpit renders it in a "Forensic detail" expandable panel (engineer-targeted, not pre-formatted display copy).
+- `forensic_facts` is typed-but-generic; bot control renders it in a "Forensic detail" expandable panel (engineer-targeted, not pre-formatted display copy).
 - `source_codes` references operational enum strings for forensics; never displayed as primary copy.
 - `code` is namespaced (`runtime.*`, `watchdog.*`, `activity.*`, `reconciliation.*`); PR 1 declares every planned slot so frontend type generation is stable across PRs 1–6.
 - `runbook_slug`, when set, must reference a file that ships in the same PR. No aspirational links.
@@ -120,14 +120,14 @@ A tier exists only if it triggers a different trader response. `advisory` was dr
 ### 4.3 Action semantics
 
 `OperatorNoticeAction.kind` separates finished notice copy from the
-closed affordance the cockpit may expose:
+closed affordance the bot control page may expose:
 
-- Navigation/focus affordances: `focus_cockpit_action`, `open_runbook`,
+- Navigation/focus affordances: `focus_bot control_action`, `open_runbook`,
   `redeploy`.
 - Bounded remediation affordances: `renew_control_plane_lease`. These
   actions must be explicitly named in this contract, routed through the
   data plane, and implemented as one-shot backend-authored operations.
-- Non-clickable explicit non-automation: `external_manual_check`. This matters — "Check positions in IBKR" must not look like the cockpit performed reconciliation.
+- Non-clickable explicit non-automation: `external_manual_check`. This matters — "Check positions in IBKR" must not look like the bot control page performed reconciliation.
 - `redeploy` routes to the Configuration tab and pre-focuses the existing redeploy/start flow. It never triggers a redeploy silently.
 - `none` / `wait` carry no affordance.
 
@@ -166,7 +166,7 @@ Two categories, mutually exclusive:
 
 ### 4.5 Exhaustiveness gate
 
-Every closed enum that reaches the cockpit through a notice is exhaustiveness-tested:
+Every closed enum that reaches the bot control page through a notice is exhaustiveness-tested:
 
 ```python
 @pytest.mark.parametrize("code", get_literal_args(RuntimeFreshnessReasonCode))
@@ -187,11 +187,11 @@ Each PR is independently mergeable on top of PR 1.
 
 | # | Scope | Closes |
 |---|---|---|
-| 1 | `OperatorNotice` contract, ADR-0015, runtime freshness composer, cockpit renderer | #657 |
+| 1 | `OperatorNotice` contract, ADR-0015, runtime freshness composer, bot control renderer | #657 |
 | 2 | Watchdog two-phase halt, `OperatorIncident` store, post-halt reconciliation gate | #656 |
 | 3 | `INTENT_DROPPED_BEFORE_SUBMIT` WAL event + fold support | (part of #658) |
 | 4 | Publisher structured-concurrency lifecycle (TaskGroup, registry ownership) | (part of #658) |
-| 5 | Broker activity health surface; cockpit consumes typed states | #658 |
+| 5 | Broker activity health surface; bot control page consumes typed states | #658 |
 | 6 | Cross-client IBKR fallback: live stream + bounded `reqExecutions` sweep + reconciliation notice | (follow-on) |
 
 PRs 2–6 each reuse the contract from PR 1; PR 1 declares all `OperatorNoticeCode` slots to stop type churn.
@@ -208,7 +208,7 @@ PRs 2–6 each reuse the contract from PR 1; PR 1 declares all `OperatorNoticeCo
 2. Implement runtime-freshness rule composer:
    - Static rules table mapping `frozenset[RuntimeFreshnessReasonCode]` (all-of / subset semantics) → `OperatorNoticeCode` with priority.
    - Composer collects active codes, evaluates rules, emits notices, picks the highest-priority notice as `headline`.
-   - `BAR_LOOP_SESSION_CLOSED` is `suppress_banner=True` — recorded in evidence, not rendered in the freshness banner. Cockpit shows it in the trading-session status card as `info`.
+   - `BAR_LOOP_SESSION_CLOSED` is `suppress_banner=True` — recorded in evidence, not rendered in the freshness banner. Bot Control shows it in the trading-session status card as `info`.
 
 3. Backend pipeline:
    - New module `app/operator/notices/` owns schema + runtime-freshness rules + composer.
@@ -243,11 +243,11 @@ Final reason-code list will be sourced verbatim from the existing `RuntimeFreshn
 ### 6.3 Trader-facing copy (anchor examples)
 
 - `runtime.market_data_feed_stalled` — title "Market data feed is stalled" — "No fresh IBKR bar has arrived for 92 seconds; the expected window is 30 seconds. New trading decisions are held until fresh data arrives." — action `external_manual_check` ("Check IBKR connection").
-- `runtime.control_plane_lease_stale` — title "Control-plane lease is stale" — "Another control-plane lease holder hasn't checked in. The bot is in a guarded state. Verify only one cockpit or host runner is attached to this run." — action `renew_control_plane_lease` ("Renew control-plane lease", target `daemon_lease`).
+- `runtime.control_plane_lease_stale` — title "Control-plane lease is stale" — "Another control-plane lease holder hasn't checked in. The bot is in a guarded state. Verify only one bot control or host runner is attached to this run." — action `renew_control_plane_lease` ("Renew control-plane lease", target `daemon_lease`).
 - `runtime.command_loop_unresponsive` — title "Bot is not responding to commands" — "Pause, Resume, Stop, or Flatten may not take effect until the bot recovers. If this persists, stop the bot from the host runner and verify positions at IBKR." — action `external_manual_check` ("Check positions in IBKR", target `ibkr_positions`).
 - `runtime.market_closed` — title "Market closed" — "The bot is idle until the regular trading session opens. No trading decision is being made." — action `none`. Suppressed from banner; rendered on the session card.
 
-Numeric forensic facts (`age_ms`, `expected_window_ms`, `latest_source_bar_ms`) populate `forensic_facts`; cockpit surfaces them in a "Forensic detail" panel for engineers.
+Numeric forensic facts (`age_ms`, `expected_window_ms`, `latest_source_bar_ms`) populate `forensic_facts`; bot control surfaces them in a "Forensic detail" panel for engineers.
 
 ### 6.4 File layout (PR 1)
 
@@ -325,7 +325,7 @@ disconnect_timeout_ms  = 3_000  (DISCONNECT_TIMEOUT_MS in watchdog_controller.py
 - On block: exits 1 (fatal_halt), writes terminal run_status.
 
 **Schema extension** (`app/schemas/live_runs.py`):
-- `OperatorSurface.incident_headline: OperatorNotice | None` — carries the blocking notice to the frontend. PR 5/6 will wire the cockpit UI; PR 2 plumbs the schema.
+- `OperatorSurface.incident_headline: OperatorNotice | None` — carries the blocking notice to the frontend. PR 5/6 will wire the bot control page UI; PR 2 plumbs the schema.
 
 Controller — single async protocol (no thread boundary; same asyncio loop as engine):
 
@@ -385,17 +385,17 @@ class BrokerActivityHealth(BaseModel):
     facts: BrokerActivityHealthFacts  # publisher_registered, publisher_running, latest_row_seq, ...
 ```
 
-State derivation is backend-only. Booleans are facts, not state primitives the cockpit composes from. Cadence: rides existing 4 s operator-surface poll. `starting` ages to `unavailable` after 30 s. Rows still SSE; only health rides the status poll.
+State derivation is backend-only. Booleans are facts, not state primitives the bot control page composes from. Cadence: rides existing 4 s operator-surface poll. `starting` ages to `unavailable` after 30 s. Rows still SSE; only health rides the status poll.
 
 ## 11. Cross-client IBKR visibility (PR 6 — sketch)
 
 Engine remains authoritative for trading decisions from its own broker adapter and WAL. Publisher merges live event stream with bounded `reqExecutions` sweep (`sweep_interval_ms=60_000`, `sweep_lookback_ms=900_000`, run immediately on publisher start and reconnect). Deduplicate by `exec_id`, then `perm_id`/`order_ref`.
 
-If sweep finds a fill absent from engine-known executions: emit `reconciliation.discovered_execution_not_in_engine_state` (critical) and require engine reconciliation. The publisher never silently "corrects" cockpit position view.
+If sweep finds a fill absent from engine-known executions: emit `reconciliation.discovered_execution_not_in_engine_state` (critical) and require engine reconciliation. The publisher never silently "corrects" bot control position view.
 
 ## 12. Testing strategy
 
-- Exhaustiveness parametrized tests on every closed enum reaching the cockpit (see §4.5).
+- Exhaustiveness parametrized tests on every closed enum reaching the bot control page (see §4.5).
 - Snapshot test on the `OperatorNoticeCode` literal — drift requires intentional update.
 - Rule-table tests: every `RuntimeFreshnessReasonCode` covered by at least one rule; combination rules cannot hide higher-priority codes; emitted `source_codes` union equals input codes minus `suppress_banner` entries.
 - Composer behavior tests: priority resolution under conflicting codes, `BAR_LOOP_SESSION_CLOSED` suppression, fact-payload correctness.
@@ -413,7 +413,7 @@ If sweep finds a fill absent from engine-known executions: emit `reconciliation.
 
 - Trader-configurable tier thresholds.
 - Notice acknowledgement / dismissal flow.
-- Push notifications outside the cockpit.
+- Push notifications outside the bot control page.
 - Internationalization of notice copy.
 - Per-trader notice routing or muting.
 - Redesigning the existing operator surface poll cadence.

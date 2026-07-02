@@ -8,7 +8,7 @@
 
 The operator's mental unit is the **strategy instance** — that is what owns the `ib_client_id`, the `bot_order_namespace`, the durable desired-state sidecar, and (after PR-A) the managed-process registry slot. A `run_id` is just one process lifetime of that instance. One instance has many runs over time.
 
-The shipped console inverts this. `broker-paper-run.component.ts:115` makes `selectedRunId` the spine: it lists runs, picks an active-or-first one, and *derives* `strategyInstanceId` **from the selected run's status** (the reverse of the direction the operator needs). Consequences fall out everywhere:
+The shipped console inverts this. `bot-control.component.ts:115` makes `selectedRunId` the spine: it lists runs, picks an active-or-first one, and *derives* `strategyInstanceId` **from the selected run's status** (the reverse of the direction the operator needs). Consequences fall out everywhere:
 
 - It structurally cannot answer "is my SPY-EMA strategy healthy?" across a restart — a new `run_id` is a new page.
 - It cannot honestly represent a fleet (executing EMA + shadow VWAP are separate OS processes per ADR 0002), because everything hangs off one selected run.
@@ -105,7 +105,7 @@ The command-channel response is canonicalized to a unified, backend-joined timel
 
 **Driver.** The 2026-04 / -05 audits that triggered PRD #619 found four interrelated control-plane gaps the original ADR did not address:
 
-1. **Process-registry persistence.** `RunnerProcessManager._managed` is an in-memory dict; a daemon restart resets the registry while the child trading processes keep running with `start_new_session=True`. The cockpit reads `IDLE` from the new daemon while the old child is still placing orders.
+1. **Process-registry persistence.** `RunnerProcessManager._managed` is an in-memory dict; a daemon restart resets the registry while the child trading processes keep running with `start_new_session=True`. The bot control page reads `IDLE` from the new daemon while the old child is still placing orders.
 2. **Daemon liveness signal.** Children have no way to detect that the daemon they were spawned by has died or restarted — every operator-action path assumes the daemon is up, with no fallback.
 3. **Orphan classification.** A new daemon coming up has no structured way to enumerate runs left behind by a previous boot.
 4. **Child shutdown contract.** When the daemon disappears, the child's mid-flight obligations (block submissions, persist intent, flush evidence, disconnect broker) have no ordered enforcement — the order matters because evidence flushed after broker disconnect captures a torn state.
@@ -118,7 +118,7 @@ The command-channel response is canonicalized to a unified, backend-joined timel
 - The daemon renews `artifacts/control_plane/daemon_lease.json` at **1 Hz** with `{schema_version, boot_id, written_at_ms, status, lease_cadence_ms, lease_threshold_ms}`.
 - Freshness threshold is **5 s**. A reader treats the lease as expired iff `now - written_at_ms > lease_threshold_ms`.
 - `status ∈ {CONNECTED, DRAINING}`. `DRAINING` signals graceful daemon shutdown — children pause + flush + disconnect + exit without flattening positions.
-- The daemon's `/health` endpoint exposes `daemon_boot_id` and the lease state for the data plane to observe directly (no file-read for the cockpit hot path).
+- The daemon's `/health` endpoint exposes `daemon_boot_id` and the lease state for the data plane to observe directly (no file-read for the bot control page hot path).
 - When the daemon spawns a child, it sets `LIVE_RUNNER_DAEMON_BOOT_ID=<boot_id>` in the child's env. The child captures this as `expected_daemon_boot_id` for the lifetime of its run.
 
 ### B. Child watchdog (PRD §B5)
@@ -200,5 +200,5 @@ All timestamps are `int64 ms UTC` at the artifact boundary per `.claude/rules/nu
 - `PythonDataService/app/engine/live/host_daemon.py` — `_current` retired in favor of the registry (PR-A).
 - `PythonDataService/app/routers/live_runs.py` — split into instance-addressed operator routes + demoted run-addressed evidence routes.
 - `PythonDataService/app/engine/live/live_engine.py:1029-1089` — command dispatch + `_persist_desired_state` (the reconciling writer).
-- `Frontend/src/app/components/broker/broker-paper-run/` — re-spined from run to instance.
+- `Frontend/src/app/components/broker/bot-control/` — re-spined from run to instance.
 - `CONTEXT.md` — operator-console glossary.

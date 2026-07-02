@@ -129,7 +129,7 @@ This keeps the dashboard trader-friendly without becoming fictional: every numbe
 - **Live config mutation** from the inspector — sealed instruction only; deferred to a future ADR (consistent with PRD #718 D1).
 - **Building a real per-bot P&L aggregation source** — this PRD folds P&L only once an authoritative source exists; creating that source is separate engine/broker work.
 - **Adding event emitters** for the strategy-signal and broker-acknowledgment nodes — this PRD surfaces the honest gap; making those nodes event-backed is separate engine work.
-- **cockpit-v2 convergence** — the fleet console (`broker/instances`) and per-bot page (`broker/bots/:id`) continue to coexist; deletion is a later fleet-console decision.
+- **Bot catalog changes** — the catalog (`broker/bots`) remains a list/navigation surface; this PRD changes the per-bot page (`broker/bots/:id`).
 - **New cross-asset / spread instrument modeling.**
 - **A live-trading safety posture** — the system remains paper-only; no `LIVE_EXECUTION` quadrant is introduced.
 

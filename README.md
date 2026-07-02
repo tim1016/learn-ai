@@ -38,7 +38,7 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 
 **Broker surface** (`/broker/*`) — Operator UIs for live runs:
 
-- **Paper Run** (`/broker/paper-run`) — Observer dashboard with run state, last-bar age, decision/execution counts, halt/poison flags, host runner controls (start/stop with hydrate policy), and reconciliation receipt links
+- **Bots** (`/broker/bots`) — Catalog of paper/live bots with links into each bot's control panel (`/broker/bots/:id`) for run state, readiness, controls, activity, audit evidence, and reconciliation receipts
 - **Account Monitor** (`/broker/account-monitor`) — Live account balances and active positions
 - **Orders** (`/broker/orders`) — Order ledger with status, fills, and exchange round-trip detail
 - **Reconciliation** (`/broker/reconciliation`) — Daily three-way reconcile (decisions ⨯ fills ⨯ broker state) with category breakdown

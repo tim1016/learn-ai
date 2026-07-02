@@ -10,7 +10,7 @@ import {
   renderTraderRemediation,
   type RendererDispatch,
   type RenderedAction,
-} from '../../cockpit-v2/lib/suggested-action-renderer';
+} from '../lib/suggested-action-renderer';
 import {
   buildDiagnosticEvidenceLines,
   type DiagnosticEvidenceLine,

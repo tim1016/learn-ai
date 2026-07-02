@@ -16,7 +16,7 @@ Engine Lab and Data Lab.
 
 ## 1. Context & goals
 
-The Engine Lab page (`/lean-engine`) is the cockpit for running and
+The Engine Lab page (`/lean-engine`) is the bot control page for running and
 reviewing LEAN-compatible backtests. It has four to five tabs:
 **Configure**, **Results**, **History**, **Docs**, and (feature-flagged)
 **Replay**. It currently scrolls vertically on every reasonable

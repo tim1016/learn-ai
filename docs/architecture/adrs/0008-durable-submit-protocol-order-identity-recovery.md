@@ -82,7 +82,7 @@ The broker-activity reconciliation surface (ADR 0014) introduced a second append
 The two WALs are **complementary, not overlapping**:
 
 - `intent_events.jsonl` is the **submit critical-section** state machine (§3 above): one record per `placeOrder` lifecycle transition (`PENDING_INTENT`, `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, …). Single-writer is the engine child. The fold is into `LiveStateEnvelope.submitted_orders`.
-- `broker_activity.jsonl` is the **operator-view reconciliation** stream: one record per IBKR execution-or-status event, joined to engine state via `order_ref`, authored into a `BrokerActivityRow` (verdict + template + facts). As shipped on 2026-06-22, its single writer was the data-plane publisher (ADR 0014 §4); after the 2026-06-25 amendment, that publisher is a projector over `broker_callbacks.jsonl`. The fold is into the SSE subscriber stream for the cockpit Activity tab.
+- `broker_activity.jsonl` is the **operator-view reconciliation** stream: one record per IBKR execution-or-status event, joined to engine state via `order_ref`, authored into a `BrokerActivityRow` (verdict + template + facts). As shipped on 2026-06-22, its single writer was the data-plane publisher (ADR 0014 §4); after the 2026-06-25 amendment, that publisher is a projector over `broker_callbacks.jsonl`. The fold is into the SSE subscriber stream for the bot control page Activity tab.
 
 The two WALs do not write to each other's surfaces. The publisher reads `LiveStateEnvelope.submitted_orders` (the projected view of the intent WAL) to obtain engine-side overlay; it does not append to `intent_events.jsonl`. Conversely, the engine's submit-critical-section never writes to `broker_activity.jsonl`.
 

@@ -80,7 +80,7 @@ once-in-a-blue-moon edge.
 # 1. Deploy + start dep_val_smoke_002 with FixedShares(1).
 # 2. Wait for a full BUY+SELL cycle (strategy auto-exits after 3 hold
 #    bars, takes ~5-10 min).
-# 3. Issue a Stop request via the cockpit immediately after the SELL
+# 3. Issue a Stop request via the bot control page immediately after the SELL
 #    fills (within ~30s).
 # 4. Observe a second SELL in intent_events.jsonl seq+2 / seq+3 with no
 #    preceding SIZING_RESOLVED — recovery_flatten fired with stale state.

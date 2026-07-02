@@ -6,21 +6,21 @@
 
 ## Context
 
-The Activity tab today renders engine-side trades and a sizing-audit table. The data sources are engine-derived (`/api/live-runs/{id}/trades`, `/api/live-runs/{id}/executions`). The frontend joins, sorts, formats, and renders rows. There is no broker-side row stream; the operator cannot ask *"is the engine telling me the truth about what IBKR did?"* from inside the cockpit.
+The Activity tab today renders engine-side trades and a sizing-audit table. The data sources are engine-derived (`/api/live-runs/{id}/trades`, `/api/live-runs/{id}/executions`). The frontend joins, sorts, formats, and renders rows. There is no broker-side row stream; the operator cannot ask *"is the engine telling me the truth about what IBKR did?"* from inside the bot control page.
 
 Three structural reasons this is the wrong shape for live-trade reconciliation:
 
 1. **Wrong source of truth.** The engine cannot prove an execution happened. Only the broker can. The operator's mental model when reconciling is *"what does IBKR show me on the Client Portal Trades tab?"* — engine state is at best an overlay on that, not a replacement for it.
-2. **Inverted verdict authority.** ADR 0013 ruled that verdicts (`expected` / `unexpected`) belong on `operator_surface`, authored server-side. A divergence-chip layered onto engine-authored rows would derive its meaning from comparing engine to broker, which is judgment the cockpit must not perform.
+2. **Inverted verdict authority.** ADR 0013 ruled that verdicts (`expected` / `unexpected`) belong on `operator_surface`, authored server-side. A divergence-chip layered onto engine-authored rows would derive its meaning from comparing engine to broker, which is judgment the bot control page must not perform.
 3. **Untruthful narratives.** A narrative that explains *why* a divergence is expected (e.g. *"reflection delayed 8s — IBKR connection dropped 14:32:14–14:32:22, exec captured on resume"*) requires structured facts the frontend does not have. Composing such prose Angular-side would invent context.
 
-Codex's review of the design surfaced an additional structural requirement: the broker-activity surface must be a *single authority* for execution verdicts — not an additive layer on top of existing engine-side trade rendering. Otherwise the cockpit ends up showing the same execution twice (engine row + broker row + divergence row) and the operator has to reconcile the surfaces themselves.
+Codex's review of the design surfaced an additional structural requirement: the broker-activity surface must be a *single authority* for execution verdicts — not an additive layer on top of existing engine-side trade rendering. Otherwise the bot control page ends up showing the same execution twice (engine row + broker row + divergence row) and the operator has to reconcile the surfaces themselves.
 
-The cockpit-v2 Activity tab is the right home for the new surface; the rest of the cockpit (Status/Risk, Audit, Configuration) keeps its existing 4s `LiveInstanceStatus` poll because those tabs depend on operator-surface verdicts that are not execution-keyed.
+The bot-control Activity tab is the right home for the new surface; the rest of the bot control page (Status/Risk, Audit, Configuration) keeps its existing 4s `LiveInstanceStatus` poll because those tabs depend on operator-surface verdicts that are not execution-keyed.
 
 ## Decision
 
-**Adopt a broker-authored operator view for the cockpit-v2 Activity tab. IBKR executions are the canonical source of the row stream; engine state is overlay/explanation only. The backend authors every operator-facing string from structured facts on the same row; the frontend is render-only.**
+**Adopt a broker-authored operator view for the bot-control Activity tab. IBKR executions are the canonical source of the row stream; engine state is overlay/explanation only. The backend authors every operator-facing string from structured facts on the same row; the frontend is render-only.**
 
 ### 1. The verbatim rule
 
@@ -64,7 +64,7 @@ Broker-activity has two durable stages:
 1. The host runner consumes live IBKR callbacks from the order-owning broker adapter (`orderStatus`, `execDetails`, `commissionReport`, position snapshots, disconnect/reconnect events) and appends them to `run_dir/broker_callbacks.jsonl`.
 2. `broker_callbacks.jsonl` is the first-capture authority. Each row carries `seq`, callback type, `observed_at_ms`, raw callback facts, and idempotency keys (`exec_id`, `perm_id`, `order_ref`, callback type). For callbacks without `exec_id`, idempotency is keyed by `(callback_type, order_ref, perm_id, broker status/time fields, seq)` until implementation narrows the exact tuple in code and tests.
 3. The data-plane broker-activity publisher is a projector/enricher over `broker_callbacks.jsonl`. It reads raw callback rows after the projection cursor, joins engine overlay from `LiveStateEnvelope.submitted_orders` by `order_ref`, calls the pure reconciliation functions (`match_identity` → `classify_verdict` → `select_template` → `render_narrative`), and appends authored `BrokerActivityRow`s to `broker_activity.jsonl`.
-4. The publisher fans authored `BrokerActivityRow`s out to SSE subscribers. The cockpit never reads raw callbacks and never composes verdicts or narratives.
+4. The publisher fans authored `BrokerActivityRow`s out to SSE subscribers. The bot control page never reads raw callbacks and never composes verdicts or narratives.
 
 Authoring itself is pure. The host runner owns first capture; the publisher owns projection state, SSE fan-out, and the authored `broker_activity.jsonl` WAL. The data plane may be stopped and later rebuild the authored projection from `broker_callbacks.jsonl`; it is not the authority for whether a broker callback happened.
 
@@ -122,7 +122,7 @@ The Activity tab's existing components are replaced, not supplemented:
 
 **Positive:**
 - The operator's mental model (*"what does the Client Portal show me"*) is the literal source of the row stream. Divergence is surfaced where it actually exists, with backend-authored context.
-- The synthetic-verdict regression mode is blocked at the source: there is no frontend code path that computes `verdict` from sub-fields. A future contributor adding *"merged_status"* on the cockpit fails the truthfulness property test.
+- The synthetic-verdict regression mode is blocked at the source: there is no frontend code path that computes `verdict` from sub-fields. A future contributor adding *"merged_status"* on the bot control page fails the truthfulness property test.
 - Template versioning + fact persistence guarantees historical operator-view reproducibility. A template-library improvement (better wording, more specific reasons) re-renders only new rows.
 - The broker-activity surface is the *single authority* for live execution verdicts. There is no shadow surface (engine-derived rows + broker-derived rows + reconciliation overlay) for the operator to mentally merge.
 - Per-instance timing policy keeps lag thresholds out of universal constants; strategies with different latency expectations configure independently.
@@ -131,7 +131,7 @@ The Activity tab's existing components are replaced, not supplemented:
 - A new template requires a code change, a test case, and a `template_version` bump. Templates are not configuration. Acceptable because templates ARE the truthfulness contract.
 - The publisher introduces a stateful background task per instance — new lifecycle surface to manage (start when instance starts, stop when instance stops, drain SSE subscribers on stop). After the 2026-06-25 amendment it is a projector over host-runner-captured callbacks, not the first durable capture point.
 - Activity-tab UX regressions are possible while operators learn the new verdict semantics. Mitigated by the runbook landing alongside (`docs/runbooks/live-trade-reconciliation.md`).
-- Two refresh sources on the cockpit (the existing 4s poll + the new Activity-tab SSE) is more wiring than a single source. Accepted because the alternative (delete the 4s poll) would dark-fire three other tabs.
+- Two refresh sources on the bot control page (the existing 4s poll + the new Activity-tab SSE) is more wiring than a single source. Accepted because the alternative (delete the 4s poll) would dark-fire three other tabs.
 
 **Non-consequences:**
 - `LiveStateEnvelope` semantics (ADR 0008 §5) are unchanged. The only new field is a sequence cursor.
@@ -148,5 +148,5 @@ The Activity tab's existing components are replaced, not supplemented:
 - `PythonDataService/app/engine/live/live_state_sidecar.py` — projection cursors: `last_broker_callbacks_wal_seq` for raw callback replay and `last_broker_activity_wal_seq` for authored row backfill.
 - `PythonDataService/app/routers/broker_activity.py` — SSE stream + paginated REST backfill.
 - ADR 0008 §3 — sibling WAL pattern (`intent_events.jsonl`). The amendment registering `broker_activity.jsonl` as a peer WAL ships with this slice.
-- `Frontend/src/app/components/broker/cockpit-v2/tabs/activity-tab/broker-activity-table.component.ts` — render-only SSE subscriber.
+- `Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.ts` — render-only SSE subscriber.
 - `docs/runbooks/live-trade-reconciliation.md` — operator runbook (lands with slice 4).

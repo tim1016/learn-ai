@@ -14,7 +14,7 @@ You can pick this up cold. No prior session context required.
 The two items that were still mapped but not started are now implemented on
 `prd-619-b-engine-watchdog-wiring-v2`:
 
-1. **Operator-surface + cockpit integration**
+1. **Operator-surface + bot control integration**
    - The data plane reads the bound child's `engine_runtime.json` directly.
    - Missing artifacts surface `ENGINE_RUNTIME_MISSING`; malformed or
      forward-incompatible artifacts surface
@@ -25,7 +25,7 @@ The two items that were still mapped but not started are now implemented on
    - Pause and Stop intentionally remain available as fail-safe durable
      intents; Mark-poisoned remains available for incident recovery.
    - Mutation endpoints consume the same freshness gate as status.
-   - The cockpit renders a high-visibility `LAST-KNOWN` / `ATTENTION`
+   - The bot control page renders a high-visibility `LAST-KNOWN` / `ATTENTION`
      runtime banner from backend-authored reason codes.
 
 2. **Session-aware bar-loop freshness**
@@ -67,7 +67,7 @@ A multi-PR program decomposed during a grilling session into four PRs:
 
 | PR | Theme | Status |
 |---|---|---|
-| **619-A** | Cockpit correctness + verdict_provider wiring + ADR-0011 amendment | **Merged** (#620) |
+| **619-A** | Bot Control correctness + verdict_provider wiring + ADR-0011 amendment | **Merged** (#620) |
 | **619-B** | Typed daemon connectivity, runtime ownership, control-plane recovery | **In progress** (see §2) |
 | **619-C** | Fail-closed ownership recovery | Not started |
 | **619-D** | (TBD post 619-C) | Not started |
@@ -86,7 +86,7 @@ A multi-PR program decomposed during a grilling session into four PRs:
 | B8 | ADR-0004 amendment | Merged (#627) |
 | **Daemon FastAPI integration** | Lifespan wires lease writer + boot_id env + orphan classifier | **Merged** (#628) |
 | **Engine ChildWatchdog wiring** | LiveEngine accepts `watchdog_factory`, constructs watchdog from daemon env | **PR #629 open; CI green** |
-| **Operator-surface composer + cockpit integration** | Fold `posture_demoted` into action capability, surface `stale_reason_codes` | **Implemented locally** |
+| **Operator-surface composer + bot control integration** | Fold `posture_demoted` into action capability, surface `stale_reason_codes` | **Implemented locally** |
 | **Bar_loop session-state provider** | Feed calendar-authored `RTH_OPEN`/`CLOSED` into freshness evaluator | **Implemented locally** |
 
 ---
@@ -131,21 +131,21 @@ Thermo-nuclear-code-quality-review was **skipped at user direction** for this PR
 
 These are mapped from independent research-agent passes over the codebase. File:line citations are real; everything is read-only research.
 
-### 3a. Operator-surface composer + cockpit integration
+### 3a. Operator-surface composer + bot control integration
 
-**Goal:** When `RuntimeFreshness.posture_demoted=True`, the cockpit's start/resume/pause/stop buttons should disable, and the operator should see `stale_reason_codes` rendered visibly.
+**Goal:** When `RuntimeFreshness.posture_demoted=True`, the bot control page's start/resume/pause/stop buttons should disable, and the operator should see `stale_reason_codes` rendered visibly.
 
 **Backend seams (4 Python files):**
 
 1. `PythonDataService/app/routers/live_instances.py:1284–1300` — router currently calls `compute_operator_surface()` without freshness. Add: load `engine_runtime.json` from live_binding run dir → call `evaluate_runtime_freshness(snapshot, session_state=None)` → pass result to composer.
 2. `PythonDataService/app/services/operator_surface.py:466–518` — add `runtime_freshness: RuntimeFreshness | None = None` to `compute_operator_surface()`, forward to `evaluate_all_actions()`.
 3. `PythonDataService/app/services/operator_capability.py:140–224` — `evaluate_action()` gets `runtime_freshness` kwarg. In resume/pause/stop blocks, append `POSTURE_DEMOTED` reason code when `runtime_freshness and runtime_freshness.posture_demoted`.
-4. (Optional) Expose `runtime_freshness` as a nested optional field on the `OperatorSurface` GraphQL type so the cockpit can render `stale_reason_codes` directly rather than deriving them from `disabled_reasons[]`.
+4. (Optional) Expose `runtime_freshness` as a nested optional field on the `OperatorSurface` GraphQL type so the bot control page can render `stale_reason_codes` directly rather than deriving them from `disabled_reasons[]`.
 
 **Frontend seams (2 files):**
 
 1. `Frontend/src/app/api/live-instances.types.ts:322–338` — add optional `runtime_freshness` to `OperatorSurface` interface.
-2. `Frontend/src/app/components/broker/cockpit-v2/cockpit-shell.component.html:83–85` (existing error-banner pattern) **or** `status-risk-tab.component.ts` (existing readiness_gates rendering with suggested_action) — render `stale_reason_codes` as a banner/chip.
+2. `Frontend/src/app/components/broker/bot-control/bot control-shell.component.html:83–85` (existing error-banner pattern) **or** `status-risk-tab.component.ts` (existing readiness_gates rendering with suggested_action) — render `stale_reason_codes` as a banner/chip.
 
 ### 3b. Bar_loop session-state provider
 
@@ -178,7 +178,7 @@ The composer wiring and session-state provider are **independent**, but the sess
 
 Proposed order:
 1. **PR #629** (open) — engine ChildWatchdog wiring.
-2. **PR-next-1** — operator-surface composer + cockpit. Uses `session_state=None` as a starting point.
+2. **PR-next-1** — operator-surface composer + bot control. Uses `session_state=None` as a starting point.
 3. **PR-next-2** — bar_loop session-state provider (Path A). Composer PR-next-1 starts consuming richer data with zero further code change.
 
 ---
@@ -189,7 +189,7 @@ Proposed order:
 `_start_child_watchdog` lives inside `LiveEngine` (~30 LoC). `LiveEngine` is already a large file — should this be extracted to a sibling module (e.g. `app/engine/live/watchdog_wiring.py`)? My read: the four callbacks need closure over engine internals (`_submissions_blocked`, `_persist_desired_state`, `_client`, the shutdown event), so an extraction would just trade one closure for an explicit dependency-injection object. Keeping it inline preserves locality. Want a second read on whether that's the right call.
 
 ### Q2. Sequencing — should PR-next-1 wait for PR-next-2?
-Shipping composer with `session_state=None` means the bar_loop posture-demoted check uses threshold-only fallback for one PR cycle. That's not wrong — the threshold *is* a posture indicator — but it does mean the cockpit will show `BAR_LOOP_STALE` rather than `BAR_LOOP_SESSION_CLOSED` during off-hours during the gap. Is that acceptable, or should we bundle?
+Shipping composer with `session_state=None` means the bar_loop posture-demoted check uses threshold-only fallback for one PR cycle. That's not wrong — the threshold *is* a posture indicator — but it does mean the bot control page will show `BAR_LOOP_STALE` rather than `BAR_LOOP_SESSION_CLOSED` during off-hours during the gap. Is that acceptable, or should we bundle?
 
 ### Q3. Path A vs Path B for session state
 Path A bumps `EngineRuntimeSnapshot.schema_version` 1→2 and adds a field that's *about* the session, not the bar loop, onto a block named `BarLoopBlock`. The naming is slightly off-key. Path B is cleaner *in name* but doubles the artifact surface. Worth the indirection?
@@ -197,7 +197,7 @@ Path A bumps `EngineRuntimeSnapshot.schema_version` 1→2 and adds a field that'
 ### Q4. GraphQL shape
 Should `runtime_freshness` be a nested optional field inside `OperatorSurface`, or a separate top-level field on the live-instance query? The composer already owns "everything the operator sees on this instance"; nesting is consistent. But `RuntimeFreshness` is also useful outside operator context (incidents page, debugging). Wondering if it deserves its own resolver.
 
-### Q5. Cockpit UX
+### Q5. Bot Control UX
 Three render options for `stale_reason_codes`:
 - (a) A persistent banner above the action row (high visibility).
 - (b) A chip next to each disabled action (close to the disable reason).
@@ -219,7 +219,7 @@ If you want to verify rather than trust:
 - `PythonDataService/app/engine/live/child_watchdog.py:120–141` — `ChildWatchdog.__init__` constructor signature (the contract the factory has to honour).
 - `PythonDataService/app/services/runtime_freshness.py:60, 89, 145–165, 226, 248–252` — freshness evaluator's public shape.
 - `PythonDataService/app/services/operator_capability.py:140–224` — current action-disable evaluator.
-- `Frontend/src/app/components/broker/cockpit-v2/cockpit-shell.component.html:83–85` — existing error-banner pattern.
+- `Frontend/src/app/components/broker/bot-control/bot control-shell.component.html:83–85` — existing error-banner pattern.
 
 ---
 

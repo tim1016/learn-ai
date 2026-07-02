@@ -2,7 +2,7 @@
 
 **Surface:** `broker/bots/:id` → `bot-control-page.component` (PRD #718).
 **Status:** Design agreed 2026-06-30 (grilling session). Decisions proposed in ADR 0017, pending ratification.
-**Scope:** the per-bot workbench *only* — not the fleet console (`broker/instances`, cockpit-v2).
+**Scope:** the per-bot workbench (`broker/bots/:id`) and its catalog entry point (`broker/bots`).
 **Authority:** ADR 0013 (judgment vs evidence), ADR 0014 (backend-rendered narratives), ADR 0016 (trader-authored activity), `CONTEXT.md` (operator console glossary). Implementation snapshot DoD: `docs/bot-lifecycle-account-owner-authority.md`.
 
 ## North star
@@ -85,10 +85,10 @@ Cross-cutting honesty rule: **no frontend-derived verdicts or chips.** Backend a
 | `StatusRiskTab` | **Dissolve (unmount)** | gates → node evidence / badges / inspector; risk metrics → header chips + Risk row + inspector Evidence. |
 | `ConfigurationTab` | **Dissolve (unmount)** | → "Change for next run" `RedeploySettingField` group on the deploy node. |
 | `ActivityTab` | **Relocate below fold** | Reuse as-is. |
-| `WorkbenchAuditPanel` | **Relocate below fold as workbench-owned read-only provenance** | Mark-poisoned lives **only** in the header `⋯`, never duplicated below the fold. The legacy cockpit-v2 `AuditTab` keeps its destructive control for the old surface until that interface is deleted. |
+| `WorkbenchAuditPanel` | **Relocate below fold as workbench-owned read-only provenance** | Mark-poisoned lives **only** in the header `⋯`, never duplicated below the fold. |
 | **New** | `RedeploySettingField`, `LockedEvidenceField`, concept help registry, Act-now bar | |
 
-No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all four. The four-tab nav is removed from bot-control entirely.
+The four-tab nav is removed from bot-control entirely; any reused tab code is an implementation detail, not a routed operator surface.
 
 ## Copy model (D6)
 
@@ -115,4 +115,4 @@ No tab files are deleted — cockpit-v2 (`broker/instances`) still mounts all fo
 ## Out of scope
 
 - Live config mutation (a future ADR with its own requirements list).
-- cockpit-v2 ↔ bot-control convergence: the fleet console (`broker/instances`) and the per-bot workbench (`broker/bots/:id`) coexist; tab-file deletion is a later fleet-console decision.
+- Deleting shared implementation helpers that the per-bot workbench still imports.

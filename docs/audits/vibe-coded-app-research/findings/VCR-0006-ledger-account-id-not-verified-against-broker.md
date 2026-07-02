@@ -112,7 +112,7 @@ Not P0 today because the paper-account refusal (DU prefix) bounds the blast radi
 - **Wrong-account fills**: an operator with IBKR_HOST/client_id misconfigured (e.g., `deployment_validation_2` inheriting env from `deployment_validation_1`'s account) deploys with `account_id="DU111"`, hashes that into `run_id`, then the engine submits orders to `DU222`. UI keeps showing `DU111`.
 - **Multi-paper-account setups** (shared Gateway, multiple paper accounts on one user) route orders to whichever account IBKR binds to, not the operator's typed one.
 - **Reconciliation drift**: account-ID-keyed reconciliation tools mismatch silently.
-- **Provenance lies**: the `[START] account=…` log line, the cockpit "Account: …" field, and the per-trade audit all keep showing the operator-typed account.
+- **Provenance lies**: the `[START] account=…` log line, the bot control page "Account: …" field, and the per-trade audit all keep showing the operator-typed account.
 
 ## Reproduction
 
@@ -141,7 +141,7 @@ if self._account_id and self._account_id.upper() != self._client.connected_accou
     )
 ```
 
-Map the error to `RunStatusSidecar.exit_reason=fatal_halt` with exit_code=2 so the cockpit's "Why it stopped" surface explains the mismatch. Pair with:
+Map the error to `RunStatusSidecar.exit_reason=fatal_halt` with exit_code=2 so the bot control page's "Why it stopped" surface explains the mismatch. Pair with:
 
 - A `session_started` event in `intent_events.jsonl` capturing BOTH `ledger.account_id` and `connected_account` for forensic traceability.
 - Per-execution capture of `connected_account` alongside `ledger.account_id` so a tampered ledger cannot retro-rewrite history.

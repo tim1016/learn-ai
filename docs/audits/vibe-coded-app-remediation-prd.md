@@ -41,7 +41,7 @@ This remediation PRD deliberately sequences work so the safety holes close first
 - Do not change strategy alpha rules.
 - Do not loosen numerical tolerances.
 - Do not regenerate golden fixtures.
-- Do not rewrite the full broker cockpit UI.
+- Do not rewrite the full Bot Control UI.
 - Do not convert the final manual to HTML/PDF in this remediation wave.
 - Do not delete medium-confidence code until owner review or stronger reachability proof exists.
 
@@ -125,7 +125,7 @@ If re-grounding disproves a finding, close it in the research report with eviden
 2. Preserve legacy ledger read compatibility in `_live_config_from_ledger`.
 3. Add `check_sizing_policy_present` to pre-flight/start checks.
 4. Enforce legacy behavior:
-   - Pre-policy ledgers may be viewed in the cockpit and Sizing card.
+   - Pre-policy ledgers may be viewed in the bot control page and Sizing card.
    - Starting a pre-policy ledger is refused with a clear error: redeploy with explicit sizing.
    - Do **not** add `--allow-pre-policy-sizing` or an equivalent bypass. Sizing is part of `live_config`, and `live_config` is hashed into `run_id`; start-time overrides would make `run_id` dishonest.
 5. Remove or quarantine comments that normalize SimpleFloor fallback for new runs.
@@ -136,7 +136,7 @@ If re-grounding disproves a finding, close it in the research report with eviden
 - Deploy with no `live_config` returns 400.
 - Deploy with `live_config={"future_field": 1, "sizing": ...}` returns 400.
 - Deploy with Safe canary serializes canonical `FixedShares(1)`.
-- Legacy ledger with no sizing loads as pre-policy in read-only/cockpit views but `cmd_start` refuses with a redeploy-required error.
+- Legacy ledger with no sizing loads as pre-policy in read-only/bot control views but `cmd_start` refuses with a redeploy-required error.
 - `check_all_in_coexistence` cannot be bypassed by absent policy.
 
 **Acceptance criteria:**
@@ -252,7 +252,7 @@ Re-validate account identity every time the IBKR connection is established or re
     "ts_ms_utc": 1234567890
   }
   ```
-- Surface in cockpit failure list.
+- Surface in bot control failure list.
 
 **Distinct event class** from `BROKER_SAFETY_VERDICT_TRANSITION_HALT`:
 
@@ -304,7 +304,7 @@ On reconnect: emit `BROKER_RECONNECTED` (on match) or halt with `RECONNECT_ACCOU
 - Reconnect to different account halts with `RECONNECT_ACCOUNT_MISMATCH_HALT`, sets durable `desired_state=PAUSED`.
 - No orders submit after a reconnect-mismatch halt.
 - `session_metadata.json` and `SESSION_STARTED` event both carry `ledger_account_id` and `connected_account`.
-- Error surfaced in run status sidecar / cockpit failure table on every mismatch path.
+- Error surfaced in run status sidecar / bot control failure table on every mismatch path.
 
 **Acceptance criteria:**
 
@@ -322,7 +322,7 @@ On reconnect: emit `BROKER_RECONNECTED` (on match) or halt with `RECONNECT_ACCOU
 
 **Required interim behavior (Phase 4):**
 
-- The cockpit MUST NOT imply runtime `RECONCILE` refreshes state.
+- The bot control page MUST NOT imply runtime `RECONCILE` refreshes state.
 - The run surface MUST warn that restart safety is not fully wired until ADR 0008 phases complete.
 - Any "Fix this" action pointing to runtime `RECONCILE` MUST be removed.
 
@@ -346,7 +346,7 @@ On reconnect: emit `BROKER_RECONNECTED` (on match) or halt with `RECONNECT_ACCOU
 - Runtime `RECONCILE` returns `accepted_noop`, never `success`.
 - UI has no "Re-sync now" button.
 - "Fix this" links do not dispatch `RECONCILE`.
-- Cockpit renders the ADR 0008 banner for active runs until durable-submit wiring status is true.
+- Bot Control renders the ADR 0008 banner for active runs until durable-submit wiring status is true.
 
 **Acceptance criteria (Phase 4):**
 
@@ -407,7 +407,7 @@ Tests:
 
 1. Invoke `ColdStartReconciler.verify()` from `cmd_start` before strategy initialization.
 2. Halt on unclassified divergence.
-3. Surface divergence details in run status/cockpit.
+3. Surface divergence details in run status/bot control.
 
 Tests:
 
@@ -442,7 +442,7 @@ Tests:
 
 **Emergency-flatten carve-out (out-of-process, explicitly operator-confirmed):**
 
-- A separate code path with `force=True` that is **not** reachable from normal runtime control. Operator confirmation is required at invocation time (CLI flag, cockpit "Emergency Flatten" confirm dialog with explicit acknowledgment).
+- A separate code path with `force=True` that is **not** reachable from normal runtime control. Operator confirmation is required at invocation time (CLI flag, bot control "Emergency Flatten" confirm dialog with explicit acknowledgment).
 - Liquidates broker-account-net positions because the alternative — leaving open broker positions during a panic — is worse than acting without ownership proof.
 - Logs loudly. Writes to `emergency_flatten_audit.jsonl`:
   ```json
@@ -455,7 +455,7 @@ Tests:
     "ts_ms_utc": 1234567890
   }
   ```
-- Cockpit failure / fleet-audit surface renders this event distinctly so it can be traced.
+- Bot Control failure / fleet-audit surface renders this event distinctly so it can be traced.
 
 **Cancel-then-liquidate ordering (sequential, no parallel-fire):**
 
@@ -619,7 +619,7 @@ This preserves the desired-state / one-shot orthogonality from CONTEXT.md while 
 
 **Acceptance criteria:**
 
-- Every cockpit command has one documented runtime effect and UI wording matches it.
+- Every bot control command has one documented runtime effect and UI wording matches it.
 
 ### Phase 7 — Paper-Mode and Provenance UI Truth
 
@@ -716,7 +716,7 @@ If a run starts under `final_verdict == "paper-only"` and later observes `final_
    }
    ```
 5. Stop / suspend the active trading loop per existing fatal-halt mechanics.
-6. The cockpit failure list renders the event with the offending gate.
+6. The bot control page failure list renders the event with the offending gate.
 
 **Resume contract (interacts with Phase 6 operator-action table):**
 
@@ -967,7 +967,7 @@ rg "broker-user-manual|Broker & Live Trading|broker manual" docs Frontend Backen
 - Deployment flow.
 - Strategy catalog and exact deploy keys.
 - EMA crossover exact behavior: 15-minute bars, EMA(5)/EMA(10), RSI(14) gate, 75-minute hold.
-- Broker cockpit states and commands.
+- Broker bot control states and commands.
 - Sizing policies and audit trail.
 - Pre-flight checklist.
 - Emergency procedures.

@@ -1,10 +1,10 @@
 # ADR 0012 — Strategy-as-signal-generator / action plan as deploy-time instrument declaration (baseline)
 
-**Status:** Proposed 2026-06-18. Slice 1A (#594) lands the foundational plumbing only — empty-plan schema, deploy-boundary acceptance, ledger hashing, registry capability flag, `/status` surfacing, cockpit read-only card. Slices 1B (#595), 1C (#596), 1D (#597), 1E (#598) extend the same surfaces with stock/option legs, parity diagnostics, and redeploy lineage. Engine consumption is **out of scope** for the PRD; it lands in Slice 4 alongside a follow-up ADR 0013.
+**Status:** Proposed 2026-06-18. Slice 1A (#594) lands the foundational plumbing only — empty-plan schema, deploy-boundary acceptance, ledger hashing, registry capability flag, `/status` surfacing, bot control read-only card. Slices 1B (#595), 1C (#596), 1D (#597), 1E (#598) extend the same surfaces with stock/option legs, parity diagnostics, and redeploy lineage. Engine consumption is **out of scope** for the PRD; it lands in Slice 4 alongside a follow-up ADR 0013.
 
-**Decision drivers:** Strategy code today decides *both* when to act and what to act on — signal logic (EMAs crossed, RSI 50–70) and instrument logic (buy 1 SPY at market) are interleaved in one Python file. `process_bar` calls `set_holdings` / `liquidate` directly. There is no clean seam to reuse a SPY-EMA-crossover signal against a stock one day and an iron condor the next without forking the strategy. The deploy/cockpit is the natural place to **declare** which instruments the bot opens on entry and closes on exit; the strategy stays the signal generator. ADR 0009 (live sizing authority) established the parallel pattern for *quantity*; this ADR establishes the same seam for *instrument*.
+**Decision drivers:** Strategy code today decides *both* when to act and what to act on — signal logic (EMAs crossed, RSI 50–70) and instrument logic (buy 1 SPY at market) are interleaved in one Python file. `process_bar` calls `set_holdings` / `liquidate` directly. There is no clean seam to reuse a SPY-EMA-crossover signal against a stock one day and an iron condor the next without forking the strategy. The deploy/bot control is the natural place to **declare** which instruments the bot opens on entry and closes on exit; the strategy stays the signal generator. ADR 0009 (live sizing authority) established the parallel pattern for *quantity*; this ADR establishes the same seam for *instrument*.
 
-**Related:** ADR 0009 (live sizing authority — quantity stays here; this ADR does NOT supersede 0009), ADR 0006 (deploy / `account_id` / `live_config` hashed into `run_id` — `live_config.action` joins the existing hash inputs), ADR 0004 (instance-addressed operator control plane — the cockpit card surfaces from `/status`), PRD #593 (this slice's parent PRD; Slices 1–3 only), follow-up ADR 0013 (deferred, Slice 4 PRD: `SignalIntent`, `StructureSizer`, the one-to-many `Decision → ActionIntent → Execution` artifact model, runtime guard against direct portfolio calls).
+**Related:** ADR 0009 (live sizing authority — quantity stays here; this ADR does NOT supersede 0009), ADR 0006 (deploy / `account_id` / `live_config` hashed into `run_id` — `live_config.action` joins the existing hash inputs), ADR 0004 (instance-addressed operator control plane — the bot control page card surfaces from `/status`), PRD #593 (this slice's parent PRD; Slices 1–3 only), follow-up ADR 0013 (deferred, Slice 4 PRD: `SignalIntent`, `StructureSizer`, the one-to-many `Decision → ActionIntent → Execution` artifact model, runtime guard against direct portfolio calls).
 
 ## Context
 
@@ -15,7 +15,7 @@ Today's surfaces (verified against repo state at this commit):
 | Strategy → broker seam | Strategies call `live_portfolio.set_holdings(symbol, fraction)` or `liquidate(symbol)` inside `process_bar`. The instrument and the broker action are baked into strategy code. |
 | `live_config` ledger keys | `LIVE_CONFIG_LEDGER_KEYS` (in `app/engine/live/config.py`) is the master allow-list; the deploy boundary rejects unknown siblings (`HostRunnerDeployRequest._validate_sizing`). Pre-Slice-1A: `{symbol, force_flat_at, consolidator_period_min, run_dir, max_submit_latency_ms, sizing}`. |
 | `run_id` derivation | `compute_run_id` (in `app/engine/live/run_ledger.py`) hashes the full `live_config` dict. Two deploys with identical hashed inputs collapse to the same `run_id` (idempotent-redeploy contract). |
-| Strategy registry capability flags | `app/routers/engine.py::StrategyRegistration` already exposes `sizing_surface ∈ {policy, explicit}` (ADR 0009 §6). The cockpit's Sizing card reads it; the runtime portfolio (`live_portfolio.set_holdings`) enforces it. |
+| Strategy registry capability flags | `app/routers/engine.py::StrategyRegistration` already exposes `sizing_surface ∈ {policy, explicit}` (ADR 0009 §6). The bot control page's Sizing card reads it; the runtime portfolio (`live_portfolio.set_holdings`) enforces it. |
 | Quantity authority | `live_config.sizing` per ADR 0009 — `OrderSizer` is the sole quantity authority. Three policies: `FixedShares`, `FixedNotional`, `SetHoldings`. |
 
 The gap: there is no schema, no ledger field, and no UI surface for the operator to declare which **instrument(s)** the bot trades. The instrument is whatever the strategy code names. Reuse across instruments requires a code edit + redeploy.
@@ -29,7 +29,7 @@ Strategy code emits signals; the deploy-form's **action plan** declares which in
 * `live_config.sizing` (ADR 0009) — quantity authority. Unchanged.
 * `live_config.action` (this ADR) — instrument authority. **New.**
 
-The action plan is a structured Pydantic v2 model — `ActionPlan{on_enter: ActionEntity[], on_exit: ExitEntity[]}`. Slice 1A ships only the empty-plan envelope so the schema, deploy boundary, ledger, hash, `/status`, and cockpit have a stable container to round-trip through before the leg shapes land in #595 / #596.
+The action plan is a structured Pydantic v2 model — `ActionPlan{on_enter: ActionEntity[], on_exit: ExitEntity[]}`. Slice 1A ships only the empty-plan envelope so the schema, deploy boundary, ledger, hash, `/status`, and bot control have a stable container to round-trip through before the leg shapes land in #595 / #596.
 
 ### 2. Schema seam — `live_config.action`
 
@@ -51,7 +51,7 @@ Every leg carries an explicit `instrument.underlying` (e.g. `"SPY"`). The deploy
 
 ### 6. `instrument_surface ∈ {policy, explicit}` capability flag — informational in Slices 1–3
 
-New `StrategyRegistration.instrument_surface` field — parallels `sizing_surface` per ADR 0009 §6. **Every current strategy registers as `"explicit"`** in Slices 1–3 (set as the default so adding a strategy doesn't silently adopt `policy`). The `/status` response reads the registered value from the strategy registry at request time (keyed by `strategy_key` recovered from the ledger) and surfaces it on the cockpit. The deploy boundary does **NOT refuse** deploys based on it — informational only. Slice 4 introduces enforcement: a `"policy"`-surface strategy that calls `set_holdings` directly will be rejected at runtime, mirroring the `sizing_surface="policy"` ↔ `set_holdings` enforcement in `live_portfolio.py`.
+New `StrategyRegistration.instrument_surface` field — parallels `sizing_surface` per ADR 0009 §6. **Every current strategy registers as `"explicit"`** in Slices 1–3 (set as the default so adding a strategy doesn't silently adopt `policy`). The `/status` response reads the registered value from the strategy registry at request time (keyed by `strategy_key` recovered from the ledger) and surfaces it on the bot control page. The deploy boundary does **NOT refuse** deploys based on it — informational only. Slice 4 introduces enforcement: a `"policy"`-surface strategy that calls `set_holdings` directly will be rejected at runtime, mirroring the `sizing_surface="policy"` ↔ `set_holdings` enforcement in `live_portfolio.py`.
 
 ### 7. Unhashed redeploy lineage — `parent_run_id` + `redeploy_reason` (Slice 1E #598)
 
@@ -61,7 +61,7 @@ New `StrategyRegistration.instrument_surface` field — parallels `sizing_surfac
 
 Pydantic enforces hard schema errors (unknown selector, `qty_ratio < 1`, exit references missing `leg_id`, duplicate `leg_id`s, missing `instrument.underlying`) at deploy. **Parity** mismatches (orphan entry leg with no matching `close_leg`, asymmetric position direction) are computed by a pure function `parity_diagnostics(plan) → list[ParityWarning]` exposed via `POST /api/live-instances/preview-action-plan`. Warnings are non-blocking — the operator can submit a plan with warnings because asymmetric structures are legitimate (calendar rolls, leg-by-leg unwinds).
 
-### 9. Cockpit honesty — "not active until engine consumption (Slice 4)"
+### 9. Bot Control honesty — "not active until engine consumption (Slice 4)"
 
 The `<app-action-plan-card>` carries the explicit literal label *"Declared action plan — not active until engine consumption (Slice 4)"*. A run's `run_id` captures **declared intent**, not what was traded. Post-hoc reconstruction can read the ledger to recover the operator's declaration; it cannot infer that the bot acted on it during Slices 1–3 because the engine does not consume `live_config.action` until Slice 4.
 
@@ -71,7 +71,7 @@ The `<app-action-plan-card>` carries the explicit literal label *"Declared actio
 
 * The strategy → instrument seam exists. Slice 4 can wire engine consumption without a schema migration; everything `run_id`-load-bearing is already in place.
 * `run_id` honestly attests to declared intent — adding `action` to the hash makes the content-addressed identity strictly more specific. Pre-Slice-1A and Slice-1A runs hash differently even when every other input is identical (a test pins this).
-* The cockpit gains an honest read-only surface for the declared plan. The label removes any ambiguity that the bot is acting on the declaration in Slices 1–3.
+* The bot control page gains an honest read-only surface for the declared plan. The label removes any ambiguity that the bot is acting on the declaration in Slices 1–3.
 * `instrument_surface` provides a forward-compatible enforcement seam (Slice 4) without changing the deploy boundary today.
 * Idempotent-redeploy contract is preserved (Slice 1E lineage fields are unhashed by design).
 
@@ -79,7 +79,7 @@ The `<app-action-plan-card>` carries the explicit literal label *"Declared actio
 
 * Adds a new `live_config` ledger key. The deploy boundary now delegates to a second Pydantic model (`ActionPlan`), increasing validator surface. Mitigated by reusing the existing `_validate_sizing` precedent — same `unknown sibling keys` allow-list pattern, same delegated round-trip via `policy_to_ledger_dict` / `ActionPlan.model_validate`.
 * `run_id` hashing now depends on a second nested structure. Future-self risk: if the schema's field ordering or default serialization changes between Pydantic versions, `run_id` could drift silently. Mitigation: explicit round-trip via `ActionPlan.model_validate(...).model_dump()` so the canonical dict shape is what enters the hash, not the operator's raw input.
-* The cockpit card and the deploy-form picker are duplicated work across Slices 1B and 1C (one extends them with stock, the next with options). Accepted because the schema variants are different enough that one big-bang slice would be unreviewable.
+* The bot control page card and the deploy-form picker are duplicated work across Slices 1B and 1C (one extends them with stock, the next with options). Accepted because the schema variants are different enough that one big-bang slice would be unreviewable.
 
 ### What this ADR does NOT decide (deferred to ADR 0013 / Slice 4)
 

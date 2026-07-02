@@ -4,7 +4,7 @@ severity: P1
 status: fixed-verified
 area: wire
 canonical_file: PythonDataService/app/routers/live_instances.py
-reference: docs/architecture/adrs/0016-bot-cockpit-trader-authored-activity-and-deploy-packages.md
+reference: docs/architecture/adrs/0016-bot-control-trader-authored-activity-and-deploy-packages.md
 first_seen: 2026-06-26
 last_seen: 2026-06-26
 fixed_in: codex/fix-ibkr-activity-evidence
@@ -13,7 +13,7 @@ phase: ad-hoc-broker-interface
 
 ## What
 
-The Activity projection attaches session-wide IBKR API evidence to each fill/order row by filtering only on request type, not on the specific order, execution, perm id, order ref, symbol, or row identity. In a multi-order session, a single fill row can therefore display evidence refs for unrelated `placeOrder`, `reqExecutionsAsync`, or `reqAllOpenOrders` observations. This weakens the Bot Cockpit's broker traceability: the UI can imply that a row is backed by request/response evidence that actually belongs to another order.
+The Activity projection attaches session-wide IBKR API evidence to each fill/order row by filtering only on request type, not on the specific order, execution, perm id, order ref, symbol, or row identity. In a multi-order session, a single fill row can therefore display evidence refs for unrelated `placeOrder`, `reqExecutionsAsync`, or `reqAllOpenOrders` observations. This weakens the Bot Control's broker traceability: the UI can imply that a row is backed by request/response evidence that actually belongs to another order.
 
 ## Where
 

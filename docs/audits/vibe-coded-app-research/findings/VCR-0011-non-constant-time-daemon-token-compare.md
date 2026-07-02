@@ -55,7 +55,7 @@ The blast radius is bounded by the daemon being bound to non-loopback (intention
 
 PRD §7 P1: "UI implies guarantees the backend/runtime does not enforce" / "critical behavior without tests/provenance." Token-equality checks on the daemon's actuation surface are the single point of authorization for every deploy/start/stop/flatten command. The standard convention (constant-time compare) is universally adopted because timing channels are subtle and the cost of fixing them is one import.
 
-Not P0 because no order or sizing math depends on a successful timing attack landing — the operator could detect the daemon being commanded externally via the cockpit instance list. But the auth surface should not be the soft target.
+Not P0 because no order or sizing math depends on a successful timing attack landing — the operator could detect the daemon being commanded externally via the bot control page instance list. But the auth surface should not be the soft target.
 
 ## Trading impact
 

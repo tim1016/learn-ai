@@ -16,7 +16,7 @@ confidence: high
 
 ## What
 
-The `FLATTEN` command verb is documented as "currently aliases to STOP" inside `live_engine.py` and persists `STOPPED` to durable desired-state. The actual flatten only fires through `_shutdown_flatten`, which depends on the bar-loop honoring `shutdown_event`. The cockpit UI advertises the verb as "Close all open positions immediately" with no signal that:
+The `FLATTEN` command verb is documented as "currently aliases to STOP" inside `live_engine.py` and persists `STOPPED` to durable desired-state. The actual flatten only fires through `_shutdown_flatten`, which depends on the bar-loop honoring `shutdown_event`. The bot control page UI advertises the verb as "Close all open positions immediately" with no signal that:
 
 1. The bot will also be **stopped** (durable intent transitions to `STOPPED`).
 2. The bot will refuse to restart until the operator explicitly redeploys or rewrites durable desired-state.
@@ -29,13 +29,13 @@ The label promises an action ("close positions"), but the runtime delivers a dif
 - `PythonDataService/app/engine/live/command_channel.py` — verbs `PAUSE`/`RESUME`/`STOP`/`FLATTEN`/`RECONCILE`/`MARK_POISONED`.
 - `PythonDataService/app/engine/live/desired_state.py` — durable `RUNNING/PAUSED/STOPPED` persistence.
 - `PythonDataService/app/engine/live/live_engine.py::_shutdown_flatten` — the actual flatten executor.
-- `Frontend/src/app/components/broker/broker-instances/**` — the cockpit's FLATTEN button labels.
+- `Frontend/src/app/components/broker/bot-control/**` — the bot control page's FLATTEN button labels.
 
 **Note**: this finding was surfaced in lens prose; the specific FLATTEN dispatcher line range was not independently re-verified by the main loop. Marked `confidence: medium` for that reason. The runtime semantics (FLATTEN = STOP + shutdown_flatten) and the UI label are the load-bearing claims; both should be re-grounded before remediation.
 
 ## Why this severity
 
-PRD §7 P1: "UI implies guarantees the backend/runtime does not enforce." The operator-facing affordance "Close all open positions immediately" is one of the highest-stakes labels in the cockpit — it's the panic button. If the operator does not realize that pressing FLATTEN also stops the bot, they may expect it to resume trading after the flatten completes (it will not), or they may use FLATTEN in scenarios (intra-session de-risk, EOD square-up) where they actually want flatten-and-keep-running.
+PRD §7 P1: "UI implies guarantees the backend/runtime does not enforce." The operator-facing affordance "Close all open positions immediately" is one of the highest-stakes labels in the bot control page — it's the panic button. If the operator does not realize that pressing FLATTEN also stops the bot, they may expect it to resume trading after the flatten completes (it will not), or they may use FLATTEN in scenarios (intra-session de-risk, EOD square-up) where they actually want flatten-and-keep-running.
 
 Not P0 because FLATTEN still does close positions (the bar-loop sees the shutdown signal and `_shutdown_flatten` runs). The gap is between the labeled affordance and the actual effect, not silent corruption.
 

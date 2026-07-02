@@ -1,7 +1,7 @@
 # ADR 0010 — Operator-action contract: "Flatten and pause" composes durable intent + one-shot, Resume is a guarded write, Stop is instance retirement
 
 **Status:** Proposed 2026-06-14. Vocabulary recorded in `CONTEXT.md` § "Operator-action contract". Grilling session: `grill-with-docs` 2026-06-14 against `docs/audits/vibe-coded-app-remediation-prd.md`. Load-bearing code claims (FLATTEN aliases STOP in `live_engine.py`; durable desired-state is the single intent knob per ADR 0004 / CONTEXT.md) verified before the session.
-**Decision drivers:** VCR-0007 (audit `docs/audits/vibe-coded-app-research/findings/VCR-0007-flatten-aliases-stop-ui-claims-immediate-close.md`) found the cockpit's FLATTEN button labelled "Close all open positions immediately" but the runtime semantics today are *FLATTEN = STOP + close positions*: durable desired-state transitions to `STOPPED`, the bot refuses to restart without redeploy, and there is no FLATTEN-without-STOP primitive. The label is the highest-stakes affordance in the cockpit (the panic button). Independently, CONTEXT.md § "Operator intent — single knob" had already established that durable desired-state (`RUNNING` / `PAUSED` / `STOPPED`) is the operator's single intent knob and that one-shots (`FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED`) are reserved for true one-shot operations. The current FLATTEN fuses a one-shot with a durable-intent change, which violates the orthogonality CONTEXT.md established. ADR 0009 / `BROKER_SAFETY_VERDICT_TRANSITION_HALT` semantics (ADR 0011) introduce halt paths that themselves set `desired_state=PAUSED` and require operator action to leave; making the Resume action *guarded* (verdict-aware) is the seam where these halt contracts compose with operator intent.
+**Decision drivers:** VCR-0007 (audit `docs/audits/vibe-coded-app-research/findings/VCR-0007-flatten-aliases-stop-ui-claims-immediate-close.md`) found the bot control page's FLATTEN button labelled "Close all open positions immediately" but the runtime semantics today are *FLATTEN = STOP + close positions*: durable desired-state transitions to `STOPPED`, the bot refuses to restart without redeploy, and there is no FLATTEN-without-STOP primitive. The label is the highest-stakes affordance in the bot control page (the panic button). Independently, CONTEXT.md § "Operator intent — single knob" had already established that durable desired-state (`RUNNING` / `PAUSED` / `STOPPED`) is the operator's single intent knob and that one-shots (`FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED`) are reserved for true one-shot operations. The current FLATTEN fuses a one-shot with a durable-intent change, which violates the orthogonality CONTEXT.md established. ADR 0009 / `BROKER_SAFETY_VERDICT_TRANSITION_HALT` semantics (ADR 0011) introduce halt paths that themselves set `desired_state=PAUSED` and require operator action to leave; making the Resume action *guarded* (verdict-aware) is the seam where these halt contracts compose with operator intent.
 **Related:** ADR 0004 (instance-addressed operator control plane — defines durable desired-state as the operator's single intent surface), ADR 0008 (durable submit / order identity — the SUBMIT_UNCERTAIN_HALT path sets `desired_state=PAUSED` and requires guarded Resume), ADR 0011 (broker safety verdict — defines the halt-on-transition path that also lands in `desired_state=PAUSED` and feeds the guarded Resume), `CONTEXT.md` § "Operator-action contract", `CONTEXT.md` § "Operator intent — single knob", `docs/audits/vibe-coded-app-remediation-prd.md` Phase 6.
 
 ## Context
@@ -11,8 +11,8 @@ Today's runtime behavior (verified against the code at session time):
 | Concern | Today |
 |---|---|
 | FLATTEN semantics | `FLATTEN` is documented to "alias to STOP" inside `live_engine.py`. Persists `STOPPED` to durable desired-state. Actual position flatten fires through `_shutdown_flatten`, which depends on the bar loop honoring `shutdown_event`. After FLATTEN, the bot will not restart without explicit operator redeploy or hand-edit of durable desired-state. |
-| UI label | The cockpit FLATTEN button is labelled along the lines of "Close all open positions immediately" with no signal that the bot also stops. The operator under stress (the moment FLATTEN matters most) sees an action verb that doesn't disclose its full effect. |
-| PAUSE / RESUME / STOP | Per CONTEXT.md § "Operator intent — single knob", PAUSE/RESUME/STOP are removed as first-class UI controls. Operator intent is conveyed by writing durable `desired_state` ∈ `{RUNNING, PAUSED, STOPPED}` via `/api/live-instances/{id}/desired-state`. The cockpit's "Pause," "Resume," and "Stop" buttons are now UI actions that drive that endpoint. |
+| UI label | The bot control page FLATTEN button is labelled along the lines of "Close all open positions immediately" with no signal that the bot also stops. The operator under stress (the moment FLATTEN matters most) sees an action verb that doesn't disclose its full effect. |
+| PAUSE / RESUME / STOP | Per CONTEXT.md § "Operator intent — single knob", PAUSE/RESUME/STOP are removed as first-class UI controls. Operator intent is conveyed by writing durable `desired_state` ∈ `{RUNNING, PAUSED, STOPPED}` via `/api/live-instances/{id}/desired-state`. The bot control page's "Pause," "Resume," and "Stop" buttons are now UI actions that drive that endpoint. |
 | One-shots | CONTEXT.md § "One-shot command channel" reserves `FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED` (and possibly `DUMP_STATUS`) for true one-shot operations. The channel is orthogonal to durable desired-state. |
 | Halt paths | ADR 0008's submit-uncertain halt and ADR 0011's broker-safety verdict transition halt both set durable `desired_state=PAUSED` and require operator action to leave. Resume from those halts must consult the current state of the world (verdict, ownership reconciliation, unresolved uncertain intents) before promoting to RUNNING — otherwise the operator can trivially re-enter the dangerous state with a button click. |
 
@@ -29,7 +29,7 @@ Shape (1) is unsafe: a bot that flattens but keeps running can re-enter on the n
 
 ### 1. UI affordances are five rows; underlying primitives are two
 
-The cockpit's primary operator actions and their effects, as locked:
+The bot control page's primary operator actions and their effects, as locked:
 
 | UI Action | Durable Intent | One-shot Work | Process |
 |---|---|---|---|
@@ -67,7 +67,7 @@ Three runtime contracts attach to Resume:
 - ADR 0011 (broker safety verdict): Resume is allowed only if `broker_safety.final_verdict == "paper-only"`.
 - This ADR: Resume is, mechanically, a write of `desired_state = RUNNING` — but the write is gated by the above contracts. The UI action's name and effect (RUNNING) are the same; what changes is that the endpoint checks the guards before promoting state.
 
-If any guard fails, durable state stays at `PAUSED` and the API surfaces the failing reason (`broker_safety_not_paper_only`, `unresolved_uncertain_intent`, `reconciliation_not_clean`, etc.). The cockpit renders the failing reason next to the Resume button so the operator can act on it.
+If any guard fails, durable state stays at `PAUSED` and the API surfaces the failing reason (`broker_safety_not_paper_only`, `unresolved_uncertain_intent`, `reconciliation_not_clean`, etc.). The bot control page renders the failing reason next to the Resume button so the operator can act on it.
 
 This makes "operator clicks Resume and bot returns to dangerous state" structurally impossible. The verdict, the reconciliation result, and the unresolved-intent ledger are all read-only inputs to the endpoint — the operator cannot bypass them by clicking the button.
 
@@ -98,15 +98,15 @@ Future revisions to this ADR may revisit either if a concrete use case appears.
 
 **Positive:**
 
-- The cockpit's panic button matches the operator's mental model. The runtime effect and the label both communicate "flatten and stand by." There is no hidden side effect.
-- Desired-state and one-shot primitives stay orthogonal — the runtime contract that CONTEXT.md established is now uniformly honored at the cockpit. `FLATTEN_NOW` is reusable from CLI/panic/scripts.
+- The bot control page's panic button matches the operator's mental model. The runtime effect and the label both communicate "flatten and stand by." There is no hidden side effect.
+- Desired-state and one-shot primitives stay orthogonal — the runtime contract that CONTEXT.md established is now uniformly honored at the bot control page. `FLATTEN_NOW` is reusable from CLI/panic/scripts.
 - Resume is structurally safe: no button click bypasses the broker safety verdict, the ownership reconciliation, or the uncertain-intent ledger.
 - STOP is reserved for instance retirement, which means operators are not trained to use it for de-risking. The "what does this button do?" surface area is small and consistent.
 
 **Negative:**
 
-- The cockpit gains an extra step for the operator who *did* want to stop the bot and flatten in one action. That operator now hits "Flatten and pause," waits for the liquidation to complete, then hits "Stop." The trade-off is intentional: the two-step is the same shape as the underlying primitives, and the one-shot can complete asynchronously while the operator decides whether STOP is the right next action.
-- The Resume button's behavior is no longer "writes RUNNING" — it is "attempts to write RUNNING, may be refused." This requires careful UI copy so operators understand why a click might not transition state. The endpoint returns a structured reason; the cockpit renders it.
+- The bot control page gains an extra step for the operator who *did* want to stop the bot and flatten in one action. That operator now hits "Flatten and pause," waits for the liquidation to complete, then hits "Stop." The trade-off is intentional: the two-step is the same shape as the underlying primitives, and the one-shot can complete asynchronously while the operator decides whether STOP is the right next action.
+- The Resume button's behavior is no longer "writes RUNNING" — it is "attempts to write RUNNING, may be refused." This requires careful UI copy so operators understand why a click might not transition state. The endpoint returns a structured reason; the bot control page renders it.
 - Existing UI code that maps the FLATTEN button to "set desired_state=STOPPED + run shutdown-flatten" needs to be rewritten to the new composition. The PRD's Phase 6 owns this work.
 - The `STOP` flatten-on-exit option is an explicitly named per-instance setting — adding it requires a small `live_config` / `StrategyRegistration` extension. Implementation lands when the use case is real.
 
@@ -115,13 +115,13 @@ Future revisions to this ADR may revisit either if a concrete use case appears.
 - The durable-state values and semantics (`RUNNING` / `PAUSED` / `STOPPED`) are unchanged.
 - The one-shot command channel verbs (`FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED`) are unchanged.
 - The instance-addressed control plane (ADR 0004) is unchanged.
-- Backend-compatible `PAUSE` / `RESUME` / `STOP` verbs on the one-shot channel (kept per CONTEXT.md for CLI / panic / older run-addressed paths) are not touched. The cockpit no longer dispatches them; CLI and panic paths may continue to.
+- Backend-compatible `PAUSE` / `RESUME` / `STOP` verbs on the one-shot channel (kept per CONTEXT.md for CLI / panic / older run-addressed paths) are not touched. The bot control page no longer dispatches them; CLI and panic paths may continue to.
 
 ---
 
 ## Amendment 2026-06-20 — PRD #616 reconciliation of contract with implementation
 
-**Status:** Amended 2026-06-20 alongside the PRD #616 cockpit-redesign work. The original ADR named "five canonical actions" but the shipped capability surface and code carried only four. The shipped guard contract on Resume was also incomplete relative to Decision 3. This amendment records the resolution.
+**Status:** Amended 2026-06-20 alongside the PRD #616 Bot Control redesign work. The original ADR named "five canonical actions" but the shipped capability surface and code carried only four. The shipped guard contract on Resume was also incomplete relative to Decision 3. This amendment records the resolution.
 
 ### A1. Five canonical actions on `operator_surface.actions`
 
@@ -137,11 +137,11 @@ operator_surface.actions = {
 }
 ```
 
-`actions.stop` shares the shared capability evaluator and the same intent-state-pair rules. The cockpit's "Stop" affordance lives in the identity-strip overflow menu (PRD #617 §"Identity / control strip") and never appears inline with normal Resume/Pause/Flatten — that placement enforces Decision 4's "heavy STOP, not a normal button" rule by separation rather than by warning copy alone. Mark Poisoned likewise lives only on the Audit tab (PRD #617 §"Audit tab").
+`actions.stop` shares the shared capability evaluator and the same intent-state-pair rules. The bot control page's "Stop" affordance lives in the identity-strip overflow menu (PRD #617 §"Identity / control strip") and never appears inline with normal Resume/Pause/Flatten — that placement enforces Decision 4's "heavy STOP, not a normal button" rule by separation rather than by warning copy alone. Mark Poisoned likewise lives only on the Audit tab (PRD #617 §"Audit tab").
 
 ### A2. Canonical render-site rule for destructive actions
 
-Each destructive action has **exactly one** canonical render site in the cockpit (PRD #617 §"Cutover criteria"):
+Each destructive action has **exactly one** canonical render site in the bot control page (PRD #617 §"Cutover criteria"):
 
 - **Mark Poisoned** → Audit tab, typed-HALT confirmation. Never inline on a readiness gate.
 - **Stop** → identity-strip overflow menu, retirement confirmation. Never inline on a readiness gate.
@@ -160,7 +160,7 @@ Decision 3 named three guards (broker safety verdict, ownership reconciliation, 
 
 ### A4. CLI `--force` deleted
 
-The legacy `--force` flag on `cmd_resume` was deleted. The cockpit cannot claim "guarded Resume is structurally safe across every entry point" while a CLI-only bypass shares the same resolver. Operators that need to clear a guard must resolve the underlying condition (re-confirm paper-only broker, reconcile uncertain intents, redeploy a poisoned run); each guard has a documented remediation path. The structural rule replaces the bypass — every other entry point shares the same resolver, so deleting `--force` was the only resolution consistent with the structural claim.
+The legacy `--force` flag on `cmd_resume` was deleted. The bot control page cannot claim "guarded Resume is structurally safe across every entry point" while a CLI-only bypass shares the same resolver. Operators that need to clear a guard must resolve the underlying condition (re-confirm paper-only broker, reconcile uncertain intents, redeploy a poisoned run); each guard has a documented remediation path. The structural rule replaces the bypass — every other entry point shares the same resolver, so deleting `--force` was the only resolution consistent with the structural claim.
 
 ### A5. Intent-state-pair rules
 
@@ -171,7 +171,7 @@ The capability evaluator layers four intent-state rules above the artifact guard
 - `STOPPED_REQUIRES_REDEPLOY` — Resume / Pause refused when current intent is STOPPED. STOPPED is the retirement state; the revival path is Redeploy (Decision 4).
 - `REDEPLOY_REQUIRED` — Resume / Pause / Stop refused when the run is poisoned. The poisoned binding is dead; revival is Redeploy.
 
-These rules apply at the capability projection only; the artifact guards apply to the mutation endpoint and the CLI as well. The structural separation keeps the "the CLI does not consult the desired-state pair" rule honest — the CLI sets durable intent; the intent-state-pair rules are cockpit-affordance presentation rules.
+These rules apply at the capability projection only; the artifact guards apply to the mutation endpoint and the CLI as well. The structural separation keeps the "the CLI does not consult the desired-state pair" rule honest — the CLI sets durable intent; the intent-state-pair rules are bot control-affordance presentation rules.
 
 
 ---
@@ -230,7 +230,7 @@ Reconcile boundaries:
 
 `OperatorSurface.broker_observation_consistency` carries a backend-authored verdict comparing the child's broker observation (from `engine_runtime.broker.connected_account`) against the data plane's singleton snapshot (from `snapshot_data_plane_broker`). Four-way verdict: `CONSISTENT` / `CONFLICTING` / `UNKNOWN` / `NOT_COMPARABLE`. Mode mismatch (paper vs live) outranks account mismatch → `NOT_COMPARABLE`.
 
-The cockpit renders the divergence card prominently on `CONFLICTING` but **never** overwrites the child's authoritative posture on `OperatorSurface.broker` — ADR-0011 makes the child observation authoritative for the bound instance; this amendment preserves that invariant.
+The bot control page renders the divergence card prominently on `CONFLICTING` but **never** overwrites the child's authoritative posture on `OperatorSurface.broker` — ADR-0011 makes the child observation authoritative for the bound instance; this amendment preserves that invariant.
 
 ### B5. Out of scope
 

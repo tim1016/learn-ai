@@ -3,13 +3,13 @@ id: VCR-0010
 severity: P1
 status: remediated
 area: ui-runtime-claims
-canonical_file: Frontend/src/app/components/broker/broker-instances/**
+canonical_file: Frontend/src/app/components/broker/bot-control/**
 reference: PRD §12.10, broker-user-manual.html §4
 first_seen: 2026-06-14
 last_seen: 2026-06-14
 remediation_progress:
   - "#502 — Phase 7A — Broker safety verdict on /broker/health (verdict surfaced; rendering wired)"
-  - "#528 — Phase 7A — Broker safety verdict card on cockpit hero"
+  - "#528 — Phase 7A — Broker safety verdict card on bot control hero"
   - "#538 — Phase 7B order-block: LivePortfolio.submit_pending_orders refuses to submit when verdict_provider returns anything other than 'paper-only' or None; raises BrokerSafetyVerdictBlockError before any broker.place_order call"
   - "#541 — Phase 7B mid-session transition observer — bar-loop poll of verdict_provider that emits BROKER_SAFETY_VERDICT_TRANSITION_HALT + halt.flag on transition out of paper-only"
   - "#548 — Phase 7B Resume guard #1 — cmd_resume consults verdict_snapshot.json written by the engine's bar-loop observer; refuses on non-paper-only without --force"
@@ -22,13 +22,13 @@ confidence: high
 
 ## What
 
-The broker-instances hero displays the static string *"Paper trading mode — no real money at risk"* with **no reactive consultation of the actual broker mode**. The runtime stack defends paper-mode at four enforcement layers (`IBKR_READONLY`, `IBKR_MODE=paper`, port-not-in-`LIVE_PORTS`, `account_id.startswith("DU")`) before `place_paper_order` returns — so the operator cannot accidentally route to a live account today. But the hero label is a **trust anchor**: an operator reading it on a misconfigured deploy (where one or more of the enforcement layers is in an unexpected state) would receive false reassurance even though the runtime is blocking.
+The bot-control hero displays the static string *"Paper trading mode — no real money at risk"* with **no reactive consultation of the actual broker mode**. The runtime stack defends paper-mode at four enforcement layers (`IBKR_READONLY`, `IBKR_MODE=paper`, port-not-in-`LIVE_PORTS`, `account_id.startswith("DU")`) before `place_paper_order` returns — so the operator cannot accidentally route to a live account today. But the hero label is a **trust anchor**: an operator reading it on a misconfigured deploy (where one or more of the enforcement layers is in an unexpected state) would receive false reassurance even though the runtime is blocking.
 
 The flip case is what makes this P1: a future toggle to live mode (the deploy form already has a "Live mode can place real orders" dialog — see VCR-P3-rollup) would not be reflected in the hero. The hero would continue to say "Paper trading mode — no real money at risk" while the runtime gates allow real orders.
 
 ## Where
 
-- `Frontend/src/app/components/broker/broker-instances/**` — hardcoded hero string (specific component and line range to re-verify).
+- `Frontend/src/app/components/broker/bot-control/**` — hardcoded hero string (specific component and line range to re-verify).
 - `PythonDataService/app/broker/ibkr/orders.py::place_paper_order` — the four-layer enforcement stack.
 - `PythonDataService/app/config.py` — `IBKR_MODE`, `IBKR_READONLY` settings.
 - `docs/broker-user-manual.html` § 4 — claims paper-only as a product property.

@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
-import { IbkrApiEvidencePanelComponent } from '../cockpit-v2/reused/ibkr-api-evidence-panel/ibkr-api-evidence-panel.component';
+import { IbkrApiEvidencePanelComponent } from './reused/ibkr-api-evidence-panel/ibkr-api-evidence-panel.component';
 import {
   buildDiagnosticEvidenceLines,
   buildProofLines,

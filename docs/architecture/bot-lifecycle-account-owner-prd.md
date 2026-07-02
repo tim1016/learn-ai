@@ -10,7 +10,7 @@
 
 ## Problem Statement
 
-Bot Cockpit has many useful gates, but they are spread across start routing, runtime pre-flight, readiness, reconciliation, operator actions, broker order safety, and watchdog shutdown. That makes the system hard to reason about and leaves gaps where one bot's failed lifecycle can contaminate the shared IBKR account and trigger more failures.
+Bot Control has many useful gates, but they are spread across start routing, runtime pre-flight, readiness, reconciliation, operator actions, broker order safety, and watchdog shutdown. That makes the system hard to reason about and leaves gaps where one bot's failed lifecycle can contaminate the shared IBKR account and trigger more failures.
 
 The root cause is that a broker account is a shared mutable resource. IBKR does not enforce our per-bot ownership model, and it will not reject a stale process's `placeOrder` just because our control-plane lease changed. Today, the host daemon runs one OS subprocess per `strategy_instance_id`; each child has its own in-process submit lock. That is still multiple writers to one account, not a true single-writer design.
 
@@ -167,7 +167,7 @@ flowchart LR
     predicate["Enforcement predicate<br/>returns GateResult"]
     mutation["Mutation/start/submit path<br/>uses GateResult"]
     board["Gate board row<br/>same GateResult"]
-    ui["Bot Cockpit render<br/>no inferred meaning"]
+    ui["Bot Control render<br/>no inferred meaning"]
     next["Operator next step<br/>reconnect / reconcile / emergency flatten<br/>baseline / override / redeploy"]
 
     predicate --> mutation

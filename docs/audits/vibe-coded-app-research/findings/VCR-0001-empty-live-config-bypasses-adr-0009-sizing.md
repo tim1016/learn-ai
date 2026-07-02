@@ -37,7 +37,7 @@ Closed by issue #493. The deploy boundary now refuses empty / sizing-less
    identity fingerprint dishonest.
 
 Read-only paths stay open: ``_live_config_from_ledger`` still hydrates
-pre-policy ledgers for cockpit / Sizing-card inspection
+pre-policy ledgers for bot control / Sizing-card inspection
 (``LiveConfig(sizing=None)``). ``check_sizing_policy_present`` is registered
 in ``app/engine/live/pre_flight.py`` for the manual pre-flight subcommand.
 

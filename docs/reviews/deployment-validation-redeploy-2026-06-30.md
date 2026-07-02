@@ -57,7 +57,7 @@ NVDA -> SPY:
    - Action: fetched IBKR paper positions with diagnostic client id `90`,
      confirmed `positions=[]`, and cleared the freeze with recovery proof
      `restart-freeze-clear-c8cf1ff4ffda`.
-   - Improvement: the cockpit should present a countdown and queue launches
+   - Improvement: the bot control page should present a countdown and queue launches
      instead of letting the third start write an ACTIVE binding that freezes the
      account.
 
@@ -93,8 +93,8 @@ NVDA -> SPY:
 ## Follow-Up Candidates
 
 - Enforce `strategy_instance_id` length against `order_ref` before deploy/start.
-- Surface restart-intensity remaining cooldown in the cockpit.
-- Show the delayed-order countdown/queue state in the cockpit while waiting for
+- Surface restart-intensity remaining cooldown in the bot control page.
+- Show the delayed-order countdown/queue state in the bot control page while waiting for
   next-bar fills.
 - Enforce the broker `orderRef` budget at ledger/deploy mint time.
 - Make action-plan trade targets first-class in the live preflight/operator

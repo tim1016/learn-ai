@@ -166,7 +166,7 @@ green so a deploy goes through cleanly.</p>
 (<code>http://localhost:4200</code>):</p>
 <table>
 <tr><th>Page</th><th>URL path</th><th>What it's for</th></tr>
-<tr><td>Instances console</td><td><code>/broker/instances</code></td><td>Your home base — see every bot, its health, start/stop/pause.</td></tr>
+<tr><td>Bots</td><td><code>/broker/bots</code></td><td>Your home base — see every bot, its health, start/stop/pause.</td></tr>
 <tr><td>Deploy form</td><td><code>/broker/deploy</code></td><td>Create a new live run from a strategy (Stage 1 of deploy).</td></tr>
 <tr><td>Account monitor / orders / reconciliation</td><td><code>/broker/...</code></td><td>Account positions, order history, and trade reconciliation.</td></tr>
 </table>
@@ -232,7 +232,7 @@ daemon</strong>, which sits <em>outside</em> the containers because the broker f
        │  click Deploy / Start / Pause
        ▼
  ┌─────────────────────────┐
- │  Frontend (Angular)     │   /broker/instances , /broker/deploy
+ │  Frontend (Angular)     │   /broker/bots , /broker/deploy
  │  localhost:4200         │   shows health, sends your intent
  └───────────┬─────────────┘
              │  HTTP
@@ -327,7 +327,7 @@ is which is half the battle.</p>
 <table>
 <tr><th>&nbsp;</th><th>Checklist A — Deploy readiness</th><th>Checklist B — Morning pre-flight</th></tr>
 <tr><td><strong>When</strong></td><td>On the Deploy form, <em>before</em> you create a run.</td><td>Each trading morning, <em>before</em> the bot's first decision.</td></tr>
-<tr><td><strong>Where you see it</strong></td><td><code>/broker/deploy</code> — "Now checks" and "Deploy checks" panels.</td><td>The instance console readiness panel; CLI <code>run pre-flight</code>.</td></tr>
+<tr><td><strong>Where you see it</strong></td><td><code>/broker/deploy</code> — "Now checks" and "Deploy checks" panels.</td><td>The bot control panel readiness panel; CLI <code>run pre-flight</code>.</td></tr>
 <tr><td><strong>Question it answers</strong></td><td>"Can I create and (optionally) start this run right now?"</td><td>"Is it safe for this already-deployed bot to trade <em>today</em>?"</td></tr>
 <tr><td><strong>If it fails</strong></td><td>Deploy is blocked; nothing is created.</td><td>The bot sits out the day; yesterday's record stays valid.</td></tr>
 </table>
@@ -478,7 +478,7 @@ python -m app.engine.live.run stop    --strategy-instance-id spy-ema-prod-001</p
 <section>
 <h2>8 · Daily operation: start, pause, stop, monitor</h2>
 
-<p>Day-to-day you live in the <strong>instance console</strong> (<code>/broker/instances</code>). It is organized by
+<p>Day-to-day you live in the <strong>bot control panel</strong> (<code>/broker/bots</code>). It is organized by
 <em>instance</em>, and for each one it merges three views into a single picture:</p>
 <ul>
   <li><strong>Process state</strong> (from the daemon): is a process alive, what's its PID, which run is it bound to?</li>
@@ -722,7 +722,7 @@ run emergency-flatten # close all (panic)</pre>
 
 <h4>Key locations</h4>
 <ul>
-  <li>Console: <code>/broker/instances</code></li>
+  <li>Console: <code>/broker/bots</code></li>
   <li>Deploy: <code>/broker/deploy</code></li>
   <li>Specs: <code>app/engine/strategy/spec/fixtures/</code></li>
   <li>Algorithms: <code>app/engine/strategy/algorithms/</code></li>

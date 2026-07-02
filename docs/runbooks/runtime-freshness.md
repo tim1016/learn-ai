@@ -1,6 +1,6 @@
 # Runtime Freshness Notices
 
-Operator-facing playbook for the `runtime.*` notice family. The cockpit
+Operator-facing playbook for the `runtime.*` notice family. The bot control page
 banner renders these verbatim; this document is what links from
 `runbook_slug`.
 
@@ -46,7 +46,7 @@ window. The bot is protecting itself.
 
 ### `runtime.broker_probe_missing`
 
-The broker probe has not run since the bot started. Cockpit sees no
+The broker probe has not run since the bot started. Bot Control sees no
 broker telemetry.
 
 **Trader action:** check that the broker daemon is connected.
@@ -61,7 +61,7 @@ verify positions at IBKR**.
 
 ### `runtime.engine_runtime_incompatible`
 
-The engine runtime version is incompatible with the cockpit. The bot
+The engine runtime version is incompatible with the bot control page. The bot
 will not start trading.
 
 **Trader action:** redeploy with a matching runtime.
@@ -71,13 +71,13 @@ will not start trading.
 Another control-plane lease holder hasn't checked in. The bot is in a
 guarded state.
 
-**Trader action:** verify only one cockpit/runner is attached to this
+**Trader action:** verify only one bot control/runner is attached to this
 run.
 
 ### `runtime.control_plane_boot_id_mismatch`
 
-The engine reports a different boot ID than the cockpit. A restart
-happened that the cockpit did not initiate.
+The engine reports a different boot ID than the bot control page. A restart
+happened that the bot control page did not initiate.
 
-**Trader action:** **STOP** trusting cockpit state; reconcile positions
+**Trader action:** **STOP** trusting bot control state; reconcile positions
 at IBKR; redeploy.

@@ -56,7 +56,7 @@ Run this list before the first submission. Each line corresponds to a checked ga
 - [ ] Paper account ID **starts with `DU`** and matches what the broker reports.
 - [ ] Working tree is clean if the strategy requires it (deployment_validation uses `clean_tree_required=false` per its registry entry).
 - [ ] No existing `halt.flag` in the run dir.
-- [ ] Cockpit broker safety verdict reads `paper-only` (green hero band). If amber `unknown` or red `unsafe`, **stop** and resolve before deploying — Phase 7A surfaces the verdict; Phase 7B enforcement that would block orders on amber/red is still pending (deferred — see §6).
+- [ ] Bot Control broker safety verdict reads `paper-only` (green hero band). If amber `unknown` or red `unsafe`, **stop** and resolve before deploying — Phase 7A surfaces the verdict; Phase 7B enforcement that would block orders on amber/red is still pending (deferred — see §6).
 
 ---
 
@@ -96,18 +96,18 @@ Per Phase 1 (VCR-0001 closure), the deploy boundary will refuse `live_config.siz
 
 | Indicator | Where to look |
 |-----------|---------------|
-| Broker safety verdict | Cockpit hero band; should read `paper-only`. |
+| Broker safety verdict | Bot Control hero band; should read `paper-only`. |
 | Pre-flight gate | Run-dir `pre_flight_report.json` lists each gate's verdict at start. |
-| Sizing audit | Cockpit Sizing card; should show 1 row per fired signal with `policy_kind=FixedShares, policy_value=1, intended_qty=1`. |
+| Sizing audit | Bot Control Sizing card; should show 1 row per fired signal with `policy_kind=FixedShares, policy_value=1, intended_qty=1`. |
 | Intent WAL | `artifacts/live_runs/<run_id>/intent_events.jsonl`. With `e9469910` you should see `[SIZING_RESOLVED, PENDING_INTENT, SUBMITTED]` per entry submit, and a matching trio per liquidate. With `a5994e95` no `SIZING_RESOLVED` rows since that's Phase 8. |
-| Halt flag | Run-dir `halt.flag` should NOT appear during a clean session. If it does, read it and surface in the cockpit failure list. |
+| Halt flag | Run-dir `halt.flag` should NOT appear during a clean session. If it does, read it and surface in the bot control page failure list. |
 | Order ref on broker side | Every IBKR order should carry `orderRef = learn-ai/<run_id>/v1:<intent_id>` (Phase 5A). Verify with the IBKR TWS Account Window → Orders pane. |
 
 ### 4.4 Emergency stop procedures
 
 From cleanest to most aggressive:
 
-1. **"Flatten and pause"** (cockpit panic button) — writes `desired_state=PAUSED`, then enqueues `FLATTEN_NOW`. Process stays alive; you can resume. Safe.
+1. **"Flatten and pause"** (bot control panic button) — writes `desired_state=PAUSED`, then enqueues `FLATTEN_NOW`. Process stays alive; you can resume. Safe.
 2. **STOP** — graceful shutdown, optional `--with-flatten`. Returns `still_running_after_2s` if the process doesn't honor SIGTERM (Phase 6B / VCR-0018-B). The runner exits.
 3. **CLI emergency flatten** — `python -m app.engine.live.run emergency-flatten --account DU... --confirm`. Now (per PR #532, VCR-0009) cancels owned open orders BEFORE liquidating, so an open SELL limit can no longer race the emergency SELL market.
 4. **Hard kill**: `podman exec polygon-data-service pkill -TERM -f "engine.live.run start"` — bypasses WAL ordering. The next start of the same `run_id` will go through `ColdStartReconciler.verify()` (Phase 5B) and halt if it can't classify the divergence.
@@ -152,7 +152,7 @@ After your deploy succeeds, merge #533 from a position of confidence.
    - `broker_safety.final_verdict == "paper-only"`
    - `ColdStartReconciler.verify()` last result is `clean`
    - No unresolved `ACK_FAILED_UNCERTAIN` in WAL
-   - Refuse Resume otherwise; surface the blocking guard in the cockpit.
+   - Refuse Resume otherwise; surface the blocking guard in the bot control page.
 
 2. **Phase 5C — ownership-query gates** (VCR-0009 deferred extras). The minimum-viable cancel-first fix shipped in PR #532; the full Phase 5C still owes:
    - `IbkrBrokerOwnershipQuery(VerifiedBrokerOwnershipQuery)` subclass — base class already exists at `app/engine/live/broker_ownership_query.py:44-60`.
@@ -198,7 +198,7 @@ After your deploy succeeds, merge #533 from a position of confidence.
 | Deploy refused with `live_config.sizing is required` (HTTP 422) | Phase 1 / VCR-0001 closure working as designed | Add `"sizing": { "kind": "FixedShares", "value": 1 }` to the deploy payload |
 | Runner refuses to start: "account identity mismatch" | Phase 3 start-time gate fired | Confirm `ledger.account_id` matches IBKR `connected_account`. **Redeploy** — do not hand-edit the ledger; the field is hashed into `run_id`. |
 | `Strategy key not found` at start | Phase 2 / VCR-0004 registry mismatch | Confirm `strategy_key` is exactly `deployment_validation` (the module name). |
-| Cockpit hero amber `Broker safety unknown` | Phase 7A verdict gate fired pre-start | One of the four gates not positively verifiable: `IBKR_MODE`, `IBKR_READONLY`, port not in `PAPER_PORTS`, account not starting with `DU`. Resolve and redeploy. |
+| Bot Control hero amber `Broker safety unknown` | Phase 7A verdict gate fired pre-start | One of the four gates not positively verifiable: `IBKR_MODE`, `IBKR_READONLY`, port not in `PAPER_PORTS`, account not starting with `DU`. Resolve and redeploy. |
 | `halt.flag` from prior run | Phase 6D pre-flight rerun | Inspect halt cause. **Do not** silently `rm halt.flag` for a SUBMIT_UNCERTAIN / cold-start divergence cause. |
 | Emergency Flatten produced an over-sell | Pre-#532 master would have had this | Confirm you're on `e9469910` or later; PR #532 fix is in. If you're on `a5994e95`, the cancel-first fix is NOT there — be extra cautious. |
 

@@ -15,7 +15,7 @@ A broker-activity row is the join of two streams:
 
 **Row identity is broker-authored, overlay is engine-authored.** The broker decides whether a row exists at all (no execution → no row, with one exception below). The engine, when it can be joined, decides what *should have happened* — requested qty, requested price, sizing policy, and the four-phase latency clock. Authoring happens at that join, in `broker_activity_reconciler.author_row_from_event` (`PythonDataService/app/services/broker_activity_reconciler.py:413`).
 
-The one exception is `ENGINE_ONLY_PENDING`: an unacked intent. The publisher synthesises a placeholder row via `author_pending_row` so the cockpit's "Working / Pending Orders" panel has something to show. It is broker-empty by construction and transitions out when a real broker event arrives.
+The one exception is `ENGINE_ONLY_PENDING`: an unacked intent. The publisher synthesises a placeholder row via `author_pending_row` so the bot control page's "Working / Pending Orders" panel has something to show. It is broker-empty by construction and transitions out when a real broker event arrives.
 
 ## Latency anatomy
 

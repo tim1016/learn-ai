@@ -2,7 +2,7 @@
 
 **Status:** Proposed 2026-06-30. Drafted during the 2026-06-30 bot lifecycle control-panel grilling session.
 **Decision drivers:** The per-bot workbench (`broker/bots/:id`) was organized around implementation tabs (Status & Risk / Activity / Audit / Configuration) that no longer match the product as the lifecycle chart accrues numerical receipts and new variables; the tab layout no longer fits the page; trader-facing surfaces were at risk of leaking raw enum codes as primary copy; "posture" was used as an overloaded, sometimes frontend-derived label; and there was no clear home for "what field or proof needs action" guidance.
-**Related:** ADR 0013 (operator-surface boundary: judgment vs evidence — amended by Slice 3), ADR 0014 (broker-authored operator view, backend-rendered narratives), ADR 0015 (operator notice contract), ADR 0016 (Bot Cockpit trader-authored activity and deploy packages), `CONTEXT.md` (Live operator console glossary), PRD #718, `docs/bot-lifecycle-workbench-redesign.md` (implementation spec).
+**Related:** ADR 0013 (operator-surface boundary: judgment vs evidence — amended by Slice 3), ADR 0014 (broker-authored operator view, backend-rendered narratives), ADR 0015 (operator notice contract), ADR 0016 (Bot Control trader-authored activity and deploy packages), `CONTEXT.md` (Live operator console glossary), PRD #718, `docs/bot-lifecycle-workbench-redesign.md` (implementation spec).
 
 ## Context
 
@@ -13,7 +13,7 @@ The current page is organized around implementation tabs (Status & Risk, Activit
 1. **The chart embeds guidance it should not own.** `overview-tab.component.html` renders `<app-trader-guidance-pane>` inside the chart component. The chart should render only the lifecycle graph; meaning belongs in the inspector.
 2. **The right pane is a tab container, not an inspector.** Four implementation tabs answer implementation questions, not the trader's one question.
 3. **Raw enum codes can reach primary trader copy.** The Act-now bar sources disabled reasons from `lifecycle_chart.actions[].reason`, whose `_capability_reason` fallback (`bot_lifecycle_chart.py`) returns a raw code such as `NO_LIVE_BINDING`, rendered verbatim by `overview-actions`. The parity-tested copy table (`disabled-reason-copy.ts`) is bypassed.
-4. **"Posture" is overloaded and sometimes derived in Angular.** Execution posture (engine `effective_posture`), position posture (`current_risk.posture`), and broker safety verdict (`broker.safety_verdict`) are three different facts wearing one word; the cockpit re-derives execution posture instead of consuming a backend field.
+4. **"Posture" is overloaded and sometimes derived in Angular.** Execution posture (engine `effective_posture`), position posture (`current_risk.posture`), and broker safety verdict (`broker.safety_verdict`) are three different facts wearing one word; the bot control page re-derives execution posture instead of consuming a backend field.
 5. **No live config-mutation path exists, yet the proposed UI implied editable fields.** Daily order cap, sizing, hydrate policy, and action plan are deploy-time settings with no PATCH endpoint and no editability contract on `operator_surface`.
 
 ## Decision
@@ -36,7 +36,7 @@ The header carries two distinct, qualified chips: **Execution** (`PAPER_EXECUTIO
 
 ### 5. Trader copy: backend authors state; raw codes appear only as receipts
 
-Backend authors live verdicts and reasons. Angular renders them verbatim. A raw reason code may appear only when framed as a receipt/provenance fact, never as the primary explanation. Slice 3 moves per-bot action-reason prose to the backend: `lifecycle_chart.actions[]` carries `reason_code` / `reason_headline` / `reason_detail`, the Act-now bar renders headline/detail directly, and `reason_code` is displayed only as `Receipt: ...`. The per-bot workbench must not map action codes through `disabled-reason-copy.ts` or infer action prose from `operator_surface.actions[id]`; the shared copy table remains only for legacy cockpit-v2/fleet-console surfaces while they exist.
+Backend authors live verdicts and reasons. Angular renders them verbatim. A raw reason code may appear only when framed as a receipt/provenance fact, never as the primary explanation. Slice 3 moves per-bot action-reason prose to the backend: `lifecycle_chart.actions[]` carries `reason_code` / `reason_headline` / `reason_detail`, the Act-now bar renders headline/detail directly, and `reason_code` is displayed only as `Receipt: ...`. The per-bot workbench must not map action codes through `disabled-reason-copy.ts` or infer action prose from `operator_surface.actions[id]`; the shared copy table remains only for legacy bot-control/bot-catalog surfaces while they exist.
 
 ### 6. Tooltips explain concepts; verdicts explain state
 
@@ -44,7 +44,7 @@ Educational tooltips are a static frontend registry keyed on stable ids (node id
 
 ## Scope
 
-This decision redesigns the **per-bot lifecycle workbench only** (`broker/bots/:id`). The shared cockpit-v2 tab components (`StatusRiskTab`, `ActivityTab`, `AuditTab`, `ConfigurationTab`) remain in the codebase because the fleet console (`broker/instances`) still mounts them. No tab files are deleted in this work. Deletion requires a later fleet-console convergence decision that is explicitly out of scope here.
+This decision redesigns the **per-bot lifecycle workbench only** (`broker/bots/:id`). The shared bot-control tab components (`StatusRiskTab`, `ActivityTab`, `AuditTab`, `ConfigurationTab`) remain in the codebase because the bot catalog (`broker/bots`) still mounts them. No tab files are deleted in this work. Deletion requires a later bot-catalog convergence decision that is explicitly out of scope here.
 
 ## Consequences
 
@@ -53,5 +53,5 @@ This decision redesigns the **per-bot lifecycle workbench only** (`broker/bots/:
 - **+** No frontend-derived chips, so the instrument panel cannot teach false confidence.
 - **+** Ships frontend-only first (Slice 1, including the raw-code fix); backend work (Execution posture, action prose) is additive and independently testable.
 - **+** Slice 3 removes the per-bot action-copy side lookup: lifecycle actions now carry backend-authored trader prose and raw codes are receipts only.
-- **−** Two per-bot/fleet surfaces coexist until a later fleet-console cutover; the dissolved tab components linger as cockpit-v2 dependencies.
+- **−** Two per-bot/fleet surfaces coexist until a later bot-catalog cutover; the dissolved tab components linger as bot-control dependencies.
 - **−** Two backend-authored posture chips now coexist by design: Execution can say `UNSAFE` while Broker proof carries the detailed safety verdict and receipts. Operators must read them as different facts, not synonyms.

@@ -59,7 +59,7 @@ describe('operator_surface wire contract', () => {
   it('exposes the expected top-level keys on every fixture', () => {
     // PRD #607 (cockpit revision) added ``trading_session``; PRD #616
     // added ``readiness_gates``.  Both fixtures must carry the full
-    // set so the cockpit-v2 renderer cannot encounter a missing block.
+    // set so the Bot Control renderer cannot encounter a missing block.
     const expected = [
       'schema_version',
       'host_process',

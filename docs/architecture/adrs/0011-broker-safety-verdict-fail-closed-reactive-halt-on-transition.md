@@ -1,7 +1,7 @@
 # ADR 0011 — Broker safety verdict: per-gate, fail-closed, reactive, order-blocking on unsafe, start-blocking on unknown, halt-on-transition on degradation, guarded Resume
 
-**Status:** Proposed 2026-06-14. **Amended 2026-06-21 (PRD #619-A) — Decision §2 derivation: `paper-only` no longer requires `readonly_flag == true`. Identity (`configured_mode=paper ∧ paper_port ∧ DU account`) and submission capability are independent facts. See "Amendment 2026-06-21" block after Decision §9.** Vocabulary recorded in `CONTEXT.md` § "Broker safety verdict" and § "QC provenance card split". Grilling session: `grill-with-docs` 2026-06-14 against `docs/audits/vibe-coded-app-remediation-prd.md`. Load-bearing code claims (four-layer paper enforcement in `broker/ibkr/orders.py::place_paper_order`; hardcoded "Paper trading mode" string in `broker-instances` hero per VCR-0010; `qc_cloud_backtest_id` labelled "QC-approved" per VCR-0014) verified before the session.
-**Decision drivers:** VCR-0010 found the `broker-instances` cockpit hero displays the static string *"Paper trading mode — no real money at risk"* with no reactive consultation of the actual broker mode. The runtime enforces paper-only at four layers — `IBKR_READONLY`, `IBKR_MODE=paper`, port-not-in-`LIVE_PORTS`, `account_id.startswith("DU")` — but the **hero is a trust anchor**: an operator reading it on a misconfigured deploy (one or more enforcement layers in an unexpected state) would receive false reassurance even though the runtime is blocking. The flip case — a future toggle to live mode — would not be reflected in the hero. VCR-0014 found `qc_cloud_backtest_id` labelled "QC-approved" with no verification path; the operator-recorded id is treated as if it were a verified fact. Both are instances of the same UI-truth failure: a label promising a guarantee independent of any verifiable runtime fact. The grilling session generalized this into a verdict design that (a) binds the hero to a server-derived structured judgment, (b) treats the verdict as a runtime gate not just a display, and (c) splits the provenance card so verified facts and operator-recorded facts cannot share a single misleading label.
+**Status:** Proposed 2026-06-14. **Amended 2026-06-21 (PRD #619-A) — Decision §2 derivation: `paper-only` no longer requires `readonly_flag == true`. Identity (`configured_mode=paper ∧ paper_port ∧ DU account`) and submission capability are independent facts. See "Amendment 2026-06-21" block after Decision §9.** Vocabulary recorded in `CONTEXT.md` § "Broker safety verdict" and § "QC provenance card split". Grilling session: `grill-with-docs` 2026-06-14 against `docs/audits/vibe-coded-app-remediation-prd.md`. Load-bearing code claims (four-layer paper enforcement in `broker/ibkr/orders.py::place_paper_order`; hardcoded "Paper trading mode" string in `bot-control` hero per VCR-0010; `qc_cloud_backtest_id` labelled "QC-approved" per VCR-0014) verified before the session.
+**Decision drivers:** VCR-0010 found the `bot-control` bot control hero displays the static string *"Paper trading mode — no real money at risk"* with no reactive consultation of the actual broker mode. The runtime enforces paper-only at four layers — `IBKR_READONLY`, `IBKR_MODE=paper`, port-not-in-`LIVE_PORTS`, `account_id.startswith("DU")` — but the **hero is a trust anchor**: an operator reading it on a misconfigured deploy (one or more enforcement layers in an unexpected state) would receive false reassurance even though the runtime is blocking. The flip case — a future toggle to live mode — would not be reflected in the hero. VCR-0014 found `qc_cloud_backtest_id` labelled "QC-approved" with no verification path; the operator-recorded id is treated as if it were a verified fact. Both are instances of the same UI-truth failure: a label promising a guarantee independent of any verifiable runtime fact. The grilling session generalized this into a verdict design that (a) binds the hero to a server-derived structured judgment, (b) treats the verdict as a runtime gate not just a display, and (c) splits the provenance card so verified facts and operator-recorded facts cannot share a single misleading label.
 **Related:** ADR 0002 (shadow-mode adapter-level no-submit — a sibling enforcement layer), ADR 0006 (deploy / account_id hashed into `run_id` — the deploy-time identity that ADR 0011's connected-account-prefix gate cross-checks at runtime), ADR 0008 (durable submit / order identity — `SUBMIT_UNCERTAIN_HALT` is a sibling halt path with similar Resume-guard semantics), ADR 0010 (operator-action contract — Resume's guarded-write contract composes with this ADR's verdict gate), ADR 0009 (live sizing authority — the audit-copy allow-list this ADR's QC provenance card surfaces), `CONTEXT.md` § "Broker safety verdict", `CONTEXT.md` § "QC provenance card split", `CONTEXT.md` § "Readiness gate", `docs/audits/vibe-coded-app-remediation-prd.md` Phase 7, `.claude/rules/numerical-rigor.md` ("numerical claims require receipts").
 
 ## Context
@@ -11,7 +11,7 @@ Today's runtime + UI state (verified against the code at session time):
 | Concern | Today |
 |---|---|
 | Paper-only enforcement | `broker/ibkr/orders.py::place_paper_order` enforces paper-only at four layers before any order is placed: `IBKR_READONLY` flag, `IBKR_MODE=paper`, port-not-in-`LIVE_PORTS`, `account_id.startswith("DU")`. Connection-time, the IBKR client also fails closed if `managedAccounts()` returns more than one account (no silent FA-sub-account selection). |
-| Cockpit hero | `broker-instances` hero renders a hardcoded string "Paper trading mode — no real money at risk" with no consultation of the runtime gates. |
+| Bot Control hero | `bot-control` hero renders a hardcoded string "Paper trading mode — no real money at risk" with no consultation of the runtime gates. |
 | QC provenance card | `qc_cloud_backtest_id` is rendered with a label that implies verification ("QC-approved" or equivalent) although no QC Cloud API verification path exists. |
 | Readiness model | CONTEXT.md § "Readiness gate" already established the *engine-authored* readiness verdict (instance-scoped, structured `{verdict, summary, gates: […]}`). The broker safety surface fits the same model but at a different altitude: it is about the **enforcement environment**, not the strategy's bar-loop readiness. |
 | Account identity gate | Phase 3 of the remediation PRD (`ledger.account_id == broker.connected_account` strict match, halt on reconnect mismatch) is a sibling runtime gate. It overlaps with this ADR's `connected_account_prefix` gate but checks a different thing (identity match, not prefix shape). Both are runtime-enforced. |
@@ -20,7 +20,7 @@ The audit grilling enumerated four design axes:
 
 1. **Granularity.** Verdict-only string vs. per-gate breakdown plus derived verdict. Verdict-only forces operators to file a support ticket to find out why the hero is amber; per-gate breakdown makes the failing input testable independently.
 2. **Derivation rule.** Optimistic ("assume paper unless we see live"), pessimistic ("require positive paper confirmation on every gate"), or hybrid. The hero is a *trust anchor*; trust nothing it cannot verify → fail-closed.
-3. **Reactivity.** On-connect snapshot vs. reactive on the existing broker-status transport. A connect-time snapshot can mask a mid-session env-reload, gateway reclassification, or reconnect to a different account; reactive ties the verdict to the same payload that already updates the cockpit.
+3. **Reactivity.** On-connect snapshot vs. reactive on the existing broker-status transport. A connect-time snapshot can mask a mid-session env-reload, gateway reclassification, or reconnect to a different account; reactive ties the verdict to the same payload that already updates the bot control page.
 4. **Runtime force.** Hero color only vs. order-blocking on unsafe + start-blocking on unknown + halt-on-transition on degradation. Hero-only leaves the runtime continuing to act under a verdict that says it should not — the failure mode VCR-0010 framed as "the day a 'live mode' path lands, this hero becomes silent corruption of operator expectations." Runtime force makes the verdict load-bearing.
 
 ## Decision
@@ -39,7 +39,7 @@ type BrokerSafetyVerdict = {
 };
 ```
 
-Per-gate fields are independently testable (every gate's derivation is one assertion in a parameterized test). `failing_gates` and `unknown_gates` carry the labels the cockpit and CLI surface; the operator never needs to compose a reason from raw fields.
+Per-gate fields are independently testable (every gate's derivation is one assertion in a parameterized test). `failing_gates` and `unknown_gates` carry the labels the bot control page and CLI surface; the operator never needs to compose a reason from raw fields.
 
 ### 2. Fail-closed derivation — `paper-only` requires positive confirmation on every gate
 
@@ -63,7 +63,7 @@ The hero is a trust anchor; any missing signal degrades to `unknown`, never to `
 
 ### 3. Reactive transport — rides the existing broker status / readiness payload
 
-The verdict is computed in the Backend and embedded in the existing broker-status / readiness payload that the cockpit polls (or receives via SSE). No new transport. No connect-time cache as the source of truth.
+The verdict is computed in the Backend and embedded in the existing broker-status / readiness payload that the bot control page polls (or receives via SSE). No new transport. No connect-time cache as the source of truth.
 
 Rationale: a connect-time snapshot would mask a mid-session env-reload, gateway reclassification, account-disconnect-and-reconnect-to-different-account, or `IBKR_READONLY` toggle. The verdict must be re-derived every poll cycle so any state change is visible on the next render.
 
@@ -82,14 +82,14 @@ A running bot captures `startup_broker_safety_verdict` at run start. A `verdict_
 1. Block new order submission immediately.
 2. Write `halt.flag` (existing fatal-halt artifact).
 3. Set durable `desired_state = PAUSED` — **not** `STOPPED`. Verdict transitions may be transient (broker disconnect, gateway restart, probe failure). `PAUSED` is reversible after operator inspection per ADR 0010. `STOPPED` is instance retirement, which is the wrong shape for a transient safety-signal degradation.
-4. Emit `BROKER_SAFETY_VERDICT_TRANSITION_HALT` WAL event carrying the old verdict, new verdict, full per-gate snapshot, and `failing_gates` / `unknown_gates` lists. The cockpit failure list renders this event with the offending gate.
+4. Emit `BROKER_SAFETY_VERDICT_TRANSITION_HALT` WAL event carrying the old verdict, new verdict, full per-gate snapshot, and `failing_gates` / `unknown_gates` lists. The bot control page failure list renders this event with the offending gate.
 5. Stop / suspend the active trading loop per the existing fatal-halt mechanics.
 
 ### 6. Resume is guarded — never bypasses the verdict
 
-Per ADR 0010's guarded-write contract for Resume: the cockpit's Resume action is mechanically a write of `desired_state = RUNNING`, but the endpoint consults the current verdict before promoting state. If `final_verdict != "paper-only"`, durable state stays `PAUSED` and the API surfaces `broker_safety_not_paper_only`. The verdict gate is read-only from the operator's perspective — the button cannot bypass it.
+Per ADR 0010's guarded-write contract for Resume: the bot control page's Resume action is mechanically a write of `desired_state = RUNNING`, but the endpoint consults the current verdict before promoting state. If `final_verdict != "paper-only"`, durable state stays `PAUSED` and the API surfaces `broker_safety_not_paper_only`. The verdict gate is read-only from the operator's perspective — the button cannot bypass it.
 
-This means a verdict transition halt's recovery loop is structural: operator inspects the failing gate, fixes the configuration (or waits for the broker to reconnect to the right account), the next status poll re-derives the verdict, the cockpit shows `paper-only` again, and Resume succeeds.
+This means a verdict transition halt's recovery loop is structural: operator inspects the failing gate, fixes the configuration (or waits for the broker to reconnect to the right account), the next status poll re-derives the verdict, the bot control page shows `paper-only` again, and Resume succeeds.
 
 ### 7. Frontend renders the server-derived verdict — never composes its own
 
@@ -99,7 +99,7 @@ Rationale: the same single-source-of-truth principle that CONTEXT.md applies to 
 
 ### 8. Feeds the start-readiness gate
 
-A start-readiness verdict (CONTEXT.md § "Readiness gate") of `READY` requires `final_verdict == "paper-only"` as a hard input. A `BLOCKED` verdict surfaces the failing gate as a `hard` readiness gate input. This makes the broker safety verdict observable from the readiness shape that the cockpit and CLI already render — no second display path.
+A start-readiness verdict (CONTEXT.md § "Readiness gate") of `READY` requires `final_verdict == "paper-only"` as a hard input. A `BLOCKED` verdict surfaces the failing gate as a `hard` readiness gate input. This makes the broker safety verdict observable from the readiness shape that the bot control page and CLI already render — no second display path.
 
 ### 9. QC provenance card split — verified facts and operator-recorded facts cannot share a label
 
@@ -127,7 +127,7 @@ The following labels are **forbidden** in code and copy until a real QC Cloud AP
 
 **Driver.** The original Decision §2 required `readonly_flag == true` for `paper-only`. `IBKR_READONLY=true` blocks order placement at the lowest layer; an executing paper bot must run with `readonly=false`. Under the original derivation, an order-capable paper run can never obtain `paper-only`, but guarded Resume in Decision §6 requires `paper-only`. The two contracts disagree. The audit triggering PRD #619 found `live_instances._resolve_safety_verdict_final` reading non-existent attributes (`client.config.port`, `client.config.read_only_api`) and silently degrading to `unknown` — the regression went unobserved because the identity gate could never be true for a real paper run.
 
-**Decision.** The verdict is split into two independent backend-authored facts. The cockpit and the runtime consult both; the original `BrokerSafetyVerdict` shape carries identity. Submission capability is carried separately at the run/spec level.
+**Decision.** The verdict is split into two independent backend-authored facts. The bot control page and the runtime consult both; the original `BrokerSafetyVerdict` shape carries identity. Submission capability is carried separately at the run/spec level.
 
 **Identity** — what the verdict resolver decides today:
 
@@ -188,7 +188,7 @@ effective_posture =
 
 ## Amendment 2026-06-22 (broker-activity slice 3) — IBKR reconnect-recovery protocol
 
-**Driver.** ADR 0014 §8 carved "reconnect-recovery sweep semantics" out of slice 1, deferring it to "ADR 0011 amendment landing with the slice 3 implementation." The slice 1 publisher pauses authoring while the broker is disconnected, but it has no mechanism to (a) backfill executions that happened during the drop or (b) prevent a new order from being submitted into a half-recovered connection while the backfill is still running. Both gaps are operator-visible: the cockpit's Activity tab silently misses fills (under the pre-2026-06-25 ADR 0014 model, a fill missed before authored-row append had no later raw-callback replay source), and a new order placed during the recovery window races the sweep — the sweep's dedupe key is `exec_id`, and a freshly-submitted order's eventual fill can land *inside* the sweep's `reqExecutions` result, causing it to be authored as a recovery row instead of a normal fill. ADR 0014's 2026-06-25 host-runner callback-WAL amendment supersedes only that first-capture premise; the reconnect sweep still protects projection freshness and submit gating until raw callback capture is implemented.
+**Driver.** ADR 0014 §8 carved "reconnect-recovery sweep semantics" out of slice 1, deferring it to "ADR 0011 amendment landing with the slice 3 implementation." The slice 1 publisher pauses authoring while the broker is disconnected, but it has no mechanism to (a) backfill executions that happened during the drop or (b) prevent a new order from being submitted into a half-recovered connection while the backfill is still running. Both gaps are operator-visible: the bot control page's Activity tab silently misses fills (under the pre-2026-06-25 ADR 0014 model, a fill missed before authored-row append had no later raw-callback replay source), and a new order placed during the recovery window races the sweep — the sweep's dedupe key is `exec_id`, and a freshly-submitted order's eventual fill can land *inside* the sweep's `reqExecutions` result, causing it to be authored as a recovery row instead of a normal fill. ADR 0014's 2026-06-25 host-runner callback-WAL amendment supersedes only that first-capture premise; the reconnect sweep still protects projection freshness and submit gating until raw callback capture is implemented.
 
 **Decision.** The IBKR reconnect-recovery protocol composes four contracts; none of them changes the original ADR's identity / capability / halt-on-transition rules.
 
@@ -226,14 +226,14 @@ The original ADR's halt-on-transition contract (Decision §5) is unchanged: it t
 
 ### E. Composition with deploy-time publisher lifecycle
 
-The slice-3 work moves the publisher's start from the cockpit-first lazy bootstrap (which only fired on the operator's first hit on the Activity tab) to a deploy-time hook in `live_instances.start_run`. The lazy fallback (`_ensure_publisher`) is preserved as a recovery path for the case where deploy-time bootstrap saw a transient broker disconnect. The recovery sweep and the submission halt only protect *registered* publishers; an instance whose publisher has not yet started is not subject to halt — the cockpit-first race window narrows from "every operator session" to "the few seconds between a fresh start and the first deploy-time bootstrap." Acceptable: the engine's own intent_events.jsonl is the durable record of what was submitted, and the WAL fills in the gap when the publisher does start.
+The slice-3 work moves the publisher's start from the bot control page-first lazy bootstrap (which only fired on the operator's first hit on the Activity tab) to a deploy-time hook in `live_instances.start_run`. The lazy fallback (`_ensure_publisher`) is preserved as a recovery path for the case where deploy-time bootstrap saw a transient broker disconnect. The recovery sweep and the submission halt only protect *registered* publishers; an instance whose publisher has not yet started is not subject to halt — the bot control page-first race window narrows from "every operator session" to "the few seconds between a fresh start and the first deploy-time bootstrap." Acceptable: the engine's own intent_events.jsonl is the durable record of what was submitted, and the WAL fills in the gap when the publisher does start.
 
 **Composition rules unchanged from prior amendments:**
 
 - Identity vs. capability split (2026-06-21 amendment) is unaffected — the recovery sweep operates on `paper-only` identity runs (it has nothing to do with capability).
 - The four-layer `place_paper_order` enforcement is unchanged. The recovery halt is a fifth layer that fires *before* the four.
 - The halt-on-transition contract (Decision §5) is unchanged. A reconnect onto the same DU paper account is not an identity transition.
-- The guarded-Resume contract (Decision §6) is unchanged. Resume still consults identity, capability, and the existing guards; the recovery sweep finishes before any Resume is attempted because the cockpit's Recovering banner is up.
+- The guarded-Resume contract (Decision §6) is unchanged. Resume still consults identity, capability, and the existing guards; the recovery sweep finishes before any Resume is attempted because the bot control page's Recovering banner is up.
 
 **Why this is the right amendment to ADR 0011 rather than a new ADR.** ADR 0014 §8 explicitly deferred the reconnect-recovery semantics to this ADR; the protocol is structurally a sibling of the halt-on-transition contract (both are "the broker connection's behaviour drives runtime safety gates"); and the submission-halt mechanism in `place_paper_order` extends the four-layer enforcement that this ADR already references. A separate ADR would force every consumer to learn two safety contracts for one connection lifecycle.
 
@@ -250,7 +250,7 @@ The slice-3 work moves the publisher's start from the cockpit-first lazy bootstr
 **Negative:**
 
 - The Backend gains a verdict resolver wired into the broker-status / readiness payload. Implementation cost is modest (the gates already exist; deriving the verdict is mechanical) but it adds a Backend responsibility that did not exist before.
-- The cockpit gains a per-gate breakdown surface (tooltip or expandable list) — UI work that did not exist before.
+- The bot control page gains a per-gate breakdown surface (tooltip or expandable list) — UI work that did not exist before.
 - Operators trained on the current "Paper trading mode" hero must learn that the amber / red verdicts have specific meanings. The Phase 12 operator manual carries the explanation.
 - The `unknown` state is a real operator-facing surface. Today, "unknown" is implicit (gates not consulted reactively); explicitly surfacing it may feel like *new* uncertainty when in fact it has always been present. The trade-off is intentional — an explicit `unknown` is honest, an implicit `paper-only` is not.
 
