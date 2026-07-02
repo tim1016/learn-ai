@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.engine.live.desired_state import DesiredState
 from app.engine.live.run import _scan_verdict_snapshot, build_parser, cmd_resume
 
@@ -32,7 +33,12 @@ def _seed_snapshot(run_dir: Path, *, verdict: str | None) -> None:
     (run_dir / "verdict_snapshot.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _seed_run_dir(artifacts_root: Path, instance_id: str = "test-instance") -> Path:
+def _seed_run_dir(
+    artifacts_root: Path,
+    instance_id: str = "test-instance",
+    *,
+    account_id: str | None = None,
+) -> Path:
     """Seed ``<artifacts_root>/live_runs/<run_id>/`` with a run_ledger.json
     naming this instance, plus an empty intent_events.jsonl so the
     uncertain-intent guard does not fire.
@@ -44,7 +50,10 @@ def _seed_run_dir(artifacts_root: Path, instance_id: str = "test-instance") -> P
     """
     run_dir = artifacts_root / "live_runs" / f"{instance_id}-run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "run_ledger.json").write_text(json.dumps({"strategy_instance_id": instance_id}), encoding="utf-8")
+    ledger: dict[str, object] = {"strategy_instance_id": instance_id}
+    if account_id is not None:
+        ledger["account_id"] = account_id
+    (run_dir / "run_ledger.json").write_text(json.dumps(ledger), encoding="utf-8")
     (run_dir / "intent_events.jsonl").write_text("", encoding="utf-8")
     (run_dir / "run_status.json").write_text(
         json.dumps(
@@ -146,6 +155,33 @@ def test_cmd_resume_paper_only_verdict_proceeds(tmp_path: Path) -> None:
     assert rc == 0
     written = json.loads(desired_state_path.read_text())
     assert written["desired_state"] == DesiredState.RUNNING.value
+
+
+def test_cmd_resume_refuses_active_account_freeze(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    instance = "frozen-account-instance"
+    account_id = "DU123456"
+    run_dir = _seed_run_dir(tmp_path, instance, account_id=account_id)
+    _seed_snapshot(run_dir, verdict="paper-only")
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=account_id,
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    rc = cmd_resume(_args(tmp_path, instance))
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "ACCOUNT_FREEZE_ACTIVE" in err
+    assert "watchdog.flatten_failed" in err
+    assert not _desired_state_path(tmp_path, instance).exists()
 
 
 def test_cmd_resume_refuses_when_verdict_snapshot_missing(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:

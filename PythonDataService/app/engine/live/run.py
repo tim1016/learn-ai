@@ -17,6 +17,9 @@ Subcommands:
     contaminated-account case in § 7.2 #6. Requires ``--confirm`` +
     ``--account``; logs every action to
     ``<run_dir>/emergency_flatten.log``.
+  * ``clear-account-freeze`` — operator recovery path for clearing an
+    account-scoped freeze with either clean recovery proof or a fresh
+    audited override.
   * ``pause`` / ``resume`` / ``stop`` — set the durable operator
     desired-state for a strategy_instance_id (PRD-A § 16.4 Resolution
     7 / PR-D). Writes ``desired_state.json`` under
@@ -53,7 +56,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from app.engine.live.account_artifacts import AccountOwnerGeneration
+    from app.engine.live.account_artifacts import (
+        AccountAuditedOverride,
+        AccountOwnerGeneration,
+        AccountRecoveryProof,
+    )
     from app.engine.live.account_owner import AccountOwner
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
 
@@ -2639,6 +2646,22 @@ def _latest_run_dir_for_instance(artifacts_root: Path, strategy_instance_id: str
     return candidates[0][1]
 
 
+def _account_id_from_run_ledger(run_dir: Path) -> str | None:
+    """Return the account id from a run ledger when present and readable."""
+
+    ledger_path = run_dir / "run_ledger.json"
+    if not ledger_path.exists():
+        return None
+    try:
+        payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    account_id = payload.get("account_id") if isinstance(payload, dict) else None
+    if not isinstance(account_id, str) or not account_id:
+        return None
+    return account_id
+
+
 def _scan_verdict_snapshot(snapshot_path: Path) -> str | None:
     """Phase 7B Resume guard #1 (PRD §7B / VCR-0010): return the last
     verdict reading if it is NOT ``"paper-only"``, otherwise ``None``.
@@ -2734,6 +2757,28 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
     run_dir = _latest_run_dir_for_instance(args.artifacts_root, args.strategy_instance_id)
     if run_dir is not None:
+        account_id = _account_id_from_run_ledger(run_dir)
+        if account_id is not None:
+            from app.engine.live.account_artifacts import read_account_freeze
+
+            try:
+                account_freeze = read_account_freeze(args.artifacts_root, account_id)
+            except (OSError, ValueError) as exc:
+                print(
+                    f"[RESUME] REFUSED (ACCOUNT_FREEZE_UNKNOWN): "
+                    f"could not read account freeze state for {account_id}: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            if account_freeze is not None:
+                print(
+                    f"[RESUME] REFUSED (ACCOUNT_FREEZE_ACTIVE): "
+                    f"account {account_id} is frozen: {account_freeze.reason}; "
+                    f"next step: {account_freeze.operator_next_step}",
+                    file=sys.stderr,
+                )
+                return 2
+
         guard_state = resolve_guard_state_from_paths(
             verdict_snapshot_path=run_dir / "verdict_snapshot.json",
             run_status_path=run_dir / "run_status.json",
@@ -2777,6 +2822,65 @@ def cmd_resume(args: argparse.Namespace) -> int:
             return 2
 
     return _cmd_set_desired_state(args, DesiredState.RUNNING)
+
+
+def _load_recovery_proof_json(path: Path) -> AccountRecoveryProof:
+    from pydantic import ValidationError
+
+    from app.engine.live.account_artifacts import AccountRecoveryProof
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return AccountRecoveryProof.model_validate(payload)
+    except OSError as exc:
+        raise ValueError(f"could not read recovery proof JSON at {path}: {exc}") from exc
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise ValueError(f"invalid recovery proof JSON at {path}: {exc}") from exc
+
+
+def _load_audited_override_json(path: Path) -> AccountAuditedOverride:
+    from pydantic import ValidationError
+
+    from app.engine.live.account_artifacts import AccountAuditedOverride
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return AccountAuditedOverride.model_validate(payload)
+    except OSError as exc:
+        raise ValueError(f"could not read audited override JSON at {path}: {exc}") from exc
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise ValueError(f"invalid audited override JSON at {path}: {exc}") from exc
+
+
+def cmd_clear_account_freeze(args: argparse.Namespace) -> int:
+    """Clear an account freeze through the shipped operator CLI path."""
+
+    if not args.confirm:
+        print(
+            "[CLEAR-FREEZE] REFUSED: pass --confirm after reviewing the recovery evidence.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from app.engine.live.account_artifacts import AccountArtifactError, clear_account_freeze
+
+    try:
+        if args.recovery_proof_json is not None:
+            recovery_proof = _load_recovery_proof_json(args.recovery_proof_json)
+            clear_account_freeze(args.artifacts_root, recovery_proof=recovery_proof)
+            account_id = recovery_proof.account_id
+            source = f"recovery:{recovery_proof.recovery_id}"
+        else:
+            audited_override = _load_audited_override_json(args.audited_override_json)
+            clear_account_freeze(args.artifacts_root, audited_override=audited_override)
+            account_id = audited_override.account_id
+            source = f"override:{audited_override.override_id}"
+    except (AccountArtifactError, ValueError) as exc:
+        print(f"[CLEAR-FREEZE] REFUSED: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"[CLEAR-FREEZE] cleared account {account_id} via {source}")
+    return 0
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -3018,6 +3122,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required. Without this flag the subcommand refuses (typo-proofing).",
     )
     flatten.set_defaults(func=cmd_emergency_flatten)
+
+    clear_freeze = sub.add_parser(
+        "clear-account-freeze",
+        help=(
+            "Clear an account-wide freeze using clean recovery proof or a fresh "
+            "audited override JSON file."
+        ),
+    )
+    clear_freeze.add_argument(
+        "--artifacts-root",
+        type=Path,
+        default=Path("PythonDataService/artifacts"),
+        help="Root for account artifacts; must match the live runner artifacts root.",
+    )
+    proof_group = clear_freeze.add_mutually_exclusive_group(required=True)
+    proof_group.add_argument(
+        "--recovery-proof-json",
+        type=Path,
+        default=None,
+        help="Path to an AccountRecoveryProof JSON payload.",
+    )
+    proof_group.add_argument(
+        "--audited-override-json",
+        type=Path,
+        default=None,
+        help="Path to an AccountAuditedOverride JSON payload.",
+    )
+    clear_freeze.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Required after reviewing the evidence; without it the command refuses.",
+    )
+    clear_freeze.set_defaults(func=cmd_clear_account_freeze)
 
     # pause / resume / stop — durable desired-state verbs (PR-D).
     for verb, handler, helptext in (
