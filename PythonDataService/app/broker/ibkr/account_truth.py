@@ -32,6 +32,7 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.order_identity import (
     MANUAL_NAMESPACE_ROOT,
+    NAMESPACE_ROOT,
     NAMESPACE_SEP,
     NAMESPACE_VERSION,
     parse_order_ref,
@@ -71,6 +72,8 @@ class _NamespaceOwner:
 class _NamespaceViews:
     attribution_by_namespace: dict[str, _NamespaceOwner]
     active_by_namespace: dict[str, _NamespaceOwner]
+    duplicate_active_namespaces: frozenset[str]
+    registry_unavailable: bool = False
 
 
 async def fetch_account_truth(
@@ -210,14 +213,23 @@ def compose_account_truth(
 ) -> AccountTruthResponse:
     """Pure account-truth projection for tests and the live endpoint."""
     checked_at_ms = generated_at_ms or now_ms_utc()
-    account_id = (
-        account.account_id
-        if account is not None
-        else positions_snapshot.account_id
-        if positions_snapshot is not None
-        else health.account_id
+    account_id, account_scope_gap = _account_id_from_sources(
+        health=health,
+        account=account,
+        positions_snapshot=positions_snapshot,
+        open_orders=open_orders,
+        completed_orders=completed_orders,
+        executions=executions,
     )
-    namespace_views = _namespace_views(account_instance_bindings, account_id=account_id)
+    projection_gaps = list(evidence_gaps)
+    if account_scope_gap is not None:
+        projection_gaps.append(account_scope_gap)
+    registry_unavailable = any(gap.source == "instance_registry" for gap in projection_gaps)
+    namespace_views = _namespace_views(
+        account_instance_bindings,
+        account_id=account_id,
+        registry_unavailable=registry_unavailable,
+    )
     known_bot_namespaces = sorted(namespace_views.attribution_by_namespace)
 
     open_order_rows = [
@@ -259,8 +271,9 @@ def compose_account_truth(
         order_rows=order_rows,
         execution_rows=execution_rows,
         position_rows=position_rows,
-        evidence_gaps=evidence_gaps,
+        evidence_gaps=projection_gaps,
         duplicate_exec_count=duplicate_exec_count,
+        duplicate_active_namespaces=namespace_views.duplicate_active_namespaces,
     )
     invariants = _invariants(
         health=health,
@@ -268,7 +281,7 @@ def compose_account_truth(
         completed_orders=completed_order_rows,
         executions=execution_rows,
         positions=position_rows,
-        evidence_gaps=evidence_gaps,
+        evidence_gaps=projection_gaps,
         duplicate_exec_count=duplicate_exec_count,
         checked_at_ms=checked_at_ms,
     )
@@ -277,7 +290,7 @@ def compose_account_truth(
     final_verdict, final_severity = _final_verdict(
         invariants,
         blockers=blockers,
-        evidence_gaps=evidence_gaps,
+        evidence_gaps=projection_gaps,
     )
     return AccountTruthResponse(
         account_id=account_id,
@@ -298,7 +311,42 @@ def compose_account_truth(
         orders=order_rows,
         executions=execution_rows,
         positions=position_rows,
-        evidence_gaps=list(evidence_gaps),
+        evidence_gaps=projection_gaps,
+    )
+
+
+def _account_id_from_sources(
+    *,
+    health: IbkrConnectionHealth,
+    account: IbkrAccountSummary | None,
+    positions_snapshot: IbkrPositionsSnapshot | None,
+    open_orders: Sequence[IbkrOpenOrder],
+    completed_orders: Sequence[IbkrOpenOrder],
+    executions: Sequence[IbkrOrderEvent],
+) -> tuple[str | None, AccountTruthEvidenceGap | None]:
+    account_ids: list[str] = []
+    if account is not None and account.account_id:
+        account_ids.append(account.account_id)
+    if positions_snapshot is not None and positions_snapshot.account_id:
+        account_ids.append(positions_snapshot.account_id)
+    if health.account_id:
+        account_ids.append(health.account_id)
+    account_ids.extend(order.account_id for order in open_orders if order.account_id)
+    account_ids.extend(order.account_id for order in completed_orders if order.account_id)
+    account_ids.extend(event.account_id for event in executions if event.account_id)
+
+    by_normalized = {account_id.upper(): account_id for account_id in account_ids}
+    if len(by_normalized) == 1:
+        return next(iter(by_normalized.values())), None
+    if not by_normalized:
+        return None, None
+    return (
+        None,
+        AccountTruthEvidenceGap(
+            source="account_scope",
+            severity="critical",
+            message="Broker evidence contains conflicting account ids; account registry ownership cannot be proven.",
+        ),
     )
 
 
@@ -306,6 +354,7 @@ def _namespace_views(
     bindings: Sequence[AccountInstanceBinding],
     *,
     account_id: str | None,
+    registry_unavailable: bool,
 ) -> _NamespaceViews:
     matching_bindings = sorted(
         (binding for binding in bindings if _binding_matches_account(binding, account_id)),
@@ -321,20 +370,31 @@ def _namespace_views(
         namespace: _namespace_owner(binding)
         for namespace, binding in latest_by_namespace.items()
     }
+    active_bindings_by_namespace: dict[str, list[AccountInstanceBinding]] = defaultdict(list)
+    for binding in latest_by_instance.values():
+        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES:
+            active_bindings_by_namespace[binding.bot_order_namespace].append(binding)
+    duplicate_active_namespaces = frozenset(
+        namespace
+        for namespace, namespace_bindings in active_bindings_by_namespace.items()
+        if len(namespace_bindings) > 1
+    )
     active_by_namespace = {
-        binding.bot_order_namespace: _namespace_owner(binding)
-        for binding in latest_by_instance.values()
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
+        namespace: _namespace_owner(namespace_bindings[0])
+        for namespace, namespace_bindings in active_bindings_by_namespace.items()
+        if len(namespace_bindings) == 1
     }
     return _NamespaceViews(
         attribution_by_namespace=attribution_by_namespace,
         active_by_namespace=active_by_namespace,
+        duplicate_active_namespaces=duplicate_active_namespaces,
+        registry_unavailable=registry_unavailable,
     )
 
 
 def _binding_matches_account(binding: AccountInstanceBinding, account_id: str | None) -> bool:
     if account_id is None:
-        return True
+        return False
     return binding.account_id.upper() == account_id.upper()
 
 
@@ -535,6 +595,16 @@ def _owner_for_order_ref(
         namespace, _intent_id = parse_order_ref(order_ref)
     except ValueError:
         return _foreign_owner("unparseable order_ref")
+    if namespace in namespace_views.duplicate_active_namespaces:
+        return AccountTruthFactOwner(
+            owner_class="mixed_known",
+            owner_key="duplicate_active_namespace",
+            owner_label="Duplicate active namespace",
+            evidence_tier="mixed_known",
+            evidence_label="Ambiguous active registry namespace",
+            owner_binding_state="UNKNOWN",
+            severity="critical",
+        )
     namespace_owner = namespace_views.active_by_namespace.get(
         namespace,
         namespace_views.attribution_by_namespace.get(namespace),
@@ -549,6 +619,17 @@ def _owner_for_order_ref(
             evidence_label="Bot-stamped order ref",
             owner_binding_state=namespace_owner.binding_state,
             severity="ok",
+        )
+    if namespace_views.registry_unavailable and _is_bot_namespace(namespace):
+        sid = _strategy_instance_id_from_bot_namespace(namespace)
+        return AccountTruthFactOwner(
+            owner_class="bot",
+            owner_key=sid,
+            owner_label=f"Bot {sid}",
+            evidence_tier="bot_order_ref",
+            evidence_label="Bot-stamped order ref; registry unavailable",
+            owner_binding_state="UNKNOWN",
+            severity="critical",
         )
     if _is_manual_namespace(namespace):
         operator = namespace.split(NAMESPACE_SEP)[1]
@@ -580,12 +661,12 @@ def _mixed_owner_binding_state(
     owners: set[AccountTruthFactOwner],
 ) -> AccountTruthOwnerBindingState:
     states = {owner.owner_binding_state for owner in owners}
-    if "RETIRED" in states:
-        return "RETIRED"
     if "ACTIVE" in states:
         return "ACTIVE"
     if "DEPLOYED" in states:
         return "DEPLOYED"
+    if states == {"RETIRED"}:
+        return "RETIRED"
     return "UNKNOWN"
 
 
@@ -619,6 +700,20 @@ def _is_manual_namespace(namespace: str) -> bool:
         and parts[1] != ""
         and parts[2] == NAMESPACE_VERSION
     )
+
+
+def _is_bot_namespace(namespace: str) -> bool:
+    parts = namespace.split(NAMESPACE_SEP)
+    return (
+        len(parts) == 3
+        and parts[0] == NAMESPACE_ROOT
+        and parts[1] != ""
+        and parts[2] == NAMESPACE_VERSION
+    )
+
+
+def _strategy_instance_id_from_bot_namespace(namespace: str) -> str:
+    return namespace.split(NAMESPACE_SEP)[1]
 
 
 def _order_lifecycle(status: str, remaining: float) -> str:
@@ -727,9 +822,26 @@ def _messages(
     position_rows: Sequence[AccountTruthPositionRow],
     evidence_gaps: Sequence[AccountTruthEvidenceGap],
     duplicate_exec_count: int,
+    duplicate_active_namespaces: frozenset[str],
 ) -> tuple[list[AccountTruthMessage], list[AccountTruthMessage]]:
     blockers: list[AccountTruthMessage] = []
     caveats: list[AccountTruthMessage] = []
+    if duplicate_active_namespaces:
+        blockers.append(
+            AccountTruthMessage(
+                code="duplicate_active_namespace",
+                severity="critical",
+                title="Duplicate active bot namespace",
+                message=(
+                    "The account instance registry has more than one active binding for "
+                    "the same bot order namespace."
+                ),
+                forensic_facts={
+                    "namespaces": sorted(duplicate_active_namespaces),
+                    "count": len(duplicate_active_namespaces),
+                },
+            )
+        )
     unknown_open = [
         row for row in order_rows
         if row.fact_kind == "open_order" and row.owner.owner_class == "foreign_or_unclaimed"

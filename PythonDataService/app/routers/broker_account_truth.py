@@ -86,7 +86,16 @@ def _account_instance_registry_evidence(
     account_id: str | None,
 ) -> AccountInstanceRegistryEvidence:
     if not account_id:
-        return AccountInstanceRegistryEvidence([], [])
+        return AccountInstanceRegistryEvidence(
+            [],
+            [
+                AccountTruthEvidenceGap(
+                    source="instance_registry",
+                    severity="critical",
+                    message="Account instance registry unavailable: broker account id is unknown",
+                )
+            ],
+        )
     artifacts_root = Path(get_settings().live_runs_root).parent
     try:
         return AccountInstanceRegistryEvidence(

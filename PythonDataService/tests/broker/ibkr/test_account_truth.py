@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 from unittest.mock import AsyncMock
 
@@ -43,14 +44,17 @@ def _health() -> IbkrConnectionHealth:
 def _binding(
     strategy_instance_id: str = "bot-a",
     *,
+    account_id: str = "DU1234567",
+    bot_order_namespace: str | None = None,
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE",
     recorded_at_ms: int = 1_780_000_000_000,
 ) -> AccountInstanceBinding:
     return AccountInstanceBinding(
-        account_id="DU1234567",
+        account_id=account_id,
         strategy_instance_id=strategy_instance_id,
         run_id=f"run-{strategy_instance_id}",
-        bot_order_namespace=f"learn-ai/{strategy_instance_id}/v1",
+        bot_order_namespace=bot_order_namespace
+        or f"learn-ai/{strategy_instance_id}/v1",
         lifecycle_state=lifecycle_state,
         recorded_at_ms=recorded_at_ms,
         source="test",
@@ -217,6 +221,162 @@ def test_account_truth_never_registered_namespace_stays_foreign() -> None:
     assert truth.orders[0].owner.owner_binding_state == "UNKNOWN"
     assert truth.orders[0].owner.severity == "critical"
     assert {row.code for row in truth.blockers} == {"unknown_open_orders"}
+
+
+def test_account_truth_registry_gap_preserves_bot_stamped_live_order() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order()],
+        completed_orders=[],
+        executions=[],
+        evidence_gaps=[
+            AccountTruthEvidenceGap(
+                source="instance_registry",
+                severity="critical",
+                message="Account instance registry unavailable: corrupt registry line",
+            )
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.orders[0].owner.owner_class == "bot"
+    assert truth.orders[0].owner.owner_key == "bot-a"
+    assert truth.orders[0].owner.owner_binding_state == "UNKNOWN"
+    assert truth.orders[0].owner.severity == "critical"
+    assert "evidence_gap_instance_registry" in {row.code for row in truth.blockers}
+    assert "unknown_open_orders" not in {row.code for row in truth.blockers}
+    assert {row.key: row.status for row in truth.invariants}[
+        "open_orders_known"
+    ] == "pass"
+
+
+def test_account_truth_mixed_active_and_retired_position_is_not_retired_live_exposure() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[
+            _binding("bot-a", lifecycle_state="ACTIVE"),
+            _binding("bot-b", lifecycle_state="RETIRED"),
+        ],
+        account=None,
+        positions_snapshot=_positions_snapshot(_position()),
+        open_orders=[],
+        completed_orders=[],
+        executions=[
+            _execution(order_ref="learn-ai/bot-a/v1:intent-a", exec_id="exec-a"),
+            _execution(
+                order_id=43,
+                perm_id=9002,
+                order_ref="learn-ai/bot-b/v1:intent-b",
+                exec_id="exec-b",
+            ),
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "clean"
+    assert truth.positions[0].owner.owner_class == "mixed_known"
+    assert truth.positions[0].owner.owner_binding_state == "ACTIVE"
+    assert truth.positions[0].owner.severity == "warning"
+    assert "retired_owner_live_exposure" not in {row.code for row in truth.blockers}
+    assert {row.key: row.status for row in truth.invariants}[
+        "positions_match_known_ownership"
+    ] == "pass"
+
+
+def test_account_truth_all_retired_mixed_position_is_retired_live_exposure() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[
+            _binding("bot-a", lifecycle_state="RETIRED"),
+            _binding("bot-b", lifecycle_state="RETIRED"),
+        ],
+        account=None,
+        positions_snapshot=_positions_snapshot(_position()),
+        open_orders=[],
+        completed_orders=[],
+        executions=[
+            _execution(order_ref="learn-ai/bot-a/v1:intent-a", exec_id="exec-a"),
+            _execution(
+                order_id=43,
+                perm_id=9002,
+                order_ref="learn-ai/bot-b/v1:intent-b",
+                exec_id="exec-b",
+            ),
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.positions[0].owner.owner_class == "mixed_known"
+    assert truth.positions[0].owner.owner_binding_state == "RETIRED"
+    assert truth.positions[0].owner.severity == "critical"
+    assert {row.code for row in truth.blockers} == {"retired_owner_live_exposure"}
+
+
+def test_account_truth_duplicate_active_namespace_fails_closed() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[
+            _binding("bot-a", bot_order_namespace="learn-ai/shared/v1"),
+            _binding("bot-b", bot_order_namespace="learn-ai/shared/v1"),
+        ],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order(order_ref="learn-ai/shared/v1:intent-shared")],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.orders[0].owner.owner_class == "mixed_known"
+    assert truth.orders[0].owner.owner_key == "duplicate_active_namespace"
+    assert truth.orders[0].owner.severity == "critical"
+    assert {row.code for row in truth.blockers} == {"duplicate_active_namespace"}
+
+
+def test_account_truth_derives_binding_account_scope_from_order_facts() -> None:
+    truth = compose_account_truth(
+        health=_health().model_copy(update={"account_id": None}),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=None,
+        open_orders=[_open_order()],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "clean"
+    assert truth.account_id == "DU1234567"
+    assert truth.orders[0].owner.owner_class == "bot"
+    assert truth.orders[0].owner.owner_binding_state == "ACTIVE"
+
+
+def test_account_truth_conflicting_account_scope_does_not_wildcard_bindings() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding(account_id="DU7654321")],
+        account=None,
+        positions_snapshot=None,
+        open_orders=[_open_order(account_id="DU7654321")],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.account_id is None
+    assert truth.orders[0].owner.owner_class == "foreign_or_unclaimed"
+    assert {gap.source for gap in truth.evidence_gaps} == {"account_scope"}
+    assert {row.code for row in truth.blockers} == {
+        "unknown_open_orders",
+        "evidence_gap_account_scope",
+    }
 
 
 def test_account_truth_retired_terminal_evidence_stays_attributed_and_clean() -> None:
@@ -520,7 +680,9 @@ def test_account_truth_unclaimed_position_blocks_bot_submits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_account_truth_collects_account_summary_gap_into_final_verdict(monkeypatch) -> None:
+async def test_fetch_account_truth_collects_account_summary_gap_into_final_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = object()
     monkeypatch.setattr(
         account_truth_module.ibkr_account,
@@ -560,7 +722,10 @@ async def test_fetch_account_truth_collects_account_summary_gap_into_final_verdi
     assert truth.blockers[0].code == "evidence_gap_account_summary"
 
 
-def test_account_truth_router_reads_durable_instance_registry(tmp_path, monkeypatch) -> None:
+def test_account_truth_router_reads_durable_instance_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.broker.ibkr import config as ibkr_config
     from app.routers import broker_account_truth
 
@@ -578,7 +743,9 @@ def test_account_truth_router_reads_durable_instance_registry(tmp_path, monkeypa
     assert evidence.evidence_gaps == []
 
 
-def test_account_truth_router_surfaces_registry_read_failure(monkeypatch) -> None:
+def test_account_truth_router_surfaces_registry_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.routers import broker_account_truth
 
     def fail_read(*_args: object, **_kwargs: object) -> None:
@@ -594,3 +761,16 @@ def test_account_truth_router_surfaces_registry_read_failure(monkeypatch) -> Non
     assert gap.source == "instance_registry"
     assert gap.severity == "critical"
     assert "corrupt registry line" in gap.message
+
+
+def test_account_truth_router_surfaces_missing_account_id_as_registry_gap() -> None:
+    from app.routers import broker_account_truth
+
+    evidence = broker_account_truth._account_instance_registry_evidence(None)
+
+    assert evidence.bindings == []
+    assert len(evidence.evidence_gaps) == 1
+    gap = evidence.evidence_gaps[0]
+    assert gap.source == "instance_registry"
+    assert gap.severity == "critical"
+    assert "broker account id is unknown" in gap.message

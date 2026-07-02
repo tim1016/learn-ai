@@ -155,7 +155,7 @@ Routes live in `app/routers/broker.py` and `app/routers/broker_account_truth.py`
 | GET | `/diagnose` | one-shot | `DiagnosticReport` | 8-check self-test (see §9). |
 | GET | `/account` | one-shot | `IbkrAccountSummary` | Cash, NLV, margin, account-level P&L. Optionally persisted via `persist_account`. |
 | GET | `/positions` | one-shot | `IbkrPositionsSnapshot` | Open positions across all symbols. |
-| GET | `/account-truth` | one-shot | `AccountTruthResponse` | Account-wide ownership and invariant projection for Account Monitor, Reconciliation, and Orders. Ownership comes from `accounts/<account_id>/instance_registry.jsonl`; retired terminal facts stay attributed, while unknown live orders, retired-owner live exposure, unassigned executions, or unexplained current positions fail closed as `not_proven`. |
+| GET | `/account-truth` | one-shot | `AccountTruthResponse` | Account-wide ownership and invariant projection for Account Monitor, Reconciliation, and Orders. Ownership comes from `accounts/<account_id>/instance_registry.jsonl`; retired terminal facts stay attributed. Unknown live orders, unassigned executions, and unexplained current positions fail closed as `not_proven`; retired-owner live exposure emits the distinct critical blocker `retired_owner_live_exposure`. |
 | GET | `/expirations/{symbol}` | one-shot | `dict` | All listed option expiries for a symbol, `int64 ms UTC`. |
 | GET | `/strikes/{symbol}?expiry_ms=...` | one-shot | `IbkrStrikeList` | Strikes IBKR can actually qualify (call ∩ put). |
 | GET | `/option-chain/{symbol}` | SSE | `IbkrChainSnapshot` (per event) | Streaming option chain — debounced (default 250 ms). |
