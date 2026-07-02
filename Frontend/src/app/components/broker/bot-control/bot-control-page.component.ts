@@ -10,6 +10,7 @@ import {
 import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { TabsModule } from 'primeng/tabs';
 
 import type {
   BrokerSafetyVerdict,
@@ -53,7 +54,7 @@ const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
 
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
-type BottomPanel = 'activity' | 'audit';
+type WorkbenchTab = 'activity' | 'audit';
 type PosturePillTone = 'ok' | 'attention' | 'warn' | 'neutral' | 'muted';
 
 interface PosturePill {
@@ -107,6 +108,7 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
   selector: 'app-bot-control-page',
   imports: [
     RouterLink,
+    TabsModule,
     ReceiptLabelPipe,
     OverviewTabComponent,
     ActivityTabComponent,
@@ -147,7 +149,7 @@ export class BotControlPageComponent {
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly flattenConfirmOpen = signal<boolean>(false);
   readonly attentionOpen = signal<boolean>(false);
-  readonly bottomPanel = signal<BottomPanel | null>(null);
+  readonly activeWorkbenchTab = signal<WorkbenchTab>('activity');
   private readonly dismissedControlPlaneSig = signal<string | null>(null);
   private readonly dismissedBrokerEvidenceSig = signal<string | null>(null);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
@@ -278,8 +280,8 @@ export class BotControlPageComponent {
       this.typedHaltInstanceId.set(null);
       this.flattenConfirmOpen.set(false);
       this.attentionOpen.set(false);
+      this.activeWorkbenchTab.set('activity');
       this.autoOpenedAttentionSituation = null;
-      this.bottomPanel.set(null);
       this.dismissedControlPlaneSig.set(null);
       this.dismissedBrokerEvidenceSig.set(null);
       if (id) {
@@ -453,16 +455,10 @@ export class BotControlPageComponent {
     this.attentionOpen.set(false);
   }
 
-  toggleBottomPanel(panel: BottomPanel): void {
-    this.bottomPanel.update((current) => (current === panel ? null : panel));
-  }
-
-  closeBottomPanel(): void {
-    this.bottomPanel.set(null);
-  }
-
-  isBottomPanelOpen(panel: BottomPanel): boolean {
-    return this.bottomPanel() === panel;
+  setActiveWorkbenchTab(value: string | number | undefined): void {
+    if (value === 'activity' || value === 'audit') {
+      this.activeWorkbenchTab.set(value);
+    }
   }
 
   dismissControlPlaneBanner(): void {

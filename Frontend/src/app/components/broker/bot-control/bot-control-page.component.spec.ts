@@ -1,5 +1,11 @@
-import { Component, signal } from '@angular/core';
-import { provideZonelessChangeDetection } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  input,
+  provideZonelessChangeDetection,
+  signal,
+} from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
@@ -17,7 +23,43 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { makeLifecycleChartFixture } from '../../../testing/live-instance-status-fixtures';
+import { ActivityTabComponent } from '../cockpit-v2/tabs/activity-tab.component';
 import { BotControlPageComponent } from './bot-control-page.component';
+import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
+
+@Component({
+  selector: 'app-activity-tab',
+  template: '<div data-testid="activity-tab-stub"></div>',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class ActivityTabStubComponent {
+  readonly status = input.required<LiveInstanceStatus>();
+}
+
+@Component({
+  selector: 'app-workbench-audit-panel',
+  template: `
+    <div data-testid="workbench-audit-panel">
+      @for (line of proofLines(); track line.id) {
+        <div
+          data-testid="locked-evidence-field"
+          [class.tone-neutral]="line.tone === 'neutral'"
+          [class.tone-ok]="line.tone === 'ok'"
+          [class.tone-attention]="line.tone === 'attention'"
+          [attr.title]="line.detail"
+        >
+          <span>{{ line.label }}</span>
+          <strong>{{ line.message }}</strong>
+        </div>
+      }
+    </div>
+  `,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class WorkbenchAuditPanelStubComponent {
+  readonly status = input.required<LiveInstanceStatus>();
+  readonly proofLines = computed(() => this.status().operator_surface.trader_guidance.proof_lines);
+}
 
 @Component({
   imports: [BotControlPageComponent, BrokerBannerComponent],
@@ -344,6 +386,10 @@ function installLocalStorageStub(): void {
 describe('BotControlPageComponent', () => {
   beforeEach(() => {
     installLocalStorageStub();
+    TestBed.overrideComponent(BotControlPageComponent, {
+      remove: { imports: [ActivityTabComponent, WorkbenchAuditPanelComponent] },
+      add: { imports: [ActivityTabStubComponent, WorkbenchAuditPanelStubComponent] },
+    });
   });
 
   afterEach(() => {
@@ -547,12 +593,7 @@ describe('BotControlPageComponent', () => {
       .toContain('Current lifecycle focus');
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
       .toContain('Deploy or start');
-    expect(el.querySelector('[data-testid="locked-evidence-field"]')).toBeNull();
-    fixture.componentInstance.toggleBottomPanel('audit');
-    fixture.detectChanges();
     expect(el.querySelector('[data-testid="locked-evidence-field"]')).not.toBeNull();
-    fixture.componentInstance.closeBottomPanel();
-    fixture.detectChanges();
 
     const dispatch = vi.spyOn(fixture.componentInstance, 'dispatchOverviewAction');
     startAction?.click();
@@ -874,8 +915,6 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
-    fixture.componentInstance.toggleBottomPanel('audit');
-    fixture.detectChanges();
 
     const runtimeField = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="locked-evidence-field"]'),
@@ -937,9 +976,11 @@ describe('BotControlPageComponent', () => {
       run_id: null,
       limit: 5,
     });
-    fixture.componentInstance.toggleBottomPanel('activity');
-    fixture.detectChanges();
-
+    const tabs = (fixture.nativeElement as HTMLElement)
+      .querySelector('[data-testid="bot-control-workbench-tabs"]');
+    expect(tabs?.textContent).toContain('Recent activity');
+    expect(tabs?.textContent).toContain('Full audit trail');
+    expect(fixture.componentInstance.activeWorkbenchTab()).toBe('activity');
     const timeline = (fixture.nativeElement as HTMLElement)
       .querySelector('[data-testid="bot-control-recent-activity"] [data-testid="trader-guidance-timeline"]');
     expect(timeline?.textContent).toContain('Broker acknowledgment failed; submit outcome is uncertain.');
@@ -987,8 +1028,6 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
-    fixture.componentInstance.toggleBottomPanel('activity');
-    fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).textContent)
       .toContain('Broker acknowledgment failed; submit outcome is uncertain.');
 
@@ -1183,8 +1222,6 @@ describe('BotControlPageComponent', () => {
     const fixture = TestBed.createComponent(BotControlPageComponent);
     fixture.detectChanges();
     await flush(fixture);
-    fixture.componentInstance.toggleBottomPanel('activity');
-    fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-overview-tab')).not.toBeNull();

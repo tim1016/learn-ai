@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { LiveInstanceStatus, OperatorSurfaceControlPlane } from '../../../../api/live-instances.types';
 import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
-import { activityRefreshKeyForStatus, cachedActivityForRequest } from './activity-tab.component';
+import type { LiveInstanceActivityProjection } from '../reused/bot-trade-chart-card/bot-trade-chart-card.types';
+import {
+  activityProjectionForDisplay,
+  activityRefreshKeyForStatus,
+  cachedActivityForRequest,
+} from './activity-tab.component';
 
 function controlPlane(
   state: OperatorSurfaceControlPlane['state'],
@@ -187,6 +192,29 @@ function status(
   };
 }
 
+function activityProjection(overrides: Partial<LiveInstanceActivityProjection> = {}): LiveInstanceActivityProjection {
+  return {
+    schema_version: 1,
+    strategy_instance_id: 'sid-a',
+    session_date: '2026-06-29',
+    timezone: 'America/New_York',
+    symbol: 'SPY',
+    resolution: '1m',
+    has_bars: true,
+    now_ms: 1_700_000_000_000,
+    bars: [],
+    fill_markers: [],
+    position_annotations: [],
+    order_overlays: [],
+    orders_today: [],
+    broker_activity_rows: [],
+    position_snapshot: [],
+    reconciliation_warnings: [],
+    evidence: [],
+    ...overrides,
+  };
+}
+
 describe('activityRefreshKeyForStatus', () => {
   it('keeps refreshing while control plane is connected or actively retrying', () => {
     expect(activityRefreshKeyForStatus(status('CONNECTED'))).toBe(123_456);
@@ -228,5 +256,61 @@ describe('cachedActivityForRequest', () => {
       resolution: '1m',
       refreshKey: null,
     })).toBeUndefined();
+  });
+});
+
+describe('activityProjectionForDisplay', () => {
+  it('keeps the last matching projection visible while a background refresh is loading', () => {
+    const cachedProjection = activityProjection({
+      orders_today: [
+        {
+          order_key: 'perm:1',
+          symbol: 'SPY',
+          side: 'BUY',
+          quantity: 1,
+          order_type: 'MKT',
+          status: 'filled',
+          group: 'resolved',
+          chart_ts_ms: 1_700_000_000_000,
+          submitted_ts_ms: 1_700_000_000_000,
+          last_update_ts_ms: 1_700_000_001_000,
+          filled_quantity: 1,
+          avg_fill_price: 420,
+          position_effect: 'Open long',
+          replay_count: 1,
+          evidence: [],
+        },
+      ],
+    });
+    const request = {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m' as const,
+      refreshKey: 123_456,
+    };
+
+    expect(activityProjectionForDisplay(undefined, {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m',
+      projection: cachedProjection,
+    }, request)).toBe(cachedProjection);
+  });
+
+  it('prefers the active resource value when a refresh completes', () => {
+    const cachedProjection = activityProjection({ now_ms: 1 });
+    const nextProjection = activityProjection({ now_ms: 2 });
+
+    expect(activityProjectionForDisplay(nextProjection, {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m',
+      projection: cachedProjection,
+    }, {
+      sid: 'sid-a',
+      sessionDate: '2026-06-29',
+      resolution: '1m',
+      refreshKey: 123_456,
+    })).toBe(nextProjection);
   });
 });

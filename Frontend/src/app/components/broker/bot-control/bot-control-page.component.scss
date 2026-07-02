@@ -518,132 +518,80 @@
   overflow: auto;
 }
 
-/* ── BOTTOM BAR + OVERLAY ── */
-.bottom-bar {
-  position: relative;
-  z-index: 30;
+/* ── INLINE WORKBENCH ── */
+.workbench {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  min-height: 40px;
-  padding: 0 1rem;
-  background: var(--bg-surface);
+  padding: 0.75rem 1rem 1rem;
   border-top: 1px solid var(--border);
 }
 
-.bottom-tab {
+.workbench-tabs {
+  display: block;
+  min-width: 0;
+}
+
+.workbench-tab-label {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  height: 40px;
-  padding: 0 0.9rem;
-  border: none;
-  border-top: 2px solid transparent;
-  background: transparent;
-  color: var(--text-subtle);
-  font: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  cursor: pointer;
 
   i {
+    color: var(--text-muted);
     font-size: 11px;
   }
-
-  &:hover {
-    color: var(--text-primary);
-  }
-
-  &.active {
-    color: var(--text-primary);
-    background: var(--bg-elevated);
-    border-top-color: var(--accent);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-  }
 }
 
-.bottom-spacer {
-  flex: 1 1 auto;
+:host ::ng-deep .workbench-tabs .p-tablist {
+  border-color: var(--border-light);
+  background: transparent;
 }
 
-.bottom-meta {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-}
-
-.bottom-panel {
-  position: absolute;
-  left: 1rem;
-  right: 1rem;
-  bottom: 40px;
-  z-index: 35;
-  height: 300px;
-  max-height: 60vh;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  border-bottom: none;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  box-shadow: var(--shadow-pop);
-}
-
-.bottom-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.55rem 0.85rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.bottom-panel-title {
-  font-size: var(--fs-sm);
-  font-weight: 700;
+:host ::ng-deep .workbench-tabs .p-tabpanels,
+:host ::ng-deep .workbench-tabs .p-tabpanel {
+  padding: 0;
+  background: transparent;
   color: var(--text-primary);
 }
 
-.bottom-panel-close {
-  display: inline-flex;
+:host ::ng-deep .workbench-tabs .p-tabpanel {
+  padding-top: 0.75rem;
+}
+
+.workbench-panel {
+  min-width: 0;
+}
+
+.workbench-panel-head {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
+  justify-content: space-between;
+  padding: 0 0 0.55rem;
 
-  &:hover {
+  h2 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0;
     color: var(--text-primary);
+    font-size: var(--fs-sm);
+    font-weight: 700;
   }
 
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
 }
 
-.bottom-panel-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 0.5rem 0.85rem 0.75rem;
+.workbench-meta {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
 }
 
-/* ── FIXED SINGLE-SCREEN SHELL (wide desktop) ── */
+.workbench-panel-body {
+  min-width: 0;
+}
+
+/* ── WIDE DESKTOP ── */
 @media (min-width: 1280px) {
-  .bot-control-page {
-    height: 100vh;
-    min-height: 0;
-    overflow: hidden;
-  }
-
   .workspace {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }

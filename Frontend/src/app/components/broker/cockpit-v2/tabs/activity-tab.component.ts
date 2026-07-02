@@ -77,6 +77,15 @@ export function cachedActivityForRequest(
   return cached.projection;
 }
 
+export function activityProjectionForDisplay(
+  resourceValue: LiveInstanceActivityProjection | null | undefined,
+  cached: CachedActivity | null,
+  params: ActivityRequestParams,
+): LiveInstanceActivityProjection | null {
+  if (resourceValue !== undefined) return resourceValue;
+  return cachedActivityForRequest(cached, params) ?? null;
+}
+
 @Component({
   selector: 'app-activity-tab',
   imports: [
@@ -98,6 +107,12 @@ export class ActivityTabComponent {
   readonly selectedSessionDate = signal<string>(localDateString());
   readonly selectedResolution = signal<ChartResolution>('1m');
   private readonly cachedActivity = signal<CachedActivity | null>(null);
+  private readonly activityRequestParams = computed<ActivityRequestParams>(() => ({
+    sid: this.strategyInstanceId(),
+    sessionDate: this.selectedSessionDate(),
+    resolution: this.selectedResolution(),
+    refreshKey: this.activityRefreshKey(),
+  }));
 
   readonly chartRunId = computed<string | null>(
     () => this.status().live_binding?.run_id ?? this.status().evidence_binding?.run_id ?? null,
@@ -113,12 +128,7 @@ export class ActivityTabComponent {
     LiveInstanceActivityProjection | null,
     ActivityRequestParams
   >({
-    params: () => ({
-      sid: this.strategyInstanceId(),
-      sessionDate: this.selectedSessionDate(),
-      resolution: this.selectedResolution(),
-      refreshKey: this.activityRefreshKey(),
-    }),
+    params: () => this.activityRequestParams(),
     loader: ({ params }): Promise<LiveInstanceActivityProjection | null> => {
       if (params.refreshKey === null) {
         const cached = cachedActivityForRequest(this.cachedActivity(), params);
@@ -128,7 +138,13 @@ export class ActivityTabComponent {
     },
   });
 
-  readonly activity = computed(() => this.activityResource.value() ?? null);
+  readonly activity = computed(() => {
+    return activityProjectionForDisplay(
+      this.activityResource.value(),
+      this.cachedActivity(),
+      this.activityRequestParams(),
+    );
+  });
   readonly ordersToday = computed(() => this.activity()?.orders_today ?? []);
   readonly brokerEventRows = computed(() => this.activity()?.broker_activity_rows ?? []);
   readonly backfillLoading = computed(() => this.activityResource.isLoading());
