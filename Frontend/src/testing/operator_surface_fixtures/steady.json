@@ -61,7 +61,12 @@
           "code": "broker_connection",
           "severity": "warning",
           "headline": "Broker session is not connected",
-          "explanation": "The broker connection evidence is UNKNOWN."
+          "explanation": "The broker connection evidence is UNKNOWN.",
+          "operator_next_step": "Reconnect the broker session, then refresh broker evidence.",
+          "remediation": {
+            "kind": "open_runbook",
+            "slug": "broker-reconnect"
+          }
         }
       ],
       "proof_lines": [

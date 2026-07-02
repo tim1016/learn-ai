@@ -188,6 +188,8 @@ function makeStatus(options: {
             severity: 'warning',
             headline: 'Broker session is disconnected',
             explanation: 'The broker connection evidence is not connected.',
+            operator_next_step: 'Reconnect the broker session, then refresh broker evidence.',
+            remediation: { kind: 'open_runbook', slug: 'broker-reconnect' },
           },
         ],
         proof_lines: [
@@ -466,8 +468,9 @@ describe('BotControlPageComponent', () => {
       .toContain('Control plane, last known.');
     const runbookLinks = Array.from(el.querySelectorAll<HTMLAnchorElement>('.warning-link'))
       .map((link) => link.getAttribute('href'));
-    expect(runbookLinks).toContain('/runbooks/broker%20evidence%2Fhealth%3F');
-    expect(runbookLinks).toContain('/runbooks/control%20plane%2Frunbook%3F');
+    expect(runbookLinks).toContain('/broker/account-monitor');
+    expect(runbookLinks).toContain('/broker');
+    expect(runbookLinks).not.toContain('/data-lab');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
     expect(el.querySelector('.decision-row')).toBeNull();
@@ -539,6 +542,8 @@ describe('BotControlPageComponent', () => {
         severity: 'critical',
         headline: 'Broker safety is unsafe',
         explanation: 'Paper-safety evidence is unsafe.',
+        operator_next_step: 'Inspect broker/account safety evidence before any trading action.',
+        remediation: { kind: 'open_runbook', slug: 'broker-instance-operator-surface' },
       },
     ];
     TestBed.configureTestingModule({
@@ -1347,6 +1352,166 @@ describe('BotControlPageComponent', () => {
     expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
   });
 
+  it('routes attention-row reconcile actions to the existing instance endpoint', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.additional_attention_groups = [
+      {
+        code: 'reconciliation',
+        severity: 'warning',
+        headline: 'Reconciliation is not fresh-clean',
+        explanation: 'Reconciliation state is NOT_AVAILABLE.',
+        operator_next_step: 'Run reconciliation and wait for a clean or adopted receipt.',
+        remediation: {
+          kind: 'invoke_endpoint',
+          endpoint: 'reconcile_instance',
+          method: 'POST',
+          path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+        },
+      },
+    ];
+    const reconcileInstance = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    (el.querySelector('[data-testid="bot-control-attention-toggle"]') as HTMLButtonElement | null)?.click();
+    fixture.detectChanges();
+
+    const action = el.querySelector(
+      '.attention-row-action',
+    ) as HTMLButtonElement | null;
+    expect(action?.textContent).toContain('Reconcile now');
+    action?.click();
+    await flush(fixture);
+
+    expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
+  });
+
+  it('renders backend reconcile precondition details instead of the generic load error', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const reconcileInstance = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'NO_LIVE_BINDING',
+            message: 'No bot process is running for this instance - reconciliation requires a live engine.',
+          },
+        },
+      }),
+    );
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const action = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="trader-guidance-primary-remediation"]',
+    ) as HTMLButtonElement | null;
+    action?.click();
+    await flush(fixture);
+    fixture.detectChanges();
+
+    const error = (fixture.nativeElement as HTMLElement).querySelector('.error-banner');
+    expect(error?.textContent).toContain('No bot process is running for this instance');
+    expect(error?.textContent).toContain('NO_LIVE_BINDING');
+    expect(error?.textContent).not.toContain('Could not load bot control data');
+  });
+
+  it('keeps runbook slugs on broker routes instead of falling through to the default page', () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'DEPVALJUL1' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn(),
+            getAccountSummary: vi.fn(),
+            getLifecycleTimeline: vi.fn(),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance: vi.fn(),
+          },
+        },
+      ],
+    });
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.componentInstance.instanceId.set('DEPVALJUL1');
+
+    expect(fixture.componentInstance.runbookHref('broker-reconnect')).toBe(
+      '/broker/account-monitor',
+    );
+    expect(fixture.componentInstance.runbookHref('cross-client-execution')).toBe(
+      '/broker/reconciliation',
+    );
+    expect(fixture.componentInstance.runbookHref('watchdog-halt')).toBe(
+      '/broker/bots/DEPVALJUL1',
+    );
+    expect(fixture.componentInstance.runbookHref('unknown-runbook')).toBeNull();
+  });
+
   it('re-derives selected lifecycle context from refreshed status data', async () => {
     const firstStatus = makeStatus();
     const secondStatus = makeStatus();
@@ -1948,6 +2113,8 @@ describe('BotControlPageComponent', () => {
         severity: 'critical',
         headline: 'Broker safety is unsafe',
         explanation: 'Paper-safety evidence is unsafe.',
+        operator_next_step: 'Inspect broker/account safety evidence before any trading action.',
+        remediation: { kind: 'open_runbook', slug: 'broker-instance-operator-surface' },
       },
     ];
     TestBed.configureTestingModule({
@@ -1996,6 +2163,13 @@ describe('BotControlPageComponent', () => {
         severity: 'critical',
         headline: 'Reconciliation failed',
         explanation: 'The cold-start reconciliation receipt failed.',
+        operator_next_step: 'Run reconciliation and wait for a clean or adopted receipt.',
+        remediation: {
+          kind: 'invoke_endpoint',
+          endpoint: 'reconcile_instance',
+          method: 'POST',
+          path_template: '/api/live-instances/{strategy_instance_id}/reconcile',
+        },
       },
     ];
     fixture.componentInstance.status.set(next);

@@ -1556,6 +1556,8 @@ class OperatorSurfaceAttentionGroup(BaseModel):
     severity: TraderAttentionSeverity
     headline: str
     explanation: str
+    operator_next_step: str
+    remediation: TraderPrimaryRemediation
 
 
 class OperatorSurfaceProofLine(BaseModel):
