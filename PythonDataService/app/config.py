@@ -52,6 +52,20 @@ class Settings(BaseSettings):
         """Parse ALLOWED_ORIGINS into a list"""
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
 
+    # Interim local control-plane guard. When configured, mutating broker-control
+    # routes require this shared-secret header; compose sets it for the shipped
+    # local stack while tests can opt in per case.
+    DATA_PLANE_CONTROL_SECRET: str = ""
+    DATA_PLANE_CONTROL_SECRET_HEADER: str = "X-Data-Plane-Control-Secret"
+    TRUSTED_HOSTS: str = (
+        "localhost,127.0.0.1,test,testserver,python-service,backend,"
+        "host.containers.internal,host.docker.internal"
+    )
+
+    def get_trusted_hosts(self) -> list[str]:
+        """Parse TRUSTED_HOSTS into a list for TrustedHostMiddleware."""
+        return [host.strip() for host in self.TRUSTED_HOSTS.split(",") if host.strip()]
+
     # Data sanitization settings
     MAX_NULL_PERCENTAGE: float = 0.1  # 10% max nulls allowed
     REMOVE_DUPLICATES: bool = True

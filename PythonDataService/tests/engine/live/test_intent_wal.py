@@ -119,6 +119,23 @@ def test_trailing_partial_line_is_tolerated(tmp_path: Path) -> None:
     assert [e.seq for e in tail] == [1, 2]  # partial trailing line dropped
 
 
+def test_append_truncates_tolerated_trailing_partial_before_write(tmp_path: Path) -> None:
+    path = tmp_path / "intent_events.jsonl"
+    wal = IntentWal(path)
+    _pending(wal)
+    _pending(wal)
+
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write('{"seq": 3, "event_type": "PENDING_INTENT", "partial')
+
+    reopened = IntentWal(path)
+    appended = _pending(reopened)
+
+    assert appended.seq == 3
+    assert [event.seq for event in reopened.read_tail()] == [1, 2, 3]
+    assert "partial" not in path.read_text(encoding="utf-8")
+
+
 def test_malformed_complete_line_poisons(tmp_path: Path) -> None:
     path = tmp_path / "intent_events.jsonl"
     # A complete (newline-terminated) malformed line is corruption, not a tail.

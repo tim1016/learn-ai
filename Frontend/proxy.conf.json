@@ -12,6 +12,9 @@
   "/api": {
     "target": "http://python-service:8000",
     "secure": false,
-    "changeOrigin": true
+    "changeOrigin": true,
+    "headers": {
+      "X-Data-Plane-Control-Secret": "local-dev-control-secret"
+    }
   }
 }

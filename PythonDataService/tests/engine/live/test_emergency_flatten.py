@@ -21,6 +21,8 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.engine.live.intent_events import IntentEventType, IntentKind
+from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run import cmd_emergency_flatten
 
 
@@ -402,6 +404,35 @@ def test_emergency_flatten_stamps_order_ref_on_each_spec_vcr_0020(tmp_path: Path
     # Each liquidation must get a UNIQUE intent_id (no replay-by-mistake).
     intents = {spec.order_ref.rpartition(":")[2] for spec in broker.placed}
     assert len(intents) == len(broker.placed)
+
+
+def test_emergency_flatten_writes_structured_audit_wal(tmp_path: Path) -> None:
+    broker = _DurableSubmitRequiringBroker(
+        positions=[_pos("SPY", 200), _pos("QQQ", -50)]
+    )
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
+
+    assert rc == 0
+    events = IntentWal(tmp_path / "emergency_flatten_audit.jsonl").read_tail()
+    assert [event.event_type for event in events] == [
+        IntentEventType.PENDING_INTENT,
+        IntentEventType.SUBMITTED,
+        IntentEventType.PENDING_INTENT,
+        IntentEventType.SUBMITTED,
+    ]
+    pending = [event for event in events if event.event_type is IntentEventType.PENDING_INTENT]
+    submitted = [event for event in events if event.event_type is IntentEventType.SUBMITTED]
+    assert [event.intent_kind for event in events] == [IntentKind.EMERGENCY_FLATTEN] * 4
+    assert [event.order_ref for event in pending] == [spec.order_ref for spec in broker.placed]
+    assert [event.intent_id for event in submitted] == [event.intent_id for event in pending]
+    assert [event.order_id for event in submitted] == [500, 501]
+    assert pending[0].order_spec is not None
+    assert pending[0].order_spec["symbol"] == "SPY"
+    assert pending[0].order_spec["action"] == "SELL"
+    assert pending[1].order_spec is not None
+    assert pending[1].order_spec["symbol"] == "QQQ"
+    assert pending[1].order_spec["action"] == "BUY"
 
 
 # ──────────────────────────── Failure path ───────────────────────────
