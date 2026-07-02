@@ -58,6 +58,29 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
     assert account_artifacts_root(tmp_path, "DU123456") == tmp_path / "accounts" / "DU123456"
 
 
+def test_account_artifacts_root_canonicalizes_account_id(tmp_path: Path) -> None:
+    assert account_artifacts_root(tmp_path, "  du123456  ") == tmp_path / "accounts" / "DU123456"
+
+
+@pytest.mark.parametrize(
+    "account_id",
+    ["DU.123456", "DU-123456", "DU 123456", "DU/123456", "../DU123456"],
+)
+def test_account_artifacts_root_rejects_path_like_account_id(
+    tmp_path: Path,
+    account_id: str,
+) -> None:
+    with pytest.raises(AccountArtifactError, match="invalid account_id"):
+        account_artifacts_root(tmp_path, account_id)
+
+
+def test_read_account_instance_registry_rejects_path_like_account_id(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AccountArtifactError, match="invalid account_id"):
+        read_account_instance_registry(tmp_path, "DU.123456")
+
+
 def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)

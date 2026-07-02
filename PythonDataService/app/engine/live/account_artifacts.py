@@ -45,7 +45,7 @@ ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
     )
 )
 
-_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_ACCOUNT_ID_RE = re.compile(r"^[A-Z][A-Z0-9]+$")
 logger = logging.getLogger(__name__)
 
 
@@ -673,9 +673,10 @@ def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
 
 
 def _validate_account_id(account_id: str) -> str:
-    if _ACCOUNT_ID_RE.fullmatch(account_id) is None:
+    canonical = account_id.strip().upper()
+    if _ACCOUNT_ID_RE.fullmatch(canonical) is None:
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    return account_id
+    return canonical
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
