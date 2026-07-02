@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { AccountReconciliationReceipt } from '../api/account-reconciliation.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -42,6 +43,7 @@ export type SymbolSearchSecType =
 export class BrokerService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/broker';
+  private readonly accountsBase = '/api/accounts';
 
   health(): Promise<IbkrConnectionHealth> {
     return firstValueFrom(this.http.get<IbkrConnectionHealth>(`${this.base}/health`));
@@ -94,6 +96,23 @@ export class BrokerService {
   accountTruth(): Promise<AccountTruthResponse> {
     return firstValueFrom(
       this.http.get<AccountTruthResponse>(`${this.base}/account-truth`),
+    );
+  }
+
+  reconcileAccount(accountId: string): Promise<AccountReconciliationReceipt> {
+    return firstValueFrom(
+      this.http.post<AccountReconciliationReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation`,
+        {},
+      ),
+    );
+  }
+
+  latestAccountReconciliation(accountId: string): Promise<AccountReconciliationReceipt> {
+    return firstValueFrom(
+      this.http.get<AccountReconciliationReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation/latest`,
+      ),
     );
   }
 

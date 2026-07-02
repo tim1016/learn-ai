@@ -45,12 +45,25 @@ ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
     )
 )
 
-_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_ACCOUNT_ID_RE = re.compile(r"^[A-Z][A-Z0-9]+$")
 logger = logging.getLogger(__name__)
 
 
 class AccountArtifactError(ValueError):
     """Raised when an account artifact path or payload is invalid."""
+
+
+def _safe_account_path_segment(account_id: str) -> str:
+    if account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None:
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    matched_account_id = match.group(0)
+    safe_account_id = os.path.basename(matched_account_id)
+    if safe_account_id != matched_account_id:
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    return safe_account_id
 
 
 class AccountEventRecord(BaseModel):
@@ -167,8 +180,27 @@ class RestartIntensityPolicy(BaseModel):
 
 
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
-    safe_account_id = _validate_account_id(account_id)
-    return artifacts_root / "accounts" / safe_account_id
+    """Return the confined account artifact directory for one account id.
+
+    ``account_id`` can arrive from URL path segments on operator recovery
+    endpoints. Require the already-canonical account-id spelling, reconstruct
+    the path component from the regex match, collapse it to a basename-only
+    segment, then resolve and assert it remains below
+    ``<artifacts_root>/accounts``. The match-group reconstruction, basename
+    extraction, and containment check mirror CodeQL's path-injection guidance.
+    """
+    safe_account_id = _safe_account_path_segment(account_id)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    candidate = os.path.realpath(os.path.join(accounts_root, safe_account_id))
+    try:
+        common = os.path.commonpath([candidate, accounts_root])
+    except ValueError as exc:
+        raise AccountArtifactError(
+            f"account artifact path {candidate} cannot share a root with {accounts_root}"
+        ) from exc
+    if common != accounts_root:
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    return Path(candidate)
 
 
 def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:
@@ -437,11 +469,31 @@ def read_account_instance_registry(
     artifacts_root: Path,
     account_id: str,
 ) -> list[AccountInstanceBinding]:
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_INSTANCE_REGISTRY_FILENAME
-    if not path.is_file():
+    root = os.path.realpath(os.fspath(account_artifacts_root(artifacts_root, account_id)))
+    registry_filename = os.path.basename(ACCOUNT_INSTANCE_REGISTRY_FILENAME)
+    if registry_filename != ACCOUNT_INSTANCE_REGISTRY_FILENAME:
+        raise AccountArtifactError("invalid account instance registry filename")
+    path = os.path.realpath(os.path.join(root, registry_filename))
+    try:
+        common = os.path.commonpath([path, root])
+    except ValueError as exc:
+        raise AccountArtifactError(
+            f"account instance registry path {path} cannot share a root with {root}"
+        ) from exc
+    if common != root:
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    root_prefix = root if root.endswith(os.sep) else f"{root}{os.sep}"
+    if not path.startswith(root_prefix):
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
         return []
+    except IsADirectoryError as exc:
+        raise AccountArtifactError(f"account instance registry is not a file: {path}") from exc
     bindings: list[AccountInstanceBinding] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         if not line.strip():
             continue
         bindings.append(AccountInstanceBinding.model_validate_json(line))
@@ -670,12 +722,6 @@ def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
         and event.get("cleared_at_ms") is not None
     ]
     return max(clears) if clears else None
-
-
-def _validate_account_id(account_id: str) -> str:
-    if _ACCOUNT_ID_RE.fullmatch(account_id) is None:
-        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    return account_id
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:

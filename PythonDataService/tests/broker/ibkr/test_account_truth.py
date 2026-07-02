@@ -724,36 +724,37 @@ async def test_fetch_account_truth_collects_account_summary_gap_into_final_verdi
 
 def test_account_truth_router_reads_durable_instance_registry(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.broker.ibkr import config as ibkr_config
-    from app.routers import broker_account_truth
+    from app.broker.ibkr.account_truth import load_account_instance_registry_evidence
 
     binding = _binding()
     write_account_instance_binding(tmp_path, binding)
-    monkeypatch.setenv("IBKR_LIVE_RUNS_ROOT", str(tmp_path / "live_runs"))
-    ibkr_config.reset_settings_for_testing()
-
-    try:
-        evidence = broker_account_truth._account_instance_registry_evidence("DU1234567")
-    finally:
-        ibkr_config.reset_settings_for_testing()
+    evidence = load_account_instance_registry_evidence(
+        artifacts_root=tmp_path,
+        account_id="DU1234567",
+        context="account truth test",
+    )
 
     assert evidence.bindings == [binding]
     assert evidence.evidence_gaps == []
 
 
 def test_account_truth_router_surfaces_registry_read_failure(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.routers import broker_account_truth
+    from app.broker.ibkr import account_truth
 
     def fail_read(*_args: object, **_kwargs: object) -> None:
         raise AccountArtifactError("corrupt registry line")
 
-    monkeypatch.setattr(broker_account_truth, "read_account_instance_registry", fail_read)
+    monkeypatch.setattr(account_truth, "read_account_instance_registry", fail_read)
 
-    evidence = broker_account_truth._account_instance_registry_evidence("DU1234567")
+    evidence = account_truth.load_account_instance_registry_evidence(
+        artifacts_root=tmp_path,
+        account_id="DU1234567",
+        context="account truth test",
+    )
 
     assert evidence.bindings == []
     assert len(evidence.evidence_gaps) == 1
@@ -764,9 +765,13 @@ def test_account_truth_router_surfaces_registry_read_failure(
 
 
 def test_account_truth_router_surfaces_missing_account_id_as_registry_gap() -> None:
-    from app.routers import broker_account_truth
+    from app.broker.ibkr.account_truth import load_account_instance_registry_evidence
 
-    evidence = broker_account_truth._account_instance_registry_evidence(None)
+    evidence = load_account_instance_registry_evidence(
+        artifacts_root=Path("/unused"),
+        account_id=None,
+        context="account truth test",
+    )
 
     assert evidence.bindings == []
     assert len(evidence.evidence_gaps) == 1

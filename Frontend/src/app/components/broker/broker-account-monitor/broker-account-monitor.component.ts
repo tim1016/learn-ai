@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -13,16 +14,19 @@ import { PageGuideComponent } from '../../../shared/page-guide/page-guide.compon
 import { RouterLink } from '@angular/router';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
+import type { GateResultStatus } from '../../../api/live-instances.types';
 import type {
   AccountTruthResponse,
   IbkrPnLTick,
   IbkrPosition,
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
+import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
 import {
   fmtCurrency,
   fmtDateNy,
@@ -59,6 +63,7 @@ interface PositionRow {
     SectionErrorComponent,
     RouterLink,
     AccountTruthBoardComponent,
+    ReceiptLabelPipe,
   ],
   styleUrl: './broker-account-monitor.component.scss',
   templateUrl: './broker-account-monitor.component.html',
@@ -75,6 +80,37 @@ export class BrokerAccountMonitorComponent {
   readonly truthLoading = signal(false);
   readonly truthError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  readonly accountReconciliation = signal<AccountReconciliationReceipt | null>(null);
+  readonly accountReconciliationNowMs = signal(Date.now());
+  readonly accountReconciliationLoading = signal(false);
+  readonly accountReconciliationError = signal<unknown>(null);
+  readonly accountReconciliationAccountId = computed(() => {
+    const truth = this.accountTruth();
+    return truth === null ? null : this.reconciliationAccountIdForTruth(truth);
+  });
+  readonly accountReconciliationExpired = computed(() => {
+    const receipt = this.accountReconciliation();
+    return receipt !== null && receipt.expires_at_ms < this.accountReconciliationNowMs();
+  });
+  readonly accountReconciliationTone = computed(
+    () => this.accountReconciliationDisplayGate(),
+  );
+  readonly accountReconciliationDisplayState = computed(() =>
+    this.accountReconciliationExpired()
+      ? 'STALE'
+      : this.accountReconciliation()?.state ?? 'UNKNOWN',
+  );
+  readonly accountReconciliationDisplayGate = computed<GateResultStatus>(() =>
+    this.accountReconciliationExpired()
+      ? 'unknown'
+      : this.accountReconciliation()?.final_gate_result.status ?? 'unknown',
+  );
+  readonly accountReconciliationReason = computed(
+    () =>
+      this.accountReconciliationExpired()
+        ? 'Receipt expired before this account monitor snapshot. Run account reconcile again.'
+        : this.accountReconciliation()?.final_gate_result.operator_reason ?? '',
+  );
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
   private readonly positionStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -116,6 +152,11 @@ export class BrokerAccountMonitorComponent {
   constructor() {
     void this.refresh();
 
+    effect((onCleanup) => {
+      const id = setInterval(() => this.accountReconciliationNowMs.set(Date.now()), 1_000);
+      onCleanup(() => clearInterval(id));
+    });
+
     // Fold per-conId ticks. The stream's ``data`` is a flat list across
     // all contracts (one entry per (con_id, debounce window)); we
     // reduce to last-tick-wins per con_id.
@@ -146,12 +187,60 @@ export class BrokerAccountMonitorComponent {
     this.truthLoading.set(true);
     this.truthError.set(null);
     try {
-      this.accountTruth.set(await this.broker.accountTruth());
+      const truth = await this.broker.accountTruth();
+      this.accountTruth.set(truth);
+      const accountId = this.reconciliationAccountIdForTruth(truth);
+      if (accountId) {
+        await this.loadLatestAccountReconciliation(accountId);
+      } else {
+        this.setAccountReconciliation(null);
+      }
     } catch (err) {
       this.truthError.set(err);
     } finally {
       this.truthLoading.set(false);
     }
+  }
+
+  async loadLatestAccountReconciliation(accountId: string): Promise<void> {
+    this.accountReconciliationLoading.set(true);
+    this.accountReconciliationError.set(null);
+    try {
+      this.setAccountReconciliation(await this.broker.latestAccountReconciliation(accountId));
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 404) {
+        this.setAccountReconciliation(null);
+      } else {
+        this.accountReconciliationError.set(err);
+      }
+    } finally {
+      this.accountReconciliationLoading.set(false);
+    }
+  }
+
+  async runAccountReconciliation(): Promise<void> {
+    const accountId = this.accountReconciliationAccountId();
+    if (!accountId || this.accountReconciliationLoading()) return;
+    this.accountReconciliationLoading.set(true);
+    this.accountReconciliationError.set(null);
+    try {
+      const receipt = await this.broker.reconcileAccount(accountId);
+      this.setAccountReconciliation(receipt);
+      this.accountTruth.set(receipt.account_truth);
+    } catch (err) {
+      this.accountReconciliationError.set(err);
+    } finally {
+      this.accountReconciliationLoading.set(false);
+    }
+  }
+
+  private reconciliationAccountIdForTruth(truth: AccountTruthResponse): string | null {
+    return truth.account_id ?? truth.health.account_id ?? null;
+  }
+
+  private setAccountReconciliation(receipt: AccountReconciliationReceipt | null): void {
+    this.accountReconciliationNowMs.set(Date.now());
+    this.accountReconciliation.set(receipt);
   }
 
   async loadPositions(): Promise<void> {

@@ -17,6 +17,7 @@ from app.broker.ibkr.client import (
 )
 from app.config import settings
 from app.routers import (
+    account_reconciliation,
     aggregates,
     baselines,
     broker,
@@ -354,6 +355,8 @@ app.include_router(research_divergence.router)
 app.include_router(broker.router)
 # Account Truth and account-wide broker ledger endpoints.
 app.include_router(broker_account_truth.router)
+# Account-scoped reconciliation and recovery triage endpoints.
+app.include_router(account_reconciliation.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

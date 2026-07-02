@@ -9,10 +9,15 @@ Orders.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import NamedTuple
+
+from pydantic import ValidationError
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -28,7 +33,9 @@ from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import executions_for_reconnect_recovery, list_open_orders
 from app.engine.live.account_artifacts import (
     ACTIVE_INSTANCE_BINDING_STATES,
+    AccountArtifactError,
     AccountInstanceBinding,
+    read_account_instance_registry,
 )
 from app.engine.live.order_identity import (
     MANUAL_NAMESPACE_ROOT,
@@ -74,6 +81,51 @@ class _NamespaceViews:
     active_by_namespace: dict[str, _NamespaceOwner]
     duplicate_active_namespaces: frozenset[str]
     registry_unavailable: bool = False
+
+
+class AccountInstanceRegistryEvidence(NamedTuple):
+    bindings: list[AccountInstanceBinding]
+    evidence_gaps: list[AccountTruthEvidenceGap]
+
+
+def load_account_instance_registry_evidence(
+    *,
+    artifacts_root: Path,
+    account_id: str | None,
+    context: str,
+) -> AccountInstanceRegistryEvidence:
+    """Read account registry bindings as Account Truth evidence."""
+    if not account_id:
+        return AccountInstanceRegistryEvidence(
+            [],
+            [
+                AccountTruthEvidenceGap(
+                    source="instance_registry",
+                    severity="critical",
+                    message="Account instance registry unavailable: broker account id is unknown",
+                )
+            ],
+        )
+    try:
+        return AccountInstanceRegistryEvidence(
+            read_account_instance_registry(artifacts_root, account_id),
+            [],
+        )
+    except (AccountArtifactError, OSError, json.JSONDecodeError, ValidationError) as exc:
+        logger.warning(
+            "failed to read account instance registry for account truth",
+            extra={"account_id": account_id, "context": context, "exception": repr(exc)},
+        )
+        return AccountInstanceRegistryEvidence(
+            [],
+            [
+                AccountTruthEvidenceGap(
+                    source="instance_registry",
+                    severity="critical",
+                    message=f"Account instance registry unavailable: {exc}",
+                )
+            ],
+        )
 
 
 async def fetch_account_truth(

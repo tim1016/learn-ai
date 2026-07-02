@@ -58,6 +58,39 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
     assert account_artifacts_root(tmp_path, "DU123456") == tmp_path / "accounts" / "DU123456"
 
 
+@pytest.mark.parametrize(
+    "account_id",
+    ["du123456", " DU123456 ", "DU.123456", "DU-123456", "DU 123456", "DU/123456", "../DU123456"],
+)
+def test_account_artifacts_root_rejects_path_like_account_id(
+    tmp_path: Path,
+    account_id: str,
+) -> None:
+    with pytest.raises(AccountArtifactError, match="invalid account_id"):
+        account_artifacts_root(tmp_path, account_id)
+
+
+def test_read_account_instance_registry_rejects_path_like_account_id(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AccountArtifactError, match="invalid account_id"):
+        read_account_instance_registry(tmp_path, "DU.123456")
+
+
+def test_account_artifacts_root_rejects_symlink_escape(tmp_path: Path) -> None:
+    accounts_root = tmp_path / "accounts"
+    accounts_root.mkdir()
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir()
+    try:
+        (accounts_root / "DU123456").symlink_to(outside_root, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable in this test environment: {exc}")
+
+    with pytest.raises(AccountArtifactError, match="path traversal"):
+        account_artifacts_root(tmp_path, "DU123456")
+
+
 def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)
