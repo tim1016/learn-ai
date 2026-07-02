@@ -53,6 +53,19 @@ class AccountArtifactError(ValueError):
     """Raised when an account artifact path or payload is invalid."""
 
 
+def _safe_account_path_segment(account_id: str) -> str:
+    if account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None:
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    matched_account_id = match.group(0)
+    safe_account_id = os.path.basename(matched_account_id)
+    if safe_account_id != matched_account_id:
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    return safe_account_id
+
+
 class AccountEventRecord(BaseModel):
     """Typed forward-write envelope for account-scoped audit events."""
 
@@ -171,27 +184,23 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
 
     ``account_id`` can arrive from URL path segments on operator recovery
     endpoints. Require the already-canonical account-id spelling, reconstruct
-    the path component from the regex match, then resolve and assert it remains
-    below ``<artifacts_root>/accounts``. The match-group reconstruction plus
-    containment check mirrors the repo's CodeQL-clean path-injection barrier.
+    the path component from the regex match, collapse it to a basename-only
+    segment, then resolve and assert it remains below
+    ``<artifacts_root>/accounts``. The match-group reconstruction, basename
+    extraction, and containment check mirror CodeQL's path-injection guidance.
     """
-    if account_id != account_id.strip():
-        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    match = _ACCOUNT_ID_RE.fullmatch(account_id)
-    if match is None:
-        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    safe_account_id = match.group(0)
-    accounts_root = (artifacts_root / "accounts").resolve(strict=False)
-    candidate = (accounts_root / safe_account_id).resolve(strict=False)
+    safe_account_id = _safe_account_path_segment(account_id)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    candidate = os.path.realpath(os.path.join(accounts_root, safe_account_id))
     try:
-        common = os.path.commonpath([str(candidate), str(accounts_root)])
+        common = os.path.commonpath([candidate, accounts_root])
     except ValueError as exc:
         raise AccountArtifactError(
             f"account artifact path {candidate} cannot share a root with {accounts_root}"
         ) from exc
-    if common != str(accounts_root):
+    if common != accounts_root:
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
-    return candidate
+    return Path(candidate)
 
 
 def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:

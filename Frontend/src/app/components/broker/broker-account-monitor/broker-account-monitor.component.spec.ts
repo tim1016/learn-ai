@@ -64,23 +64,29 @@ describe('BrokerAccountMonitorComponent', () => {
     expect(screen.queryByText('CLEAN')).toBeNull();
   });
 
-  it('marks an expired latest receipt as stale', async () => {
+  it('marks a latest receipt stale when the monitor clock passes its expiry', async () => {
     const broker = new FakeBrokerService();
+    const expiresAtMs = Date.now() + 60_000;
     broker.latestAccountReconciliation.mockResolvedValue(
-      accountReconciliationReceipt({ expiresAtMs: Date.now() - 1_000 }),
+      accountReconciliationReceipt({ expiresAtMs }),
     );
-    await render(BrokerAccountMonitorComponent, {
+    const view = await render(BrokerAccountMonitorComponent, {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
       ],
     });
 
-    expect(await screen.findByText('Stale')).toBeTruthy();
-    expect(screen.getByText('Unknown')).toBeTruthy();
+    expect((await screen.findAllByText('Clean')).length).toBeGreaterThan(0);
+
+    view.fixture.componentInstance.accountReconciliationNowMs.set(expiresAtMs + 1);
+    view.fixture.detectChanges();
+
+    expect(screen.getByText('Stale')).toBeTruthy();
     expect(
       screen.getByText('Receipt expired before this account monitor snapshot. Run account reconcile again.'),
     ).toBeTruthy();
+    expect(screen.getByText('Unknown')).toBeTruthy();
   });
 
   it('runs fail-closed reconciliation from broker health account when truth account is unknown', async () => {

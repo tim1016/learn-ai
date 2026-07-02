@@ -81,7 +81,7 @@ export class BrokerAccountMonitorComponent {
   readonly truthError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
   readonly accountReconciliation = signal<AccountReconciliationReceipt | null>(null);
-  readonly accountReconciliationCheckedAtMs = signal(Date.now());
+  readonly accountReconciliationNowMs = signal(Date.now());
   readonly accountReconciliationLoading = signal(false);
   readonly accountReconciliationError = signal<unknown>(null);
   readonly accountReconciliationAccountId = computed(() => {
@@ -90,7 +90,7 @@ export class BrokerAccountMonitorComponent {
   });
   readonly accountReconciliationExpired = computed(() => {
     const receipt = this.accountReconciliation();
-    return receipt !== null && receipt.expires_at_ms < this.accountReconciliationCheckedAtMs();
+    return receipt !== null && receipt.expires_at_ms < this.accountReconciliationNowMs();
   });
   readonly accountReconciliationTone = computed(
     () => this.accountReconciliationDisplayGate(),
@@ -151,6 +151,11 @@ export class BrokerAccountMonitorComponent {
 
   constructor() {
     void this.refresh();
+
+    effect((onCleanup) => {
+      const id = setInterval(() => this.accountReconciliationNowMs.set(Date.now()), 1_000);
+      onCleanup(() => clearInterval(id));
+    });
 
     // Fold per-conId ticks. The stream's ``data`` is a flat list across
     // all contracts (one entry per (con_id, debounce window)); we
@@ -234,7 +239,7 @@ export class BrokerAccountMonitorComponent {
   }
 
   private setAccountReconciliation(receipt: AccountReconciliationReceipt | null): void {
-    this.accountReconciliationCheckedAtMs.set(Date.now());
+    this.accountReconciliationNowMs.set(Date.now());
     this.accountReconciliation.set(receipt);
   }
 
