@@ -137,7 +137,7 @@ jobs:
           fi
           changed=$(git diff --name-only "$range" || true)
           # Baseline dirs are always run; skip them here to avoid duplicate paths.
-          baseline_pattern='^PythonDataService/tests/(unit|indicators|edge|utils|engine|routers|schemas)/'
+          baseline_pattern='^PythonDataService/tests/(unit|indicators|edge|utils|engine|routers|schemas|services|operator)/'
           extra=""
           # (1) Directly-changed test files outside the baseline dirs.
           while IFS= read -r p; do
@@ -174,7 +174,7 @@ jobs:
         run: |
           python -m pytest \
             tests/unit tests/indicators tests/edge tests/utils \
-            tests/engine tests/routers tests/schemas \
+            tests/engine tests/routers tests/schemas tests/services tests/operator \
             ${{ steps.changed.outputs.extra }} \
             -v -k "not slow" --tb=short
 
