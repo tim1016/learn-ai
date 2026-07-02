@@ -29,6 +29,7 @@ import type {
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
+import type { ActiveBotSidebarNotice } from '../../../shell/active-bot-sidebar-notice.service';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
@@ -163,13 +164,34 @@ export class BotControlPageComponent {
     () => this.accountSummary()?.notice ?? null,
   );
 
-  readonly hostRunnerNotice = computed(() => {
+  readonly hostRunnerNotice = computed<ActiveBotSidebarNotice | null>(() => {
     const hostProcess = this.status()?.operator_surface.host_process ?? null;
+    if (hostProcess?.state === 'WAITING_FOR_HOST') {
+      const cap = hostProcess.start_capability;
+      return {
+        instanceId: this.instanceId() ?? '',
+        kind: 'live-binding-invalid',
+        summary: 'Live binding invalid.',
+        message: hostProcess.notice ?? 'This bot has no active live binding. Bind again before trading.',
+        command: null,
+        action: canStartHostProcess(cap)
+          ? {
+              label: 'Bind again',
+              busyLabel: 'Binding...',
+              runId: cap.run_id,
+              request: cap.request,
+            }
+          : null,
+      };
+    }
     if (hostProcess?.state !== 'UNREACHABLE') return null;
     return {
-      title: 'Host runner unreachable',
+      instanceId: this.instanceId() ?? '',
+      kind: 'host-runner-unreachable',
+      summary: 'Warning, host runner unreachable.',
       message: hostProcess.notice ?? 'The host runner cannot be reached for this bot.',
       command: hostProcess.copyable_command,
+      action: null,
     };
   });
 
@@ -323,8 +345,11 @@ export class BotControlPageComponent {
         id && notice
           ? {
               instanceId: id,
+              kind: notice.kind,
+              summary: notice.summary,
               message: notice.message,
               command: notice.command,
+              action: notice.action,
             }
           : null,
       );

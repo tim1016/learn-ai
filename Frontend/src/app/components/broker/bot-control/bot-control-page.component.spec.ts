@@ -16,9 +16,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   FleetAccountSummary,
+  HostProcessState,
   LifecycleTimelineResponse,
   LiveInstanceStatus,
 } from '../../../api/live-instances.types';
+import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
@@ -80,12 +82,29 @@ class FakeBrokerHealthService {
 
 function makeStatus(options: {
   id?: string;
+  hostState?: HostProcessState;
   hostNotice?: string;
+  startCapabilityEnabled?: boolean;
+  startRunId?: string;
+  startRequest?: HostRunnerStartRequest;
   markPoisonedEnabled?: boolean;
 } = {}): LiveInstanceStatus {
+  const hostState = options.hostState ?? 'UNREACHABLE';
+  const startRequest: HostRunnerStartRequest = options.startRequest ?? {
+    readonly: false,
+    hydrate_policy: 'require',
+    strategy: 'deployment_validation',
+    max_orders_per_day: 2,
+    ibkr_host: '127.0.0.1',
+  };
+  const processState: LiveInstanceStatus['process']['state'] = hostState === 'WAITING_FOR_HOST'
+    ? 'idle'
+    : hostState === 'RUNNING'
+      ? 'running'
+      : 'exited';
   return {
     strategy_instance_id: options.id ?? 'sid-x',
-    process: { state: 'exited', pid: null, bound_run_id: null, started_at_ms: null },
+    process: { state: processState, pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,
     evidence_binding: null,
     desired_state: {
@@ -111,16 +130,24 @@ function makeStatus(options: {
     operator_surface: {
       schema_version: 1,
       host_process: {
-        state: 'UNREACHABLE',
+        state: hostState,
         notice: options.hostNotice ?? 'Start the host runner before trading this bot.',
-        copyable_command: 'make broker-runner',
-        start_capability: {
-          enabled: false,
-          run_id: null,
-          request: null,
-          disabled_reason_code: 'HOST_SERVICE_OFFLINE',
-          gate_results: [],
-        },
+        copyable_command: hostState === 'UNREACHABLE' ? 'make broker-runner' : null,
+        start_capability: options.startCapabilityEnabled
+          ? {
+              enabled: true,
+              run_id: options.startRunId ?? 'run-x',
+              request: startRequest,
+              disabled_reason_code: null,
+              gate_results: [],
+            }
+          : {
+              enabled: false,
+              run_id: null,
+              request: null,
+              disabled_reason_code: 'HOST_SERVICE_OFFLINE',
+              gate_results: [],
+            },
       },
       prior_run: { classification: 'UNKNOWN' },
       broker: { safety_verdict: 'UNKNOWN', connection: 'DISCONNECTED' },
@@ -1462,6 +1489,67 @@ describe('BotControlPageComponent', () => {
     expect(sidebarNotice?.textContent).toContain('Start the host runner before trading this bot.');
     expect(sidebarNotice?.textContent).toContain('make broker-runner');
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
+  });
+
+  it('renders an invalid live-binding sidebar notice with a bind-again action', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const request: HostRunnerStartRequest = {
+      readonly: false,
+      hydrate_policy: 'require',
+      strategy: 'deployment_validation',
+      max_orders_per_day: 2,
+      ibkr_host: '127.0.0.1',
+    };
+    const startHostRunner = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      imports: [BotControlWithSidebarHostComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'DEPVALJUL1' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus({
+              id: 'DEPVALJUL1',
+              hostState: 'WAITING_FOR_HOST',
+              hostNotice: 'Trading was requested, but this bot process has not started yet.',
+              startCapabilityEnabled: true,
+              startRunId: 'run-bind',
+              startRequest: request,
+            })),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner,
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlWithSidebarHostComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    const sidebarNotice = el.querySelector('[data-testid="sidebar-host-runner-notice"]');
+    const action = el.querySelector<HTMLButtonElement>('[data-testid="sidebar-host-runner-action"]');
+    expect(sidebarNotice?.textContent).toContain('Live binding invalid.');
+    expect(sidebarNotice?.textContent).toContain('Trading was requested, but this bot process has not started yet.');
+    expect(action?.textContent?.trim()).toBe('Bind again');
+
+    action?.click();
+    await flush(fixture);
+
+    expect(startHostRunner).toHaveBeenCalledWith('run-bind', request);
   });
 
   it('refreshes broker evidence on the serialized poll loop', async () => {

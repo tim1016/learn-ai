@@ -1,9 +1,20 @@
 import { Injectable, signal } from '@angular/core';
+import type { HostRunnerStartRequest } from '../api/live-runs.types';
+
+export interface ActiveBotSidebarNoticeAction {
+  readonly label: string;
+  readonly busyLabel: string;
+  readonly runId: string;
+  readonly request: HostRunnerStartRequest;
+}
 
 export interface ActiveBotSidebarNotice {
   readonly instanceId: string;
+  readonly kind: 'host-runner-unreachable' | 'live-binding-invalid';
+  readonly summary: string;
   readonly message: string;
   readonly command: string | null;
+  readonly action: ActiveBotSidebarNoticeAction | null;
 }
 
 @Injectable({ providedIn: 'root' })

@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from app.broker.ibkr.models import IbkrOpenOrder, IbkrOrderEvent
+from app.engine.live.account_artifacts import AccountOwnerGeneration
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.live_state_sidecar import (
@@ -46,12 +47,22 @@ from app.engine.live.reconciliation_classifier import (
 from app.engine.live.reconciliation_orchestrator import reconcile
 from app.engine.live.run import (
     _build_broker_snapshot_from_ibkr,
+    _record_account_owner_startup_generation,
     _resolve_prior_run_dir,
 )
 from app.schemas.live_runs import ReconciliationReceipt
 
 NS = build_bot_order_namespace("inst-x")
 SID = "inst-x"
+
+
+class _StartupAccountOwner:
+    def __init__(self) -> None:
+        self.recorded_at_ms: list[int] = []
+
+    def record_accepting_generation(self, *, recorded_at_ms: int) -> str:
+        self.recorded_at_ms.append(recorded_at_ms)
+        return "recorded"
 
 
 def _open_order(
@@ -173,6 +184,39 @@ def test_build_broker_snapshot_filters_non_fill_events() -> None:
     )
     snap = _build_broker_snapshot_from_ibkr([], [status_event])
     assert snap.executions == ()
+
+
+def test_record_account_owner_startup_generation_records_missing_proof() -> None:
+    owner = _StartupAccountOwner()
+
+    recorded = _record_account_owner_startup_generation(
+        owner,
+        None,
+        recorded_at_ms=1_700_000_004_000,
+    )
+
+    assert recorded == "recorded"
+    assert owner.recorded_at_ms == [1_700_000_004_000]
+
+
+def test_record_account_owner_startup_generation_preserves_non_accepting_phase() -> None:
+    owner = _StartupAccountOwner()
+    persisted = AccountOwnerGeneration(
+        account_id="DU1",
+        generation=3,
+        phase="frozen",
+        recorded_at_ms=1_700_000_003_000,
+        source="account_owner",
+    )
+
+    recorded = _record_account_owner_startup_generation(
+        owner,
+        persisted,
+        recorded_at_ms=1_700_000_004_000,
+    )
+
+    assert recorded is None
+    assert owner.recorded_at_ms == []
 
 
 def _write_ledger(run_dir: Path, *, sid: str, created_ms: int) -> None:

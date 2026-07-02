@@ -1,6 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { BrokerHealthService } from '../services/broker-health.service';
+import { LiveRunsService } from '../services/live-runs.service';
 import { ActiveBotSidebarNoticeService } from './active-bot-sidebar-notice.service';
+import type { ActiveBotSidebarNotice } from './active-bot-sidebar-notice.service';
+
+const NOTICE_ACTION_TIMEOUT_MS = 15_000;
 
 /**
  * Sidebar broker connection control.
@@ -15,12 +20,30 @@ import { ActiveBotSidebarNoticeService } from './active-bot-sidebar-notice.servi
   styleUrl: './broker-banner.component.scss',
   template: `
     @if (activeBotNotice(); as notice) {
-      <details class="host-runner-sidebar-notice" data-testid="sidebar-host-runner-notice">
-        <summary>Warning, host runner unreachable.</summary>
+      <details
+        class="host-runner-sidebar-notice"
+        [class.is-binding-invalid]="notice.kind === 'live-binding-invalid'"
+        data-testid="sidebar-host-runner-notice"
+      >
+        <summary>{{ notice.summary }}</summary>
         <div class="host-runner-sidebar-detail">
           <p>{{ notice.message }}</p>
           @if (notice.command) {
             <pre><code>{{ notice.command }}</code></pre>
+          }
+          @if (notice.action; as action) {
+            <button
+              type="button"
+              class="host-runner-sidebar-action"
+              data-testid="sidebar-host-runner-action"
+              [disabled]="isNoticeActionInFlight(notice.instanceId)"
+              (click)="invokeNoticeAction(notice)"
+            >
+              {{ isNoticeActionInFlight(notice.instanceId) ? action.busyLabel : action.label }}
+            </button>
+          }
+          @if (noticeActionError(); as err) {
+            <p class="host-runner-sidebar-error" role="alert">{{ err }}</p>
           }
         </div>
       </details>
@@ -68,9 +91,17 @@ import { ActiveBotSidebarNoticeService } from './active-bot-sidebar-notice.servi
 })
 export class BrokerBannerComponent {
   private readonly healthService = inject(BrokerHealthService);
+  private readonly liveRuns = inject(LiveRunsService);
   private readonly activeBotNoticeService = inject(ActiveBotSidebarNoticeService);
   readonly lifecycleAction = this.healthService.lifecycleAction;
   readonly activeBotNotice = this.activeBotNoticeService.activeNotice;
+  readonly noticeActionInFlight = signal<ReadonlySet<string>>(new Set<string>());
+  private readonly noticeActionErrorState = signal<{ instanceId: string; message: string } | null>(null);
+  readonly noticeActionError = computed<string | null>(() => {
+    const notice = this.activeBotNotice();
+    const error = this.noticeActionErrorState();
+    return notice !== null && error?.instanceId === notice.instanceId ? error.message : null;
+  });
 
   toggleConnection(): Promise<void> {
     const state = this.banner();
@@ -83,6 +114,27 @@ export class BrokerBannerComponent {
     if (action === 'connect') return 'Connecting';
     if (action === 'disconnect') return 'Disconnecting';
     return label;
+  }
+
+  async invokeNoticeAction(notice: ActiveBotSidebarNotice): Promise<void> {
+    const action = notice.action;
+    if (action === null || this.isNoticeActionInFlight(notice.instanceId)) return;
+    this.setNoticeActionInFlight(notice.instanceId, true);
+    this.noticeActionErrorState.set(null);
+    try {
+      await this.withNoticeActionTimeout(this.liveRuns.startHostRunner(action.runId, action.request));
+    } catch (err) {
+      this.noticeActionErrorState.set({
+        instanceId: notice.instanceId,
+        message: this.formatNoticeActionError(err),
+      });
+    } finally {
+      this.setNoticeActionInFlight(notice.instanceId, false);
+    }
+  }
+
+  isNoticeActionInFlight(instanceId: string): boolean {
+    return this.noticeActionInFlight().has(instanceId);
   }
 
   readonly banner = computed(() => {
@@ -160,5 +212,44 @@ export class BrokerBannerComponent {
       default:
         return 'not ready for orders';
     }
+  }
+
+  private formatNoticeActionError(err: unknown): string {
+    if (err instanceof HttpErrorResponse) {
+      const detail = err.error;
+      if (typeof detail === 'string') return detail;
+      if (detail && typeof detail === 'object' && 'detail' in detail && typeof detail.detail === 'string') {
+        return detail.detail;
+      }
+      return err.message || 'Failed to start bot process.';
+    }
+    if (err instanceof Error) return err.message;
+    return 'Failed to start bot process.';
+  }
+
+  private setNoticeActionInFlight(instanceId: string, inFlight: boolean): void {
+    this.noticeActionInFlight.update((current) => {
+      const next = new Set(current);
+      if (inFlight) {
+        next.add(instanceId);
+      } else {
+        next.delete(instanceId);
+      }
+      return next;
+    });
+  }
+
+  private withNoticeActionTimeout<T>(promise: Promise<T>): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error('Timed out starting bot process. Try again.'));
+      }, NOTICE_ACTION_TIMEOUT_MS);
+    });
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    });
   }
 }

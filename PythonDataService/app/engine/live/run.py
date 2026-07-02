@@ -53,6 +53,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from app.engine.live.account_artifacts import AccountOwnerGeneration
+    from app.engine.live.account_owner import AccountOwner
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
 
 from app.broker.runtime_snapshot import make_live_engine_verdict_provider
@@ -129,6 +131,17 @@ def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
         )
 
     return _factory
+
+
+def _record_account_owner_startup_generation(
+    account_owner: AccountOwner,
+    persisted_generation: AccountOwnerGeneration | None,
+    *,
+    recorded_at_ms: int,
+) -> AccountOwnerGeneration | None:
+    if persisted_generation is not None and persisted_generation.phase != "accepting":
+        return None
+    return account_owner.record_accepting_generation(recorded_at_ms=recorded_at_ms)
 
 
 # ──────────────────────────── init-ledger subcommand ─────────────────
@@ -1650,6 +1663,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         persisted_generation = read_account_owner_generation(_artifacts_root, ledger.account_id)
         account_owner_generation = persisted_generation.generation if persisted_generation is not None else 0
+        account_owner_initial_phase = persisted_generation.phase if persisted_generation is not None else "accepting"
 
         def _account_owner_generation_provider() -> int:
             return account_owner_generation
@@ -1690,6 +1704,12 @@ def cmd_start(args: argparse.Namespace) -> int:
             owner_generation_provider=_account_owner_generation_provider,
             owner_generation_advancer=_advance_account_owner_generation,
             classifier=_classify_account_for_submit,
+            initial_phase=account_owner_initial_phase,
+        )
+        _record_account_owner_startup_generation(
+            account_owner,
+            persisted_generation,
+            recorded_at_ms=now_ms(),
         )
 
     engine = LiveEngine(

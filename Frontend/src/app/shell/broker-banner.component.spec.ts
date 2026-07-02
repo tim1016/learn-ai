@@ -3,6 +3,7 @@ import { signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { BrokerBannerComponent } from './broker-banner.component';
 import { BrokerHealthService } from '../services/broker-health.service';
+import { LiveRunsService } from '../services/live-runs.service';
 import { ActiveBotSidebarNoticeService } from './active-bot-sidebar-notice.service';
 import type { IbkrConnectionHealth } from '../api/broker-models';
 
@@ -33,23 +34,39 @@ class FakeBrokerHealthService {
   disconnect = vi.fn().mockResolvedValue(undefined);
 }
 
+class FakeLiveRunsService {
+  startHostRunner = vi.fn().mockResolvedValue(undefined);
+}
+
 function setup() {
   const brokerHealth = new FakeBrokerHealthService();
+  const liveRuns = new FakeLiveRunsService();
   const activeBotNotice = new ActiveBotSidebarNoticeService();
   TestBed.configureTestingModule({
     imports: [BrokerBannerComponent],
     providers: [
       { provide: BrokerHealthService, useValue: brokerHealth },
+      { provide: LiveRunsService, useValue: liveRuns },
       { provide: ActiveBotSidebarNoticeService, useValue: activeBotNotice },
     ],
   });
   const fixture = TestBed.createComponent(BrokerBannerComponent);
   fixture.detectChanges();
-  return { fixture, brokerHealth, activeBotNotice };
+  return { fixture, brokerHealth, liveRuns, activeBotNotice };
 }
 
 function toggle(fixture: ComponentFixture<BrokerBannerComponent>): HTMLButtonElement | null {
   return fixture.nativeElement.querySelector('.broker-toggle') as HTMLButtonElement | null;
+}
+
+function bindAgainRequest() {
+  return {
+    readonly: false,
+    hydrate_policy: 'require' as const,
+    strategy: 'deployment_validation',
+    max_orders_per_day: 2,
+    ibkr_host: '127.0.0.1',
+  };
 }
 
 describe('BrokerBannerComponent', () => {
@@ -101,8 +118,11 @@ describe('BrokerBannerComponent', () => {
     const { fixture, brokerHealth, activeBotNotice } = setup();
     activeBotNotice.setNotice({
       instanceId: 'DEPVAL-DIA-20260626',
+      kind: 'host-runner-unreachable',
+      summary: 'Warning, host runner unreachable.',
       message: 'The bot service is offline.',
       command: 'make host-runner',
+      action: null,
     });
     brokerHealth.bannerState.set('disconnected');
     brokerHealth.health.set(health({ connected: false, is_paper: null }));
@@ -115,5 +135,146 @@ describe('BrokerBannerComponent', () => {
     expect(notice?.querySelector('summary')?.textContent).toContain('Warning, host runner unreachable.');
     expect(notice?.textContent).toContain('The bot service is offline.');
     expect(notice?.compareDocumentPosition(banner as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('starts the host process from an invalid live-binding sidebar action', async () => {
+    const { fixture, activeBotNotice, liveRuns } = setup();
+    const request = bindAgainRequest();
+    activeBotNotice.setNotice({
+      instanceId: 'DEPVALJUL1',
+      kind: 'live-binding-invalid',
+      summary: 'Live binding invalid.',
+      message: 'Trading was requested, but this bot process has not started yet.',
+      command: null,
+      action: {
+        label: 'Bind again',
+        busyLabel: 'Binding...',
+        runId: 'run-1',
+        request,
+      },
+    });
+    fixture.detectChanges();
+
+    const button = fixture.nativeElement.querySelector(
+      '[data-testid="sidebar-host-runner-action"]',
+    ) as HTMLButtonElement | null;
+    expect(fixture.nativeElement.textContent).toContain('Live binding invalid.');
+    expect(button?.textContent?.trim()).toBe('Bind again');
+    button?.click();
+    await fixture.whenStable();
+
+    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-1', request);
+  });
+
+  it('keeps sidebar action in-flight state scoped to each notice instance', async () => {
+    const { fixture, activeBotNotice, liveRuns } = setup();
+    const request = bindAgainRequest();
+    let finishFirst: () => void = () => undefined;
+    liveRuns.startHostRunner
+      .mockReturnValueOnce(new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      }))
+      .mockResolvedValueOnce(undefined);
+
+    activeBotNotice.setNotice({
+      instanceId: 'DEPVALJUL1',
+      kind: 'live-binding-invalid',
+      summary: 'Live binding invalid.',
+      message: 'Trading was requested, but this bot process has not started yet.',
+      command: null,
+      action: {
+        label: 'Bind again',
+        busyLabel: 'Binding...',
+        runId: 'run-1',
+        request,
+      },
+    });
+    fixture.detectChanges();
+
+    const firstButton = fixture.nativeElement.querySelector(
+      '[data-testid="sidebar-host-runner-action"]',
+    ) as HTMLButtonElement;
+    firstButton.click();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(firstButton.disabled).toBe(true);
+
+    activeBotNotice.setNotice({
+      instanceId: 'DEPVALJUL2',
+      kind: 'live-binding-invalid',
+      summary: 'Live binding invalid.',
+      message: 'Trading was requested, but this bot process has not started yet.',
+      command: null,
+      action: {
+        label: 'Bind again',
+        busyLabel: 'Binding...',
+        runId: 'run-2',
+        request,
+      },
+    });
+    fixture.detectChanges();
+
+    const secondButton = fixture.nativeElement.querySelector(
+      '[data-testid="sidebar-host-runner-action"]',
+    ) as HTMLButtonElement;
+    expect(secondButton.disabled).toBe(false);
+    secondButton.click();
+    await fixture.whenStable();
+
+    expect(liveRuns.startHostRunner).toHaveBeenNthCalledWith(1, 'run-1', request);
+    expect(liveRuns.startHostRunner).toHaveBeenNthCalledWith(2, 'run-2', request);
+    finishFirst();
+    await fixture.whenStable();
+  });
+
+  it('times out a hung invalid live-binding sidebar action and allows retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fixture, activeBotNotice, liveRuns } = setup();
+      const request = bindAgainRequest();
+      liveRuns.startHostRunner
+        .mockReturnValueOnce(new Promise<void>(() => undefined))
+        .mockResolvedValueOnce(undefined);
+      activeBotNotice.setNotice({
+        instanceId: 'DEPVALJUL1',
+        kind: 'live-binding-invalid',
+        summary: 'Live binding invalid.',
+        message: 'Trading was requested, but this bot process has not started yet.',
+        command: null,
+        action: {
+          label: 'Bind again',
+          busyLabel: 'Binding...',
+          runId: 'run-1',
+          request,
+        },
+      });
+      fixture.detectChanges();
+
+      const button = fixture.nativeElement.querySelector(
+        '[data-testid="sidebar-host-runner-action"]',
+      ) as HTMLButtonElement;
+      button.click();
+      await Promise.resolve();
+      fixture.detectChanges();
+      expect(button.disabled).toBe(true);
+      expect(button.textContent?.trim()).toBe('Binding...');
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      fixture.detectChanges();
+
+      const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement | null;
+      const retryButton = fixture.nativeElement.querySelector(
+        '[data-testid="sidebar-host-runner-action"]',
+      ) as HTMLButtonElement;
+      expect(alert?.textContent).toContain('Timed out starting bot process. Try again.');
+      expect(retryButton.disabled).toBe(false);
+      expect(retryButton.textContent?.trim()).toBe('Bind again');
+
+      retryButton.click();
+      await Promise.resolve();
+      expect(liveRuns.startHostRunner).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1738,6 +1738,7 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     from app.engine.live import engine_runtime_publisher as publisher_mod
     from app.engine.live import live_engine as live_engine_mod
     from app.engine.live import reconciliation_orchestrator as recon_mod
+    from app.engine.live.account_artifacts import read_account_events, read_account_owner_generation
     from app.engine.live.reconciliation_classifier import Continue
     from app.engine.live.run import cmd_start
     from app.engine.live.run_ledger import build_ledger, write_ledger
@@ -1847,6 +1848,15 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     kwargs = captured["kwargs"]
     assert callable(kwargs["account_owner_submitter"])
     assert callable(kwargs["owner_generation_provider"])
+    owner_generation = read_account_owner_generation(artifacts_root, "DU123")
+    assert owner_generation is not None
+    assert owner_generation.generation == 0
+    assert owner_generation.phase == "accepting"
+    assert owner_generation.source == "account_owner"
+    events = read_account_events(artifacts_root, "DU123")
+    assert events[-1]["event_type"] == "account_owner_generation_recorded"
+    assert events[-1]["generation"] == 0
+    assert events[-1]["phase"] == "accepting"
 
 
 def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> None:
