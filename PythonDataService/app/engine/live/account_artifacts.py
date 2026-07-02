@@ -175,7 +175,11 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     below ``<artifacts_root>/accounts``. The match-group reconstruction plus
     containment check mirrors the repo's CodeQL-clean path-injection barrier.
     """
-    safe_account_id = _validate_account_id(account_id)
+    canonical = account_id.strip().upper()
+    match = _ACCOUNT_ID_RE.fullmatch(canonical)
+    if match is None:
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    safe_account_id = match.group(0)
     accounts_root = (artifacts_root / "accounts").resolve()
     candidate = (accounts_root / safe_account_id).resolve()
     try:
@@ -684,14 +688,6 @@ def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
         and event.get("cleared_at_ms") is not None
     ]
     return max(clears) if clears else None
-
-
-def _validate_account_id(account_id: str) -> str:
-    canonical = account_id.strip().upper()
-    match = _ACCOUNT_ID_RE.fullmatch(canonical)
-    if match is None:
-        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    return match.group(0)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
