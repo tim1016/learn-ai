@@ -18,6 +18,28 @@
   box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.35));
 }
 
+.account-reconcile-card {
+  margin-top: 1rem;
+  background: var(--bg-surface, #131722);
+  border: 1px solid var(--border-light, #2a2e39);
+  border-left: 4px solid var(--border-strong, #363a45);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  color: var(--text-primary, #f0f3fa);
+}
+
+.receipt-pass {
+  border-left-color: #2fb344;
+}
+
+.receipt-block {
+  border-left-color: #ff6b6b;
+}
+
+.receipt-unknown {
+  border-left-color: #f5c542;
+}
+
 .truth-section {
   margin-top: 1rem;
 }
@@ -68,6 +90,17 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+}
+
+.receipt-grid {
+  margin-top: 0.75rem;
+  max-width: 720px;
+}
+
+.receipt-reason {
+  margin: 0.75rem 0 0;
+  color: var(--text-secondary, #b2b5be);
+  font-size: 0.9rem;
 }
 
 .mono {

@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import time
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -37,6 +38,7 @@ from app.broker.ibkr.client import (
     get_client_lifecycle_lock,
     set_client,
 )
+from app.broker.ibkr.config import get_settings
 from app.broker.ibkr.contracts import search_option_contracts
 from app.broker.ibkr.diagnostics import run_diagnostics
 from app.broker.ibkr.health import (
@@ -86,6 +88,7 @@ from app.broker.ibkr.surface import (
     stream_option_surface,
 )
 from app.broker.ibkr.symbol_search import search_symbols
+from app.engine.live.account_artifacts import AccountArtifactError, read_account_freeze
 from app.engine.live.order_identity import (
     build_manual_order_namespace,
     build_order_ref,
@@ -201,7 +204,6 @@ async def data_plane_health_endpoint() -> DataPlaneHealth:
 @router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
-    from app.broker.ibkr.config import get_settings
     from app.broker.safety_verdict import derive_broker_safety_verdict
 
     s = get_settings()
@@ -854,6 +856,7 @@ async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
     """Cancel one paper order by ``order_id``."""
     client = require_connected_client()
     try:
+        _raise_if_account_frozen_for_raw_cancel(client)
         return await cancel_paper_order(client, order_id)
     except OrderRefusedError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
@@ -861,6 +864,26 @@ async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+def _raise_if_account_frozen_for_raw_cancel(client: IbkrClient) -> None:
+    """Refuse session-local order-id cancels while account recovery is frozen."""
+    account_id = client.connected_account
+    if account_id is None:
+        return
+    artifacts_root = Path(get_settings().live_runs_root).parent
+    try:
+        freeze = read_account_freeze(artifacts_root, account_id)
+    except (AccountArtifactError, OSError, ValueError) as exc:
+        raise OrderRefusedError(
+            f"Refusing raw order-id cancel: account freeze state for {account_id!r} is not readable."
+        ) from exc
+    if freeze is not None:
+        raise OrderRefusedError(
+            "Refusing raw order-id cancel while account freeze is active. "
+            f"Reason: {freeze.reason}. Next step: {freeze.operator_next_step}. "
+            "Use account recovery with durable perm_id/order_ref evidence."
+        )
 
 
 def _order_event_to_sse(event: IbkrOrderEvent) -> str:

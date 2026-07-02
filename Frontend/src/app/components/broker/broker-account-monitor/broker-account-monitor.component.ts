@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -23,6 +24,7 @@ import type {
   IbkrPosition,
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
+import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
 import {
   fmtCurrency,
   fmtDateNy,
@@ -75,6 +77,12 @@ export class BrokerAccountMonitorComponent {
   readonly truthLoading = signal(false);
   readonly truthError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  readonly accountReconciliation = signal<AccountReconciliationReceipt | null>(null);
+  readonly accountReconciliationLoading = signal(false);
+  readonly accountReconciliationError = signal<unknown>(null);
+  readonly accountReconciliationTone = computed(
+    () => this.accountReconciliation()?.final_gate_result.status ?? 'unknown',
+  );
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
   private readonly positionStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -146,11 +154,51 @@ export class BrokerAccountMonitorComponent {
     this.truthLoading.set(true);
     this.truthError.set(null);
     try {
-      this.accountTruth.set(await this.broker.accountTruth());
+      const truth = await this.broker.accountTruth();
+      this.accountTruth.set(truth);
+      if (truth.account_id) {
+        await this.loadLatestAccountReconciliation(truth.account_id);
+      } else {
+        this.accountReconciliation.set(null);
+      }
     } catch (err) {
       this.truthError.set(err);
     } finally {
       this.truthLoading.set(false);
+    }
+  }
+
+  async loadLatestAccountReconciliation(accountId: string): Promise<void> {
+    this.accountReconciliationLoading.set(true);
+    this.accountReconciliationError.set(null);
+    try {
+      this.accountReconciliation.set(
+        await this.broker.latestAccountReconciliation(accountId),
+      );
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 404) {
+        this.accountReconciliation.set(null);
+      } else {
+        this.accountReconciliationError.set(err);
+      }
+    } finally {
+      this.accountReconciliationLoading.set(false);
+    }
+  }
+
+  async runAccountReconciliation(): Promise<void> {
+    const accountId = this.accountTruth()?.account_id;
+    if (!accountId || this.accountReconciliationLoading()) return;
+    this.accountReconciliationLoading.set(true);
+    this.accountReconciliationError.set(null);
+    try {
+      const receipt = await this.broker.reconcileAccount(accountId);
+      this.accountReconciliation.set(receipt);
+      this.accountTruth.set(receipt.account_truth);
+    } catch (err) {
+      this.accountReconciliationError.set(err);
+    } finally {
+      this.accountReconciliationLoading.set(false);
     }
   }
 

@@ -58,6 +58,49 @@
         [showExecutionHistory]="true"
         [showSymbolExposures]="true"
       />
+      <article
+        class="account-reconcile-card"
+        [class.receipt-pass]="accountReconciliationTone() === 'pass'"
+        [class.receipt-block]="accountReconciliationTone() === 'block'"
+        [class.receipt-unknown]="accountReconciliationTone() === 'unknown'"
+      >
+        <header class="card-header">
+          Account reconciliation receipt
+          <button
+            type="button"
+            class="ghost-btn"
+            [disabled]="accountReconciliationLoading() || !truth.account_id"
+            (click)="runAccountReconciliation()"
+          >
+            <i class="pi pi-shield" aria-hidden="true"></i>
+            {{ accountReconciliationLoading() ? 'Reconciling…' : 'Run account reconcile' }}
+          </button>
+        </header>
+
+        @if (accountReconciliationError(); as err) {
+          <app-section-error
+            [error]="err"
+            contextWhat="We couldn't produce the account reconciliation receipt."
+            (retry)="runAccountReconciliation()"
+          />
+        } @else if (accountReconciliation(); as receipt) {
+          <dl class="kv-grid receipt-grid">
+            <dt>State</dt>
+            <dd class="mono">{{ receipt.state }}</dd>
+            <dt>Final gate</dt>
+            <dd class="mono">{{ receipt.final_gate_result.status }}</dd>
+            <dt>Generated</dt>
+            <dd class="mono">{{ fmtDateNy(receipt.generated_at_ms) }}</dd>
+            <dt>Expires</dt>
+            <dd class="mono">{{ fmtDateNy(receipt.expires_at_ms) }}</dd>
+          </dl>
+          <p class="receipt-reason">{{ receipt.final_gate_result.operator_reason }}</p>
+        } @else {
+          <p class="muted">
+            No account-level reconciliation receipt has been recorded for this account.
+          </p>
+        }
+      </article>
     }
   </section>
 

@@ -510,6 +510,16 @@ The check lives in `PythonDataService/app/services/activity_lifecycle_consistenc
 
 These warnings are capture-gap diagnostics, not new trading verdicts. They do not mutate broker-activity WALs, do not write projection rows from a GET, do not make Postgres canonical, and do not let Angular infer lifecycle or submit safety. Tests pin legacy Intent WAL, AccountOwner submit-event, and Activity-only gaps in `PythonDataService/tests/routers/test_live_instances.py`.
 
+### Account-Level Reconciliation Receipt Snapshot
+
+`POST /api/accounts/{account_id}/reconciliation` now creates a durable account-level reconciliation receipt at `accounts/<account_id>/account_reconciliation_receipt.json`. The receipt wraps the existing `AccountTruthResponse` verdict and adds connected-account proof, broker-liveness/freshness gating, TTL, evidence refs, and a canonical `GateResult` at `gate_id=account.reconciliation`.
+
+This is not a second account-clean engine. `Account Truth` remains the sole owner of clean vs not-proven over broker orders, executions, positions, evidence gaps, and ownership. The account-level receipt may fail closed for stale truth, connected-account mismatch, missing broker liveness, or expired TTL, but it may not re-derive cleanliness from raw broker facts.
+
+`GET /api/accounts/{account_id}/reconciliation/latest` returns the latest receipt without sweeping IBKR. `GET /api/accounts/{account_id}/triage` returns a thin account triage projection over the latest receipt, account freeze evidence, and active account registry bindings. Triage is a routing/read model: it authors affected bots and recovery rows, but it does not replace `operator_surface`, run-scoped reconciliation, or Account Truth.
+
+Account Monitor now surfaces the account reconciliation receipt and can request a fresh account-level reconcile for the connected account. Angular renders the backend-authored receipt and gate reason; it does not compute account-clean status or recovery eligibility. Tests pin the Python receipt service and router in `PythonDataService/tests/services/test_account_reconciliation.py` and `PythonDataService/tests/routers/test_account_reconciliation.py`, and the Account Monitor affordance in `Frontend/src/app/components/broker/broker-account-monitor/broker-account-monitor.component.spec.ts`.
+
 ### Lifecycle Template Receipt Snapshot
 
 `PythonDataService/app/services/lifecycle_projection_store.py` now persists `rendered_headline` and `rendered_template_id` for every lifecycle projection row authored from `BotLifecycleEvent`. The rendered headline is the backend-authored lifecycle summary already shown in the timeline; the template id is stable and versioned from the source template before source/event normalization collapses rows into the public projection shape. For example, `ACK_FAILED_UNCERTAIN` and `SUBMIT_UNCERTAIN_HALTED` keep distinct template ids.
@@ -529,6 +539,7 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 | IBKR connection | `PythonDataService/app/broker/ibkr/client.py` |
 | IBKR order placement | `PythonDataService/app/broker/ibkr/orders.py` |
 | Reconciliation | `PythonDataService/app/engine/live/reconciliation_orchestrator.py`, `reconciliation_classifier.py` |
+| Account-level reconciliation receipts | `PythonDataService/app/services/account_reconciliation.py`, `PythonDataService/app/routers/account_reconciliation.py`, `PythonDataService/app/schemas/account_reconciliation.py` |
 | Desired state | `PythonDataService/app/engine/live/desired_state.py` |
 | Operator action gates | `PythonDataService/app/services/operator_capability.py`, `resume_guard_state.py`, `operator_surface.py`, `operator_trader_guidance.py` |
 | Start/deploy/instance API | `PythonDataService/app/routers/live_instances.py` |
