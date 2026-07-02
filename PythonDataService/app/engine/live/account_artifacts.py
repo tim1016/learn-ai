@@ -469,11 +469,28 @@ def read_account_instance_registry(
     artifacts_root: Path,
     account_id: str,
 ) -> list[AccountInstanceBinding]:
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_INSTANCE_REGISTRY_FILENAME
-    if not path.is_file():
+    root = os.path.realpath(os.fspath(account_artifacts_root(artifacts_root, account_id)))
+    registry_filename = os.path.basename(ACCOUNT_INSTANCE_REGISTRY_FILENAME)
+    if registry_filename != ACCOUNT_INSTANCE_REGISTRY_FILENAME:
+        raise AccountArtifactError("invalid account instance registry filename")
+    path = os.path.realpath(os.path.join(root, registry_filename))
+    try:
+        common = os.path.commonpath([path, root])
+    except ValueError as exc:
+        raise AccountArtifactError(
+            f"account instance registry path {path} cannot share a root with {root}"
+        ) from exc
+    if common != root:
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
         return []
+    except IsADirectoryError as exc:
+        raise AccountArtifactError(f"account instance registry is not a file: {path}") from exc
     bindings: list[AccountInstanceBinding] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         if not line.strip():
             continue
         bindings.append(AccountInstanceBinding.model_validate_json(line))
