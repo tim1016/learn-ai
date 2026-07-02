@@ -1,86 +1,101 @@
-// PRD #617 — bot-control-status-routing.spec.ts
-//
-// Auto-route exactly once on the foreground instance's READY → non-READY
-// transition; do not re-force on subsequent attention-changed polls.
-// Background instance enters attention → outer-tab marker only, never
-// forced foreground.
-//
-// Meta-rule (ADR-0013 §3): every scenario asserts independent PROCESS,
-// INTENT, READINESS, BROKER, and SAFETY values rather than a synthetic
-// master status.
-
 import { expect, test, type Page } from '@playwright/test';
 
-import { buildAccountSummary, buildScenarioStatus, buildSummary } from './fixtures/bot-control-fixtures';
+import {
+  buildAccountSummary,
+  buildActivityProjection,
+  buildChartSnapshot,
+  buildLifecycleTimeline,
+  buildScenarioStatus,
+  buildSummary,
+} from './fixtures/bot-control-fixtures';
 
 const SID = 'dep_val_smoke_001';
 
-async function installRoutes(
+async function installBotControlRoutes(
   page: Page,
   state: {
     summaries: ReturnType<typeof buildSummary>[];
     status: ReturnType<typeof buildScenarioStatus>;
-    account: ReturnType<typeof buildAccountSummary>;
+    account?: ReturnType<typeof buildAccountSummary>;
   },
-) {
-  await page.route('**/api/live-instances', (route) =>
-    route.fulfill({ json: state.summaries }),
+): Promise<void> {
+  await page.route(/\/api\/live-instances\/account-summary(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: state.account ?? buildAccountSummary() }),
   );
-  await page.route('**/api/live-instances/account-summary', (route) =>
-    route.fulfill({ json: state.account }),
-  );
-  await page.route(/\/api\/live-instances\/[^/]+\/status$/, (route) =>
+  await page.route(/\/api\/live-instances\/[^/]+\/status(?:\?.*)?$/, (route) =>
     route.fulfill({ json: state.status }),
   );
+  await page.route(/\/api\/lifecycle-projection\/timeline(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: buildLifecycleTimeline(state.status.strategy_instance_id) }),
+  );
+  await page.route(/\/api\/live-instances\/[^/]+\/activity(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: buildActivityProjection(state.status.strategy_instance_id) }),
+  );
+  await page.route(/\/api\/live-instances\/[^/]+\/chart-snapshot(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: buildChartSnapshot(state.status.strategy_instance_id) }),
+  );
+  await page.route(/\/api\/live-instances\/[^/]+\/active-dates(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route(/\/api\/live-runs\/[^/]+\/incidents(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route(/\/api\/live-instances(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: state.summaries }),
+  );
 }
 
-async function assertIndependentIndicators(page: Page) {
-  for (const id of ['indicator-process', 'indicator-intent', 'indicator-readiness', 'indicator-broker', 'indicator-safety']) {
-    await expect(page.getByTestId(id)).toBeVisible();
-  }
-}
-
-test.describe('Bot Control status routing', () => {
+test.describe('Bot Control route and page shell', () => {
   test('legacy instance route redirects to the canonical Bot Control route', async ({ page }) => {
     const status = buildScenarioStatus({
       strategyInstanceId: SID,
       readinessVerdict: 'READY',
     });
-    await installRoutes(page, {
+    await installBotControlRoutes(page, {
       summaries: [buildSummary({ strategyInstanceId: SID, readinessVerdict: 'READY' })],
       status,
-      account: buildAccountSummary({}),
     });
 
     await page.goto(`/broker/instances/${SID}`);
 
     await expect(page).toHaveURL(new RegExp(`/broker/bots/${SID}(?:$|[?#])`));
-    await expect(page.getByTestId('inner-tab-status')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#bot-control-title')).toHaveText(SID);
+    await expect(page.getByLabel('Bot lifecycle chart')).toBeVisible();
   });
 
-  test('READY + RUNNING shows Status tab by default', async ({ page }) => {
+  test('canonical Bot Control page renders lifecycle and recent activity workbench', async ({ page }) => {
     const status = buildScenarioStatus({
       strategyInstanceId: SID,
       readinessVerdict: 'READY',
       processState: 'running',
       intent: 'RUNNING',
     });
-    await installRoutes(page, {
+    await installBotControlRoutes(page, {
       summaries: [buildSummary({ strategyInstanceId: SID, readinessVerdict: 'READY', desiredState: 'RUNNING' })],
       status,
-      account: buildAccountSummary({}),
     });
+
     await page.goto(`/broker/bots/${SID}`);
-    await expect(page.getByTestId('inner-tab-status')).toHaveAttribute('aria-selected', 'true');
-    await assertIndependentIndicators(page);
+
+    await expect(page.getByRole('heading', { name: 'Lifecycle overview' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Lifecycle controls' })).toBeVisible();
+    await expect(page.getByTestId('bot-control-context-header')).toContainText('Deploy or start');
+    await expect(page.getByTestId('bot-control-workbench-tabs')).toContainText('Recent activity');
+    await expect(page.getByTestId('bot-control-workbench-tabs')).toContainText('Full audit trail');
+    await expect(page.getByTestId('bot-control-recent-activity')).toContainText(
+      'Broker acknowledgment failed; submit outcome is uncertain.',
+    );
+    await expect(page.getByTestId('activity-tab')).toBeVisible();
   });
 
-  test('BLOCKED + WAITING_FOR_HOST shows three independent facts', async ({ page }) => {
+  test('blocked bot surfaces independent posture facts without restoring old shell tabs', async ({ page }) => {
     const status = buildScenarioStatus({
       strategyInstanceId: SID,
       readinessVerdict: 'BLOCKED',
       processState: 'idle',
       intent: 'RUNNING',
+      brokerSafety: 'UNSAFE',
+      brokerConnection: 'DISCONNECTED',
       readinessGates: [
         {
           name: 'broker_connection',
@@ -92,31 +107,27 @@ test.describe('Bot Control status routing', () => {
         },
       ],
     });
-    await installRoutes(page, {
-      summaries: [buildSummary({ strategyInstanceId: SID, readinessVerdict: 'BLOCKED', processState: 'idle', desiredState: 'RUNNING' })],
+    await installBotControlRoutes(page, {
+      summaries: [
+        buildSummary({
+          strategyInstanceId: SID,
+          readinessVerdict: 'BLOCKED',
+          processState: 'idle',
+          desiredState: 'RUNNING',
+        }),
+      ],
       status,
-      account: buildAccountSummary({}),
     });
-    await page.goto(`/broker/bots/${SID}`);
-    await expect(page.getByTestId('indicator-process')).toContainText('WAITING_FOR_HOST');
-    await expect(page.getByTestId('indicator-intent')).toContainText('RUNNING');
-    await expect(page.getByTestId('indicator-readiness')).toContainText('BLOCKED');
-    // Status tab is the canonical landing point for non-READY.
-    await expect(page.getByTestId('inner-tab-status')).toHaveAttribute('aria-selected', 'true');
-  });
 
-  test('Operator manual selection persists on subsequent same-verdict polls', async ({ page }) => {
-    const status = buildScenarioStatus({ strategyInstanceId: SID, readinessVerdict: 'READY' });
-    await installRoutes(page, {
-      summaries: [buildSummary({ strategyInstanceId: SID, readinessVerdict: 'READY' })],
-      status,
-      account: buildAccountSummary({}),
-    });
     await page.goto(`/broker/bots/${SID}`);
-    await page.getByTestId('inner-tab-audit').click();
-    await expect(page.getByTestId('inner-tab-audit')).toHaveAttribute('aria-selected', 'true');
-    // wait for the next poll tick
-    await page.waitForTimeout(4_500);
-    await expect(page.getByTestId('inner-tab-audit')).toHaveAttribute('aria-selected', 'true');
+
+    await expect(page.locator('.posture-pills')).toContainText('Broker proof');
+    await expect(page.locator('.posture-pills')).toContainText('Unsafe');
+    await expect(page.locator('.posture-pills')).toContainText('Blocked before submit');
+    await expect(page.locator('.connection-pill')).toContainText('Disconnected');
+    await page.getByTestId('bot-control-attention-toggle').click();
+    await expect(page.getByTestId('bot-control-attention-panel')).toContainText('Broker session is disconnected');
+    await expect(page.locator('[data-testid="bot-status-banner"]')).toHaveCount(0);
+    await expect(page.getByTestId('inner-tab-status')).toHaveCount(0);
   });
 });
