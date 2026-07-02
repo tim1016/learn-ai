@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse, Response
 
 from app.broker.ibkr.client import (
     BrokerError,
@@ -67,6 +71,21 @@ from app.utils.error_handlers import polygon_exception_handler
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+_UNSAFE_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_CONTROL_PLANE_MUTATION_PREFIXES = (
+    "/api/live-instances",
+    "/api/live-runs",
+    "/api/broker",
+    "/api/accounts",
+)
+
+
+def _is_control_plane_mutation(request: Request) -> bool:
+    if request.method.upper() not in _UNSAFE_HTTP_METHODS:
+        return False
+    path = request.url.path
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _CONTROL_PLANE_MUTATION_PREFIXES)
 
 
 @asynccontextmanager
@@ -254,6 +273,30 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.get_trusted_hosts(),
+)
+
+
+@app.middleware("http")
+async def require_data_plane_control_secret(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Require the local control header for mutating broker-control routes."""
+
+    expected = settings.DATA_PLANE_CONTROL_SECRET.strip()
+    if expected and _is_control_plane_mutation(request):
+        header_name = settings.DATA_PLANE_CONTROL_SECRET_HEADER
+        supplied = request.headers.get(header_name)
+        if supplied is None or not hmac.compare_digest(supplied, expected):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": f"missing or wrong {header_name}"},
+            )
+    return await call_next(request)
+
 
 # CORS middleware for C# backend
 app.add_middleware(

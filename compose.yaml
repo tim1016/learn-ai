@@ -121,6 +121,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
+      - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:-local-dev-control-secret}
       - BACKEND_URL=http://backend:8080
       - REDIS_URL=redis://redis:6379/0
       # Data lake writer root (Slice 1b). Container path of the host-bind mount above.
