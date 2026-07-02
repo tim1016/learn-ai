@@ -85,6 +85,8 @@ class IntentWal:
         """Append one event with the next per-run ``seq`` and **fsync before
         returning**. The caller may call ``placeOrder`` only after this returns.
         """
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._truncate_tolerated_tail()
         seq = self._allocate_seq()
         # Reviewer finding 2: capture process wall-clock at append time so the
         # fold can compare legacy_sizing_only_cutoff_ms (engine_started_at_ms,
@@ -114,8 +116,6 @@ class IntentWal:
             sized_via=sized_via,
             symbol=symbol,
         )
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._truncate_tolerated_tail()
         line = event.model_dump_json() + "\n"
         with open(self._path, "a", encoding="utf-8") as fh:
             fh.write(line)
@@ -179,9 +179,10 @@ class IntentWal:
         return events
 
     def _allocate_seq(self) -> int:
-        if self._next_seq is None:
-            existing = self.read_tail()
-            self._next_seq = (existing[-1].seq + 1) if existing else 1
+        existing = self.read_tail()
+        disk_next_seq = (existing[-1].seq + 1) if existing else 1
+        if self._next_seq is None or self._next_seq < disk_next_seq:
+            self._next_seq = disk_next_seq
         return self._next_seq
 
     def _truncate_tolerated_tail(self) -> None:
