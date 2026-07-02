@@ -32,7 +32,7 @@ export class AccountTruthBoardComponent {
   trackInvariant = (_: number, invariant: AccountTruthInvariant): string => invariant.key;
   trackMessage = (_: number, message: AccountTruthMessage): string => message.code;
   trackOwner = (_: number, owner: AccountTruthOwnerSummary): string =>
-    `${owner.owner_class}:${owner.owner_key}:${owner.evidence_tier}`;
+    `${owner.owner_class}:${owner.owner_key}:${owner.evidence_tier}:${owner.owner_binding_state}`;
   trackExposure = (_: number, exposure: AccountTruthSymbolExposure): string =>
     `${exposure.symbol}:${exposure.owner_key}:${exposure.con_id ?? 'none'}`;
 }

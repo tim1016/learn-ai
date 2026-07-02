@@ -32,6 +32,7 @@ AccountTruthEvidenceTier = Literal[
     "mixed_known",
     "foreign_or_unclaimed",
 ]
+AccountTruthOwnerBindingState = Literal["DEPLOYED", "ACTIVE", "RETIRED", "UNKNOWN"]
 AccountTruthFactKind = Literal["open_order", "completed_order", "execution", "position"]
 AccountTruthLifecycle = Literal["submitted", "acknowledged", "filled", "cancelled", "rejected", "limbo"]
 
@@ -73,6 +74,7 @@ class AccountTruthOwnerSummary(BaseModel):
     owner_label: str
     evidence_tier: AccountTruthEvidenceTier
     evidence_label: str
+    owner_binding_state: AccountTruthOwnerBindingState = "UNKNOWN"
     open_order_count: int = Field(ge=0)
     execution_count: int = Field(ge=0)
     position_count: int = Field(ge=0)
@@ -102,6 +104,7 @@ class AccountTruthFactOwner(BaseModel):
     owner_label: str
     evidence_tier: AccountTruthEvidenceTier
     evidence_label: str
+    owner_binding_state: AccountTruthOwnerBindingState = "UNKNOWN"
     severity: AccountTruthSeverity
 
 
