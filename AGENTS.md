@@ -9,7 +9,7 @@ A scientific platform for porting and validating trading logic. Reference implem
 3. **Sovereignty over the math.** Reference code is studied, ported, and then the dependency is eliminated. Vendored references in `references/` exist for audit, not for runtime use.
 4. **Strict equivalence is the default.** Warmup bars, timestamp alignment, commission, and fill models must match the reference exactly. If they can't, that fact is documented in the port's module docstring.
 5. **Python owns all math.** Every indicator, statistic, backtest calculation, fill model, Greek, and P&L computation lives in `PythonDataService/` and is exposed via FastAPI. `.NET` is transport — GraphQL, auth, persistence — and may only `decimal`-preserve passthrough from the Python response; it may not compute a number a user will compare against another number. Angular is visualization — it may downsample, format, and map for rendering, but may not compute strategy signals, P&L, or statistics. Two consequences: (a) there is exactly one authority for any given numerical answer in the system; (b) when `.NET` or Angular appears to be computing math, that's a bug to be fixed by moving the computation to Python, not a pattern to extend. See `docs/audits/computational-fidelity-2026-04-22-addendum.md` § 5 for the reasoning.
-6. **Timestamps are `int64 ms UTC` at all boundaries.** Wire and storage must always use `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. See `.claude/rules/numerical-rigor.md` → "Timestamp rigor" for the full policy, the two conversion boundaries, and the ban list.
+6. **Timestamps are `int64 ms UTC` at all boundaries.** Wire and storage must always use Unix epoch milliseconds UTC; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. Frontend rendering defaults to the viewer/user's local timezone unless a view explicitly states another display timezone. See `.claude/rules/numerical-rigor.md` → "Timestamp rigor" for the full policy, the two conversion boundaries, and the ban list.
 
 ## Repo map
 
@@ -51,7 +51,6 @@ Agent tooling auto-discovers these from `.claude/skills/`. Invoke directly or le
 - **port-indicator** — Port an indicator or strategy from a reference source into `PythonDataService/` with strict numerical equivalence
 - **reconcile-backtest** — Diff two backtest runs trade-by-trade and classify divergence sources
 - **extract-math-from-paper** — Transcribe equations from a PDF paper into testable Python with paper-section citations
-- **trading-domain** — Domain knowledge (bar semantics, timestamp conventions, strategy invariants). Auto-loads when trading vocabulary appears
 - **add-fastapi-endpoint** — Add a new FastAPI endpoint exposing engine output to the frontend
 - **write-graphql-resolver** — Write or debug a Hot Chocolate v15 resolver
 - **build-angular-component** — Build or modify an Angular 21 component
@@ -85,9 +84,8 @@ Full conventions live in `.claude/rules/`. Read the relevant file before signifi
 When starting a session on this repo, before the first significant edit:
 
 1. Read the user's task. Identify the skill that matches, if any.
-2. If porting math or working with trading concepts, `.claude/skills/trading-domain/SKILL.md` should auto-load. If it didn't, load it manually.
-3. Before touching stack code, read the relevant `.claude/rules/*.md`.
-4. If the task involves a reference repo, check `references/` for a vendored copy. If not present, ask the user whether to vendor it or fetch via GitHub MCP.
+2. Before touching stack code, read the relevant `.claude/rules/*.md`.
+3. If the task involves a reference repo, check `references/` for a vendored copy. If not present, ask the user whether to vendor it or fetch via GitHub MCP.
 
 ## Disclaimers
 

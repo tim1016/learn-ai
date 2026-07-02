@@ -21,9 +21,10 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import type {
+  AccountTruthEvidenceGap,
+  AccountTruthExecutionRow,
   AccountTruthOrderRow,
   AccountTruthResponse,
-  IbkrOpenOrder,
   IbkrOrderAck,
   IbkrOrderEvidenceFields,
   IbkrOrderEvent,
@@ -34,7 +35,7 @@ import type {
   OrderType,
   SecType,
 } from '../../../api/broker-models';
-import { fmtCurrency, fmtSignedNumber, fmtTimestampNy } from '../format';
+import { fmtCurrency, fmtNumber, fmtSignedNumber, fmtTimestampNy } from '../format';
 
 const ORDER_EVENT_BUFFER = 50;
 const CONFIRM_DIALOG_COOLDOWN_MS = 3000;
@@ -43,6 +44,18 @@ const CONFIRM_DIALOG_TICK_MS = 100;
 interface OrderEventLine extends IbkrOrderEvent {
   /** Pre-rendered ET timestamp string for the log row. */
   displayTs: string;
+}
+
+interface LedgerSourceNotice {
+  key: string;
+  headline: string;
+  detail: string;
+  tone: 'info' | 'warn';
+}
+
+interface LedgerOrderRow {
+  order: AccountTruthOrderRow;
+  executionIds: string[];
 }
 
 /**
@@ -123,13 +136,25 @@ export class BrokerOrdersComponent {
       this.isPaperConnected(),
   );
 
-  // Open orders list
-  readonly openOrdersLoading = signal(false);
-  readonly openOrdersError = signal<unknown>(null);
-  readonly openOrders = signal<IbkrOpenOrder[]>([]);
+  // Order ledger
+  readonly ledgerLoading = signal(false);
+  readonly ledgerError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  readonly retainedCompletedHistory = signal(false);
   readonly ledgerOrders = computed<AccountTruthOrderRow[]>(
     () => this.accountTruth()?.orders ?? [],
+  );
+  readonly ledgerRows = computed<LedgerOrderRow[]>(() =>
+    this.buildLedgerRows(
+      this.ledgerOrders(),
+      this.accountTruth()?.executions ?? [],
+    ),
+  );
+  readonly hasCancellableLedgerOrders = computed(() =>
+    this.ledgerOrders().some((order) => this.canCancelLedgerOrder(order)),
+  );
+  readonly ledgerSourceNotices = computed<LedgerSourceNotice[]>(() =>
+    this.buildLedgerSourceNotices(),
   );
 
   // Order events SSE
@@ -166,18 +191,26 @@ export class BrokerOrdersComponent {
   readonly fmtSignedNumber = fmtSignedNumber;
   readonly fmtTimestampNy = fmtTimestampNy;
 
+  private ledgerRefreshRunning = false;
+  private ledgerRefreshQueued = false;
+  private lastLedgerRefreshEventKey: string | null = null;
+
   constructor() {
-    void this.refreshOpenOrders();
+    void this.refreshLedger();
     this.openEventStream();
 
-    // Refresh open orders whenever a new event arrives — the event
-    // log itself isn't authoritative, but the open-orders endpoint is.
+    // Refresh the account-truth ledger when a new order event arrives.
+    // The SSE payload itself is not a ledger source; it is only a nudge
+    // to re-sweep the broker projection.
     effect(() => {
       const stream = this.eventStream();
       if (stream === null) return;
-      const data = stream.data();
-      if (data.length > 0) {
-        void this.refreshOpenOrders();
+      const latest = stream.latest();
+      if (latest === null) return;
+      const key = this.orderEventKey(latest);
+      if (key !== this.lastLedgerRefreshEventKey) {
+        this.lastLedgerRefreshEventKey = key;
+        void this.refreshLedger();
       }
     });
 
@@ -263,21 +296,29 @@ export class BrokerOrdersComponent {
     }
   }
 
-  async refreshOpenOrders(): Promise<void> {
+  async refreshLedger(): Promise<void> {
     if (!this.health.health()?.connected) return;
-    this.openOrdersLoading.set(true);
-    this.openOrdersError.set(null);
+    if (this.ledgerRefreshRunning) {
+      this.ledgerRefreshQueued = true;
+      return;
+    }
+
+    this.ledgerRefreshRunning = true;
+    this.ledgerLoading.set(true);
     try {
-      const [orders, truth] = await Promise.all([
-        this.broker.openOrders(),
-        this.broker.accountTruth(),
-      ]);
-      this.openOrders.set(orders);
-      this.accountTruth.set(truth);
-    } catch (err) {
-      this.openOrdersError.set(err);
+      do {
+        this.ledgerRefreshQueued = false;
+        this.ledgerError.set(null);
+        try {
+          const truth = await this.broker.accountTruth();
+          this.applyAccountTruth(truth);
+        } catch (err) {
+          this.ledgerError.set(err);
+        }
+      } while (this.ledgerRefreshQueued);
     } finally {
-      this.openOrdersLoading.set(false);
+      this.ledgerRefreshRunning = false;
+      this.ledgerLoading.set(false);
     }
   }
 
@@ -296,7 +337,7 @@ export class BrokerOrdersComponent {
     try {
       const ack = await this.broker.placeOrder(spec);
       this.lastAck.set(ack);
-      void this.refreshOpenOrders();
+      void this.refreshLedger();
     } catch (err) {
       this.placeError.set(err);
     } finally {
@@ -311,9 +352,9 @@ export class BrokerOrdersComponent {
   async cancel(orderId: number): Promise<void> {
     try {
       await this.broker.cancelOrder(orderId);
-      void this.refreshOpenOrders();
+      void this.refreshLedger();
     } catch (err) {
-      this.openOrdersError.set(err);
+      this.ledgerError.set(err);
     }
   }
 
@@ -362,15 +403,10 @@ export class BrokerOrdersComponent {
     };
   }
 
-  trackOrder = (_: number, o: IbkrOpenOrder): number => o.order_id;
-  trackLedgerOrder = (_: number, o: AccountTruthOrderRow): string => o.lifecycle_id;
+  trackLedgerRow = (_: number, row: LedgerOrderRow): string => row.order.lifecycle_id;
   trackEvent = (_: number, e: OrderEventLine): string =>
-    `${e.order_id}:${e.ts_ms}:${e.event_type}`;
-
-  fillProgress(o: IbkrOpenOrder): number {
-    if (o.quantity === 0) return 0;
-    return Math.max(0, Math.min(1, o.cumulative_filled / o.quantity));
-  }
+    this.orderEventKey(e);
+  trackLedgerNotice = (_: number, notice: LedgerSourceNotice): string => notice.key;
 
   eventColor(e: IbkrOrderEvent): string {
     switch (e.event_type) {
@@ -415,6 +451,11 @@ export class BrokerOrdersComponent {
     return `Cannot cancel order ${row.order_id}: ${reason}`;
   }
 
+  formatQuantity(value: number | null | undefined): string {
+    if (value == null) return '—';
+    return fmtNumber(value, Number.isInteger(value) ? 0 : 2);
+  }
+
   ibkrEvidenceJson(value: IbkrOrderEvidenceFields | IbkrOrderEvent): string {
     return JSON.stringify(value.ibkr_evidence ?? null, null, 2);
   }
@@ -456,6 +497,128 @@ export class BrokerOrdersComponent {
       }),
     );
     this.eventStream.set(stream);
+  }
+
+  private applyAccountTruth(truth: AccountTruthResponse): void {
+    const previousTruth = this.accountTruth();
+    const previousCompleted =
+      previousTruth?.account_id === truth.account_id
+        ? previousTruth.orders.filter(
+            (order) => order.fact_kind === 'completed_order',
+          )
+        : [];
+    const completedOrdersUnavailable = this.hasEvidenceGap(
+      truth.evidence_gaps,
+      'completed_orders',
+    );
+    const nextOrders =
+      completedOrdersUnavailable && previousCompleted.length > 0
+        ? [
+            ...truth.orders.filter((order) => order.fact_kind !== 'completed_order'),
+            ...previousCompleted,
+          ]
+        : truth.orders;
+
+    this.retainedCompletedHistory.set(
+      completedOrdersUnavailable && previousCompleted.length > 0,
+    );
+    this.accountTruth.set({ ...truth, orders: nextOrders });
+  }
+
+  private buildLedgerSourceNotices(): LedgerSourceNotice[] {
+    const notices: LedgerSourceNotice[] = [];
+    const status = this.eventStatus();
+    if (status === 'error' || status === 'closed') {
+      notices.push({
+        key: 'event-stream-unavailable',
+        headline: 'Live order stream unavailable',
+        detail:
+          'The order ledger is not using live stream rows. It is rendered from broker account-truth sweeps; live event timing may be stale until the stream reconnects.',
+        tone: 'warn',
+      });
+    }
+
+    const truth = this.accountTruth();
+    const completedGap = this.evidenceGap(truth, 'completed_orders');
+    if (completedGap) {
+      notices.push({
+        key: 'completed-orders-unavailable',
+        headline: 'Completed-order history unavailable',
+        detail: this.retainedCompletedHistory()
+          ? `${completedGap.message} Keeping the last successful completed-order rows while current broker facts refresh.`
+          : `${completedGap.message} The ledger is limited to the available current-order projection until completed-order history is reachable.`,
+        tone: 'warn',
+      });
+    }
+
+    const openGap = this.evidenceGap(truth, 'open_orders');
+    if (openGap) {
+      notices.push({
+        key: 'open-orders-unavailable',
+        headline: 'Open-order sweep unavailable',
+        detail: `${openGap.message} Live open orders may be omitted until the broker sweep succeeds.`,
+        tone: 'warn',
+      });
+    }
+
+    return notices;
+  }
+
+  private buildLedgerRows(
+    orders: AccountTruthOrderRow[],
+    executions: AccountTruthExecutionRow[],
+  ): LedgerOrderRow[] {
+    const executionIdsByKey = new Map<string, Set<string>>();
+    for (const execution of executions) {
+      if (!execution.exec_id) continue;
+      for (const key of this.ledgerMatchKeys(execution)) {
+        const ids = executionIdsByKey.get(key) ?? new Set<string>();
+        ids.add(execution.exec_id);
+        executionIdsByKey.set(key, ids);
+      }
+    }
+
+    return orders.map((order) => {
+      const executionIds = new Set<string>();
+      for (const key of this.ledgerMatchKeys(order)) {
+        for (const execId of executionIdsByKey.get(key) ?? []) {
+          executionIds.add(execId);
+        }
+      }
+
+      return {
+        order,
+        executionIds: [...executionIds].sort(),
+      };
+    });
+  }
+
+  private ledgerMatchKeys(
+    value: Pick<
+      AccountTruthOrderRow | AccountTruthExecutionRow,
+      'order_ref' | 'perm_id' | 'order_id'
+    >,
+  ): string[] {
+    const keys: string[] = [];
+    if (value.order_ref) keys.push(`ref:${value.order_ref}`);
+    if (value.perm_id !== null) keys.push(`perm:${value.perm_id}`);
+    if (value.order_id > 0) keys.push(`order:${value.order_id}`);
+    return keys;
+  }
+
+  private evidenceGap(
+    truth: AccountTruthResponse | null,
+    source: string,
+  ): AccountTruthEvidenceGap | null {
+    return truth?.evidence_gaps.find((gap) => gap.source === source) ?? null;
+  }
+
+  private hasEvidenceGap(gaps: AccountTruthEvidenceGap[], source: string): boolean {
+    return gaps.some((gap) => gap.source === source);
+  }
+
+  private orderEventKey(event: Pick<IbkrOrderEvent, 'order_id' | 'ts_ms' | 'event_type'>): string {
+    return `${event.order_id}:${event.ts_ms}:${event.event_type}`;
   }
 }
 

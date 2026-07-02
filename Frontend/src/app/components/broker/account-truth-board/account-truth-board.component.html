@@ -92,12 +92,12 @@
         <tbody>
           @for (owner of accountTruth.owner_summaries; track trackOwner($index, owner)) {
             <tr>
-              <td>{{ owner.owner_label }}</td>
-              <td>{{ owner.owner_binding_state | receiptLabel }}</td>
-              <td>{{ owner.evidence_label }}</td>
-              <td class="mono num">{{ owner.open_order_count }}</td>
-              <td class="mono num">{{ owner.execution_count }}</td>
-              <td class="mono num">{{ owner.position_count }}</td>
+              <td class="source-bot">{{ owner.owner_label }}</td>
+              <td class="source-bot">{{ owner.owner_binding_state | receiptLabel }}</td>
+              <td class="source-bot">{{ owner.evidence_label }}</td>
+              <td class="mono num source-broker">{{ owner.open_order_count }}</td>
+              <td class="mono num source-broker">{{ owner.execution_count }}</td>
+              <td class="mono num source-broker">{{ owner.position_count }}</td>
             </tr>
           }
         </tbody>
@@ -105,13 +105,19 @@
     </div>
   }
 
+  @if (showExecutionHistory()) {
+    <app-account-truth-execution-history
+      [executions]="accountTruth.executions"
+    />
+  }
+
   @if (showSymbolExposures() && accountTruth.symbol_exposures.length > 0) {
     <div class="exposure-strip">
       @for (exposure of accountTruth.symbol_exposures; track trackExposure($index, exposure)) {
         <span class="exposure-chip">
-          <span class="mono">{{ exposure.symbol }}</span>
-          <span>{{ exposure.owner_label }}</span>
-          <span class="mono">{{ fmtSignedNumber(exposure.quantity, 0) }}</span>
+          <span class="mono source-broker">{{ exposure.symbol }}</span>
+          <span class="source-bot">{{ exposure.owner_label }}</span>
+          <span class="mono source-broker">{{ fmtSignedNumber(exposure.quantity, 0) }}</span>
         </span>
       }
     </div>

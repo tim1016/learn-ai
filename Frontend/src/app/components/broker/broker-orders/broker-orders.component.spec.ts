@@ -1,31 +1,70 @@
-import { TestBed } from '@angular/core/testing';
+import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerOrdersComponent } from './broker-orders.component';
 import type {
+  AccountTruthExecutionRow,
   AccountTruthOrderRow,
+  AccountTruthResponse,
   IbkrOpenOrder,
   IbkrOrderWhatIfPreview,
 } from '../../../api/broker-models';
+
+class StubEventSource {
+  static instances: StubEventSource[] = [];
+
+  readonly url: string | URL;
+  readyState = 0;
+  onopen: ((this: EventSource, ev: Event) => unknown) | null = null;
+  onmessage: ((this: EventSource, ev: MessageEvent) => unknown) | null = null;
+  onerror: ((this: EventSource, ev: Event) => unknown) | null = null;
+  private readonly listeners = new Map<string, EventListenerOrEventListenerObject[]>();
+
+  constructor(url: string | URL) {
+    this.url = url;
+    StubEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((item) => item !== listener),
+    );
+  }
+
+  dispatchEvent(event: Event): boolean {
+    for (const listener of this.listeners.get(event.type) ?? []) {
+      if (typeof listener === 'function') {
+        listener.call(this as unknown as EventSource, event);
+      } else {
+        listener.handleEvent(event);
+      }
+    }
+    if (event.type === 'error') this.onerror?.call(this as unknown as EventSource, event);
+    if (event.type === 'open') this.onopen?.call(this as unknown as EventSource, event);
+    return true;
+  }
+
+  emit(type: string, data?: string): void {
+    this.dispatchEvent(data === undefined ? new Event(type) : new MessageEvent(type, { data }));
+  }
+
+  close(): void { /* no-op */ }
+}
 
 // jsdom lacks EventSource and (across versions) HTMLDialogElement's
 // showModal / close. Stub once at module scope so the broker-orders
 // constructor — which opens a real SSE stream and the dialog effect
 // can both run without exploding.
 beforeAll(() => {
-  class StubEventSource {
-    readyState = 0;
-    onopen: ((this: EventSource, ev: Event) => unknown) | null = null;
-    onmessage: ((this: EventSource, ev: MessageEvent) => unknown) | null = null;
-    onerror: ((this: EventSource, ev: Event) => unknown) | null = null;
-    addEventListener(): void { /* no-op */ }
-    removeEventListener(): void { /* no-op */ }
-    dispatchEvent(): boolean { return true; }
-    close(): void { /* no-op */ }
-  }
-  (globalThis as { EventSource?: unknown }).EventSource = StubEventSource;
+  (globalThis as { EventSource?: unknown }).EventSource =
+    StubEventSource as unknown as typeof EventSource;
 
   if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
     HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -38,6 +77,10 @@ beforeAll(() => {
       this.dispatchEvent(new Event('close'));
     };
   }
+});
+
+beforeEach(() => {
+  StubEventSource.instances = [];
 });
 
 class FakeBrokerHealthService {
@@ -57,13 +100,7 @@ class FakeBrokerHealthService {
 
 class FakeBrokerService {
   openOrders = vi.fn().mockResolvedValue([]);
-  accountTruth = vi.fn().mockResolvedValue({
-    orders: [],
-    final_verdict: 'clean',
-    final_severity: 'ok',
-    status_label: 'Clean',
-    status_detail: 'Required live broker evidence is assigned to known ownership.',
-  });
+  accountTruth = vi.fn().mockResolvedValue(accountTruthResponse());
   orderWhatIf = vi.fn().mockResolvedValue({
     init_margin_change: 10,
     maint_margin_change: 5,
@@ -109,32 +146,17 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-function setup(openOrders: IbkrOpenOrder[] = []) {
+function setup(
+  openOrders: IbkrOpenOrder[] = [],
+  truthResponses?: AccountTruthResponse[],
+) {
   const broker = new FakeBrokerService();
   broker.openOrders.mockResolvedValue(openOrders);
-  broker.accountTruth.mockResolvedValue({
-    orders: openOrders.map((order) => ({
-      ...order,
-      fact_kind: 'open_order',
-      lifecycle_id: `perm:${order.perm_id ?? order.order_id}`,
-      lifecycle: 'acknowledged',
-      owner: {
-        owner_class: 'bot',
-        owner_key: 'test-bot',
-        owner_label: 'Bot test-bot',
-        evidence_tier: 'bot_order_ref',
-        evidence_label: 'Bot-stamped order ref',
-        owner_binding_state: 'ACTIVE',
-        severity: 'ok',
-      },
-      headline: 'Bot test-bot open order',
-      detail: 'Ownership is proven by bot-stamped order ref.',
-    })),
-    final_verdict: 'clean',
-    final_severity: 'ok',
-    status_label: 'Clean',
-    status_detail: 'Required live broker evidence is assigned to known ownership.',
-  });
+  const defaultTruth = accountTruthResponse(openOrders.map(openOrderTruthRow));
+  broker.accountTruth.mockResolvedValue(defaultTruth);
+  for (const response of truthResponses ?? []) {
+    broker.accountTruth.mockResolvedValueOnce(response);
+  }
   const health = new FakeBrokerHealthService();
   TestBed.configureTestingModule({
     providers: [
@@ -189,8 +211,102 @@ function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): Accou
   };
 }
 
+function accountTruthExecution(
+  overrides: Partial<AccountTruthExecutionRow> = {},
+): AccountTruthExecutionRow {
+  return {
+    fact_kind: 'execution',
+    account_id: 'DU1234567',
+    exec_id: '00025e7a.6685.exec',
+    order_id: 42,
+    perm_id: 9001,
+    client_id: 1,
+    con_id: 756733,
+    symbol: 'SPY',
+    side: 'BUY',
+    order_type: 'MKT',
+    quantity: 1,
+    price: 450,
+    fee: null,
+    exec_time_ms: 1,
+    observed_at_ms: 1,
+    order_ref: 'learn-ai/test-bot/v1:intent-42',
+    owner: {
+      owner_class: 'bot',
+      owner_key: 'test-bot',
+      owner_label: 'Bot test-bot',
+      evidence_tier: 'bot_order_ref',
+      evidence_label: 'Bot-stamped order ref',
+      owner_binding_state: 'ACTIVE',
+      severity: 'ok',
+    },
+    headline: 'Bot test-bot execution',
+    detail: 'Ownership is proven by bot-stamped order ref.',
+    ...overrides,
+  };
+}
+
+function openOrderTruthRow(order: IbkrOpenOrder): AccountTruthOrderRow {
+  return accountTruthOrder({
+    ...order,
+    lifecycle_id: `perm:${order.perm_id ?? order.order_id}`,
+  });
+}
+
+function accountTruthResponse(
+  orders: AccountTruthOrderRow[] = [],
+  evidenceGaps: AccountTruthResponse['evidence_gaps'] = [],
+  executions: AccountTruthExecutionRow[] = [],
+): AccountTruthResponse {
+  return {
+    account_id: 'DU1234567',
+    final_verdict: 'clean',
+    final_severity: 'ok',
+    status_label: 'Clean',
+    status_detail: 'Required live broker evidence is assigned to known ownership.',
+    generated_at_ms: 1,
+    health: {
+      connected: true,
+      is_paper: true,
+      account_id: 'DU1234567',
+      mode: 'paper',
+      host: '127.0.0.1',
+      port: 4002,
+      client_id: 1,
+      server_version: 178,
+      fetched_at_ms: 1,
+      connection_state: 'connected',
+      last_transition_ms: 1,
+    },
+    account: null,
+    known_bot_namespaces: [],
+    manual_namespaces_observed: [],
+    invariants: [],
+    blockers: [],
+    caveats: [],
+    owner_summaries: [],
+    symbol_exposures: [],
+    orders,
+    executions,
+    positions: [],
+    evidence_gaps: evidenceGaps,
+  };
+}
+
+function orderLedgerElement(fixture: ComponentFixture<BrokerOrdersComponent>): HTMLElement {
+  return (fixture.nativeElement as HTMLElement).querySelector('.orders-card') as HTMLElement;
+}
+
+function orderLedgerText(fixture: ComponentFixture<BrokerOrdersComponent>): string {
+  return orderLedgerElement(fixture).textContent ?? '';
+}
+
 async function primeWhatIf(component: BrokerOrdersComponent): Promise<void> {
   await component.loadWhatIfPreview();
+}
+
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
@@ -267,14 +383,129 @@ describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
 });
 
 describe('BrokerOrdersComponent — broker provenance', () => {
-  it('renders the broker order_ref for open orders when the backend provides it', async () => {
-    const { fixture, component } = setup([openOrderWithRef]);
-    await component.refreshOpenOrders();
+  it('renders app order refs and broker execution IDs without promoting zero API order IDs', async () => {
+    const order = accountTruthOrder({
+      fact_kind: 'completed_order',
+      lifecycle_id: 'perm:9001',
+      order_id: 0,
+      perm_id: 9001,
+      status: 'Filled',
+      quantity: 1,
+      cumulative_filled: 1,
+      remaining: 0,
+    });
+    const execution = accountTruthExecution({
+      order_id: 0,
+      perm_id: 9001,
+    });
+    const { fixture } = setup([], [
+      accountTruthResponse([order], [], [execution]),
+    ]);
+    await flushAsyncWork();
     fixture.detectChanges();
 
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
-      'learn-ai/test-bot/v1:intent-42',
+    const headers = Array.from(
+      orderLedgerElement(fixture).querySelectorAll('th'),
+      (header) => header.textContent?.trim() ?? '',
     );
+    expect(headers).toContain('Order ref');
+    expect(headers).toContain('Broker order');
+    expect(headers).toContain('Broker exec ID');
+    expect(headers).not.toContain('ID');
+    expect(headers).not.toContain('Owner');
+    expect(headers).not.toContain('Qty');
+    expect(headers).not.toContain('Status');
+
+    const ledgerText = orderLedgerText(fixture);
+    expect(ledgerText).toContain('learn-ai/test-bot/v1:intent-42');
+    expect(ledgerText).toContain('Perm 9001');
+    expect(ledgerText).toContain('00025e7a.6685.exec');
+    expect(ledgerText).toContain('Broker direct');
+    expect(ledgerText).toContain('Stamped and echoed');
+    expect(ledgerText).toContain('1/1');
+    expect(ledgerText).not.toContain('Completed Order');
+    expect(ledgerText).not.toContain('Filled');
+    expect(ledgerText).not.toContain('IBKR');
+
+    const cellTexts = Array.from(
+      orderLedgerElement(fixture).querySelectorAll('tbody td'),
+      (cell) => cell.textContent?.trim() ?? '',
+    );
+    expect(cellTexts).not.toContain('0');
+    expect(
+      orderLedgerElement(fixture).querySelectorAll('.source-legend .source-pill'),
+    ).toHaveLength(2);
+    expect(orderLedgerElement(fixture).querySelector('tbody .source-pill')).toBeNull();
+    expect(orderLedgerElement(fixture).querySelector('details.ibkr-evidence')).toBeNull();
+    expect(orderLedgerElement(fixture).querySelector('button[aria-label^="Cancel"]')).toBeNull();
+  });
+
+  it('uses account truth as the ledger source without the unused open-orders call', async () => {
+    const { broker, component } = setup([openOrderWithRef]);
+
+    await flushAsyncWork();
+    await component.refreshLedger();
+
+    expect(broker.accountTruth).toHaveBeenCalled();
+    expect(broker.openOrders).not.toHaveBeenCalled();
+  });
+
+  it('keeps completed history stable when the completed-order sweep degrades', async () => {
+    const openOrder = accountTruthOrder({
+      fact_kind: 'open_order',
+      lifecycle_id: 'perm:9001',
+      order_id: 42,
+      order_ref: 'learn-ai/test-bot/v1:open-42',
+      perm_id: 9001,
+      status: 'Submitted',
+      remaining: 1,
+    });
+    const completedOrder = accountTruthOrder({
+      fact_kind: 'completed_order',
+      lifecycle_id: 'perm:9002',
+      order_id: 43,
+      order_ref: 'learn-ai/test-bot/v1:completed-43',
+      perm_id: 9002,
+      status: 'Filled',
+      quantity: 1,
+      cumulative_filled: 1,
+      remaining: 0,
+    });
+    const { fixture, component } = setup([], [
+      accountTruthResponse([openOrder, completedOrder]),
+      accountTruthResponse([openOrder], [
+        {
+          source: 'completed_orders',
+          severity: 'warning',
+          message: 'IBKR completed-order sweep unavailable.',
+        },
+      ]),
+    ]);
+
+    await flushAsyncWork();
+    await component.refreshLedger();
+    fixture.detectChanges();
+
+    const text = orderLedgerText(fixture);
+    expect(text).toContain('learn-ai/test-bot/v1:open-42');
+    expect(text).toContain('learn-ai/test-bot/v1:completed-43');
+    expect(text).toContain('Perm 9002');
+    expect(text).toContain('Completed-order history unavailable');
+    expect(text).toContain('Keeping the last successful completed-order rows');
+  });
+
+  it('explains that the ledger falls back to sweeps when the stream is unavailable', async () => {
+    const { fixture, component } = setup([openOrderWithRef]);
+
+    await flushAsyncWork();
+    await component.refreshLedger();
+    StubEventSource.instances[0]?.emit('error');
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Live order stream unavailable');
+    expect(text).toContain('not using live stream rows');
+    expect(text).toContain('learn-ai/test-bot/v1:intent-42');
   });
 });
 

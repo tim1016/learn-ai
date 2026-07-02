@@ -579,7 +579,7 @@ Deferred per the revised direction (Step 7+):
 
 ### 16.3. Term Lock (deployment-specific glossary)
 
-These terms are introduced or pinned by this design-lock round. They are deployment-runtime-specific; trading-domain terms remain owned by `.claude/skills/trading-domain/`. A repo-wide `CONTEXT.md` is not created at this time — if/when a third use site for these terms emerges, promote them.
+These terms are introduced or pinned by this design-lock round. They are deployment-runtime-specific; shared math, timestamp, and engine authority remains in the repo authority docs and `.claude/rules/`. A repo-wide `CONTEXT.md` is not created at this time — if/when a third use site for these terms emerges, promote them.
 
 | Term | Definition |
 |---|---|

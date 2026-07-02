@@ -1,5 +1,9 @@
 :host {
   display: block;
+  --source-broker: #7dd3fc;
+  --source-broker-bg: rgba(14, 165, 233, 0.1);
+  --source-bot: #facc15;
+  --source-bot-bg: rgba(250, 204, 21, 0.1);
 }
 
 .truth-board {
@@ -192,6 +196,22 @@
   th.num {
     text-align: right;
   }
+
+  td.source-broker {
+    background: var(--source-broker-bg);
+  }
+
+  td.source-bot {
+    background: var(--source-bot-bg);
+  }
+}
+
+.source-broker {
+  color: var(--source-broker);
+}
+
+.source-bot {
+  color: var(--source-bot);
 }
 
 .exposure-strip {

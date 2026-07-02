@@ -1,0 +1,87 @@
+<section class="execution-history" aria-labelledby="execution-history-heading">
+  <header class="history-header">
+    <h3 id="execution-history-heading">Execution history</h3>
+    <span class="badge mono">{{ executionCount() }} execs</span>
+  </header>
+  <div class="source-legend" aria-label="Execution field source legend">
+    <span class="source-pill source-broker">Broker direct</span>
+    <span class="source-pill source-bot">Bot attribution</span>
+    <span class="source-pill source-mixed">Stamped and echoed</span>
+  </div>
+
+  @if (executionGroups().length === 0) {
+    <p class="muted">No executions returned.</p>
+  } @else {
+    <div class="owner-groups">
+      @for (group of executionGroups(); track trackGroup($index, group); let first = $first) {
+        <details class="owner-group" [open]="first || group.uncertaintyCount > 0">
+          <summary>
+            <span class="source-bot">{{ group.ownerLabel }}</span>
+            <span class="summary-meta">
+              <span class="source-bot">{{ group.owner.owner_binding_state | receiptLabel }}</span>
+              <span class="mono source-broker">{{ group.executionCount }} execs</span>
+              @if (group.uncertaintyCount > 0) {
+                <span class="warning mono">{{ group.uncertaintyCount }} uncertain</span>
+              }
+            </span>
+          </summary>
+
+          @for (day of group.days; track trackDay($index, day)) {
+            <section class="day-group">
+              <header class="day-header">
+                <span class="mono source-broker">{{ day.label }} local</span>
+                <span class="mono source-broker">{{ day.rows.length }} execs</span>
+              </header>
+
+              <div class="table-wrap">
+                <table class="execution-table">
+                  <thead>
+                    <tr>
+                      <th class="source-broker">Time</th>
+                      <th class="source-broker">Symbol</th>
+                      <th class="source-broker">Side</th>
+                      <th class="num source-broker">Qty</th>
+                      <th class="num source-broker">Price</th>
+                      <th class="num source-broker">Fee</th>
+                      <th class="source-mixed">Order ref</th>
+                      <th class="source-broker">Broker order ID</th>
+                      <th class="source-broker">Broker exec ID</th>
+                      <th>Uncertainty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (row of day.rows; track trackExecution($index, row)) {
+                      @let execution = row.execution;
+                      <tr [class.has-uncertainty]="row.uncertaintyCodes.length > 0">
+                        <td class="mono source-broker">{{ fmtTimestampLocal(row.timeMs) }}</td>
+                        <td class="mono source-broker">{{ execution.symbol ?? '—' }}</td>
+                        <td class="mono source-broker">{{ execution.side ?? '—' }}</td>
+                        <td class="mono num source-broker">{{ fmtNumber(execution.quantity) }}</td>
+                        <td class="mono num source-broker">{{ fmtCurrency(execution.price) }}</td>
+                        <td class="mono num source-broker">{{ fmtCurrency(execution.fee) }}</td>
+                        <td class="mono token source-mixed">{{ execution.order_ref ?? '—' }}</td>
+                        <td class="mono token source-broker">{{ execution.order_id }}</td>
+                        <td class="mono token source-broker">{{ execution.exec_id }}</td>
+                        <td>
+                          @if (row.uncertaintyCodes.length === 0) {
+                            <span class="muted">—</span>
+                          } @else {
+                            <span class="chips">
+                              @for (code of row.uncertaintyCodes; track trackUncertainty($index, code)) {
+                                <span class="chip">{{ code | receiptLabel }}</span>
+                              }
+                            </span>
+                          }
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          }
+        </details>
+      }
+    </div>
+  }
+</section>
