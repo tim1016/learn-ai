@@ -160,13 +160,13 @@ def test_deploy_run_accepts_valid_instance_id(
             spec,
             qc,
             tmp_path / "live_runs",
-            strategy_instance_id="deployment-validation-jun3",
+            strategy_instance_id="deploy-validation-jun3",
         )
     )
 
     assert result.created is True
     ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
-    assert ledger["strategy_instance_id"] == "deployment-validation-jun3"
+    assert ledger["strategy_instance_id"] == "deploy-validation-jun3"
 
 
 @requires_git
