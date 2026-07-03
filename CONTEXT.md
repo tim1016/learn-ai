@@ -734,3 +734,155 @@ The closed reason-code vocabulary, the priority order for the
 single-line tooltip, and the structured `disabled_reasons` list are
 the only set of disabled-reason codes the cockpit's typed lookup
 covers.  Unknown codes fail closed.
+
+## Broker session mirror — client-connection observability (resolved 2026-07-03)
+
+A read-only, session-level visualization of every IBKR API client socket — a
+faithful mirror of what IB Gateway itself sees. It is **not** an authority: it
+gates nothing (contrast the per-instance readiness/safety verdicts); it is a
+better *view*. It sits at the backend-authored **fleet/session altitude** (see
+"Broker-observed state & position ownership → two altitudes, two authors"),
+distinct from the per-`strategy_instance` Bot Cockpit.
+
+- **Broker client** — one IBKR API socket to the Gateway, identified by its live
+  `client_id`. There is **no single "broker connection"**: there are N clients
+  (the FastAPI data-plane singleton + one per live bot child + any others), each
+  with its own independent connection state. The Gateway logs each separately, so
+  the sidebar and Bot Cockpit "disagreeing" is often two *different clients* each
+  reporting correctly — not one truth shown inconsistently. **Verified empirically
+  2026-07-03** via `lsof -iTCP:4002` against a live system: 4 real sockets (1
+  data-plane on client_id 42 + 3 host `cmd_start` children), each a distinct TCP
+  connection — the per-child model, **not** ADR-0011's "one shared connection
+  serves every instance" (that line conflicts with observed reality and the ADR
+  must record the gap). The same probe caught the control plane reporting all three
+  live children as `offline`/`STOPPED` while they held live sockets — the divergence
+  this mirror exists to expose.
+- **Socket-enumeration spine (the referee).** The authoritative roster, liveness,
+  and attribution come from **`lsof` on the Gateway port, run by the host daemon** —
+  every real TCP connection, PID-attributed, needing **no log decryption and no
+  child self-report**. `PID → process args → --run-dir → strategy_instance_id` is
+  the enrichment join available **today** (every `engine_runtime.json` carries
+  `client_id: null` — the client_id is never published). Ghost/orphan detection
+  falls out for free: a Gateway-side socket with **no matching live client PID** is
+  orphaned/half-open; a live client PID the **registry calls `offline`** is a stale
+  control plane. This spine complements the live API-event spine below: `lsof` owns
+  *who is connected*, the API callbacks own *what each is saying* (the 9 categories).
+- **Primary job — answer "did my bot actually start and connect?"** The mirror's
+  north star (and acceptance test) is reconciling **three altitudes** that drift
+  apart silently today: operator *intent* (what was started), the process
+  *registry's claim* (`live`/`offline`), and *OS/Gateway reality* (`lsof` sockets).
+  The registry is **in-memory only** (`ProcessRegistry._managed = {}`, no
+  rehydration), so a host-daemon restart makes it forget live children — they keep
+  running and holding sockets but report `offline` (observed 2026-07-03: three live
+  children the registry called `offline`; the operator started bots and could not
+  confirm they were running). The `lsof` spine reads OS truth independent of that
+  memory, so it cannot be fooled the same way; disagreement across the three
+  altitudes is itself the surfaced alert, naming which altitude is lying. Fixing the
+  registry's amnesia (a durable/rehydrating registry) is an **adjacent** concern the
+  mirror *exposes* but does not own.
+- **Client identity type** — every observed `client_id` is classified as exactly
+  one of:
+  - **bot client** — opened by a live child; enriched with its
+    `strategy_instance_id`, account, and posture.
+  - **system client** — infrastructure, not a strategy (the data-plane
+    singleton, a host-runner-owned session). Labeled as infrastructure, never
+    dressed up as a bot.
+  - **orphaned bot socket** — a `client_id` **attributable** to a known bot (its
+    last-published id) whose owning process has died while the socket lingers at
+    the Gateway. **Not a ghost** — a named, crashed bot whose connection IBKR still
+    holds. Treated as a **safety hazard** (can hold open orders/positions, collides
+    with the bot's clientId on restart): raises an **operator notice** (ADR-0015)
+    with remediation, never a passive row.
+  - **ghost client** — a `client_id` at the Gateway that is **neither live nor
+    attributable** to any bot we opened (a manual TWS login, an external/foreign
+    session). Detected and surfaced honestly; distinct from an orphaned bot socket.
+- **Connection recency axis (orthogonal to identity type).** Independent of *who*
+  owns a socket (bot/system/ghost), every row carries *how sure we are it is live
+  right now*:
+  - **CURRENT** — confirmed connected now (a fresh event/probe within the
+    freshness threshold). Rendered active.
+  - **PAST** — recorded history exists but a current connection cannot be
+    confirmed. Two honest flavors: **closed** (a disconnect was recorded —
+    definitively gone) and **last-known** (the observer was lost — data-plane/SSE
+    down or stale; last seen connected at T, current state indeterminate).
+    Rendered clearly demarcated (muted, "as of T", historical badge).
+  - **UNKNOWN** — no basis at all (no history; observer down from the start).
+  **Invariant: PAST is never rendered as CURRENT.** When the observer goes down the
+  page does not blank or collapse to a bare UNKNOWN — it demotes rows to
+  PAST/last-known with recorded history fully browsable, demarcated so an operator
+  can never mistake last-known history for live truth. The honest-empty rule
+  applied to *time*, not just to verdicts.
+- **Orphaned-socket remediation is detect-alert-guide, not one-click close.** IBKR
+  exposes **no surgical "kick client N" API**, and a cleanly-exited process's socket
+  is already closed by the OS — so a *lingering* socket means half-open or a hung
+  process IBKR hasn't noticed. The mirror therefore **detects**, **alerts** (operator
+  notice deep-linked to the owning bot's cockpit), and **guides**: a clientId-reclaim
+  probe to confirm IBKR still holds it, then the heavier operator remediations
+  (Gateway reset/restart via the host daemon/IBC — all-clients — or waiting out
+  IBKR's timeout). No button promises a surgical close the broker API cannot deliver;
+  the heavier Gateway-reset action lives at a session/host admin site, not the mirror.
+- **Live API-event spine** — the event stream is the API callbacks each of our
+  own clients already receives from the Gateway (`errorEvent`, connect/disconnect),
+  **not** the Gateway log files. On-disk logs are encrypted at rest (TWS Build
+  977+) and readable only through the Gateway GUI; the same events are broadcast
+  live and in plaintext to every connected API client, so the mirror listens to
+  the broadcast rather than decrypting the vault.
+- **1:1 fidelity ceiling (accepted 2026-07-03)** — full event detail for **our**
+  clients (data-plane + bot children), since we receive their broadcasts and
+  own-lifecycle directly. **Identity-only** for ghost clients: existence is
+  detectable (via `client_id`-in-use collisions and host-daemon filename metadata
+  of the encrypted `api.<id>.<day>.log` set) but private event *content* is not —
+  it is neither broadcast to us nor decryptable outside the Gateway. A documented,
+  accepted limit, not a defect to engineer around.
+- **Client enrichment join** — `actual connected client_id → strategy_instance_id`.
+  "Actual" because a child may reconnect under a different id after an
+  `IbkrClientIdInUseError` collision, and the Gateway's truth is the id it
+  actually holds. This join key is **not recorded durably today** (neither the
+  process registry nor `engine_runtime.json` carries `client_id`); publishing it
+  is the enrichment's prerequisite.
+- **Categorized broker events, not a text stream** — raw log lines are never the
+  primary surface. Each event is classified into a closed backend vocabulary
+  (extending the **Event narrative registry** pattern); raw fields live only in an
+  expandable technical-details area. The classifier **shares** the single
+  code→meaning table already in `client.py` (`_CONNECTIVITY_LOST_CODES`, etc.) — it
+  does not fork a second broker-event vocabulary.
+- **Bounded durable history with operator purge.** The mirror backfills from the
+  durable per-client `connection_events.jsonl` (plus a session-level store for the
+  data-plane and ghost clients) and tails live SSE; retention is a bounded rolling
+  window. The operator may **manually purge** historical entries (by time range
+  and/or per client). **Purge is scoped to diagnostic broker-session logs only —
+  it never touches the trading audit trail** (`intent_events.jsonl` WAL, intent
+  ledger, reconciliation receipts, fill/execution records), which stay immutable
+  as ownership/attribution proof. Purging history never disconnects a client, never
+  removes its live roster row, and — because diagnostic logs are **never** an input
+  to a safety/ownership/resume decision — can never alter a verdict. Purge is the
+  mirror's only mutating capability; it is otherwise read-only.
+
+The robust recovery state machine (folded into Phase 1) is the **single**
+authority for connectivity-driven halt/resume — it **subsumes** the ADR-0011
+reactive-halt-on-transition path (`live_engine.py` connectivity-count snapshot);
+there are never two halt-on-transition mechanisms.
+
+- **Recovery reconciles, it does not resume.** On reconnect the machine
+  distinguishes IBKR's real failure modes (1100/2110 link-interrupt → *wait* for
+  1101/1102, not a socket teardown; 1101 → re-request market data **+ open orders
+  + executions + positions** and bump `connection_epoch`; socket-dead → backoff
+  reconnect; exhausted → terminal `HARD_DOWN`). It then runs the owned-orphan /
+  outside-mutation ladder. A **provably-clean** reconcile (broker exposure ==
+  `expected_position_by_symbol`, no owned-orphan ambiguity, no outside-mutation,
+  no in-flight `ACK_FAILED_UNCERTAIN` at the drop) produces a passing
+  reconciliation receipt; **any** ambiguity stays hard-blocked.
+- **Resume is operator-only, from the Bot Cockpit.** A clean reconcile *clears
+  the connectivity/reconciliation gate* but **never auto-resumes trading**. The
+  bot resumes only when the operator clicks Resume on the bot control panel (sets
+  `desired_state = RUNNING`). This wires into the existing **ResumeGuardState**
+  (ADR-0010 §A3, PRD #616): recovery feeds its reconciliation-receipt guard; the
+  safety-verdict and uncertain-intent-WAL guards stay independent, so a mid-submit
+  drop stays blocked even after a clean reconnect.
+- **Gate state is server-authored and reflected in the UI.** `BLOCKED →
+  CLEARABLE (clean reconcile) → CLEARED/RUNNING (after the click)` via
+  `operator_surface.actions.resume`. The Bot Cockpit renders the verdict; it never
+  re-derives it.
+- **The broker session mirror stays read-only.** It *visualizes* the reconnect
+  and gate-cleared events (and may deep-link to the Bot Cockpit) but carries **no
+  Resume control** — the resume action's render site remains the Bot Cockpit.
