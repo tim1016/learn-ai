@@ -12,7 +12,6 @@ import {
 } from '@angular/core';
 import type {
   OperatorNotice,
-  OperatorNoticeAction,
   OperatorSurfaceRuntimeFreshness,
 } from '../../../../api/live-instances.types';
 import { OperatorNoticeComponent } from '../../../operator-notice/operator-notice.component';
@@ -38,7 +37,7 @@ export class RuntimeBannerComponent {
    *  above the freshness headline. Critical-tier incidents are always shown above
    *  lower-priority notices per ADR-0013 §3. */
   readonly incidentHeadline = input<OperatorNotice | null>(null);
-  readonly actionClicked = output<OperatorNoticeAction>();
+  readonly actionClicked = output<OperatorNotice>();
 
   private readonly _destroyRef = inject(DestroyRef);
   // Re-evaluated on every clock tick so the debounce window can release
@@ -83,7 +82,7 @@ export class RuntimeBannerComponent {
     () => this.incidentHeadline() !== null || this.headline() !== null,
   );
 
-  forwardAction(action: OperatorNoticeAction): void {
-    this.actionClicked.emit(action);
+  forwardAction(notice: OperatorNotice): void {
+    this.actionClicked.emit(notice);
   }
 }

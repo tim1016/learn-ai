@@ -201,7 +201,7 @@
           </span>
           <span class="ack-meta">
             Order #{{ ack.order_id }} · status
-            <span class="mono">{{ ack.status }}</span>
+            <span class="mono">{{ ack.status | receiptLabel }}</span>
             @if (ack.order_ref) {
               <span class="ref-chip mono">{{ ack.order_ref }}</span>
             }

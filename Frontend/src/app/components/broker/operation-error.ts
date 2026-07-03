@@ -17,7 +17,8 @@ export type OperationKind =
   | 'resume'
   | 'flatten'
   | 'reconcile'
-  | 'mark-poisoned';
+  | 'mark-poisoned'
+  | 'renew-lease';
 
 export type ErrorCategory =
   | 'validation'
@@ -49,7 +50,7 @@ export interface OutcomeUnknownBody {
   reason_code: 'OUTCOME_UNKNOWN';
   error_category: string;
   detail: string | null;
-  endpoint: 'deploy' | 'start_run' | 'stop_run' | 'emergency_flatten';
+  endpoint: 'deploy' | 'start_run' | 'stop_run' | 'emergency_flatten' | 'renew_daemon_lease';
   occurred_at_ms: number;
   runbook_hint: string;
 }
@@ -70,6 +71,7 @@ const OPERATION_LABEL: Record<OperationKind, string> = {
   flatten: 'Flatten',
   reconcile: 'Reconcile',
   'mark-poisoned': 'Mark poisoned',
+  'renew-lease': 'Renew lease',
 };
 
 // Remediation keyed on (operation, status). Most-specific cell wins; a generic
@@ -92,6 +94,10 @@ const REMEDIATION: Partial<Record<OperationKind, Partial<Record<number, string>>
   flatten: { 409: 'No live run is bound to this instance. Start the instance before issuing commands.' },
   reconcile: { 409: 'No live run is bound to this instance. Start the instance before issuing commands.' },
   'mark-poisoned': { 409: 'No live run is bound to this instance. Start the instance before issuing commands.' },
+  'renew-lease': {
+    409: 'Refresh Bot Control to read the current daemon lease before retrying.',
+    503: 'The host daemon is unavailable. Check the local daemon and retry.',
+  },
 };
 
 const GENERIC_REMEDIATION: Record<ErrorCategory, string> = {
@@ -206,6 +212,11 @@ export function toOperationError(operation: OperationKind, err: unknown): Operat
       detail = body;
     } else if (body && typeof body === 'object' && typeof (body as { detail?: unknown }).detail === 'string') {
       detail = (body as { detail: string }).detail;
+    } else if (body && typeof body === 'object') {
+      const nested = (body as { detail?: unknown }).detail;
+      detail = nested && typeof nested === 'object' && typeof (nested as { message?: unknown }).message === 'string'
+        ? (nested as { message: string }).message
+        : err.message;
     } else {
       detail = err.message;
     }

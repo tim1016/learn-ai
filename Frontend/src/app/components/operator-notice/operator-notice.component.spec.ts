@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 import { OperatorNoticeComponent } from './operator-notice.component';
-import type { OperatorNotice, OperatorNoticeAction } from '../../models/operator-notice';
+import type { OperatorNotice } from '../../models/operator-notice';
 
 function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
   return {
@@ -51,6 +51,31 @@ describe('OperatorNoticeComponent', () => {
     expect(screen.getByRole('button', { name: /how to recover/i })).toBeTruthy();
   });
 
+  it('uses the notice runbook slug when an open-runbook action has no target', async () => {
+    await render(OperatorNoticeComponent, {
+      inputs: {
+        notice: makeNotice({
+          action: { kind: 'open_runbook', label: 'How to recover', target: null },
+          runbook_slug: 'runtime-freshness',
+        }),
+      },
+    });
+
+    expect(screen.getByRole('button', { name: /how to recover/i })).toBeTruthy();
+  });
+
+  it('does not render a clickable action when the executable target is missing', async () => {
+    await render(OperatorNoticeComponent, {
+      inputs: {
+        notice: makeNotice({
+          action: { kind: 'focus_cockpit_action', label: 'Focus action', target: null },
+        }),
+      },
+    });
+
+    expect(screen.queryByRole('button', { name: /focus action/i })).toBeNull();
+  });
+
   it('renders the control-plane lease renew action as a button', async () => {
     await render(OperatorNoticeComponent, {
       inputs: {
@@ -64,14 +89,16 @@ describe('OperatorNoticeComponent', () => {
   });
 
   it('emits the action when a clickable action button is clicked', async () => {
-    const action: OperatorNoticeAction = { kind: 'open_runbook', label: 'How to recover', target: 'runtime-freshness' };
-    let captured: OperatorNoticeAction | null = null;
+    const notice = makeNotice({
+      action: { kind: 'open_runbook', label: 'How to recover', target: 'runtime-freshness' },
+    });
+    let captured: OperatorNotice | null = null;
     await render(OperatorNoticeComponent, {
-      inputs: { notice: makeNotice({ action }) },
-      on: { actionClicked: (a: OperatorNoticeAction) => { captured = a; } },
+      inputs: { notice },
+      on: { actionClicked: (value: OperatorNotice) => { captured = value; } },
     });
     await screen.getByRole('button', { name: /how to recover/i }).click();
-    expect(captured).toEqual(action);
+    expect(captured).toEqual(notice);
   });
 
   it('renders external_manual_check as an inert label, not a clickable button', async () => {

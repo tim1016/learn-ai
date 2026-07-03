@@ -22,7 +22,6 @@ import type {
   OperatorSurfaceCurrentRisk,
   OperatorSurfaceSubmitReadiness,
   OperatorNotice,
-  OperatorNoticeAction,
   OperatorSurfaceControlPlane,
   RiskPosture,
   TraderPrimaryRemediation,
@@ -41,6 +40,11 @@ import {
   type RenderedAction,
   type RendererDispatch,
 } from './lib/suggested-action-renderer';
+import {
+  renderOperatorNoticeAction,
+  type OperatorNoticeDispatch,
+} from './lib/operator-notice-action-renderer';
+import { toOperationError, type OperationKind } from '../operation-error';
 import { AttentionDropdownComponent } from './attention-dropdown.component';
 import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
@@ -294,6 +298,12 @@ export class BotControlPageComponent {
     },
   };
 
+  private readonly runtimeNoticeDispatch: OperatorNoticeDispatch = {
+    ...this.primaryRemediationDispatch,
+    focusTarget: (target) => this.selectActionTargetNode(target),
+    renewControlPlaneLease: () => { void this.dispatchRenewControlPlaneLease(); },
+  };
+
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
       const id = params.get('id');
@@ -386,7 +396,7 @@ export class BotControlPageComponent {
       await startHostProcessFromCapability(this.liveRuns, cap);
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.humanError(err));
+      this.mutationError.set(this.operationErrorMessage('start', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -413,7 +423,7 @@ export class BotControlPageComponent {
       });
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.humanError(err));
+      this.mutationError.set(this.operationErrorMessage('flatten', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -491,29 +501,13 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
-  handleRuntimeNoticeAction(action: OperatorNoticeAction): void {
-    switch (action.kind) {
-      case 'open_runbook':
-        if (action.target) this.onGateOpenRunbook(action.target);
-        break;
-      case 'focus_cockpit_action':
-        if (action.target) this.selectActionTargetNode(action.target);
-        break;
-      case 'redeploy':
-        this.onGateRedeploy();
-        break;
-      case 'renew_control_plane_lease':
-        void this.dispatchRenewControlPlaneLease();
-        break;
-      case 'none':
-      case 'wait':
-      case 'external_manual_check':
-        break;
-      default: {
-        const unreachable: never = action.kind;
-        this.mutationError.set(`Unsupported notice action: ${String(unreachable)}`);
-      }
+  handleRuntimeNoticeAction(notice: OperatorNotice): void {
+    const action = renderOperatorNoticeAction(notice, this.runtimeNoticeDispatch);
+    if (action === null) {
+      this.mutationError.set('Notice action is not executable because required action evidence is missing.');
+      return;
     }
+    action.invoke();
   }
 
   toggleAttention(): void {
@@ -549,7 +543,7 @@ export class BotControlPageComponent {
       await this.liveRuns.reconcileInstance(id);
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.humanError(err));
+      this.mutationError.set(this.operationErrorMessage('reconcile', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -564,7 +558,7 @@ export class BotControlPageComponent {
       await this.liveRuns.renewControlPlaneLease();
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.humanError(err));
+      this.mutationError.set(this.operationErrorMessage('renew-lease', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -658,7 +652,7 @@ export class BotControlPageComponent {
       await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.humanError(err));
+      this.mutationError.set(this.operationErrorMessage('mark-poisoned', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -772,16 +766,22 @@ export class BotControlPageComponent {
       });
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.humanError(err));
+      this.mutationError.set(this.operationErrorMessage(action, err));
     } finally {
       this.busyAction.set(null);
     }
   }
 
+  private operationErrorMessage(operation: OperationKind, err: unknown): string {
+    const error = toOperationError(operation, err);
+    return `${error.detail} ${error.remediation}`;
+  }
+
   private humanError(err: unknown): string {
-    if (err instanceof HttpErrorResponse) {
-      const detail = err.error && typeof err.error === 'object'
-        ? (err.error as { detail?: unknown }).detail
+    if (err && typeof err === 'object' && 'error' in err && 'message' in err) {
+      const httpErr = err as { error?: unknown; message?: unknown };
+      const detail = httpErr.error && typeof httpErr.error === 'object'
+        ? (httpErr.error as { detail?: unknown }).detail
         : null;
       if (typeof detail === 'string') return detail;
       if (detail && typeof detail === 'object') {
@@ -792,11 +792,11 @@ export class BotControlPageComponent {
           : typeof body.disabled_reason_code === 'string'
             ? body.disabled_reason_code
             : null;
-        if (message && reason) return `${message} (${reason})`;
+        if (message && reason) return `${message} (${formatReceiptLabel(reason)})`;
         if (message) return message;
-        if (reason) return reason;
+        if (reason) return formatReceiptLabel(reason);
       }
-      if (err.message) return err.message;
+      if (typeof httpErr.message === 'string') return httpErr.message;
     }
     if (err instanceof Error && err.message) return err.message;
     return 'Could not load bot control data.';
