@@ -621,16 +621,40 @@ export function installBotControlPageTestStubs(): void {
   });
 }
 
+type AsyncMockValue<T> = T | Promise<T>;
+
+interface BotControlMutationResponses {
+  renewControlPlaneLease?: HostRunnerHealth;
+  startHostRunner?: HostRunnerActionResponse;
+  setInstanceDesiredState?: SetInstanceDesiredStateResponse;
+  flattenAndPause?: SetInstanceDesiredStateResponse;
+  issueInstanceCommand?: CommandWriteResponse;
+  reconcileInstance?: ReconcileAckResponse;
+}
+
+interface BotControlMutationFailures {
+  setInstanceDesiredState?: unknown;
+  reconcileInstance?: unknown;
+}
+
 // Harness convention: use this for ordinary Bot Control page wiring tests so
 // route, status, account-summary, and lifecycle-timeline setup stays shared.
 // Keep direct TestBed setup for sidebar-host integration, route-race subjects,
-// or intentionally bespoke service sequencing. Mutations fail closed by
-// default; action tests must explicitly opt into the command they exercise.
+// or intentionally bespoke service sequencing. Prefer the typed read/mutation
+// options below before using configureLiveRuns; mutations fail closed by
+// default, and action tests must explicitly opt into the command they exercise.
 export interface BotControlLiveRunsOptions {
   routeId?: string;
   status?: LiveInstanceStatus;
+  statusSequence?: readonly AsyncMockValue<LiveInstanceStatus>[];
+  statusResolver?: LiveRunsService['getInstanceStatus'];
   accountSummary?: FleetAccountSummary;
+  accountSummarySequence?: readonly AsyncMockValue<FleetAccountSummary>[];
   lifecycleTimeline?: LifecycleTimelineResponse;
+  lifecycleTimelineSequence?: readonly AsyncMockValue<LifecycleTimelineResponse>[];
+  lifecycleTimelineFailure?: unknown;
+  mutationResponses?: BotControlMutationResponses;
+  mutationFailures?: BotControlMutationFailures;
   configureLiveRuns?: (liveRuns: FakeLiveRunsService) => void;
 }
 
@@ -651,18 +675,100 @@ export interface BotControlSidebarHostHarness {
   liveRuns: FakeLiveRunsService;
 }
 
+function applyReadSequence<T>(
+  mock: {
+    mockResolvedValue(value: AsyncMockValue<T>): unknown;
+    mockResolvedValueOnce(value: AsyncMockValue<T>): unknown;
+  },
+  sequence: readonly AsyncMockValue<T>[] | undefined,
+  fallback: T,
+): void {
+  if (!sequence?.length) {
+    mock.mockResolvedValue(fallback);
+    return;
+  }
+  for (const value of sequence) {
+    mock.mockResolvedValueOnce(value);
+  }
+  mock.mockResolvedValue(sequence[sequence.length - 1]);
+}
+
+function applyMutationResponses(
+  liveRuns: FakeLiveRunsService,
+  responses: BotControlMutationResponses | undefined,
+): void {
+  if (!responses) return;
+  if (responses.renewControlPlaneLease) {
+    allowRenewControlPlaneLeaseCall(liveRuns, responses.renewControlPlaneLease);
+  }
+  if (responses.startHostRunner) {
+    allowStartHostRunnerCall(liveRuns, responses.startHostRunner);
+  }
+  if (responses.setInstanceDesiredState) {
+    allowSetDesiredStateCall(liveRuns, responses.setInstanceDesiredState);
+  }
+  if (responses.flattenAndPause) {
+    allowFlattenAndPauseCall(liveRuns, responses.flattenAndPause);
+  }
+  if (responses.issueInstanceCommand) {
+    allowIssueInstanceCommandCall(liveRuns, responses.issueInstanceCommand);
+  }
+  if (responses.reconcileInstance) {
+    allowReconcileInstanceCall(liveRuns, responses.reconcileInstance);
+  }
+}
+
+function hasOwn(object: object, property: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(object, property);
+}
+
+function applyMutationFailures(
+  liveRuns: FakeLiveRunsService,
+  failures: BotControlMutationFailures | undefined,
+): void {
+  if (!failures) return;
+  if (hasOwn(failures, 'setInstanceDesiredState')) {
+    rejectSetDesiredStateCall(liveRuns, failures.setInstanceDesiredState);
+  }
+  if (hasOwn(failures, 'reconcileInstance')) {
+    rejectReconcileInstanceCall(liveRuns, failures.reconcileInstance);
+  }
+}
+
 export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}): FakeLiveRunsService {
   const routeId = options.routeId ?? 'sid-x';
   const liveRuns = new FakeLiveRunsService();
-  liveRuns.getInstanceStatus.mockResolvedValue(options.status ?? makeStatus({ id: routeId }));
-  liveRuns.getAccountSummary.mockResolvedValue(options.accountSummary ?? makeAccountSummary());
-  liveRuns.getLifecycleTimeline.mockResolvedValue(options.lifecycleTimeline ?? makeLifecycleTimeline());
+  if (options.statusResolver) {
+    liveRuns.getInstanceStatus.mockImplementation(options.statusResolver);
+  } else {
+    applyReadSequence(
+      liveRuns.getInstanceStatus,
+      options.statusSequence,
+      options.status ?? makeStatus({ id: routeId }),
+    );
+  }
+  applyReadSequence(
+    liveRuns.getAccountSummary,
+    options.accountSummarySequence,
+    options.accountSummary ?? makeAccountSummary(),
+  );
+  if (options.lifecycleTimelineFailure) {
+    liveRuns.getLifecycleTimeline.mockRejectedValue(options.lifecycleTimelineFailure);
+  } else {
+    applyReadSequence(
+      liveRuns.getLifecycleTimeline,
+      options.lifecycleTimelineSequence,
+      options.lifecycleTimeline ?? makeLifecycleTimeline(),
+    );
+  }
   liveRuns.renewControlPlaneLease.mockRejectedValue(unexpectedMutation('renewControlPlaneLease'));
   liveRuns.startHostRunner.mockRejectedValue(unexpectedMutation('startHostRunner'));
   liveRuns.setInstanceDesiredState.mockRejectedValue(unexpectedMutation('setInstanceDesiredState'));
   liveRuns.flattenAndPause.mockRejectedValue(unexpectedMutation('flattenAndPause'));
   liveRuns.issueInstanceCommand.mockRejectedValue(unexpectedMutation('issueInstanceCommand'));
   liveRuns.reconcileInstance.mockRejectedValue(unexpectedMutation('reconcileInstance'));
+  applyMutationResponses(liveRuns, options.mutationResponses);
+  applyMutationFailures(liveRuns, options.mutationFailures);
   options.configureLiveRuns?.(liveRuns);
   return liveRuns;
 }
