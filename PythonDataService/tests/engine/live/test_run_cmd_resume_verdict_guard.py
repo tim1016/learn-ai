@@ -184,6 +184,56 @@ def test_cmd_resume_refuses_active_account_freeze(
     assert not _desired_state_path(tmp_path, instance).exists()
 
 
+def test_cmd_resume_keeps_run_dir_finder_injection_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from app.engine.live import run as run_module
+
+    instance = "patched-finder-instance"
+    account_id = "DU123456"
+    run_dir = tmp_path / "patched-run-dir"
+    _seed_run_dir(tmp_path, "unrelated-instance", account_id=account_id)
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"strategy_instance_id": instance, "account_id": account_id}),
+        encoding="utf-8",
+    )
+    _seed_snapshot(run_dir, verdict="paper-only")
+    (run_dir / "intent_events.jsonl").write_text("", encoding="utf-8")
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": "patched-run-dir",
+                "started_at_ms": 1_700_000_000_000,
+                "last_update_ms": 1_700_000_000_000,
+                "host_pid": 1,
+                "submit_mode_at_start": "live_paper",
+                "readonly_at_start": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=account_id,
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    monkeypatch.setattr(run_module, "_latest_run_dir_for_instance", lambda _root, _sid: run_dir)
+
+    rc = run_module.cmd_resume(_args(tmp_path, instance))
+
+    assert rc == 2
+    assert "ACCOUNT_FREEZE_ACTIVE" in capsys.readouterr().err
+
+
 def test_cmd_resume_refuses_when_verdict_snapshot_missing(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     # PRD #616 — fail-closed: a missing snapshot is UNKNOWN, not
     # silently allowed.  Older runs that pre-date the snapshot must
