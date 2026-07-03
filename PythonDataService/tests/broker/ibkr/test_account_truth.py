@@ -151,6 +151,7 @@ def test_account_truth_passes_when_bot_execution_explains_position() -> None:
     assert truth.final_verdict == "clean"
     assert truth.positions[0].owner.owner_class == "bot"
     assert truth.positions[0].owner.owner_key == "bot-a"
+    assert truth.executions[0].uncertainty_codes == []
     assert {row.key: row.status for row in truth.invariants}[
         "positions_match_known_ownership"
     ] == "pass"
@@ -250,6 +251,36 @@ def test_account_truth_authors_order_cancel_action_reasons() -> None:
     assert completed.orders[0].cancel_action.visible is False
     assert completed.orders[0].cancel_action.enabled is False
     assert completed.orders[0].cancel_action.reason_code == "NOT_OPEN_ORDER"
+
+
+def test_account_truth_authors_execution_uncertainty_codes() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[
+            _execution(
+                order_ref=None,
+                exec_time_ms=None,
+                fee=None,
+                fill_quantity=None,
+                avg_fill_price=None,
+                last_fill_price=None,
+            )
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.executions[0].uncertainty_codes == [
+        "missing_order_ref",
+        "observed_time_only",
+        "commission_pending",
+        "missing_quantity",
+        "missing_price",
+    ]
 
 
 def test_account_truth_never_registered_namespace_stays_foreign() -> None:
@@ -565,6 +596,7 @@ def test_account_truth_dedupes_exec_id_and_warns_on_missing_commission() -> None
     )
 
     assert len(truth.executions) == 1
+    assert truth.executions[0].uncertainty_codes == ["commission_pending"]
     assert {row.code for row in truth.caveats} == {
         "missing_commission",
         "duplicate_exec_id_suppressed",
@@ -591,6 +623,7 @@ def test_account_truth_duplicate_exec_backfills_later_commission() -> None:
 
     assert len(truth.executions) == 1
     assert truth.executions[0].fee == 1.25
+    assert truth.executions[0].uncertainty_codes == []
     assert {row.code for row in truth.caveats} == {"duplicate_exec_id_suppressed"}
     assert {row.key: row.status for row in truth.invariants}[
         "commission_complete"

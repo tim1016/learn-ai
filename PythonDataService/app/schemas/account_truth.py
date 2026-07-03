@@ -41,6 +41,13 @@ AccountTruthOrderCancelReasonCode = Literal[
     "FOREIGN_OR_UNCLAIMED",
     "ORDER_TERMINAL",
 ]
+AccountTruthExecutionUncertaintyCode = Literal[
+    "missing_order_ref",
+    "observed_time_only",
+    "commission_pending",
+    "missing_quantity",
+    "missing_price",
+]
 
 
 class AccountTruthMessage(BaseModel):
@@ -182,6 +189,7 @@ class AccountTruthExecutionRow(BaseModel):
     owner: AccountTruthFactOwner
     headline: str
     detail: str
+    uncertainty_codes: list[AccountTruthExecutionUncertaintyCode] = Field(default_factory=list)
     ibkr_evidence: IbkrTradeEvidence | None = None
 
 

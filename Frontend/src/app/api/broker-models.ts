@@ -446,6 +446,13 @@ export interface AccountTruthOrderCancelAction {
   detail: string;
 }
 
+export type AccountTruthExecutionUncertaintyCode =
+  | 'missing_order_ref'
+  | 'observed_time_only'
+  | 'commission_pending'
+  | 'missing_quantity'
+  | 'missing_price';
+
 export interface AccountTruthOrderRow extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
   fact_kind: 'open_order' | 'completed_order';
   lifecycle_id: string;
@@ -491,6 +498,7 @@ export interface AccountTruthExecutionRow extends IbkrOrderEvidenceFields, IbkrO
   owner: AccountTruthFactOwner;
   headline: string;
   detail: string;
+  uncertainty_codes: AccountTruthExecutionUncertaintyCode[];
 }
 
 export interface AccountTruthPositionRow {

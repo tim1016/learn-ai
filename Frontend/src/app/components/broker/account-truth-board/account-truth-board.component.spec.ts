@@ -117,6 +117,7 @@ function truth(overrides: Partial<AccountTruthResponse> = {}): AccountTruthRespo
         },
         headline: 'SPY execution',
         detail: 'SPY execution detail',
+        uncertainty_codes: [],
         ibkr_evidence: null,
       },
     ],

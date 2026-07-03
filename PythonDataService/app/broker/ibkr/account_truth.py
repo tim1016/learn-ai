@@ -47,6 +47,7 @@ from app.engine.live.order_identity import (
 from app.schemas.account_truth import (
     AccountTruthEvidenceGap,
     AccountTruthExecutionRow,
+    AccountTruthExecutionUncertaintyCode,
     AccountTruthFactOwner,
     AccountTruthFinalVerdict,
     AccountTruthInvariant,
@@ -618,8 +619,37 @@ def _execution_row(
         owner=owner,
         headline=_fact_headline(owner, "execution"),
         detail=_execution_detail(event, owner),
+        uncertainty_codes=_execution_uncertainty_codes(
+            order_ref=event.order_ref,
+            exec_time_ms=event.exec_time_ms,
+            fee=event.fee,
+            quantity=event.fill_quantity,
+            price=event.last_fill_price or event.avg_fill_price,
+        ),
         ibkr_evidence=event.ibkr_evidence,
     )
+
+
+def _execution_uncertainty_codes(
+    *,
+    order_ref: str | None,
+    exec_time_ms: int | None,
+    fee: float | None,
+    quantity: float | None,
+    price: float | None,
+) -> list[AccountTruthExecutionUncertaintyCode]:
+    codes: list[AccountTruthExecutionUncertaintyCode] = []
+    if not order_ref:
+        codes.append("missing_order_ref")
+    if exec_time_ms is None:
+        codes.append("observed_time_only")
+    if fee is None:
+        codes.append("commission_pending")
+    if quantity is None:
+        codes.append("missing_quantity")
+    if price is None:
+        codes.append("missing_price")
+    return codes
 
 
 def _merge_execution_row(
@@ -654,7 +684,18 @@ def _merge_execution_row(
 
     if not updates:
         return existing
-    return existing.model_copy(update=updates)
+    merged = existing.model_copy(update=updates)
+    return merged.model_copy(
+        update={
+            "uncertainty_codes": _execution_uncertainty_codes(
+                order_ref=merged.order_ref,
+                exec_time_ms=merged.exec_time_ms,
+                fee=merged.fee,
+                quantity=merged.quantity,
+                price=merged.price,
+            )
+        }
+    )
 
 
 def _position_rows(
@@ -882,9 +923,10 @@ def _order_detail(order: IbkrOpenOrder, owner: AccountTruthFactOwner) -> str:
 
 
 def _execution_detail(event: IbkrOrderEvent, owner: AccountTruthFactOwner) -> str:
+    quantity = f"{event.fill_quantity:g}" if event.fill_quantity is not None else "unknown quantity"
     base = (
         f"IBKR execution {event.exec_id} filled "
-        f"{event.fill_quantity:g} {event.symbol or 'unknown symbol'}."
+        f"{quantity} {event.symbol or 'unknown symbol'}."
     )
     if owner.owner_class == "foreign_or_unclaimed":
         return f"{base} No exact known namespace proves ownership."

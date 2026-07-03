@@ -287,6 +287,7 @@ function accountTruthExecution(
     },
     headline: 'Bot test-bot execution',
     detail: 'Ownership is proven by bot-stamped order ref.',
+    uncertainty_codes: [],
     ...overrides,
   };
 }
