@@ -29,11 +29,19 @@ _EXPECTED_FIXTURE_NAMES = {"steady", "stopped"}
 
 
 def test_operator_surface_fixture_scenario_set_is_explicit() -> None:
-    generated_names = set(operator_surface_fixture_scenarios())
+    scenarios = operator_surface_fixture_scenarios()
+    generated_names = set(scenarios)
     committed_names = {path.stem for path in _FIXTURE_DIR.glob("*.json")}
 
     assert generated_names == _EXPECTED_FIXTURE_NAMES
     assert committed_names == _EXPECTED_FIXTURE_NAMES
+    expected_ledger_run_ids = {"steady": "run-steady", "stopped": "run-stopped"}
+    for name, scenario in scenarios.items():
+        assert scenario.name == name
+        assert scenario.strategy_instance_id == "spy_ema_paper"
+        assert scenario.ledger_run_id == expected_ledger_run_ids[name]
+        assert scenario.ledger_created_at_ms == 100
+        assert scenario.daemon_url == "http://daemon"
 
 
 @pytest.mark.asyncio
