@@ -269,7 +269,7 @@
               <th class="num source-broker">Fill</th>
               <th class="source-broker">Broker order</th>
               <th class="source-broker">Broker exec ID</th>
-              @if (hasCancellableLedgerOrders()) {
+              @if (hasVisibleCancelActions()) {
                 <th></th>
               }
             </tr>
@@ -314,7 +314,7 @@
                     —
                   }
                 </td>
-                @if (hasCancellableLedgerOrders()) {
+                @if (hasVisibleCancelActions()) {
                   <td>
                     @if (canCancelLedgerOrder(o)) {
                       <button

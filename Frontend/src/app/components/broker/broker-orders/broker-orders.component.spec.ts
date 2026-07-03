@@ -213,22 +213,16 @@ function disabledCancelAction(
   };
 }
 
-function defaultCancelAction(row: Pick<AccountTruthOrderRow, 'fact_kind' | 'lifecycle' | 'remaining'>): AccountTruthOrderCancelAction {
-  if (row.fact_kind !== 'open_order') {
-    return disabledCancelAction(
-      'NOT_OPEN_ORDER',
-      'Only live open broker orders can be cancelled.',
-      false,
-    );
-  }
-  if (row.remaining <= 0 || ['filled', 'cancelled', 'rejected'].includes(row.lifecycle)) {
-    return disabledCancelAction('ORDER_TERMINAL', 'Order is already terminal at IBKR.');
-  }
-  return enabledCancelAction();
+function notOpenOrderCancelAction(): AccountTruthOrderCancelAction {
+  return disabledCancelAction(
+    'NOT_OPEN_ORDER',
+    'Only live open broker orders can be cancelled.',
+    false,
+  );
 }
 
 function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): AccountTruthOrderRow {
-  const row: AccountTruthOrderRow = {
+  return {
     ...openOrderWithRef,
     fact_kind: 'open_order',
     lifecycle_id: 'perm:9001',
@@ -249,10 +243,6 @@ function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): Accou
     headline: 'Bot test-bot open order',
     detail: 'Ownership is proven by bot-stamped order ref.',
     ...overrides,
-  };
-  return {
-    ...row,
-    cancel_action: overrides.cancel_action ?? defaultCancelAction(row),
   };
 }
 
@@ -439,6 +429,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
       quantity: 1,
       cumulative_filled: 1,
       remaining: 0,
+      cancel_action: notOpenOrderCancelAction(),
     });
     const execution = accountTruthExecution({
       order_id: 0,
@@ -516,6 +507,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
       quantity: 1,
       cumulative_filled: 1,
       remaining: 0,
+      cancel_action: notOpenOrderCancelAction(),
     });
     const { fixture, component } = setup([], [
       accountTruthResponse([openOrder, completedOrder]),

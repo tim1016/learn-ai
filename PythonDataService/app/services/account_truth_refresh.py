@@ -21,6 +21,7 @@ async def refresh_account_truth_and_update_cache(
     health: IbkrConnectionHealth,
     account_instance_bindings: Sequence[AccountInstanceBinding],
     initial_evidence_gaps: Sequence[AccountTruthEvidenceGap] = (),
+    account_freeze_active: bool = False,
     snapshot_provider: AccountTruthSnapshotProvider | None = None,
 ) -> AccountTruthResponse:
     """Fetch Account Truth and keep the readiness cache in sync with the attempt."""
@@ -32,6 +33,7 @@ async def refresh_account_truth_and_update_cache(
             health=health,
             account_instance_bindings=account_instance_bindings,
             initial_evidence_gaps=initial_evidence_gaps,
+            account_freeze_active=account_freeze_active,
         )
     except BrokerError as exc:
         provider.mark_refresh_failed(

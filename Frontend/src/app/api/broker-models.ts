@@ -436,7 +436,8 @@ export type AccountTruthOrderCancelReasonCode =
   | 'BROKER_NOT_PAPER_CONNECTED'
   | 'NOT_OPEN_ORDER'
   | 'FOREIGN_OR_UNCLAIMED'
-  | 'ORDER_TERMINAL';
+  | 'ORDER_TERMINAL'
+  | 'ACCOUNT_FROZEN';
 
 export interface AccountTruthOrderCancelAction {
   visible: boolean;

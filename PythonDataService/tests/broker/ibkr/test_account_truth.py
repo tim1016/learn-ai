@@ -224,6 +224,21 @@ def test_account_truth_authors_order_cancel_action_reasons() -> None:
     assert non_paper.orders[0].cancel_action.enabled is False
     assert non_paper.orders[0].cancel_action.reason_code == "BROKER_NOT_PAPER_CONNECTED"
 
+    frozen = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order()],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+        account_freeze_active=True,
+    )
+    assert frozen.orders[0].cancel_action.visible is True
+    assert frozen.orders[0].cancel_action.enabled is False
+    assert frozen.orders[0].cancel_action.reason_code == "ACCOUNT_FROZEN"
+
     terminal = compose_account_truth(
         health=_health(),
         account_instance_bindings=[_binding()],
@@ -281,6 +296,27 @@ def test_account_truth_authors_execution_uncertainty_codes() -> None:
         "missing_quantity",
         "missing_price",
     ]
+
+
+def test_account_truth_execution_uncertainty_preserves_zero_price() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[
+            _execution(
+                avg_fill_price=450.0,
+                last_fill_price=0.0,
+            )
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.executions[0].price == 0.0
+    assert "missing_price" not in truth.executions[0].uncertainty_codes
 
 
 def test_account_truth_never_registered_namespace_stays_foreign() -> None:
