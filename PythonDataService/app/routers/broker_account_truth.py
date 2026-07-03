@@ -25,6 +25,7 @@ from app.broker.ibkr.order_previews import preview_paper_order
 from app.broker.ibkr.orders import OrderRefusedError
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_truth import AccountTruthResponse
+from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -40,12 +41,14 @@ async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthRes
         context="account truth",
     )
     try:
-        return await fetch_account_truth(
+        truth = await fetch_account_truth(
             client,
             health=health,
             account_instance_bindings=registry_evidence.bindings,
             initial_evidence_gaps=registry_evidence.evidence_gaps,
         )
+        get_account_truth_snapshot_provider().remember(truth)
+        return truth
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import pytest
 
+from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.schemas.account_truth import AccountTruthMessage, AccountTruthResponse
 from app.schemas.live_runs import (
     DesiredStateView,
     InstanceBrokerView,
@@ -32,6 +34,7 @@ from app.schemas.live_runs import (
     ReadinessVector,
 )
 from app.services import operator_surface as operator_surface_module
+from app.services.account_truth_snapshot import AccountTruthSnapshot
 from app.services.operator_capability import REASON_CODES, evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -51,9 +54,46 @@ _NOW_MS = 1_700_000_000_000
 
 def _surface(**overrides):
     """Build a surface with sane defaults; tests override one section."""
-    kwargs = {"process": _PROC, "now_ms": _NOW_MS}
+    now_ms = overrides.get("now_ms", _NOW_MS)
+    kwargs = {
+        "process": _PROC,
+        "now_ms": now_ms,
+        "account_truth_snapshot": _account_truth_snapshot(generated_at_ms=now_ms - 1_000),
+    }
     kwargs.update(overrides)
     return compute_operator_surface(**kwargs)
+
+
+def _account_truth_snapshot(
+    *,
+    final_verdict: str = "clean",
+    generated_at_ms: int = _NOW_MS - 1_000,
+    blockers: list[AccountTruthMessage] | None = None,
+) -> AccountTruthSnapshot:
+    severity = "ok" if final_verdict == "clean" else "critical"
+    truth = AccountTruthResponse(
+        account_id="DU123",
+        final_verdict=final_verdict,  # type: ignore[arg-type]
+        final_severity=severity,  # type: ignore[arg-type]
+        status_label="Clean" if final_verdict == "clean" else "Not proven",
+        status_detail="Account Truth is clean." if final_verdict == "clean" else "Account Truth has blockers.",
+        generated_at_ms=generated_at_ms,
+        health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=7,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            fetched_at_ms=generated_at_ms,
+            connection_state="connected",
+            last_transition_ms=generated_at_ms,
+        ),
+        invariants=[],
+        blockers=blockers or [],
+    )
+    return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
 
 
 def _guard(
@@ -514,6 +554,88 @@ def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
     assert proof_lines["broker-proof"].tone == "ok"
     assert proof_lines["runtime-freshness"].message == "Runtime evidence is fresh."
     assert proof_lines["runtime-freshness"].tone == "ok"
+
+
+def test_trader_guidance_missing_account_truth_cache_is_not_safe_to_submit() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=_runtime_freshness(),
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        account_truth_snapshot=None,
+        now_ms=_RTH_MID,
+    )
+
+    assert surface.submit_readiness.code == "broker_state_unproven"
+    assert surface.submit_readiness.can_submit is False
+    assert "ACCOUNT_TRUTH_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "account_truth"
+    )
+    assert attention.headline == "Account Truth snapshot is unavailable"
+
+
+def test_trader_guidance_stale_account_truth_cache_is_not_safe_to_submit() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=_runtime_freshness(),
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        account_truth_snapshot=_account_truth_snapshot(generated_at_ms=_NOW_MS - 60_001),
+        now_ms=_NOW_MS,
+    )
+
+    assert surface.submit_readiness.code == "broker_state_unproven"
+    assert surface.submit_readiness.can_submit is False
+    assert "ACCOUNT_TRUTH_STALE" in surface.submit_readiness.blocking_reason_codes
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "account_truth"
+    )
+    assert attention.headline == "Account Truth snapshot is stale"
+    assert "hard freshness threshold" in attention.explanation
+
+
+def test_trader_guidance_not_clean_account_truth_cache_is_not_safe_to_submit() -> None:
+    blocker = AccountTruthMessage(
+        code="unknown_positions",
+        severity="critical",
+        title="Unknown current broker positions",
+        message="At least one current IBKR position is not explained by known bot/manual evidence.",
+    )
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=_runtime_freshness(),
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        account_truth_snapshot=_account_truth_snapshot(
+            final_verdict="not_proven",
+            generated_at_ms=_RTH_MID - 1_000,
+            blockers=[blocker],
+        ),
+        now_ms=_RTH_MID,
+    )
+
+    assert surface.submit_readiness.code == "broker_state_unproven"
+    assert surface.submit_readiness.can_submit is False
+    assert "ACCOUNT_TRUTH_NOT_PROVEN" in surface.submit_readiness.blocking_reason_codes
+    assert "ACCOUNT_TRUTH_UNKNOWN_POSITIONS" in surface.submit_readiness.blocking_reason_codes
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "account_truth"
+    )
+    assert attention.headline == "Account Truth is not clean"
+    assert attention.explanation == blocker.message
 
 
 def test_trader_guidance_runtime_market_closed_uses_notice_copy() -> None:
