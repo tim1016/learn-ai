@@ -45,7 +45,7 @@ if (!typeSourceFile) {
   throw new Error(`Could not load ${typeFilePath}`);
 }
 
-const rootType = getExportedType(typeSourceFile, "LiveInstanceStatus");
+const rootType = getExportedType(typeSourceFile, "OperatorSurface");
 const failures = [];
 const checkedLiteralPaths = new Set();
 let checkedLiteralCount = 0;
@@ -56,7 +56,7 @@ for (const [fixtureName, fixturePath] of fixturePaths) {
 }
 
 if (failures.length > 0) {
-  console.error("LiveInstanceStatus fixture literal contract failed:");
+  console.error("OperatorSurface fixture literal contract failed:");
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
@@ -66,7 +66,7 @@ if (failures.length > 0) {
 assertCoverage();
 
 console.log(
-  `live instance literal contract guard ok (${checkedLiteralCount} closed literal values checked)`,
+  `operator surface literal contract guard ok (${checkedLiteralCount} closed literal values checked)`,
 );
 
 function createProgram() {
@@ -306,54 +306,41 @@ function assertCoverage() {
   const requiredCoverage = [
     [
       "prior run classification",
-      (item) => item.endsWith(".operator_surface.prior_run.classification"),
+      (item) => item.endsWith(".prior_run.classification"),
     ],
     [
       "trader guidance proof-line tone",
       (item) =>
-        item.includes(".operator_surface.trader_guidance.proof_lines[") &&
+        item.includes(".trader_guidance.proof_lines[") &&
         item.endsWith(".tone"),
     ],
     [
       "invoke-endpoint remediation endpoint",
       (item) =>
         item.includes(
-          ".operator_surface.trader_guidance.additional_attention_groups[",
+          ".trader_guidance.additional_attention_groups[",
         ) && item.endsWith(".remediation.endpoint"),
     ],
     [
       "invoke-endpoint remediation method",
       (item) =>
         item.includes(
-          ".operator_surface.trader_guidance.additional_attention_groups[",
+          ".trader_guidance.additional_attention_groups[",
         ) && item.endsWith(".remediation.method"),
     ],
     [
       "invoke-endpoint remediation path template",
       (item) =>
         item.includes(
-          ".operator_surface.trader_guidance.additional_attention_groups[",
+          ".trader_guidance.additional_attention_groups[",
         ) && item.endsWith(".remediation.path_template"),
-    ],
-    [
-      "lifecycle chart node status",
-      (item) =>
-        item.includes(".lifecycle_chart.global_graph.nodes[") &&
-        item.endsWith(".status"),
-    ],
-    [
-      "lifecycle subgraph record values",
-      (item) =>
-        item.includes(".lifecycle_chart.subgraphs.") &&
-        item.includes(".nodes[") &&
-        item.endsWith(".status"),
     ],
   ];
 
   for (const [label, predicate] of requiredCoverage) {
     assert(
       [...checkedLiteralPaths].some(predicate),
-      `LiveInstanceStatus literal guard did not exercise ${label}`,
+      `OperatorSurface literal guard did not exercise ${label}`,
     );
   }
 }

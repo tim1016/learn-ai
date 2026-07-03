@@ -2,8 +2,8 @@
 
 PRD #607 / Slice 1 (#608) — contract-test bridge between the Python
 ``/api/live-instances/{id}/status`` route and the Frontend
-``LiveInstanceStatus`` TypeScript type.  Captures real status responses
-for the cockpit fixtures into
+``OperatorSurface`` TypeScript type.  Captures the route's
+``operator_surface`` block into
 ``Frontend/src/testing/operator_surface_fixtures/<state>.json``.
 Frontend imports those JSON snapshots directly; pytest also re-captures
 the route output and compares it to the committed JSON so stale fixtures
@@ -156,7 +156,7 @@ async def _capture(scenario: OperatorSurfaceFixtureScenario) -> dict[str, Any]:
                     f"/api/live-instances/{scenario.strategy_instance_id}/status"
                 )
             response.raise_for_status()
-            return _sanitize_fixture_payload(response.json(), tmp)
+            return _sanitize_fixture_payload(response.json()["operator_surface"], tmp)
 
 
 async def capture_operator_surface_fixtures() -> dict[str, dict[str, Any]]:
