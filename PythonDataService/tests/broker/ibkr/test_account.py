@@ -78,6 +78,7 @@ def _fake_client(account_id: str, *, summary_rows=None, positions=None, cached_p
     client = SimpleNamespace(
         ib=ib,
         connected_account=account_id,
+        _last_event_ms=1,
         is_connected=lambda: True,
         require_connected=lambda: None,
     )
@@ -283,7 +284,7 @@ async def test_fetch_positions_continues_on_unparseable_row() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_positions_retries_live_after_timeout_cache_fallback() -> None:
+async def test_fetch_positions_timeout_fails_closed_by_default_even_with_cache() -> None:
     cached = [
         SimpleNamespace(
             account="DU1234567",
@@ -298,6 +299,79 @@ async def test_fetch_positions_retries_live_after_timeout_cache_fallback() -> No
             avgCost=0.0,
         ),
     ]
+
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    client = _fake_client("DU1234567", cached_positions=cached)
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
+
+    with pytest.raises(BrokerError, match="live positions are unavailable"):
+        await fetch_positions(client, timeout_s=0.001)
+
+    client.ib.client.cancelPositions.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_fetch_positions_cache_fallback_requires_known_cache_timestamp() -> None:
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    client = _fake_client(
+        "DU1234567",
+        cached_positions=[
+            SimpleNamespace(
+                account="DU1234567",
+                contract=_stock_contract("SPY", 756733),
+                position=3,
+                avgCost=590.0,
+            )
+        ],
+    )
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
+
+    with pytest.raises(BrokerError, match="cache freshness is unknown"):
+        await fetch_positions(client, timeout_s=0.001, allow_cache_fallback=True)
+
+    client.ib.client.cancelPositions.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_fetch_positions_read_only_cache_fallback_preserves_cache_timestamp() -> None:
+    cached = [
+        SimpleNamespace(
+            account="DU1234567",
+            contract=_stock_contract("SPY", 756733),
+            position=3,
+            avgCost=590.0,
+        ),
+        SimpleNamespace(
+            account="DU1234567",
+            contract=_stock_contract("MU", 9939),
+            position=0,
+            avgCost=0.0,
+        ),
+    ]
+
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    client = _fake_client("DU1234567", positions=cached, cached_positions=cached)
+    live = await fetch_positions(client, timeout_s=1)
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
+
+    snap = await fetch_positions(client, timeout_s=0.001, allow_cache_fallback=True)
+
+    assert len(snap.positions) == 1
+    assert snap.positions[0].symbol == "SPY"
+    assert snap.used_cache_fallback is True
+    assert snap.fetched_at_ms == live.fetched_at_ms
+    assert snap.positions[0].fetched_at_ms == live.fetched_at_ms
+    client.ib.client.cancelPositions.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_fetch_positions_timeout_guard_blocks_retry_until_reconnect() -> None:
     live = [
         SimpleNamespace(
             account="DU1234567",
@@ -306,31 +380,28 @@ async def test_fetch_positions_retries_live_after_timeout_cache_fallback() -> No
             avgCost=180.0,
         )
     ]
-    call_count = 0
 
-    async def timeout_then_live():
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            await asyncio.sleep(60)
-        return live
+    async def never_returns():
+        await asyncio.sleep(60)
 
-    client = _fake_client("DU1234567", cached_positions=cached)
-    client.ib.reqPositionsAsync = AsyncMock(side_effect=timeout_then_live)
+    client = _fake_client("DU1234567", cached_positions=live)
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
 
-    snap = await fetch_positions(client, timeout_s=0.001)
+    with pytest.raises(BrokerError, match="live positions are unavailable"):
+        await fetch_positions(client, timeout_s=0.001)
+    with pytest.raises(BrokerError, match="previously timed out"):
+        await fetch_positions(client, timeout_s=1)
 
-    assert len(snap.positions) == 1
-    assert snap.positions[0].symbol == "SPY"
-    assert snap.used_cache_fallback is True
-    client.ib.client.cancelPositions.assert_called_once_with()
+    assert client.ib.reqPositionsAsync.await_count == 1
 
+    client._last_event_ms = 2
+    client.ib.reqPositionsAsync = AsyncMock(return_value=live)
     snap_again = await fetch_positions(client, timeout_s=1)
 
     assert len(snap_again.positions) == 1
     assert snap_again.positions[0].symbol == "AAPL"
     assert snap_again.used_cache_fallback is False
-    assert client.ib.reqPositionsAsync.await_count == 2
+    assert client.ib.reqPositionsAsync.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -376,7 +447,8 @@ async def test_fetch_positions_timeout_raises_when_cache_unavailable() -> None:
 
     client = _fake_client("DU1234567")
     client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
+    client._learn_ai_positions_cache_fetched_at_ms = 1_780_000_000_000
     delattr(client.ib, "positions")
 
     with pytest.raises(BrokerError, match="positions cache is unavailable"):
-        await fetch_positions(client, timeout_s=0.001)
+        await fetch_positions(client, timeout_s=0.001, allow_cache_fallback=True)

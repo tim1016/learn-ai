@@ -311,6 +311,10 @@ def test_account_truth_cache_fallback_positions_force_not_proven() -> None:
     assert "reqPositionsAsync timed out" in positions.message
     assert truth.final_verdict == "not_proven"
     assert truth.final_severity == "critical"
+    assert {row.code for row in truth.blockers} == {"source_freshness_positions_stale"}
+    assert truth.blockers[0].forensic_facts["reason_code"] == (
+        "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
+    )
 
 
 def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> None:

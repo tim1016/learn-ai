@@ -236,7 +236,7 @@ async def _collect_positions(
     gaps: list[AccountTruthEvidenceGap],
 ) -> IbkrPositionsSnapshot | None:
     try:
-        return await ibkr_account.fetch_positions(client)
+        return await ibkr_account.fetch_positions(client, allow_cache_fallback=True)
     except BrokerError as exc:
         _log_evidence_gap("positions", "critical", exc)
         gaps.append(
@@ -410,6 +410,13 @@ def compose_account_truth(
         evidence_gaps=projection_gaps,
         checked_at_ms=checked_at_ms,
     )
+    freshness_blockers, freshness_caveats = _source_freshness_messages(
+        source_freshness,
+        evidence_gaps=projection_gaps,
+        checked_at_ms=checked_at_ms,
+    )
+    blockers.extend(freshness_blockers)
+    caveats.extend(freshness_caveats)
     final_verdict, final_severity = _final_verdict(
         invariants,
         blockers=blockers,
@@ -1130,6 +1137,43 @@ def _messages(
             )
         )
     return blockers, caveats
+
+
+def _source_freshness_messages(
+    source_freshness: Sequence[AccountTruthSourceFreshness],
+    *,
+    evidence_gaps: Sequence[AccountTruthEvidenceGap],
+    checked_at_ms: int,
+) -> tuple[list[AccountTruthMessage], list[AccountTruthMessage]]:
+    gap_sources = {gap.source for gap in evidence_gaps}
+    blockers: list[AccountTruthMessage] = []
+    caveats: list[AccountTruthMessage] = []
+    for row in critical_source_freshness_blocks(source_freshness, checked_at_ms=checked_at_ms):
+        if row.source in gap_sources:
+            continue
+        blockers.append(_source_freshness_message(row))
+    for row in source_freshness:
+        if row.severity == "critical" or row.status == "fresh" or row.source in gap_sources:
+            continue
+        caveats.append(_source_freshness_message(row))
+    return blockers, caveats
+
+
+def _source_freshness_message(row: AccountTruthSourceFreshness) -> AccountTruthMessage:
+    return AccountTruthMessage(
+        code=f"source_freshness_{row.source}_{row.status}",
+        severity=row.severity,
+        title=f"{row.label} evidence is {row.status}",
+        message=row.message,
+        forensic_facts={
+            "source": row.source,
+            "status": row.status,
+            "reason_code": row.reason_code,
+            "fetched_at_ms": row.fetched_at_ms,
+            "age_ms": row.age_ms,
+            "hard_ttl_ms": row.hard_ttl_ms,
+        },
+    )
 
 
 def _invariants(

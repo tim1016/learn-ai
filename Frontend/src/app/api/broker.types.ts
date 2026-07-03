@@ -4494,6 +4494,11 @@ export interface components {
             positions: components["schemas"]["IbkrPosition"][];
             /** Fetched At Ms */
             fetched_at_ms: number;
+            /**
+             * Used Cache Fallback
+             * @default false
+             */
+            used_cache_fallback: boolean;
         };
         /**
          * IcCiResponse
