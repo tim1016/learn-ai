@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.broker.ibkr.account_truth import (
-    build_account_truth_collection_context,
-)
-from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import BrokerError, IbkrClient
-from app.broker.ibkr.config import get_settings
-from app.broker.ibkr.health import build_broker_health
 from app.engine.live.account_artifacts import AccountArtifactError
 from app.engine.live.account_identity import normalize_account_id
 from app.routers.broker_dependencies import require_connected_client
@@ -22,15 +15,14 @@ from app.schemas.account_reconciliation import (
     AccountTriageResponse,
 )
 from app.services.account_reconciliation import AccountReconciliationService
-from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
+from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
 
 
 def get_account_reconciliation_service() -> AccountReconciliationService:
-    artifacts_root = Path(get_settings().live_runs_root).parent
-    return AccountReconciliationService(artifacts_root=artifacts_root)
+    return AccountReconciliationService(artifacts_root=account_truth_artifacts_root())
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -44,17 +36,11 @@ async def reconcile_account_endpoint(
 ) -> AccountReconciliationReceipt:
     """Create a durable account reconciliation receipt from Account Truth."""
     canonical_account_id = _canonical_account_id(account_id)
-    health = build_broker_health(client, get_monitor())
-    collection_context = build_account_truth_collection_context(
-        artifacts_root=Path(get_settings().live_runs_root).parent,
-        account_id=canonical_account_id,
-        context="account reconciliation",
-    )
     try:
-        account_truth = await refresh_account_truth_and_update_cache(
+        account_truth = await refresh_account_truth_now(
             client,
-            health=health,
-            collection_context=collection_context,
+            account_id=canonical_account_id,
+            context="account reconciliation",
         )
         return service.write_receipt(
             requested_account_id=canonical_account_id,

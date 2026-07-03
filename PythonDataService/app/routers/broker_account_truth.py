@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.broker.ibkr.account_truth import (
-    build_account_truth_collection_context,
-)
-from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import BrokerError, IbkrClient
-from app.broker.ibkr.config import get_settings
-from app.broker.ibkr.health import build_broker_health
 from app.broker.ibkr.models import (
     IbkrOpenOrder,
     IbkrOrderSpec,
@@ -24,7 +17,7 @@ from app.broker.ibkr.order_previews import preview_paper_order
 from app.broker.ibkr.orders import OrderRefusedError
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_truth import AccountTruthResponse
-from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
+from app.services.account_truth_refresh import refresh_account_truth_now
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -33,19 +26,8 @@ ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
 @router.get("/account-truth", response_model=AccountTruthResponse)
 async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthResponse:
     """Account-wide ownership, risk, and invariant truth projection."""
-    health = build_broker_health(client, get_monitor())
-    artifacts_root = Path(get_settings().live_runs_root).parent
-    collection_context = build_account_truth_collection_context(
-        artifacts_root=artifacts_root,
-        account_id=health.account_id,
-        context="account truth",
-    )
     try:
-        return await refresh_account_truth_and_update_cache(
-            client,
-            health=health,
-            collection_context=collection_context,
-        )
+        return await refresh_account_truth_now(client, context="account truth")
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

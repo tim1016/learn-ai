@@ -2019,6 +2019,147 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert events[-1]["phase"] == "accepting"
 
 
+def test_cmd_start_runs_account_truth_refresh_loop_for_durable_submit_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import argparse as _argparse
+    import types
+    from collections.abc import AsyncIterator
+
+    from app.broker.ibkr import orders as orders_mod
+    from app.engine.live import engine_runtime_publisher as publisher_mod
+    from app.engine.live import live_engine as live_engine_mod
+    from app.engine.live import reconciliation_orchestrator as recon_mod
+    from app.engine.live.reconciliation_classifier import Continue
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from app.services import account_truth_refresh as account_truth_refresh_mod
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _Settings:
+        mode = "paper"
+        readonly = False
+        port = 7497
+        client_id = 12
+
+    class _Client:
+        settings = _Settings()
+        connected_account = "DU123"
+        connection_state = "connected"
+
+        async def connect(self) -> None:
+            return None
+
+        async def disconnect(self) -> None:
+            return None
+
+        def is_connected(self) -> bool:
+            return True
+
+    class _DurableBroker(FakeBroker):
+        requires_durable_submit = True
+
+    class _Publisher:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    class _LiveEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def run(self, strategy: object, *, bars: object, shutdown_event: object) -> None:
+            return None
+
+    loop_events: list[str] = []
+
+    class _RefreshLoop:
+        def __init__(self, *, client: object, **_kwargs: object) -> None:
+            assert isinstance(client, _Client)
+            assert _kwargs["artifacts_root"] == artifacts_root
+            loop_events.append("init")
+
+        async def refresh_once(self) -> None:
+            loop_events.append("refresh_once")
+
+        def start(self) -> None:
+            loop_events.append("start")
+
+        async def stop(self) -> None:
+            loop_events.append("stop")
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    async def _empty_open_orders(_client: object) -> list:
+        return []
+
+    async def _empty_executions(_client: object) -> list:
+        return []
+
+    async def _reconcile(**_kwargs: object) -> object:
+        return types.SimpleNamespace(verdict=Continue())
+
+    monkeypatch.setattr(live_engine_mod, "LiveEngine", _LiveEngine)
+    monkeypatch.setattr(publisher_mod, "EngineRuntimePublisher", _Publisher)
+    monkeypatch.setattr(orders_mod, "list_open_orders", _empty_open_orders)
+    monkeypatch.setattr(orders_mod, "executions_for_reconnect_recovery", _empty_executions)
+    monkeypatch.setattr(recon_mod, "reconcile", _reconcile)
+    monkeypatch.setattr(account_truth_refresh_mod, "AccountTruthRefreshLoop", _RefreshLoop)
+
+    strategy_spec = (
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "engine"
+        / "strategy"
+        / "spec"
+        / "fixtures"
+        / "deployment_validation.spec.json"
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-account-truth-loop",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+        strategy_instance_id="spy_ema_paper",
+        strategy_key="deployment_validation",
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=artifacts_root,
+            broker=_DurableBroker(),
+            bars=_empty_bars(),
+            client=_Client(),
+        )
+    )
+
+    assert rc == 0
+    assert loop_events == ["init", "refresh_once", "start", "stop"]
+
+
 def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> None:
     """A broker connect() failure before the session starts must record a
     terminal status sidecar (exit_code=3, exit_reason=exception) and exit 3 —

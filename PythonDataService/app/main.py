@@ -64,6 +64,7 @@ from app.routers import (
     live_runs as live_runs_router,
 )
 from app.security.data_plane_control import require_data_plane_control_secret
+from app.services.account_truth_refresh import AccountTruthRefreshLoop
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -100,6 +101,7 @@ async def lifespan(app: FastAPI):
     )
 
     monitor: AutoReconnectMonitor | None = None
+    account_truth_refresh_loop = None
 
     if ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
@@ -179,6 +181,9 @@ async def lifespan(app: FastAPI):
         )
         monitor.start()
         set_monitor(monitor)
+
+        account_truth_refresh_loop = AccountTruthRefreshLoop(client=ibkr_client)
+        account_truth_refresh_loop.start()
     else:
         set_client(None)
         set_monitor(None)
@@ -229,6 +234,8 @@ async def lifespan(app: FastAPI):
         if daemon_monitor is not None:
             await daemon_monitor.stop()
             set_daemon_monitor(None)
+        if account_truth_refresh_loop is not None:
+            await account_truth_refresh_loop.stop()
         # ADR 0014 — stop every broker-activity publisher before tearing
         # down the broker connection so each publisher's WAL append +
         # subscriber drain completes cleanly. Safe to call even when no
