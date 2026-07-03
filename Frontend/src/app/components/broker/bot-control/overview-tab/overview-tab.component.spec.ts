@@ -99,7 +99,7 @@ describe('OverviewTabComponent', () => {
     expect(blockedGate?.querySelector('strong')?.textContent?.trim()).toBe('Reconcile broker state');
   });
 
-  it('marks the current blocking gate directly in the lifecycle flow', () => {
+  it('marks the blocking node while preserving backend-authored edge status', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
@@ -129,9 +129,10 @@ describe('OverviewTabComponent', () => {
     const blockingNode = el.querySelector<HTMLElement>('.flow-node.blocking-node');
     expect(blockingNode?.querySelector('strong')?.textContent?.trim()).toBe('Deploy or start');
     expect(blockingNode?.querySelector('.node-callout')?.textContent?.trim()).toBe('Blocking step');
-    const blockedConnector = el.querySelector<HTMLElement>('.flow-connector.status-blocked');
-    expect(blockedConnector?.textContent?.replace(/\s+/g, ' ')).toContain(
-      'Blocked Deploy or start -> Pre-flight gates',
+    expect(el.querySelector<HTMLElement>('.flow-connector.status-blocked')).toBeNull();
+    const waitingConnector = el.querySelector<HTMLElement>('.flow-connector.status-inactive');
+    expect(waitingConnector?.textContent?.replace(/\s+/g, ' ')).toContain(
+      'Waiting Deploy or start -> Pre-flight gates',
     );
   });
 

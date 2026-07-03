@@ -114,13 +114,6 @@ export class OverviewTabComponent {
     return status === 'blocked' || status === 'poison' || status === 'freeze' || status === 'unknown';
   }
 
-  visualEdgeStatus(sourceNode: LifecycleChartNode, edge: LifecycleChartEdge): LifecycleChartStatus {
-    if (this.isBlockingNode(sourceNode) && (edge.status === 'inactive' || edge.status === 'unknown')) {
-      return sourceNode.status;
-    }
-    return edge.status;
-  }
-
   edgeColor(status: LifecycleChartStatus): string {
     switch (status) {
       case 'passed':
