@@ -96,7 +96,11 @@ def _append_sizing_skip_line(path: Path, payload: dict) -> None:
         logger.exception("sizing_skip.jsonl append failed; in-memory audit preserved")
 
 
-class BrokerSafetyVerdictBlockError(RuntimeError):
+class ControlledLiveHaltError(RuntimeError):
+    """Base class for deliberate live-runtime halts that must not recovery-flatten."""
+
+
+class BrokerSafetyVerdictBlockError(ControlledLiveHaltError):
     """Phase 7B / VCR-0010 — broker safety verdict is not ``paper-only``.
 
     Raised by ``submit_pending_orders`` BEFORE any broker call when the
@@ -122,7 +126,7 @@ class BrokerSafetyVerdictBlockError(RuntimeError):
         self.detail = detail
 
 
-class SubmitGateBlockError(RuntimeError):
+class SubmitGateBlockError(ControlledLiveHaltError):
     """Base class for controlled pre-submit gate refusals."""
 
 
@@ -497,7 +501,7 @@ class LivePortfolio:
                 "bot_order_namespace=build_bot_order_namespace(strategy_instance_id)."
             )
 
-    def _drop_pending_intents_before_submit(self, *, drop_reason: DropReason, ts_ms: int) -> None:
+    def drop_pending_before_submit(self, *, drop_reason: DropReason, ts_ms: int) -> None:
         """Append drop events for WAL-identified pending orders, then clear memory."""
 
         if self.intent_wal is not None and self.bot_order_namespace:
@@ -807,29 +811,32 @@ class LivePortfolio:
             SubmitVerdict,
             next_action,
         )
+        from app.utils.timestamps import now_ms_utc
 
         requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
 
         if self.account_freeze_provider is not None:
             freeze_evidence = self.account_freeze_provider()  # type: ignore[operator]
             if freeze_evidence is not None and not self._pending_orders_reduce_exposure_only():
-                self.pending_orders.clear()
-                self._intent_by_order_id.clear()
+                self.drop_pending_before_submit(
+                    drop_reason="account_freeze_block",
+                    ts_ms=now_ms_utc(),
+                )
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
 
         if self.account_registry_gate_provider is not None:
             registry_gate = self.account_registry_gate_provider()
             if registry_gate is not None and getattr(registry_gate, "status", None) != "pass":
-                self.pending_orders.clear()
-                self._intent_by_order_id.clear()
+                self.drop_pending_before_submit(
+                    drop_reason="account_registry_block",
+                    ts_ms=now_ms_utc(),
+                )
                 raise AccountRegistryBlockError(gate_result=registry_gate)
 
         if self.account_truth_gate_provider is not None:
             account_truth_gate = self.account_truth_gate_provider()
             if account_truth_gate is not None and getattr(account_truth_gate, "status", None) != "pass":
-                from app.utils.timestamps import now_ms_utc
-
-                self._drop_pending_intents_before_submit(
+                self.drop_pending_before_submit(
                     drop_reason="account_truth_block",
                     ts_ms=now_ms_utc(),
                 )
@@ -845,9 +852,7 @@ class LivePortfolio:
         if self.verdict_provider is not None:
             verdict_value = self.verdict_provider()  # type: ignore[operator]
             if verdict_value is not None and verdict_value != "paper-only":
-                from app.utils.timestamps import now_ms_utc
-
-                self._drop_pending_intents_before_submit(
+                self.drop_pending_before_submit(
                     drop_reason="broker_safety_halt",
                     ts_ms=now_ms_utc(),
                 )

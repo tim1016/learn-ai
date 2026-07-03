@@ -39,13 +39,6 @@ class AccountTruthSnapshot:
     def is_stale(self, now_ms: int) -> bool:
         return self.age_ms(now_ms) > self.hard_ttl_ms
 
-    def blocking_reason_codes(self, now_ms: int) -> tuple[str, ...]:
-        return assess_account_truth(self, now_ms=now_ms).reason_codes
-
-    def primary_blocking_reason_code(self, now_ms: int) -> str | None:
-        return assess_account_truth(self, now_ms=now_ms).primary_reason_code
-
-
 @dataclass(frozen=True)
 class AccountTruthUnavailable:
     """Latest Account Truth refresh attempt failed or produced no projection."""

@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.schemas.account_truth import AccountTruthMessage, AccountTruthResponse
+from app.services import account_truth_refresh
+from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
 from app.services.account_truth_snapshot import (
     AccountTruthSnapshotProvider,
     account_truth_gate_result,
@@ -41,6 +48,53 @@ def _truth(
         invariants=[],
         blockers=blockers or [],
     )
+
+
+@pytest.mark.asyncio
+async def test_refresh_service_remembers_successful_account_truth(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    truth = _truth()
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(return_value=truth),
+    )
+
+    result = await refresh_account_truth_and_update_cache(
+        object(),  # type: ignore[arg-type]
+        health=truth.health,
+        account_instance_bindings=[],
+        snapshot_provider=provider,
+    )
+
+    assert result is truth
+    assert provider.get("DU123").truth is truth  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_refresh_service_marks_failure_for_any_account_truth_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    provider.remember(_truth(), cached_at_ms=1_000)
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(side_effect=BrokerError("broker sweep timed out")),
+    )
+
+    with pytest.raises(BrokerError):
+        await refresh_account_truth_and_update_cache(
+            object(),  # type: ignore[arg-type]
+            health=_truth().health,
+            account_instance_bindings=[],
+            snapshot_provider=provider,
+        )
+
+    assessment = assess_account_truth(provider.get("DU123"), now_ms=3_000)
+    assert assessment.status == "block"
+    assert assessment.reason_codes == ("ACCOUNT_TRUTH_REFRESH_FAILED",)
+    assert assessment.explanation == "broker sweep timed out"
 
 
 def test_refresh_failure_replaces_prior_clean_snapshot() -> None:
