@@ -7,9 +7,8 @@ test_router.py.
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,7 +18,6 @@ from app.broker.ibkr.account import (
     fetch_account_summary,
     fetch_positions,
 )
-from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.contracts import yyyymmdd_to_expiry_ms
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -67,13 +65,11 @@ def _option_contract(
     )
 
 
-def _fake_client(account_id: str, *, summary_rows=None, positions=None, cached_positions=None):
+def _fake_client(account_id: str, *, summary_rows=None, positions=None):
     """Build a minimal IbkrClient stand-in that the production code can use."""
     ib = SimpleNamespace(
         accountSummaryAsync=AsyncMock(return_value=list(summary_rows or [])),
         reqPositionsAsync=AsyncMock(return_value=list(positions or [])),
-        positions=lambda: list(cached_positions or []),
-        client=SimpleNamespace(cancelPositions=Mock()),
     )
     client = SimpleNamespace(
         ib=ib,
@@ -280,87 +276,3 @@ async def test_fetch_positions_continues_on_unparseable_row() -> None:
 
     assert len(snap.positions) == 1
     assert snap.positions[0].symbol == "AAPL"
-
-
-@pytest.mark.asyncio
-async def test_fetch_positions_uses_cached_positions_after_req_positions_timeout() -> None:
-    async def never_returns():
-        await asyncio.sleep(60)
-
-    cached = [
-        SimpleNamespace(
-            account="DU1234567",
-            contract=_stock_contract("SPY", 756733),
-            position=3,
-            avgCost=590.0,
-        ),
-        SimpleNamespace(
-            account="DU1234567",
-            contract=_stock_contract("MU", 9939),
-            position=0,
-            avgCost=0.0,
-        ),
-    ]
-    client = _fake_client("DU1234567", cached_positions=cached)
-    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
-
-    snap = await fetch_positions(client, timeout_s=0.001)
-
-    assert len(snap.positions) == 1
-    assert snap.positions[0].symbol == "SPY"
-    client.ib.client.cancelPositions.assert_called_once_with()
-
-    snap_again = await fetch_positions(client, timeout_s=0.001)
-
-    assert len(snap_again.positions) == 1
-    assert snap_again.positions[0].symbol == "SPY"
-    assert client.ib.reqPositionsAsync.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_fetch_positions_serializes_req_positions_per_client() -> None:
-    in_flight = 0
-    max_in_flight = 0
-
-    async def delayed_positions():
-        nonlocal in_flight, max_in_flight
-        in_flight += 1
-        max_in_flight = max(max_in_flight, in_flight)
-        try:
-            await asyncio.sleep(0.02)
-            return [
-                SimpleNamespace(
-                    account="DU1234567",
-                    contract=_stock_contract("SPY", 756733),
-                    position=3,
-                    avgCost=590.0,
-                )
-            ]
-        finally:
-            in_flight -= 1
-
-    client = _fake_client("DU1234567")
-    client.ib.reqPositionsAsync = AsyncMock(side_effect=delayed_positions)
-
-    first, second = await asyncio.gather(
-        fetch_positions(client, timeout_s=1),
-        fetch_positions(client, timeout_s=1),
-    )
-
-    assert len(first.positions) == 1
-    assert len(second.positions) == 1
-    assert client.ib.reqPositionsAsync.await_count == 2
-    assert max_in_flight == 1
-
-
-@pytest.mark.asyncio
-async def test_fetch_positions_timeout_raises_when_cache_unavailable() -> None:
-    async def never_returns():
-        await asyncio.sleep(60)
-
-    client = _fake_client("DU1234567")
-    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
-    delattr(client.ib, "positions")
-
-    with pytest.raises(BrokerError, match="positions cache is unavailable"):
-        await fetch_positions(client, timeout_s=0.001)
