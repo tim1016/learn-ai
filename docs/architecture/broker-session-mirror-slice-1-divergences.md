@@ -52,3 +52,32 @@ The intended review boundary for this PR is slice 1 only:
   probe is unavailable?
 - Does Angular render CURRENT, PAST, and UNKNOWN without deriving broker meaning
   client-side?
+
+## Slice 2 addendum — categorized event content
+
+Date: 2026-07-03
+
+The stacked slice-2 branch adds the shared IBKR event-code vocabulary,
+classified diagnostic events, an `/events` REST endpoint, an `/events/stream`
+SSE endpoint, per-row category counts when `client_id` is known, and Angular
+row drill-down for categorized event history.
+
+Additional divergences / limits:
+
+1. **Child bot event drill-down remains blocked by missing child `client_id`.**
+   The event stream can be filtered precisely when a roster row has
+   `client_id`, but current child runtime artifacts still publish
+   `client_id: null`. Rows without a client id therefore render an honest-empty
+   event panel rather than guessing by PID/run-dir. PRD slice 4 must publish
+   actual connected child client ids before child drill-down can be complete.
+
+2. **Event stream is diagnostic JSONL polling, not a durable session store.**
+   Slice 2 reads the existing `_broker/connection_events.jsonl` and streams new
+   line-indexed classified rows. It does not implement the bounded
+   session-level store, retention policy, or purge endpoint from PRD slice 6.
+
+3. **Classifier covers the existing client callback vocabulary only.**
+   Codes already understood by the IBKR client share a single table with the
+   mirror. Unknown `IBKR_CODE` values are visibly classified as `unclassified`.
+   Order/execution, pacing, and auth/session categories exist in the wire
+   vocabulary but need additional capture sites before they can be populated.
