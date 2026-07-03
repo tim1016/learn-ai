@@ -87,6 +87,13 @@ const NAV: NavGroup[] = [
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },
       { label: 'Bots', route: '/broker/bots' },
+    ],
+  },
+  {
+    id: 'design-lab',
+    title: 'Design Lab',
+    icon: 'pi pi-palette',
+    items: [
       { label: 'Desert Oasis', route: '/broker/desert-oasis' },
       { label: 'Bot Sprites', route: '/broker/bot-sprites' },
     ],

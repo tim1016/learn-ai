@@ -109,14 +109,79 @@ h1 {
 }
 
 .sprite {
+  position: relative;
   width: 64px;
   height: 64px;
-  background-image: var(--sprite-image);
-  background-position: 0 calc(var(--row-offset) * -1);
-  background-repeat: no-repeat;
   image-rendering: pixelated;
   transform: scale(2.45);
   animation: sprite-play var(--duration) steps(var(--frame-count)) infinite;
+}
+
+.sprite::before {
+  content: "";
+  position: absolute;
+  left: 22px;
+  top: 14px;
+  width: 20px;
+  height: 34px;
+  background: var(--sprite-primary);
+  box-shadow:
+    0 -8px 0 #f3c991,
+    -8px 8px 0 var(--sprite-trim),
+    8px 8px 0 var(--sprite-accent),
+    -4px 34px 0 var(--sprite-trim),
+    8px 34px 0 var(--sprite-trim);
+}
+
+.sprite::after {
+  content: "";
+  position: absolute;
+  left: 42px;
+  top: 20px;
+  width: 6px;
+  height: 34px;
+  background: #d7dce9;
+  box-shadow: 0 30px 0 rgba(0, 0, 0, 0.24);
+}
+
+.sprite[data-facing="west"]::after {
+  left: 16px;
+}
+
+.sprite[data-facing="north"]::after {
+  left: 30px;
+  top: 4px;
+  height: 24px;
+}
+
+.sprite[data-facing="south"]::after {
+  left: 30px;
+  top: 34px;
+  height: 24px;
+}
+
+.sprite[data-state="attack"]::after,
+.sprite[data-state="walk-attack"]::after,
+.sprite[data-state="run-attack"]::after {
+  height: 42px;
+}
+
+.sprite[data-state="hurt"]::before {
+  transform: rotate(-8deg);
+}
+
+.sprite[data-state="death"]::before {
+  left: 16px;
+  top: 34px;
+  width: 36px;
+  height: 16px;
+  box-shadow:
+    0 -8px 0 var(--sprite-accent),
+    34px 0 0 #f3c991;
+}
+
+.sprite[data-state="death"]::after {
+  display: none;
 }
 
 .sprite-meta {
@@ -142,11 +207,11 @@ h2 {
 
 @keyframes sprite-play {
   from {
-    background-position: 0 calc(var(--row-offset) * -1);
+    translate: 0 0;
   }
 
   to {
-    background-position: calc(var(--sheet-width) * -1) calc(var(--row-offset) * -1);
+    translate: 0 -3px;
   }
 }
 

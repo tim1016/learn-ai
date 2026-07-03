@@ -1,10 +1,10 @@
 <section class="sprite-page">
   <header class="page-header">
     <div>
-      <p class="eyebrow">Broker bots</p>
+      <p class="eyebrow">Design lab</p>
       <h1>Swordsman sprite states</h1>
       <p class="lede">
-        Craftpix top-down bot avatar sheets, rendered as stepped CSS sprite animations.
+        Repo-owned pixel bot studies rendered as stepped CSS sprite animations.
       </p>
     </div>
 
@@ -45,9 +45,12 @@
         <div class="sprite-stage" [attr.aria-label]="sprite.label + ' animation'">
           <div
             class="sprite"
-            [style.--sprite-image]="'url(' + sprite.image + ')'"
-            [style.--sheet-width.px]="sprite.sheetWidth"
-            [style.--row-offset.px]="sprite.rowOffset"
+            [attr.data-state]="sprite.id"
+            [attr.data-facing]="sprite.facingId"
+            [attr.data-level]="sprite.level"
+            [style.--sprite-primary]="sprite.primaryColor"
+            [style.--sprite-accent]="sprite.accentColor"
+            [style.--sprite-trim]="sprite.trimColor"
             [style.--frame-count]="sprite.frames"
             [style.--duration.ms]="sprite.durationMs"
           ></div>
