@@ -1,7 +1,7 @@
 {
   "control_prefixes": [
-    "/api/broker",
     "/api/accounts",
+    "/api/broker",
     "/api/live-instances",
     "/api/live-runs"
   ]
