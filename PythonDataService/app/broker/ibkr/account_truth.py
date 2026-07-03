@@ -20,6 +20,10 @@ from typing import NamedTuple
 from pydantic import ValidationError
 
 from app.broker.ibkr import account as ibkr_account
+from app.broker.ibkr.account_recovery import (
+    AccountRecoveryState,
+    read_account_recovery_state,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
@@ -53,6 +57,7 @@ from app.schemas.account_truth import (
     AccountTruthFinalVerdict,
     AccountTruthInvariant,
     AccountTruthMessage,
+    AccountTruthOrderCancelAction,
     AccountTruthOrderRow,
     AccountTruthOwnerBindingState,
     AccountTruthOwnerSummary,
@@ -88,6 +93,13 @@ class _NamespaceViews:
 class AccountInstanceRegistryEvidence(NamedTuple):
     bindings: list[AccountInstanceBinding]
     evidence_gaps: list[AccountTruthEvidenceGap]
+
+
+@dataclass(frozen=True)
+class AccountTruthCollectionContext:
+    account_instance_bindings: tuple[AccountInstanceBinding, ...]
+    evidence_gaps: tuple[AccountTruthEvidenceGap, ...]
+    account_recovery_state: AccountRecoveryState
 
 
 def load_account_instance_registry_evidence(
@@ -130,16 +142,47 @@ def load_account_instance_registry_evidence(
         )
 
 
+def build_account_truth_collection_context(
+    *,
+    artifacts_root: Path,
+    account_id: str | None,
+    context: str,
+) -> AccountTruthCollectionContext:
+    """Collect filesystem-backed Account Truth context once per request."""
+
+    registry_evidence = load_account_instance_registry_evidence(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+        context=context,
+    )
+    recovery_state = read_account_recovery_state(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    )
+    evidence_gaps = list(registry_evidence.evidence_gaps)
+    if recovery_state.status == "unreadable":
+        evidence_gaps.append(
+            AccountTruthEvidenceGap(
+                source="account_freeze",
+                severity="critical",
+                message=f"Account freeze state unavailable: {recovery_state.unreadable_error}",
+            )
+        )
+    return AccountTruthCollectionContext(
+        account_instance_bindings=tuple(registry_evidence.bindings),
+        evidence_gaps=tuple(evidence_gaps),
+        account_recovery_state=recovery_state,
+    )
+
+
 async def fetch_account_truth(
     client: IbkrClient,
     *,
     health: IbkrConnectionHealth,
-    account_instance_bindings: Sequence[AccountInstanceBinding],
-    initial_evidence_gaps: Sequence[AccountTruthEvidenceGap] = (),
-    account_freeze_active: bool = False,
+    collection_context: AccountTruthCollectionContext,
 ) -> AccountTruthResponse:
     """Collect broker facts and project them into account truth."""
-    evidence_gaps = list(initial_evidence_gaps)
+    evidence_gaps = list(collection_context.evidence_gaps)
 
     account_summary, positions_snapshot, open_orders, completed_orders, executions = (
         await asyncio.gather(
@@ -153,14 +196,14 @@ async def fetch_account_truth(
 
     return compose_account_truth(
         health=health,
-        account_instance_bindings=account_instance_bindings,
+        account_instance_bindings=collection_context.account_instance_bindings,
         account=account_summary,
         positions_snapshot=positions_snapshot,
         open_orders=open_orders,
         completed_orders=completed_orders,
         executions=executions,
         evidence_gaps=evidence_gaps,
-        account_freeze_active=account_freeze_active,
+        account_recovery_state=collection_context.account_recovery_state,
         generated_at_ms=now_ms_utc(),
     )
 
@@ -259,13 +302,13 @@ def compose_account_truth(
     *,
     health: IbkrConnectionHealth,
     account_instance_bindings: Sequence[AccountInstanceBinding],
+    account_recovery_state: AccountRecoveryState,
     account: IbkrAccountSummary | None,
     positions_snapshot: IbkrPositionsSnapshot | None,
     open_orders: Sequence[IbkrOpenOrder],
     completed_orders: Sequence[IbkrOpenOrder],
     executions: Sequence[IbkrOrderEvent],
     evidence_gaps: Sequence[AccountTruthEvidenceGap] = (),
-    account_freeze_active: bool = False,
     generated_at_ms: int | None = None,
 ) -> AccountTruthResponse:
     """Pure account-truth projection for tests and the live endpoint."""
@@ -295,7 +338,7 @@ def compose_account_truth(
             fact_kind="open_order",
             namespace_views=namespace_views,
             health=health,
-            account_freeze_active=account_freeze_active,
+            account_recovery_state=account_recovery_state,
         )
         for order in open_orders
     ]
@@ -305,7 +348,7 @@ def compose_account_truth(
             fact_kind="completed_order",
             namespace_views=namespace_views,
             health=health,
-            account_freeze_active=account_freeze_active,
+            account_recovery_state=account_recovery_state,
         )
         for order in completed_orders
     ]
@@ -470,13 +513,41 @@ def _namespace_owner(binding: AccountInstanceBinding) -> _NamespaceOwner:
     )
 
 
+def cancel_action_for_open_order(
+    order: IbkrOpenOrder,
+    *,
+    health: IbkrConnectionHealth,
+    collection_context: AccountTruthCollectionContext,
+) -> AccountTruthOrderCancelAction:
+    """Project the canonical cancel action for one current open-order fact."""
+
+    registry_unavailable = any(
+        gap.source == "instance_registry" for gap in collection_context.evidence_gaps
+    )
+    namespace_views = _namespace_views(
+        collection_context.account_instance_bindings,
+        account_id=health.account_id or order.account_id,
+        registry_unavailable=registry_unavailable,
+    )
+    owner = _live_risk_owner(_owner_for_order_ref(order.order_ref, namespace_views))
+    lifecycle = _order_lifecycle(order.status, order.remaining)
+    return evaluate_order_cancel_capability(
+        health=health,
+        fact_kind="open_order",
+        owner=owner,
+        lifecycle=lifecycle,
+        remaining=order.remaining,
+        account_recovery_state=collection_context.account_recovery_state,
+    )
+
+
 def _order_row(
     order: IbkrOpenOrder,
     *,
     fact_kind: str,
     namespace_views: _NamespaceViews,
     health: IbkrConnectionHealth,
-    account_freeze_active: bool,
+    account_recovery_state: AccountRecoveryState,
 ) -> AccountTruthOrderRow:
     owner = _owner_for_order_ref(order.order_ref, namespace_views)
     lifecycle = _order_lifecycle(order.status, order.remaining)
@@ -516,7 +587,7 @@ def _order_row(
             owner=owner,
             lifecycle=lifecycle,
             remaining=order.remaining,
-            account_freeze_active=account_freeze_active,
+            account_recovery_state=account_recovery_state,
         ),
         headline=_fact_headline(owner, fact_kind.replace("_", " ")),
         detail=_order_detail(order, owner),

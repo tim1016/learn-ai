@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.schemas.account_truth import (
     AccountTruthFactOwner,
@@ -34,7 +35,7 @@ def evaluate_order_cancel_capability(
     owner: AccountTruthFactOwner,
     lifecycle: str,
     remaining: float,
-    account_freeze_active: bool = False,
+    account_recovery_state: AccountRecoveryState,
 ) -> AccountTruthOrderCancelAction:
     """Return the canonical cancel affordance for one broker order row."""
 
@@ -44,11 +45,27 @@ def evaluate_order_cancel_capability(
             reason_code="NOT_OPEN_ORDER",
             detail="Only live open broker orders can be cancelled.",
         )
-    if account_freeze_active:
+    if account_recovery_state.status == "frozen":
+        freeze = account_recovery_state.freeze
+        detail = "Account recovery is frozen; cancel requires account recovery evidence first."
+        if freeze is not None:
+            detail = (
+                "Account recovery is frozen. "
+                f"Reason: {freeze.reason}. Next step: {freeze.operator_next_step}."
+            )
         return disabled_order_cancel_action(
             visible=True,
             reason_code="ACCOUNT_FROZEN",
-            detail="Account recovery is frozen; cancel requires account recovery evidence first.",
+            detail=detail,
+        )
+    if account_recovery_state.status == "unreadable":
+        detail = "Account freeze state is unreadable; cancel requires account recovery evidence first."
+        if account_recovery_state.unreadable_error:
+            detail = f"{detail} Error: {account_recovery_state.unreadable_error}"
+        return disabled_order_cancel_action(
+            visible=True,
+            reason_code="ACCOUNT_FREEZE_UNREADABLE",
+            detail=detail,
         )
     if health.connected is not True or health.is_paper is not True:
         return disabled_order_cancel_action(

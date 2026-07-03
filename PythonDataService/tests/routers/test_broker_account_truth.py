@@ -43,16 +43,6 @@ def _patch_endpoint_dependencies(
         lambda: SimpleNamespace(live_runs_root=str(live_runs_root)),
     )
     monkeypatch.setattr(broker_account_truth, "get_monitor", lambda: None)
-    monkeypatch.setattr(
-        broker_account_truth,
-        "load_account_instance_registry_evidence",
-        lambda **_: SimpleNamespace(bindings=[], evidence_gaps=[]),
-    )
-    monkeypatch.setattr(
-        broker_account_truth,
-        "get_account_truth_snapshot_provider",
-        lambda: SimpleNamespace(remember=lambda _truth: None),
-    )
 
 
 @pytest.mark.asyncio
@@ -73,21 +63,21 @@ async def test_account_truth_endpoint_passes_active_account_freeze_to_projection
     )
     captured: dict[str, object] = {}
 
-    async def fake_fetch_account_truth(*_, **kwargs) -> SimpleNamespace:
-        captured["account_freeze_active"] = kwargs["account_freeze_active"]
-        captured["initial_evidence_gaps"] = kwargs["initial_evidence_gaps"]
+    async def fake_refresh_account_truth_and_update_cache(*_, **kwargs) -> SimpleNamespace:
+        captured["collection_context"] = kwargs["collection_context"]
         return SimpleNamespace()
 
     monkeypatch.setattr(
         broker_account_truth,
-        "fetch_account_truth",
-        fake_fetch_account_truth,
+        "refresh_account_truth_and_update_cache",
+        fake_refresh_account_truth_and_update_cache,
     )
 
     await broker_account_truth.account_truth_endpoint(_client())
 
-    assert captured["account_freeze_active"] is True
-    assert captured["initial_evidence_gaps"] == []
+    collection_context = captured["collection_context"]
+    assert collection_context.account_recovery_state.status == "frozen"
+    assert collection_context.evidence_gaps == ()
 
 
 @pytest.mark.asyncio
@@ -101,22 +91,21 @@ async def test_account_truth_endpoint_adds_gap_when_freeze_state_unreadable(
     (account_root / "unresolved_exposure.flag").write_text("{not-json", encoding="utf-8")
     captured: dict[str, object] = {}
 
-    async def fake_fetch_account_truth(*_, **kwargs) -> SimpleNamespace:
-        captured["account_freeze_active"] = kwargs["account_freeze_active"]
-        captured["initial_evidence_gaps"] = kwargs["initial_evidence_gaps"]
+    async def fake_refresh_account_truth_and_update_cache(*_, **kwargs) -> SimpleNamespace:
+        captured["collection_context"] = kwargs["collection_context"]
         return SimpleNamespace()
 
     monkeypatch.setattr(
         broker_account_truth,
-        "fetch_account_truth",
-        fake_fetch_account_truth,
+        "refresh_account_truth_and_update_cache",
+        fake_refresh_account_truth_and_update_cache,
     )
 
     await broker_account_truth.account_truth_endpoint(_client())
 
-    evidence_gaps = captured["initial_evidence_gaps"]
-    assert captured["account_freeze_active"] is False
-    assert isinstance(evidence_gaps, list)
+    collection_context = captured["collection_context"]
+    evidence_gaps = collection_context.evidence_gaps
+    assert collection_context.account_recovery_state.status == "unreadable"
     assert len(evidence_gaps) == 1
     gap = evidence_gaps[0]
     assert gap.source == "account_freeze"

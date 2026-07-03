@@ -23,10 +23,6 @@ from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr import contracts as ibkr_contracts
-from app.broker.ibkr.account_truth import (
-    fetch_account_truth,
-    load_account_instance_registry_evidence,
-)
 from app.broker.ibkr.api_evidence import (
     IbkrApiEvidenceEvent,
     get_ibkr_api_evidence_recorder,
@@ -67,6 +63,7 @@ from app.broker.ibkr.models import (
     IbkrStrikeList,
     IbkrSurfaceSnapshot,
 )
+from app.broker.ibkr.order_cancel_decision import account_truth_cancel_decision
 from app.broker.ibkr.orders import (
     OrderNotFoundError,
     OrderRefusedError,
@@ -92,7 +89,6 @@ from app.broker.ibkr.surface import (
     stream_option_surface,
 )
 from app.broker.ibkr.symbol_search import search_symbols
-from app.engine.live.account_artifacts import AccountArtifactError, read_account_freeze
 from app.engine.live.order_identity import (
     build_manual_order_namespace,
     build_order_ref,
@@ -860,7 +856,13 @@ async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
     """Cancel one paper order by ``order_id``."""
     client = require_connected_client()
     try:
-        await _raise_if_account_truth_blocks_cancel(client, order_id)
+        decision = await account_truth_cancel_decision(
+            client,
+            health=build_broker_health(client, get_monitor()),
+            artifacts_root=Path(get_settings().live_runs_root).parent,
+            order_id=order_id,
+        )
+        decision.raise_if_blocked()
         return await cancel_paper_order(client, order_id)
     except OrderRefusedError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
@@ -868,66 +870,6 @@ async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-
-async def _raise_if_account_truth_blocks_cancel(
-    client: IbkrClient,
-    order_id: int,
-) -> None:
-    """Refuse order-id cancels that Account Truth would show as disabled."""
-    health = build_broker_health(client, get_monitor())
-    artifacts_root = Path(get_settings().live_runs_root).parent
-    account_freeze_active = False
-    if health.account_id is not None:
-        account_freeze_active = _read_cancel_account_freeze(
-            artifacts_root,
-            health.account_id,
-            order_id,
-        )
-    registry_evidence = load_account_instance_registry_evidence(
-        artifacts_root=artifacts_root,
-        account_id=health.account_id,
-        context="order cancel",
-    )
-    truth = await fetch_account_truth(
-        client,
-        health=health,
-        account_instance_bindings=registry_evidence.bindings,
-        initial_evidence_gaps=registry_evidence.evidence_gaps,
-        account_freeze_active=account_freeze_active,
-    )
-    row = next(
-        (
-            row
-            for row in truth.orders
-            if row.fact_kind == "open_order" and int(row.order_id) == int(order_id)
-        ),
-        None,
-    )
-    if row is None:
-        raise OrderNotFoundError(f"No open order with order_id={order_id} on this client.")
-    action = row.cancel_action
-    if action.enabled:
-        return
-    reason = action.reason_code or "UNKNOWN"
-    raise OrderRefusedError(
-        f"Refusing to cancel order_id={order_id}: {reason}. {action.detail}"
-    )
-
-
-def _read_cancel_account_freeze(
-    artifacts_root: Path,
-    account_id: str,
-    order_id: int,
-) -> bool:
-    try:
-        freeze = read_account_freeze(artifacts_root, account_id)
-    except (AccountArtifactError, OSError, ValueError) as exc:
-        raise OrderRefusedError(
-            f"Refusing to cancel order_id={order_id}: ACCOUNT_FREEZE_UNREADABLE. "
-            f"Account freeze state for {account_id!r} is not readable."
-        ) from exc
-    return freeze is not None
 
 
 def _order_event_to_sse(event: IbkrOrderEvent) -> str:

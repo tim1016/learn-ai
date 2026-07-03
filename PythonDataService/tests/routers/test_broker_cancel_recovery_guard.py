@@ -1,16 +1,22 @@
-"""Tests for broker cancel recovery guards."""
+"""Tests for Account Truth order-cancel recovery guards."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from app.broker.ibkr.models import IbkrConnectionHealth
-from app.broker.ibkr.orders import OrderRefusedError
-from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
-from app.routers import broker
+from app.broker.ibkr import order_cancel_decision
+from app.broker.ibkr.models import IbkrConnectionHealth, IbkrOpenOrder
+from app.broker.ibkr.order_cancel_decision import account_truth_cancel_decision
+from app.broker.ibkr.orders import OrderNotFoundError, OrderRefusedError
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    AccountInstanceBinding,
+    write_account_freeze,
+    write_account_instance_binding,
+)
 
 
 def _health(account_id: str | None = "DU1234567") -> IbkrConnectionHealth:
@@ -28,54 +34,74 @@ def _health(account_id: str | None = "DU1234567") -> IbkrConnectionHealth:
     )
 
 
-def _client(health: IbkrConnectionHealth) -> SimpleNamespace:
-    return SimpleNamespace(health=lambda: health)
-
-
-def _cancel_row(
-    *,
-    enabled: bool,
-    reason_code: str | None,
-    detail: str,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        fact_kind="open_order",
-        order_id=42,
-        cancel_action=SimpleNamespace(
-            enabled=enabled,
-            reason_code=reason_code,
-            detail=detail,
-        ),
+def _binding() -> AccountInstanceBinding:
+    return AccountInstanceBinding(
+        account_id="DU1234567",
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        lifecycle_state="ACTIVE",
+        recorded_at_ms=1_780_000_000_000,
+        source="test",
     )
 
 
-def _patch_cancel_truth_dependencies(
-    monkeypatch: pytest.MonkeyPatch,
+def _open_order(**overrides) -> IbkrOpenOrder:
+    base = {
+        "account_id": "DU1234567",
+        "order_id": 42,
+        "perm_id": 9001,
+        "client_id": 7,
+        "con_id": 12345,
+        "symbol": "SPY",
+        "sec_type": "STK",
+        "action": "BUY",
+        "quantity": 1.0,
+        "order_type": "MKT",
+        "limit_price": None,
+        "time_in_force": "DAY",
+        "status": "Submitted",
+        "cumulative_filled": 0.0,
+        "remaining": 1.0,
+        "avg_fill_price": None,
+        "order_ref": "learn-ai/bot-a/v1:intent-a",
+        "fetched_at_ms": 1_780_000_000_100,
+    }
+    base.update(overrides)
+    return IbkrOpenOrder(**base)
+
+
+async def _decision(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     *,
-    account_freeze_active: bool | None,
-    row: SimpleNamespace,
+    orders: list[IbkrOpenOrder] | None = None,
+    health: IbkrConnectionHealth | None = None,
+):
+    monkeypatch.setattr(
+        order_cancel_decision,
+        "list_open_orders",
+        AsyncMock(return_value=orders or [_open_order()]),
+    )
+    return await account_truth_cancel_decision(
+        object(),  # type: ignore[arg-type]
+        health=health or _health(),
+        artifacts_root=tmp_path,
+        order_id=42,
+    )
+
+
+@pytest.mark.asyncio
+async def test_order_id_cancel_allows_owned_open_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    live_runs_root = tmp_path / "live_runs"
-    live_runs_root.mkdir(exist_ok=True)
-    monkeypatch.setattr(
-        broker,
-        "get_settings",
-        lambda: SimpleNamespace(live_runs_root=str(live_runs_root)),
-    )
-    monkeypatch.setattr(broker, "get_monitor", lambda: None)
-    monkeypatch.setattr(
-        broker,
-        "load_account_instance_registry_evidence",
-        lambda **_: SimpleNamespace(bindings=[], evidence_gaps=[]),
-    )
+    write_account_instance_binding(tmp_path, _binding())
 
-    async def fake_fetch_account_truth(*_, **kwargs) -> SimpleNamespace:
-        if account_freeze_active is not None:
-            assert kwargs["account_freeze_active"] is account_freeze_active
-        return SimpleNamespace(orders=[row])
+    decision = await _decision(tmp_path, monkeypatch)
 
-    monkeypatch.setattr(broker, "fetch_account_truth", fake_fetch_account_truth)
+    assert decision.action.enabled is True
+    decision.raise_if_blocked()
 
 
 @pytest.mark.asyncio
@@ -83,6 +109,7 @@ async def test_order_id_cancel_refuses_active_account_freeze(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    write_account_instance_binding(tmp_path, _binding())
     write_account_freeze(
         tmp_path,
         AccountFreezeEvidence(
@@ -93,94 +120,64 @@ async def test_order_id_cancel_refuses_active_account_freeze(
             operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
         ),
     )
-    _patch_cancel_truth_dependencies(
-        monkeypatch,
-        tmp_path,
-        account_freeze_active=True,
-        row=_cancel_row(
-            enabled=False,
-            reason_code="ACCOUNT_FROZEN",
-            detail="Account recovery is frozen.",
-        ),
-    )
 
+    decision = await _decision(tmp_path, monkeypatch)
+
+    assert decision.action.reason_code == "ACCOUNT_FROZEN"
     with pytest.raises(OrderRefusedError) as exc_info:
-        await broker._raise_if_account_truth_blocks_cancel(_client(_health()), 42)
+        decision.raise_if_blocked()
     message = str(exc_info.value)
     assert "ACCOUNT_FROZEN" in message
-    assert "Account recovery is frozen" in message
+    assert "restart_intensity.threshold_breached" in message
+    assert "STOP_RESTARTING_AND_RECOVER_ACCOUNT" in message
 
 
 @pytest.mark.asyncio
-async def test_order_id_cancel_skips_freeze_read_without_connected_account(
+async def test_order_id_cancel_refuses_when_freeze_state_unreadable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_cancel_truth_dependencies(
-        monkeypatch,
-        tmp_path,
-        account_freeze_active=False,
-        row=_cancel_row(
-            enabled=True,
-            reason_code=None,
-            detail="Sends an IBKR cancel request for this live open order.",
-        ),
-    )
-    monkeypatch.setattr(
-        broker,
-        "read_account_freeze",
-        lambda *_: pytest.fail("freeze state should not be read without an account id"),
-    )
-
-    await broker._raise_if_account_truth_blocks_cancel(_client(_health(None)), 42)
-
-
-@pytest.mark.asyncio
-async def test_order_id_cancel_fails_closed_when_freeze_state_unreadable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    live_runs_root = tmp_path / "live_runs"
-    live_runs_root.mkdir()
-    monkeypatch.setattr(
-        broker,
-        "get_settings",
-        lambda: SimpleNamespace(live_runs_root=str(live_runs_root)),
-    )
+    write_account_instance_binding(tmp_path, _binding())
     account_root = tmp_path / "accounts" / "DU1234567"
-    account_root.mkdir(parents=True)
+    account_root.mkdir(parents=True, exist_ok=True)
     (account_root / "unresolved_exposure.flag").write_text("{not-json", encoding="utf-8")
-    monkeypatch.setattr(broker, "get_monitor", lambda: None)
-    monkeypatch.setattr(
-        broker,
-        "fetch_account_truth",
-        lambda *_args, **_kwargs: pytest.fail(
-            "unreadable freeze state must fail before Account Truth fetch"
-        ),
-    )
 
-    with pytest.raises(OrderRefusedError, match="is not readable"):
-        await broker._raise_if_account_truth_blocks_cancel(_client(_health()), 42)
+    decision = await _decision(tmp_path, monkeypatch)
+
+    assert decision.action.reason_code == "ACCOUNT_FREEZE_UNREADABLE"
+    with pytest.raises(OrderRefusedError) as exc_info:
+        decision.raise_if_blocked()
+    assert "ACCOUNT_FREEZE_UNREADABLE" in str(exc_info.value)
+    assert "Account freeze state is unreadable" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_order_id_cancel_refuses_backend_disabled_action(
+async def test_order_id_cancel_refuses_foreign_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_cancel_truth_dependencies(
-        monkeypatch,
-        tmp_path,
-        account_freeze_active=False,
-        row=_cancel_row(
-            enabled=False,
-            reason_code="FOREIGN_OR_UNCLAIMED",
-            detail="Foreign orders require adoption.",
-        ),
+    decision = await _decision(tmp_path, monkeypatch)
+
+    assert decision.action.reason_code == "FOREIGN_OR_UNCLAIMED"
+    with pytest.raises(OrderRefusedError, match="FOREIGN_OR_UNCLAIMED"):
+        decision.raise_if_blocked()
+
+
+@pytest.mark.asyncio
+async def test_order_id_cancel_reports_missing_open_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        order_cancel_decision,
+        "list_open_orders",
+        AsyncMock(return_value=[]),
     )
 
-    with pytest.raises(OrderRefusedError) as exc_info:
-        await broker._raise_if_account_truth_blocks_cancel(_client(_health()), 42)
-
-    assert "FOREIGN_OR_UNCLAIMED" in str(exc_info.value)
-    assert "Foreign orders require adoption" in str(exc_info.value)
+    with pytest.raises(OrderNotFoundError):
+        await account_truth_cancel_decision(
+            object(),  # type: ignore[arg-type]
+            health=_health(),
+            artifacts_root=tmp_path,
+            order_id=42,
+        )

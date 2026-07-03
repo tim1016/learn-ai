@@ -41,6 +41,7 @@ AccountTruthOrderCancelReasonCode = Literal[
     "FOREIGN_OR_UNCLAIMED",
     "ORDER_TERMINAL",
     "ACCOUNT_FROZEN",
+    "ACCOUNT_FREEZE_UNREADABLE",
 ]
 AccountTruthExecutionUncertaintyCode = Literal[
     "missing_order_ref",

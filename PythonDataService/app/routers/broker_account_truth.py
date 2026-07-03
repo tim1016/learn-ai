@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.broker.ibkr.account_truth import (
-    load_account_instance_registry_evidence,
+    build_account_truth_collection_context,
 )
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -22,9 +22,8 @@ from app.broker.ibkr.models import (
 from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.order_previews import preview_paper_order
 from app.broker.ibkr.orders import OrderRefusedError
-from app.engine.live.account_artifacts import AccountArtifactError, read_account_freeze
 from app.routers.broker_dependencies import require_connected_client
-from app.schemas.account_truth import AccountTruthEvidenceGap, AccountTruthResponse
+from app.schemas.account_truth import AccountTruthResponse
 from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -36,31 +35,16 @@ async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthRes
     """Account-wide ownership, risk, and invariant truth projection."""
     health = build_broker_health(client, get_monitor())
     artifacts_root = Path(get_settings().live_runs_root).parent
-    registry_evidence = load_account_instance_registry_evidence(
+    collection_context = build_account_truth_collection_context(
         artifacts_root=artifacts_root,
         account_id=health.account_id,
         context="account truth",
     )
-    evidence_gaps = list(registry_evidence.evidence_gaps)
-    account_freeze_active = False
-    if health.account_id is not None:
-        try:
-            account_freeze_active = read_account_freeze(artifacts_root, health.account_id) is not None
-        except (AccountArtifactError, OSError, ValueError) as exc:
-            evidence_gaps.append(
-                AccountTruthEvidenceGap(
-                    source="account_freeze",
-                    severity="critical",
-                    message=f"Account freeze state unavailable: {exc}",
-                )
-            )
     try:
         return await refresh_account_truth_and_update_cache(
             client,
             health=health,
-            account_instance_bindings=registry_evidence.bindings,
-            initial_evidence_gaps=evidence_gaps,
-            account_freeze_active=account_freeze_active,
+            collection_context=collection_context,
         )
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc

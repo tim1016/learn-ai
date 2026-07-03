@@ -6,6 +6,7 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
+from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import account_artifacts_root
@@ -32,6 +33,7 @@ def _truth():
     return compose_account_truth(
         health=_health(),
         account_instance_bindings=[],
+        account_recovery_state=AccountRecoveryState.clear("DU1234567"),
         account=None,
         positions_snapshot=None,
         open_orders=[],

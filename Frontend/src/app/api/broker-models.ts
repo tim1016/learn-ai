@@ -437,7 +437,8 @@ export type AccountTruthOrderCancelReasonCode =
   | 'NOT_OPEN_ORDER'
   | 'FOREIGN_OR_UNCLAIMED'
   | 'ORDER_TERMINAL'
-  | 'ACCOUNT_FROZEN';
+  | 'ACCOUNT_FROZEN'
+  | 'ACCOUNT_FREEZE_UNREADABLE';
 
 export interface AccountTruthOrderCancelAction {
   visible: boolean;
