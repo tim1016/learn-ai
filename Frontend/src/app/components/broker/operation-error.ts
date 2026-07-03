@@ -44,13 +44,25 @@ export interface OperationError {
   status: number | null;
 }
 
+const OUTCOME_UNKNOWN_ENDPOINTS = [
+  'deploy',
+  'start_run',
+  'stop_run',
+  'emergency_flatten',
+  'renew_daemon_lease',
+] as const;
+
+export type OutcomeUnknownEndpoint = (typeof OUTCOME_UNKNOWN_ENDPOINTS)[number];
+
+const OUTCOME_UNKNOWN_ENDPOINT_SET: ReadonlySet<string> = new Set(OUTCOME_UNKNOWN_ENDPOINTS);
+
 /** Structured 409 body for ambiguous-outcome mutations (PRD #619-C5). */
 export interface OutcomeUnknownBody {
   outcome: 'UNKNOWN';
   reason_code: 'OUTCOME_UNKNOWN';
   error_category: string;
   detail: string | null;
-  endpoint: 'deploy' | 'start_run' | 'stop_run' | 'emergency_flatten' | 'renew_daemon_lease';
+  endpoint: OutcomeUnknownEndpoint;
   occurred_at_ms: number;
   runbook_hint: string;
 }
@@ -125,6 +137,10 @@ function categoryOf(status: number | null): ErrorCategory {
   return CATEGORY_BY_STATUS[status] ?? 'unknown';
 }
 
+function isOutcomeUnknownEndpoint(value: unknown): value is OutcomeUnknownEndpoint {
+  return typeof value === 'string' && OUTCOME_UNKNOWN_ENDPOINT_SET.has(value);
+}
+
 /**
  * Build a structured OperationError from the operation and HTTP status.
  * `detail` is shown verbatim; remediation comes from the (operation, status)
@@ -164,24 +180,29 @@ export function readOutcomeUnknownBody(body: unknown): OutcomeUnknownBody | null
   const detail = (body as { detail?: unknown }).detail;
   if (!detail || typeof detail !== 'object') return null;
   const d = detail as Record<string, unknown>;
+  const endpoint = d['endpoint'];
+  const errorCategory = d['error_category'];
+  const occurredAtMs = d['occurred_at_ms'];
+  const runbookHint = d['runbook_hint'];
+  const bodyDetail = d['detail'];
   if (
     d['outcome'] !== 'UNKNOWN' ||
     d['reason_code'] !== 'OUTCOME_UNKNOWN' ||
-    typeof d['error_category'] !== 'string' ||
-    typeof d['endpoint'] !== 'string' ||
-    typeof d['occurred_at_ms'] !== 'number' ||
-    typeof d['runbook_hint'] !== 'string'
+    typeof errorCategory !== 'string' ||
+    !isOutcomeUnknownEndpoint(endpoint) ||
+    typeof occurredAtMs !== 'number' ||
+    typeof runbookHint !== 'string'
   ) {
     return null;
   }
   return {
     outcome: 'UNKNOWN',
     reason_code: 'OUTCOME_UNKNOWN',
-    error_category: d['error_category'] as string,
-    detail: typeof d['detail'] === 'string' ? (d['detail'] as string) : null,
-    endpoint: d['endpoint'] as OutcomeUnknownBody['endpoint'],
-    occurred_at_ms: d['occurred_at_ms'] as number,
-    runbook_hint: d['runbook_hint'] as string,
+    error_category: errorCategory,
+    detail: typeof bodyDetail === 'string' ? bodyDetail : null,
+    endpoint,
+    occurred_at_ms: occurredAtMs,
+    runbook_hint: runbookHint,
   };
 }
 
