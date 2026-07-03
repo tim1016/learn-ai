@@ -21,6 +21,10 @@ const pageHarnessTokens = [
   'setupBotControlPage',
   'setupBotControlSidebarHost',
 ];
+const harnessObjectTokens = [
+  'setupBotControlPage',
+  'setupBotControlSidebarHost',
+];
 const mutationMethods = [
   'renewControlPlaneLease',
   'startHostRunner',
@@ -83,6 +87,14 @@ function memberName(node) {
   return null;
 }
 
+function bindingPropertyName(element) {
+  const propertyName = element.propertyName ?? element.name;
+  if (ts.isIdentifier(propertyName) || ts.isStringLiteralLike(propertyName)) {
+    return propertyName.text;
+  }
+  return null;
+}
+
 function containsGuardedMutationExpression(node, aliases, source) {
   let found = false;
   function visit(child) {
@@ -102,6 +114,19 @@ function containsGuardedMutationExpression(node, aliases, source) {
   return found;
 }
 
+function addHarnessObjectBindingAliases(bindingName, liveRunsObjectAliases, mutationAliases) {
+  if (!ts.isObjectBindingPattern(bindingName)) return;
+  for (const element of bindingName.elements) {
+    const propertyName = bindingPropertyName(element);
+    if (propertyName !== 'liveRuns') continue;
+    if (ts.isIdentifier(element.name)) {
+      liveRunsObjectAliases.add(element.name.text);
+    } else {
+      addBindingAliases(element.name, mutationAliases);
+    }
+  }
+}
+
 function addBindingAliases(bindingName, aliases) {
   if (ts.isIdentifier(bindingName)) {
     aliases.add(bindingName.text);
@@ -109,19 +134,62 @@ function addBindingAliases(bindingName, aliases) {
   }
   if (!ts.isObjectBindingPattern(bindingName)) return;
   for (const element of bindingName.elements) {
-    const propertyName = element.propertyName ?? element.name;
-    if (!ts.isIdentifier(propertyName) || !mutationMethodSet.has(propertyName.text)) continue;
+    const propertyName = bindingPropertyName(element);
+    if (!propertyName || !mutationMethodSet.has(propertyName)) continue;
     addBindingAliases(element.name, aliases);
   }
 }
 
+function expressionNamesHarnessObject(node, harnessObjectAliases, source) {
+  if (ts.isIdentifier(node) && harnessObjectAliases.has(node.text)) return true;
+  const text = node.getText(source);
+  return harnessObjectTokens.some((token) => new RegExp(`\\b${token}\\s*\\(`).test(text));
+}
+
+function expressionNamesLiveRunsObject(node, liveRunsObjectAliases, harnessObjectAliases, source) {
+  if (ts.isIdentifier(node) && liveRunsObjectAliases.has(node.text)) return true;
+  if (/\bmakeFailClosedLiveRuns\s*\(/.test(node.getText(source))) return true;
+  if (memberName(node) === 'liveRuns') {
+    const receiver = ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)
+      ? node.expression
+      : null;
+    return receiver ? expressionNamesHarnessObject(receiver, harnessObjectAliases, source) : false;
+  }
+  return false;
+}
+
 function gatherMutationAliases(source) {
   const aliases = new Set();
+  const liveRunsObjectAliases = new Set(['liveRuns']);
+  const harnessObjectAliases = new Set();
   function visit(node) {
     if (ts.isVariableDeclaration(node) && node.initializer) {
+      if (ts.isIdentifier(node.name) && expressionNamesHarnessObject(node.initializer, harnessObjectAliases, source)) {
+        harnessObjectAliases.add(node.name.text);
+      }
+      if (ts.isIdentifier(node.name) && expressionNamesLiveRunsObject(
+        node.initializer,
+        liveRunsObjectAliases,
+        harnessObjectAliases,
+        source,
+      )) {
+        liveRunsObjectAliases.add(node.name.text);
+      }
+      if (ts.isObjectBindingPattern(node.name) && expressionNamesHarnessObject(
+        node.initializer,
+        harnessObjectAliases,
+        source,
+      )) {
+        addHarnessObjectBindingAliases(node.name, liveRunsObjectAliases, aliases);
+      }
       if (containsGuardedMutationExpression(node.initializer, aliases, source)) {
         addBindingAliases(node.name, aliases);
-      } else if (ts.isObjectBindingPattern(node.name) && /\bliveRuns\b/.test(node.initializer.getText(source))) {
+      } else if (ts.isObjectBindingPattern(node.name) && expressionNamesLiveRunsObject(
+        node.initializer,
+        liveRunsObjectAliases,
+        harnessObjectAliases,
+        source,
+      )) {
         addBindingAliases(node.name, aliases);
       }
     }
@@ -165,6 +233,11 @@ function assertMutationMockDetectorCatchesBypasses() {
     "liveRuns['setInstanceDesiredState'].mockResolvedValue(response);",
     'const setDesiredState = liveRuns.setInstanceDesiredState;\nsetDesiredState.mockResolvedValue(response);',
     'const { setInstanceDesiredState } = liveRuns;\nsetInstanceDesiredState.mockResolvedValue(response);',
+    'const { liveRuns: runs } = await setupBotControlPage();\nconst { setInstanceDesiredState } = runs;\nsetInstanceDesiredState.mockResolvedValue(response);',
+    'const harness = await setupBotControlPage();\nconst runs = harness.liveRuns;\nconst { setInstanceDesiredState } = runs;\nsetInstanceDesiredState.mockResolvedValue(response);',
+    'const { liveRuns: { setInstanceDesiredState } } = await setupBotControlPage();\nsetInstanceDesiredState.mockResolvedValue(response);',
+    'const { liveRuns: { setInstanceDesiredState: setDesiredState } } = await setupBotControlPage();\nsetDesiredState.mockResolvedValue(response);',
+    'const harness = await setupBotControlPage();\nconst { liveRuns: { setInstanceDesiredState } } = harness;\nsetInstanceDesiredState.mockResolvedValue(response);',
   ];
   for (const bypass of bypasses) {
     assert.notEqual(
