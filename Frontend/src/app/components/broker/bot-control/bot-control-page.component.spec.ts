@@ -19,6 +19,8 @@ import type {
   HostProcessState,
   LifecycleTimelineResponse,
   LiveInstanceStatus,
+  OperatorNotice,
+  OperatorSurfaceRuntimeFreshness,
 } from '../../../api/live-instances.types';
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
@@ -341,6 +343,55 @@ function makeAccountSummary(): FleetAccountSummary {
   };
 }
 
+function makeIncidentHeadline(): OperatorNotice {
+  return {
+    code: 'watchdog.flatten_timed_out',
+    tier: 'critical',
+    title: 'Flatten timed out',
+    message: 'The watchdog could not prove that the account is flat after the emergency flatten attempt.',
+    source_codes: ['watchdog.flatten_timed_out'],
+    forensic_facts: {
+      run_id: 'run-x',
+      attempt: 1,
+    },
+    action: { kind: 'none', label: null, target: null },
+    runbook_slug: 'watchdog-halt',
+    occurred_at_ms: 1_700_000_001_000,
+  };
+}
+
+function makeRuntimeFreshnessWithLeaseAction(): OperatorSurfaceRuntimeFreshness {
+  const headline: OperatorNotice = {
+    code: 'runtime.control_plane_lease_stale',
+    tier: 'critical',
+    title: 'Control-plane lease is stale',
+    message: 'The engine has not observed a fresh daemon lease.',
+    source_codes: ['CONTROL_PLANE_LEASE_STALE'],
+    forensic_facts: {},
+    action: {
+      kind: 'renew_control_plane_lease',
+      label: 'Renew control-plane lease',
+      target: 'daemon_lease',
+    },
+    runbook_slug: 'runtime-freshness',
+    occurred_at_ms: 1_700_000_001_000,
+  };
+  return {
+    posture_demoted: true,
+    stale_reason_codes: ['CONTROL_PLANE_LEASE_STALE'],
+    command_loop: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
+    broker: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
+    bar_loop: { state: 'FRESH', age_ms: 100, stale_reason_codes: [] },
+    control_plane: {
+      state: 'STALE',
+      age_ms: 30_000,
+      stale_reason_codes: ['CONTROL_PLANE_LEASE_STALE'],
+    },
+    headline,
+    additional_reasons: [],
+  };
+}
+
 function makeLifecycleTimeline(): LifecycleTimelineResponse {
   return {
     projection_available: true,
@@ -475,6 +526,94 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
     expect(el.querySelector('.decision-row')).toBeNull();
+  });
+
+  it('renders backend-authored runtime incident headlines on the bot control page', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.incident_headline = makeIncidentHeadline();
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const el = fixture.nativeElement as HTMLElement;
+    const incident = el.querySelector('[data-testid="runtime-banner-incident"]');
+    expect(incident).not.toBeNull();
+    expect(incident?.textContent).toContain('Flatten timed out');
+    expect(incident?.textContent).toContain(
+      'The watchdog could not prove that the account is flat after the emergency flatten attempt.',
+    );
+  });
+
+  it('runs the backend-authored renew-lease action from runtime freshness notices', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.runtime_freshness = makeRuntimeFreshnessWithLeaseAction();
+    const renewControlPlaneLease = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus: vi.fn().mockResolvedValue(status),
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            renewControlPlaneLease,
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    const action = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '[data-testid="operator-notice-action"]',
+    );
+    expect(action?.textContent).toContain('Renew control-plane lease');
+    action?.click();
+    fixture.detectChanges();
+    await flush(fixture);
+
+    expect(renewControlPlaneLease).toHaveBeenCalledTimes(1);
   });
 
   it('opens the attention dropdown on demand with folded why/risk and items', async () => {

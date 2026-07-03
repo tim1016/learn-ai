@@ -66,6 +66,14 @@
         </button>
       }
     </div>
+
+    @if (s.operator_surface.runtime_freshness !== null || s.operator_surface.incident_headline !== null) {
+      <app-runtime-banner
+        [freshness]="s.operator_surface.runtime_freshness"
+        [incidentHeadline]="s.operator_surface.incident_headline"
+        (actionClicked)="handleRuntimeNoticeAction($event)"
+      />
+    }
   }
 
   <!-- ── SLIM DISMISSIBLE BANNERS ── -->
