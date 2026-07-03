@@ -10,13 +10,15 @@ from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
-    AccountInstanceBinding,
     account_artifacts_root,
     append_account_event,
     read_account_freeze,
-    read_account_instance_registry,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    read_account_instance_registry,
+)
 from app.schemas.account_reconciliation import (
     AccountReconciliationEvidenceRef,
     AccountReconciliationReceipt,

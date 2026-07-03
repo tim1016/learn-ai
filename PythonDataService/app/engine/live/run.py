@@ -1489,10 +1489,12 @@ def cmd_start(args: argparse.Namespace) -> int:
     if ledger.account_id and ledger.strategy_instance_id:
         try:
             from app.engine.live.account_artifacts import (
-                AccountInstanceBinding,
-                bot_order_namespace_for_instance,
                 evaluate_restart_intensity,
                 read_account_freeze,
+            )
+            from app.engine.live.account_registry import (
+                AccountInstanceBinding,
+                bot_order_namespace_for_instance,
                 write_account_instance_binding,
             )
 
@@ -1661,16 +1663,13 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.broker.ibkr.orders import (
             list_open_orders as _owner_list_open_orders,
         )
-        from app.engine.live.account_artifacts import (
-            read_account_events,
-            read_account_instance_registry,
-            read_account_owner_generation,
-        )
+        from app.engine.live.account_artifacts import read_account_events, read_account_owner_generation
         from app.engine.live.account_classifier import (
             AccountBrokerEvidence,
             classify_account,
         )
         from app.engine.live.account_owner import AccountOwner
+        from app.engine.live.account_registry import read_account_instance_registry
         from app.engine.live.fleet_reset_baseline import read_applicable_baseline
 
         persisted_generation = read_account_owner_generation(_artifacts_root, ledger.account_id)

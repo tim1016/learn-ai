@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from app.engine.live.account_artifacts import (
+from app.engine.live.account_registry import (
     AccountInstanceBinding,
     index_account_instance_bindings,
 )
