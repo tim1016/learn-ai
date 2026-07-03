@@ -30,14 +30,24 @@ function request({
 }
 
 function proxyReqRecorder(initialHeaders = {}) {
-  const headers = new Map(Object.entries(initialHeaders));
+  const values = new Map(
+    Object.entries(initialHeaders).map(([name, value]) => [name.toLowerCase(), value]),
+  );
+  const headers = {
+    get(name) {
+      return values.get(name.toLowerCase());
+    },
+    has(name) {
+      return values.has(name.toLowerCase());
+    },
+  };
   return {
     headers,
     setHeader(name, value) {
-      headers.set(name, value);
+      values.set(name.toLowerCase(), value);
     },
     removeHeader(name) {
-      headers.delete(name);
+      values.delete(name.toLowerCase());
     },
   };
 }
@@ -88,11 +98,13 @@ for (const prefix of CONTROL_PREFIXES) {
     intent: null,
   });
   const proxyReq = proxyReqRecorder({
-    [DATA_PLANE_CONTROL_SECRET_HEADER]: 'attacker-supplied-secret',
+    [DATA_PLANE_CONTROL_SECRET_HEADER.toLowerCase()]: 'attacker-supplied-secret',
   });
+  assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), true);
   attachDataPlaneSecret(proxyReq, req);
   assert.equal(req.headers[DATA_PLANE_CONTROL_SECRET_HEADER.toLowerCase()], 'attacker-supplied-secret');
   assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), false);
+  assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER.toLowerCase()), false);
   assert.equal(shouldAttachDataPlaneSecret(req), false);
 }
 
