@@ -297,6 +297,10 @@ services:
     volumes:
       - ./Frontend/src:/app/src:z
       - ./Frontend/proxy.conf.js:/app/proxy.conf.js:z
+      # Repo-root contracts are outside the Frontend image context, but
+      # tsconfig maps @repo-contracts/* to ../contracts/* which resolves to
+      # /contracts/* from the dev container's /app baseUrl.
+      - ./contracts:/contracts:ro,z
       # PRD #593 / ADR 0012 — cross-language ``ActionPlan`` parity
       # fixtures live in PythonDataService so Pydantic stays
       # authoritative; mount them read-only inside src/testing/ so the
