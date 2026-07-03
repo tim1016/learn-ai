@@ -78,6 +78,7 @@ def _binding(
     bot_order_namespace: str | None = None,
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE",
     recorded_at_ms: int = 1_780_000_000_000,
+    source: str = "test",
 ) -> AccountInstanceBinding:
     return AccountInstanceBinding(
         account_id=account_id,
@@ -87,7 +88,7 @@ def _binding(
         or f"learn-ai/{strategy_instance_id}/v1",
         lifecycle_state=lifecycle_state,
         recorded_at_ms=recorded_at_ms,
-        source="test",
+        source=source,
     )
 
 
@@ -612,6 +613,36 @@ def test_account_truth_retired_current_position_is_distinct_critical_anomaly() -
     assert {row.key: row.status for row in truth.invariants}[
         "positions_match_known_ownership"
     ] == "fail"
+
+
+def test_account_truth_crash_retired_position_is_not_active_owner() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[
+            _binding(
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=1_780_000_000_000,
+                source="host_daemon.start",
+            ),
+            _binding(
+                lifecycle_state="RETIRED",
+                recorded_at_ms=1_780_000_000_500,
+                source="host_daemon.process_crashed",
+            ),
+        ],
+        account=None,
+        positions_snapshot=_positions_snapshot(_position()),
+        open_orders=[],
+        completed_orders=[],
+        executions=[_execution()],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.positions[0].owner.owner_class == "bot"
+    assert truth.positions[0].owner.owner_binding_state == "RETIRED"
+    assert truth.positions[0].owner.severity == "critical"
+    assert {row.code for row in truth.blockers} == {"retired_owner_live_exposure"}
 
 
 def test_account_truth_keeps_app_minted_manual_distinct_from_bot() -> None:

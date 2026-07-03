@@ -20,6 +20,8 @@ from app.engine.live.account_artifacts import (
     compute_reconcile_namespaces,
     evaluate_account_instance_binding,
     evaluate_restart_intensity,
+    has_account_recovery_evidence_after,
+    latest_account_instance_binding,
     read_account_events,
     read_account_events_tolerant,
     read_account_freeze,
@@ -510,6 +512,51 @@ def test_compute_reconcile_namespaces_drops_later_retired_and_wrong_account_bind
 
     assert owned == frozenset({"learn-ai/aapl/v1"})
     assert siblings == frozenset()
+
+
+def test_latest_account_instance_binding_uses_later_append_on_timestamp_tie() -> None:
+    active = _binding(recorded_at_ms=1_700_000_000_000)
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.process_crashed",
+        }
+    )
+
+    latest = latest_account_instance_binding(
+        [active, retired],
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert latest == retired
+
+
+def test_has_account_recovery_evidence_after_requires_later_recovery_event() -> None:
+    crash_at_ms = 1_700_000_000_000
+
+    assert has_account_recovery_evidence_after(
+        [
+            {
+                "event_type": "account_instance_binding_recorded",
+                "ts_ms": crash_at_ms + 1,
+            },
+            {
+                "event_type": "account_recovery_proof_recorded",
+                "ts_ms": crash_at_ms,
+            },
+        ],
+        crash_at_ms,
+    ) is False
+    assert has_account_recovery_evidence_after(
+        [
+            {
+                "event_type": "account_recovery_proof_recorded",
+                "ts_ms": crash_at_ms + 1,
+            },
+        ],
+        crash_at_ms,
+    ) is True
 
 
 def test_account_instance_registry_blocks_unknown_instance(tmp_path: Path) -> None:
