@@ -199,13 +199,12 @@ function enabledCancelAction(): AccountTruthOrderCancelAction {
   };
 }
 
-function disabledCancelAction(
+function disabledVisibleCancelAction(
   reasonCode: AccountTruthOrderCancelReasonCode,
   detail: string,
-  visible = true,
 ): AccountTruthOrderCancelAction {
   return {
-    visible,
+    visible: true,
     enabled: false,
     reason_code: reasonCode,
     label: 'Cannot cancel',
@@ -213,15 +212,21 @@ function disabledCancelAction(
   };
 }
 
-function notOpenOrderCancelAction(): AccountTruthOrderCancelAction {
-  return disabledCancelAction(
-    'NOT_OPEN_ORDER',
-    'Only live open broker orders can be cancelled.',
-    false,
-  );
+function hiddenNotOpenCancelAction(): AccountTruthOrderCancelAction {
+  return {
+    visible: false,
+    enabled: false,
+    reason_code: 'NOT_OPEN_ORDER',
+    label: 'Cannot cancel',
+    detail: 'Only live open broker orders can be cancelled.',
+  };
 }
 
-function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): AccountTruthOrderRow {
+type AccountTruthOrderFixtureOverrides =
+  Partial<Omit<AccountTruthOrderRow, 'cancel_action'>> &
+  Pick<AccountTruthOrderRow, 'cancel_action'>;
+
+function accountTruthOrder(overrides: AccountTruthOrderFixtureOverrides): AccountTruthOrderRow {
   return {
     ...openOrderWithRef,
     fact_kind: 'open_order',
@@ -239,7 +244,6 @@ function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): Accou
       owner_binding_state: 'ACTIVE',
       severity: 'ok',
     },
-    cancel_action: enabledCancelAction(),
     headline: 'Bot test-bot open order',
     detail: 'Ownership is proven by bot-stamped order ref.',
     ...overrides,
@@ -286,6 +290,7 @@ function openOrderTruthRow(order: IbkrOpenOrder): AccountTruthOrderRow {
   return accountTruthOrder({
     ...order,
     lifecycle_id: `perm:${order.perm_id ?? order.order_id}`,
+    cancel_action: enabledCancelAction(),
   });
 }
 
@@ -429,7 +434,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
       quantity: 1,
       cumulative_filled: 1,
       remaining: 0,
-      cancel_action: notOpenOrderCancelAction(),
+      cancel_action: hiddenNotOpenCancelAction(),
     });
     const execution = accountTruthExecution({
       order_id: 0,
@@ -496,6 +501,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
       perm_id: 9001,
       status: 'Submitted',
       remaining: 1,
+      cancel_action: enabledCancelAction(),
     });
     const completedOrder = accountTruthOrder({
       fact_kind: 'completed_order',
@@ -507,7 +513,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
       quantity: 1,
       cumulative_filled: 1,
       remaining: 0,
-      cancel_action: notOpenOrderCancelAction(),
+      cancel_action: hiddenNotOpenCancelAction(),
     });
     const { fixture, component } = setup([], [
       accountTruthResponse([openOrder, completedOrder]),
@@ -657,22 +663,16 @@ describe('BrokerOrdersComponent — cancel reasons', () => {
     const { component } = setup();
 
     const foreignReason = component.cancelDisabledReason(accountTruthOrder({
-      cancel_action: {
-        visible: true,
-        enabled: false,
-        reason_code: 'FOREIGN_OR_UNCLAIMED',
-        label: 'Cannot cancel',
-        detail: 'Backend says this order needs adoption first.',
-      },
+      cancel_action: disabledVisibleCancelAction(
+        'FOREIGN_OR_UNCLAIMED',
+        'Backend says this order needs adoption first.',
+      ),
     }));
     const terminalReason = component.cancelDisabledReason(accountTruthOrder({
-      cancel_action: {
-        visible: true,
-        enabled: false,
-        reason_code: 'ORDER_TERMINAL',
-        label: 'Cannot cancel',
-        detail: 'Backend says this order is terminal.',
-      },
+      cancel_action: disabledVisibleCancelAction(
+        'ORDER_TERMINAL',
+        'Backend says this order is terminal.',
+      ),
     }));
 
     expect(foreignReason).toBe('Backend says this order needs adoption first.');
@@ -683,13 +683,10 @@ describe('BrokerOrdersComponent — cancel reasons', () => {
     const { component, broker } = setup();
 
     await component.cancel(accountTruthOrder({
-      cancel_action: {
-        visible: true,
-        enabled: false,
-        reason_code: 'BROKER_NOT_PAPER_CONNECTED',
-        label: 'Cannot cancel',
-        detail: 'Backend says paper broker is unavailable.',
-      },
+      cancel_action: disabledVisibleCancelAction(
+        'BROKER_NOT_PAPER_CONNECTED',
+        'Backend says paper broker is unavailable.',
+      ),
     }));
 
     expect(broker.cancelOrder).not.toHaveBeenCalled();
