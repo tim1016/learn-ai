@@ -12,13 +12,10 @@ from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
-    AccountInstanceBinding,
     AccountOwnerGeneration,
-    bot_order_namespace_for_instance,
     read_account_events,
     read_account_owner_generation,
     write_account_freeze,
-    write_account_instance_binding,
     write_account_owner_generation,
 )
 from app.engine.live.account_classifier import AccountClassifierDecision
@@ -27,6 +24,11 @@ from app.engine.live.account_owner import (
     AccountOwnerSubmitIntent,
     AccountOwnerSubmitRejected,
     ClientIdInUseError,
+)
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    bot_order_namespace_for_instance,
+    write_account_instance_binding,
 )
 from app.engine.live.order_identity import build_order_ref, mint_intent_id
 

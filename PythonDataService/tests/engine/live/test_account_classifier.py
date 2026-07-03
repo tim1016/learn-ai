@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from app.engine.live.account_artifacts import (
-    AccountInstanceBinding,
-    bot_order_namespace_for_instance,
-)
 from app.engine.live.account_classifier import (
     AccountBaselineEvidence,
     AccountBrokerEvidence,
     AccountDurableIntent,
     AccountOperatorOverride,
     classify_account,
+)
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    bot_order_namespace_for_instance,
 )
 from app.engine.live.order_identity import build_order_ref, mint_intent_id
 from app.engine.live.reconciliation_classifier import (

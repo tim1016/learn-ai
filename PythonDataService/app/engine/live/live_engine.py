@@ -1924,7 +1924,7 @@ class LiveEngine:
         verdict_payload: dict = {"status": "completed", "request_id": request_id}
         try:
             from app.engine.live import reconciliation_orchestrator
-            from app.engine.live.account_artifacts import compute_reconcile_namespaces
+            from app.engine.live.account_registry import compute_reconcile_namespaces
             from app.engine.live.fleet_reset_baseline import read_applicable_baseline
             from app.engine.live.live_state_sidecar import (
                 LiveStateSidecarRepo,
