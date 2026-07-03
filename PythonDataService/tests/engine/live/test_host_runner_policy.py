@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.engine.live.host_runner_policy import (
     allowed_ibkr_hosts,
+    load_policy_env_file,
     validate_ibkr_host_allowed,
 )
 
@@ -33,3 +36,50 @@ def test_policy_accepts_configured_ibkr_host() -> None:
 def test_policy_rejects_unallowlisted_host() -> None:
     with pytest.raises(ValueError, match="host-daemon allow-list"):
         validate_ibkr_host_allowed("192.168.1.50", environ={})
+
+
+def test_policy_env_file_loads_only_documented_daemon_keys(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POLYGON_API_KEY=not-for-daemon",
+                "IBKR_HOST_ALLOWLIST=192.168.1.50,gateway.example.com",
+                "IBKR_HOST=192.168.1.50",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env: dict[str, str] = {}
+
+    loaded = load_policy_env_file(env_file, environ=env)
+
+    assert loaded == ("IBKR_HOST_ALLOWLIST", "IBKR_HOST")
+    assert env == {
+        "IBKR_HOST_ALLOWLIST": "192.168.1.50,gateway.example.com",
+        "IBKR_HOST": "192.168.1.50",
+    }
+    assert validate_ibkr_host_allowed("192.168.1.50", environ=env) == "192.168.1.50"
+
+
+def test_policy_env_file_does_not_override_process_env(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "IBKR_HOST_ALLOWLIST=file-host.example.com",
+                "IBKR_HOST=file-host.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "IBKR_HOST_ALLOWLIST": "process-host.example.com",
+    }
+
+    loaded = load_policy_env_file(env_file, environ=env)
+
+    assert loaded == ("IBKR_HOST",)
+    assert env["IBKR_HOST_ALLOWLIST"] == "process-host.example.com"
+    assert env["IBKR_HOST"] == "file-host.example.com"
+    assert validate_ibkr_host_allowed("process-host.example.com", environ=env) == "process-host.example.com"

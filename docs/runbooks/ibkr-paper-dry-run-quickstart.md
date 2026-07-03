@@ -115,9 +115,16 @@ IBKR_HOST=127.0.0.1 PYTHONPATH=PythonDataService python -m app.engine.live.run s
 
 Or launch the local UI daemon once and use `/broker/bots` to open the bot, then use its **Host Runner** controls:
 
-```powershell
-$env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .
+```bash
+./start-live-daemon.sh --background
 ```
+
+The launcher passes `.env` to the daemon for the host policy keys only:
+`IBKR_HOST_ALLOWLIST` and `IBKR_HOST`. Exported process env values still win.
+The browser/data-plane path only checks that `ibkr_host` is a bare host name
+or IP address; the daemon is the authority that accepts or rejects that host.
+Run `./start-live-daemon.sh --print-launch-env` to inspect the effective
+daemon allow-list without starting anything.
 
 **Expect during the run:**
 - IB Gateway shows one connected client (id=42).

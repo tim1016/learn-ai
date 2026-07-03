@@ -302,6 +302,7 @@ nohup env PYTHONPATH="$ROOT_DIR/PythonDataService" \
   "$VENV_PYTHON" -m app.engine.live.host_daemon \
   --repo-root "$ROOT_DIR" \
   --port "$PORT" \
+  --env-file "$ROOT_DIR/.env" \
   > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 

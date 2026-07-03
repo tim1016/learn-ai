@@ -92,6 +92,15 @@ It does **not** answer:
 
 Settings live in `app/broker/ibkr/config.py:IbkrSettings`, env-prefixed `IBKR_`. Loaded from a `.env` file at repo root. Singleton — instantiated once via `get_settings()`.
 
+Host-runner start requests have a separate authority split. The browser-facing
+data plane validates only `ibkr_host` shape (bare host name or IP address, no
+URL/path/userinfo). The host daemon enforces the configured connection policy
+at start time. Its launcher contract is `--env-file <path>` (default
+`<repo-root>/.env`), from which it loads only `IBKR_HOST_ALLOWLIST` and
+`IBKR_HOST`; exported process env values take precedence. This keeps policy in
+the process that spawns the runner while avoiding shell-sourcing the full env
+file.
+
 | Field | Default | Notes |
 |---|---|---|
 | `mode` | `paper` | `paper` or `live`. Default refuses to drift to live. |
@@ -383,7 +392,14 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 
 Run these in order before turning the runner loose:
 
-1. **`.env`** has `IBKR_MODE=paper`, `IBKR_PORT=4002` (or `7497` for TWS), `IBKR_READONLY=false`, paper account `DU…` ID. Anything else and the four layers will refuse.
+1. **`.env`** has `IBKR_MODE=paper`, `IBKR_PORT=4002` (or `7497`
+   for TWS), `IBKR_READONLY=false`, paper account `DU…` ID. If the Host
+   Runner will target anything outside the daemon defaults (`127.0.0.1`,
+   `::1`, `localhost`, `host.containers.internal`,
+   `host.docker.internal`), add it to `IBKR_HOST_ALLOWLIST`;
+   `./start-live-daemon.sh --print-launch-env` shows the effective daemon
+   policy without starting the daemon. Anything else and the four safety
+   layers will refuse.
 2. **NYSE/ARCA real-time market-data subscription** active on the linked live account. Paper inherits — see TDD §2.4.
 3. **IB Gateway** running, logged into the paper account, "Read-Only API" is OFF, and the API tab's "Trusted IPs" includes:
    - **`127.0.0.1`** (host loopback) — required by the host-venv `cmd_start` (Step 7); without this, the dry-run client cannot connect.

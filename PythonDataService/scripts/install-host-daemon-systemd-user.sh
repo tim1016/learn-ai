@@ -40,7 +40,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$WORKING_DIR
 Environment=PYTHONPATH=$WORKING_DIR
-ExecStart=$PYTHON_EXE -m app.engine.live.host_daemon --host $HOST --port $PORT --repo-root $REPO_ROOT --live-runs-root $LIVE_RUNS_ROOT
+ExecStart=$PYTHON_EXE -m app.engine.live.host_daemon --host $HOST --port $PORT --repo-root $REPO_ROOT --live-runs-root $LIVE_RUNS_ROOT --env-file $REPO_ROOT/.env
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:$LOG_DIR/host_daemon_service.out.log
