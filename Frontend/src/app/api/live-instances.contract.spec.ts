@@ -71,8 +71,8 @@ type JsonImported<T> = T extends string
           ? { [Key in keyof T]: JsonImported<T[Key]> }
           : T;
 
-const STEADY = steadyFixture satisfies JsonImported<LiveInstanceStatus>;
-const STOPPED = stoppedFixture satisfies JsonImported<LiveInstanceStatus>;
+const STEADY: JsonImported<LiveInstanceStatus> = steadyFixture;
+const STOPPED: JsonImported<LiveInstanceStatus> = stoppedFixture;
 const FIXTURES = [
   ["steady", STEADY],
   ["stopped", STOPPED],
