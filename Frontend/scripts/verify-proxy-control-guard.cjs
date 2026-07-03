@@ -7,6 +7,7 @@ const {
   DATA_PLANE_CONTROL_INTENT_VALUE,
   CONTROL_PREFIXES,
   attachDataPlaneSecret,
+  configureDataPlaneProxy,
   isControlMutation,
   shouldAttachDataPlaneSecret,
 } = proxyConfig.__test;
@@ -52,12 +53,36 @@ function proxyReqRecorder(initialHeaders = {}) {
   };
 }
 
+function proxyEmitterRecorder() {
+  const handlers = new Map();
+  return {
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    handler(event) {
+      return handlers.get(event);
+    },
+  };
+}
+
 for (const prefix of CONTROL_PREFIXES) {
   const req = request({ url: `${prefix}/__probe` });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
   assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
   assert.equal(isControlMutation(req), true);
+}
+
+{
+  const req = request({ url: '/api/live-instances/runs/run-abc/start' });
+  const proxy = proxyEmitterRecorder();
+  const proxyReq = proxyReqRecorder();
+  configureDataPlaneProxy(proxy);
+
+  const proxyReqHandler = proxy.handler('proxyReq');
+  assert.equal(typeof proxyReqHandler, 'function');
+  proxyReqHandler(proxyReq, req);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
 }
 
 {

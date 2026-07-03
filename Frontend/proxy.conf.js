@@ -68,6 +68,10 @@ function attachDataPlaneSecret(proxyReq, req) {
   }
 }
 
+function configureDataPlaneProxy(proxy) {
+  proxy.on('proxyReq', attachDataPlaneSecret);
+}
+
 const proxyConfig = {
   '/graphql': {
     target: 'http://backend:8080',
@@ -83,6 +87,7 @@ const proxyConfig = {
     target: 'http://python-service:8000',
     secure: false,
     changeOrigin: true,
+    configure: configureDataPlaneProxy,
     onProxyReq: attachDataPlaneSecret,
     on: {
       proxyReq: attachDataPlaneSecret,
@@ -98,6 +103,7 @@ Object.defineProperty(proxyConfig, '__test', {
     DATA_PLANE_CONTROL_INTENT_VALUE,
     CONTROL_PREFIXES,
     attachDataPlaneSecret,
+    configureDataPlaneProxy,
     isControlMutation,
     shouldAttachDataPlaneSecret,
   },

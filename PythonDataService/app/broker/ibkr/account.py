@@ -17,6 +17,7 @@ Phase 2b (out of scope here) adds the SSE P&L streams in ``pnl.py``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.broker.ibkr.api_evidence import (
@@ -24,7 +25,7 @@ from app.broker.ibkr.api_evidence import (
     evidence_response,
     get_ibkr_api_evidence_recorder,
 )
-from app.broker.ibkr.client import IbkrClient, _is_paper_account
+from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrPosition,
@@ -35,6 +36,8 @@ from app.broker.ibkr.models import (
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+_POSITIONS_TIMEOUT_S = 8.0
 
 
 # IBKR's reqAccountSummary returns string-keyed tags. ib_async subscribes
@@ -184,7 +187,21 @@ def _ibkr_position_to_model(
     )
 
 
-async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
+def _cached_positions(client: IbkrClient) -> list:
+    positions = getattr(client.ib, "positions", None)
+    if not callable(positions):
+        raise BrokerError("IBKR positions cache is unavailable on this client.")
+    try:
+        return list(positions())
+    except Exception as exc:
+        raise BrokerError(f"IBKR positions cache read failed: {exc}") from exc
+
+
+async def fetch_positions(
+    client: IbkrClient,
+    *,
+    timeout_s: float = _POSITIONS_TIMEOUT_S,
+) -> IbkrPositionsSnapshot:
     """All open positions for the connected account.
 
     ``reqPositionsAsync`` returns positions across all accounts the user
@@ -197,7 +214,16 @@ async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
     if account_id is None:
         raise RuntimeError("connected client has no account_id")
 
-    raw = await client.ib.reqPositionsAsync()
+    used_cache_fallback = False
+    try:
+        raw = await asyncio.wait_for(client.ib.reqPositionsAsync(), timeout=timeout_s)
+    except TimeoutError:
+        used_cache_fallback = True
+        raw = _cached_positions(client)
+        logger.warning(
+            "IBKR reqPositionsAsync timed out; using synchronized positions cache",
+            extra={"timeout_s": timeout_s, "cached_row_count": len(raw)},
+        )
     fetched_at_ms = now_ms_utc()
     get_ibkr_api_evidence_recorder().record(
         source="account.fetch_positions",
@@ -205,7 +231,7 @@ async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
         request=evidence_request("reqPositionsAsync"),
         response=evidence_response(
             "position",
-            fields={"row_count": len(raw)},
+            fields={"row_count": len(raw), "cache_fallback": used_cache_fallback},
             objects=raw,
         ),
     )

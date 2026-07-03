@@ -7,6 +7,7 @@ test_router.py.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,6 +19,7 @@ from app.broker.ibkr.account import (
     fetch_account_summary,
     fetch_positions,
 )
+from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.contracts import yyyymmdd_to_expiry_ms
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -65,11 +67,12 @@ def _option_contract(
     )
 
 
-def _fake_client(account_id: str, *, summary_rows=None, positions=None):
+def _fake_client(account_id: str, *, summary_rows=None, positions=None, cached_positions=None):
     """Build a minimal IbkrClient stand-in that the production code can use."""
     ib = SimpleNamespace(
         accountSummaryAsync=AsyncMock(return_value=list(summary_rows or [])),
         reqPositionsAsync=AsyncMock(return_value=list(positions or [])),
+        positions=lambda: list(cached_positions or []),
     )
     client = SimpleNamespace(
         ib=ib,
@@ -276,3 +279,44 @@ async def test_fetch_positions_continues_on_unparseable_row() -> None:
 
     assert len(snap.positions) == 1
     assert snap.positions[0].symbol == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_fetch_positions_uses_cached_positions_after_req_positions_timeout() -> None:
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    cached = [
+        SimpleNamespace(
+            account="DU1234567",
+            contract=_stock_contract("SPY", 756733),
+            position=3,
+            avgCost=590.0,
+        ),
+        SimpleNamespace(
+            account="DU1234567",
+            contract=_stock_contract("MU", 9939),
+            position=0,
+            avgCost=0.0,
+        ),
+    ]
+    client = _fake_client("DU1234567", cached_positions=cached)
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
+
+    snap = await fetch_positions(client, timeout_s=0.001)
+
+    assert len(snap.positions) == 1
+    assert snap.positions[0].symbol == "SPY"
+
+
+@pytest.mark.asyncio
+async def test_fetch_positions_timeout_raises_when_cache_unavailable() -> None:
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    client = _fake_client("DU1234567")
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=never_returns)
+    delattr(client.ib, "positions")
+
+    with pytest.raises(BrokerError, match="positions cache is unavailable"):
+        await fetch_positions(client, timeout_s=0.001)
