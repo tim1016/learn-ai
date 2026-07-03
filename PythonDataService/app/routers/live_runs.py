@@ -397,8 +397,8 @@ def _build_summary(run_dir: Path, now_ms: int) -> LiveRunSummary:
         ended_at_ms=sidecar.ended_at_ms if sidecar is not None else None,
         last_activity_ms=_last_activity_ms(run_dir),
         state=state,
-        decision_count=parquet_row_count(decisions_path),
-        execution_count=parquet_row_count(executions_path),
+        decision_count=parquet_row_count(decisions_path, on_error="warn_empty"),
+        execution_count=parquet_row_count(executions_path, on_error="warn_empty"),
         halt_flag_set=(run_dir / "halt.flag").exists(),
         poisoned_flag_set=(run_dir / "poisoned.flag").exists(),
     )
@@ -406,14 +406,14 @@ def _build_summary(run_dir: Path, now_ms: int) -> LiveRunSummary:
 
 def _read_parquet_tail(path: Path, n: int) -> list[dict]:
     """Read the last n rows of a Parquet file as a list of dicts."""
-    return read_parquet_tail(path, n)
+    return read_parquet_tail(path, n, on_error="warn_empty")
 
 
 def _build_decisions_summary(run_dir: Path) -> DecisionsSummary:
     path = run_dir / "decisions.parquet"
     if not artifact_exists(path):
         return DecisionsSummary(row_count=0)
-    row_count = parquet_row_count(path)
+    row_count = parquet_row_count(path, on_error="warn_empty")
     latest: dict | None = None
     if row_count > 0:
         rows = _read_parquet_tail(path, 1)
@@ -425,7 +425,7 @@ def _build_executions_summary(run_dir: Path) -> ExecutionsSummary:
     path = run_dir / "executions.parquet"
     if not artifact_exists(path):
         return ExecutionsSummary(row_count=0)
-    row_count = parquet_row_count(path)
+    row_count = parquet_row_count(path, on_error="warn_empty")
     last_fills = _read_parquet_tail(path, 5) if row_count > 0 else []
     return ExecutionsSummary(row_count=row_count, last_fills=last_fills)
 
@@ -434,7 +434,7 @@ def _build_trades_summary(run_dir: Path) -> TradesSummary:
     path = run_dir / "trades.parquet"
     if not artifact_exists(path):
         return TradesSummary(row_count=0)
-    row_count = parquet_row_count(path)
+    row_count = parquet_row_count(path, on_error="warn_empty")
     open_position: dict | None = None
     if row_count > 0:
         rows = _read_parquet_tail(path, 1)
@@ -710,7 +710,7 @@ async def get_trades(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
     path = _artifact_path(run_dir, "trades.parquet")
-    rows = read_parquet_rows(path)
+    rows = read_parquet_rows(path, on_error="warn_empty")
     if since_ms is not None:
         rows = [r for r in rows if int(r.get("exit_time_ms", 0)) > since_ms]
     if len(rows) > limit:
@@ -740,7 +740,7 @@ async def get_executions(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
     path = _artifact_path(run_dir, "executions.parquet")
-    rows = read_parquet_rows(path)
+    rows = read_parquet_rows(path, on_error="warn_empty")
     if since_ms is not None:
         rows = [r for r in rows if int(r.get("ts_ms", 0)) > since_ms]
     if len(rows) > limit:

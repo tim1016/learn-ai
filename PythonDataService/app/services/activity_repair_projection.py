@@ -139,10 +139,13 @@ def _closed_trade_events_for_run(
     start_ms: int,
     end_ms: int,
 ) -> list[ActivityBrokerEventRow]:
-    rows = read_parquet_rows(run_dir / "trades.parquet")
+    rows = read_parquet_rows(run_dir / "trades.parquet", on_error="warn_empty")
     if not rows:
         return []
-    execution_rows = read_parquet_rows(run_dir / "executions.parquet")
+    execution_rows = read_parquet_rows(
+        run_dir / "executions.parquet",
+        on_error="warn_empty",
+    )
     fallback_symbol = _first_symbol(execution_rows)
     out: list[ActivityBrokerEventRow] = []
     for row in rows:

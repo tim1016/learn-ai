@@ -10,12 +10,17 @@ manifest writers, and pre-flight verification.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+logger = logging.getLogger(__name__)
+
+LiveArtifactErrorPolicy = Literal["raise", "warn_empty"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,16 @@ class LiveArtifactMetadata:
     size_bytes: int
     mtime_ms: int
     row_count: int | None = None
+
+
+@dataclass(frozen=True)
+class LiveArtifactReadError(Exception):
+    path: Path
+    operation: str
+    cause: Exception
+
+    def __str__(self) -> str:
+        return f"Could not {self.operation} live artifact {self.path}: {self.cause}"
 
 
 def artifact_exists(path: Path) -> bool:
@@ -79,35 +94,86 @@ def artifact_mtime_ms(path: Path) -> int:
     return int(best * 1000)
 
 
-def parquet_row_count(path: Path) -> int:
+def parquet_row_count(
+    path: Path,
+    *,
+    on_error: LiveArtifactErrorPolicy = "raise",
+) -> int:
     """Return row count for a parquet file or dataset directory."""
 
     if not artifact_exists(path):
         return 0
     try:
-        return pq.read_table(path).num_rows
-    except (FileNotFoundError, OSError, pa.ArrowException):
-        return 0
+        return sum(_parquet_file_row_count(file_path) for file_path in _parquet_files(path))
+    except (FileNotFoundError, OSError, pa.ArrowException) as exc:
+        return _handle_artifact_read_error(
+            path=path,
+            operation="count rows in",
+            exc=exc,
+            on_error=on_error,
+            empty_value=0,
+        )
 
 
-def read_parquet_rows(path: Path) -> list[dict[str, Any]]:
+def read_parquet_rows(
+    path: Path,
+    *,
+    on_error: LiveArtifactErrorPolicy = "raise",
+) -> list[dict[str, Any]]:
     """Read all rows from a parquet file or dataset directory."""
 
     if not artifact_exists(path):
         return []
     try:
-        return pq.read_table(path).to_pylist()
-    except (FileNotFoundError, OSError, pa.ArrowException):
-        return []
+        rows: list[dict[str, Any]] = []
+        for file_path in _parquet_files(path):
+            rows.extend(pq.read_table(file_path).to_pylist())
+        return rows
+    except (FileNotFoundError, OSError, pa.ArrowException) as exc:
+        return _handle_artifact_read_error(
+            path=path,
+            operation="read rows from",
+            exc=exc,
+            on_error=on_error,
+            empty_value=[],
+        )
 
 
-def read_parquet_tail(path: Path, n: int) -> list[dict[str, Any]]:
+def read_parquet_tail(
+    path: Path,
+    n: int,
+    *,
+    on_error: LiveArtifactErrorPolicy = "raise",
+) -> list[dict[str, Any]]:
     """Read the last ``n`` rows from a parquet file or dataset directory."""
 
     if n <= 0:
         return []
-    rows = read_parquet_rows(path)
-    return rows[-n:]
+    if not artifact_exists(path):
+        return []
+    try:
+        remaining = n
+        chunks: list[list[dict[str, Any]]] = []
+        for file_path in reversed(_parquet_files(path)):
+            row_count = _parquet_file_row_count(file_path)
+            if row_count <= 0:
+                continue
+            take = min(remaining, row_count)
+            start = row_count - take
+            rows = pq.read_table(file_path).slice(start, take).to_pylist()
+            chunks.append(rows)
+            remaining -= take
+            if remaining == 0:
+                break
+        return [row for chunk in reversed(chunks) for row in chunk]
+    except (FileNotFoundError, OSError, pa.ArrowException) as exc:
+        return _handle_artifact_read_error(
+            path=path,
+            operation="read tail from",
+            exc=exc,
+            on_error=on_error,
+            empty_value=[],
+        )
 
 
 def artifact_sha256(path: Path) -> str:
@@ -123,7 +189,7 @@ def artifact_sha256(path: Path) -> str:
 
 
 def list_run_artifacts(run_dir: Path) -> list[LiveArtifactMetadata]:
-    """List immediate file and directory artifacts in a live run directory."""
+    """List immediate file artifacts and known parquet dataset directories."""
 
     artifacts: list[LiveArtifactMetadata] = []
     try:
@@ -131,11 +197,11 @@ def list_run_artifacts(run_dir: Path) -> list[LiveArtifactMetadata]:
     except OSError:
         return artifacts
     for path in entries:
-        if not artifact_exists(path):
+        if not _is_listable_artifact(path):
             continue
         row_count: int | None = None
         if path.suffix == ".parquet":
-            row_count = parquet_row_count(path)
+            row_count = parquet_row_count(path, on_error="warn_empty")
         artifacts.append(
             LiveArtifactMetadata(
                 name=path.name,
@@ -145,6 +211,41 @@ def list_run_artifacts(run_dir: Path) -> list[LiveArtifactMetadata]:
             )
         )
     return artifacts
+
+
+def _handle_artifact_read_error[T](
+    *,
+    path: Path,
+    operation: str,
+    exc: Exception,
+    on_error: LiveArtifactErrorPolicy,
+    empty_value: T,
+) -> T:
+    error = LiveArtifactReadError(path=path, operation=operation, cause=exc)
+    if on_error == "warn_empty":
+        logger.warning(
+            "live artifact unreadable: %s",
+            error,
+            extra={"path": str(path), "error": str(error)},
+        )
+        return empty_value
+    raise error from exc
+
+
+def _is_listable_artifact(path: Path) -> bool:
+    return path.is_file() or (path.is_dir() and path.suffix == ".parquet")
+
+
+def _parquet_files(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        return sorted(p for p in path.rglob("*.parquet") if p.is_file())
+    return []
+
+
+def _parquet_file_row_count(path: Path) -> int:
+    return pq.ParquetFile(path).metadata.num_rows
 
 
 def _directory_sha256(path: Path) -> str:
@@ -162,6 +263,7 @@ def _directory_sha256(path: Path) -> str:
 
 __all__ = [
     "LiveArtifactMetadata",
+    "LiveArtifactReadError",
     "artifact_exists",
     "artifact_mtime_ms",
     "artifact_mtime_signature",

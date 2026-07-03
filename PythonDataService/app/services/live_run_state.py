@@ -160,7 +160,7 @@ def infer_state(run_dir: Path, now_ms: int | None = None) -> RunState:
         # [BAR] lines exist; use live.log mtime as proxy for last bar activity
         if log_age_s <= STALE_THRESHOLD_S:
             decisions_path = run_dir / "decisions.parquet"
-            row_count = parquet_row_count(decisions_path)
+            row_count = parquet_row_count(decisions_path, on_error="warn_empty")
             # 6 or 7: warming_up vs running
             return RunState.running if row_count >= 1 else RunState.warming_up
 
