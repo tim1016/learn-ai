@@ -1,7 +1,7 @@
 const DATA_PLANE_CONTROL_SECRET_HEADER = 'X-Data-Plane-Control-Secret';
 const DATA_PLANE_CONTROL_INTENT_HEADER = 'X-Data-Plane-Control-Intent';
 const DATA_PLANE_CONTROL_INTENT_VALUE = 'learn-ai-browser-control';
-const dataPlaneControlSurfaces = require('./src/app/security/data-plane-control-surfaces.json');
+const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfaces.json');
 const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CONTROL_PREFIXES = dataPlaneControlSurfaces.control_prefixes;
