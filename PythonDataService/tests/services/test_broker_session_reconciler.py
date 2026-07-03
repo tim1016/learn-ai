@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+from app.broker.ibkr.models import IbkrConnectionHealth
+from app.schemas.broker_session import GatewaySocketRow
+from app.schemas.live_runs import (
+    HostRunnerInstance,
+    HostRunnerInstancesStatus,
+    HostRunnerProcessState,
+    HostRunnerProcessStatus,
+)
+from app.services.broker_session_reconciler import (
+    RuntimeIndexEntry,
+    reconcile_broker_session_roster,
+)
+
+AS_OF_MS = 1_783_120_000_000
+
+
+def test_reconciler_surfaces_registry_offline_socket_live() -> None:
+    run_dir = "/runs/run-a"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=21760,
+                command="python",
+                run_dir=run_dir,
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(
+            _instance(
+                "PrajiTSLADemo",
+                "run-a",
+                run_dir,
+                HostRunnerProcessStatus(
+                    state=HostRunnerProcessState.exited,
+                    pid=21760,
+                    ended_at_ms=AS_OF_MS - 1_000,
+                ),
+            )
+        ),
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="PrajiTSLADemo",
+                run_id="run-a",
+                run_dir=run_dir,
+                account_id="DU123",
+                connection_state="connected",
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "bot"
+    assert rows[0].recency == "current"
+    assert rows[0].socket_present is True
+    assert rows[0].strategy_instance_id == "PrajiTSLADemo"
+    assert rows[0].attention_codes == ["REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE"]
+
+
+def test_reconciler_surfaces_started_but_no_socket() -> None:
+    run_dir = "/runs/run-b"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=_registry(
+            _instance(
+                "DEPVALJUL1",
+                "run-b",
+                run_dir,
+                HostRunnerProcessStatus(
+                    state=HostRunnerProcessState.running,
+                    pid=22332,
+                    started_at_ms=AS_OF_MS - 5_000,
+                ),
+            )
+        ),
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="DEPVALJUL1",
+                run_id="run-b",
+                run_dir=run_dir,
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "bot"
+    assert rows[0].recency == "unknown"
+    assert rows[0].socket_present is False
+    assert rows[0].attention_codes == ["STARTED_BUT_NO_SOCKET"]
+
+
+def test_reconciler_classifies_known_socket_without_pid_as_orphan() -> None:
+    run_dir = "/runs/run-c"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=None,
+                command="",
+                run_dir=run_dir,
+                local_port=50125,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="orphan-demo",
+                run_id="run-c",
+                run_dir=run_dir,
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "orphaned_bot_socket"
+    assert rows[0].recency == "current"
+    assert rows[0].attention_codes == ["SOCKET_WITHOUT_LIVE_PID", "ORPHANED_BOT_SOCKET"]
+
+
+def test_reconciler_classifies_unattributed_socket_as_ghost() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=999,
+                command="external",
+                local_port=50126,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "ghost"
+    assert rows[0].attention_codes == ["GHOST_SOCKET"]
+
+
+def test_reconciler_adds_connected_data_plane_system_row() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=42,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            fetched_at_ms=AS_OF_MS,
+            connection_state="connected",
+            last_transition_ms=AS_OF_MS - 500,
+        ),
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "system"
+    assert rows[0].client_id == 42
+    assert rows[0].account_id == "DU123"
+    assert rows[0].recency == "current"
+
+
+def _registry(*instances: HostRunnerInstance) -> HostRunnerInstancesStatus:
+    return HostRunnerInstancesStatus(instances=list(instances), fetched_at_ms=AS_OF_MS)
+
+
+def _instance(
+    strategy_instance_id: str,
+    run_id: str,
+    run_dir: str,
+    process: HostRunnerProcessStatus,
+) -> HostRunnerInstance:
+    return HostRunnerInstance(
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+        run_dir=run_dir,
+        process=process,
+    )

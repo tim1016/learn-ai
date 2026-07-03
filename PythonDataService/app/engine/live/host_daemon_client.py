@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from app.engine.live.daemon_auth import TOKEN_HEADER, read_daemon_token
 from app.engine.live.daemon_transport import DaemonResult
+from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import HostRunnerHealth
 
 logger = logging.getLogger(__name__)
@@ -342,6 +343,44 @@ async def fetch_health(
         ),
         health,
     )
+
+
+async def fetch_gateway_sockets(
+    base_url: str,
+    *,
+    gateway_port: int,
+) -> tuple[DaemonResult, GatewaySocketsSnapshot | None]:
+    """GET /broker/sockets from the host daemon.
+
+    The data plane passes the configured IBKR port; the browser never calls this
+    daemon route directly because it requires the shared live-runner token.
+    """
+
+    result, response = await _classify_http(
+        f"{base_url.rstrip('/')}/broker/sockets?gateway_port={gateway_port}",
+        method="GET",
+    )
+    if response is None:
+        return result, None
+    try:
+        snapshot = GatewaySocketsSnapshot.model_validate_json(response.content)
+    except ValidationError as exc:
+        return (
+            DaemonResult.incompatible_contract(
+                status=response.status_code,
+                detail=str(exc),
+            ),
+            None,
+        )
+    except ValueError as exc:
+        return (
+            DaemonResult.malformed_body(
+                status=response.status_code,
+                detail=str(exc),
+            ),
+            None,
+        )
+    return DaemonResult.connected(status=response.status_code), snapshot
 
 
 async def _typed_get_json(

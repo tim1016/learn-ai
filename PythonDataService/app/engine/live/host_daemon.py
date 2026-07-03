@@ -29,10 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.live.broker_socket_probe import BrokerSocketProbeError, LsofSocketEnumerator
 from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
 from app.engine.live.deploy import (
     DeployIOError,
@@ -51,6 +52,7 @@ from app.engine.live.deploy import (
 )
 from app.engine.live.host_runner_policy import load_policy_env_file, validate_ibkr_host_allowed
 from app.engine.strategy.spec.schema import load_spec_from_path
+from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import (
     AuditCopySizingLookup,
     EmergencyFlattenRequest,
@@ -1191,6 +1193,23 @@ def create_app(
     @app.get("/health", response_model=HostRunnerHealth, dependencies=auth)
     async def health() -> HostRunnerHealth:
         return process_manager.health()
+
+    @app.get("/broker/sockets", response_model=GatewaySocketsSnapshot, dependencies=auth)
+    async def broker_sockets(
+        gateway_port: int = Query(default=4002, ge=1, le=65535),
+    ) -> GatewaySocketsSnapshot:
+        try:
+            sockets = await run_in_threadpool(
+                LsofSocketEnumerator().enumerate,
+                gateway_port,
+            )
+        except BrokerSocketProbeError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        return GatewaySocketsSnapshot(
+            fetched_at_ms=_now_ms(),
+            gateway_port=gateway_port,
+            sockets=sockets,
+        )
 
     @app.post("/control-plane/renew-lease", response_model=HostRunnerHealth, dependencies=auth)
     async def renew_control_plane_lease() -> HostRunnerHealth:
