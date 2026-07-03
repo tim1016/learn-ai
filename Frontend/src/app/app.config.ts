@@ -1,6 +1,6 @@
 import { ApplicationConfig, inject, provideZonelessChangeDetection } from "@angular/core";
 import { provideRouter, withInMemoryScrolling, withExperimentalAutoCleanupInjectors } from "@angular/router";
-import { provideHttpClient } from "@angular/common/http";
+import { provideHttpClient, withInterceptors } from "@angular/common/http";
 import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
 import { providePrimeNG } from "primeng/config";
 import { MessageService } from "primeng/api";
@@ -10,6 +10,7 @@ import { InMemoryCache } from "@apollo/client/core";
 import Aura from "@primeuix/themes/aura";
 import { environment } from "../environments/environment";
 import { routes } from "./app.routes";
+import { dataPlaneControlIntentInterceptor } from "./security/data-plane-control-intent.interceptor";
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -19,7 +20,7 @@ export const appConfig: ApplicationConfig = {
       withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' }),
       withExperimentalAutoCleanupInjectors(),
     ),
-    provideHttpClient(),
+    provideHttpClient(withInterceptors([dataPlaneControlIntentInterceptor])),
     provideAnimationsAsync(),
     providePrimeNG({
       theme: {
