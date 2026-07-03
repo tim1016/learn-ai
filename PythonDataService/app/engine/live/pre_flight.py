@@ -14,7 +14,6 @@ collects them and refuses to start if any has ``passed=False``.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import socket
@@ -24,6 +23,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+from app.engine.live.live_artifact_io import artifact_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -492,14 +493,6 @@ def check_sizing_policy_present(live_config: dict) -> CheckResult:
 # ──────────────────────────── Yesterday-artifacts gate ───────────────
 
 
-def _file_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def check_yesterday_artifacts_valid(
     *,
     run_dir: Path,
@@ -577,7 +570,7 @@ def check_yesterday_artifacts_valid(
         if not path.exists():
             mismatches.append({"key": key, "path": str(path), "reason": "missing"})
             continue
-        actual = _file_sha256(path)
+        actual = artifact_sha256(path)
         if actual != recorded:
             mismatches.append(
                 {

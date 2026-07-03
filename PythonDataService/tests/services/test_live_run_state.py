@@ -203,6 +203,23 @@ def test_infer_state_running(tmp_path: Path):
     assert infer_state(run_dir, now_ms=now_ms) == RunState.running
 
 
+def test_infer_state_running_with_segmented_decision_dataset(tmp_path: Path) -> None:
+    sidecar = _make_sidecar(started_offset_s=30)
+    bar_line = "2026-01-01T09:35:00+00:00 INFO [BAR] 2026-01-01T09:35:00+00:00 consolidator_emitted=1 snapshot=set\n"
+    run_dir = make_run_dir(
+        tmp_path,
+        sidecar=sidecar,
+        log_content=bar_line,
+        decisions_rows=0,
+    )
+    dataset_dir = run_dir / "decisions.parquet"
+    dataset_dir.mkdir()
+    pq.write_table(pa.table({"signal": ["ENTER"]}), dataset_dir / "part-000001.parquet")
+
+    now_ms = int(time.time() * 1000)
+    assert infer_state(run_dir, now_ms=now_ms) == RunState.running
+
+
 def test_infer_state_stale_log_old(tmp_path: Path):
     """Active sidecar, [BAR] in log, but log mtime > 90 s → stale."""
     sidecar = _make_sidecar(started_offset_s=120)

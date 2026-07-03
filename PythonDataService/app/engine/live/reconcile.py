@@ -78,7 +78,6 @@ from __future__ import annotations
 
 import argparse
 import enum
-import hashlib
 import json
 import logging
 import sys
@@ -87,6 +86,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
+
+from app.engine.live.live_artifact_io import artifact_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -484,26 +485,7 @@ def summarize_day(
 
 def file_sha256(path: Path) -> str:
     """Return a stable lowercase SHA-256 for a file or artifact directory."""
-    if path.is_dir():
-        return _directory_sha256(path)
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _directory_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    for child in sorted(p for p in path.rglob("*") if p.is_file()):
-        rel = child.relative_to(path).as_posix().encode("utf-8")
-        h.update(rel)
-        h.update(b"\0")
-        with child.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                h.update(chunk)
-        h.update(b"\0")
-    return h.hexdigest()
+    return artifact_sha256(path)
 
 
 def _maybe_sha256(path: Path) -> str | None:

@@ -225,6 +225,10 @@ def test_decision_writer_interrupted_segment_publish_keeps_prior_rows(
     recovered = pd.read_parquet(path)
     assert len(recovered) == 2
     assert list(recovered["signal"]) == ["HOLD", "ENTER"]
+    assert sorted(p.name for p in path.iterdir()) == [
+        "part-000001.parquet",
+        "part-000002.parquet",
+    ]
 
 
 def test_decision_writer_round_trips_through_reconcile_loader(tmp_path: Path) -> None:

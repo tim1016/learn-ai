@@ -17,9 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
+from app.engine.live.live_artifact_io import (
+    artifact_exists,
+    artifact_mtime_signature,
+    read_parquet_rows,
+)
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import ActivityBrokerEventRow
 from app.services.broker_activity_reconstruction import project_broker_activity_for_run
@@ -137,10 +139,10 @@ def _closed_trade_events_for_run(
     start_ms: int,
     end_ms: int,
 ) -> list[ActivityBrokerEventRow]:
-    rows = _read_parquet_rows(run_dir / "trades.parquet")
+    rows = read_parquet_rows(run_dir / "trades.parquet")
     if not rows:
         return []
-    execution_rows = _read_parquet_rows(run_dir / "executions.parquet")
+    execution_rows = read_parquet_rows(run_dir / "executions.parquet")
     fallback_symbol = _first_symbol(execution_rows)
     out: list[ActivityBrokerEventRow] = []
     for row in rows:
@@ -196,10 +198,10 @@ def _run_specs_with_repair_artifacts(runs: Iterable[dict[str, Any]]) -> Iterable
         if (run_dir / "broker_callbacks.jsonl").is_file():
             yield run
             continue
-        if _parquet_artifact_exists(run_dir / "executions.parquet"):
+        if artifact_exists(run_dir / "executions.parquet"):
             yield run
             continue
-        if _parquet_artifact_exists(run_dir / "trades.parquet"):
+        if artifact_exists(run_dir / "trades.parquet"):
             yield run
             continue
 
@@ -245,11 +247,8 @@ def _live_state_repair_fingerprint(path: Path) -> str:
 
 
 def _file_fingerprint(path: Path) -> str:
-    try:
-        stat = path.stat()
-    except OSError:
-        return f"{path.name}:missing"
-    return f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}"
+    signature = artifact_mtime_signature(path)
+    return f"{path.name}:{signature!r}"
 
 
 def _read_cache(path: Path, *, signature: str) -> ActivityRepairProjection | None:
@@ -298,20 +297,6 @@ def _file_lock(path: Path) -> Iterable[None]:
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
-def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
-    if not _parquet_artifact_exists(path):
-        return []
-    try:
-        return pq.read_table(path).to_pylist()
-    except (OSError, pa.ArrowException) as exc:
-        logger.warning("activity repair parquet read failed for %s: %s", path, exc, exc_info=True)
-        return []
-
-
-def _parquet_artifact_exists(path: Path) -> bool:
-    return path.is_file() or path.is_dir()
 
 
 def _first_symbol(rows: list[dict[str, Any]]) -> str | None:

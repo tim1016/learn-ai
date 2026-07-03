@@ -19,8 +19,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+from app.engine.live.live_artifact_io import artifact_sha256
 from app.engine.live.pre_flight import (
     NTP_EPOCH_OFFSET_SEC,
     NTP_PACKET_SIZE,
@@ -360,6 +363,44 @@ def test_yesterday_artifacts_passes_when_all_hashes_match(tmp_path: Path) -> Non
     result = check_yesterday_artifacts_valid(
         run_dir=run_dir, qc_dir=qc_dir, docs_dir=docs_dir, yesterday_day_n=1
     )
+    assert result.passed is True
+
+
+def test_yesterday_artifacts_verifies_parquet_dataset_directory_hash(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    qc_dir = tmp_path / "qc"
+    docs_dir = tmp_path / "docs"
+    (run_dir / "reconcile").mkdir(parents=True)
+    qc_dir.mkdir()
+    docs_dir.mkdir()
+    (docs_dir / "day-1.md").write_text("# day 1\n", encoding="utf-8")
+    executions_dir = run_dir / "executions.parquet"
+    executions_dir.mkdir()
+    pq.write_table(
+        pa.table({"exec_id": ["exec-1"], "symbol": ["SPY"]}),
+        executions_dir / "part-000001.parquet",
+    )
+
+    sidecar = run_dir / "reconcile" / "day-1.hashes.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "reconcile_json": None,
+                "reconcile_parquet": None,
+                "python_executions_parquet": artifact_sha256(executions_dir),
+                "python_trades_parquet": None,
+                "qc_export_trades": None,
+                "qc_export_indicators": None,
+                "run_ledger": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = check_yesterday_artifacts_valid(
+        run_dir=run_dir, qc_dir=qc_dir, docs_dir=docs_dir, yesterday_day_n=1
+    )
+
     assert result.passed is True
 
 

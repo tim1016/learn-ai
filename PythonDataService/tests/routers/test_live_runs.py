@@ -80,6 +80,27 @@ def _write_decisions(run_dir: Path, n: int) -> None:
     pq.write_table(t, run_dir / "decisions.parquet")
 
 
+def _write_decisions_dataset(run_dir: Path, values: list[str]) -> None:
+    dataset_dir = run_dir / "decisions.parquet"
+    dataset_dir.mkdir()
+    pq.write_table(pa.table({"signal": values[:1]}), dataset_dir / "part-000001.parquet")
+    if len(values) > 1:
+        pq.write_table(pa.table({"signal": values[1:]}), dataset_dir / "part-000002.parquet")
+
+
+def _write_executions_dataset(run_dir: Path) -> None:
+    dataset_dir = run_dir / "executions.parquet"
+    dataset_dir.mkdir()
+    pq.write_table(
+        pa.table({"ts_ms": [1_700_000_000_000], "exec_id": ["exec-1"]}),
+        dataset_dir / "part-000001.parquet",
+    )
+    pq.write_table(
+        pa.table({"ts_ms": [1_700_000_060_000], "exec_id": ["exec-2"]}),
+        dataset_dir / "part-000002.parquet",
+    )
+
+
 def _write_log(run_dir: Path, content: str, *, mtime_offset_s: float = 0.0) -> None:
     log = run_dir / "live.log"
     log.write_text(content, encoding="utf-8")
@@ -355,6 +376,45 @@ async def test_status_decisions_count(live_runs_root):
     assert response.status_code == 200
     data = response.json()
     assert data["decisions"]["row_count"] == 1
+
+
+async def test_executions_endpoint_reads_segmented_dataset(live_runs_root):
+    run_id = "run-exec-dataset-" + "x" * 47
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    _write_executions_dataset(run_dir)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/executions?since_ms=1700000000000")
+
+    assert response.status_code == 200
+    assert response.json() == [{"ts_ms": 1_700_000_060_000, "exec_id": "exec-2"}]
+
+
+async def test_status_reads_segmented_decisions_dataset(live_runs_root):
+    run_id = "run-dataset-" + "s" * 52
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    _write_sidecar(run_dir, _sidecar(run_id, started_offset_s=30))
+    _write_log(
+        run_dir,
+        "2026-01-01T09:35:00+00:00 INFO [BAR] 2026-01-01T09:35:00+00:00 consolidator_emitted=1 snapshot=set\n",
+    )
+    _write_decisions_dataset(run_dir, ["HOLD", "ENTER"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["state"] == "running"
+    assert data["decisions"]["row_count"] == 2
+    assert data["decisions"]["latest_decision"]["signal"] == "ENTER"
+    artifacts = {artifact["name"]: artifact for artifact in data["artifacts"]["files"]}
+    assert artifacts["decisions.parquet"]["row_count"] == 2
+    assert artifacts["decisions.parquet"]["size_bytes"] > 0
 
 
 async def test_status_halt_flag_populated(live_runs_root):

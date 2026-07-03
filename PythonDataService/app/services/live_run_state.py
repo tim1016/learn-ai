@@ -17,8 +17,7 @@ import json
 import time
 from pathlib import Path
 
-import pyarrow.parquet as pq
-
+from app.engine.live.live_artifact_io import parquet_row_count
 from app.schemas.live_runs import ExitReason, RunState, RunStatusSidecar
 
 # ---------------------------------------------------------------------------
@@ -45,14 +44,6 @@ def _mtime_ms(path: Path) -> int | None:
         return int(path.stat().st_mtime * 1000)
     except FileNotFoundError:
         return None
-
-
-def _parquet_row_count(path: Path) -> int:
-    """Return row count from Parquet footer metadata. O(1) — no data read."""
-    try:
-        return pq.ParquetFile(path).metadata.num_rows
-    except (FileNotFoundError, OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
-        return 0
 
 
 def _read_sidecar(run_dir: Path) -> RunStatusSidecar | None:
@@ -169,7 +160,7 @@ def infer_state(run_dir: Path, now_ms: int | None = None) -> RunState:
         # [BAR] lines exist; use live.log mtime as proxy for last bar activity
         if log_age_s <= STALE_THRESHOLD_S:
             decisions_path = run_dir / "decisions.parquet"
-            row_count = _parquet_row_count(decisions_path) if decisions_path.exists() else 0
+            row_count = parquet_row_count(decisions_path)
             # 6 or 7: warming_up vs running
             return RunState.running if row_count >= 1 else RunState.warming_up
 
