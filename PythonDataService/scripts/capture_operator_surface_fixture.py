@@ -20,6 +20,7 @@ import asyncio
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -38,6 +39,17 @@ _FIXTURE_DIR = (
 _FIXTURE_NOW_MS = 1_782_000_000_000
 _FIXTURE_ROOT_TOKEN = "__OPERATOR_SURFACE_FIXTURE_ROOT__"
 _STRATEGY_INSTANCE_ID = "spy_ema_paper"
+_DAEMON_URL = "http://daemon"
+
+
+@dataclass(frozen=True)
+class OperatorSurfaceFixtureScenario:
+    name: str
+    ledger_run_id: str
+    process: dict[str, Any] | None
+    strategy_instance_id: str = _STRATEGY_INSTANCE_ID
+    ledger_created_at_ms: int = 100
+    daemon_url: str = _DAEMON_URL
 
 
 def _write_ledger(root: Path, run_id: str, sid: str, created_at_ms: int) -> None:
@@ -65,24 +77,32 @@ def _sanitize_fixture_payload(payload: Any, root: Path) -> Any:
     return payload
 
 
-def operator_surface_fixture_scenarios() -> dict[str, dict[str, Any] | None]:
+def operator_surface_fixture_scenarios() -> dict[str, OperatorSurfaceFixtureScenario]:
     """Return the committed fixture scenarios by stable fixture name."""
     return {
-        "steady": {
-            "state": "running",
-            "run_id": "run-steady",
-            "pid": 99,
-            "started_at_ms": 100,
-        },
-        "stopped": {"state": "idle"},
+        "steady": OperatorSurfaceFixtureScenario(
+            name="steady",
+            ledger_run_id="run-steady",
+            process={
+                "state": "running",
+                "run_id": "run-steady",
+                "pid": 99,
+                "started_at_ms": 100,
+            },
+        ),
+        "stopped": OperatorSurfaceFixtureScenario(
+            name="stopped",
+            ledger_run_id="run-stopped",
+            process={"state": "idle"},
+        ),
     }
 
 
 @contextmanager
-def _patched_status_route(root: Path, process: dict[str, Any] | None) -> Iterator[None]:
+def _patched_status_route(root: Path, scenario: OperatorSurfaceFixtureScenario) -> Iterator[None]:
     stub = SimpleNamespace(
         live_runs_root=str(root / "live_runs"),
-        live_runner_daemon_url="http://daemon",
+        live_runner_daemon_url=scenario.daemon_url,
         live_runner_host_start_command="python -m app.engine.live.host_daemon",
         fleet_dirty_blocks_starts=False,
         mode="paper",
@@ -93,8 +113,10 @@ def _patched_status_route(root: Path, process: dict[str, Any] | None) -> Iterato
     monkeyed_now_ms = live_instances._now_ms
     monkeyed_fetch = host_daemon_client.fetch_instance_process
 
-    async def fake_process(_base_url: str, _sid: str) -> tuple[DaemonResult, dict | None]:
-        return DaemonResult(kind="CONNECTED"), process
+    async def fake_process(base_url: str, sid: str) -> tuple[DaemonResult, dict | None]:
+        assert base_url == scenario.daemon_url
+        assert sid == scenario.strategy_instance_id
+        return DaemonResult(kind="CONNECTED"), scenario.process
 
     live_instances.get_settings = lambda: stub  # type: ignore[assignment]
     live_instances._now_ms = lambda: _FIXTURE_NOW_MS  # type: ignore[assignment]
@@ -107,27 +129,34 @@ def _patched_status_route(root: Path, process: dict[str, Any] | None) -> Iterato
         host_daemon_client.fetch_instance_process = monkeyed_fetch  # type: ignore[assignment]
 
 
-async def _capture(state: str, process: dict[str, Any] | None) -> dict[str, Any]:
-    with TemporaryDirectory(prefix=f"operator-surface-{state}-") as tmp_name:
+async def _capture(scenario: OperatorSurfaceFixtureScenario) -> dict[str, Any]:
+    with TemporaryDirectory(prefix=f"operator-surface-{scenario.name}-") as tmp_name:
         tmp = Path(tmp_name)
         (tmp / "live_runs").mkdir(parents=True, exist_ok=True)
-        _write_ledger(tmp / "live_runs", f"run-{state}", _STRATEGY_INSTANCE_ID, 100)
+        _write_ledger(
+            tmp / "live_runs",
+            scenario.ledger_run_id,
+            scenario.strategy_instance_id,
+            scenario.ledger_created_at_ms,
+        )
 
-        with _patched_status_route(tmp, process):
+        with _patched_status_route(tmp, scenario):
             from app.main import app
 
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
-                response = await client.get(f"/api/live-instances/{_STRATEGY_INSTANCE_ID}/status")
+                response = await client.get(
+                    f"/api/live-instances/{scenario.strategy_instance_id}/status"
+                )
             response.raise_for_status()
             return _sanitize_fixture_payload(response.json(), tmp)
 
 
 async def capture_operator_surface_fixtures() -> dict[str, dict[str, Any]]:
     captured_fixtures: dict[str, dict[str, Any]] = {}
-    for name, process in operator_surface_fixture_scenarios().items():
-        captured_fixtures[name] = await _capture(name, process)
+    for name, scenario in operator_surface_fixture_scenarios().items():
+        captured_fixtures[name] = await _capture(scenario)
     return captured_fixtures
 
 
