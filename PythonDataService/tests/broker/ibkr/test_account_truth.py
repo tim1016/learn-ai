@@ -306,7 +306,7 @@ def test_account_truth_cache_fallback_positions_force_not_proven() -> None:
     positions = next(row for row in truth.source_freshness if row.source == "positions")
 
     assert positions.status == "stale"
-    assert positions.age_ms == 600
+    assert positions.age_ms is None
     assert positions.reason_code == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
     assert "reqPositionsAsync timed out" in positions.message
     assert truth.final_verdict == "not_proven"

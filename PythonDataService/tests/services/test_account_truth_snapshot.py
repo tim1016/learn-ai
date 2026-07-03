@@ -660,6 +660,22 @@ def test_critical_source_freshness_block_is_shared_with_gate_projection() -> Non
     assert gate.operator_reason == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
 
 
+def test_fresh_critical_source_is_rechecked_at_gate_read_time() -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=120_000)
+    snapshot = provider.remember(
+        _truth(source_freshness=fresh_account_truth_source_freshness(1_000)),
+        cached_at_ms=1_000,
+    )
+
+    assessment = assess_account_truth(snapshot, now_ms=61_001)
+    gate = account_truth_gate_result(snapshot, now_ms=61_001)
+
+    assert assessment.status == "block"
+    assert assessment.primary_reason_code == "ACCOUNT_TRUTH_SOURCE_STALE_BROKER_CONNECTION"
+    assert assessment.explanation == "Broker connection evidence is 60001 ms old; hard freshness threshold is 60000 ms."
+    assert gate.operator_reason == "ACCOUNT_TRUTH_SOURCE_STALE_BROKER_CONNECTION"
+
+
 def test_restamped_cache_cannot_fake_stale_source_freshness() -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
     source_freshness = [

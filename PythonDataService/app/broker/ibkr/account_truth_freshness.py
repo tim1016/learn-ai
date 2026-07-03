@@ -174,18 +174,19 @@ def _source_freshness_row(
         )
 
     age_ms = max(0, checked_at_ms - fetched_at_ms)
-    if force_stale_message is not None or age_ms > spec.hard_ttl_ms:
-        return AccountTruthSourceFreshness(
-            source=source,
-            label=spec.label,
-            status="stale",
-            severity=spec.severity,
+    if force_stale_message is not None:
+        return _stale_source_freshness_row(
+            source,
+            fetched_at_ms=fetched_at_ms,
+            age_ms=None,
+            message=force_stale_message,
+        )
+    if age_ms > spec.hard_ttl_ms:
+        return _stale_source_freshness_row(
+            source,
             fetched_at_ms=fetched_at_ms,
             age_ms=age_ms,
-            hard_ttl_ms=spec.hard_ttl_ms,
-            reason_code=_reason_code(source, "stale"),
-            message=force_stale_message
-            or f"{spec.label} evidence is {age_ms} ms old; hard freshness threshold is {spec.hard_ttl_ms} ms.",
+            message=None,
         )
 
     return AccountTruthSourceFreshness(
@@ -211,19 +212,42 @@ def _recheck_source_age(
         return row
     age_ms = max(0, checked_at_ms - row.fetched_at_ms)
     if row.status != "fresh":
+        if row.age_ms is None:
+            return row
         return row.model_copy(update={"age_ms": age_ms})
     if age_ms <= spec.hard_ttl_ms:
         return row.model_copy(update={"age_ms": age_ms})
+    return _stale_source_freshness_row(
+        row.source,
+        fetched_at_ms=row.fetched_at_ms,
+        age_ms=age_ms,
+        message=None,
+    )
+
+
+def _stale_source_freshness_row(
+    source: AccountTruthSourceName,
+    *,
+    fetched_at_ms: int | None,
+    age_ms: int | None,
+    message: str | None,
+) -> AccountTruthSourceFreshness:
+    spec = _SOURCE_SPEC_BY_NAME[source]
     return AccountTruthSourceFreshness(
-        source=row.source,
+        source=source,
         label=spec.label,
         status="stale",
         severity=spec.severity,
-        fetched_at_ms=row.fetched_at_ms,
+        fetched_at_ms=fetched_at_ms,
         age_ms=age_ms,
         hard_ttl_ms=spec.hard_ttl_ms,
-        reason_code=_reason_code(row.source, "stale"),
-        message=f"{spec.label} evidence is {age_ms} ms old; hard freshness threshold is {spec.hard_ttl_ms} ms.",
+        reason_code=_reason_code(source, "stale"),
+        message=message
+        or (
+            f"{spec.label} evidence is {age_ms} ms old; hard freshness threshold is {spec.hard_ttl_ms} ms."
+            if age_ms is not None
+            else f"{spec.label} evidence age is unknown; hard freshness threshold is {spec.hard_ttl_ms} ms."
+        ),
     )
 
 
