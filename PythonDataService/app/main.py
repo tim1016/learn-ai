@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -100,6 +101,7 @@ async def lifespan(app: FastAPI):
     )
 
     monitor: AutoReconnectMonitor | None = None
+    account_truth_refresh_loop = None
 
     if ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
@@ -179,6 +181,14 @@ async def lifespan(app: FastAPI):
         )
         monitor.start()
         set_monitor(monitor)
+
+        from app.services.account_truth_refresh import AccountTruthRefreshLoop
+
+        account_truth_refresh_loop = AccountTruthRefreshLoop(
+            client=ibkr_client,
+            artifacts_root=Path(ibkr_settings.live_runs_root).parent,
+        )
+        account_truth_refresh_loop.start()
     else:
         set_client(None)
         set_monitor(None)
@@ -229,6 +239,8 @@ async def lifespan(app: FastAPI):
         if daemon_monitor is not None:
             await daemon_monitor.stop()
             set_daemon_monitor(None)
+        if account_truth_refresh_loop is not None:
+            await account_truth_refresh_loop.stop()
         # ADR 0014 — stop every broker-activity publisher before tearing
         # down the broker connection so each publisher's WAL append +
         # subscriber drain completes cleanly. Safe to call even when no
