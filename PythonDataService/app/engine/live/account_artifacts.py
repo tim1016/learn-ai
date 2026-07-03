@@ -7,8 +7,10 @@ import logging
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -124,6 +126,23 @@ class AccountInstanceBinding(BaseModel):
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE"
     recorded_at_ms: int = Field(ge=0)
     source: str = Field(min_length=1)
+
+
+@dataclass(frozen=True)
+class AccountInstanceBindingIndex:
+    """Latest-row fold of account instance registry rows."""
+
+    latest_by_instance: Mapping[str, AccountInstanceBinding]
+    latest_by_namespace: Mapping[str, AccountInstanceBinding]
+    active_by_namespace: Mapping[str, tuple[AccountInstanceBinding, ...]]
+
+    @property
+    def duplicate_active_namespaces(self) -> frozenset[str]:
+        return frozenset(
+            namespace
+            for namespace, namespace_bindings in self.active_by_namespace.items()
+            if len(namespace_bindings) > 1
+        )
 
 
 class AccountOwnerGeneration(BaseModel):
@@ -508,21 +527,57 @@ def read_account_instance_registry(
     return bindings
 
 
+def index_account_instance_bindings(
+    bindings: Sequence[AccountInstanceBinding],
+    *,
+    account_id: str | None = None,
+) -> AccountInstanceBindingIndex:
+    """Fold registry rows into latest-row views.
+
+    Newer ``recorded_at_ms`` wins. When two rows share the same timestamp, the
+    later append wins because the account registry is append-only.
+    """
+    latest_by_instance: dict[str, AccountInstanceBinding] = {}
+    latest_by_namespace: dict[str, AccountInstanceBinding] = {}
+    for binding in bindings:
+        if account_id is not None and binding.account_id.upper() != account_id.upper():
+            continue
+        latest_instance = latest_by_instance.get(binding.strategy_instance_id)
+        if latest_instance is None or binding.recorded_at_ms >= latest_instance.recorded_at_ms:
+            latest_by_instance[binding.strategy_instance_id] = binding
+
+        latest_namespace = latest_by_namespace.get(binding.bot_order_namespace)
+        if latest_namespace is None or binding.recorded_at_ms >= latest_namespace.recorded_at_ms:
+            latest_by_namespace[binding.bot_order_namespace] = binding
+
+    active_lists_by_namespace: dict[str, list[AccountInstanceBinding]] = {}
+    for binding in latest_by_instance.values():
+        if binding.lifecycle_state not in ACTIVE_INSTANCE_BINDING_STATES:
+            continue
+        active_lists_by_namespace.setdefault(binding.bot_order_namespace, []).append(binding)
+
+    return AccountInstanceBindingIndex(
+        latest_by_instance=MappingProxyType(latest_by_instance),
+        latest_by_namespace=MappingProxyType(latest_by_namespace),
+        active_by_namespace=MappingProxyType(
+            {
+                namespace: tuple(namespace_bindings)
+                for namespace, namespace_bindings in active_lists_by_namespace.items()
+            }
+        ),
+    )
+
+
 def latest_account_instance_binding(
     bindings: list[AccountInstanceBinding],
     *,
     account_id: str,
     strategy_instance_id: str,
 ) -> AccountInstanceBinding | None:
-    latest: AccountInstanceBinding | None = None
-    for binding in bindings:
-        if binding.account_id.upper() != account_id.upper():
-            continue
-        if binding.strategy_instance_id != strategy_instance_id:
-            continue
-        if latest is None or binding.recorded_at_ms >= latest.recorded_at_ms:
-            latest = binding
-    return latest
+    return index_account_instance_bindings(
+        bindings,
+        account_id=account_id,
+    ).latest_by_instance.get(strategy_instance_id)
 
 
 def has_account_recovery_evidence_after(events: list[dict], recorded_at_ms: int) -> bool:
@@ -550,18 +605,15 @@ def compute_reconcile_namespaces(
     namespaces are recognized as same-account managed activity, but never
     adoptable by this run.
     """
-    bindings = read_account_instance_registry(artifacts_root, account_id)
-    latest_by_instance: dict[str, AccountInstanceBinding] = {}
-    for binding in sorted(bindings, key=lambda b: b.recorded_at_ms):
-        if binding.account_id.upper() != account_id.upper():
-            continue
-        latest_by_instance[binding.strategy_instance_id] = binding
+    binding_index = index_account_instance_bindings(
+        read_account_instance_registry(artifacts_root, account_id),
+        account_id=account_id,
+    )
 
     sibling_namespaces = {
-        binding.bot_order_namespace
-        for binding in latest_by_instance.values()
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
-        and binding.bot_order_namespace != current_namespace
+        namespace
+        for namespace in binding_index.active_by_namespace
+        if namespace != current_namespace
     }
     return frozenset({current_namespace}), frozenset(sibling_namespaces)
 
@@ -574,12 +626,11 @@ def evaluate_account_instance_binding(
     run_id: str,
     bot_order_namespace: str,
 ) -> GateResult:
-    bindings = read_account_instance_registry(artifacts_root, account_id)
-    latest_by_instance: dict[str, AccountInstanceBinding] = {}
-    for binding in bindings:
-        latest_by_instance[binding.strategy_instance_id] = binding
+    binding_index = index_account_instance_bindings(
+        read_account_instance_registry(artifacts_root, account_id),
+    )
 
-    current = latest_by_instance.get(strategy_instance_id)
+    current = binding_index.latest_by_instance.get(strategy_instance_id)
     if current is None:
         return _registry_gate_result(
             status="block",
@@ -616,12 +667,7 @@ def evaluate_account_instance_binding(
             evidence_at_ms=current.recorded_at_ms,
         )
 
-    namespace_owners = [
-        binding
-        for binding in latest_by_instance.values()
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
-        and binding.bot_order_namespace == bot_order_namespace
-    ]
+    namespace_owners = binding_index.active_by_namespace.get(bot_order_namespace, ())
     if len(namespace_owners) > 1:
         return _registry_gate_result(
             status="block",
@@ -870,6 +916,7 @@ __all__ = [
     "AccountEventRecord",
     "AccountFreezeEvidence",
     "AccountInstanceBinding",
+    "AccountInstanceBindingIndex",
     "AccountOwnerGeneration",
     "AccountRecoveryProof",
     "RestartIntensityPolicy",
@@ -880,6 +927,7 @@ __all__ = [
     "compute_reconcile_namespaces",
     "evaluate_account_instance_binding",
     "evaluate_restart_intensity",
+    "index_account_instance_bindings",
     "read_account_events",
     "read_account_events_tolerant",
     "read_account_events_tolerant_with_hash",

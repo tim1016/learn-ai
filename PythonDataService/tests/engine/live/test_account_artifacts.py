@@ -21,6 +21,7 @@ from app.engine.live.account_artifacts import (
     evaluate_account_instance_binding,
     evaluate_restart_intensity,
     has_account_recovery_evidence_after,
+    index_account_instance_bindings,
     latest_account_instance_binding,
     read_account_events,
     read_account_events_tolerant,
@@ -530,6 +531,57 @@ def test_latest_account_instance_binding_uses_later_append_on_timestamp_tie() ->
     )
 
     assert latest == retired
+
+
+def test_index_account_instance_bindings_filters_account_and_tie_breaks_by_append_order() -> None:
+    active = _binding(recorded_at_ms=1_700_000_000_000)
+    wrong_account = _binding(
+        sid="wrong-account",
+        namespace="learn-ai/wrong-account/v1",
+        recorded_at_ms=1_700_000_000_500,
+    ).model_copy(update={"account_id": "DU999999"})
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.process_crashed",
+        }
+    )
+
+    binding_index = index_account_instance_bindings(
+        [active, wrong_account, retired],
+        account_id="DU123456",
+    )
+
+    assert binding_index.latest_by_instance == {"spy-ema-paper-1": retired}
+    assert binding_index.latest_by_namespace == {
+        "learn-ai/spy-ema-paper-1/v1": retired,
+    }
+    assert binding_index.active_by_namespace == {}
+    assert binding_index.duplicate_active_namespaces == frozenset()
+    with pytest.raises(TypeError):
+        binding_index.latest_by_instance["mutated"] = active
+
+
+def test_index_account_instance_bindings_groups_duplicate_active_namespace() -> None:
+    first = _binding(
+        sid="spy-a",
+        run_id="run-a",
+        namespace="learn-ai/shared/v1",
+        recorded_at_ms=1_700_000_000_000,
+    )
+    second = _binding(
+        sid="spy-b",
+        run_id="run-b",
+        namespace="learn-ai/shared/v1",
+        recorded_at_ms=1_700_000_000_001,
+    )
+
+    binding_index = index_account_instance_bindings([first, second], account_id="DU123456")
+
+    assert binding_index.active_by_namespace == {
+        "learn-ai/shared/v1": (first, second),
+    }
+    assert binding_index.duplicate_active_namespaces == frozenset({"learn-ai/shared/v1"})
 
 
 def test_has_account_recovery_evidence_after_requires_later_recovery_event() -> None:

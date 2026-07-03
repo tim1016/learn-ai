@@ -37,9 +37,9 @@ from app.broker.ibkr.order_cancel_capability import evaluate_order_cancel_capabi
 from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import executions_for_reconnect_recovery, list_open_orders
 from app.engine.live.account_artifacts import (
-    ACTIVE_INSTANCE_BINDING_STATES,
     AccountArtifactError,
     AccountInstanceBinding,
+    index_account_instance_bindings,
     read_account_instance_registry,
 )
 from app.engine.live.order_identity import (
@@ -464,46 +464,26 @@ def _namespace_views(
     account_id: str | None,
     registry_unavailable: bool,
 ) -> _NamespaceViews:
-    matching_bindings = sorted(
-        (binding for binding in bindings if _binding_matches_account(binding, account_id)),
-        key=lambda binding: (binding.recorded_at_ms, binding.strategy_instance_id, binding.run_id),
-    )
-    latest_by_namespace: dict[str, AccountInstanceBinding] = {}
-    latest_by_instance: dict[str, AccountInstanceBinding] = {}
-    for binding in matching_bindings:
-        latest_by_namespace[binding.bot_order_namespace] = binding
-        latest_by_instance[binding.strategy_instance_id] = binding
+    if account_id is None:
+        binding_index = index_account_instance_bindings(())
+    else:
+        binding_index = index_account_instance_bindings(bindings, account_id=account_id)
 
     attribution_by_namespace = {
         namespace: _namespace_owner(binding)
-        for namespace, binding in latest_by_namespace.items()
+        for namespace, binding in binding_index.latest_by_namespace.items()
     }
-    active_bindings_by_namespace: dict[str, list[AccountInstanceBinding]] = defaultdict(list)
-    for binding in latest_by_instance.values():
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES:
-            active_bindings_by_namespace[binding.bot_order_namespace].append(binding)
-    duplicate_active_namespaces = frozenset(
-        namespace
-        for namespace, namespace_bindings in active_bindings_by_namespace.items()
-        if len(namespace_bindings) > 1
-    )
     active_by_namespace = {
         namespace: _namespace_owner(namespace_bindings[0])
-        for namespace, namespace_bindings in active_bindings_by_namespace.items()
+        for namespace, namespace_bindings in binding_index.active_by_namespace.items()
         if len(namespace_bindings) == 1
     }
     return _NamespaceViews(
         attribution_by_namespace=attribution_by_namespace,
         active_by_namespace=active_by_namespace,
-        duplicate_active_namespaces=duplicate_active_namespaces,
+        duplicate_active_namespaces=binding_index.duplicate_active_namespaces,
         registry_unavailable=registry_unavailable,
     )
-
-
-def _binding_matches_account(binding: AccountInstanceBinding, account_id: str | None) -> bool:
-    if account_id is None:
-        return False
-    return binding.account_id.upper() == account_id.upper()
 
 
 def _namespace_owner(binding: AccountInstanceBinding) -> _NamespaceOwner:
