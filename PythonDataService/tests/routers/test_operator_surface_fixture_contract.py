@@ -1,9 +1,9 @@
-"""Freshness guard for Frontend live-instance status fixtures.
+"""Freshness guard for Frontend operator-surface fixtures.
 
 The Frontend imports committed JSON snapshots from
 ``Frontend/src/testing/operator_surface_fixtures``. This test re-captures
-the same deterministic ASGI route output and fails when the JSON snapshots
-are stale.
+the same deterministic ASGI route output and fails when the committed
+``operator_surface`` JSON snapshots are stale.
 """
 
 from __future__ import annotations
