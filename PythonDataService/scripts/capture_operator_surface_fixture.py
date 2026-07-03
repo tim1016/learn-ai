@@ -82,17 +82,23 @@ def operator_surface_fixture_scenarios() -> dict[str, OperatorSurfaceFixtureScen
     return {
         "steady": OperatorSurfaceFixtureScenario(
             name="steady",
-            ledger_run_id="run-steady",
+            ledger_run_id="fixture-active-ledger-042",
+            strategy_instance_id="fixture_steady_bot",
+            ledger_created_at_ms=4_242,
+            daemon_url="http://fixture-daemon-steady",
             process={
                 "state": "running",
-                "run_id": "run-steady",
+                "run_id": "fixture-active-ledger-042",
                 "pid": 99,
                 "started_at_ms": 100,
             },
         ),
         "stopped": OperatorSurfaceFixtureScenario(
             name="stopped",
-            ledger_run_id="run-stopped",
+            ledger_run_id="fixture-evidence-ledger-314",
+            strategy_instance_id="fixture_stopped_bot",
+            ledger_created_at_ms=3_141,
+            daemon_url="http://fixture-daemon-stopped",
             process={"state": "idle"},
         ),
     }
