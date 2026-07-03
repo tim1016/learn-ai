@@ -35,6 +35,12 @@ AccountTruthEvidenceTier = Literal[
 AccountTruthOwnerBindingState = Literal["DEPLOYED", "ACTIVE", "RETIRED", "UNKNOWN"]
 AccountTruthFactKind = Literal["open_order", "completed_order", "execution", "position"]
 AccountTruthLifecycle = Literal["submitted", "acknowledged", "filled", "cancelled", "rejected", "limbo"]
+AccountTruthOrderCancelReasonCode = Literal[
+    "BROKER_NOT_PAPER_CONNECTED",
+    "NOT_OPEN_ORDER",
+    "FOREIGN_OR_UNCLAIMED",
+    "ORDER_TERMINAL",
+]
 
 
 class AccountTruthMessage(BaseModel):
@@ -108,6 +114,18 @@ class AccountTruthFactOwner(BaseModel):
     severity: AccountTruthSeverity
 
 
+class AccountTruthOrderCancelAction(BaseModel):
+    """Backend-authored cancel affordance for one broker order row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    visible: bool
+    enabled: bool
+    reason_code: AccountTruthOrderCancelReasonCode | None = None
+    label: str
+    detail: str
+
+
 class AccountTruthOrderRow(BaseModel):
     """Open or terminal broker order row grouped by broker lifecycle identity."""
 
@@ -133,6 +151,7 @@ class AccountTruthOrderRow(BaseModel):
     avg_fill_price: float | None = None
     order_ref: str | None = None
     owner: AccountTruthFactOwner
+    cancel_action: AccountTruthOrderCancelAction
     headline: str
     detail: str
     fetched_at_ms: int
