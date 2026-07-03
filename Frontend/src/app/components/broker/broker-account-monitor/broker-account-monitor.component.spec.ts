@@ -210,5 +210,6 @@ function positionsSnapshot(): IbkrPositionsSnapshot {
     is_paper: true,
     positions: [],
     fetched_at_ms: 1_780_000_001_000,
+    used_cache_fallback: false,
   };
 }
