@@ -35,10 +35,14 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.data.trade_bar import TradeBar
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.base import Strategy
+from app.schemas.account_truth import AccountTruthResponse
+from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
+from app.utils.timestamps import now_ms_utc
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
 
@@ -75,6 +79,34 @@ def _bar(minute: int) -> TradeBar:
     )
 
 
+def _remember_clean_account_truth() -> None:
+    generated_at_ms = now_ms_utc()
+    get_account_truth_snapshot_provider().remember(
+        AccountTruthResponse(
+            account_id="DU123",
+            final_verdict="clean",
+            final_severity="ok",
+            status_label="Clean",
+            status_detail="Account Truth is clean.",
+            generated_at_ms=generated_at_ms,
+            health=IbkrConnectionHealth(
+                mode="paper",
+                host="127.0.0.1",
+                port=4002,
+                client_id=7,
+                connected=True,
+                account_id="DU123",
+                is_paper=True,
+                fetched_at_ms=generated_at_ms,
+                connection_state="connected",
+                last_transition_ms=generated_at_ms,
+            ),
+            invariants=[],
+        ),
+        cached_at_ms=generated_at_ms,
+    )
+
+
 @pytest.mark.asyncio
 async def test_engine_constructs_portfolio_with_intent_wal_against_real_broker(
     tmp_path: Path,
@@ -104,7 +136,11 @@ async def test_engine_constructs_portfolio_with_intent_wal_against_real_broker(
     # The test passes iff engine.run() completes without raising — the
     # wire-through happened and Phase 5B's structural check was
     # satisfied.
-    await engine.run(_NoopStrategy(), iter_bars([_bar(m) for m in range(3)]))
+    _remember_clean_account_truth()
+    try:
+        await engine.run(_NoopStrategy(), iter_bars([_bar(m) for m in range(3)]))
+    finally:
+        get_account_truth_snapshot_provider().clear()
 
 
 @pytest.mark.asyncio

@@ -12,9 +12,12 @@ from dataclasses import dataclass
 from threading import Lock
 
 from app.schemas.account_truth import AccountTruthResponse
+from app.schemas.live_runs import GateResult
 from app.utils.timestamps import now_ms_utc
 
 DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS = 60_000
+ACCOUNT_TRUTH_GATE_ID = "account.account_truth"
+ACCOUNT_TRUTH_GATE_SOURCE = "account_truth_snapshot"
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,15 @@ class AccountTruthSnapshot:
             )
             return ("ACCOUNT_TRUTH_NOT_PROVEN", *blocker_codes)
         return ()
+
+    def primary_blocking_reason_code(self, now_ms: int) -> str | None:
+        if self.is_stale(now_ms):
+            return "ACCOUNT_TRUTH_STALE"
+        if self.truth.final_verdict != "clean" and self.truth.blockers:
+            return f"ACCOUNT_TRUTH_{self.truth.blockers[0].code.upper()}"
+        if self.truth.final_verdict != "clean":
+            return "ACCOUNT_TRUTH_NOT_PROVEN"
+        return None
 
 
 class AccountTruthSnapshotProvider:
@@ -83,3 +95,43 @@ _PROVIDER = AccountTruthSnapshotProvider()
 
 def get_account_truth_snapshot_provider() -> AccountTruthSnapshotProvider:
     return _PROVIDER
+
+
+def account_truth_gate_result(
+    snapshot: AccountTruthSnapshot | None,
+    *,
+    now_ms: int | None = None,
+) -> GateResult:
+    """Project the cached Account Truth snapshot into the submit-gate contract."""
+
+    decided_at_ms = now_ms_utc() if now_ms is None else now_ms
+    if snapshot is None:
+        return GateResult(
+            gate_id=ACCOUNT_TRUTH_GATE_ID,
+            status="block",
+            source=ACCOUNT_TRUTH_GATE_SOURCE,
+            operator_reason="ACCOUNT_TRUTH_NOT_AVAILABLE",
+            operator_next_step="REFRESH_ACCOUNT_TRUTH",
+            evidence_at_ms=decided_at_ms,
+        )
+
+    reason = snapshot.primary_blocking_reason_code(decided_at_ms)
+    if reason is None:
+        return GateResult(
+            gate_id=ACCOUNT_TRUTH_GATE_ID,
+            status="pass",
+            source=ACCOUNT_TRUTH_GATE_SOURCE,
+            operator_reason="ACCOUNT_TRUTH_CLEAN",
+            operator_next_step=None,
+            evidence_at_ms=snapshot.truth.generated_at_ms,
+        )
+
+    next_step = "REFRESH_ACCOUNT_TRUTH" if reason == "ACCOUNT_TRUTH_STALE" else "RESOLVE_ACCOUNT_TRUTH_BLOCKERS"
+    return GateResult(
+        gate_id=ACCOUNT_TRUTH_GATE_ID,
+        status="block",
+        source=ACCOUNT_TRUTH_GATE_SOURCE,
+        operator_reason=reason,
+        operator_next_step=next_step,
+        evidence_at_ms=snapshot.truth.generated_at_ms,
+    )

@@ -75,7 +75,7 @@ Account Truth emits backend-authored invariant rows rather than leaving Angular 
 
 Rows preserve broker identifiers for audit: `execId` dedupes executions, `permId` groups an order lifecycle when available, `order_ref` assigns ownership, and `orderId` is displayed only as broker evidence.
 
-`GET /api/broker/account-truth` also stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot Control status reads consume only that cached projection by account id. A missing cache entry, a cache entry older than the hard readiness TTL, or a cached `final_verdict != clean` folds into `operator_surface.submit_readiness` as `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. This read-side fold performs no IBKR sweep, writes no freeze artifact, and is not the future hard pre-submit gate.
+`GET /api/broker/account-truth` also stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot Control status reads consume only that cached projection by account id. A missing cache entry, a cache entry older than the hard readiness TTL, or a cached `final_verdict != clean` folds into `operator_surface.submit_readiness` as `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. `LivePortfolio.submit_pending_orders` consumes the same cached projection through the `account.account_truth` `GateResult` and blocks non-pass results before any broker call or AccountOwner handoff. The readiness fold and submit gate perform no IBKR sweep and write no freeze artifact.
 
 ### Manual adoption boundary
 

@@ -138,6 +138,15 @@ class AccountRegistryBlockError(RuntimeError):
         self.gate_result = gate_result
 
 
+class AccountTruthBlockError(RuntimeError):
+    """Raised when cached Account Truth blocks order submission."""
+
+    def __init__(self, *, gate_result: object) -> None:
+        reason = getattr(gate_result, "operator_reason", None)
+        super().__init__(f"AccountTruthBlockError(reason={reason!r})")
+        self.gate_result = gate_result
+
+
 class SubmitUncertainHaltError(RuntimeError):
     """Phase 5D / VCR-0002 — submit state machine reached HALT.
 
@@ -409,6 +418,10 @@ class LivePortfolio:
     # Account-scoped instance registry provider. When it returns any gate result
     # other than pass, submit is refused before any broker call.
     account_registry_gate_provider: object = None
+    # Account Truth provider. When it returns any gate result other than pass,
+    # submit is refused before any broker call. The provider must read cached
+    # Account Truth only; it must not sweep IBKR from the submit path.
+    account_truth_gate_provider: object = None
     # AccountOwner mode: when set, runner code emits an AccountOwnerSubmitIntent
     # to this callable instead of placing the order through its broker adapter.
     account_owner_submitter: object = None
@@ -776,6 +789,13 @@ class LivePortfolio:
                 self.pending_orders.clear()
                 self._intent_by_order_id.clear()
                 raise AccountRegistryBlockError(gate_result=registry_gate)
+
+        if self.account_truth_gate_provider is not None:
+            account_truth_gate = self.account_truth_gate_provider()  # type: ignore[operator]
+            if account_truth_gate is not None and getattr(account_truth_gate, "status", None) != "pass":
+                self.pending_orders.clear()
+                self._intent_by_order_id.clear()
+                raise AccountTruthBlockError(gate_result=account_truth_gate)
 
         # Phase 7B / VCR-0010 — broker safety verdict gate. Consulted once at
         # the start of the submit pass (the verdict can't flip mid-call) so
