@@ -182,10 +182,10 @@ def test_activity_repair_projection_cache_hit_does_not_scan_parquet(
 
     assert [row.exec_id for row in first.broker_rows] == ["exec-repair-cache-1"]
 
-    def fail_read_table(*_args, **_kwargs):
-        raise AssertionError("warm repair projection should not read parquet")
+    def fail_build_projection(*_args, **_kwargs):
+        raise AssertionError("warm repair projection should not rebuild artifacts")
 
-    monkeypatch.setattr(activity_repair_projection.pq, "read_table", fail_read_table)
+    monkeypatch.setattr(activity_repair_projection, "_build_projection", fail_build_projection)
 
     cached = load_activity_repair_projection(
         artifacts_root=artifacts_root,
@@ -221,10 +221,10 @@ def test_activity_repair_projection_cache_ignores_live_state_cursor_only_writes(
     )
     assert [row.exec_id for row in first.broker_rows] == ["exec-repair-cache-1"]
 
-    def fail_read_table(*_args, **_kwargs):
+    def fail_build_projection(*_args, **_kwargs):
         raise AssertionError("cursor-only live_state updates must not invalidate cache")
 
-    monkeypatch.setattr(activity_repair_projection.pq, "read_table", fail_read_table)
+    monkeypatch.setattr(activity_repair_projection, "_build_projection", fail_build_projection)
     _write_live_state(artifacts_root, cursor=2)
 
     cached = load_activity_repair_projection(
