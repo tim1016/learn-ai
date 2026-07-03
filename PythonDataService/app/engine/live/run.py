@@ -1845,6 +1845,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         # return 1 on bad position). Without it, a position-gate halt
         # would leak the IBKR session and interfere with the next
         # operator run. (Reviewer feedback on PR #233.)
+        account_truth_refresh_loop = None
         try:
             # Unexpected-position gate (spec § 5 single-client invariant
             # + § 7 broker-state-divergence). The pre-flight subcommand
@@ -2162,6 +2163,15 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # soon as the engine's startup hooks populate all
                 # four blocks. ``finally`` below stops it bounded so
                 # a final snapshot is flushed.
+                if client is not None and getattr(broker, "requires_durable_submit", False):
+                    from app.services.account_truth_refresh import AccountTruthRefreshLoop
+
+                    account_truth_refresh_loop = AccountTruthRefreshLoop(
+                        client=client,
+                        artifacts_root=_artifacts_root,
+                    )
+                    await account_truth_refresh_loop.refresh_once()
+                    account_truth_refresh_loop.start()
                 await _runtime_publisher.start()
                 await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
                 # Write exit sidecar — use keyboard_interrupt if signal was received
@@ -2354,6 +2364,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                 await _runtime_publisher.stop()
             except Exception:
                 logger.exception("runtime publisher stop failed", extra={"step": "8"})
+            if account_truth_refresh_loop is not None:
+                try:
+                    await account_truth_refresh_loop.stop()
+                except Exception:
+                    logger.exception("account truth refresh loop stop failed", extra={"step": "8"})
             if client is not None:
                 try:
                     await client.disconnect()

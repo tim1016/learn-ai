@@ -356,6 +356,51 @@ async def test_refresh_loop_running_keeps_snapshot_fresh(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_refresh_loop_refreshes_during_data_farm_degradation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+    refreshed = False
+
+    async def fake_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        nonlocal refreshed
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
+        assert health.connection_state == "degraded_data_farm"
+        assert snapshot_provider is provider
+        refreshed = True
+        truth = _truth(generated_at_ms=2_000)
+        provider.remember(truth, cached_at_ms=2_000)
+        return truth
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(
+            _health(
+                account_id="DU123",
+                connected=True,
+                connection_state="degraded_data_farm",
+                fetched_at_ms=2_000,
+            )
+        ),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+    )
+
+    assert await loop.refresh_once() is not None
+    assert refreshed is True
+    assert assess_account_truth(provider.get("DU123"), now_ms=2_500).status == "pass"
+
+
+@pytest.mark.asyncio
 async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -394,7 +439,7 @@ async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
     assessment = assess_account_truth(provider.get("DU123"), now_ms=2_500)
     assert assessment.status == "block"
     assert assessment.reason_codes == ("ACCOUNT_TRUTH_REFRESH_FAILED",)
-    assert "requires a connected broker session" in assessment.explanation
+    assert "requires an available account/order broker session" in assessment.explanation
     assert assessment.evidence_at_ms == 2_000
 
 
