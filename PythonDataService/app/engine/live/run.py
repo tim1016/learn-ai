@@ -1967,10 +1967,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                     executions_for_reconnect_recovery,
                     list_open_orders,
                 )
-                from app.engine.live.account_artifacts import (
-                    compute_reconcile_namespaces,
-                    read_account_events,
-                )
+                from app.engine.live.account_artifacts import read_account_events
+                from app.engine.live.account_registry import compute_reconcile_namespaces
                 from app.engine.live.live_state_sidecar import (
                     LiveStateSidecarRepo,
                     stable_live_state_path,

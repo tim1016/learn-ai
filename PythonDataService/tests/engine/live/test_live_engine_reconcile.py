@@ -30,7 +30,7 @@ from typing import Any
 import pytest
 
 from app.engine.live import reconciliation_orchestrator
-from app.engine.live.account_artifacts import AccountInstanceBinding, write_account_instance_binding
+from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState

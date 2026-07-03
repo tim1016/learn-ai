@@ -15,11 +15,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live.account_artifacts import (
-    AccountInstanceBinding,
     append_account_event,
+    read_account_freeze,
+)
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
     bot_order_namespace_for_instance,
     compute_reconcile_namespaces,
-    read_account_freeze,
     read_account_instance_registry,
     write_account_instance_binding,
 )
