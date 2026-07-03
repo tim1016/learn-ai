@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth readiness-cache update: Bot Control submit readiness now consumes the cached Account Truth projection and fails closed when the cached verdict is missing, stale, or not clean. Hard pre-submit Account Truth enforcement remains a follow-up.)
+> **Last reviewed:** 2026-07-03 (Account Truth submit-gate update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, or not clean. Per-source Account Truth freshness remains a follow-up.)
 
 ---
 
@@ -171,7 +171,7 @@ state to guess around.
 
 Account Truth reads `instance_registry.jsonl` as its bot ownership source. Its attribution namespace view includes every namespace ever recorded for the account, including retired bindings, so stopped bots keep ownership of terminal completed orders and historical executions. Its active-known/current-risk namespace view is limited to currently-bound `DEPLOYED` or `ACTIVE` bindings; a live working order or current position under a retired binding is emitted as `retired_owner_live_exposure`, not as clean bot-owned exposure and not as `foreign_or_unclaimed`.
 
-`GET /api/broker/account-truth` now stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot status reads consume only that cache; they do not sweep IBKR. `operator_surface.submit_readiness` maps a missing, stale, or `not_proven` cached projection to `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. This is read-side readiness only: it does not write a freeze artifact and does not add the future hard pre-submit Account Truth gate.
+`GET /api/broker/account-truth` now stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot status reads consume only that cache; they do not sweep IBKR. `operator_surface.submit_readiness` maps a missing, stale, or `not_proven` cached projection to `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. `LivePortfolio.submit_pending_orders` consumes the same cache through the `account.account_truth` `GateResult` and refuses non-pass results before any broker call or AccountOwner handoff; `LiveEngine` wires that provider for durable-submit broker adapters. The gate is a pure cached predicate: it performs no IBKR sweep, writes no freeze artifact, and remains separate from the broker-snapshot classifier.
 
 ### 4.1 Postgres Lifecycle Projection Read Model
 
@@ -258,7 +258,7 @@ Submit safety currently has three layers:
 
 1. Legacy direct-submit mode refuses a real broker adapter without `IntentWal` and non-empty `bot_order_namespace`.
 2. AccountOwner submit mode refuses a configured run-scoped `IntentWal`; it requires an AccountOwner submitter plus account id, strategy instance id, run id, bot order namespace, owner generation provider, and trace id provider.
-3. `LivePortfolio.submit_pending_orders` refuses active account freezes and non-passing account registry bindings before any broker call or AccountOwner handoff.
+3. `LivePortfolio.submit_pending_orders` refuses active account freezes, non-passing account registry bindings, and non-passing cached Account Truth gate results before any broker call or AccountOwner handoff.
 4. AccountOwner submit mode emits `AccountOwnerSubmitIntent` to the configured submitter, writes account-scoped submit evidence to `account_events.jsonl`, and does not call its broker adapter directly.
 5. Legacy direct-submit mode writes `PENDING_INTENT` before `broker.place_order`, then writes `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, `SUBMITTED_RECOVERED`, `INTENT_NOT_ACCEPTED`, or `SUBMIT_UNCERTAIN_HALTED`.
 6. `place_paper_order` requires `spec.order_ref` and enforces paper safety before `IB.placeOrder`.
@@ -416,7 +416,7 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 
 `PythonDataService/app/services/operator_trader_guidance.py` now authors `operator_surface.submit_readiness` and `operator_surface.trader_guidance` from one prioritized finding list over the same backend facts that feed the existing operator surface: broker safety, broker connection, submission capability, uncertain-intent WAL state, reconciliation projection, account freeze evidence, AccountOwner generation/phase evidence, runtime process state, trading-session permission, and readiness gates. `operator_surface.py` remains the composition boundary rather than a second copy of the decision ladder.
 
-The only shipped `submit_readiness.code` allowed to claim order submission is safe is `safe_to_submit`. It requires broker safety `PAPER_ONLY`, broker connection `CONNECTED`, submission capability `SATISFIED`, no unresolved uncertain intent, AccountOwner phase `accepting` with a known generation, fresh `CLEAN` or `ADOPTED` reconciliation, a cached Account Truth projection that is fresh and `clean`, no account freeze, no hard readiness gate failure, a running host process, and a trading session that permits strategy activity. All other codes are non-submit states: `safe_to_monitor`, `blocked_before_submit`, `broker_state_unproven`, `account_frozen`, `waiting_for_owner_generation`, and `submit_outcome_uncertain`.
+The only shipped `submit_readiness.code` allowed to claim order submission is safe is `safe_to_submit`. It requires broker safety `PAPER_ONLY`, broker connection `CONNECTED`, submission capability `SATISFIED`, no unresolved uncertain intent, AccountOwner phase `accepting` with a known generation, fresh `CLEAN` or `ADOPTED` reconciliation, a cached Account Truth projection that is fresh and `clean`, no account freeze, no hard readiness gate failure, a running host process, and a trading session that permits strategy activity. The live submit path now enforces the same cached Account Truth predicate through `account.account_truth`; all other readiness codes are non-submit states: `safe_to_monitor`, `blocked_before_submit`, `broker_state_unproven`, `account_frozen`, `waiting_for_owner_generation`, and `submit_outcome_uncertain`.
 
 The Angular Overview tab now places the authentic lifecycle flowchart and the trader-guidance pane side by side. `trader-guidance-pane.component.*` renders backend-authored `headline`, `explanation`, `risk_*`, `submit_readiness`, `additional_attention_groups`, `advanced_evidence`, and timeline rows verbatim. Trader remediations render through the trader-specific `renderTraderRemediation` helper, separate from bot control gate suggested actions. Clicking an `invoke_endpoint/reconcile_instance` remediation emits the backend remediation object to the page, where `BotControlPageComponent` calls the existing `/api/live-instances/{strategy_instance_id}/reconcile` client method.
 

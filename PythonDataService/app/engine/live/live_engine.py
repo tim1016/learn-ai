@@ -849,6 +849,18 @@ class LiveEngine:
                     self._account_id,
                 )
 
+        account_truth_gate_provider = None
+        if self._account_id and getattr(self._broker, "requires_durable_submit", False):
+            from app.services.account_truth_snapshot import (
+                account_truth_gate_result,
+                get_account_truth_snapshot_provider,
+            )
+            from app.utils.timestamps import now_ms_utc
+
+            def account_truth_gate_provider():
+                snapshot = get_account_truth_snapshot_provider().get(self._account_id)
+                return account_truth_gate_result(snapshot, now_ms=now_ms_utc())
+
         portfolio = LivePortfolio(
             self._broker,
             intent_wal=intent_wal_for_portfolio,
@@ -857,6 +869,7 @@ class LiveEngine:
             account_registry_gate_provider=(
                 self._account_registry_gate_result if self._account_registry_gate_enabled else None
             ),
+            account_truth_gate_provider=account_truth_gate_provider,
             account_owner_submitter=self._account_owner_submitter,
             account_id=self._account_id,
             strategy_instance_id=self._strategy_instance_id,

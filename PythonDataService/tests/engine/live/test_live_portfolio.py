@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.broker.ibkr.models import (
+    IbkrConnectionHealth,
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
@@ -16,11 +17,48 @@ from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwner
 from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
     AccountRegistryBlockError,
+    AccountTruthBlockError,
     LivePortfolio,
     SubmitUncertainHaltError,
 )
+from app.schemas.account_truth import AccountTruthMessage, AccountTruthResponse
 from app.schemas.live_runs import GateResult
+from app.services.account_truth_snapshot import AccountTruthSnapshot, account_truth_gate_result
 from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+_NOW_MS = 1_700_000_000_000
+
+
+def _account_truth_snapshot(
+    *,
+    final_verdict: str = "clean",
+    generated_at_ms: int = _NOW_MS - 1_000,
+    blockers: list[AccountTruthMessage] | None = None,
+) -> AccountTruthSnapshot:
+    severity = "ok" if final_verdict == "clean" else "critical"
+    truth = AccountTruthResponse(
+        account_id="DU123",
+        final_verdict=final_verdict,  # type: ignore[arg-type]
+        final_severity=severity,  # type: ignore[arg-type]
+        status_label="Clean" if final_verdict == "clean" else "Not proven",
+        status_detail="Account Truth is clean." if final_verdict == "clean" else "Account Truth has blockers.",
+        generated_at_ms=generated_at_ms,
+        health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=7,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            fetched_at_ms=generated_at_ms,
+            connection_state="connected",
+            last_transition_ms=generated_at_ms,
+        ),
+        invariants=[],
+        blockers=blockers or [],
+    )
+    return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
 
 
 @pytest.mark.asyncio
@@ -358,6 +396,89 @@ async def test_submit_pending_orders_blocks_when_account_registry_rejects() -> N
     assert exc.value.gate_result == gate
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_when_account_truth_rejects_unexplained_position() -> None:
+    broker = FakeBroker()
+    blocker = AccountTruthMessage(
+        code="unknown_positions",
+        severity="critical",
+        title="Unknown current broker positions",
+        message="At least one current IBKR position is not explained by known bot/manual evidence.",
+    )
+    gate = account_truth_gate_result(
+        _account_truth_snapshot(final_verdict="not_proven", blockers=[blocker]),
+        now_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(broker, account_truth_gate_provider=lambda: gate)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == gate
+    assert gate.gate_id == "account.account_truth"
+    assert gate.operator_reason == "ACCOUNT_TRUTH_UNKNOWN_POSITIONS"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_when_account_truth_snapshot_is_stale() -> None:
+    broker = FakeBroker()
+    gate = account_truth_gate_result(
+        _account_truth_snapshot(generated_at_ms=_NOW_MS - 60_001),
+        now_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(broker, account_truth_gate_provider=lambda: gate)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == gate
+    assert gate.operator_reason == "ACCOUNT_TRUTH_STALE"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_when_account_truth_snapshot_is_missing() -> None:
+    broker = FakeBroker()
+    gate = account_truth_gate_result(None, now_ms=_NOW_MS)
+    portfolio = LivePortfolio(broker, account_truth_gate_provider=lambda: gate)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == gate
+    assert gate.operator_reason == "ACCOUNT_TRUTH_NOT_AVAILABLE"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_allows_fresh_clean_account_truth_gate() -> None:
+    broker = FakeBroker()
+    gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+    portfolio = LivePortfolio(broker, account_truth_gate_provider=lambda: gate)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert gate.status == "pass"
+    assert len(acks) == 1
+    assert broker.orders[0].symbol == "SPY"
 
 
 @pytest.mark.asyncio
