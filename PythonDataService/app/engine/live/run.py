@@ -69,9 +69,6 @@ from app.engine.live.account_recovery_cli import (
 from app.engine.live.account_recovery_cli import (
     cmd_resume as _account_recovery_cmd_resume,
 )
-from app.engine.live.account_recovery_cli import (
-    latest_run_dir_for_instance as _latest_run_dir_for_instance,
-)
 from app.engine.live.deploy import (
     DeployIOError,
     DeployParams,
@@ -2625,82 +2622,10 @@ def cmd_pause(args: argparse.Namespace) -> int:
     return _cmd_set_desired_state(args, DesiredState.PAUSED)
 
 
-def _scan_verdict_snapshot(snapshot_path: Path) -> str | None:
-    """Phase 7B Resume guard #1 (PRD §7B / VCR-0010): return the last
-    verdict reading if it is NOT ``"paper-only"``, otherwise ``None``.
-
-    Returns ``None`` when:
-      * The snapshot file does not exist (no engine has observed a
-        verdict for this instance — older runs predating the snapshot).
-      * The snapshot's ``verdict`` field is ``"paper-only"``.
-      * The snapshot is unreadable or malformed (fail-open here so a
-        spurious file corruption does not jail the operator out of
-        Resume entirely; the engine bar loop is still the secondary
-        defense and will re-emit a fresh snapshot on the next check).
-    """
-    if not snapshot_path.exists():
-        return None
-    try:
-        import json as _json
-
-        data = _json.loads(snapshot_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    verdict_value = data.get("verdict") if isinstance(data, dict) else None
-    if not isinstance(verdict_value, str):
-        return None
-    if verdict_value == "paper-only":
-        return None
-    return verdict_value
-
-
-def _scan_wal_for_unresolved_uncertains(wal_path: Path) -> list[str]:
-    """Phase 5D Resume guard (PRD §5D Resume contract, guard #3): return
-    the list of ``intent_id``s whose ``ACK_FAILED_UNCERTAIN`` event has no
-    matching resolution event downstream in the same WAL.
-
-    A resolution is any of: ``SUBMITTED_RECOVERED`` (probe PRESENT),
-    ``INTENT_NOT_ACCEPTED`` (probe PROVABLY_ABSENT — retry), ``SUBMITTED``
-    (the retry succeeded), or ``SUBMIT_UNCERTAIN_HALTED`` (the state machine
-    halted on the uncertain — an explicit resolution, not silent drop).
-
-    An empty list means Resume is safe per this guard. A non-empty list
-    means the WAL carries an orphaned uncertain ack and the operator must
-    reconcile broker state manually before Resume.
-    """
-    from app.engine.live.intent_events import IntentEventType
-    from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
-
-    if not wal_path.exists():
-        return []
-    try:
-        events = IntentWal(wal_path).read_tail()
-    except IntentWalCorruptError:
-        # A corrupt WAL must NOT silently allow Resume — surface it as
-        # "every intent_id with an uncertain is unresolved" so the caller
-        # refuses Resume and the operator inspects the WAL.
-        return ["<wal-corrupt-cannot-scan>"]
-    pending_uncertain: set[str] = set()
-    resolution_types = {
-        IntentEventType.SUBMITTED.value,
-        IntentEventType.SUBMITTED_RECOVERED.value,
-        IntentEventType.INTENT_NOT_ACCEPTED.value,
-        IntentEventType.SUBMIT_UNCERTAIN_HALTED.value,
-    }
-    for event in events:
-        et = event.event_type.value
-        if et == IntentEventType.ACK_FAILED_UNCERTAIN.value:
-            pending_uncertain.add(event.intent_id)
-        elif et in resolution_types:
-            pending_uncertain.discard(event.intent_id)
-    return sorted(pending_uncertain)
-
-
 def cmd_resume(args: argparse.Namespace) -> int:
     return _account_recovery_cmd_resume(
         args,
         set_desired_state=_cmd_set_desired_state,
-        run_dir_finder=_latest_run_dir_for_instance,
     )
 
 

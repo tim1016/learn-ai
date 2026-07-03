@@ -43,7 +43,7 @@ def _stub_settings(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
 
 def _seed_run_dir(root: Path, sid: str, run_id: str = "run-001") -> Path:
     """Seed a run_ledger.json that ties run_id to sid so
-    ``_latest_run_dir_for_instance`` finds it."""
+    ``latest_run_dir_for_instance`` finds it."""
     run_dir = root / "live_runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = run_dir / "run_ledger.json"
@@ -149,7 +149,7 @@ def test_wal_fold_preserves_null_reference_price(
 def test_falls_back_to_sidecar_when_wal_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A run dir exists (so ``_latest_run_dir_for_instance`` returns it)
+    """A run dir exists (so ``latest_run_dir_for_instance`` returns it)
     but it has no SIZING_RESOLVED / SIZING_SKIP evidence yet. The
     fallback fires and the sidecar projection wins."""
     _stub_settings(monkeypatch, tmp_path)

@@ -107,6 +107,36 @@ def test_clear_account_freeze_cli_clears_with_clean_recovery_proof(tmp_path: Pat
     ]
 
 
+def test_clear_account_freeze_cli_clears_with_fresh_audited_override(tmp_path: Path) -> None:
+    write_account_freeze(tmp_path, _freeze())
+    override_path = tmp_path / "audited-override.json"
+    _write_payload(override_path, _audited_override(valid_until_ms=9_223_372_036_854_775_807))
+
+    rc = main(
+        [
+            "clear-account-freeze",
+            "--artifacts-root",
+            str(tmp_path),
+            "--audited-override-json",
+            str(override_path),
+            "--confirm",
+        ]
+    )
+
+    assert rc == 0
+    assert read_account_freeze(tmp_path, ACCOUNT_ID) is None
+    events = read_account_events(tmp_path, ACCOUNT_ID)
+    event_types = [event["event_type"] for event in events]
+    assert event_types == [
+        "account_freeze_recorded",
+        "account_audited_override_recorded",
+        "account_freeze_cleared",
+    ]
+    assert events[1]["override_id"] == "override-1"
+    assert events[1]["approved_decision"] == "continue"
+    assert events[2]["cleared_source"] == "account_audited_override"
+
+
 def test_clear_account_freeze_cli_requires_confirm(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     write_account_freeze(tmp_path, _freeze())
     proof_path = tmp_path / "recovery-proof.json"

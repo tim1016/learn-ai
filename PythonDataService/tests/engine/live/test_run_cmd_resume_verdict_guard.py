@@ -6,10 +6,9 @@ directly with ``--force`` as a bypass.  PRD #616 rewired it to the shared
 resolver and deleted ``--force`` so the cockpit's structural-safety claim
 ("guarded Resume is structurally safe") holds across every entry point.
 
-The legacy ``_scan_verdict_snapshot`` / ``_scan_wal_for_unresolved_uncertains``
-helpers remain in the module as private references for the old write path;
-the shared resolver tests (tests/services/test_resume_guards.py) cover the
-new fold layer directly.
+The old verdict/WAL scanner helpers are intentionally gone from ``run.py``.
+The shared resolver tests (tests/services/test_resume_guards.py) cover the
+canonical fold layer directly.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ import pytest
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.engine.live.desired_state import DesiredState
-from app.engine.live.run import _scan_verdict_snapshot, build_parser, cmd_resume
+from app.engine.live.run import build_parser, cmd_resume
 
 
 def _seed_snapshot(run_dir: Path, *, verdict: str | None) -> None:
@@ -83,20 +82,6 @@ def _args(artifacts_root: Path, instance_id: str) -> argparse.Namespace:
         reason=None,
         updated_by="operator",
     )
-
-
-# ──────────────────────────── _scan_verdict_snapshot (legacy helper) ───
-
-
-def test_legacy_scan_verdict_snapshot_returns_none_when_file_missing(tmp_path: Path) -> None:
-    # PRD #616 — the helper is retained for back-compat callers but
-    # the CLI no longer consults it; the shared resolver replaces it.
-    assert _scan_verdict_snapshot(tmp_path / "verdict_snapshot.json") is None
-
-
-def test_legacy_scan_verdict_snapshot_returns_none_on_paper_only(tmp_path: Path) -> None:
-    _seed_snapshot(tmp_path, verdict="paper-only")
-    assert _scan_verdict_snapshot(tmp_path / "verdict_snapshot.json") is None
 
 
 # ──────────────────────────── cmd_resume — shared resolver ─────────────
@@ -184,12 +169,11 @@ def test_cmd_resume_refuses_active_account_freeze(
     assert not _desired_state_path(tmp_path, instance).exists()
 
 
-def test_cmd_resume_keeps_run_dir_finder_injection_boundary(
+def test_cmd_resume_accepts_run_dir_finder_injection_boundary(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    from app.engine.live import run as run_module
+    from app.engine.live.account_recovery_cli import cmd_resume as account_recovery_cmd_resume
 
     instance = "patched-finder-instance"
     account_id = "DU123456"
@@ -226,9 +210,12 @@ def test_cmd_resume_keeps_run_dir_finder_injection_boundary(
             operator_next_step="CHECK_IBKR",
         ),
     )
-    monkeypatch.setattr(run_module, "_latest_run_dir_for_instance", lambda _root, _sid: run_dir)
 
-    rc = run_module.cmd_resume(_args(tmp_path, instance))
+    rc = account_recovery_cmd_resume(
+        _args(tmp_path, instance),
+        set_desired_state=lambda args, state: 0,
+        run_dir_finder=lambda _root, _sid: run_dir,
+    )
 
     assert rc == 2
     assert "ACCOUNT_FREEZE_ACTIVE" in capsys.readouterr().err

@@ -918,11 +918,9 @@ def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
     settings = get_settings()
     artifacts_root = Path(settings.live_runs_root).parent
 
-    # Local import — keeps the routers package free of a top-level dep
-    # on the CLI entrypoint module, which has a much larger import graph.
-    from app.engine.live.run import _latest_run_dir_for_instance
+    from app.engine.live.run_lookup import latest_run_dir_for_instance
 
-    run_dir = _latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
+    run_dir = latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
     if run_dir is not None:
         wal_rows = _fold_wal_sizing_audit(run_dir)
         if wal_rows:
