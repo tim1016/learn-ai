@@ -150,7 +150,7 @@ export class BrokerOrdersComponent {
       this.accountTruth()?.executions ?? [],
     ),
   );
-  readonly hasCancellableLedgerOrders = computed(() =>
+  readonly hasVisibleCancelActions = computed(() =>
     this.ledgerOrders().some((order) => order.cancel_action.visible),
   );
   readonly ledgerSourceNotices = computed<LedgerSourceNotice[]>(() =>

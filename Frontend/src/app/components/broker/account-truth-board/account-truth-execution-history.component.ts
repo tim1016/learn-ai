@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import type {
+  AccountTruthExecutionUncertaintyCode,
   AccountTruthExecutionRow,
   AccountTruthFactOwner,
 } from '../../../api/broker-models';
@@ -9,7 +10,7 @@ import { fmtCurrency, fmtNumber, fmtTimestampLocal } from '../format';
 interface ExecutionHistoryRow {
   execution: AccountTruthExecutionRow;
   timeMs: number;
-  uncertaintyCodes: string[];
+  uncertaintyCodes: AccountTruthExecutionUncertaintyCode[];
 }
 
 interface ExecutionHistoryDay {
@@ -57,7 +58,8 @@ export class AccountTruthExecutionHistoryComponent {
   trackDay = (_: number, day: ExecutionHistoryDay): string => day.key;
   trackExecution = (_: number, row: ExecutionHistoryRow): string =>
     `${row.execution.exec_id}:${row.execution.observed_at_ms}`;
-  trackUncertainty = (_: number, code: string): string => code;
+  trackUncertainty = (_: number, code: AccountTruthExecutionUncertaintyCode): string =>
+    code;
 
   private groupExecutions(
     executions: AccountTruthExecutionRow[],

@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.broker.ibkr.account_truth import (
-    load_account_instance_registry_evidence,
+    build_account_truth_collection_context,
 )
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -45,7 +45,7 @@ async def reconcile_account_endpoint(
     """Create a durable account reconciliation receipt from Account Truth."""
     canonical_account_id = _canonical_account_id(account_id)
     health = build_broker_health(client, get_monitor())
-    registry_evidence = load_account_instance_registry_evidence(
+    collection_context = build_account_truth_collection_context(
         artifacts_root=Path(get_settings().live_runs_root).parent,
         account_id=canonical_account_id,
         context="account reconciliation",
@@ -54,8 +54,7 @@ async def reconcile_account_endpoint(
         account_truth = await refresh_account_truth_and_update_cache(
             client,
             health=health,
-            account_instance_bindings=registry_evidence.bindings,
-            initial_evidence_gaps=registry_evidence.evidence_gaps,
+            collection_context=collection_context,
         )
         return service.write_receipt(
             requested_account_id=canonical_account_id,

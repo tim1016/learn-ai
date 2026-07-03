@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import (
@@ -42,6 +43,7 @@ def _truth(
     return compose_account_truth(
         health=_health(account_id=account_id, connected=connected),
         account_instance_bindings=[],
+        account_recovery_state=AccountRecoveryState.clear(account_id),
         account=None,
         positions_snapshot=None,
         open_orders=[],

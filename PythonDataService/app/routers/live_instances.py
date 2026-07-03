@@ -63,6 +63,7 @@ from app.engine.live.nyse_calendar import nyse_session_state_at_ms
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
+from app.engine.live.signal_tone import latest_signal_tone
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.operator.incidents.store import IncidentStore
@@ -482,19 +483,6 @@ def _nonempty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _latest_signal_tone(latest_decision: dict | None) -> SignalTone:
-    signal = latest_decision.get("signal") if latest_decision is not None else None
-    if not isinstance(signal, str) or not signal:
-        return "neutral"
-    match signal.upper():
-        case "ENTER" | "BUY" | "LONG":
-            return "ok"
-        case "EXIT" | "SELL" | "SHORT":
-            return "warn"
-        case _:
-            return "neutral"
-
-
 def _strategy_state(
     root: Path,
     live_binding: LiveBinding | None,
@@ -529,7 +517,7 @@ def _strategy_state(
         descriptors = decision_column_descriptors(spec)
     except (OSError, ValueError, KeyError):
         descriptors = []
-    return latest_decision, _latest_signal_tone(latest_decision), descriptors
+    return latest_decision, latest_signal_tone(latest_decision), descriptors
 
 
 def _resolve_readonly_default(settings: object) -> bool:

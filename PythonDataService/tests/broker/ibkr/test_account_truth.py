@@ -9,7 +9,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.broker.ibkr import account_truth as account_truth_module
-from app.broker.ibkr.account_truth import compose_account_truth, fetch_account_truth
+from app.broker.ibkr.account_recovery import AccountRecoveryState
+from app.broker.ibkr.account_truth import (
+    AccountTruthCollectionContext,
+    fetch_account_truth,
+)
+from app.broker.ibkr.account_truth import (
+    compose_account_truth as _compose_account_truth,
+)
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import (
     IbkrConnectionHealth,
@@ -20,6 +27,7 @@ from app.broker.ibkr.models import (
 )
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
+    AccountFreezeEvidence,
     AccountInstanceBinding,
     write_account_instance_binding,
 )
@@ -38,6 +46,28 @@ def _health() -> IbkrConnectionHealth:
         fetched_at_ms=1_780_000_000_000,
         connection_state="connected",
         last_transition_ms=1_780_000_000_000,
+    )
+
+
+def compose_account_truth(**kwargs):
+    kwargs.setdefault(
+        "account_recovery_state",
+        AccountRecoveryState.clear("DU1234567"),
+    )
+    return _compose_account_truth(**kwargs)
+
+
+def _collection_context(
+    *,
+    bindings: list[AccountInstanceBinding] | None = None,
+    evidence_gaps: list[AccountTruthEvidenceGap] | None = None,
+    recovery_state: AccountRecoveryState | None = None,
+) -> AccountTruthCollectionContext:
+    return AccountTruthCollectionContext(
+        account_instance_bindings=tuple(bindings or []),
+        evidence_gaps=tuple(evidence_gaps or []),
+        account_recovery_state=recovery_state
+        or AccountRecoveryState.clear("DU1234567"),
     )
 
 
@@ -224,6 +254,29 @@ def test_account_truth_authors_order_cancel_action_reasons() -> None:
     assert non_paper.orders[0].cancel_action.enabled is False
     assert non_paper.orders[0].cancel_action.reason_code == "BROKER_NOT_PAPER_CONNECTED"
 
+    frozen = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account_recovery_state=AccountRecoveryState.frozen(
+            AccountFreezeEvidence(
+                account_id="DU1234567",
+                reason="restart_intensity.threshold_breached",
+                source="account_restart_intensity",
+                recorded_at_ms=1_780_000_002_000,
+                operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
+            )
+        ),
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order()],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+    assert frozen.orders[0].cancel_action.visible is True
+    assert frozen.orders[0].cancel_action.enabled is False
+    assert frozen.orders[0].cancel_action.reason_code == "ACCOUNT_FROZEN"
+
     terminal = compose_account_truth(
         health=_health(),
         account_instance_bindings=[_binding()],
@@ -281,6 +334,27 @@ def test_account_truth_authors_execution_uncertainty_codes() -> None:
         "missing_quantity",
         "missing_price",
     ]
+
+
+def test_account_truth_execution_uncertainty_preserves_zero_price() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[
+            _execution(
+                avg_fill_price=450.0,
+                last_fill_price=0.0,
+            )
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    assert truth.executions[0].price == 0.0
+    assert "missing_price" not in truth.executions[0].uncertainty_codes
 
 
 def test_account_truth_never_registered_namespace_stays_foreign() -> None:
@@ -796,7 +870,7 @@ async def test_fetch_account_truth_collects_account_summary_gap_into_final_verdi
     truth = await fetch_account_truth(
         client,  # type: ignore[arg-type]
         health=_health(),
-        account_instance_bindings=[_binding()],
+        collection_context=_collection_context(bindings=[_binding()]),
     )
 
     assert truth.final_verdict == "not_proven"

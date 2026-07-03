@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.broker.ibkr.account_truth import (
-    load_account_instance_registry_evidence,
+    build_account_truth_collection_context,
 )
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -34,8 +34,9 @@ ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
 async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthResponse:
     """Account-wide ownership, risk, and invariant truth projection."""
     health = build_broker_health(client, get_monitor())
-    registry_evidence = load_account_instance_registry_evidence(
-        artifacts_root=Path(get_settings().live_runs_root).parent,
+    artifacts_root = Path(get_settings().live_runs_root).parent
+    collection_context = build_account_truth_collection_context(
+        artifacts_root=artifacts_root,
         account_id=health.account_id,
         context="account truth",
     )
@@ -43,8 +44,7 @@ async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthRes
         return await refresh_account_truth_and_update_cache(
             client,
             health=health,
-            account_instance_bindings=registry_evidence.bindings,
-            initial_evidence_gaps=registry_evidence.evidence_gaps,
+            collection_context=collection_context,
         )
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc

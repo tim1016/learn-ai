@@ -20,6 +20,10 @@ from typing import NamedTuple
 from pydantic import ValidationError
 
 from app.broker.ibkr import account as ibkr_account
+from app.broker.ibkr.account_recovery import (
+    AccountRecoveryState,
+    read_account_recovery_state,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
@@ -29,6 +33,7 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.broker.ibkr.order_cancel_capability import evaluate_order_cancel_capability
 from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import executions_for_reconnect_recovery, list_open_orders
 from app.engine.live.account_artifacts import (
@@ -53,7 +58,6 @@ from app.schemas.account_truth import (
     AccountTruthInvariant,
     AccountTruthMessage,
     AccountTruthOrderCancelAction,
-    AccountTruthOrderCancelReasonCode,
     AccountTruthOrderRow,
     AccountTruthOwnerBindingState,
     AccountTruthOwnerSummary,
@@ -89,6 +93,13 @@ class _NamespaceViews:
 class AccountInstanceRegistryEvidence(NamedTuple):
     bindings: list[AccountInstanceBinding]
     evidence_gaps: list[AccountTruthEvidenceGap]
+
+
+@dataclass(frozen=True)
+class AccountTruthCollectionContext:
+    account_instance_bindings: tuple[AccountInstanceBinding, ...]
+    evidence_gaps: tuple[AccountTruthEvidenceGap, ...]
+    account_recovery_state: AccountRecoveryState
 
 
 def load_account_instance_registry_evidence(
@@ -131,15 +142,47 @@ def load_account_instance_registry_evidence(
         )
 
 
+def build_account_truth_collection_context(
+    *,
+    artifacts_root: Path,
+    account_id: str | None,
+    context: str,
+) -> AccountTruthCollectionContext:
+    """Collect filesystem-backed Account Truth context once per request."""
+
+    registry_evidence = load_account_instance_registry_evidence(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+        context=context,
+    )
+    recovery_state = read_account_recovery_state(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    )
+    evidence_gaps = list(registry_evidence.evidence_gaps)
+    if recovery_state.status == "unreadable":
+        evidence_gaps.append(
+            AccountTruthEvidenceGap(
+                source="account_freeze",
+                severity="critical",
+                message=f"Account freeze state unavailable: {recovery_state.unreadable_error}",
+            )
+        )
+    return AccountTruthCollectionContext(
+        account_instance_bindings=tuple(registry_evidence.bindings),
+        evidence_gaps=tuple(evidence_gaps),
+        account_recovery_state=recovery_state,
+    )
+
+
 async def fetch_account_truth(
     client: IbkrClient,
     *,
     health: IbkrConnectionHealth,
-    account_instance_bindings: Sequence[AccountInstanceBinding],
-    initial_evidence_gaps: Sequence[AccountTruthEvidenceGap] = (),
+    collection_context: AccountTruthCollectionContext,
 ) -> AccountTruthResponse:
     """Collect broker facts and project them into account truth."""
-    evidence_gaps = list(initial_evidence_gaps)
+    evidence_gaps = list(collection_context.evidence_gaps)
 
     account_summary, positions_snapshot, open_orders, completed_orders, executions = (
         await asyncio.gather(
@@ -153,13 +196,14 @@ async def fetch_account_truth(
 
     return compose_account_truth(
         health=health,
-        account_instance_bindings=account_instance_bindings,
+        account_instance_bindings=collection_context.account_instance_bindings,
         account=account_summary,
         positions_snapshot=positions_snapshot,
         open_orders=open_orders,
         completed_orders=completed_orders,
         executions=executions,
         evidence_gaps=evidence_gaps,
+        account_recovery_state=collection_context.account_recovery_state,
         generated_at_ms=now_ms_utc(),
     )
 
@@ -258,6 +302,7 @@ def compose_account_truth(
     *,
     health: IbkrConnectionHealth,
     account_instance_bindings: Sequence[AccountInstanceBinding],
+    account_recovery_state: AccountRecoveryState,
     account: IbkrAccountSummary | None,
     positions_snapshot: IbkrPositionsSnapshot | None,
     open_orders: Sequence[IbkrOpenOrder],
@@ -288,7 +333,13 @@ def compose_account_truth(
     known_bot_namespaces = sorted(namespace_views.attribution_by_namespace)
 
     open_order_rows = [
-        _order_row(order, fact_kind="open_order", namespace_views=namespace_views, health=health)
+        _order_row(
+            order,
+            fact_kind="open_order",
+            namespace_views=namespace_views,
+            health=health,
+            account_recovery_state=account_recovery_state,
+        )
         for order in open_orders
     ]
     completed_order_rows = [
@@ -297,6 +348,7 @@ def compose_account_truth(
             fact_kind="completed_order",
             namespace_views=namespace_views,
             health=health,
+            account_recovery_state=account_recovery_state,
         )
         for order in completed_orders
     ]
@@ -461,12 +513,41 @@ def _namespace_owner(binding: AccountInstanceBinding) -> _NamespaceOwner:
     )
 
 
+def cancel_action_for_open_order(
+    order: IbkrOpenOrder,
+    *,
+    health: IbkrConnectionHealth,
+    collection_context: AccountTruthCollectionContext,
+) -> AccountTruthOrderCancelAction:
+    """Project the canonical cancel action for one current open-order fact."""
+
+    registry_unavailable = any(
+        gap.source == "instance_registry" for gap in collection_context.evidence_gaps
+    )
+    namespace_views = _namespace_views(
+        collection_context.account_instance_bindings,
+        account_id=health.account_id or order.account_id,
+        registry_unavailable=registry_unavailable,
+    )
+    owner = _live_risk_owner(_owner_for_order_ref(order.order_ref, namespace_views))
+    lifecycle = _order_lifecycle(order.status, order.remaining)
+    return evaluate_order_cancel_capability(
+        health=health,
+        fact_kind="open_order",
+        owner=owner,
+        lifecycle=lifecycle,
+        remaining=order.remaining,
+        account_recovery_state=collection_context.account_recovery_state,
+    )
+
+
 def _order_row(
     order: IbkrOpenOrder,
     *,
     fact_kind: str,
     namespace_views: _NamespaceViews,
     health: IbkrConnectionHealth,
+    account_recovery_state: AccountRecoveryState,
 ) -> AccountTruthOrderRow:
     owner = _owner_for_order_ref(order.order_ref, namespace_views)
     lifecycle = _order_lifecycle(order.status, order.remaining)
@@ -500,73 +581,18 @@ def _order_row(
         avg_fill_price=order.avg_fill_price,
         order_ref=order.order_ref,
         owner=owner,
-        cancel_action=_order_cancel_action(
+        cancel_action=evaluate_order_cancel_capability(
             health=health,
             fact_kind=fact_kind,
             owner=owner,
             lifecycle=lifecycle,
             remaining=order.remaining,
+            account_recovery_state=account_recovery_state,
         ),
         headline=_fact_headline(owner, fact_kind.replace("_", " ")),
         detail=_order_detail(order, owner),
         fetched_at_ms=order.fetched_at_ms,
         ibkr_evidence=order.ibkr_evidence,
-    )
-
-
-def _disabled_order_cancel_action(
-    *,
-    visible: bool,
-    reason_code: AccountTruthOrderCancelReasonCode,
-    detail: str,
-) -> AccountTruthOrderCancelAction:
-    return AccountTruthOrderCancelAction(
-        visible=visible,
-        enabled=False,
-        reason_code=reason_code,
-        label="Cannot cancel",
-        detail=detail,
-    )
-
-
-def _order_cancel_action(
-    *,
-    health: IbkrConnectionHealth,
-    fact_kind: str,
-    owner: AccountTruthFactOwner,
-    lifecycle: str,
-    remaining: float,
-) -> AccountTruthOrderCancelAction:
-    if fact_kind != "open_order":
-        return _disabled_order_cancel_action(
-            visible=False,
-            reason_code="NOT_OPEN_ORDER",
-            detail="Only live open broker orders can be cancelled.",
-        )
-    if health.connected is not True or health.is_paper is not True:
-        return _disabled_order_cancel_action(
-            visible=True,
-            reason_code="BROKER_NOT_PAPER_CONNECTED",
-            detail="Disabled until IBKR is connected to a paper account (DU account).",
-        )
-    if owner.owner_class == "foreign_or_unclaimed":
-        return _disabled_order_cancel_action(
-            visible=True,
-            reason_code="FOREIGN_OR_UNCLAIMED",
-            detail="Foreign or unclaimed orders require explicit adoption before app-side cancel.",
-        )
-    if remaining <= 0 or lifecycle in {"filled", "cancelled", "rejected"}:
-        return _disabled_order_cancel_action(
-            visible=True,
-            reason_code="ORDER_TERMINAL",
-            detail="Order is already terminal at IBKR.",
-        )
-    return AccountTruthOrderCancelAction(
-        visible=True,
-        enabled=True,
-        reason_code=None,
-        label="Cancel",
-        detail="Sends an IBKR cancel request for this live open order.",
     )
 
 
@@ -600,6 +626,7 @@ def _execution_row(
     owner = _owner_for_order_ref(event.order_ref, namespace_views)
     if owner.owner_class == "foreign_or_unclaimed":
         owner = owner.model_copy(update={"severity": "critical"})
+    price = event.last_fill_price if event.last_fill_price is not None else event.avg_fill_price
     return AccountTruthExecutionRow(
         account_id=event.account_id,
         exec_id=event.exec_id,
@@ -611,7 +638,7 @@ def _execution_row(
         side=event.side,
         order_type=event.order_type,
         quantity=event.fill_quantity,
-        price=event.last_fill_price or event.avg_fill_price,
+        price=price,
         fee=event.fee,
         exec_time_ms=event.exec_time_ms,
         observed_at_ms=event.ts_ms,
@@ -624,7 +651,7 @@ def _execution_row(
             exec_time_ms=event.exec_time_ms,
             fee=event.fee,
             quantity=event.fill_quantity,
-            price=event.last_fill_price or event.avg_fill_price,
+            price=price,
         ),
         ibkr_evidence=event.ibkr_evidence,
     )

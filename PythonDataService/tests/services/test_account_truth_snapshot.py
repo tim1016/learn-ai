@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.broker.ibkr.account_recovery import AccountRecoveryState
+from app.broker.ibkr.account_truth import AccountTruthCollectionContext
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.schemas.account_truth import AccountTruthMessage, AccountTruthResponse
@@ -50,6 +52,14 @@ def _truth(
     )
 
 
+def _collection_context(account_id: str = "DU123") -> AccountTruthCollectionContext:
+    return AccountTruthCollectionContext(
+        account_instance_bindings=(),
+        evidence_gaps=(),
+        account_recovery_state=AccountRecoveryState.clear(account_id),
+    )
+
+
 @pytest.mark.asyncio
 async def test_refresh_service_remembers_successful_account_truth(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
@@ -63,7 +73,7 @@ async def test_refresh_service_remembers_successful_account_truth(monkeypatch: p
     result = await refresh_account_truth_and_update_cache(
         object(),  # type: ignore[arg-type]
         health=truth.health,
-        account_instance_bindings=[],
+        collection_context=_collection_context(),
         snapshot_provider=provider,
     )
 
@@ -87,7 +97,7 @@ async def test_refresh_service_marks_failure_for_any_account_truth_route(
         await refresh_account_truth_and_update_cache(
             object(),  # type: ignore[arg-type]
             health=_truth().health,
-            account_instance_bindings=[],
+            collection_context=_collection_context(),
             snapshot_provider=provider,
         )
 
