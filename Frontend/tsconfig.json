@@ -19,7 +19,9 @@
     "module": "ES2022",
     "lib": ["ES2022", "dom"],
     "baseUrl": "./",
-    "paths": {}
+    "paths": {
+      "@repo-contracts/*": ["../contracts/*"]
+    }
   },
   "exclude": [
     "src/**/*.spec.ts",

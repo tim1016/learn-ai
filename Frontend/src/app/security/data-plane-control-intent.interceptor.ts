@@ -1,5 +1,5 @@
 import type { HttpInterceptorFn, HttpRequest } from "@angular/common/http";
-import dataPlaneControlSurfaces from "./data-plane-control-surfaces.json";
+import dataPlaneControlSurfaces from "@repo-contracts/data-plane-control-surfaces.json";
 
 export const DATA_PLANE_CONTROL_INTENT_HEADER = "X-Data-Plane-Control-Intent";
 export const DATA_PLANE_CONTROL_INTENT_VALUE = "learn-ai-browser-control";

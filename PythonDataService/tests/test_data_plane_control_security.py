@@ -23,10 +23,7 @@ from app.security.data_plane_control import (
 
 _CONTROL_SURFACE_MANIFEST = (
     Path(__file__).resolve().parents[2]
-    / "Frontend"
-    / "src"
-    / "app"
-    / "security"
+    / "contracts"
     / "data-plane-control-surfaces.json"
 )
 _CONTROL_SURFACE_PREFIXES = tuple(json.loads(_CONTROL_SURFACE_MANIFEST.read_text())["control_prefixes"])
@@ -34,16 +31,20 @@ _MUTATION_PATH = "/api/broker/orders/what-if"
 _READ_PATH = "/api/broker/health"
 
 
+def _path_is_manifest_control_surface(path: str) -> bool:
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _CONTROL_SURFACE_PREFIXES)
+
+
+def _is_manifest_control_route(route: APIRoute) -> bool:
+    return _path_is_manifest_control_surface(route.path)
+
+
+def _api_routes() -> list[APIRoute]:
+    return [route for route in app.routes if isinstance(route, APIRoute)]
+
+
 def _control_routes() -> list[APIRoute]:
-    return [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        and any(
-            route.path == prefix or route.path.startswith(f"{prefix}/")
-            for prefix in _CONTROL_SURFACE_PREFIXES
-        )
-    ]
+    return [route for route in _api_routes() if _is_manifest_control_route(route)]
 
 
 def _unsafe_methods(route: APIRoute) -> set[str]:
@@ -70,6 +71,22 @@ def test_unsafe_control_routes_declare_data_plane_guard_dependency() -> None:
     assert ("/api/live-instances/runs/{run_id}/start", ["POST"], True) in unsafe_routes
     assert ("/api/accounts/{account_id}/reconciliation", ["POST"], True) in unsafe_routes
     assert all(has_guard for _path, _methods, has_guard in unsafe_routes)
+
+
+def test_guarded_control_routes_are_declared_in_shared_manifest() -> None:
+    guarded_unsafe_routes = [
+        (route.path, sorted(_unsafe_methods(route)))
+        for route in _api_routes()
+        if _unsafe_methods(route) and _has_control_guard(route)
+    ]
+    missing_from_manifest = [
+        (path, methods)
+        for path, methods in guarded_unsafe_routes
+        if not _path_is_manifest_control_surface(path)
+    ]
+
+    assert guarded_unsafe_routes
+    assert missing_from_manifest == []
 
 
 @pytest.mark.asyncio
