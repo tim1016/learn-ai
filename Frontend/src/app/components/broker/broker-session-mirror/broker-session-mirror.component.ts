@@ -15,6 +15,7 @@ import { TagModule } from 'primeng/tag';
 
 import type {
   BrokerSessionAttentionCode,
+  BrokerSessionEvent,
   BrokerSessionIdentityType,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRecency,
@@ -23,6 +24,7 @@ import type {
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import { BrokerSessionMirrorService } from '../../../services/broker-session-mirror.service';
 import { fmtInteger, fmtTimestampNy } from '../format';
+import { BrokerSessionEventsPanelComponent } from './broker-session-events-panel.component';
 
 type TagSeverity = 'success' | 'info' | 'warn' | 'danger' | 'secondary';
 
@@ -35,7 +37,13 @@ interface MirrorSummary {
 
 @Component({
   selector: 'app-broker-session-mirror',
-  imports: [CommonModule, ButtonModule, TableModule, TagModule],
+  imports: [
+    CommonModule,
+    ButtonModule,
+    BrokerSessionEventsPanelComponent,
+    TableModule,
+    TagModule,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './broker-session-mirror.component.html',
   styleUrl: './broker-session-mirror.component.scss',
@@ -44,12 +52,20 @@ export class BrokerSessionMirrorComponent {
   private readonly injector = inject(Injector);
   private readonly mirror = inject(BrokerSessionMirrorService);
   private readonly router = inject(Router);
-  private readonly stream: SseStream<BrokerSessionMirrorSnapshot> =
+  private readonly snapshotStream: SseStream<BrokerSessionMirrorSnapshot> =
     runInInjectionContext(this.injector, () =>
       brokerSse<BrokerSessionMirrorSnapshot>(
         '/api/broker/session-mirror/stream',
         'snapshot',
         { maxBuffer: 1 },
+      ),
+    );
+  private readonly eventStream: SseStream<BrokerSessionEvent> =
+    runInInjectionContext(this.injector, () =>
+      brokerSse<BrokerSessionEvent>(
+        '/api/broker/session-mirror/events/stream',
+        'broker_event',
+        { maxBuffer: 500 },
       ),
     );
 
@@ -58,14 +74,17 @@ export class BrokerSessionMirrorComponent {
   readonly refreshError = signal<string | null>(null);
 
   readonly snapshot = computed<BrokerSessionMirrorSnapshot | null>(
-    () => this.stream.latest() ?? this.manualSnapshot(),
+    () => this.snapshotStream.latest() ?? this.manualSnapshot(),
   );
   readonly rows = computed<BrokerSessionRosterRow[]>(
     () => this.snapshot()?.rows ?? [],
   );
   readonly summary = computed<MirrorSummary>(() => summarizeRows(this.rows()));
-  readonly streamStatus = this.stream.status;
-  readonly streamError = this.stream.lastError;
+  readonly streamStatus = this.snapshotStream.status;
+  readonly streamError = this.snapshotStream.lastError;
+  readonly eventStreamStatus = this.eventStream.status;
+  readonly eventStreamError = this.eventStream.lastError;
+  readonly events = this.eventStream.data;
 
   constructor() {
     void this.refresh();
@@ -175,6 +194,14 @@ export class BrokerSessionMirrorComponent {
 
   formatNumber(value: number | null): string {
     return fmtInteger(value);
+  }
+
+  eventsForRow(row: BrokerSessionRosterRow): readonly BrokerSessionEvent[] {
+    if (row.client_id === null) return [];
+    return this.events()
+      .filter((event) => event.client_id === row.client_id)
+      .slice(-10)
+      .reverse();
   }
 
   readonly trackByRowId = (_index: number, row: BrokerSessionRosterRow): string =>

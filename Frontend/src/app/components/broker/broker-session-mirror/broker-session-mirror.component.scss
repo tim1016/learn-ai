@@ -35,7 +35,7 @@
 
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(8rem, 1fr));
+  grid-template-columns: repeat(6, minmax(8rem, 1fr));
   border: 1px solid var(--surface-border, #d7dde8);
   border-radius: 8px;
   overflow: hidden;

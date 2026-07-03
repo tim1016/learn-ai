@@ -13,6 +13,19 @@ export type BrokerSessionRecency =
 export type BrokerSessionObserverStatus = 'online' | 'degraded';
 export type BrokerSessionGhostDetectionStatus = 'available' | 'unknown';
 
+export type BrokerSessionEventCategory =
+  | 'client_lifecycle'
+  | 'link_connectivity'
+  | 'recovery_reconnect'
+  | 'data_farm'
+  | 'auth_session'
+  | 'order_execution'
+  | 'pacing_throttling'
+  | 'fault_client_error'
+  | 'unclassified';
+
+export type BrokerSessionEventSeverity = 'info' | 'warning' | 'critical';
+
 export type BrokerSessionAttentionCode =
   | 'REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE'
   | 'STARTED_BUT_NO_SOCKET'
@@ -51,6 +64,7 @@ export interface BrokerSessionRosterRow {
   connection_epoch: number | null;
   last_event_ms: number | null;
   as_of_ms: number;
+  event_counts: Partial<Record<BrokerSessionEventCategory, number>>;
   attention_codes: BrokerSessionAttentionCode[];
   registry_claim: BrokerSessionRegistryClaim | null;
 }
@@ -62,4 +76,24 @@ export interface BrokerSessionMirrorSnapshot {
   ghost_detection_status: BrokerSessionGhostDetectionStatus;
   rows: BrokerSessionRosterRow[];
   degradation_reasons: string[];
+}
+
+export interface BrokerSessionEvent {
+  seq: number;
+  ts_ms: number;
+  category: BrokerSessionEventCategory;
+  severity: BrokerSessionEventSeverity;
+  label: string;
+  message: string | null;
+  raw_event_type: string;
+  client_id: number | null;
+  account_id: string | null;
+  ibkr_code: number | null;
+  connection_state: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface BrokerSessionEventPage {
+  rows: BrokerSessionEvent[];
+  next_seq: number | null;
 }
