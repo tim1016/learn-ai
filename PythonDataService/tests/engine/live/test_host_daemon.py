@@ -16,7 +16,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.engine.live.account_artifacts import (
     AccountInstanceBinding,
+    append_account_event,
     bot_order_namespace_for_instance,
+    compute_reconcile_namespaces,
     read_account_freeze,
     read_account_instance_registry,
     write_account_instance_binding,
@@ -379,6 +381,93 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.start_failed"
+
+
+async def test_child_crash_retires_account_registry_binding_when_observed(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_process = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
+
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+    fake_process.returncode = -9
+
+    status = manager.process_status(RUN_ID)
+
+    assert status.state == HostRunnerProcessState.exited
+    bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
+    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
+    assert bindings[-1].source == "host_daemon.process_crashed"
+    _owned, siblings = compute_reconcile_namespaces(
+        artifacts_root=manager.artifacts_root,
+        account_id="DU111",
+        current_namespace="learn-ai/other_bot/v1",
+    )
+    assert "learn-ai/spy_ema_paper/v1" not in siblings
+
+
+async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.host_daemon import HostRunnerError
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    fixed_ms = 1_700_000_020_000
+    from app.engine.live import host_daemon as hd
+
+    monkeypatch.setattr(hd, "_now_ms", lambda: fixed_ms)
+    first_process = FakeProcess()
+    second_process = FakeProcess()
+    popen_results = iter([first_process, second_process])
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: next(popen_results))
+
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+    first_process.returncode = -9
+    manager.process_status(RUN_ID)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+    assert exc_info.value.status_code == 409
+    assert "recovery proof" in exc_info.value.detail
+
+    append_account_event(
+        manager.artifacts_root,
+        "DU111",
+        {
+            "event_type": "account_recovery_proof_recorded",
+            "recorded_at_ms": fixed_ms + 1,
+            "recovery_id": "proof-1",
+            "reconciliation_result": "clean",
+        },
+    )
+
+    response = manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert response.accepted is True
+    assert response.process.pid == second_process.pid
 
 
 async def test_start_blocks_when_restart_intensity_freezes_account(

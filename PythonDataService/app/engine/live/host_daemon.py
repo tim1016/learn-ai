@@ -122,6 +122,7 @@ class ManagedProcess:
     log_handle: TextIO
     stopping: bool = False
     ended_at_ms: int | None = None
+    registry_retired_at_ms: int | None = None
 
 
 class RunnerProcessManager:
@@ -419,6 +420,7 @@ class RunnerProcessManager:
                         "Stop it before starting another run for this instance.",
                     )
 
+            self._enforce_crash_retired_recovery(run_dir)
             account_freeze = self._write_account_registry_binding(
                 run_dir,
                 run_id=run_id,
@@ -650,22 +652,9 @@ class RunnerProcessManager:
         lifecycle_state: str,
         source: str,
     ):
-        ledger_path = run_dir / "run_ledger.json"
-        if not ledger_path.is_file():
+        account_id, strategy_instance_id = self._account_registry_identity(run_dir)
+        if account_id is None or strategy_instance_id is None:
             return None
-        try:
-            data = json.loads(ledger_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                f"could not read run ledger for account registry: {exc}",
-            ) from exc
-        account_id = data.get("account_id")
-        strategy_instance_id = data.get("strategy_instance_id")
-        if not isinstance(account_id, str) or not account_id:
-            return
-        if not isinstance(strategy_instance_id, str) or not strategy_instance_id:
-            return
         from app.engine.live.account_artifacts import (
             AccountInstanceBinding,
             bot_order_namespace_for_instance,
@@ -701,6 +690,64 @@ class RunnerProcessManager:
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 f"could not write account instance registry: {exc}",
             ) from exc
+
+    def _account_registry_identity(self, run_dir: Path) -> tuple[str | None, str | None]:
+        ledger_path = run_dir / "run_ledger.json"
+        if not ledger_path.is_file():
+            return None, None
+        try:
+            data = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not read run ledger for account registry: {exc}",
+            ) from exc
+        account_id = data.get("account_id")
+        strategy_instance_id = data.get("strategy_instance_id")
+        if not isinstance(account_id, str) or not account_id:
+            return None, None
+        if not isinstance(strategy_instance_id, str) or not strategy_instance_id:
+            return None, None
+        return account_id, strategy_instance_id
+
+    def _enforce_crash_retired_recovery(self, run_dir: Path) -> None:
+        account_id, strategy_instance_id = self._account_registry_identity(run_dir)
+        if account_id is None or strategy_instance_id is None:
+            return
+        from app.engine.live.account_artifacts import (
+            CRASH_RETIRED_BINDING_SOURCES,
+            has_account_recovery_evidence_after,
+            latest_account_instance_binding,
+            read_account_events,
+            read_account_instance_registry,
+        )
+
+        try:
+            bindings = read_account_instance_registry(self.artifacts_root, account_id)
+            events = read_account_events(self.artifacts_root, account_id)
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not read account recovery evidence: {exc}",
+            ) from exc
+        latest = latest_account_instance_binding(
+            bindings,
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+        )
+        if latest is None:
+            return
+        if latest.lifecycle_state != "RETIRED" or latest.source not in CRASH_RETIRED_BINDING_SOURCES:
+            return
+        if has_account_recovery_evidence_after(events, latest.recorded_at_ms):
+            return
+        raise HostRunnerError(
+            status.HTTP_409_CONFLICT,
+            (
+                f"Previous host runner for {strategy_instance_id!r} crashed without later account recovery proof. "
+                "Reconcile or record an audited recovery override before restarting this binding."
+            ),
+        )
 
     def _git_tracked_under(self, subdir: Path) -> list[str]:
         """Repo-relative POSIX paths of git-tracked files under ``subdir``.
@@ -1009,9 +1056,35 @@ class RunnerProcessManager:
         and close its log handle exactly once."""
         if managed.process.poll() is None:
             return
+        if managed.registry_retired_at_ms is None:
+            try:
+                self._write_account_registry_binding(
+                    managed.run_dir,
+                    run_id=managed.run_id,
+                    lifecycle_state="RETIRED",
+                    source=self._account_registry_retirement_source(managed),
+                )
+                managed.registry_retired_at_ms = _now_ms()
+            except HostRunnerError:
+                logger.exception(
+                    "Failed to retire account registry binding for exited host runner",
+                    extra={
+                        "run_id": managed.run_id,
+                        "strategy_instance_id": managed.strategy_instance_id,
+                    },
+                )
         if managed.ended_at_ms is None:
             managed.ended_at_ms = _now_ms()
             managed.log_handle.close()
+
+    @staticmethod
+    def _account_registry_retirement_source(managed: ManagedProcess) -> str:
+        if managed.stopping:
+            return "host_daemon.stop_exited"
+        returncode = managed.process.returncode
+        if returncode == 0:
+            return "host_daemon.process_exited"
+        return "host_daemon.process_crashed"
 
     def _resolve_strategy_instance_id(self, run_dir: Path) -> str:
         """Read ``strategy_instance_id`` from the run ledger (UI-0 binding).

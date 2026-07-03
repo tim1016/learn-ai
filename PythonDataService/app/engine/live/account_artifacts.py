@@ -21,6 +21,14 @@ ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
 ACCOUNT_INSTANCE_REGISTRY_FILENAME = "instance_registry.jsonl"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
+CRASH_RETIRED_BINDING_SOURCES = frozenset({"host_daemon.process_crashed"})
+ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
+    {
+        "account_recovery_proof_recorded",
+        "account_audited_override_recorded",
+        "account_freeze_cleared",
+    }
+)
 RESTART_INTENSITY_REASON = "restart_intensity.threshold_breached"
 RESTART_INTENSITY_SOURCE = "account_restart_intensity"
 ACCOUNT_EVENT_TS_FIELD_PRECEDENCE: tuple[str, ...] = (
@@ -498,6 +506,36 @@ def read_account_instance_registry(
             continue
         bindings.append(AccountInstanceBinding.model_validate_json(line))
     return bindings
+
+
+def latest_account_instance_binding(
+    bindings: list[AccountInstanceBinding],
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+) -> AccountInstanceBinding | None:
+    latest: AccountInstanceBinding | None = None
+    for binding in bindings:
+        if binding.account_id.upper() != account_id.upper():
+            continue
+        if binding.strategy_instance_id != strategy_instance_id:
+            continue
+        if latest is None or binding.recorded_at_ms >= latest.recorded_at_ms:
+            latest = binding
+    return latest
+
+
+def has_account_recovery_evidence_after(events: list[dict], recorded_at_ms: int) -> bool:
+    for event in events:
+        if event.get("event_type") not in ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES:
+            continue
+        try:
+            event_ts_ms = int(event.get("ts_ms") or 0)
+        except (TypeError, ValueError):
+            continue
+        if event_ts_ms > recorded_at_ms:
+            return True
+    return False
 
 
 def compute_reconcile_namespaces(
