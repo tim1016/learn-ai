@@ -6,7 +6,11 @@ from pathlib import Path
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
-from app.broker.ibkr.models import IbkrConnectionHealth
+from app.broker.ibkr.models import (
+    IbkrAccountSummary,
+    IbkrConnectionHealth,
+    IbkrPositionsSnapshot,
+)
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountInstanceBinding,
@@ -34,6 +38,26 @@ def _health(*, account_id: str = "DU1234567", connected: bool = True) -> IbkrCon
     )
 
 
+def _account_summary() -> IbkrAccountSummary:
+    return IbkrAccountSummary(
+        account_id="DU1234567",
+        is_paper=True,
+        base_currency="USD",
+        net_liquidation=100_000.0,
+        buying_power=50_000.0,
+        fetched_at_ms=1_780_000_000_000,
+    )
+
+
+def _positions_snapshot() -> IbkrPositionsSnapshot:
+    return IbkrPositionsSnapshot(
+        account_id="DU1234567",
+        is_paper=True,
+        positions=[],
+        fetched_at_ms=1_780_000_000_400,
+    )
+
+
 def _truth(
     *,
     account_id: str = "DU1234567",
@@ -44,8 +68,8 @@ def _truth(
         health=_health(account_id=account_id, connected=connected),
         account_instance_bindings=[],
         account_recovery_state=AccountRecoveryState.clear(account_id),
-        account=None,
-        positions_snapshot=None,
+        account=_account_summary(),
+        positions_snapshot=_positions_snapshot(),
         open_orders=[],
         completed_orders=[],
         executions=[],
@@ -123,6 +147,22 @@ def test_receipt_blocks_broker_liveness_failure(tmp_path: Path) -> None:
     assert receipt.state == "NOT_PROVEN"
     assert receipt.account_truth_verdict == "not_proven"
     assert receipt.final_gate_result.status == "block"
+
+
+def test_receipt_rechecks_critical_source_freshness(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_061_001,
+    )
+
+    assert receipt.state == "NOT_PROVEN"
+    assert receipt.account_truth_verdict == "clean"
+    assert receipt.final_gate_result.status == "block"
+    assert receipt.final_gate_result.operator_next_step == "REFRESH_ACCOUNT_TRUTH"
+    assert "hard freshness threshold" in receipt.final_gate_result.operator_reason
 
 
 def test_receipt_bounds_long_evidence_gap_details(tmp_path: Path) -> None:

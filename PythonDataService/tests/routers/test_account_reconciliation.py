@@ -8,7 +8,11 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
-from app.broker.ibkr.models import IbkrConnectionHealth
+from app.broker.ibkr.models import (
+    IbkrAccountSummary,
+    IbkrConnectionHealth,
+    IbkrPositionsSnapshot,
+)
 from app.engine.live.account_artifacts import account_artifacts_root
 from app.routers import account_reconciliation
 from app.services.account_reconciliation import AccountReconciliationService
@@ -29,13 +33,33 @@ def _health() -> IbkrConnectionHealth:
     )
 
 
+def _account_summary() -> IbkrAccountSummary:
+    return IbkrAccountSummary(
+        account_id="DU1234567",
+        is_paper=True,
+        base_currency="USD",
+        net_liquidation=100_000.0,
+        buying_power=50_000.0,
+        fetched_at_ms=1_780_000_000_000,
+    )
+
+
+def _positions_snapshot() -> IbkrPositionsSnapshot:
+    return IbkrPositionsSnapshot(
+        account_id="DU1234567",
+        is_paper=True,
+        positions=[],
+        fetched_at_ms=1_780_000_000_400,
+    )
+
+
 def _truth():
     return compose_account_truth(
         health=_health(),
         account_instance_bindings=[],
         account_recovery_state=AccountRecoveryState.clear("DU1234567"),
-        account=None,
-        positions_snapshot=None,
+        account=_account_summary(),
+        positions_snapshot=_positions_snapshot(),
         open_orders=[],
         completed_orders=[],
         executions=[],

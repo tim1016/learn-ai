@@ -206,7 +206,10 @@ def assess_account_truth(
             age_ms=age_ms,
             hard_ttl_ms=evidence.hard_ttl_ms,
         )
-    critical_source_blocks = critical_source_freshness_blocks(evidence.truth.source_freshness)
+    critical_source_blocks = critical_source_freshness_blocks(
+        evidence.truth.source_freshness,
+        checked_at_ms=decided_at_ms,
+    )
     if critical_source_blocks:
         reason_codes = tuple(
             row.reason_code or f"ACCOUNT_TRUTH_SOURCE_{row.status.upper()}_{row.source.upper()}"

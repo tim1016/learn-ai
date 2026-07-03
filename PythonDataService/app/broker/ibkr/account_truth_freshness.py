@@ -76,6 +76,7 @@ def compose_account_truth_source_freshness(
             fetched_at_ms=positions_snapshot.fetched_at_ms if positions_snapshot is not None else None,
             gap=gap_by_source.get("positions"),
             checked_at_ms=checked_at_ms,
+            force_stale_message=_positions_cache_fallback_message(positions_snapshot),
         ),
         _source_freshness_row(
             "open_orders",
@@ -100,12 +101,14 @@ def compose_account_truth_source_freshness(
 
 def critical_source_freshness_blocks(
     source_freshness: Sequence[AccountTruthSourceFreshness],
+    *,
+    checked_at_ms: int | None = None,
 ) -> tuple[AccountTruthSourceFreshness, ...]:
     """Return critical missing/stale source rows, including absent expected rows."""
 
     return tuple(
         row
-        for row in normalize_source_freshness(source_freshness)
+        for row in normalize_source_freshness(source_freshness, checked_at_ms=checked_at_ms)
         if _SOURCE_SPEC_BY_NAME[row.source].severity == "critical"
         and row.status in {"missing", "stale"}
     )
@@ -113,6 +116,8 @@ def critical_source_freshness_blocks(
 
 def normalize_source_freshness(
     source_freshness: Sequence[AccountTruthSourceFreshness],
+    *,
+    checked_at_ms: int | None = None,
 ) -> tuple[AccountTruthSourceFreshness, ...]:
     """Fill absent rows and canonicalize severity/reason fields from the source spec."""
 
@@ -137,7 +142,12 @@ def normalize_source_freshness(
             updates["hard_ttl_ms"] = spec.hard_ttl_ms
         if row.status != "fresh" and row.reason_code is None:
             updates["reason_code"] = _reason_code(row.source, row.status)
-        rows.append(row.model_copy(update=updates) if updates else row)
+        updated_row = row.model_copy(update=updates) if updates else row
+        rows.append(
+            _recheck_source_age(updated_row, checked_at_ms=checked_at_ms)
+            if checked_at_ms is not None
+            else updated_row
+        )
     return tuple(rows)
 
 
@@ -147,6 +157,7 @@ def _source_freshness_row(
     fetched_at_ms: int | None,
     gap: AccountTruthEvidenceGap | None,
     checked_at_ms: int,
+    force_stale_message: str | None = None,
 ) -> AccountTruthSourceFreshness:
     spec = _SOURCE_SPEC_BY_NAME[source]
     if gap is not None or fetched_at_ms is None:
@@ -163,17 +174,19 @@ def _source_freshness_row(
         )
 
     age_ms = max(0, checked_at_ms - fetched_at_ms)
+    if force_stale_message is not None:
+        return _stale_source_freshness_row(
+            source,
+            fetched_at_ms=fetched_at_ms,
+            age_ms=None,
+            message=force_stale_message,
+        )
     if age_ms > spec.hard_ttl_ms:
-        return AccountTruthSourceFreshness(
-            source=source,
-            label=spec.label,
-            status="stale",
-            severity=spec.severity,
+        return _stale_source_freshness_row(
+            source,
             fetched_at_ms=fetched_at_ms,
             age_ms=age_ms,
-            hard_ttl_ms=spec.hard_ttl_ms,
-            reason_code=_reason_code(source, "stale"),
-            message=f"{spec.label} evidence is {age_ms} ms old; hard freshness threshold is {spec.hard_ttl_ms} ms.",
+            message=None,
         )
 
     return AccountTruthSourceFreshness(
@@ -186,6 +199,66 @@ def _source_freshness_row(
         hard_ttl_ms=spec.hard_ttl_ms,
         reason_code=None,
         message=f"{spec.label} evidence is fresh.",
+    )
+
+
+def _recheck_source_age(
+    row: AccountTruthSourceFreshness,
+    *,
+    checked_at_ms: int,
+) -> AccountTruthSourceFreshness:
+    spec = _SOURCE_SPEC_BY_NAME[row.source]
+    if row.fetched_at_ms is None:
+        return row
+    age_ms = max(0, checked_at_ms - row.fetched_at_ms)
+    if row.status != "fresh":
+        if row.age_ms is None:
+            return row
+        return row.model_copy(update={"age_ms": age_ms})
+    if age_ms <= spec.hard_ttl_ms:
+        return row.model_copy(update={"age_ms": age_ms})
+    return _stale_source_freshness_row(
+        row.source,
+        fetched_at_ms=row.fetched_at_ms,
+        age_ms=age_ms,
+        message=None,
+    )
+
+
+def _stale_source_freshness_row(
+    source: AccountTruthSourceName,
+    *,
+    fetched_at_ms: int | None,
+    age_ms: int | None,
+    message: str | None,
+) -> AccountTruthSourceFreshness:
+    spec = _SOURCE_SPEC_BY_NAME[source]
+    return AccountTruthSourceFreshness(
+        source=source,
+        label=spec.label,
+        status="stale",
+        severity=spec.severity,
+        fetched_at_ms=fetched_at_ms,
+        age_ms=age_ms,
+        hard_ttl_ms=spec.hard_ttl_ms,
+        reason_code=_reason_code(source, "stale"),
+        message=message
+        or (
+            f"{spec.label} evidence is {age_ms} ms old; hard freshness threshold is {spec.hard_ttl_ms} ms."
+            if age_ms is not None
+            else f"{spec.label} evidence age is unknown; hard freshness threshold is {spec.hard_ttl_ms} ms."
+        ),
+    )
+
+
+def _positions_cache_fallback_message(
+    positions_snapshot: IbkrPositionsSnapshot | None,
+) -> str | None:
+    if positions_snapshot is None or not positions_snapshot.used_cache_fallback:
+        return None
+    return (
+        "Positions evidence came from the synchronized IBKR cache after "
+        "reqPositionsAsync timed out; live broker positions cannot be proven."
     )
 
 

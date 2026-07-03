@@ -24,7 +24,10 @@ from app.broker.ibkr.account_recovery import (
     AccountRecoveryState,
     read_account_recovery_state,
 )
-from app.broker.ibkr.account_truth_freshness import compose_account_truth_source_freshness
+from app.broker.ibkr.account_truth_freshness import (
+    compose_account_truth_source_freshness,
+    critical_source_freshness_blocks,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
@@ -65,6 +68,7 @@ from app.schemas.account_truth import (
     AccountTruthPositionRow,
     AccountTruthResponse,
     AccountTruthSeverity,
+    AccountTruthSourceFreshness,
     AccountTruthSymbolExposure,
 )
 from app.utils.timestamps import now_ms_utc
@@ -232,7 +236,7 @@ async def _collect_positions(
     gaps: list[AccountTruthEvidenceGap],
 ) -> IbkrPositionsSnapshot | None:
     try:
-        return await ibkr_account.fetch_positions(client)
+        return await ibkr_account.fetch_positions(client, allow_cache_fallback=True)
     except BrokerError as exc:
         _log_evidence_gap("positions", "critical", exc)
         gaps.append(
@@ -396,11 +400,6 @@ def compose_account_truth(
     )
     owner_summaries = _owner_summaries(order_rows, execution_rows, position_rows)
     symbol_exposures = _symbol_exposures(position_rows)
-    final_verdict, final_severity = _final_verdict(
-        invariants,
-        blockers=blockers,
-        evidence_gaps=projection_gaps,
-    )
     source_freshness = compose_account_truth_source_freshness(
         health=health,
         account=account,
@@ -409,6 +408,20 @@ def compose_account_truth(
         completed_orders=completed_orders,
         executions=executions,
         evidence_gaps=projection_gaps,
+        checked_at_ms=checked_at_ms,
+    )
+    freshness_blockers, freshness_caveats = _source_freshness_messages(
+        source_freshness,
+        evidence_gaps=projection_gaps,
+        checked_at_ms=checked_at_ms,
+    )
+    blockers.extend(freshness_blockers)
+    caveats.extend(freshness_caveats)
+    final_verdict, final_severity = _final_verdict(
+        invariants,
+        blockers=blockers,
+        evidence_gaps=projection_gaps,
+        source_freshness=source_freshness,
         checked_at_ms=checked_at_ms,
     )
     return AccountTruthResponse(
@@ -1126,6 +1139,43 @@ def _messages(
     return blockers, caveats
 
 
+def _source_freshness_messages(
+    source_freshness: Sequence[AccountTruthSourceFreshness],
+    *,
+    evidence_gaps: Sequence[AccountTruthEvidenceGap],
+    checked_at_ms: int,
+) -> tuple[list[AccountTruthMessage], list[AccountTruthMessage]]:
+    gap_sources = {gap.source for gap in evidence_gaps}
+    blockers: list[AccountTruthMessage] = []
+    caveats: list[AccountTruthMessage] = []
+    for row in critical_source_freshness_blocks(source_freshness, checked_at_ms=checked_at_ms):
+        if row.source in gap_sources:
+            continue
+        blockers.append(_source_freshness_message(row))
+    for row in source_freshness:
+        if row.severity == "critical" or row.status == "fresh" or row.source in gap_sources:
+            continue
+        caveats.append(_source_freshness_message(row))
+    return blockers, caveats
+
+
+def _source_freshness_message(row: AccountTruthSourceFreshness) -> AccountTruthMessage:
+    return AccountTruthMessage(
+        code=f"source_freshness_{row.source}_{row.status}",
+        severity=row.severity,
+        title=f"{row.label} evidence is {row.status}",
+        message=row.message,
+        forensic_facts={
+            "source": row.source,
+            "status": row.status,
+            "reason_code": row.reason_code,
+            "fetched_at_ms": row.fetched_at_ms,
+            "age_ms": row.age_ms,
+            "hard_ttl_ms": row.hard_ttl_ms,
+        },
+    )
+
+
 def _invariants(
     *,
     health: IbkrConnectionHealth,
@@ -1367,10 +1417,12 @@ def _final_verdict(
     *,
     blockers: Sequence[AccountTruthMessage],
     evidence_gaps: Sequence[AccountTruthEvidenceGap],
+    source_freshness: Sequence[AccountTruthSourceFreshness],
+    checked_at_ms: int,
 ) -> tuple[AccountTruthFinalVerdict, AccountTruthSeverity]:
     if any(gap.severity == "critical" for gap in evidence_gaps) or any(
         blocker.severity == "critical" for blocker in blockers
-    ):
+    ) or critical_source_freshness_blocks(source_freshness, checked_at_ms=checked_at_ms):
         return "not_proven", "critical"
     failing = [row for row in invariants if row.status == "fail"]
     if not failing:

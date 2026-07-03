@@ -416,7 +416,7 @@ async def positions_endpoint() -> IbkrPositionsSnapshot:
     """All open positions for the connected account."""
     client = require_connected_client()
     try:
-        return await ibkr_account.fetch_positions(client)
+        return await ibkr_account.fetch_positions(client, allow_cache_fallback=True)
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

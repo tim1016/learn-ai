@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth submit-gate update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, or not clean. Per-source Account Truth freshness remains a follow-up.)
+> **Last reviewed:** 2026-07-03 (Account Truth source-freshness update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract.)
 
 ---
 
@@ -172,6 +172,10 @@ state to guess around.
 Account Truth reads `instance_registry.jsonl` as its bot ownership source. Its attribution namespace view includes every namespace ever recorded for the account, including retired bindings, so stopped bots keep ownership of terminal completed orders and historical executions. Its active-known/current-risk namespace view is limited to currently-bound `DEPLOYED` or `ACTIVE` bindings; a live working order or current position under a retired binding is emitted as `retired_owner_live_exposure`, not as clean bot-owned exposure and not as `foreign_or_unclaimed`.
 
 `GET /api/broker/account-truth` now stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot status reads consume only that cache; they do not sweep IBKR. `operator_surface.submit_readiness` maps a missing, stale, or `not_proven` cached projection to `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. `LivePortfolio.submit_pending_orders` consumes the same cache through the `account.account_truth` `GateResult` and refuses non-pass results before any broker call or AccountOwner handoff; `LiveEngine` wires that provider for durable-submit broker adapters. The gate is a pure cached predicate: it performs no IBKR sweep, writes no freeze artifact, and remains separate from the broker-snapshot classifier.
+
+Account Truth source freshness is now part of the authoritative verdict, not an annotation. `compose_account_truth_source_freshness(...)` emits one backend-authored freshness row for broker connection, account summary, positions, open orders, completed orders, and executions. Critical sources are broker connection, account summary, positions, and open orders. `critical_source_freshness_blocks(...)` re-evaluates hard TTL at read time; any critical `missing` or `stale` row forces `AccountTruthResponse.final_verdict = not_proven` and `final_severity = critical`. The same check is consumed by the cached submit gate and by `AccountReconciliationService.compose_receipt(...)`, so a once-clean truth snapshot cannot remain clean after critical source evidence ages out.
+
+`IbkrPositionsSnapshot.used_cache_fallback=true` means `fetch_positions(...)` returned synchronized IBKR cache rows because `reqPositionsAsync` timed out. That snapshot is degraded evidence even when the read itself just happened: downstream Account Truth marks positions source freshness `stale` and blocks submit/reconciliation clean receipts until a later live positions request succeeds. The timeout is not latched for the client lifetime; each later positions snapshot retries the live broker request behind the per-client serialization lock.
 
 ### 4.1 Postgres Lifecycle Projection Read Model
 

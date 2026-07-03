@@ -17,6 +17,7 @@ Phase 2b (out of scope here) adds the SSE P&L streams in ``pnl.py``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.broker.ibkr.api_evidence import (
@@ -24,7 +25,7 @@ from app.broker.ibkr.api_evidence import (
     evidence_response,
     get_ibkr_api_evidence_recorder,
 )
-from app.broker.ibkr.client import IbkrClient, _is_paper_account
+from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrPosition,
@@ -36,6 +37,10 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
+_POSITIONS_TIMEOUT_S = 8.0
+_POSITIONS_LOCK_ATTR = "_learn_ai_positions_request_lock"
+_POSITIONS_CACHE_FETCHED_AT_ATTR = "_learn_ai_positions_cache_fetched_at_ms"
+_POSITIONS_TIMEOUT_EVENT_ATTR = "_learn_ai_positions_timeout_event_ms"
 
 # IBKR's reqAccountSummary returns string-keyed tags. ib_async subscribes
 # to the standard tag set on connect; we just consume the ones Phase 2a
@@ -184,7 +189,107 @@ def _ibkr_position_to_model(
     )
 
 
-async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
+def _cached_positions(client: IbkrClient) -> list:
+    positions = getattr(client.ib, "positions", None)
+    if not callable(positions):
+        raise BrokerError("IBKR positions cache is unavailable on this client.")
+    try:
+        return list(positions())
+    except Exception as exc:
+        raise BrokerError(f"IBKR positions cache read failed: {exc}") from exc
+
+
+def _positions_request_lock(client: IbkrClient) -> asyncio.Lock:
+    lock = getattr(client, _POSITIONS_LOCK_ATTR, None)
+    if lock is None:
+        lock = asyncio.Lock()
+        setattr(client, _POSITIONS_LOCK_ATTR, lock)
+    return lock
+
+
+def _client_event_ms(client: IbkrClient) -> int | None:
+    event_ms = getattr(client, "_last_event_ms", None)
+    return event_ms if isinstance(event_ms, int) else None
+
+
+def _positions_timeout_guard_active(client: IbkrClient) -> bool:
+    timed_out_event_ms = getattr(client, _POSITIONS_TIMEOUT_EVENT_ATTR, None)
+    if not isinstance(timed_out_event_ms, int):
+        return False
+    event_ms = _client_event_ms(client)
+    if event_ms is not None and event_ms > timed_out_event_ms:
+        delattr(client, _POSITIONS_TIMEOUT_EVENT_ATTR)
+        return False
+    return True
+
+
+def _mark_positions_timed_out(client: IbkrClient) -> None:
+    setattr(
+        client,
+        _POSITIONS_TIMEOUT_EVENT_ATTR,
+        _client_event_ms(client) or now_ms_utc(),
+    )
+
+
+def _cancel_positions_request(client: IbkrClient) -> None:
+    cancel = getattr(getattr(client.ib, "client", None), "cancelPositions", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel()
+    except Exception as exc:
+        logger.debug("IBKR cancelPositions raised after positions timeout: %s", exc)
+
+
+def _cached_position_rows_with_timestamp(client: IbkrClient) -> tuple[list, int]:
+    fetched_at_ms = getattr(client, _POSITIONS_CACHE_FETCHED_AT_ATTR, None)
+    if not isinstance(fetched_at_ms, int):
+        raise BrokerError(
+            "IBKR positions cache freshness is unknown; refusing to use cached positions."
+        )
+    return _cached_positions(client), fetched_at_ms
+
+
+async def _fetch_position_rows(
+    client: IbkrClient,
+    *,
+    timeout_s: float,
+    allow_cache_fallback: bool,
+) -> tuple[list, bool, int]:
+    if _positions_timeout_guard_active(client):
+        if allow_cache_fallback:
+            raw, fetched_at_ms = _cached_position_rows_with_timestamp(client)
+            return raw, True, fetched_at_ms
+        raise BrokerError(
+            "IBKR positions request previously timed out; reconnect IBKR before "
+            "retrying live positions."
+        )
+    try:
+        raw = await asyncio.wait_for(client.ib.reqPositionsAsync(), timeout=timeout_s)
+        fetched_at_ms = now_ms_utc()
+        setattr(client, _POSITIONS_CACHE_FETCHED_AT_ATTR, fetched_at_ms)
+        return raw, False, fetched_at_ms
+    except TimeoutError as exc:
+        _cancel_positions_request(client)
+        _mark_positions_timed_out(client)
+        if not allow_cache_fallback:
+            raise BrokerError(
+                "IBKR reqPositionsAsync timed out; live positions are unavailable."
+            ) from exc
+        raw, fetched_at_ms = _cached_position_rows_with_timestamp(client)
+        logger.warning(
+            "IBKR reqPositionsAsync timed out; using synchronized positions cache",
+            extra={"timeout_s": timeout_s, "cached_row_count": len(raw)},
+        )
+        return raw, True, fetched_at_ms
+
+
+async def fetch_positions(
+    client: IbkrClient,
+    *,
+    timeout_s: float = _POSITIONS_TIMEOUT_S,
+    allow_cache_fallback: bool = False,
+) -> IbkrPositionsSnapshot:
     """All open positions for the connected account.
 
     ``reqPositionsAsync`` returns positions across all accounts the user
@@ -197,15 +302,27 @@ async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
     if account_id is None:
         raise RuntimeError("connected client has no account_id")
 
-    raw = await client.ib.reqPositionsAsync()
-    fetched_at_ms = now_ms_utc()
+    # ib_async keys reqPositionsAsync on the static "positions" slot, so
+    # overlapping calls can cross-contaminate if a timed-out response arrives
+    # late. Serialize per client while still retrying the live request on the
+    # next snapshot; cache fallback is only evidence for the current read.
+    async with _positions_request_lock(client):
+        raw, used_cache_fallback, fetched_at_ms = await _fetch_position_rows(
+            client,
+            timeout_s=timeout_s,
+            allow_cache_fallback=allow_cache_fallback,
+        )
     get_ibkr_api_evidence_recorder().record(
         source="account.fetch_positions",
         account_id=account_id,
         request=evidence_request("reqPositionsAsync"),
         response=evidence_response(
             "position",
-            fields={"row_count": len(raw)},
+            fields={
+                "row_count": len(raw),
+                "cache_fallback": used_cache_fallback,
+                "cache_fallback_allowed": allow_cache_fallback,
+            },
             objects=raw,
         ),
     )
@@ -231,4 +348,5 @@ async def fetch_positions(client: IbkrClient) -> IbkrPositionsSnapshot:
         is_paper=_is_paper_account(account_id),
         positions=positions,
         fetched_at_ms=fetched_at_ms,
+        used_cache_fallback=used_cache_fallback,
     )
