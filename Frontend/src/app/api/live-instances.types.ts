@@ -68,6 +68,7 @@ export interface ReadinessGate {
   status: 'pass' | 'fail' | 'unknown';
   severity: 'hard' | 'soft';
   detail: string;
+  gate_result?: GateResult | null;
 }
 
 export interface ReadinessVector {
@@ -78,6 +79,8 @@ export interface ReadinessVector {
   summary: string;
   gates: ReadinessGate[];
   live_readiness_available?: boolean | null;
+  orders_used?: number | null;
+  orders_cap?: number | null;
 }
 
 export interface DecisionColumnDescriptor {
@@ -737,6 +740,8 @@ export interface OperatorSurfaceReconciliation {
    *  adopted receipt) — the intent_ids the orchestrator recovered. */
   adopted_intent_ids: string[];
   last_reconcile_ms: number | null;
+  sidecar_wal_seq: number | null;
+  broker_observed_at_ms: number | null;
 }
 
 /** PRD #619-D4 — backend-authored divergence card.

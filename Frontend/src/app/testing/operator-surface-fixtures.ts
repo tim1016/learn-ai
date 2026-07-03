@@ -156,6 +156,8 @@ export function makeOperatorSurfaceFixture(
       failure_reason: null,
       adopted_intent_ids: [],
       last_reconcile_ms: 1_800_000_000_000,
+      sidecar_wal_seq: 0,
+      broker_observed_at_ms: 1_800_000_000_000,
     },
     broker_activity_health: null,
     incident_headline: null,
