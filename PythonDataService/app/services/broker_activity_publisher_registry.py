@@ -106,8 +106,7 @@ class BrokerActivityPublisherRegistry:
             publishers = list(self._by_instance.values())
             self._by_instance.clear()
             self._registered_at_by_instance.clear()
-        for p in publishers:
-            await p.stop()
+        await asyncio.gather(*(p.stop() for p in publishers))
 
     def instances(self) -> tuple[str, ...]:
         return tuple(self._by_instance.keys())
