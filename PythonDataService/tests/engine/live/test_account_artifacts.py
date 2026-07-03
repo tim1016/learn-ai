@@ -18,6 +18,7 @@ from app.engine.live.account_artifacts import (
     account_artifacts_root,
     clear_account_freeze,
     compute_reconcile_namespaces,
+    crash_retired_restart_blocking_binding,
     evaluate_account_instance_binding,
     evaluate_restart_intensity,
     has_account_recovery_evidence_after,
@@ -609,6 +610,74 @@ def test_has_account_recovery_evidence_after_requires_later_recovery_event() -> 
         ],
         crash_at_ms,
     ) is True
+
+
+def test_crash_retired_restart_recovery_blocks_without_later_proof(tmp_path: Path) -> None:
+    active = _binding(recorded_at_ms=1_700_000_000_000)
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": 1_700_000_010_000,
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    write_account_instance_binding(tmp_path, active)
+    write_account_instance_binding(tmp_path, retired)
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert blocking_binding == retired
+
+
+def test_crash_retired_restart_recovery_allows_after_later_proof(tmp_path: Path) -> None:
+    retired = _binding(
+        recorded_at_ms=1_700_000_010_000,
+    ).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    write_account_instance_binding(tmp_path, retired)
+    account_artifacts.append_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "event_type": "account_recovery_proof_recorded",
+            "recorded_at_ms": 1_700_000_010_001,
+            "recovery_id": "proof-1",
+        },
+    )
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert blocking_binding is None
+
+
+def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Path) -> None:
+    retired = _binding().model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.stop_requested",
+        }
+    )
+    write_account_instance_binding(tmp_path, retired)
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert blocking_binding is None
 
 
 def test_account_instance_registry_blocks_unknown_instance(tmp_path: Path) -> None:

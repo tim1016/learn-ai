@@ -593,6 +593,30 @@ def has_account_recovery_evidence_after(events: list[dict], recorded_at_ms: int)
     return False
 
 
+def crash_retired_restart_blocking_binding(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+) -> AccountInstanceBinding | None:
+    """Return the crash-retired binding that blocks restart, if any."""
+
+    bindings = read_account_instance_registry(artifacts_root, account_id)
+    events = read_account_events(artifacts_root, account_id)
+    latest = latest_account_instance_binding(
+        bindings,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if latest is None:
+        return None
+    if latest.lifecycle_state != "RETIRED" or latest.source not in CRASH_RETIRED_BINDING_SOURCES:
+        return None
+    if has_account_recovery_evidence_after(events, latest.recorded_at_ms):
+        return None
+    return latest
+
+
 def compute_reconcile_namespaces(
     *,
     artifacts_root: Path,
@@ -925,6 +949,7 @@ __all__ = [
     "bot_order_namespace_for_instance",
     "clear_account_freeze",
     "compute_reconcile_namespaces",
+    "crash_retired_restart_blocking_binding",
     "evaluate_account_instance_binding",
     "evaluate_restart_intensity",
     "index_account_instance_bindings",
