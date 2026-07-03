@@ -432,6 +432,20 @@ export interface AccountTruthFactOwner {
   severity: AccountTruthSeverity;
 }
 
+export type AccountTruthOrderCancelReasonCode =
+  | 'BROKER_NOT_PAPER_CONNECTED'
+  | 'NOT_OPEN_ORDER'
+  | 'FOREIGN_OR_UNCLAIMED'
+  | 'ORDER_TERMINAL';
+
+export interface AccountTruthOrderCancelAction {
+  visible: boolean;
+  enabled: boolean;
+  reason_code: AccountTruthOrderCancelReasonCode | null;
+  label: string;
+  detail: string;
+}
+
 export interface AccountTruthOrderRow extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
   fact_kind: 'open_order' | 'completed_order';
   lifecycle_id: string;
@@ -452,6 +466,7 @@ export interface AccountTruthOrderRow extends IbkrOrderEvidenceFields, IbkrOrder
   remaining: number;
   avg_fill_price: number | null;
   owner: AccountTruthFactOwner;
+  cancel_action: AccountTruthOrderCancelAction;
   headline: string;
   detail: string;
   fetched_at_ms: number;

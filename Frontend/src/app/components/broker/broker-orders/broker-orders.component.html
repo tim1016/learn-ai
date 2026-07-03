@@ -320,15 +320,19 @@
                       <button
                         type="button"
                         class="ghost-btn small action-btn"
-                        (click)="cancel(o.order_id)"
+                        (click)="cancel(o)"
                         [attr.aria-label]="cancelButtonLabel(o)"
-                        title="Cancel order"
+                        [title]="o.cancel_action.detail"
                       >
                         <i class="pi pi-times" aria-hidden="true"></i>
-                        <span>Cancel</span>
+                        <span>{{ o.cancel_action.label }}</span>
                       </button>
                     } @else {
-                      <span class="muted mono">—</span>
+                      <span
+                        class="muted mono"
+                        [attr.aria-label]="cancelButtonLabel(o)"
+                        [title]="o.cancel_action.detail"
+                      >—</span>
                     }
                   </td>
                 }

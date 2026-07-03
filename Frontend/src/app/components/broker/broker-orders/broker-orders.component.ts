@@ -151,7 +151,7 @@ export class BrokerOrdersComponent {
     ),
   );
   readonly hasCancellableLedgerOrders = computed(() =>
-    this.ledgerOrders().some((order) => this.canCancelLedgerOrder(order)),
+    this.ledgerOrders().some((order) => order.cancel_action.visible),
   );
   readonly ledgerSourceNotices = computed<LedgerSourceNotice[]>(() =>
     this.buildLedgerSourceNotices(),
@@ -349,9 +349,10 @@ export class BrokerOrdersComponent {
     }
   }
 
-  async cancel(orderId: number): Promise<void> {
+  async cancel(row: AccountTruthOrderRow): Promise<void> {
+    if (!row.cancel_action.enabled) return;
     try {
-      await this.broker.cancelOrder(orderId);
+      await this.broker.cancelOrder(row.order_id);
       void this.refreshLedger();
     } catch (err) {
       this.ledgerError.set(err);
@@ -426,28 +427,16 @@ export class BrokerOrdersComponent {
   }
 
   canCancelLedgerOrder(row: AccountTruthOrderRow): boolean {
-    return this.cancelDisabledReason(row) === null;
+    return row.cancel_action.enabled;
   }
 
   cancelDisabledReason(row: AccountTruthOrderRow): string | null {
-    if (!this.isPaperConnected()) {
-      return 'Disabled until IBKR is connected to a paper account (DU account).';
-    }
-    if (row.fact_kind !== 'open_order') {
-      return 'Only live open broker orders can be cancelled.';
-    }
-    if (row.owner.owner_class === 'foreign_or_unclaimed') {
-      return 'Foreign or unclaimed orders require explicit adoption before app-side cancel.';
-    }
-    if (row.remaining <= 0 || ['filled', 'cancelled', 'rejected'].includes(row.lifecycle)) {
-      return 'Order is already terminal at IBKR.';
-    }
-    return null;
+    return row.cancel_action.enabled ? null : row.cancel_action.detail;
   }
 
   cancelButtonLabel(row: AccountTruthOrderRow): string {
     const reason = this.cancelDisabledReason(row);
-    if (reason === null) return `Cancel order ${row.order_id}`;
+    if (reason === null) return `${row.cancel_action.label} order ${row.order_id}`;
     return `Cannot cancel order ${row.order_id}: ${reason}`;
   }
 

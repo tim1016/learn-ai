@@ -172,6 +172,8 @@ def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> 
     assert truth.final_severity == "critical"
     assert truth.orders[0].owner.owner_class == "foreign_or_unclaimed"
     assert truth.orders[0].owner.severity == "critical"
+    assert truth.orders[0].cancel_action.enabled is False
+    assert truth.orders[0].cancel_action.reason_code == "FOREIGN_OR_UNCLAIMED"
     assert truth.blockers[0].code == "unknown_open_orders"
 
 
@@ -196,10 +198,58 @@ def test_account_truth_active_known_live_order_stays_clean(
     assert truth.orders[0].owner.owner_class == "bot"
     assert truth.orders[0].owner.owner_binding_state == lifecycle_state
     assert truth.orders[0].owner.severity == "ok"
+    assert truth.orders[0].cancel_action.visible is True
+    assert truth.orders[0].cancel_action.enabled is True
+    assert truth.orders[0].cancel_action.reason_code is None
+    assert truth.orders[0].cancel_action.label == "Cancel"
     assert truth.blockers == []
     assert {row.key: row.status for row in truth.invariants}[
         "open_orders_known"
     ] == "pass"
+
+
+def test_account_truth_authors_order_cancel_action_reasons() -> None:
+    non_paper = compose_account_truth(
+        health=_health().model_copy(update={"mode": "live", "is_paper": False}),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order()],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+    assert non_paper.orders[0].cancel_action.visible is True
+    assert non_paper.orders[0].cancel_action.enabled is False
+    assert non_paper.orders[0].cancel_action.reason_code == "BROKER_NOT_PAPER_CONNECTED"
+
+    terminal = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[_open_order(status="Filled", remaining=0.0)],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+    assert terminal.orders[0].cancel_action.visible is True
+    assert terminal.orders[0].cancel_action.enabled is False
+    assert terminal.orders[0].cancel_action.reason_code == "ORDER_TERMINAL"
+
+    completed = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=None,
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[_open_order(status="Cancelled", remaining=0.0)],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+    assert completed.orders[0].cancel_action.visible is False
+    assert completed.orders[0].cancel_action.enabled is False
+    assert completed.orders[0].cancel_action.reason_code == "NOT_OPEN_ORDER"
 
 
 def test_account_truth_never_registered_namespace_stays_foreign() -> None:

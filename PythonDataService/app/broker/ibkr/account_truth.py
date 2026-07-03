@@ -51,6 +51,8 @@ from app.schemas.account_truth import (
     AccountTruthFinalVerdict,
     AccountTruthInvariant,
     AccountTruthMessage,
+    AccountTruthOrderCancelAction,
+    AccountTruthOrderCancelReasonCode,
     AccountTruthOrderRow,
     AccountTruthOwnerBindingState,
     AccountTruthOwnerSummary,
@@ -285,7 +287,7 @@ def compose_account_truth(
     known_bot_namespaces = sorted(namespace_views.attribution_by_namespace)
 
     open_order_rows = [
-        _order_row(order, fact_kind="open_order", namespace_views=namespace_views)
+        _order_row(order, fact_kind="open_order", namespace_views=namespace_views, health=health)
         for order in open_orders
     ]
     completed_order_rows = [
@@ -293,6 +295,7 @@ def compose_account_truth(
             order,
             fact_kind="completed_order",
             namespace_views=namespace_views,
+            health=health,
         )
         for order in completed_orders
     ]
@@ -462,6 +465,7 @@ def _order_row(
     *,
     fact_kind: str,
     namespace_views: _NamespaceViews,
+    health: IbkrConnectionHealth,
 ) -> AccountTruthOrderRow:
     owner = _owner_for_order_ref(order.order_ref, namespace_views)
     lifecycle = _order_lifecycle(order.status, order.remaining)
@@ -495,10 +499,73 @@ def _order_row(
         avg_fill_price=order.avg_fill_price,
         order_ref=order.order_ref,
         owner=owner,
+        cancel_action=_order_cancel_action(
+            health=health,
+            fact_kind=fact_kind,
+            owner=owner,
+            lifecycle=lifecycle,
+            remaining=order.remaining,
+        ),
         headline=_fact_headline(owner, fact_kind.replace("_", " ")),
         detail=_order_detail(order, owner),
         fetched_at_ms=order.fetched_at_ms,
         ibkr_evidence=order.ibkr_evidence,
+    )
+
+
+def _disabled_order_cancel_action(
+    *,
+    visible: bool,
+    reason_code: AccountTruthOrderCancelReasonCode,
+    detail: str,
+) -> AccountTruthOrderCancelAction:
+    return AccountTruthOrderCancelAction(
+        visible=visible,
+        enabled=False,
+        reason_code=reason_code,
+        label="Cannot cancel",
+        detail=detail,
+    )
+
+
+def _order_cancel_action(
+    *,
+    health: IbkrConnectionHealth,
+    fact_kind: str,
+    owner: AccountTruthFactOwner,
+    lifecycle: str,
+    remaining: float,
+) -> AccountTruthOrderCancelAction:
+    if fact_kind != "open_order":
+        return _disabled_order_cancel_action(
+            visible=False,
+            reason_code="NOT_OPEN_ORDER",
+            detail="Only live open broker orders can be cancelled.",
+        )
+    if health.connected is not True or health.is_paper is not True:
+        return _disabled_order_cancel_action(
+            visible=True,
+            reason_code="BROKER_NOT_PAPER_CONNECTED",
+            detail="Disabled until IBKR is connected to a paper account (DU account).",
+        )
+    if owner.owner_class == "foreign_or_unclaimed":
+        return _disabled_order_cancel_action(
+            visible=True,
+            reason_code="FOREIGN_OR_UNCLAIMED",
+            detail="Foreign or unclaimed orders require explicit adoption before app-side cancel.",
+        )
+    if remaining <= 0 or lifecycle in {"filled", "cancelled", "rejected"}:
+        return _disabled_order_cancel_action(
+            visible=True,
+            reason_code="ORDER_TERMINAL",
+            detail="Order is already terminal at IBKR.",
+        )
+    return AccountTruthOrderCancelAction(
+        visible=True,
+        enabled=True,
+        reason_code=None,
+        label="Cancel",
+        detail="Sends an IBKR cancel request for this live open order.",
     )
 
 

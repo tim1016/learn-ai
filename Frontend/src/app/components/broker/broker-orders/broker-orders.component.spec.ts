@@ -6,6 +6,8 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerOrdersComponent } from './broker-orders.component';
 import type {
   AccountTruthExecutionRow,
+  AccountTruthOrderCancelAction,
+  AccountTruthOrderCancelReasonCode,
   AccountTruthOrderRow,
   AccountTruthResponse,
   IbkrOpenOrder,
@@ -187,8 +189,46 @@ const openOrderWithRef: IbkrOpenOrder = {
   order_ref: 'learn-ai/test-bot/v1:intent-42',
 };
 
-function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): AccountTruthOrderRow {
+function enabledCancelAction(): AccountTruthOrderCancelAction {
   return {
+    visible: true,
+    enabled: true,
+    reason_code: null,
+    label: 'Cancel',
+    detail: 'Sends an IBKR cancel request for this live open order.',
+  };
+}
+
+function disabledCancelAction(
+  reasonCode: AccountTruthOrderCancelReasonCode,
+  detail: string,
+  visible = true,
+): AccountTruthOrderCancelAction {
+  return {
+    visible,
+    enabled: false,
+    reason_code: reasonCode,
+    label: 'Cannot cancel',
+    detail,
+  };
+}
+
+function defaultCancelAction(row: Pick<AccountTruthOrderRow, 'fact_kind' | 'lifecycle' | 'remaining'>): AccountTruthOrderCancelAction {
+  if (row.fact_kind !== 'open_order') {
+    return disabledCancelAction(
+      'NOT_OPEN_ORDER',
+      'Only live open broker orders can be cancelled.',
+      false,
+    );
+  }
+  if (row.remaining <= 0 || ['filled', 'cancelled', 'rejected'].includes(row.lifecycle)) {
+    return disabledCancelAction('ORDER_TERMINAL', 'Order is already terminal at IBKR.');
+  }
+  return enabledCancelAction();
+}
+
+function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): AccountTruthOrderRow {
+  const row: AccountTruthOrderRow = {
     ...openOrderWithRef,
     fact_kind: 'open_order',
     lifecycle_id: 'perm:9001',
@@ -205,9 +245,14 @@ function accountTruthOrder(overrides: Partial<AccountTruthOrderRow> = {}): Accou
       owner_binding_state: 'ACTIVE',
       severity: 'ok',
     },
+    cancel_action: enabledCancelAction(),
     headline: 'Bot test-bot open order',
     detail: 'Ownership is proven by bot-stamped order ref.',
     ...overrides,
+  };
+  return {
+    ...row,
+    cancel_action: overrides.cancel_action ?? defaultCancelAction(row),
   };
 }
 
@@ -615,26 +660,45 @@ describe('BrokerOrdersComponent — what-if preview gate', () => {
 });
 
 describe('BrokerOrdersComponent — cancel reasons', () => {
-  it('explains disabled foreign and terminal ledger cancels', () => {
+  it('uses backend-authored disabled cancel detail', () => {
     const { component } = setup();
 
     const foreignReason = component.cancelDisabledReason(accountTruthOrder({
-      owner: {
-        owner_class: 'foreign_or_unclaimed',
-        owner_key: 'foreign_or_unclaimed',
-        owner_label: 'Foreign or unclaimed',
-        evidence_tier: 'foreign_or_unclaimed',
-        evidence_label: 'No known ownership evidence',
-        owner_binding_state: 'UNKNOWN',
-        severity: 'critical',
+      cancel_action: {
+        visible: true,
+        enabled: false,
+        reason_code: 'FOREIGN_OR_UNCLAIMED',
+        label: 'Cannot cancel',
+        detail: 'Backend says this order needs adoption first.',
       },
     }));
     const terminalReason = component.cancelDisabledReason(accountTruthOrder({
-      lifecycle: 'filled',
-      remaining: 0,
+      cancel_action: {
+        visible: true,
+        enabled: false,
+        reason_code: 'ORDER_TERMINAL',
+        label: 'Cannot cancel',
+        detail: 'Backend says this order is terminal.',
+      },
     }));
 
-    expect(foreignReason).toContain('Foreign or unclaimed');
-    expect(terminalReason).toContain('terminal');
+    expect(foreignReason).toBe('Backend says this order needs adoption first.');
+    expect(terminalReason).toBe('Backend says this order is terminal.');
+  });
+
+  it('does not cancel when the backend action is disabled', async () => {
+    const { component, broker } = setup();
+
+    await component.cancel(accountTruthOrder({
+      cancel_action: {
+        visible: true,
+        enabled: false,
+        reason_code: 'BROKER_NOT_PAPER_CONNECTED',
+        label: 'Cannot cancel',
+        detail: 'Backend says paper broker is unavailable.',
+      },
+    }));
+
+    expect(broker.cancelOrder).not.toHaveBeenCalled();
   });
 });
