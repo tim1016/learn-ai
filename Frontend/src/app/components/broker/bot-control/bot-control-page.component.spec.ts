@@ -10,23 +10,18 @@ import type {
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import {
   allowFlattenAndPause,
-  allowFlattenAndPauseCall,
-  allowIssueInstanceCommandCall,
-  allowReconcileInstanceCall,
-  allowRenewControlPlaneLeaseCall,
-  allowSetDesiredStateCall,
-  allowStartHostRunnerCall,
   deferred,
   flush,
   installBotControlPageTestStubs,
-  makeAccountSummary,
+  makeCommandWriteResponse,
+  makeDesiredStateResponse,
+  makeHostRunnerHealth,
   makeHostRunnerProcess,
   makeIncidentHeadline,
   makeLifecycleTimeline,
+  makeReconcileAckResponse,
   makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
-  rejectReconcileInstanceCall,
-  rejectSetDesiredStateCall,
   setupBotControlPage,
   setupBotControlSidebarHost,
 } from './bot-control-page.testing';
@@ -80,9 +75,7 @@ describe('BotControlPageComponent', () => {
     status.operator_surface.runtime_freshness = makeRuntimeFreshnessWithLeaseAction();
     const { fixture, element, liveRuns } = await setupBotControlPage({
       status,
-      configureLiveRuns: (service) => {
-        allowRenewControlPlaneLeaseCall(service);
-      },
+      mutationResponses: { renewControlPlaneLease: makeHostRunnerHealth() },
     });
 
     const action = element.querySelector<HTMLButtonElement>(
@@ -407,17 +400,9 @@ describe('BotControlPageComponent', () => {
       ...makeStatus(),
       evidence_binding: { run_id: 'run-y', state: 'latest_run_by_ledger', is_live: false },
     };
-    const getInstanceStatus = vi.fn()
-      .mockResolvedValueOnce(makeStatus())
-      .mockResolvedValueOnce(nextStatus);
-    const getLifecycleTimeline = vi.fn()
-      .mockResolvedValueOnce(makeLifecycleTimeline())
-      .mockReturnValueOnce(nextTimeline.promise);
     const { fixture, component, element } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        service.getInstanceStatus.mockImplementation(getInstanceStatus);
-        service.getLifecycleTimeline.mockImplementation(getLifecycleTimeline);
-      },
+      statusSequence: [makeStatus(), nextStatus],
+      lifecycleTimelineSequence: [makeLifecycleTimeline(), nextTimeline.promise],
     });
 
     expect(element.textContent).toContain('Broker acknowledgment failed; submit outcome is uncertain.');
@@ -529,11 +514,8 @@ describe('BotControlPageComponent', () => {
 
   it('keeps Bot Control file-backed when the projection timeline is unavailable', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const getLifecycleTimeline = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 503 }));
     const { element: el } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        service.getLifecycleTimeline.mockImplementation(getLifecycleTimeline);
-      },
+      lifecycleTimelineFailure: new HttpErrorResponse({ status: 503 }),
     });
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
     expect(el.querySelector('[data-testid="bot-control-recent-activity"]')?.textContent)
@@ -544,9 +526,7 @@ describe('BotControlPageComponent', () => {
   it('routes the trader guidance reconcile action to the existing instance endpoint', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fixture, element, liveRuns } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        allowReconcileInstanceCall(service);
-      },
+      mutationResponses: { reconcileInstance: makeReconcileAckResponse() },
     });
 
     const action = element.querySelector(
@@ -579,9 +559,7 @@ describe('BotControlPageComponent', () => {
     ];
     const { fixture, element: el, liveRuns } = await setupBotControlPage({
       status,
-      configureLiveRuns: (service) => {
-        allowReconcileInstanceCall(service);
-      },
+      mutationResponses: { reconcileInstance: makeReconcileAckResponse() },
     });
 
     (el.querySelector('[data-testid="bot-control-attention-toggle"]') as HTMLButtonElement | null)?.click();
@@ -601,14 +579,9 @@ describe('BotControlPageComponent', () => {
     const initial = makeStatus();
     const refreshed = makeStatus();
     refreshed.symbol = 'QQQ';
-    const getInstanceStatus = vi.fn()
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValue(refreshed);
     const { fixture, component, element, liveRuns } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        service.getInstanceStatus.mockImplementation(getInstanceStatus);
-        allowReconcileInstanceCall(service);
-      },
+      statusSequence: [initial, refreshed],
+      mutationResponses: { reconcileInstance: makeReconcileAckResponse() },
     });
 
     await component.dispatchReconcileNow();
@@ -616,7 +589,7 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
 
     expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
-    expect(getInstanceStatus).toHaveBeenCalledTimes(2);
+    expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(2);
 
     const text = element.textContent ?? '';
     expect(text).toContain('QQQ');
@@ -636,9 +609,7 @@ describe('BotControlPageComponent', () => {
       },
     });
     const { fixture, element } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        rejectReconcileInstanceCall(service, reconcileError);
-      },
+      mutationFailures: { reconcileInstance: reconcileError },
     });
 
     const action = element.querySelector(
@@ -662,14 +633,11 @@ describe('BotControlPageComponent', () => {
     allowFlattenAndPause(refreshed);
     refreshed.symbol = 'QQQ';
     const { fixture, component, liveRuns, element } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        service.getInstanceStatus.mockReset();
-        service.getInstanceStatus
-          .mockResolvedValueOnce(initial)
-          .mockResolvedValue(refreshed);
-        allowSetDesiredStateCall(service);
-        allowFlattenAndPauseCall(service);
-        allowIssueInstanceCommandCall(service);
+      statusSequence: [initial, refreshed],
+      mutationResponses: {
+        setInstanceDesiredState: makeDesiredStateResponse(),
+        flattenAndPause: makeDesiredStateResponse(),
+        issueInstanceCommand: makeCommandWriteResponse(),
       },
     });
 
@@ -715,9 +683,7 @@ describe('BotControlPageComponent', () => {
       },
     });
     const { fixture, component, element } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        rejectSetDesiredStateCall(service, stopError);
-      },
+      mutationFailures: { setInstanceDesiredState: stopError },
     });
 
     component.dispatchOverviewAction('stop');
@@ -755,12 +721,9 @@ describe('BotControlPageComponent', () => {
 
   it('resets selected tab, lifecycle context, and typed HALT when the route changes to another bot', async () => {
     const paramMap = new Subject<ParamMap>();
-    const getInstanceStatus = vi.fn().mockResolvedValue(makeStatus({ markPoisonedEnabled: true }));
     const { fixture, component, element, liveRuns } = await setupBotControlPage({
       routeParamMap$: paramMap,
-      configureLiveRuns: (service) => {
-        service.getInstanceStatus.mockImplementation(getInstanceStatus);
-      },
+      status: makeStatus({ markPoisonedEnabled: true }),
     });
 
     paramMap.next(convertToParamMap({ id: 'bot-a' }));
@@ -813,11 +776,11 @@ describe('BotControlPageComponent', () => {
         startRunId: 'run-bind',
         startRequest: request,
       }),
-      configureLiveRuns: (service) => {
-        allowStartHostRunnerCall(service, {
+      mutationResponses: {
+        startHostRunner: {
           accepted: true,
           process: makeHostRunnerProcess(),
-        });
+        },
       },
     });
 
@@ -835,37 +798,25 @@ describe('BotControlPageComponent', () => {
 
   it('refreshes broker evidence on the serialized poll loop', async () => {
     vi.useFakeTimers();
-    const getInstanceStatus = vi.fn().mockResolvedValue(makeStatus());
-    const getAccountSummary = vi.fn().mockResolvedValue(makeAccountSummary());
-    const { fixture } = await setupBotControlPage({
-      configureLiveRuns: (service) => {
-        service.getInstanceStatus.mockImplementation(getInstanceStatus);
-        service.getAccountSummary.mockImplementation(getAccountSummary);
-      },
-    });
-    expect(getAccountSummary).toHaveBeenCalledTimes(1);
+    const { fixture, liveRuns } = await setupBotControlPage();
+    expect(liveRuns.getAccountSummary).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(4_000);
     await Promise.resolve();
     await Promise.resolve();
     fixture.detectChanges();
 
-    expect(getInstanceStatus).toHaveBeenCalledTimes(2);
-    expect(getAccountSummary).toHaveBeenCalledTimes(2);
+    expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(2);
+    expect(liveRuns.getAccountSummary).toHaveBeenCalledTimes(2);
   });
 
   it('ignores stale status responses after the route changes to another bot', async () => {
     const paramMap = new Subject<ParamMap>();
     const first = deferred<LiveInstanceStatus>();
     const second = deferred<LiveInstanceStatus>();
-    const getInstanceStatus = vi
-      .fn()
-      .mockImplementation((id: string) => id === 'bot-a' ? first.promise : second.promise);
     const { fixture, element } = await setupBotControlSidebarHost({
       routeParamMap$: paramMap,
-      configureLiveRuns: (service) => {
-        service.getInstanceStatus.mockImplementation(getInstanceStatus);
-      },
+      statusResolver: (id) => id === 'bot-a' ? first.promise : second.promise,
     });
 
     paramMap.next(convertToParamMap({ id: 'bot-a' }));
@@ -883,9 +834,7 @@ describe('BotControlPageComponent', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fixture, component, element: el, liveRuns } = await setupBotControlPage({
       status: makeStatus({ markPoisonedEnabled: true }),
-      configureLiveRuns: (service) => {
-        allowIssueInstanceCommandCall(service);
-      },
+      mutationResponses: { issueInstanceCommand: makeCommandWriteResponse() },
     });
     component.dispatchOverviewAction('mark_poisoned');
     fixture.detectChanges();
@@ -908,9 +857,7 @@ describe('BotControlPageComponent', () => {
     allowFlattenAndPause(status);
     const { fixture, component, liveRuns } = await setupBotControlPage({
       status,
-      configureLiveRuns: (service) => {
-        allowFlattenAndPauseCall(service);
-      },
+      mutationResponses: { flattenAndPause: makeDesiredStateResponse() },
     });
 
     // Dispatching flatten opens the confirm dialog and does not call the mutation yet.
