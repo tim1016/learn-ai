@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -35,6 +37,7 @@ _FIXTURE_DIR = (
 )
 _FIXTURE_NOW_MS = 1_782_000_000_000
 _FIXTURE_ROOT_TOKEN = "__OPERATOR_SURFACE_FIXTURE_ROOT__"
+_STRATEGY_INSTANCE_ID = "spy_ema_paper"
 
 
 def _write_ledger(root: Path, run_id: str, sid: str, created_at_ms: int) -> None:
@@ -62,47 +65,9 @@ def _sanitize_fixture_payload(payload: Any, root: Path) -> Any:
     return payload
 
 
-async def _capture(state: str, process: dict[str, Any] | None) -> dict[str, Any]:
-    with TemporaryDirectory(prefix=f"operator-surface-{state}-") as tmp_name:
-        tmp = Path(tmp_name)
-        stub = SimpleNamespace(
-            live_runs_root=str(tmp / "live_runs"),
-            live_runner_daemon_url="http://daemon",
-            live_runner_host_start_command="python -m app.engine.live.host_daemon",
-            fleet_dirty_blocks_starts=False,
-            mode="paper",
-            readonly=False,
-        )
-        (tmp / "live_runs").mkdir(parents=True, exist_ok=True)
-        _write_ledger(tmp / "live_runs", f"run-{state}", "spy_ema_paper", 100)
-
-        monkeyed_settings = live_instances.get_settings
-        live_instances.get_settings = lambda: stub  # type: ignore[assignment]
-        monkeyed_now_ms = live_instances._now_ms
-        live_instances._now_ms = lambda: _FIXTURE_NOW_MS  # type: ignore[assignment]
-
-        async def fake_process(_base_url: str, _sid: str) -> tuple[DaemonResult, dict | None]:
-            return DaemonResult(kind="CONNECTED"), process
-
-        monkeyed_fetch = host_daemon_client.fetch_instance_process
-        host_daemon_client.fetch_instance_process = fake_process  # type: ignore[assignment]
-        try:
-            from app.main import app
-
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                response = await client.get("/api/live-instances/spy_ema_paper/status")
-            response.raise_for_status()
-            return _sanitize_fixture_payload(response.json(), tmp)
-        finally:
-            live_instances.get_settings = monkeyed_settings  # type: ignore[assignment]
-            live_instances._now_ms = monkeyed_now_ms  # type: ignore[assignment]
-            host_daemon_client.fetch_instance_process = monkeyed_fetch  # type: ignore[assignment]
-
-
-async def capture_operator_surface_fixtures() -> dict[str, dict[str, Any]]:
-    fixture_processes = {
+def operator_surface_fixture_scenarios() -> dict[str, dict[str, Any] | None]:
+    """Return the committed fixture scenarios by stable fixture name."""
+    return {
         "steady": {
             "state": "running",
             "run_id": "run-steady",
@@ -111,8 +76,57 @@ async def capture_operator_surface_fixtures() -> dict[str, dict[str, Any]]:
         },
         "stopped": {"state": "idle"},
     }
+
+
+@contextmanager
+def _patched_status_route(root: Path, process: dict[str, Any] | None) -> Iterator[None]:
+    stub = SimpleNamespace(
+        live_runs_root=str(root / "live_runs"),
+        live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="python -m app.engine.live.host_daemon",
+        fleet_dirty_blocks_starts=False,
+        mode="paper",
+        readonly=False,
+    )
+
+    monkeyed_settings = live_instances.get_settings
+    monkeyed_now_ms = live_instances._now_ms
+    monkeyed_fetch = host_daemon_client.fetch_instance_process
+
+    async def fake_process(_base_url: str, _sid: str) -> tuple[DaemonResult, dict | None]:
+        return DaemonResult(kind="CONNECTED"), process
+
+    live_instances.get_settings = lambda: stub  # type: ignore[assignment]
+    live_instances._now_ms = lambda: _FIXTURE_NOW_MS  # type: ignore[assignment]
+    host_daemon_client.fetch_instance_process = fake_process  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        live_instances.get_settings = monkeyed_settings  # type: ignore[assignment]
+        live_instances._now_ms = monkeyed_now_ms  # type: ignore[assignment]
+        host_daemon_client.fetch_instance_process = monkeyed_fetch  # type: ignore[assignment]
+
+
+async def _capture(state: str, process: dict[str, Any] | None) -> dict[str, Any]:
+    with TemporaryDirectory(prefix=f"operator-surface-{state}-") as tmp_name:
+        tmp = Path(tmp_name)
+        (tmp / "live_runs").mkdir(parents=True, exist_ok=True)
+        _write_ledger(tmp / "live_runs", f"run-{state}", _STRATEGY_INSTANCE_ID, 100)
+
+        with _patched_status_route(tmp, process):
+            from app.main import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.get(f"/api/live-instances/{_STRATEGY_INSTANCE_ID}/status")
+            response.raise_for_status()
+            return _sanitize_fixture_payload(response.json(), tmp)
+
+
+async def capture_operator_surface_fixtures() -> dict[str, dict[str, Any]]:
     captured_fixtures: dict[str, dict[str, Any]] = {}
-    for name, process in fixture_processes.items():
+    for name, process in operator_surface_fixture_scenarios().items():
         captured_fixtures[name] = await _capture(name, process)
     return captured_fixtures
 
