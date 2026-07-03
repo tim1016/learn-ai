@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Literal
 
-from app.schemas.account_truth import AccountTruthResponse, AccountTruthSourceFreshness
+from app.broker.ibkr.account_truth_freshness import critical_source_freshness_blocks
+from app.schemas.account_truth import AccountTruthResponse
 from app.schemas.live_runs import GateResult
 from app.utils.timestamps import now_ms_utc
 
@@ -201,7 +202,7 @@ def assess_account_truth(
             age_ms=age_ms,
             hard_ttl_ms=evidence.hard_ttl_ms,
         )
-    critical_source_blocks = _critical_source_blocks(evidence.truth.source_freshness)
+    critical_source_blocks = critical_source_freshness_blocks(evidence.truth.source_freshness)
     if critical_source_blocks:
         reason_codes = tuple(
             row.reason_code or f"ACCOUNT_TRUTH_SOURCE_{row.status.upper()}_{row.source.upper()}"
@@ -247,14 +248,4 @@ def assess_account_truth(
         evidence_at_ms=evidence.truth.generated_at_ms,
         age_ms=age_ms,
         hard_ttl_ms=evidence.hard_ttl_ms,
-    )
-
-
-def _critical_source_blocks(
-    source_freshness: list[AccountTruthSourceFreshness],
-) -> tuple[AccountTruthSourceFreshness, ...]:
-    return tuple(
-        row
-        for row in source_freshness
-        if row.severity == "critical" and row.status in {"missing", "stale"}
     )
