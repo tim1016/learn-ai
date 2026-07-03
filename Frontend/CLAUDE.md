@@ -52,7 +52,7 @@ src/app/
 - **PrimeNG** for UI components + **Tailwind CSS** for utility styling
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
 - Modern control flow: `@if`, `@for` (with `track`), `@switch`, `@let`
-- API proxy: `/graphql` proxied to backend container via `proxy.conf.json`
+- API proxy: `/graphql` proxied to backend container via `proxy.conf.js`
 - Receipt/evidence identifiers render through the shared `receiptLabel` pipe. Preserve opaque audit tokens such as intent/order IDs, paths, hashes, refs, and URLs exactly. Backend-authored trader/operator prose stays unpiped.
 
 ## Testing
@@ -64,6 +64,6 @@ src/app/
 
 ## Gotchas
 
-- `proxy.conf.json` routes `/graphql` to `http://backend:8080` inside the container network
+- `proxy.conf.js` routes `/graphql` to `http://backend:8080` inside the container network and adds the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET`
 - Some components are large (options-strategy-lab, strategy-builder) — consider extracting child components
 - `tsconfig.json` excludes spec files; `tsconfig.spec.json` includes them for test builds

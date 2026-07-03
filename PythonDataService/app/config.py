@@ -52,11 +52,10 @@ class Settings(BaseSettings):
         """Parse ALLOWED_ORIGINS into a list"""
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
 
-    # Interim local control-plane guard. When configured, mutating broker-control
-    # routes require this shared-secret header; compose sets it for the shipped
-    # local stack while tests can opt in per case.
+    # Local control-plane guard. Mutating broker-control routes fail closed unless
+    # this shared secret is configured or a local-dev operator explicitly opts out.
     DATA_PLANE_CONTROL_SECRET: str = ""
-    DATA_PLANE_CONTROL_SECRET_HEADER: str = "X-Data-Plane-Control-Secret"
+    DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL: bool = False
     TRUSTED_HOSTS: str = (
         "localhost,127.0.0.1,test,testserver,python-service,backend,"
         "host.containers.internal,host.docker.internal"

@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 4200
 
 # Dev server with polling for container volume changes
-CMD ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.json"]
+CMD ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.js"]
