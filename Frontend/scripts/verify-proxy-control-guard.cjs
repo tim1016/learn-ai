@@ -77,6 +77,8 @@ for (const prefix of CONTROL_PREFIXES) {
   const req = request({ url: '/api/live-instances/runs/run-abc/start' });
   const proxy = proxyEmitterRecorder();
   const proxyReq = proxyReqRecorder();
+  assert.equal(proxyConfig['/api'].onProxyReq, undefined);
+  assert.equal(proxyConfig['/api'].on, undefined);
   configureDataPlaneProxy(proxy);
 
   const proxyReqHandler = proxy.handler('proxyReq');

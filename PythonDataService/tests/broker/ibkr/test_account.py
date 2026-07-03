@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -73,6 +73,7 @@ def _fake_client(account_id: str, *, summary_rows=None, positions=None, cached_p
         accountSummaryAsync=AsyncMock(return_value=list(summary_rows or [])),
         reqPositionsAsync=AsyncMock(return_value=list(positions or [])),
         positions=lambda: list(cached_positions or []),
+        client=SimpleNamespace(cancelPositions=Mock()),
     )
     client = SimpleNamespace(
         ib=ib,
@@ -307,6 +308,49 @@ async def test_fetch_positions_uses_cached_positions_after_req_positions_timeout
 
     assert len(snap.positions) == 1
     assert snap.positions[0].symbol == "SPY"
+    client.ib.client.cancelPositions.assert_called_once_with()
+
+    snap_again = await fetch_positions(client, timeout_s=0.001)
+
+    assert len(snap_again.positions) == 1
+    assert snap_again.positions[0].symbol == "SPY"
+    assert client.ib.reqPositionsAsync.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_positions_serializes_req_positions_per_client() -> None:
+    in_flight = 0
+    max_in_flight = 0
+
+    async def delayed_positions():
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        try:
+            await asyncio.sleep(0.02)
+            return [
+                SimpleNamespace(
+                    account="DU1234567",
+                    contract=_stock_contract("SPY", 756733),
+                    position=3,
+                    avgCost=590.0,
+                )
+            ]
+        finally:
+            in_flight -= 1
+
+    client = _fake_client("DU1234567")
+    client.ib.reqPositionsAsync = AsyncMock(side_effect=delayed_positions)
+
+    first, second = await asyncio.gather(
+        fetch_positions(client, timeout_s=1),
+        fetch_positions(client, timeout_s=1),
+    )
+
+    assert len(first.positions) == 1
+    assert len(second.positions) == 1
+    assert client.ib.reqPositionsAsync.await_count == 2
+    assert max_in_flight == 1
 
 
 @pytest.mark.asyncio

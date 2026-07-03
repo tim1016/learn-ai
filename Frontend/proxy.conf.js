@@ -88,10 +88,6 @@ const proxyConfig = {
     secure: false,
     changeOrigin: true,
     configure: configureDataPlaneProxy,
-    onProxyReq: attachDataPlaneSecret,
-    on: {
-      proxyReq: attachDataPlaneSecret,
-    },
   },
 };
 
