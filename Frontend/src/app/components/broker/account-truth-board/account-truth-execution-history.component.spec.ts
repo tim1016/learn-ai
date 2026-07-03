@@ -53,6 +53,7 @@ function execution(
     owner: BOT_OWNER,
     headline: 'SPY execution',
     detail: 'SPY execution detail',
+    uncertainty_codes: [],
     ibkr_evidence: null,
     ...overrides,
   };
@@ -90,11 +91,13 @@ describe('AccountTruthExecutionHistoryComponent', () => {
     fixture.componentRef.setInput('executions', [
       execution({
         exec_id: 'exec-foreign',
-        order_ref: null,
-        exec_time_ms: null,
-        fee: null,
-        quantity: null,
-        price: null,
+        uncertainty_codes: [
+          'missing_order_ref',
+          'observed_time_only',
+          'commission_pending',
+          'missing_quantity',
+          'missing_price',
+        ],
         owner: {
           owner_class: 'foreign_or_unclaimed',
           owner_key: 'foreign_or_unclaimed',

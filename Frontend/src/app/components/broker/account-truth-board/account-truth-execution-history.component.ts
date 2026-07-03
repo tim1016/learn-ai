@@ -68,7 +68,7 @@ export class AccountTruthExecutionHistoryComponent {
       const row: ExecutionHistoryRow = {
         execution,
         timeMs: execution.exec_time_ms ?? execution.observed_at_ms,
-        uncertaintyCodes: this.uncertaintyCodes(execution),
+        uncertaintyCodes: execution.uncertainty_codes,
       };
       groups.set(key, [...(groups.get(key) ?? []), row]);
     }
@@ -123,13 +123,4 @@ export class AccountTruthExecutionHistoryComponent {
     return `${year}-${month}-${day}`;
   }
 
-  private uncertaintyCodes(execution: AccountTruthExecutionRow): string[] {
-    const codes: string[] = [];
-    if (!execution.order_ref) codes.push('missing_order_ref');
-    if (execution.exec_time_ms == null) codes.push('observed_time_only');
-    if (execution.fee == null) codes.push('commission_pending');
-    if (execution.quantity == null) codes.push('missing_quantity');
-    if (execution.price == null) codes.push('missing_price');
-    return codes;
-  }
 }
