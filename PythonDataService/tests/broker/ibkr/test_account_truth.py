@@ -19,6 +19,7 @@ from app.broker.ibkr.account_truth import (
 )
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import (
+    IbkrAccountSummary,
     IbkrConnectionHealth,
     IbkrOpenOrder,
     IbkrOrderEvent,
@@ -28,9 +29,8 @@ from app.broker.ibkr.models import (
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
     AccountFreezeEvidence,
-    AccountInstanceBinding,
-    write_account_instance_binding,
 )
+from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
 from app.schemas.account_truth import AccountTruthEvidenceGap
 
 
@@ -47,6 +47,19 @@ def _health() -> IbkrConnectionHealth:
         connection_state="connected",
         last_transition_ms=1_780_000_000_000,
     )
+
+
+def _account_summary(**overrides) -> IbkrAccountSummary:
+    base = {
+        "account_id": "DU1234567",
+        "is_paper": True,
+        "base_currency": "USD",
+        "net_liquidation": 100_000.0,
+        "buying_power": 50_000.0,
+        "fetched_at_ms": 1_780_000_000_000,
+    }
+    base.update(overrides)
+    return IbkrAccountSummary(**base)
 
 
 def compose_account_truth(**kwargs):
@@ -186,6 +199,85 @@ def test_account_truth_passes_when_bot_execution_explains_position() -> None:
     assert {row.key: row.status for row in truth.invariants}[
         "positions_match_known_ownership"
     ] == "pass"
+
+
+def test_account_truth_reports_per_source_freshness_for_successful_empty_sweeps() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=_account_summary(),
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    freshness = {row.source: row for row in truth.source_freshness}
+
+    assert list(freshness) == [
+        "broker_connection",
+        "account_summary",
+        "positions",
+        "open_orders",
+        "completed_orders",
+        "executions",
+    ]
+    assert freshness["account_summary"].status == "fresh"
+    assert freshness["account_summary"].age_ms == 1_000
+    assert freshness["positions"].status == "fresh"
+    assert freshness["open_orders"].status == "fresh"
+    assert freshness["open_orders"].fetched_at_ms == truth.generated_at_ms
+    assert freshness["completed_orders"].status == "fresh"
+    assert freshness["executions"].status == "fresh"
+
+
+def test_account_truth_marks_missing_source_from_evidence_gap() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=_account_summary(),
+        positions_snapshot=None,
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        evidence_gaps=[
+            AccountTruthEvidenceGap(
+                source="positions",
+                severity="critical",
+                message="IBKR positions unavailable: timed out",
+            )
+        ],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    positions = next(row for row in truth.source_freshness if row.source == "positions")
+
+    assert positions.status == "missing"
+    assert positions.severity == "critical"
+    assert positions.fetched_at_ms is None
+    assert positions.reason_code == "ACCOUNT_TRUTH_SOURCE_MISSING_POSITIONS"
+    assert positions.message == "IBKR positions unavailable: timed out"
+
+
+def test_account_truth_marks_stale_source_from_old_evidence_timestamp() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=_account_summary(fetched_at_ms=1_780_000_000_000),
+        positions_snapshot=_positions_snapshot(),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_060_001,
+    )
+
+    account_summary = next(row for row in truth.source_freshness if row.source == "account_summary")
+
+    assert account_summary.status == "stale"
+    assert account_summary.age_ms == 60_001
+    assert account_summary.hard_ttl_ms == 60_000
+    assert account_summary.reason_code == "ACCOUNT_TRUTH_SOURCE_STALE_ACCOUNT_SUMMARY"
 
 
 def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> None:

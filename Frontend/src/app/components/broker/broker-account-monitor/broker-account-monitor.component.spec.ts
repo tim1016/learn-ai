@@ -200,6 +200,7 @@ function accountTruthResponse(
     executions: [],
     positions: [],
     evidence_gaps: [],
+    source_freshness: [],
   };
 }
 

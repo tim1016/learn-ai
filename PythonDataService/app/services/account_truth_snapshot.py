@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Literal
 
-from app.schemas.account_truth import AccountTruthResponse
+from app.schemas.account_truth import AccountTruthResponse, AccountTruthSourceFreshness
 from app.schemas.live_runs import GateResult
 from app.utils.timestamps import now_ms_utc
 
@@ -201,6 +201,24 @@ def assess_account_truth(
             age_ms=age_ms,
             hard_ttl_ms=evidence.hard_ttl_ms,
         )
+    critical_source_blocks = _critical_source_blocks(evidence.truth.source_freshness)
+    if critical_source_blocks:
+        reason_codes = tuple(
+            row.reason_code or f"ACCOUNT_TRUTH_SOURCE_{row.status.upper()}_{row.source.upper()}"
+            for row in critical_source_blocks
+        )
+        first_block = critical_source_blocks[0]
+        return AccountTruthAssessment(
+            status="block",
+            reason_codes=reason_codes,
+            primary_reason_code=reason_codes[0],
+            headline="Account Truth source evidence is not fresh",
+            explanation=first_block.message,
+            operator_next_step="Refresh Account Truth from broker evidence before treating submit readiness as safe.",
+            evidence_at_ms=first_block.fetched_at_ms or evidence.truth.generated_at_ms,
+            age_ms=first_block.age_ms or age_ms,
+            hard_ttl_ms=first_block.hard_ttl_ms,
+        )
     if evidence.truth.final_verdict != "clean":
         blocker_codes = tuple(
             f"ACCOUNT_TRUTH_{message.code.upper()}"
@@ -229,4 +247,14 @@ def assess_account_truth(
         evidence_at_ms=evidence.truth.generated_at_ms,
         age_ms=age_ms,
         hard_ttl_ms=evidence.hard_ttl_ms,
+    )
+
+
+def _critical_source_blocks(
+    source_freshness: list[AccountTruthSourceFreshness],
+) -> tuple[AccountTruthSourceFreshness, ...]:
+    return tuple(
+        row
+        for row in source_freshness
+        if row.severity == "critical" and row.status in {"missing", "stale"}
     )

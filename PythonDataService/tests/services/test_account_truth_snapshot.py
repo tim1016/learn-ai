@@ -10,7 +10,11 @@ from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import AccountTruthCollectionContext
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import IbkrConnectionHealth
-from app.schemas.account_truth import AccountTruthMessage, AccountTruthResponse
+from app.schemas.account_truth import (
+    AccountTruthMessage,
+    AccountTruthResponse,
+    AccountTruthSourceFreshness,
+)
 from app.services import account_truth_refresh
 from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
 from app.services.account_truth_snapshot import (
@@ -26,6 +30,7 @@ def _truth(
     final_verdict: str = "clean",
     generated_at_ms: int = 1_700_000_000_000,
     blockers: list[AccountTruthMessage] | None = None,
+    source_freshness: list[AccountTruthSourceFreshness] | None = None,
 ) -> AccountTruthResponse:
     severity = "ok" if final_verdict == "clean" else "critical"
     return AccountTruthResponse(
@@ -49,6 +54,7 @@ def _truth(
         ),
         invariants=[],
         blockers=blockers or [],
+        source_freshness=source_freshness or [],
     )
 
 
@@ -131,6 +137,65 @@ def test_staleness_uses_cached_at_ms_not_broker_generated_at_ms() -> None:
 
     assert assessment.status == "pass"
     assert assessment.age_ms == 500
+
+
+def test_critical_source_freshness_block_is_shared_with_gate_projection() -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    snapshot = provider.remember(
+        _truth(
+            source_freshness=[
+                AccountTruthSourceFreshness(
+                    source="positions",
+                    label="Positions",
+                    status="stale",
+                    severity="critical",
+                    fetched_at_ms=1_000,
+                    age_ms=60_001,
+                    hard_ttl_ms=60_000,
+                    reason_code="ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS",
+                    message="Positions evidence is 60001 ms old; hard freshness threshold is 60000 ms.",
+                )
+            ]
+        ),
+        cached_at_ms=1_100,
+    )
+
+    assessment = assess_account_truth(snapshot, now_ms=1_500)
+    gate = account_truth_gate_result(snapshot, now_ms=1_500)
+
+    assert assessment.status == "block"
+    assert assessment.reason_codes == ("ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS",)
+    assert assessment.primary_reason_code == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
+    assert assessment.explanation.startswith("Positions evidence is")
+    assert assessment.evidence_at_ms == 1_000
+    assert gate.operator_reason == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
+
+
+def test_warning_source_freshness_does_not_block_clean_snapshot() -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    snapshot = provider.remember(
+        _truth(
+            source_freshness=[
+                AccountTruthSourceFreshness(
+                    source="executions",
+                    label="Executions",
+                    status="missing",
+                    severity="warning",
+                    fetched_at_ms=None,
+                    age_ms=None,
+                    hard_ttl_ms=60_000,
+                    reason_code="ACCOUNT_TRUTH_SOURCE_MISSING_EXECUTIONS",
+                    message="IBKR execution sweep unavailable: timed out",
+                )
+            ]
+        ),
+        cached_at_ms=1_100,
+    )
+
+    assessment = assess_account_truth(snapshot, now_ms=1_500)
+
+    assert assessment.status == "pass"
+    assert assessment.reason_codes == ()
 
 
 def test_unclean_snapshot_assessment_is_shared_with_gate_projection() -> None:

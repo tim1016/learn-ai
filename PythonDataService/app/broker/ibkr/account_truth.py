@@ -64,11 +64,33 @@ from app.schemas.account_truth import (
     AccountTruthPositionRow,
     AccountTruthResponse,
     AccountTruthSeverity,
+    AccountTruthSourceFreshness,
+    AccountTruthSourceName,
     AccountTruthSymbolExposure,
 )
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+ACCOUNT_TRUTH_SOURCE_FRESHNESS_TTL_MS = 60_000
+
+_SOURCE_LABELS: dict[AccountTruthSourceName, str] = {
+    "broker_connection": "Broker connection",
+    "account_summary": "Account summary",
+    "positions": "Positions",
+    "open_orders": "Open orders",
+    "completed_orders": "Completed orders",
+    "executions": "Executions",
+}
+
+_SOURCE_SEVERITIES: dict[AccountTruthSourceName, AccountTruthSeverity] = {
+    "broker_connection": "critical",
+    "account_summary": "critical",
+    "positions": "critical",
+    "open_orders": "critical",
+    "completed_orders": "warning",
+    "executions": "warning",
+}
 
 _TERMINAL_CANCEL_STATUSES = frozenset({"Cancelled", "ApiCancelled"})
 _REJECTED_STATUSES = frozenset({"Inactive", "Rejected"})
@@ -400,6 +422,16 @@ def compose_account_truth(
         blockers=blockers,
         evidence_gaps=projection_gaps,
     )
+    source_freshness = _source_freshness(
+        health=health,
+        account=account,
+        positions_snapshot=positions_snapshot,
+        open_orders=open_orders,
+        completed_orders=completed_orders,
+        executions=executions,
+        evidence_gaps=projection_gaps,
+        checked_at_ms=checked_at_ms,
+    )
     return AccountTruthResponse(
         account_id=account_id,
         final_verdict=final_verdict,
@@ -420,7 +452,124 @@ def compose_account_truth(
         executions=execution_rows,
         positions=position_rows,
         evidence_gaps=projection_gaps,
+        source_freshness=source_freshness,
     )
+
+
+def _source_freshness(
+    *,
+    health: IbkrConnectionHealth,
+    account: IbkrAccountSummary | None,
+    positions_snapshot: IbkrPositionsSnapshot | None,
+    open_orders: Sequence[IbkrOpenOrder],
+    completed_orders: Sequence[IbkrOpenOrder],
+    executions: Sequence[IbkrOrderEvent],
+    evidence_gaps: Sequence[AccountTruthEvidenceGap],
+    checked_at_ms: int,
+) -> list[AccountTruthSourceFreshness]:
+    gap_by_source = {gap.source: gap for gap in evidence_gaps}
+    return [
+        _source_freshness_row(
+            "broker_connection",
+            fetched_at_ms=health.fetched_at_ms,
+            gap=None,
+            checked_at_ms=checked_at_ms,
+        ),
+        _source_freshness_row(
+            "account_summary",
+            fetched_at_ms=account.fetched_at_ms if account is not None else None,
+            gap=gap_by_source.get("account_summary"),
+            checked_at_ms=checked_at_ms,
+        ),
+        _source_freshness_row(
+            "positions",
+            fetched_at_ms=positions_snapshot.fetched_at_ms if positions_snapshot is not None else None,
+            gap=gap_by_source.get("positions"),
+            checked_at_ms=checked_at_ms,
+        ),
+        _source_freshness_row(
+            "open_orders",
+            fetched_at_ms=_sequence_fetched_at_ms(open_orders, checked_at_ms),
+            gap=gap_by_source.get("open_orders"),
+            checked_at_ms=checked_at_ms,
+        ),
+        _source_freshness_row(
+            "completed_orders",
+            fetched_at_ms=_sequence_fetched_at_ms(completed_orders, checked_at_ms),
+            gap=gap_by_source.get("completed_orders"),
+            checked_at_ms=checked_at_ms,
+        ),
+        _source_freshness_row(
+            "executions",
+            fetched_at_ms=_execution_source_fetched_at_ms(executions, checked_at_ms),
+            gap=gap_by_source.get("executions"),
+            checked_at_ms=checked_at_ms,
+        ),
+    ]
+
+
+def _source_freshness_row(
+    source: AccountTruthSourceName,
+    *,
+    fetched_at_ms: int | None,
+    gap: AccountTruthEvidenceGap | None,
+    checked_at_ms: int,
+) -> AccountTruthSourceFreshness:
+    hard_ttl_ms = ACCOUNT_TRUTH_SOURCE_FRESHNESS_TTL_MS
+    severity = _SOURCE_SEVERITIES[source]
+    label = _SOURCE_LABELS[source]
+    if gap is not None or fetched_at_ms is None:
+        return AccountTruthSourceFreshness(
+            source=source,
+            label=label,
+            status="missing",
+            severity=gap.severity if gap is not None else severity,
+            fetched_at_ms=None,
+            age_ms=None,
+            hard_ttl_ms=hard_ttl_ms,
+            reason_code=f"ACCOUNT_TRUTH_SOURCE_MISSING_{source.upper()}",
+            message=gap.message if gap is not None else f"{label} evidence is unavailable.",
+        )
+
+    age_ms = max(0, checked_at_ms - fetched_at_ms)
+    if age_ms > hard_ttl_ms:
+        return AccountTruthSourceFreshness(
+            source=source,
+            label=label,
+            status="stale",
+            severity=severity,
+            fetched_at_ms=fetched_at_ms,
+            age_ms=age_ms,
+            hard_ttl_ms=hard_ttl_ms,
+            reason_code=f"ACCOUNT_TRUTH_SOURCE_STALE_{source.upper()}",
+            message=f"{label} evidence is {age_ms} ms old; hard freshness threshold is {hard_ttl_ms} ms.",
+        )
+
+    return AccountTruthSourceFreshness(
+        source=source,
+        label=label,
+        status="fresh",
+        severity=severity,
+        fetched_at_ms=fetched_at_ms,
+        age_ms=age_ms,
+        hard_ttl_ms=hard_ttl_ms,
+        reason_code=None,
+        message=f"{label} evidence is fresh.",
+    )
+
+
+def _sequence_fetched_at_ms(
+    rows: Sequence[IbkrOpenOrder],
+    checked_at_ms: int,
+) -> int:
+    return max((row.fetched_at_ms for row in rows), default=checked_at_ms)
+
+
+def _execution_source_fetched_at_ms(
+    rows: Sequence[IbkrOrderEvent],
+    checked_at_ms: int,
+) -> int:
+    return max((row.ts_ms for row in rows), default=checked_at_ms)
 
 
 def _account_id_from_sources(

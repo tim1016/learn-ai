@@ -380,6 +380,14 @@ export type AccountTruthLifecycle =
   | 'cancelled'
   | 'rejected'
   | 'limbo';
+export type AccountTruthSourceName =
+  | 'broker_connection'
+  | 'account_summary'
+  | 'positions'
+  | 'open_orders'
+  | 'completed_orders'
+  | 'executions';
+export type AccountTruthSourceFreshnessStatus = 'fresh' | 'stale' | 'missing';
 
 export interface AccountTruthMessage {
   code: string;
@@ -524,6 +532,18 @@ export interface AccountTruthEvidenceGap {
   message: string;
 }
 
+export interface AccountTruthSourceFreshness {
+  source: AccountTruthSourceName;
+  label: string;
+  status: AccountTruthSourceFreshnessStatus;
+  severity: AccountTruthSeverity;
+  fetched_at_ms: number | null;
+  age_ms: number | null;
+  hard_ttl_ms: number;
+  reason_code: string | null;
+  message: string;
+}
+
 export interface AccountTruthResponse {
   account_id: string | null;
   final_verdict: AccountTruthFinalVerdict;
@@ -544,4 +564,5 @@ export interface AccountTruthResponse {
   executions: AccountTruthExecutionRow[];
   positions: AccountTruthPositionRow[];
   evidence_gaps: AccountTruthEvidenceGap[];
+  source_freshness: AccountTruthSourceFreshness[];
 }

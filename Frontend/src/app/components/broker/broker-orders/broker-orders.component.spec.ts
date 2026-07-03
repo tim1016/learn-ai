@@ -331,6 +331,7 @@ function accountTruthResponse(
     executions,
     positions: [],
     evidence_gaps: evidenceGaps,
+    source_freshness: [],
   };
 }
 
