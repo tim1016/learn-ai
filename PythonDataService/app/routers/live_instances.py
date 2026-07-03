@@ -129,6 +129,7 @@ from app.schemas.live_runs import (
     SignalTone,
     SizingAuditRow,
 )
+from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
     matching_evidence_refs,
@@ -1403,6 +1404,7 @@ async def _resolve_instance_status_from_process(
     )
     instance_account_id = _instance_ledger_account_id(root, sid)
     account_owner = _resolve_account_owner_surface(root.parent, instance_account_id)
+    account_truth_snapshot = get_account_truth_snapshot_provider().get(instance_account_id)
     latest_mutation = _resolve_latest_mutation(root, sid)
     broker_observation_consistency = _resolve_broker_observation_consistency(
         live_binding,
@@ -1441,6 +1443,7 @@ async def _resolve_instance_status_from_process(
         control_plane_state=control_plane_state,
         latest_mutation=latest_mutation,
         broker_observation_consistency=broker_observation_consistency,
+        account_truth_snapshot=account_truth_snapshot,
         host_start_command=settings.live_runner_host_start_command,
         start_run_id=_resolve_start_run_id(root, live_binding, runs),
         account_freeze=account_freeze,

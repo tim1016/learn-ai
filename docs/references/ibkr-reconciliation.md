@@ -75,6 +75,8 @@ Account Truth emits backend-authored invariant rows rather than leaving Angular 
 
 Rows preserve broker identifiers for audit: `execId` dedupes executions, `permId` groups an order lifecycle when available, `order_ref` assigns ownership, and `orderId` is displayed only as broker evidence.
 
+`GET /api/broker/account-truth` also stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot Control status reads consume only that cached projection by account id. A missing cache entry, a cache entry older than the hard readiness TTL, or a cached `final_verdict != clean` folds into `operator_surface.submit_readiness` as `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. This read-side fold performs no IBKR sweep, writes no freeze artifact, and is not the future hard pre-submit gate.
+
 ### Manual adoption boundary
 
 Post-hoc adoption of foreign/unclaimed rows is deliberately not part of the MVP projection. When it ships, it must be an append-only adoption ledger folded over raw broker facts, keyed by durable identity (`permId` for orders, `execId` for executions). Adoption is a human claim layered over broker-foreign identity; it must not rewrite raw broker evidence or silently mark a row safe. Live-working order adoption is especially sensitive because it can clear the unknown-open-order bot-submit block.
