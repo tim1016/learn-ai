@@ -315,6 +315,7 @@ class IbkrPositionsSnapshot(BaseModel):
     is_paper: bool
     positions: list[IbkrPosition]
     fetched_at_ms: int
+    used_cache_fallback: bool = False
 
 
 class IbkrOptionQuote(BaseModel):

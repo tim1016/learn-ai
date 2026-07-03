@@ -67,6 +67,11 @@ def compose_account_truth(**kwargs):
         "account_recovery_state",
         AccountRecoveryState.clear("DU1234567"),
     )
+    gap_sources = {gap.source for gap in kwargs.get("evidence_gaps", [])}
+    if kwargs.get("account") is None and "account_summary" not in gap_sources:
+        kwargs["account"] = _account_summary()
+    if kwargs.get("positions_snapshot") is None and "positions" not in gap_sources:
+        kwargs["positions_snapshot"] = _positions_snapshot()
     return _compose_account_truth(**kwargs)
 
 
@@ -157,12 +162,16 @@ def _execution(**overrides) -> IbkrOrderEvent:
     return IbkrOrderEvent(**base)
 
 
-def _positions_snapshot(*positions: IbkrPosition) -> IbkrPositionsSnapshot:
+def _positions_snapshot(
+    *positions: IbkrPosition,
+    used_cache_fallback: bool = False,
+) -> IbkrPositionsSnapshot:
     return IbkrPositionsSnapshot(
         account_id="DU1234567",
         is_paper=True,
         positions=list(positions),
         fetched_at_ms=1_780_000_000_400,
+        used_cache_fallback=used_cache_fallback,
     )
 
 
@@ -278,6 +287,30 @@ def test_account_truth_marks_stale_source_from_old_evidence_timestamp() -> None:
     assert account_summary.age_ms == 60_001
     assert account_summary.hard_ttl_ms == 60_000
     assert account_summary.reason_code == "ACCOUNT_TRUTH_SOURCE_STALE_ACCOUNT_SUMMARY"
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
+
+
+def test_account_truth_cache_fallback_positions_force_not_proven() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=_account_summary(),
+        positions_snapshot=_positions_snapshot(used_cache_fallback=True),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    positions = next(row for row in truth.source_freshness if row.source == "positions")
+
+    assert positions.status == "stale"
+    assert positions.age_ms == 600
+    assert positions.reason_code == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
+    assert "reqPositionsAsync timed out" in positions.message
+    assert truth.final_verdict == "not_proven"
+    assert truth.final_severity == "critical"
 
 
 def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> None:

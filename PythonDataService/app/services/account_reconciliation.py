@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.broker.ibkr.account_truth_freshness import critical_source_freshness_blocks
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
     account_artifacts_root,
@@ -26,7 +27,7 @@ from app.schemas.account_reconciliation import (
     AccountTriageGateRow,
     AccountTriageResponse,
 )
-from app.schemas.account_truth import AccountTruthResponse
+from app.schemas.account_truth import AccountTruthResponse, AccountTruthSourceFreshness
 from app.schemas.artifact_io import (
     atomic_write_pydantic_artifact,
     read_pydantic_artifact,
@@ -98,7 +99,11 @@ class AccountReconciliationService:
         connected_matches = connected is not None and connected == requested
         truth_matches = truth_account is not None and truth_account == requested
         truth_fresh = account_truth.generated_at_ms <= generated_at_ms
-        truth_clean = account_truth.final_verdict == "clean"
+        critical_source_blocks = critical_source_freshness_blocks(
+            account_truth.source_freshness,
+            checked_at_ms=generated_at_ms,
+        )
+        truth_clean = account_truth.final_verdict == "clean" and not critical_source_blocks
 
         state = "CLEAN" if connected_matches and truth_matches and truth_fresh and truth_clean else "NOT_PROVEN"
         final_gate = _final_gate_result(
@@ -110,6 +115,7 @@ class AccountReconciliationService:
             connected_matches=connected_matches,
             truth_matches=truth_matches,
             truth_fresh=truth_fresh,
+            critical_source_blocks=critical_source_blocks,
         )
         receipt_id = _receipt_id(
             requested_account_id=requested,
@@ -241,6 +247,7 @@ def _final_gate_result(
     connected_matches: bool,
     truth_matches: bool,
     truth_fresh: bool,
+    critical_source_blocks: tuple[AccountTruthSourceFreshness, ...],
 ) -> GateResult:
     if state == "CLEAN":
         return GateResult(
@@ -265,6 +272,9 @@ def _final_gate_result(
         next_step = "REFRESH_ACCOUNT_TRUTH"
     elif not truth_fresh:
         reason = "Account Truth was generated after the receipt clock and cannot be receipted safely."
+        next_step = "REFRESH_ACCOUNT_TRUTH"
+    elif critical_source_blocks:
+        reason = critical_source_blocks[0].message
         next_step = "REFRESH_ACCOUNT_TRUTH"
     else:
         reason = account_truth.status_detail

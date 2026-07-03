@@ -24,7 +24,10 @@ from app.broker.ibkr.account_recovery import (
     AccountRecoveryState,
     read_account_recovery_state,
 )
-from app.broker.ibkr.account_truth_freshness import compose_account_truth_source_freshness
+from app.broker.ibkr.account_truth_freshness import (
+    compose_account_truth_source_freshness,
+    critical_source_freshness_blocks,
+)
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
@@ -65,6 +68,7 @@ from app.schemas.account_truth import (
     AccountTruthPositionRow,
     AccountTruthResponse,
     AccountTruthSeverity,
+    AccountTruthSourceFreshness,
     AccountTruthSymbolExposure,
 )
 from app.utils.timestamps import now_ms_utc
@@ -396,11 +400,6 @@ def compose_account_truth(
     )
     owner_summaries = _owner_summaries(order_rows, execution_rows, position_rows)
     symbol_exposures = _symbol_exposures(position_rows)
-    final_verdict, final_severity = _final_verdict(
-        invariants,
-        blockers=blockers,
-        evidence_gaps=projection_gaps,
-    )
     source_freshness = compose_account_truth_source_freshness(
         health=health,
         account=account,
@@ -409,6 +408,13 @@ def compose_account_truth(
         completed_orders=completed_orders,
         executions=executions,
         evidence_gaps=projection_gaps,
+        checked_at_ms=checked_at_ms,
+    )
+    final_verdict, final_severity = _final_verdict(
+        invariants,
+        blockers=blockers,
+        evidence_gaps=projection_gaps,
+        source_freshness=source_freshness,
         checked_at_ms=checked_at_ms,
     )
     return AccountTruthResponse(
@@ -1367,10 +1373,12 @@ def _final_verdict(
     *,
     blockers: Sequence[AccountTruthMessage],
     evidence_gaps: Sequence[AccountTruthEvidenceGap],
+    source_freshness: Sequence[AccountTruthSourceFreshness],
+    checked_at_ms: int,
 ) -> tuple[AccountTruthFinalVerdict, AccountTruthSeverity]:
     if any(gap.severity == "critical" for gap in evidence_gaps) or any(
         blocker.severity == "critical" for blocker in blockers
-    ):
+    ) or critical_source_freshness_blocks(source_freshness, checked_at_ms=checked_at_ms):
         return "not_proven", "critical"
     failing = [row for row in invariants if row.status == "fail"]
     if not failing:
