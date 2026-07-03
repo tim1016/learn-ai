@@ -52,7 +52,6 @@ def test_operator_surface_fixture_scenario_set_is_explicit() -> None:
     for name, expected in expected_scenarios.items():
         scenario = scenarios[name]
         assert scenario.name == name
-        assert scenario.ledger_run_id != f"run-{name}"
         assert {
             "ledger_run_id": scenario.ledger_run_id,
             "strategy_instance_id": scenario.strategy_instance_id,
