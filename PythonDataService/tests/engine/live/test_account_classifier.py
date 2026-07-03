@@ -315,6 +315,58 @@ def test_account_classifier_duplicate_namespace_uses_latest_binding_per_instance
     assert decision.reason == "ACCOUNT_STATE_MATCHES_REGISTRY"
 
 
+def test_account_classifier_uses_case_insensitive_account_registry_filter() -> None:
+    intent_id = mint_intent_id()
+    decision = classify_account(
+        account_id=ACCOUNT,
+        broker=AccountBrokerEvidence(
+            snapshot=BrokerSnapshot(open_orders=(BrokerOrderView(order_ref=build_order_ref(NS, intent_id)),))
+        ),
+        registry_bindings=(_binding().model_copy(update={"account_id": ACCOUNT.lower()}),),
+        durable_intents=(_intent(intent_id),),
+        baseline=None,
+        operator_override=None,
+        now_ms=NOW_MS,
+    )
+
+    assert decision.outcome == "continue"
+    assert decision.reason == "ACCOUNT_STATE_MATCHES_REGISTRY"
+    assert decision.strategy_instance_id == SID
+
+
+def test_account_classifier_uses_timestamp_latest_registry_fold_for_submit_guard() -> None:
+    intent_id = mint_intent_id()
+    active = _binding().model_copy(
+        update={
+            "lifecycle_state": "ACTIVE",
+            "recorded_at_ms": NOW_MS,
+        }
+    )
+    older_retired_appended_later = _binding().model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": NOW_MS - 1,
+            "source": "host_daemon.stop_exited",
+        }
+    )
+
+    decision = classify_account(
+        account_id=ACCOUNT,
+        broker=AccountBrokerEvidence(
+            snapshot=BrokerSnapshot(open_orders=(BrokerOrderView(order_ref=build_order_ref(NS, intent_id)),))
+        ),
+        registry_bindings=(active, older_retired_appended_later),
+        durable_intents=(_intent(intent_id),),
+        baseline=None,
+        operator_override=None,
+        now_ms=NOW_MS,
+    )
+
+    assert decision.outcome == "continue"
+    assert decision.reason == "ACCOUNT_STATE_MATCHES_REGISTRY"
+    assert decision.run_id == RUN_ID
+
+
 def test_account_classifier_poisons_run_for_no_order_ref() -> None:
     decision = classify_account(
         account_id=ACCOUNT,

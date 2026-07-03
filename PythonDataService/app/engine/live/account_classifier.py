@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.engine.live.account_artifacts import (
-    ACTIVE_INSTANCE_BINDING_STATES,
     AccountInstanceBinding,
+    index_account_instance_bindings,
 )
 from app.engine.live.order_identity import OrderRefParseError, parse_order_ref
 from app.engine.live.reconciliation_classifier import BrokerSnapshot
@@ -192,14 +192,22 @@ def classify_account(
         )
 
     snapshot = broker.snapshot or BrokerSnapshot()
-    namespace_bindings = _active_bindings_by_namespace(registry_bindings, account_id)
-    if _has_duplicate_active_namespace(registry_bindings, account_id):
+    binding_index = index_account_instance_bindings(
+        registry_bindings,
+        account_id=account_id,
+    )
+    if binding_index.duplicate_active_namespaces:
         return _decision(
             "freeze",
             "ACCOUNT_REGISTRY_DUPLICATE_NAMESPACE",
             account_id=account_id,
             now_ms=now_ms,
         )
+    namespace_bindings = {
+        namespace: namespace_group[0]
+        for namespace, namespace_group in binding_index.active_by_namespace.items()
+        if len(namespace_group) == 1
+    }
 
     intents_by_ref = {intent.order_ref: intent for intent in durable_intents if intent.account_id == account_id}
     adopt_refs: list[str] = []
@@ -389,39 +397,6 @@ def _reject_invalid_override(
             override=override,
         )
     return None
-
-
-def _active_bindings_by_namespace(
-    bindings: tuple[AccountInstanceBinding, ...],
-    account_id: str,
-) -> dict[str, AccountInstanceBinding]:
-    latest_by_instance: dict[str, AccountInstanceBinding] = {}
-    for binding in bindings:
-        if binding.account_id == account_id:
-            latest_by_instance[binding.strategy_instance_id] = binding
-    return {
-        binding.bot_order_namespace: binding
-        for binding in latest_by_instance.values()
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
-    }
-
-
-def _has_duplicate_active_namespace(
-    bindings: tuple[AccountInstanceBinding, ...],
-    account_id: str,
-) -> bool:
-    latest_by_instance: dict[str, AccountInstanceBinding] = {}
-    for binding in bindings:
-        if binding.account_id == account_id:
-            latest_by_instance[binding.strategy_instance_id] = binding
-
-    namespaces: set[str] = set()
-    for binding in latest_by_instance.values():
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES:
-            if binding.bot_order_namespace in namespaces:
-                return True
-            namespaces.add(binding.bot_order_namespace)
-    return False
 
 
 def _single_active_binding(
