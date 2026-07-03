@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.broker.ibkr.orders import (
@@ -73,6 +74,7 @@ def _client(
         ib=ib,
         settings=settings,
         connected_account=account,
+        _last_event_ms=1,
         is_connected=lambda: True,
         require_connected=lambda: None,
         require_live=lambda: None,
@@ -382,6 +384,41 @@ async def test_list_open_orders_includes_own_orders_with_empty_account() -> None
     assert out[0].ibkr_evidence.contract.fields["symbol"] == "SPY"
     assert out[0].ibkr_evidence.order is not None
     assert out[0].ibkr_evidence.order.fields["orderId"] == 44
+
+
+@pytest.mark.asyncio
+async def test_list_open_orders_timeout_raises_broker_error() -> None:
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    client = _client()
+    client.ib.reqAllOpenOrdersAsync = AsyncMock(side_effect=never_returns)
+
+    with pytest.raises(BrokerError, match="open orders request timed out"):
+        await list_open_orders(client, timeout_s=0.001)
+
+
+@pytest.mark.asyncio
+async def test_list_open_orders_timeout_guard_blocks_retry_until_reconnect() -> None:
+    async def never_returns():
+        await asyncio.sleep(60)
+
+    client = _client()
+    client.ib.reqAllOpenOrdersAsync = AsyncMock(side_effect=never_returns)
+
+    with pytest.raises(BrokerError, match="open orders request timed out"):
+        await list_open_orders(client, timeout_s=0.001)
+    with pytest.raises(BrokerError, match="previously timed out"):
+        await list_open_orders(client, timeout_s=1)
+
+    assert client.ib.reqAllOpenOrdersAsync.await_count == 1
+
+    client._last_event_ms = 2
+    client.ib.reqAllOpenOrdersAsync = AsyncMock(return_value=[_trade_namespace(order_id=42)])
+    out = await list_open_orders(client, timeout_s=1)
+
+    assert [order.order_id for order in out] == [42]
+    assert client.ib.reqAllOpenOrdersAsync.await_count == 1
 
 
 @pytest.mark.asyncio

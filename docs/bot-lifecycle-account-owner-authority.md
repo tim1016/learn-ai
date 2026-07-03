@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract.)
+> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
 
 ---
 
@@ -176,6 +176,8 @@ Account Truth reads `instance_registry.jsonl` as its bot ownership source. Its a
 Account Truth source freshness is now part of the authoritative verdict, not an annotation. `compose_account_truth_source_freshness(...)` emits one backend-authored freshness row for broker connection, account summary, positions, open orders, completed orders, and executions. Critical sources are broker connection, account summary, positions, and open orders. `critical_source_freshness_blocks(...)` re-evaluates hard TTL at read time; any critical `missing` or `stale` row forces `AccountTruthResponse.final_verdict = not_proven` and `final_severity = critical`. The same check is consumed by the cached submit gate and by `AccountReconciliationService.compose_receipt(...)`, so a once-clean truth snapshot cannot remain clean after critical source evidence ages out.
 
 `IbkrPositionsSnapshot.used_cache_fallback=true` means `fetch_positions(...)` returned synchronized IBKR cache rows because `reqPositionsAsync` timed out. That snapshot is degraded evidence even when the read itself just happened: downstream Account Truth marks positions source freshness `stale` and blocks submit/reconciliation clean receipts until a later live positions request succeeds. The timeout is not latched for the client lifetime; each later positions snapshot retries the live broker request behind the per-client serialization lock.
+
+Account Truth refresh must not wedge the data plane. The broker evidence calls that feed it are externally bounded: `fetch_account_summary(...)` wraps `accountSummaryAsync` in a timeout, `fetch_positions(...)` wraps `reqPositionsAsync` in a timeout and exposes degraded cache fallback, and `list_open_orders(...)` wraps `reqAllOpenOrdersAsync` in a timeout. Broker timeouts surface as `BrokerError`, then as Account Truth evidence gaps or refresh-failed cache state, never as a permanently hung FastAPI worker. The background Account Truth loop uses bounded exponential backoff with jitter after failed iterations. `/api/live-instances/catalog` offloads its run-directory scan to a worker thread so slow filesystems do not monopolize the event loop, and the data-plane lifespan stops broker-activity publishers concurrently before disconnecting the broker. Dev and production uvicorn entrypoints set `--timeout-graceful-shutdown` so reload/shutdown has a hard upper bound.
 
 ### 4.1 Postgres Lifecycle Projection Read Model
 

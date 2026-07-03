@@ -429,6 +429,38 @@ async def test_registry_stop_all_drains_every_publisher(tmp_path: Path) -> None:
         assert not p.is_running
 
 
+async def test_registry_stop_all_stops_publishers_concurrently() -> None:
+    registry = BrokerActivityPublisherRegistry()
+    both_stopping = asyncio.Event()
+    stopping: list[str] = []
+
+    class _SlowPublisher:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.stopped = False
+
+        def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            stopping.append(self.name)
+            if len(stopping) == 2:
+                both_stopping.set()
+            await both_stopping.wait()
+            self.stopped = True
+
+    first = _SlowPublisher("first")
+    second = _SlowPublisher("second")
+    await registry.register(first, strategy_instance_id="first")  # type: ignore[arg-type]
+    await registry.register(second, strategy_instance_id="second")  # type: ignore[arg-type]
+
+    await asyncio.wait_for(registry.stop_all(), timeout=0.5)
+
+    assert set(stopping) == {"first", "second"}
+    assert first.stopped is True
+    assert second.stopped is True
+
+
 async def test_fill_matches_via_intent_wal_when_sidecar_empty(
     tmp_path: Path,
 ) -> None:

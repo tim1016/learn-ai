@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS = 15_000
+ACCOUNT_TRUTH_REFRESH_BACKOFF_MAX_MULTIPLIER = 4
+ACCOUNT_TRUTH_REFRESH_JITTER_RATIO = 0.15
 _ACCOUNT_TRUTH_REFRESH_UNAVAILABLE_STATES = frozenset(
     {
         "disabled",
@@ -57,6 +60,23 @@ def validate_account_truth_refresh_cadence(
 
 
 validate_account_truth_refresh_cadence(DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS)
+
+
+def _refresh_sleep_seconds(
+    interval_ms: int,
+    *,
+    consecutive_failures: int,
+    random_fraction: float | None = None,
+) -> float:
+    base_s = interval_ms / 1000
+    multiplier = min(
+        2 ** max(0, consecutive_failures),
+        ACCOUNT_TRUTH_REFRESH_BACKOFF_MAX_MULTIPLIER,
+    )
+    fraction = random.random() if random_fraction is None else random_fraction
+    centered = (max(0.0, min(1.0, fraction)) * 2) - 1
+    jitter = 1 + (centered * ACCOUNT_TRUTH_REFRESH_JITTER_RATIO)
+    return max(0.001, base_s * multiplier * jitter)
 
 
 def account_truth_refresh_session_unavailable(health: IbkrConnectionHealth) -> bool:
@@ -152,6 +172,7 @@ class AccountTruthRefreshLoop:
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
         self._last_account_id: str | None = None
+        self._last_refresh_result: str | None = None
 
     @property
     def is_running(self) -> bool:
@@ -203,6 +224,7 @@ class AccountTruthRefreshLoop:
                         ),
                         attempted_at_ms=attempted_at_ms,
                     )
+                    self._last_refresh_result = "unavailable"
                     return None
 
                 refresh_kwargs: dict[str, object] = {
@@ -213,13 +235,16 @@ class AccountTruthRefreshLoop:
                 }
                 if self._artifacts_root is not None:
                     refresh_kwargs["artifacts_root"] = self._artifacts_root
-                return await self._refresh_now(self._client, **refresh_kwargs)
+                result = await self._refresh_now(self._client, **refresh_kwargs)
+                self._last_refresh_result = "success"
+                return result
             except BrokerError as exc:
                 self._mark_refresh_unavailable(
                     account_id,
                     detail=str(exc),
                     attempted_at_ms=attempted_at_ms,
                 )
+                self._last_refresh_result = "failure"
                 logger.warning(
                     "account truth refresh failed",
                     extra={"account_id": account_id, "exception": repr(exc)},
@@ -231,6 +256,7 @@ class AccountTruthRefreshLoop:
                     detail=f"Account Truth refresh failed unexpectedly: {exc}",
                     attempted_at_ms=attempted_at_ms,
                 )
+                self._last_refresh_result = "failure"
                 logger.exception(
                     "account truth refresh failed unexpectedly",
                     extra={"account_id": account_id},
@@ -238,12 +264,21 @@ class AccountTruthRefreshLoop:
                 return None
 
     async def _run(self) -> None:
+        consecutive_failures = 0
         while not self._stopped.is_set():
-            await self.refresh_once()
+            result = await self.refresh_once()
+            consecutive_failures = (
+                0
+                if result is not None or self._last_refresh_result == "unavailable"
+                else consecutive_failures + 1
+            )
             try:
                 await asyncio.wait_for(
                     self._stopped.wait(),
-                    timeout=self._interval_ms / 1000,
+                    timeout=_refresh_sleep_seconds(
+                        self._interval_ms,
+                        consecutive_failures=consecutive_failures,
+                    ),
                 )
             except TimeoutError:
                 continue

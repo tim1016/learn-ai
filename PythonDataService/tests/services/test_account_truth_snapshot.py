@@ -22,6 +22,7 @@ from app.services import account_truth_refresh
 from app.services.account_truth_refresh import (
     DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
     AccountTruthRefreshLoop,
+    _refresh_sleep_seconds,
     refresh_account_truth_and_update_cache,
     refresh_account_truth_now,
     validate_account_truth_refresh_cadence,
@@ -307,6 +308,34 @@ def test_refresh_loop_validates_cadence_against_provider_ttl() -> None:
         )
 
 
+def test_refresh_loop_sleep_uses_bounded_backoff_and_jitter() -> None:
+    assert _refresh_sleep_seconds(
+        1_000,
+        consecutive_failures=0,
+        random_fraction=0.5,
+    ) == 1.0
+    assert _refresh_sleep_seconds(
+        1_000,
+        consecutive_failures=2,
+        random_fraction=0.5,
+    ) == 4.0
+    assert _refresh_sleep_seconds(
+        1_000,
+        consecutive_failures=99,
+        random_fraction=0.5,
+    ) == 4.0
+    assert _refresh_sleep_seconds(
+        1_000,
+        consecutive_failures=0,
+        random_fraction=0.0,
+    ) == 0.85
+    assert _refresh_sleep_seconds(
+        1_000,
+        consecutive_failures=0,
+        random_fraction=1.0,
+    ) == 1.15
+
+
 @pytest.mark.asyncio
 async def test_refresh_loop_running_keeps_snapshot_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
@@ -441,6 +470,60 @@ async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
     assert assessment.reason_codes == ("ACCOUNT_TRUTH_REFRESH_FAILED",)
     assert "requires an available account/order broker session" in assessment.explanation
     assert assessment.evidence_at_ms == 2_000
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_does_not_backoff_unavailable_broker_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed_failures: list[int] = []
+    observed_twice = asyncio.Event()
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    def fake_sleep_seconds(
+        interval_ms: int,
+        *,
+        consecutive_failures: int,
+        random_fraction: float | None = None,
+    ) -> float:
+        observed_failures.append(consecutive_failures)
+        if len(observed_failures) >= 2:
+            observed_twice.set()
+        return 0.001
+
+    async def failing_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
+        assert snapshot_provider is provider
+        raise BrokerError("broker sweep timed out")
+
+    monkeypatch.setattr(account_truth_refresh, "_refresh_sleep_seconds", fake_sleep_seconds)
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(
+            _health(account_id="DU123", connected=False, connection_state="disconnected", fetched_at_ms=1_000),
+            _health(account_id="DU123", connected=True, connection_state="connected", fetched_at_ms=2_000),
+        ),  # type: ignore[arg-type]
+        interval_ms=1,
+        snapshot_provider=provider,
+        refresh_now=failing_refresh_now,
+    )
+
+    loop.start()
+    try:
+        await asyncio.wait_for(observed_twice.wait(), timeout=1.0)
+    finally:
+        await loop.stop()
+
+    assert observed_failures[:2] == [0, 1]
 
 
 @pytest.mark.asyncio
