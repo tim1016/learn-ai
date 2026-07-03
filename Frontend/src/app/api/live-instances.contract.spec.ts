@@ -2,12 +2,14 @@
 //
 // Snapshots captured from the running Python ``/api/live-instances/{id}/status``
 // endpoint via ``PythonDataService/scripts/capture_operator_surface_fixture.py``.
-// We type each fixture via ``satisfies LiveInstanceStatus`` so a shape
-// drift (renamed field, dropped block, null/non-null mismatch) becomes
-// a TypeScript build failure, NOT a silent runtime gap.
+// A Python freshness test re-captures the route and compares it to the committed
+// JSON. This Vitest contract then checks those same JSON payloads against the
+// Frontend status type so a shape drift (renamed field, dropped block,
+// null/non-null mismatch) becomes a TypeScript build failure, NOT a silent
+// runtime gap.
 //
 // To refresh: run the Python script after any projection change, then
-// commit both the Python diff and the regenerated JSON in the same PR.
+// commit both the Python diff and the regenerated JSON fixtures in the same PR.
 
 import { describe, expect, it } from 'vitest';
 
@@ -15,26 +17,45 @@ import steadyFixture from '../../testing/operator_surface_fixtures/steady.json';
 import stoppedFixture from '../../testing/operator_surface_fixtures/stopped.json';
 import type { LiveInstanceStatus } from './live-instances.types';
 
-// `satisfies` keeps the literal types narrow while asserting structural
-// conformance — the assignment fails to compile if any field drifts.
-const STEADY = steadyFixture as unknown as LiveInstanceStatus;
-const STOPPED = stoppedFixture as unknown as LiveInstanceStatus;
+// TypeScript widens JSON string literals to `string`, so raw JSON cannot
+// satisfy closed string unions directly. The Python freshness test anchors
+// literal values to backend output; this helper keeps the structural and
+// nullability contract checked against the Frontend type.
+type JsonImported<T> = T extends string
+  ? string
+  : T extends number
+    ? number
+    : T extends boolean
+      ? boolean
+      : T extends readonly (infer Item)[]
+        ? JsonImported<Item>[]
+        : T extends object
+          ? { [Key in keyof T]: JsonImported<T[Key]> }
+          : T;
 
-describe('operator_surface wire contract', () => {
+const STEADY = steadyFixture satisfies JsonImported<LiveInstanceStatus>;
+const STOPPED = stoppedFixture satisfies JsonImported<LiveInstanceStatus>;
+
+describe('live instance status fixture wire contract', () => {
   it('STEADY fixture carries every projection block', () => {
     expect(STEADY.operator_surface.schema_version).toBe(1);
     expect(STEADY.operator_surface.host_process.state).toBe('RUNNING');
     expect(STEADY.operator_surface.host_process.notice).toBeNull();
     expect(STEADY.operator_surface.host_process.copyable_command).toBeNull();
-    expect(STEADY.operator_surface.actions.resume.enabled).toBe(true);
+    expect(STEADY.operator_surface.actions.resume.enabled).toBe(false);
     expect(STEADY.operator_surface.actions.pause.enabled).toBe(true);
-    expect(STEADY.operator_surface.actions.resume.disabled_reason_code).toBeNull();
+    expect(STEADY.operator_surface.actions.resume.disabled_reason_code).toBe(
+      'POSTURE_DEMOTED',
+    );
     expect(STEADY.operator_surface.actions.pause.disabled_reason_code).toBeNull();
     expect(STEADY.operator_surface.submit_readiness.code).toBe('broker_state_unproven');
     expect(STEADY.operator_surface.execution?.posture).toBe('UNKNOWN');
     expect(STEADY.operator_surface.trader_guidance.primary_remediation.kind).toBe(
-      'invoke_endpoint',
+      'open_runbook',
     );
+    expect(STEADY.operator_surface.trader_guidance.primary_remediation).toMatchObject({
+      slug: 'broker-instance-operator-surface',
+    });
   });
 
   it('STOPPED fixture surfaces the host-process notice and reflects the unbound state', () => {
@@ -49,10 +70,12 @@ describe('operator_surface wire contract', () => {
     expect(STOPPED.operator_surface.actions.flatten_and_pause.disabled_reason_code).toBe(
       'NO_LIVE_BINDING',
     );
-    // PRD #616 — resume/pause are now guarded; under the no-deployed
-    // (empty guard state) fixture they remain enabled because the
-    // intent is effectively-RUNNING with clean artifacts.
-    expect(STOPPED.operator_surface.actions.resume.enabled).toBe(true);
+    // PRD #616 / runtime-freshness hardening — resume is fail-closed when
+    // broker safety/submission capability are not proven.
+    expect(STOPPED.operator_surface.actions.resume.enabled).toBe(false);
+    expect(STOPPED.operator_surface.actions.resume.disabled_reason_code).toBe(
+      'BROKER_SAFETY_UNKNOWN',
+    );
     expect(STOPPED.operator_surface.actions.pause.enabled).toBe(true);
   });
 
@@ -75,13 +98,17 @@ describe('operator_surface wire contract', () => {
       'actions',
       'trading_session',
       'readiness_gates',
+      'runtime_freshness',
+      'control_plane',
+      'broker_observation_consistency',
+      'reconciliation',
+      'broker_activity_health',
+      'incident_headline',
+      'execution',
     ];
     for (const fixture of [STEADY, STOPPED]) {
       const actual = Object.keys(fixture.operator_surface).sort();
-      const fixtureExpected = (
-        fixture === STEADY ? [...expected, 'execution'] : [...expected]
-      ).sort();
-      expect(actual).toEqual(fixtureExpected);
+      expect(actual).toEqual([...expected].sort());
     }
   });
 
