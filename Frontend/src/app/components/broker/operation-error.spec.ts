@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { describe, expect, it } from 'vitest';
-import { describeOperationError, toOperationError } from './operation-error';
+import { describeOperationError, readOutcomeUnknownBody, toOperationError } from './operation-error';
 
 describe('describeOperationError', () => {
   it('maps a 409 deploy to a precondition with deploy-specific remediation', () => {
@@ -141,6 +141,22 @@ describe('toOperationError', () => {
     expect(e.category).toBe('outcome-unknown');
     expect(e.detail).toBe('lease response lost');
     expect(e.remediation).toBe('Refresh Bot Control before retrying.');
+  });
+
+  it('rejects outcome-unknown bodies with endpoints outside the closed contract', () => {
+    const parsed = readOutcomeUnknownBody({
+      detail: {
+        outcome: 'UNKNOWN',
+        reason_code: 'OUTCOME_UNKNOWN',
+        error_category: 'read_timeout',
+        detail: 'cancel response lost',
+        endpoint: 'cancel_order',
+        occurred_at_ms: 1_700_000_000_000,
+        runbook_hint: 'Refresh before retrying.',
+      },
+    });
+
+    expect(parsed).toBeNull();
   });
 
   it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {
