@@ -12,7 +12,7 @@
   },
   "evidence_binding": {
     "is_live": false,
-    "run_id": "run-stopped",
+    "run_id": "fixture-evidence-ledger-314",
     "state": "latest_run_by_ledger"
   },
   "fetched_at_ms": 1782000000000,
@@ -234,10 +234,10 @@
               "headline": "Committed run identity is present.",
               "label": "run.provenance.run_id",
               "source": "run_ledger",
-              "ts_ms": 100,
+              "ts_ms": 3141,
               "ts_ms_resolved": true,
               "unit": null,
-              "value": "run-stopped"
+              "value": "fixture-evidence-ledger-314"
             },
             {
               "detail": "This backend configuration check must clear before pre-flight is ready.",
@@ -549,7 +549,7 @@
       "primary_node_id": "deploy",
       "title": "Bot lifecycle overview"
     },
-    "selected_bot_id": "spy_ema_paper",
+    "selected_bot_id": "fixture_stopped_bot",
     "subgraphs": {
       "account_safety": {
         "edges": [
@@ -1134,10 +1134,10 @@
                 "headline": "Committed run identity is present.",
                 "label": "run.provenance.run_id",
                 "source": "run_ledger",
-                "ts_ms": 100,
+                "ts_ms": 3141,
                 "ts_ms_resolved": true,
                 "unit": null,
-                "value": "run-stopped"
+                "value": "fixture-evidence-ledger-314"
               },
               {
                 "detail": "This backend configuration check must clear before pre-flight is ready.",
@@ -2224,12 +2224,12 @@
   "provenance": {
     "account_id": "",
     "code_sha": "",
-    "created_at_ms": 100,
+    "created_at_ms": 3141,
     "live_config": {},
     "qc_audit_copy_path": "",
     "qc_audit_copy_sha256": "",
     "qc_cloud_backtest_id": "",
-    "run_id": "run-stopped",
+    "run_id": "fixture-evidence-ledger-314",
     "schema_version": "",
     "start_date_ms": null,
     "strategy_spec_path": "",
@@ -2321,6 +2321,6 @@
     "strategy": "",
     "strategy_spec_path": ""
   },
-  "strategy_instance_id": "spy_ema_paper",
+  "strategy_instance_id": "fixture_stopped_bot",
   "symbol": null
 }

@@ -12,7 +12,7 @@
   },
   "evidence_binding": {
     "is_live": false,
-    "run_id": "run-steady",
+    "run_id": "fixture-active-ledger-042",
     "state": "latest_run_by_ledger"
   },
   "fetched_at_ms": 1782000000000,
@@ -234,10 +234,10 @@
               "headline": "Committed run identity is present.",
               "label": "run.provenance.run_id",
               "source": "run_ledger",
-              "ts_ms": 100,
+              "ts_ms": 4242,
               "ts_ms_resolved": true,
               "unit": null,
-              "value": "run-steady"
+              "value": "fixture-active-ledger-042"
             },
             {
               "detail": "This backend configuration check must clear before pre-flight is ready.",
@@ -593,7 +593,7 @@
       "primary_node_id": "preflight",
       "title": "Bot lifecycle overview"
     },
-    "selected_bot_id": "spy_ema_paper",
+    "selected_bot_id": "fixture_steady_bot",
     "subgraphs": {
       "account_safety": {
         "edges": [
@@ -1222,10 +1222,10 @@
                 "headline": "Committed run identity is present.",
                 "label": "run.provenance.run_id",
                 "source": "run_ledger",
-                "ts_ms": 100,
+                "ts_ms": 4242,
                 "ts_ms_resolved": true,
                 "unit": null,
-                "value": "run-steady"
+                "value": "fixture-active-ledger-042"
               },
               {
                 "detail": "This backend configuration check must clear before pre-flight is ready.",
@@ -1829,8 +1829,8 @@
   },
   "lineage": null,
   "live_binding": {
-    "run_dir": "__OPERATOR_SURFACE_FIXTURE_ROOT__/live_runs/run-steady",
-    "run_id": "run-steady",
+    "run_dir": "__OPERATOR_SURFACE_FIXTURE_ROOT__/live_runs/fixture-active-ledger-042",
+    "run_id": "fixture-active-ledger-042",
     "source": "registry"
   },
   "operator_surface": {
@@ -2397,7 +2397,7 @@
     }
   },
   "process": {
-    "bound_run_id": "run-steady",
+    "bound_run_id": "fixture-active-ledger-042",
     "pid": 99,
     "started_at_ms": 100,
     "state": "running"
@@ -2405,12 +2405,12 @@
   "provenance": {
     "account_id": "",
     "code_sha": "",
-    "created_at_ms": 100,
+    "created_at_ms": 4242,
     "live_config": {},
     "qc_audit_copy_path": "",
     "qc_audit_copy_sha256": "",
     "qc_cloud_backtest_id": "",
-    "run_id": "run-steady",
+    "run_id": "fixture-active-ledger-042",
     "schema_version": "",
     "start_date_ms": null,
     "strategy_spec_path": "",
@@ -2502,6 +2502,6 @@
     "strategy": "",
     "strategy_spec_path": ""
   },
-  "strategy_instance_id": "spy_ema_paper",
+  "strategy_instance_id": "fixture_steady_bot",
   "symbol": null
 }

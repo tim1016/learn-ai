@@ -35,13 +35,32 @@ def test_operator_surface_fixture_scenario_set_is_explicit() -> None:
 
     assert generated_names == _EXPECTED_FIXTURE_NAMES
     assert committed_names == _EXPECTED_FIXTURE_NAMES
-    expected_ledger_run_ids = {"steady": "run-steady", "stopped": "run-stopped"}
-    for name, scenario in scenarios.items():
+    expected_scenarios = {
+        "steady": {
+            "ledger_run_id": "fixture-active-ledger-042",
+            "strategy_instance_id": "fixture_steady_bot",
+            "ledger_created_at_ms": 4_242,
+            "daemon_url": "http://fixture-daemon-steady",
+        },
+        "stopped": {
+            "ledger_run_id": "fixture-evidence-ledger-314",
+            "strategy_instance_id": "fixture_stopped_bot",
+            "ledger_created_at_ms": 3_141,
+            "daemon_url": "http://fixture-daemon-stopped",
+        },
+    }
+    for name, expected in expected_scenarios.items():
+        scenario = scenarios[name]
         assert scenario.name == name
-        assert scenario.strategy_instance_id == "spy_ema_paper"
-        assert scenario.ledger_run_id == expected_ledger_run_ids[name]
-        assert scenario.ledger_created_at_ms == 100
-        assert scenario.daemon_url == "http://daemon"
+        assert scenario.ledger_run_id != f"run-{name}"
+        assert {
+            "ledger_run_id": scenario.ledger_run_id,
+            "strategy_instance_id": scenario.strategy_instance_id,
+            "ledger_created_at_ms": scenario.ledger_created_at_ms,
+            "daemon_url": scenario.daemon_url,
+        } == expected
+        if scenario.process is not None and scenario.process.get("state") == "running":
+            assert scenario.process.get("run_id") == scenario.ledger_run_id
 
 
 @pytest.mark.asyncio
