@@ -35,8 +35,6 @@ function makeDispatch(): OperatorNoticeDispatch & {
     renewControlPlaneLease: 0,
   };
   return {
-    invokeCapability: vi.fn(),
-    focus: vi.fn(),
     redeploy: vi.fn(() => {
       calls.redeploy += 1;
     }),
