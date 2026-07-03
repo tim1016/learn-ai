@@ -35,12 +35,13 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.account_truth_freshness import ACCOUNT_TRUTH_SOURCE_FRESHNESS_SPECS
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.data.trade_bar import TradeBar
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.base import Strategy
-from app.schemas.account_truth import AccountTruthResponse
+from app.schemas.account_truth import AccountTruthResponse, AccountTruthSourceFreshness
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.utils.timestamps import now_ms_utc
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
@@ -102,9 +103,27 @@ def _remember_clean_account_truth() -> None:
                 last_transition_ms=generated_at_ms,
             ),
             invariants=[],
+            source_freshness=_fresh_source_freshness(generated_at_ms),
         ),
         cached_at_ms=generated_at_ms,
     )
+
+
+def _fresh_source_freshness(generated_at_ms: int) -> list[AccountTruthSourceFreshness]:
+    return [
+        AccountTruthSourceFreshness(
+            source=spec.source,
+            label=spec.label,
+            status="fresh",
+            severity=spec.severity,
+            fetched_at_ms=generated_at_ms,
+            age_ms=0,
+            hard_ttl_ms=spec.hard_ttl_ms,
+            reason_code=None,
+            message=f"{spec.label} evidence is fresh.",
+        )
+        for spec in ACCOUNT_TRUTH_SOURCE_FRESHNESS_SPECS
+    ]
 
 
 @pytest.mark.asyncio

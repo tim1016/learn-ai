@@ -123,6 +123,7 @@ function truth(overrides: Partial<AccountTruthResponse> = {}): AccountTruthRespo
     ],
     positions: [],
     evidence_gaps: [],
+    source_freshness: [],
     ...overrides,
   };
 }

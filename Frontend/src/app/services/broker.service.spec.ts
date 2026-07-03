@@ -83,6 +83,7 @@ describe('BrokerService diagnostics endpoints', () => {
       executions: [],
       positions: [],
       evidence_gaps: [],
+      source_freshness: [],
     });
 
     await expect(promise).resolves.toMatchObject({

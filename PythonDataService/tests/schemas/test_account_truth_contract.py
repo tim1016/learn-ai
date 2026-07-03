@@ -4,7 +4,11 @@ from typing import get_args
 
 import pytest
 
-from app.schemas.account_truth import AccountTruthExecutionUncertaintyCode
+from app.schemas.account_truth import (
+    AccountTruthExecutionUncertaintyCode,
+    AccountTruthSourceFreshnessStatus,
+    AccountTruthSourceName,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_ROOT = REPO_ROOT / "Frontend"
@@ -21,6 +25,33 @@ def test_execution_uncertainty_code_typescript_mirror_matches_python_literal() -
 
     assert typescript_codes == python_codes, (
         "AccountTruthExecutionUncertaintyCode drifted between Python and Frontend.\n"
+        f"Python literal: {python_codes}\n"
+        f"TypeScript union: {typescript_codes}\n"
+        f"Missing from TypeScript: {sorted(set(python_codes) - set(typescript_codes))}\n"
+        f"Extra in TypeScript: {sorted(set(typescript_codes) - set(python_codes))}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("python_literal", "typescript_type"),
+    [
+        (AccountTruthSourceName, "AccountTruthSourceName"),
+        (AccountTruthSourceFreshnessStatus, "AccountTruthSourceFreshnessStatus"),
+    ],
+)
+def test_source_freshness_typescript_mirrors_match_python_literals(
+    python_literal,
+    typescript_type: str,
+) -> None:
+    """Source freshness is part of the Account Truth wire contract."""
+    python_codes = list(get_args(python_literal))
+    typescript_codes = _typescript_string_union_values(
+        BROKER_MODELS_PATH,
+        typescript_type,
+    )
+
+    assert typescript_codes == python_codes, (
+        f"{typescript_type} drifted between Python and Frontend.\n"
         f"Python literal: {python_codes}\n"
         f"TypeScript union: {typescript_codes}\n"
         f"Missing from TypeScript: {sorted(set(python_codes) - set(typescript_codes))}\n"

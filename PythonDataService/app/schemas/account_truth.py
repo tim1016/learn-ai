@@ -35,6 +35,15 @@ AccountTruthEvidenceTier = Literal[
 AccountTruthOwnerBindingState = Literal["DEPLOYED", "ACTIVE", "RETIRED", "UNKNOWN"]
 AccountTruthFactKind = Literal["open_order", "completed_order", "execution", "position"]
 AccountTruthLifecycle = Literal["submitted", "acknowledged", "filled", "cancelled", "rejected", "limbo"]
+AccountTruthSourceName = Literal[
+    "broker_connection",
+    "account_summary",
+    "positions",
+    "open_orders",
+    "completed_orders",
+    "executions",
+]
+AccountTruthSourceFreshnessStatus = Literal["fresh", "stale", "missing"]
 AccountTruthOrderCancelReasonCode = Literal[
     "BROKER_NOT_PAPER_CONNECTED",
     "NOT_OPEN_ORDER",
@@ -224,6 +233,22 @@ class AccountTruthEvidenceGap(BaseModel):
     message: str
 
 
+class AccountTruthSourceFreshness(BaseModel):
+    """Backend-authored freshness verdict for one Account Truth evidence source."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source: AccountTruthSourceName
+    label: str
+    status: AccountTruthSourceFreshnessStatus
+    severity: AccountTruthSeverity
+    fetched_at_ms: int | None = None
+    age_ms: int | None = None
+    hard_ttl_ms: int
+    reason_code: str | None = None
+    message: str
+
+
 class AccountTruthResponse(BaseModel):
     """Backend-authored account-wide truth projection."""
 
@@ -248,3 +273,4 @@ class AccountTruthResponse(BaseModel):
     executions: list[AccountTruthExecutionRow] = Field(default_factory=list)
     positions: list[AccountTruthPositionRow] = Field(default_factory=list)
     evidence_gaps: list[AccountTruthEvidenceGap] = Field(default_factory=list)
+    source_freshness: list[AccountTruthSourceFreshness] = Field(default_factory=list)

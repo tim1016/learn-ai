@@ -24,6 +24,7 @@ from app.broker.ibkr.account_recovery import (
     AccountRecoveryState,
     read_account_recovery_state,
 )
+from app.broker.ibkr.account_truth_freshness import compose_account_truth_source_freshness
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
@@ -400,6 +401,16 @@ def compose_account_truth(
         blockers=blockers,
         evidence_gaps=projection_gaps,
     )
+    source_freshness = compose_account_truth_source_freshness(
+        health=health,
+        account=account,
+        positions_snapshot=positions_snapshot,
+        open_orders=open_orders,
+        completed_orders=completed_orders,
+        executions=executions,
+        evidence_gaps=projection_gaps,
+        checked_at_ms=checked_at_ms,
+    )
     return AccountTruthResponse(
         account_id=account_id,
         final_verdict=final_verdict,
@@ -420,6 +431,7 @@ def compose_account_truth(
         executions=execution_rows,
         positions=position_rows,
         evidence_gaps=projection_gaps,
+        source_freshness=source_freshness,
     )
 
 
