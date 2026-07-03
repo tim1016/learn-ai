@@ -79,6 +79,9 @@ _QUALIFY_TIMEOUT_S = 10.0
 # publisher's ``finally`` clears the halt and the next reconnect cycle
 # can retry the sweep cleanly.
 _RECOVERY_EXECUTIONS_TIMEOUT_S = 30.0
+_OPEN_ORDERS_TIMEOUT_S = 8.0
+_OPEN_ORDERS_LOCK_ATTR = "_learn_ai_open_orders_request_lock"
+_OPEN_ORDERS_TIMEOUT_EVENT_ATTR = "_learn_ai_open_orders_timeout_event_ms"
 
 
 def _finite_float(value: object, default: float = 0.0) -> float:
@@ -87,6 +90,38 @@ def _finite_float(value: object, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if math.isfinite(parsed) else default
+
+
+def _client_event_ms(client: IbkrClient) -> int | None:
+    event_ms = getattr(client, "_last_event_ms", None)
+    return event_ms if isinstance(event_ms, int) else None
+
+
+def _open_orders_request_lock(client: IbkrClient) -> asyncio.Lock:
+    lock = getattr(client, _OPEN_ORDERS_LOCK_ATTR, None)
+    if lock is None:
+        lock = asyncio.Lock()
+        setattr(client, _OPEN_ORDERS_LOCK_ATTR, lock)
+    return lock
+
+
+def _open_orders_timeout_guard_active(client: IbkrClient) -> bool:
+    timed_out_event_ms = getattr(client, _OPEN_ORDERS_TIMEOUT_EVENT_ATTR, None)
+    if not isinstance(timed_out_event_ms, int):
+        return False
+    event_ms = _client_event_ms(client)
+    if event_ms is not None and event_ms > timed_out_event_ms:
+        delattr(client, _OPEN_ORDERS_TIMEOUT_EVENT_ATTR)
+        return False
+    return True
+
+
+def _mark_open_orders_timed_out(client: IbkrClient) -> None:
+    setattr(
+        client,
+        _OPEN_ORDERS_TIMEOUT_EVENT_ATTR,
+        _client_event_ms(client) or now_ms_utc(),
+    )
 
 
 # Process-level idempotency cache: maps client_order_id → previously-issued
@@ -581,7 +616,11 @@ def _trade_to_open_order(
     )
 
 
-async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
+async def list_open_orders(
+    client: IbkrClient,
+    *,
+    timeout_s: float = _OPEN_ORDERS_TIMEOUT_S,
+) -> list[IbkrOpenOrder]:
     """All open orders the connected client has placed.
 
     ``ib_async.IB.openOrdersAsync`` returns ``Trade`` objects across the
@@ -593,7 +632,25 @@ async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
         raise BrokerError("connected client has no account_id")
 
     request_snapshot = all_open_orders_request_evidence()
-    trades = await client.ib.reqAllOpenOrdersAsync()
+    try:
+        async with _open_orders_request_lock(client):
+            if _open_orders_timeout_guard_active(client):
+                raise BrokerError(
+                    "IBKR open orders request previously timed out; reconnect IBKR "
+                    "before retrying open-order sweeps."
+                )
+            try:
+                trades = await asyncio.wait_for(
+                    client.ib.reqAllOpenOrdersAsync(),
+                    timeout=timeout_s,
+                )
+            except TimeoutError:
+                _mark_open_orders_timed_out(client)
+                raise
+    except TimeoutError as exc:
+        raise BrokerError(
+            f"IBKR open orders request timed out after {timeout_s:g}s."
+        ) from exc
     get_ibkr_api_evidence_recorder().record(
         source="orders.list_open_orders",
         account_id=account_id,

@@ -156,6 +156,41 @@ async def test_fetch_account_summary_live_account_flag() -> None:
     assert out.account_id == "U7654321"
 
 
+@pytest.mark.asyncio
+async def test_fetch_account_summary_timeout_raises_broker_error() -> None:
+    async def never_returns(_account_id: str):
+        await asyncio.sleep(60)
+
+    client = _fake_client("DU1234567")
+    client.ib.accountSummaryAsync = AsyncMock(side_effect=never_returns)
+
+    with pytest.raises(BrokerError, match="account summary request timed out"):
+        await fetch_account_summary(client, timeout_s=0.001)
+
+
+@pytest.mark.asyncio
+async def test_fetch_account_summary_timeout_cancels_subscription_request() -> None:
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    wrapper = SimpleNamespace(acctSummary={}, startReq=Mock(return_value=future))
+    ib_client = SimpleNamespace(
+        getReqId=Mock(return_value=42),
+        reqAccountSummary=Mock(),
+        cancelAccountSummary=Mock(),
+    )
+    client = SimpleNamespace(
+        ib=SimpleNamespace(client=ib_client, wrapper=wrapper),
+        connected_account="DU1234567",
+        require_connected=lambda: None,
+    )
+
+    with pytest.raises(BrokerError, match="account summary request timed out"):
+        await fetch_account_summary(client, timeout_s=0.001)
+
+    ib_client.reqAccountSummary.assert_called_once()
+    ib_client.cancelAccountSummary.assert_called_once_with(42)
+
+
 # ── _ibkr_position_to_model ─────────────────────────────────────────────
 
 

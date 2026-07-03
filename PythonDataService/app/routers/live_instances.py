@@ -1349,10 +1349,14 @@ async def _resolve_instance_status_from_process(
     root: Path,
     settings: IbkrSettings,
     daemon_process: dict | None,
+    *,
+    runs_by_instance: dict[str, list[dict]] | None = None,
 ) -> LiveInstanceStatus:
     process, live_binding = _interpret_daemon_process(daemon_process, root)
 
-    runs = _scan_runs_by_instance(root).get(sid, [])
+    if runs_by_instance is None:
+        runs_by_instance = _scan_runs_by_instance(root)
+    runs = runs_by_instance.get(sid, [])
     account_freeze = _resolve_account_freeze(root.parent, runs)
     evidence = EvidenceBinding(run_id=runs[0]["run_id"]) if runs else None
     desired = _resolve_desired_state(root, sid)
@@ -1388,7 +1392,11 @@ async def _resolve_instance_status_from_process(
         _broker_connection_state_from_engine_runtime(fresh_runtime_snapshot)
         or _broker_connection_state_from_readiness(readiness)
     )
-    instance_account_id = _instance_ledger_account_id(root, sid)
+    instance_account_id = _instance_ledger_account_id(
+        root,
+        sid,
+        runs_by_instance=runs_by_instance,
+    )
     account_owner = _resolve_account_owner_surface(root.parent, instance_account_id)
     account_truth_snapshot = get_account_truth_snapshot_provider().get(instance_account_id)
     latest_mutation = _resolve_latest_mutation(root, sid)
@@ -1529,7 +1537,7 @@ async def list_bot_catalog() -> BotCatalogResponse:
     """Server-authored bot catalog cards for the frontend DataView."""
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    by_instance = _scan_runs_by_instance(root)
+    by_instance = await asyncio.to_thread(_scan_runs_by_instance, root)
 
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_by_sid: dict[str, dict] = {}
@@ -1547,6 +1555,7 @@ async def list_bot_catalog() -> BotCatalogResponse:
             root,
             settings,
             _daemon_process_from_instance(daemon_by_sid.get(sid)),
+            runs_by_instance=by_instance,
         )
         rows.append(compose_bot_catalog_row(status_view, trading_mode))
     rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
@@ -2130,11 +2139,18 @@ async def renew_daemon_lease() -> HostRunnerHealth:
         ) from exc
 
 
-def _instance_ledger_account_id(root: Path, sid: str) -> str | None:
+def _instance_ledger_account_id(
+    root: Path,
+    sid: str,
+    *,
+    runs_by_instance: dict[str, list[dict]] | None = None,
+) -> str | None:
     """Latest ledger ``account_id`` for ``sid`` (``None`` when no ledger
     or the ledger pre-dates the field).  Pure read; used by the fleet
     account-identity aggregation."""
-    runs = _scan_runs_by_instance(root).get(sid, [])
+    if runs_by_instance is None:
+        runs_by_instance = _scan_runs_by_instance(root)
+    runs = runs_by_instance.get(sid, [])
     if not runs:
         return None
     try:

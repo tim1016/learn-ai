@@ -1924,6 +1924,53 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert row["last_run_detail"] == "No completed run has been recorded for this bot."
 
 
+async def test_bot_catalog_offloads_run_scan(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _root = app_with_root
+    called = False
+
+    async def fake_to_thread(func, *args, **kwargs):
+        nonlocal called
+        called = True
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(live_instances.asyncio, "to_thread", fake_to_thread)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert called is True
+
+
+async def test_bot_catalog_reuses_run_scan_for_status_rows(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 110)
+    calls = 0
+    real_scan = live_instances._scan_runs_by_instance
+
+    def counted_scan(scan_root: Path):
+        nonlocal calls
+        calls += 1
+        return real_scan(scan_root)
+
+    monkeypatch.setattr(live_instances, "_scan_runs_by_instance", counted_scan)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert {row["strategy_instance_id"] for row in response.json()["bots"]} == {
+        "spy_ema_paper",
+        "spy_vwap_shadow",
+    }
+    assert calls == 1
+
+
 async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

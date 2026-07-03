@@ -196,10 +196,10 @@ services:
       - |
         case "$$(printf '%s' "$${UVICORN_RELOAD:-true}" | tr '[:upper:]' '[:lower:]')" in
           false|0|no|off)
-            exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+            exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
             ;;
         esac
-        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 10
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

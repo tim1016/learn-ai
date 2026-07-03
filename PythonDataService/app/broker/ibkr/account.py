@@ -41,6 +41,20 @@ _POSITIONS_TIMEOUT_S = 8.0
 _POSITIONS_LOCK_ATTR = "_learn_ai_positions_request_lock"
 _POSITIONS_CACHE_FETCHED_AT_ATTR = "_learn_ai_positions_cache_fetched_at_ms"
 _POSITIONS_TIMEOUT_EVENT_ATTR = "_learn_ai_positions_timeout_event_ms"
+_ACCOUNT_SUMMARY_TIMEOUT_S = 8.0
+_ACCOUNT_SUMMARY_TAGS = (
+    "AccountType,NetLiquidation,TotalCashValue,SettledCash,"
+    "AccruedCash,BuyingPower,EquityWithLoanValue,"
+    "PreviousDayEquityWithLoanValue,GrossPositionValue,RegTEquity,"
+    "RegTMargin,SMA,InitMarginReq,MaintMarginReq,AvailableFunds,"
+    "ExcessLiquidity,Cushion,FullInitMarginReq,FullMaintMarginReq,"
+    "FullAvailableFunds,FullExcessLiquidity,LookAheadNextChange,"
+    "LookAheadInitMarginReq,LookAheadMaintMarginReq,"
+    "LookAheadAvailableFunds,LookAheadExcessLiquidity,"
+    "HighestSeverity,DayTradesRemaining,DayTradesRemainingT+1,"
+    "DayTradesRemainingT+2,DayTradesRemainingT+3,"
+    "DayTradesRemainingT+4,Leverage,$LEDGER:ALL"
+)
 
 # IBKR's reqAccountSummary returns string-keyed tags. ib_async subscribes
 # to the standard tag set on connect; we just consume the ones Phase 2a
@@ -66,7 +80,56 @@ def _coerce_float_or_none(value: str | float | None) -> float | None:
         return None
 
 
-async def fetch_account_summary(client: IbkrClient) -> IbkrAccountSummary:
+def _cancel_account_summary_request(client: IbkrClient, req_id: int) -> None:
+    cancel = getattr(getattr(client.ib, "client", None), "cancelAccountSummary", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel(req_id)
+    except Exception as exc:
+        logger.debug("IBKR cancelAccountSummary raised after summary timeout: %s", exc)
+
+
+async def _fetch_account_summary_rows(
+    client: IbkrClient,
+    *,
+    account_id: str,
+    timeout_s: float,
+) -> list:
+    ib_client = getattr(client.ib, "client", None)
+    wrapper = getattr(client.ib, "wrapper", None)
+    get_req_id = getattr(ib_client, "getReqId", None)
+    req_account_summary = getattr(ib_client, "reqAccountSummary", None)
+    start_req = getattr(wrapper, "startReq", None)
+    acct_summary = getattr(wrapper, "acctSummary", None)
+    if (
+        not callable(get_req_id)
+        or not callable(req_account_summary)
+        or not callable(start_req)
+        or not isinstance(acct_summary, dict)
+    ):
+        rows = await asyncio.wait_for(
+            client.ib.accountSummaryAsync(account_id),
+            timeout=timeout_s,
+        )
+        return list(rows)
+
+    req_id = int(get_req_id())
+    future = start_req(req_id)
+    req_account_summary(req_id, "All", _ACCOUNT_SUMMARY_TAGS)
+    try:
+        await asyncio.wait_for(future, timeout=timeout_s)
+    except TimeoutError:
+        _cancel_account_summary_request(client, req_id)
+        raise
+    return [v for v in acct_summary.values() if v.account == account_id]
+
+
+async def fetch_account_summary(
+    client: IbkrClient,
+    *,
+    timeout_s: float = _ACCOUNT_SUMMARY_TIMEOUT_S,
+) -> IbkrAccountSummary:
     """Fetch a one-shot account summary.
 
     Uses ``reqAccountSummaryAsync`` against the connected account ID.
@@ -81,7 +144,16 @@ async def fetch_account_summary(client: IbkrClient) -> IbkrAccountSummary:
         # invariant explicit for the type checker and for safety.
         raise RuntimeError("connected client has no account_id")
 
-    rows = await client.ib.accountSummaryAsync(account_id)
+    try:
+        rows = await _fetch_account_summary_rows(
+            client,
+            account_id=account_id,
+            timeout_s=timeout_s,
+        )
+    except TimeoutError as exc:
+        raise BrokerError(
+            f"IBKR account summary request timed out after {timeout_s:g}s."
+        ) from exc
     get_ibkr_api_evidence_recorder().record(
         source="account.fetch_account_summary",
         account_id=account_id,
