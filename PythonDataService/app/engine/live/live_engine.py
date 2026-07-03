@@ -68,6 +68,7 @@ from app.engine.live.halt import (
 from app.engine.live.live_context import LiveContext
 from app.engine.live.live_portfolio import (
     BrokerAdapter,
+    ControlledLiveHaltError,
     IbkrBrokerAdapter,
     LiveBrokerEventStreamError,
     LivePortfolio,
@@ -258,7 +259,7 @@ class ReconnectAccountMismatchHaltError(RuntimeError):
         self.connection_epoch = connection_epoch
 
 
-class BrokerSafetyVerdictTransitionHaltError(RuntimeError):
+class BrokerSafetyVerdictTransitionHaltError(ControlledLiveHaltError):
     """Phase 7B / VCR-0010 — broker safety verdict left ``paper-only``.
 
     Raised by ``LiveEngine._check_verdict_transition_halt`` at the top of
@@ -353,35 +354,11 @@ def _emit_drop_events_for_pending(
     drop_reason: str,
     ts_ms: int,
 ) -> None:
-    """PR 3 / operator-notice — emit INTENT_DROPPED_BEFORE_SUBMIT for each pending order.
-
-    Called BEFORE pending_orders are cleared from memory. The fsync inside
-    ``IntentWal.append`` guarantees the drop event is on disk before the
-    in-memory pending orders are erased, satisfying the ``append → fsync →
-    clear`` invariant.
-
-    No-op when the portfolio has no WAL wired (replay tests, shadow paths).
-    Intents without a minted ``intent_id`` (orders that bypassed set_holdings)
-    are skipped — they have no WAL identity and can't carry a meaningful drop
-    record.
-    """
-    from app.engine.live.intent_events import IntentEventType
-    from app.engine.live.order_identity import build_order_ref
-
-    if portfolio.intent_wal is None or not portfolio.bot_order_namespace:
-        return
-    for order in portfolio.pending_orders:
-        intent_id = portfolio._intent_by_order_id.get(order.order_id)
-        if intent_id is None:
-            continue  # no WAL identity minted — nothing to record
-        portfolio.intent_wal.append(
-            event_type=IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
-            intent_id=intent_id,
-            bot_order_namespace=portfolio.bot_order_namespace,
-            order_ref=build_order_ref(portfolio.bot_order_namespace, intent_id),
-            drop_reason=drop_reason,  # type: ignore[arg-type]
-            ts_ms=ts_ms,
-        )
+    """Compatibility wrapper for the portfolio-owned append-and-clear boundary."""
+    portfolio.drop_pending_before_submit(
+        drop_reason=drop_reason,  # type: ignore[arg-type]
+        ts_ms=ts_ms,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1254,7 +1231,6 @@ class LiveEngine:
                         drop_reason=_drop_reason,
                         ts_ms=int(minute_bar.end_time.timestamp() * 1000),
                     )
-                    portfolio.pending_orders.clear()
                 # Predictive cap check: refuse to submit the pending batch if
                 # it would push the day's total past ``max_orders_per_day``,
                 # rather than submitting first and raising afterwards.
@@ -1280,7 +1256,6 @@ class LiveEngine:
                         drop_reason="max_orders_per_day",
                         ts_ms=int(minute_bar.end_time.timestamp() * 1000),
                     )
-                    portfolio.pending_orders.clear()
                     raise MaxOrdersPerDayExceeded(
                         f"would push total to {orders_submitted_today + pending_count} on "
                         f"{current_session_date} (cap={self._max_orders_per_day}); "
@@ -2534,7 +2509,6 @@ class LiveEngine:
             drop_reason="broker_safety_halt",
             ts_ms=now_ms_utc(),
         )
-        portfolio.pending_orders.clear()
         if self._output_dir is not None:
             try:
                 self._output_dir.mkdir(parents=True, exist_ok=True)

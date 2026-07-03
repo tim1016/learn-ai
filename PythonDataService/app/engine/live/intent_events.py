@@ -30,6 +30,9 @@ DropReason = Literal[
     "submissions_blocked",
     "max_orders_per_day",
     "broker_safety_halt",
+    "account_truth_block",
+    "account_freeze_block",
+    "account_registry_block",
 ]
 
 

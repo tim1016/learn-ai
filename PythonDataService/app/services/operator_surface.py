@@ -69,7 +69,7 @@ from app.schemas.live_runs import (
     ReconciliationState,
     RedeployAction,
 )
-from app.services.account_truth_snapshot import AccountTruthSnapshot
+from app.services.account_truth_snapshot import AccountTruthReadinessEvidence, assess_account_truth
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.mutation_attempt import MutationAttempt
 from app.services.operator_capability import evaluate_all_actions
@@ -939,7 +939,7 @@ def compute_operator_surface(
     control_plane_state: DaemonConnectivityState | None = None,
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
-    account_truth_snapshot: AccountTruthSnapshot | None = None,
+    account_truth_snapshot: AccountTruthReadinessEvidence | None = None,
     host_start_command: str | None = None,
     start_run_id: str | None = None,
     account_freeze: AccountFreezeEvidence | None = None,
@@ -1033,6 +1033,7 @@ def compute_operator_surface(
         now_ms=now_ms,
     )
     runtime_freshness_projection = _project_runtime_freshness(runtime_freshness)
+    account_truth_assessment = assess_account_truth(account_truth_snapshot, now_ms=now_ms)
     submit_readiness = author_submit_readiness(
         host_process=host_process,
         broker=broker_projection,
@@ -1042,8 +1043,7 @@ def compute_operator_surface(
         guard_state=resolved_guards,
         reconciliation=reconciliation_projection,
         readiness_gates=readiness_gates,
-        account_truth_snapshot=account_truth_snapshot,
-        now_ms=now_ms,
+        account_truth=account_truth_assessment,
     )
     trader_guidance = author_trader_guidance(
         submit_readiness=submit_readiness,
@@ -1057,8 +1057,7 @@ def compute_operator_surface(
         runtime_freshness=runtime_freshness_projection,
         readiness_gates=readiness_gates,
         daily_order_cap=daily_order_cap,
-        account_truth_snapshot=account_truth_snapshot,
-        now_ms=now_ms,
+        account_truth=account_truth_assessment,
     )
 
     return OperatorSurface(

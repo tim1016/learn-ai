@@ -8,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.broker.ibkr.account_truth import (
-    fetch_account_truth,
     load_account_instance_registry_evidence,
 )
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
@@ -25,7 +24,7 @@ from app.broker.ibkr.order_previews import preview_paper_order
 from app.broker.ibkr.orders import OrderRefusedError
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_truth import AccountTruthResponse
-from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
+from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -41,14 +40,12 @@ async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthRes
         context="account truth",
     )
     try:
-        truth = await fetch_account_truth(
+        return await refresh_account_truth_and_update_cache(
             client,
             health=health,
             account_instance_bindings=registry_evidence.bindings,
             initial_evidence_gaps=registry_evidence.evidence_gaps,
         )
-        get_account_truth_snapshot_provider().remember(truth)
-        return truth
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

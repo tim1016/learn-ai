@@ -8,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.broker.ibkr.account_truth import (
-    fetch_account_truth,
     load_account_instance_registry_evidence,
 )
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
@@ -23,6 +22,7 @@ from app.schemas.account_reconciliation import (
     AccountTriageResponse,
 )
 from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_truth_refresh import refresh_account_truth_and_update_cache
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -51,7 +51,7 @@ async def reconcile_account_endpoint(
         context="account reconciliation",
     )
     try:
-        account_truth = await fetch_account_truth(
+        account_truth = await refresh_account_truth_and_update_cache(
             client,
             health=health,
             account_instance_bindings=registry_evidence.bindings,

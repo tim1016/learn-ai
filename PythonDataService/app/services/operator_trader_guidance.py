@@ -29,7 +29,7 @@ from app.schemas.live_runs import (
     TraderPrimaryRemediation,
     TraderSituationCode,
 )
-from app.services.account_truth_snapshot import AccountTruthSnapshot
+from app.services.account_truth_snapshot import AccountTruthAssessment
 from app.services.resume_guard_state import ResumeGuardState
 
 _READY_RECONCILIATION_STATES: frozenset[ReconciliationState] = frozenset({"CLEAN", "ADOPTED"})
@@ -147,8 +147,7 @@ def author_submit_readiness(
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
     readiness_gates: list[OperatorGate],
-    account_truth_snapshot: AccountTruthSnapshot | None,
-    now_ms: int,
+    account_truth: AccountTruthAssessment,
 ) -> OperatorSurfaceSubmitReadiness:
     """Author submit readiness from a single prioritized finding list."""
 
@@ -161,8 +160,7 @@ def author_submit_readiness(
         guard_state=guard_state,
         reconciliation=reconciliation,
         readiness_gates=readiness_gates,
-        account_truth_snapshot=account_truth_snapshot,
-        now_ms=now_ms,
+        account_truth=account_truth,
     )
     code: SubmitReadinessCode = findings[0].readiness_code if findings else "safe_to_submit"
     label, explanation = _SUBMIT_READINESS_COPY[code]
@@ -190,8 +188,7 @@ def author_trader_guidance(
     runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
     readiness_gates: list[OperatorGate],
     daily_order_cap: OperatorSurfaceDailyOrderCap,
-    account_truth_snapshot: AccountTruthSnapshot | None,
-    now_ms: int,
+    account_truth: AccountTruthAssessment,
 ) -> OperatorSurfaceTraderGuidance:
     """Author trader-readable guidance from the same prioritized findings."""
 
@@ -204,8 +201,7 @@ def author_trader_guidance(
         guard_state=guard_state,
         reconciliation=reconciliation,
         readiness_gates=readiness_gates,
-        account_truth_snapshot=account_truth_snapshot,
-        now_ms=now_ms,
+        account_truth=account_truth,
     )
     situation_code = _situation_code_for_submit_readiness(submit_readiness.code, findings)
     headline, explanation, risk_headline, risk_explanation = _TRADER_GUIDANCE_COPY[situation_code]
@@ -250,8 +246,7 @@ def build_submit_readiness_findings(
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
     readiness_gates: list[OperatorGate],
-    account_truth_snapshot: AccountTruthSnapshot | None,
-    now_ms: int,
+    account_truth: AccountTruthAssessment,
 ) -> list[SubmitReadinessFinding]:
     findings: list[SubmitReadinessFinding] = []
     if account_freeze is not None:
@@ -397,7 +392,7 @@ def build_submit_readiness_findings(
                 reconciliation_remediation,
             )
         )
-    findings.extend(_account_truth_findings(account_truth_snapshot, now_ms=now_ms))
+    findings.extend(_account_truth_findings(account_truth))
     for gate in _hard_blocking_readiness_gates(readiness_gates):
         findings.append(
             _finding(
@@ -492,41 +487,9 @@ def _account_owner_ready(account_owner: OperatorSurfaceAccountOwner | None) -> b
     return account_owner is not None and account_owner.generation is not None and account_owner.phase == "accepting"
 
 
-def _account_truth_findings(
-    snapshot: AccountTruthSnapshot | None,
-    *,
-    now_ms: int,
-) -> list[SubmitReadinessFinding]:
-    if snapshot is None:
-        return [
-            _finding(
-                "broker_state_unproven",
-                "ACCOUNT_TRUTH_NOT_AVAILABLE",
-                "account_truth",
-                "critical",
-                "Account Truth snapshot is unavailable",
-                "No cached Account Truth projection is available for this account.",
-                "Open Account Monitor and refresh Account Truth before treating submit readiness as safe.",
-                OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
-            )
-        ]
-
-    reason_codes = snapshot.blocking_reason_codes(now_ms)
-    if not reason_codes:
+def _account_truth_findings(assessment: AccountTruthAssessment) -> list[SubmitReadinessFinding]:
+    if assessment.can_submit:
         return []
-
-    if snapshot.is_stale(now_ms):
-        headline = "Account Truth snapshot is stale"
-        explanation = (
-            f"Account Truth snapshot age is {snapshot.age_ms(now_ms)} ms; "
-            f"hard freshness threshold is {snapshot.hard_ttl_ms} ms."
-        )
-        next_step = "Refresh Account Truth from broker evidence before treating submit readiness as safe."
-    else:
-        headline = "Account Truth is not clean"
-        first_blocker = snapshot.truth.blockers[0].message if snapshot.truth.blockers else snapshot.truth.status_detail
-        explanation = first_blocker
-        next_step = "Resolve the Account Truth blockers before treating submit readiness as safe."
 
     return [
         _finding(
@@ -534,12 +497,13 @@ def _account_truth_findings(
             reason_code,
             "account_truth",
             "critical",
-            headline,
-            explanation,
-            next_step,
+            assessment.headline,
+            assessment.explanation,
+            assessment.operator_next_step
+            or "Open Account Monitor and refresh Account Truth before treating submit readiness as safe.",
             OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
         )
-        for reason_code in reason_codes
+        for reason_code in assessment.reason_codes
     ]
 
 
