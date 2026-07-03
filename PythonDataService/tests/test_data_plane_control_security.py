@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
@@ -18,12 +21,15 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret,
 )
 
-_CONTROL_SURFACE_PREFIXES = (
-    "/api/live-instances",
-    "/api/live-runs",
-    "/api/broker",
-    "/api/accounts",
+_CONTROL_SURFACE_MANIFEST = (
+    Path(__file__).resolve().parents[2]
+    / "Frontend"
+    / "src"
+    / "app"
+    / "security"
+    / "data-plane-control-surfaces.json"
 )
+_CONTROL_SURFACE_PREFIXES = tuple(json.loads(_CONTROL_SURFACE_MANIFEST.read_text())["control_prefixes"])
 _MUTATION_PATH = "/api/broker/orders/what-if"
 _READ_PATH = "/api/broker/health"
 

@@ -1,14 +1,10 @@
 const DATA_PLANE_CONTROL_SECRET_HEADER = 'X-Data-Plane-Control-Secret';
 const DATA_PLANE_CONTROL_INTENT_HEADER = 'X-Data-Plane-Control-Intent';
 const DATA_PLANE_CONTROL_INTENT_VALUE = 'learn-ai-browser-control';
+const dataPlaneControlSurfaces = require('./src/app/security/data-plane-control-surfaces.json');
 const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const CONTROL_PREFIXES = [
-  '/api/broker',
-  '/api/accounts',
-  '/api/live-instances',
-  '/api/live-runs',
-];
+const CONTROL_PREFIXES = dataPlaneControlSurfaces.control_prefixes;
 const LOCAL_DEV_ORIGINS = new Set([
   'http://localhost:4200',
   'http://127.0.0.1:4200',
@@ -32,7 +28,7 @@ function isControlMutation(req) {
 }
 
 function isLocalDevUrl(value) {
-  if (!value) return true;
+  if (!value) return false;
   try {
     const parsed = new URL(value);
     return LOCAL_DEV_ORIGINS.has(parsed.origin);
@@ -42,9 +38,16 @@ function isLocalDevUrl(value) {
 }
 
 function hasSameOriginFetchMetadata(req) {
+  // Metadata-absent local tools do not receive the private proxy secret. The
+  // Angular app sends the public intent header; browser provenance must still
+  // prove this is same-origin localhost UI traffic before we attach the secret.
   const secFetchSite = requestHeader(req, 'sec-fetch-site');
-  if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') return false;
-  return isLocalDevUrl(requestHeader(req, 'origin')) && isLocalDevUrl(requestHeader(req, 'referer'));
+  if (secFetchSite !== 'same-origin' && secFetchSite !== 'none') return false;
+  const origin = requestHeader(req, 'origin');
+  const referer = requestHeader(req, 'referer');
+  if (origin && !isLocalDevUrl(origin)) return false;
+  if (referer && !isLocalDevUrl(referer)) return false;
+  return Boolean(origin || referer);
 }
 
 function shouldAttachDataPlaneSecret(req) {
@@ -93,6 +96,7 @@ Object.defineProperty(proxyConfig, '__test', {
     DATA_PLANE_CONTROL_SECRET_HEADER,
     DATA_PLANE_CONTROL_INTENT_HEADER,
     DATA_PLANE_CONTROL_INTENT_VALUE,
+    CONTROL_PREFIXES,
     attachDataPlaneSecret,
     isControlMutation,
     shouldAttachDataPlaneSecret,
