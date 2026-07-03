@@ -134,6 +134,7 @@ def test_build_broker_block_composes_full_axes() -> None:
         readonly=False,
         connection_state="connected",
         connection_epoch=3,
+        client_id=12,
         connected_account="DU0123456",
         port_class="paper_port",
         observation_at_ms=1_700_000_000_000,
@@ -145,6 +146,7 @@ def test_build_broker_block_composes_full_axes() -> None:
     assert block.effective_posture == "PAPER_EXECUTION"
     assert block.connection_state == "connected"
     assert block.connection_epoch == 3
+    assert block.client_id == 12
     assert block.connected_account == "DU0123456"
     assert block.port_class == "paper_port"
     assert block.observation_at_ms == 1_700_000_000_000
@@ -575,6 +577,7 @@ async def test_engine_first_runtime_snapshot_coheres_without_bars(
         "all four blocks and the publisher will refuse to write "
         "engine_runtime.json"
     )
+    assert snapshot.broker.client_id == 12
     assert snapshot.broker.probe_completed_at_ms == now_ms
 
     # The freshness evaluator with session_state=CLOSED (pre-market or

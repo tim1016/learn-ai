@@ -95,6 +95,7 @@ class BrokerBlock(BaseModel):
         "disabled",
     ]
     connection_epoch: int = Field(ge=0)
+    client_id: int | None = Field(default=None, ge=0)
     connected_account: str | None = None
     port_class: Literal["paper_port", "live_port", "unknown"]
     observation_at_ms: int = Field(ge=0)

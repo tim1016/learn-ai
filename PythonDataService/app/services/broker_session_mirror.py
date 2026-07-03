@@ -183,9 +183,7 @@ def _runtime_entry_from_run_dir(run_dir: Path) -> RuntimeIndexEntry | None:
 
 
 def _runtime_client_id(_runtime: EngineRuntimeSnapshot | None) -> int | None:
-    # Slice 4 of the PRD explicitly publishes child client_id into runtime
-    # artifacts. Until then, the correct value is unavailable here.
-    return None
+    return _runtime.broker.client_id if _runtime is not None else None
 
 
 def _read_json_object(path: Path) -> dict[str, object] | None:

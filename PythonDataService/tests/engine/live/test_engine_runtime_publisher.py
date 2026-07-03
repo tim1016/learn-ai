@@ -65,6 +65,7 @@ def _broker(at_ms: int = 1_700_000_000_000) -> BrokerBlock:
         effective_posture="PAPER_EXECUTION",
         connection_state="connected",
         connection_epoch=1,
+        client_id=12,
         connected_account="DU1234567",
         port_class="paper_port",
         observation_at_ms=at_ms,
