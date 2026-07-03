@@ -136,9 +136,9 @@ async def bootstrap_publisher_for_instance(
             "IBKR broker disconnected; cannot start broker-activity publisher.",
         )
 
-    from app.engine.live.run import _latest_run_dir_for_instance
+    from app.engine.live.run_lookup import latest_run_dir_for_instance
 
-    run_dir = _latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
+    run_dir = latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
     if run_dir is None:
         raise PublisherBootstrapError(
             "no_run_dir", f"no run directory for {strategy_instance_id!r}"

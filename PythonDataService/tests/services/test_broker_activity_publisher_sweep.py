@@ -402,13 +402,13 @@ async def test_bootstrap_passes_incident_store(
 
     monkeypatch.setattr(ba_module, "get_client", lambda: _FakeClient())
 
-    # Patch _latest_run_dir_for_instance so it returns our tmp run_dir.
+    # Patch latest_run_dir_for_instance so it returns our tmp run_dir.
     def _fake_run_dir(art_root: Path, sid: str) -> Path:
         return run_dir
 
-    import app.engine.live.run as run_module
+    import app.engine.live.run_lookup as run_lookup_module
 
-    monkeypatch.setattr(run_module, "_latest_run_dir_for_instance", _fake_run_dir)
+    monkeypatch.setattr(run_lookup_module, "latest_run_dir_for_instance", _fake_run_dir)
 
     # Patch event factories so the publisher doesn't try to talk to IBKR.
     async def _empty_gen():
@@ -473,10 +473,10 @@ async def test_sweep_persists_incident_via_bootstrapped_store(
 
     monkeypatch.setattr(ba_module, "get_client", lambda: _FakeClient())
 
-    import app.engine.live.run as run_module
+    import app.engine.live.run_lookup as run_lookup_module
 
     monkeypatch.setattr(
-        run_module, "_latest_run_dir_for_instance", lambda _art, _sid: run_dir
+        run_lookup_module, "latest_run_dir_for_instance", lambda _art, _sid: run_dir
     )
 
     from app.broker.ibkr.models import IbkrOrderEvent

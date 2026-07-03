@@ -429,9 +429,9 @@ def read_submission_capability(
 def read_uncertain_intent_state(wal_path: Path | None) -> UncertainIntentArtifact:
     """Pure fold over ``intent_events.jsonl`` for unresolved uncertains.
 
-    Mirrors the legacy ``_scan_wal_for_unresolved_uncertains`` (see
-    ``app/engine/live/run.py``) but as a shared resolver input.  A
-    corrupt WAL is ``UNKNOWN`` (fail-closed); missing WAL is ``CLEAR``.
+    ACK_FAILED_UNCERTAIN events remain unresolved until a downstream resolution
+    event appears in the same WAL. A corrupt WAL is ``UNKNOWN`` (fail-closed);
+    missing WAL is ``CLEAR``.
     """
     if wal_path is None or not wal_path.exists():
         return UncertainIntentArtifact(state="CLEAR")
