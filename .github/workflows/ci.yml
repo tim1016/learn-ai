@@ -100,6 +100,10 @@ jobs:
   python-test:
     name: Python Tests
     runs-on: ubuntu-latest
+    env:
+      PYTHON_FAST_BASELINE_TEST_DIRS: >-
+        tests/unit tests/indicators tests/edge tests/utils
+        tests/engine tests/routers tests/schemas tests/services tests/operator
     defaults:
       run:
         working-directory: PythonDataService
@@ -138,7 +142,14 @@ jobs:
           fi
           changed=$(git diff --name-only "$range" || true)
           # Baseline dirs are always run; skip them here to avoid duplicate paths.
-          baseline_pattern='^PythonDataService/tests/(unit|indicators|edge|utils|engine|routers|schemas|services|operator)/'
+          read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
+          baseline_pattern=$(
+            printf '%s\n' "${baseline_dirs[@]}" \
+              | sed 's#^#PythonDataService/#' \
+              | sed 's#[][(){}.^$*+?|\\]#\\&#g' \
+              | paste -sd'|' -
+          )
+          baseline_pattern="^(${baseline_pattern})(/|$)"
           extra=""
           # (1) Directly-changed test files outside the baseline dirs.
           while IFS= read -r p; do
@@ -173,11 +184,9 @@ jobs:
 
       - name: Run fast baseline + change-driven tests
         run: |
-          python -m pytest \
-            tests/unit tests/indicators tests/edge tests/utils \
-            tests/engine tests/routers tests/schemas tests/services tests/operator \
-            ${{ steps.changed.outputs.extra }} \
-            -v -k "not slow" --tb=short
+          read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
+          extra="${{ steps.changed.outputs.extra }}"
+          python -m pytest "${baseline_dirs[@]}" $extra -v -k "not slow" --tb=short
 
   validate-golden-manifest:
     name: Validate Golden Manifest

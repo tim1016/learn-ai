@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import jsonschema
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
@@ -26,7 +27,9 @@ _CONTROL_SURFACE_MANIFEST = (
     / "contracts"
     / "data-plane-control-surfaces.json"
 )
-_CONTROL_SURFACE_PREFIXES = tuple(json.loads(_CONTROL_SURFACE_MANIFEST.read_text())["control_prefixes"])
+_CONTROL_SURFACE_SCHEMA = _CONTROL_SURFACE_MANIFEST.with_suffix(".schema.json")
+_CONTROL_SURFACE_MANIFEST_PAYLOAD = json.loads(_CONTROL_SURFACE_MANIFEST.read_text())
+_CONTROL_SURFACE_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["control_prefixes"])
 _MUTATION_PATH = "/api/broker/orders/what-if"
 _READ_PATH = "/api/broker/health"
 
@@ -57,6 +60,15 @@ def _has_control_guard(route: APIRoute) -> bool:
 
 def _request(method: str) -> Request:
     return Request({"type": "http", "method": method, "path": _MUTATION_PATH, "headers": []})
+
+
+def test_data_plane_control_surface_manifest_matches_schema() -> None:
+    schema = json.loads(_CONTROL_SURFACE_SCHEMA.read_text())
+
+    jsonschema.validate(_CONTROL_SURFACE_MANIFEST_PAYLOAD, schema=schema)
+    assert tuple(sorted(_CONTROL_SURFACE_PREFIXES)) == _CONTROL_SURFACE_PREFIXES
+    assert all(prefix.startswith("/api/") for prefix in _CONTROL_SURFACE_PREFIXES)
+    assert all(not prefix.endswith("/") for prefix in _CONTROL_SURFACE_PREFIXES)
 
 
 def test_unsafe_control_routes_declare_data_plane_guard_dependency() -> None:
