@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,6 +12,7 @@ from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import AccountTruthCollectionContext
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.models import IbkrConnectionHealth
+from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
@@ -200,6 +202,88 @@ async def test_refresh_now_builds_context_once_and_remembers_truth(
     assert result is truth
     assert captured == {"account_id": "DU123", "context": "account reconciliation"}
     assert provider.get("DU123").truth is truth  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_refresh_now_passes_active_account_freeze_to_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123",
+            reason="restart_intensity.threshold_breached",
+            source="account_restart_intensity",
+            recorded_at_ms=1_780_000_002_000,
+            operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
+        ),
+    )
+    captured: dict[str, AccountTruthCollectionContext] = {}
+
+    async def fake_fetch_account_truth(
+        _client,
+        *,
+        health: IbkrConnectionHealth,
+        collection_context: AccountTruthCollectionContext,
+    ) -> AccountTruthResponse:
+        captured["collection_context"] = collection_context
+        return _truth(account_id=health.account_id or "")
+
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+    monkeypatch.setattr(account_truth_refresh, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(account_truth_refresh, "fetch_account_truth", fake_fetch_account_truth)
+
+    await refresh_account_truth_now(
+        _FakeClient(_health(account_id="DU123")),  # type: ignore[arg-type]
+        context="account truth",
+        snapshot_provider=provider,
+    )
+
+    collection_context = captured["collection_context"]
+    assert collection_context.account_recovery_state.status == "frozen"
+    assert collection_context.evidence_gaps == ()
+
+
+@pytest.mark.asyncio
+async def test_refresh_now_adds_gap_when_freeze_state_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    account_root = tmp_path / "accounts" / "DU123"
+    account_root.mkdir(parents=True)
+    (account_root / "unresolved_exposure.flag").write_text("{not-json", encoding="utf-8")
+    captured: dict[str, AccountTruthCollectionContext] = {}
+
+    async def fake_fetch_account_truth(
+        _client,
+        *,
+        health: IbkrConnectionHealth,
+        collection_context: AccountTruthCollectionContext,
+    ) -> AccountTruthResponse:
+        captured["collection_context"] = collection_context
+        return _truth(account_id=health.account_id or "")
+
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+    monkeypatch.setattr(account_truth_refresh, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(account_truth_refresh, "fetch_account_truth", fake_fetch_account_truth)
+
+    await refresh_account_truth_now(
+        _FakeClient(_health(account_id="DU123")),  # type: ignore[arg-type]
+        context="account truth",
+        snapshot_provider=provider,
+    )
+
+    collection_context = captured["collection_context"]
+    evidence_gaps = collection_context.evidence_gaps
+    assert collection_context.account_recovery_state.status == "unreadable"
+    assert len(evidence_gaps) == 1
+    gap = evidence_gaps[0]
+    assert gap.source == "account_freeze"
+    assert gap.severity == "critical"
+    assert "Account freeze state unavailable" in gap.message
 
 
 def test_refresh_cadence_has_margin_under_readiness_ttl() -> None:

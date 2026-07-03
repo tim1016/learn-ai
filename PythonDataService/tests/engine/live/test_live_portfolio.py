@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.ibkr.account_truth_freshness import ACCOUNT_TRUTH_SOURCE_FRESHNESS_SPECS
 from app.broker.ibkr.models import (
     IbkrConnectionHealth,
     IbkrPosition,
@@ -26,10 +25,10 @@ from app.engine.live.live_portfolio import (
 from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
-    AccountTruthSourceFreshness,
 )
 from app.schemas.live_runs import GateResult
 from app.services.account_truth_snapshot import AccountTruthSnapshot, account_truth_gate_result
+from tests._helpers.account_truth import fresh_account_truth_source_freshness
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 _NOW_MS = 1_700_000_000_000
@@ -63,26 +62,9 @@ def _account_truth_snapshot(
         ),
         invariants=[],
         blockers=blockers or [],
-        source_freshness=_fresh_source_freshness(generated_at_ms),
+        source_freshness=fresh_account_truth_source_freshness(generated_at_ms),
     )
     return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
-
-
-def _fresh_source_freshness(generated_at_ms: int) -> list[AccountTruthSourceFreshness]:
-    return [
-        AccountTruthSourceFreshness(
-            source=spec.source,
-            label=spec.label,
-            status="fresh",
-            severity=spec.severity,
-            fetched_at_ms=generated_at_ms,
-            age_ms=0,
-            hard_ttl_ms=spec.hard_ttl_ms,
-            reason_code=None,
-            message=f"{spec.label} evidence is fresh.",
-        )
-        for spec in ACCOUNT_TRUTH_SOURCE_FRESHNESS_SPECS
-    ]
 
 
 @pytest.mark.asyncio
