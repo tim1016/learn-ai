@@ -172,15 +172,28 @@ commands run" above for why container-side `start` does not work
 Instead of paste-running the `start` command by hand, launch the host
 daemon once from the repo root:
 
-```powershell
-$env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .
+```bash
+./start-live-daemon.sh --background
 ```
 
-On Windows/Mac podman, leave the daemon bound to its default
-`127.0.0.1:8765` — the container reaches it via
-`host.containers.internal` → host loopback (gvproxy). On **Linux rootless
-podman** that alias maps to the bridge gateway, which can't reach
-loopback, so add `--host 0.0.0.0` or the container sees an empty engine.
+`start-live-daemon.sh` passes `--env-file .env` to the daemon. The daemon
+loads only `IBKR_HOST_ALLOWLIST` and `IBKR_HOST` from that file, and any
+already-exported process env value wins. To prove what a local launch will
+feed into the daemon policy without stopping or starting a daemon, run:
+
+```bash
+./start-live-daemon.sh --print-launch-env
+```
+
+The browser/data-plane request path validates only that `ibkr_host` is a
+bare host name or IP address. The host daemon is the authority that decides
+whether that host is allowed, using `IBKR_HOST_ALLOWLIST` plus `IBKR_HOST`.
+
+On Windows/Mac podman, a direct daemon launch can stay bound to its default
+`127.0.0.1:8765` because the container reaches it via
+`host.containers.internal` → host loopback (gvproxy). `start-live-daemon.sh`
+binds `0.0.0.0` so Linux rootless podman works too; in that topology the alias
+maps to the bridge gateway, which cannot reach loopback.
 
 The daemon authenticates every protected route with a mandatory
 `X-Live-Runner-Token` shared secret (ADR 0007), so binding `0.0.0.0` is

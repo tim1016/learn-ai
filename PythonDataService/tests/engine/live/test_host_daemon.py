@@ -23,6 +23,7 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
+from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
 from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerProcessState,
@@ -1074,6 +1075,38 @@ def test_start_rejects_unallowlisted_ibkr_host_at_daemon_boundary(
 
     assert exc_info.value.status_code == 400
     assert "host-daemon allow-list" in exc_info.value.detail
+
+
+def test_main_env_file_feeds_daemon_host_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.engine.live import host_daemon
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    env_file = tmp_path / ".env"
+    env_file.write_text("IBKR_HOST_ALLOWLIST=192.168.1.50\n", encoding="utf-8")
+    monkeypatch.delenv("IBKR_HOST", raising=False)
+    monkeypatch.delenv("IBKR_HOST_ALLOWLIST", raising=False)
+    monkeypatch.setattr(host_daemon, "ensure_daemon_token", lambda _artifacts_root: _TEST_TOKEN)
+
+    import uvicorn
+
+    served: dict[str, object] = {}
+
+    def fake_run(app: object, *, host: str, port: int) -> None:
+        served["app"] = app
+        served["host"] = host
+        served["port"] = port
+        assert validate_ibkr_host_allowed("192.168.1.50") == "192.168.1.50"
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    try:
+        assert host_daemon.main(["--repo-root", str(repo_root), "--env-file", str(env_file)]) == 0
+    finally:
+        monkeypatch.delenv("IBKR_HOST_ALLOWLIST", raising=False)
+
+    assert served["host"] == "127.0.0.1"
+    assert served["port"] == 8765
 
 
 def test_sibling_all_in_symbols_detects_set_holdings_full(

@@ -49,7 +49,7 @@ from app.engine.live.deploy import (
     deploy_run,
     git_head_sha,
 )
-from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
+from app.engine.live.host_runner_policy import load_policy_env_file, validate_ibkr_host_allowed
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
     AuditCopySizingLookup,
@@ -1289,6 +1289,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_ALLOWED_ORIGINS,
         help="Comma-separated browser origins allowed to call this daemon.",
     )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help=(
+            "Dotenv file that supplies daemon-owned IBKR host policy keys "
+            "(IBKR_HOST_ALLOWLIST / IBKR_HOST). Defaults to <repo-root>/.env."
+        ),
+    )
     return parser
 
 
@@ -1311,7 +1320,10 @@ def _valid_bind_host(host: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO)
     repo_root = args.repo_root.resolve()
+    env_file = args.env_file.resolve() if args.env_file is not None else repo_root / ".env"
+    loaded_policy_keys = load_policy_env_file(env_file)
     live_runs_root = (
         args.live_runs_root.resolve()
         if args.live_runs_root is not None
@@ -1326,7 +1338,8 @@ def main(argv: list[str] | None = None) -> int:
         allowed_origins=[origin.strip() for origin in args.allowed_origins.split(",") if origin.strip()],
         auth_token=token,
     )
-    logging.basicConfig(level=logging.INFO)
+    if loaded_policy_keys:
+        logger.info("host daemon loaded IBKR host policy keys from %s: %s", env_file, ",".join(loaded_policy_keys))
     logger.info(
         "host daemon binding %s:%s with mandatory %s auth (token at %s)",
         args.host,

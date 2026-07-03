@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
+from pathlib import Path
 
 DEFAULT_IBKR_HOST_ALLOWLIST: frozenset[str] = frozenset(
     {
@@ -14,6 +15,57 @@ DEFAULT_IBKR_HOST_ALLOWLIST: frozenset[str] = frozenset(
         "host.docker.internal",
     }
 )
+IBKR_HOST_POLICY_ENV_KEYS: tuple[str, str] = ("IBKR_HOST_ALLOWLIST", "IBKR_HOST")
+
+
+def load_policy_env_file(
+    env_file: str | Path,
+    *,
+    environ: MutableMapping[str, str] | None = None,
+    missing_ok: bool = True,
+) -> tuple[str, ...]:
+    """Load daemon-owned IBKR host policy keys from a dotenv-style file.
+
+    The host daemon needs only the connection host allow-list contract, not the
+    whole application settings surface. Keep this narrow and non-executable:
+    ``.env`` is parsed as data, never sourced by a shell.
+    """
+    target = os.environ if environ is None else environ
+    path = Path(env_file)
+    if not path.exists():
+        if missing_ok:
+            return ()
+        raise FileNotFoundError(path)
+
+    loaded: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parsed = _parse_policy_env_line(line)
+        if parsed is None:
+            continue
+        key, value = parsed
+        if key not in IBKR_HOST_POLICY_ENV_KEYS or key in target:
+            continue
+        target[key] = value
+        loaded.append(key)
+    return tuple(loaded)
+
+
+def _parse_policy_env_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if stripped.startswith("export "):
+        stripped = stripped.removeprefix("export ").lstrip()
+    key, separator, raw_value = stripped.partition("=")
+    if not separator:
+        return None
+    key = key.strip()
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    else:
+        value = value.split(" #", 1)[0].strip()
+    return key, value
 
 
 def allowed_ibkr_hosts(environ: Mapping[str, str] | None = None) -> frozenset[str]:
@@ -45,6 +97,8 @@ def validate_ibkr_host_allowed(
 
 __all__ = [
     "DEFAULT_IBKR_HOST_ALLOWLIST",
+    "IBKR_HOST_POLICY_ENV_KEYS",
     "allowed_ibkr_hosts",
+    "load_policy_env_file",
     "validate_ibkr_host_allowed",
 ]
