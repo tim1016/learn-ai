@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import hmac
 import logging
 import time
-from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from starlette.responses import JSONResponse, Response
 
 from app.broker.ibkr.client import (
     BrokerError,
@@ -66,27 +63,12 @@ from app.routers import (
 from app.routers import (
     live_runs as live_runs_router,
 )
+from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-_UNSAFE_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-_CONTROL_PLANE_MUTATION_PREFIXES = (
-    "/api/live-instances",
-    "/api/live-runs",
-    "/api/broker",
-    "/api/accounts",
-)
-
-
-def _is_control_plane_mutation(request: Request) -> bool:
-    if request.method.upper() not in _UNSAFE_HTTP_METHODS:
-        return False
-    path = request.url.path
-    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _CONTROL_PLANE_MUTATION_PREFIXES)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -280,24 +262,6 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def require_data_plane_control_secret(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
-    """Require the local control header for mutating broker-control routes."""
-
-    expected = settings.DATA_PLANE_CONTROL_SECRET.strip()
-    if expected and _is_control_plane_mutation(request):
-        header_name = settings.DATA_PLANE_CONTROL_SECRET_HEADER
-        supplied = request.headers.get(header_name)
-        if supplied is None or not hmac.compare_digest(supplied, expected):
-            return JSONResponse(
-                status_code=403,
-                content={"detail": f"missing or wrong {header_name}"},
-            )
-    return await call_next(request)
-
-
 # CORS middleware for C# backend
 app.add_middleware(
     CORSMiddleware,
@@ -308,6 +272,8 @@ app.add_middleware(
 )
 
 # Include routers
+DATA_PLANE_CONTROL_DEPENDENCIES = [Depends(require_data_plane_control_secret)]
+
 app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
 app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
 app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
@@ -395,25 +361,35 @@ app.include_router(iv_recorder.router)
 app.include_router(research_divergence.router)
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
-app.include_router(broker.router)
+app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account Truth and account-wide broker ledger endpoints.
-app.include_router(broker_account_truth.router)
+app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account-scoped reconciliation and recovery triage endpoints.
-app.include_router(account_reconciliation.router)
+app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
 # Live paper-trading run observer (read-only). Three-layer caching:
 # Layer 1: 15 s TTL on dir listing; Layer 2: mtime-signature LRU on status;
 # Layer 3: inode-tracked incremental deque on log tail.
-app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
-app.include_router(live_instances_router.router, prefix="/api/live-instances", tags=["live-instances"])
+app.include_router(
+    live_runs_router.router,
+    prefix="/api/live-runs",
+    tags=["live-runs"],
+    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+)
+app.include_router(
+    live_instances_router.router,
+    prefix="/api/live-instances",
+    tags=["live-instances"],
+    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+)
 app.include_router(lifecycle_projection.router)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally
 # (so the path is sibling to the live-instances router), keeping the
 # operator-facing URL space consistent.
-app.include_router(broker_activity_router.router)
+app.include_router(broker_activity_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
 # Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
 # When disabled, the prefix has no registered routes; clients get 404.

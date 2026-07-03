@@ -296,7 +296,7 @@ services:
       - "127.0.0.1:4200:4200"
     volumes:
       - ./Frontend/src:/app/src:z
-      - ./Frontend/proxy.conf.json:/app/proxy.conf.json:z
+      - ./Frontend/proxy.conf.js:/app/proxy.conf.js:z
       # PRD #593 / ADR 0012 — cross-language ``ActionPlan`` parity
       # fixtures live in PythonDataService so Pydantic stays
       # authoritative; mount them read-only inside src/testing/ so the
@@ -310,7 +310,9 @@ services:
       # (primeng + apollo + chart.js + lightweight-charts + katex). Raise the
       # old-space limit so workers don't hit ERR_WORKER_OUT_OF_MEMORY.
       - NODE_OPTIONS=--max-old-space-size=3584
-    command: ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.json"]
+      # Keep Angular's dev proxy secret in lockstep with the Python data plane.
+      - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:-local-dev-control-secret}
+    command: ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.js"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4200"]
       interval: 10s
