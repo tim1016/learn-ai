@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Protocol
 
 from app.broker.ibkr.account_truth import (
     AccountTruthCollectionContext,
     build_account_truth_collection_context,
     fetch_account_truth,
 )
-from app.broker.ibkr.auto_reconnect_monitor import AutoReconnectMonitor, get_monitor
+from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import BrokerError, IbkrClient
+from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.ibkr.health import build_broker_health
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.schemas.account_truth import AccountTruthResponse
@@ -27,40 +28,6 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS = 15_000
-
-
-class AccountTruthRefreshCallable(Protocol):
-    async def __call__(
-        self,
-        client: IbkrClient,
-        *,
-        health: IbkrConnectionHealth,
-        collection_context: AccountTruthCollectionContext,
-        snapshot_provider: AccountTruthSnapshotProvider | None = None,
-    ) -> AccountTruthResponse: ...
-
-
-class AccountTruthCollectionContextBuilder(Protocol):
-    def __call__(
-        self,
-        *,
-        artifacts_root: Path,
-        account_id: str | None,
-        context: str,
-    ) -> AccountTruthCollectionContext: ...
-
-
-class BrokerHealthBuilder(Protocol):
-    def __call__(
-        self,
-        client: IbkrClient,
-        monitor: AutoReconnectMonitor | None,
-    ) -> IbkrConnectionHealth: ...
-
-
-class MonitorProvider(Protocol):
-    def __call__(self) -> AutoReconnectMonitor | None: ...
-
 
 def validate_account_truth_refresh_cadence(
     interval_ms: int,
@@ -81,6 +48,37 @@ def validate_account_truth_refresh_cadence(
 
 
 validate_account_truth_refresh_cadence(DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS)
+
+
+def account_truth_artifacts_root(settings: IbkrSettings | None = None) -> Path:
+    """Return the account-artifacts root shared by Account Truth callers."""
+
+    active_settings = settings or get_settings()
+    return Path(active_settings.live_runs_root).parent
+
+
+async def refresh_account_truth_now(
+    client: IbkrClient,
+    *,
+    context: str,
+    account_id: str | None = None,
+    health: IbkrConnectionHealth | None = None,
+    snapshot_provider: AccountTruthSnapshotProvider | None = None,
+) -> AccountTruthResponse:
+    """Build Account Truth refresh context once and update the readiness cache."""
+
+    health = health if health is not None else build_broker_health(client, get_monitor())
+    collection_context = build_account_truth_collection_context(
+        artifacts_root=account_truth_artifacts_root(),
+        account_id=account_id if account_id is not None else health.account_id,
+        context=context,
+    )
+    return await refresh_account_truth_and_update_cache(
+        client,
+        health=health,
+        collection_context=collection_context,
+        snapshot_provider=snapshot_provider,
+    )
 
 
 async def refresh_account_truth_and_update_cache(
@@ -116,23 +114,18 @@ class AccountTruthRefreshLoop:
         self,
         *,
         client: IbkrClient,
-        artifacts_root: Path,
         interval_ms: int = DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
         snapshot_provider: AccountTruthSnapshotProvider | None = None,
-        refresh: AccountTruthRefreshCallable = refresh_account_truth_and_update_cache,
-        health_builder: BrokerHealthBuilder = build_broker_health,
-        monitor_provider: MonitorProvider = get_monitor,
-        collection_context_builder: AccountTruthCollectionContextBuilder = build_account_truth_collection_context,
+        refresh_now: Callable[..., Awaitable[AccountTruthResponse]] = refresh_account_truth_now,
     ) -> None:
-        validate_account_truth_refresh_cadence(interval_ms)
         self._client = client
-        self._artifacts_root = artifacts_root
         self._interval_ms = interval_ms
         self._snapshot_provider = snapshot_provider or get_account_truth_snapshot_provider()
-        self._refresh = refresh
-        self._health_builder = health_builder
-        self._monitor_provider = monitor_provider
-        self._collection_context_builder = collection_context_builder
+        validate_account_truth_refresh_cadence(
+            interval_ms,
+            hard_ttl_ms=self._snapshot_provider.hard_ttl_ms,
+        )
+        self._refresh_now = refresh_now
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -171,47 +164,52 @@ class AccountTruthRefreshLoop:
         """Perform one account-scoped refresh attempt."""
 
         async with self._refresh_lock:
-            health = self._health_builder(self._client, self._monitor_provider())
-            account_id = health.account_id or self._last_account_id
-            if account_id is not None:
-                self._last_account_id = account_id
-            if health.account_id is None or not health.connected or health.connection_state != "connected":
-                self._mark_refresh_unavailable(
-                    account_id,
-                    detail=(
-                        "Account Truth refresh requires a connected broker session; "
-                        f"current broker state is {health.connection_state}."
-                    ),
-                    attempted_at_ms=health.fetched_at_ms,
-                )
-                return None
-
-            collection_context = self._collection_context_builder(
-                artifacts_root=self._artifacts_root,
-                account_id=health.account_id,
-                context="account truth refresh loop",
-            )
+            account_id = self._last_account_id
+            attempted_at_ms: int | None = None
             try:
-                return await self._refresh(
+                health = build_broker_health(self._client, get_monitor())
+                attempted_at_ms = health.fetched_at_ms
+                account_id = health.account_id or self._last_account_id
+                if account_id is not None:
+                    self._last_account_id = account_id
+                if health.account_id is None or health.connection_state != "connected":
+                    self._mark_refresh_unavailable(
+                        account_id,
+                        detail=(
+                            "Account Truth refresh requires a connected broker session; "
+                            f"current broker state is {health.connection_state}."
+                        ),
+                        attempted_at_ms=attempted_at_ms,
+                    )
+                    return None
+
+                return await self._refresh_now(
                     self._client,
+                    context="account truth refresh loop",
+                    account_id=health.account_id,
                     health=health,
-                    collection_context=collection_context,
                     snapshot_provider=self._snapshot_provider,
                 )
             except BrokerError as exc:
+                self._mark_refresh_unavailable(
+                    account_id,
+                    detail=str(exc),
+                    attempted_at_ms=attempted_at_ms,
+                )
                 logger.warning(
                     "account truth refresh failed",
-                    extra={"account_id": health.account_id, "exception": repr(exc)},
+                    extra={"account_id": account_id, "exception": repr(exc)},
                 )
                 return None
             except Exception as exc:
                 self._mark_refresh_unavailable(
-                    health.account_id,
+                    account_id,
                     detail=f"Account Truth refresh failed unexpectedly: {exc}",
+                    attempted_at_ms=attempted_at_ms,
                 )
                 logger.exception(
                     "account truth refresh failed unexpectedly",
-                    extra={"account_id": health.account_id},
+                    extra={"account_id": account_id},
                 )
                 return None
 
@@ -245,6 +243,8 @@ class AccountTruthRefreshLoop:
 __all__ = [
     "DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS",
     "AccountTruthRefreshLoop",
+    "account_truth_artifacts_root",
     "refresh_account_truth_and_update_cache",
+    "refresh_account_truth_now",
     "validate_account_truth_refresh_cadence",
 ]

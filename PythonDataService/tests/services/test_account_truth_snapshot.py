@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -22,6 +21,7 @@ from app.services.account_truth_refresh import (
     DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
     AccountTruthRefreshLoop,
     refresh_account_truth_and_update_cache,
+    refresh_account_truth_now,
     validate_account_truth_refresh_cadence,
 )
 from app.services.account_truth_snapshot import (
@@ -97,6 +97,22 @@ def _health(
     )
 
 
+class _FakeClient:
+    def __init__(self, *health_results: IbkrConnectionHealth | Exception) -> None:
+        self._health_results = list(health_results)
+        self._index = 0
+
+    def health(self) -> IbkrConnectionHealth:
+        if not self._health_results:
+            raise AssertionError("fake client needs at least one health result")
+        index = min(self._index, len(self._health_results) - 1)
+        self._index += 1
+        result = self._health_results[index]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 @pytest.mark.asyncio
 async def test_refresh_service_remembers_successful_account_truth(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
@@ -144,6 +160,48 @@ async def test_refresh_service_marks_failure_for_any_account_truth_route(
     assert assessment.explanation == "broker sweep timed out"
 
 
+@pytest.mark.asyncio
+async def test_refresh_now_builds_context_once_and_remembers_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    truth = _truth(account_id="DU123")
+    captured: dict[str, str | None] = {}
+
+    def fake_collection_context(
+        *,
+        artifacts_root,
+        account_id: str | None,
+        context: str,
+    ) -> AccountTruthCollectionContext:
+        captured["account_id"] = account_id
+        captured["context"] = context
+        return _collection_context(account_id or "")
+
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "build_account_truth_collection_context",
+        fake_collection_context,
+    )
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(return_value=truth),
+    )
+
+    result = await refresh_account_truth_now(
+        _FakeClient(_health(account_id="DU999")),  # type: ignore[arg-type]
+        account_id="DU123",
+        context="account reconciliation",
+        snapshot_provider=provider,
+    )
+
+    assert result is truth
+    assert captured == {"account_id": "DU123", "context": "account reconciliation"}
+    assert provider.get("DU123").truth is truth  # type: ignore[union-attr]
+
+
 def test_refresh_cadence_has_margin_under_readiness_ttl() -> None:
     validate_account_truth_refresh_cadence(
         DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
@@ -154,23 +212,38 @@ def test_refresh_cadence_has_margin_under_readiness_ttl() -> None:
         validate_account_truth_refresh_cadence(30_000, hard_ttl_ms=60_000)
 
 
+def test_refresh_loop_validates_cadence_against_provider_ttl() -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=20_000)
+
+    with pytest.raises(ValueError, match="less than half"):
+        AccountTruthRefreshLoop(
+            client=_FakeClient(_health()),  # type: ignore[arg-type]
+            interval_ms=15_000,
+            snapshot_provider=provider,
+        )
+
+
 @pytest.mark.asyncio
-async def test_refresh_loop_running_keeps_snapshot_fresh() -> None:
+async def test_refresh_loop_running_keeps_snapshot_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
     generated_times = iter((1_000, 2_000))
     refreshed_twice = asyncio.Event()
     call_count = 0
 
-    async def fake_refresh(
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(
         _client,
         *,
-        health: IbkrConnectionHealth,
-        collection_context: AccountTruthCollectionContext,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
         snapshot_provider: AccountTruthSnapshotProvider | None = None,
     ) -> AccountTruthResponse:
         nonlocal call_count
-        assert health.account_id == "DU123"
-        assert collection_context.account_recovery_state.account_id == "DU123"
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
         call_count += 1
         generated_at_ms = next(generated_times, 2_000)
         truth = _truth(generated_at_ms=generated_at_ms)
@@ -181,14 +254,10 @@ async def test_refresh_loop_running_keeps_snapshot_fresh() -> None:
         return truth
 
     loop = AccountTruthRefreshLoop(
-        client=object(),  # type: ignore[arg-type]
-        artifacts_root=Path("/tmp/account-truth"),
+        client=_FakeClient(_health(fetched_at_ms=1_000), _health(fetched_at_ms=2_000)),  # type: ignore[arg-type]
         interval_ms=1,
         snapshot_provider=provider,
-        refresh=fake_refresh,
-        health_builder=lambda _client, _monitor: _health(fetched_at_ms=1_000),
-        monitor_provider=lambda: None,
-        collection_context_builder=lambda *, artifacts_root, account_id, context: _collection_context(account_id or ""),
+        refresh_now=fake_refresh_now,
     )
 
     loop.start()
@@ -203,36 +272,36 @@ async def test_refresh_loop_running_keeps_snapshot_fresh() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects() -> None:
+async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
-    healths = iter(
-        (
-            _health(account_id="DU123", connected=True, connection_state="connected", fetched_at_ms=1_000),
-            _health(account_id=None, connected=False, connection_state="disconnected", fetched_at_ms=2_000),
-        )
-    )
 
-    async def fake_refresh(
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(
         _client,
         *,
-        health: IbkrConnectionHealth,
-        collection_context: AccountTruthCollectionContext,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
         snapshot_provider: AccountTruthSnapshotProvider | None = None,
     ) -> AccountTruthResponse:
-        assert collection_context.account_recovery_state.account_id == health.account_id
-        truth = _truth(generated_at_ms=health.fetched_at_ms)
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
+        truth = _truth(generated_at_ms=1_000)
         assert snapshot_provider is not None
-        snapshot_provider.remember(truth, cached_at_ms=health.fetched_at_ms)
+        snapshot_provider.remember(truth, cached_at_ms=1_000)
         return truth
 
     loop = AccountTruthRefreshLoop(
-        client=object(),  # type: ignore[arg-type]
-        artifacts_root=Path("/tmp/account-truth"),
+        client=_FakeClient(
+            _health(account_id="DU123", connected=True, connection_state="connected", fetched_at_ms=1_000),
+            _health(account_id=None, connected=False, connection_state="disconnected", fetched_at_ms=2_000),
+        ),  # type: ignore[arg-type]
         snapshot_provider=provider,
-        refresh=fake_refresh,
-        health_builder=lambda _client, _monitor: next(healths),
-        monitor_provider=lambda: None,
-        collection_context_builder=lambda *, artifacts_root, account_id, context: _collection_context(account_id or ""),
+        refresh_now=fake_refresh_now,
     )
 
     assert await loop.refresh_once() is not None
@@ -243,6 +312,126 @@ async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects() 
     assert assessment.reason_codes == ("ACCOUNT_TRUTH_REFRESH_FAILED",)
     assert "requires a connected broker session" in assessment.explanation
     assert assessment.evidence_at_ms == 2_000
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_marks_broker_error_failed_locally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    provider.remember(_truth(), cached_at_ms=1_000)
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
+        assert snapshot_provider is provider
+        raise BrokerError("broker sweep timed out")
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+    )
+
+    assert await loop.refresh_once() is None
+
+    assessment = assess_account_truth(provider.get("DU123"), now_ms=2_500)
+    assert assessment.status == "block"
+    assert assessment.reason_codes == ("ACCOUNT_TRUTH_REFRESH_FAILED",)
+    assert assessment.explanation == "broker sweep timed out"
+    assert assessment.evidence_at_ms == 2_000
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_marks_last_account_failed_when_iteration_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        assert health is not None
+        truth = _truth(generated_at_ms=1_000)
+        assert snapshot_provider is not None
+        snapshot_provider.remember(truth, cached_at_ms=1_000)
+        return truth
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(
+            _health(account_id="DU123", fetched_at_ms=1_000),
+            RuntimeError("health read broke"),
+        ),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+    )
+
+    assert await loop.refresh_once() is not None
+    assert await loop.refresh_once() is None
+
+    assessment = assess_account_truth(provider.get("DU123"), now_ms=2_500)
+    assert assessment.status == "block"
+    assert assessment.reason_codes == ("ACCOUNT_TRUTH_REFRESH_FAILED",)
+    assert "health read broke" in assessment.explanation
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_continues_after_unexpected_iteration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    refreshed_after_error = asyncio.Event()
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        assert health is not None
+        truth = _truth(generated_at_ms=2_000)
+        assert snapshot_provider is not None
+        snapshot_provider.remember(truth, cached_at_ms=2_000)
+        refreshed_after_error.set()
+        return truth
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(
+            RuntimeError("transient health read failed"),
+            _health(account_id="DU123", fetched_at_ms=2_000),
+        ),  # type: ignore[arg-type]
+        interval_ms=1,
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+    )
+
+    loop.start()
+    try:
+        await asyncio.wait_for(refreshed_after_error.wait(), timeout=1.0)
+    finally:
+        await loop.stop()
+
+    assessment = assess_account_truth(provider.get("DU123"), now_ms=2_500)
+    assert assessment.status == "pass"
+    assert assessment.age_ms == 500
 
 
 def test_refresh_failure_replaces_prior_clean_snapshot() -> None:

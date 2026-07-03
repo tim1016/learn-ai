@@ -93,6 +93,10 @@ class AccountTruthSnapshotProvider:
         self._entries: dict[str, AccountTruthReadinessEvidence] = {}
         self._lock = Lock()
 
+    @property
+    def hard_ttl_ms(self) -> int:
+        return self._hard_ttl_ms
+
     def remember(self, truth: AccountTruthResponse, *, cached_at_ms: int | None = None) -> AccountTruthSnapshot | None:
         if truth.account_id is None:
             return None

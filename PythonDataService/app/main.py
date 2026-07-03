@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,6 +64,7 @@ from app.routers import (
     live_runs as live_runs_router,
 )
 from app.security.data_plane_control import require_data_plane_control_secret
+from app.services.account_truth_refresh import AccountTruthRefreshLoop
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -182,12 +182,7 @@ async def lifespan(app: FastAPI):
         monitor.start()
         set_monitor(monitor)
 
-        from app.services.account_truth_refresh import AccountTruthRefreshLoop
-
-        account_truth_refresh_loop = AccountTruthRefreshLoop(
-            client=ibkr_client,
-            artifacts_root=Path(ibkr_settings.live_runs_root).parent,
-        )
+        account_truth_refresh_loop = AccountTruthRefreshLoop(client=ibkr_client)
         account_truth_refresh_loop.start()
     else:
         set_client(None)
