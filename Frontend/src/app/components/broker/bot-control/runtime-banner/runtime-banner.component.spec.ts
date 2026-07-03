@@ -164,15 +164,15 @@ describe('RuntimeBannerComponent', () => {
       action,
     };
     f.posture_demoted = true;
-    let captured: typeof action | null = null;
+    let captured: OperatorNotice | null = null;
 
     await render(RuntimeBannerComponent, {
       inputs: { freshness: f },
-      on: { actionClicked: (a) => { captured = a as typeof action; } },
+      on: { actionClicked: (notice) => { captured = notice as OperatorNotice; } },
     });
     await screen.getByRole('button', { name: /renew control-plane lease/i }).click();
 
-    expect(captured).toEqual(action);
+    expect(captured).toEqual(f.headline);
   });
 
   it('resets the debounce when freshness recovers, so a brief blip never shows the banner', async () => {

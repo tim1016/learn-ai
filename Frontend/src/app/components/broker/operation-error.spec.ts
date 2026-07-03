@@ -120,6 +120,29 @@ describe('toOperationError', () => {
     expect(e.remediation).toBe('Refresh before retrying.');
   });
 
+  it('accepts renew-daemon-lease outcome unknown responses', () => {
+    const err = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          outcome: 'UNKNOWN',
+          reason_code: 'OUTCOME_UNKNOWN',
+          error_category: 'read_timeout',
+          detail: 'lease response lost',
+          endpoint: 'renew_daemon_lease',
+          occurred_at_ms: 1_700_000_000_000,
+          runbook_hint: 'Refresh Bot Control before retrying.',
+        },
+      },
+    });
+
+    const e = toOperationError('renew-lease', err);
+
+    expect(e.category).toBe('outcome-unknown');
+    expect(e.detail).toBe('lease response lost');
+    expect(e.remediation).toBe('Refresh Bot Control before retrying.');
+  });
+
   it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {
     // A regular precondition 409 (e.g. dirty tree) still uses the canned
     // remediation, NOT the new outcome-unknown branch.

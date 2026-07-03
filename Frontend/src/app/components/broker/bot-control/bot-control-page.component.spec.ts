@@ -1658,7 +1658,8 @@ describe('BotControlPageComponent', () => {
 
     const error = (fixture.nativeElement as HTMLElement).querySelector('.error-banner');
     expect(error?.textContent).toContain('No bot process is running for this instance');
-    expect(error?.textContent).toContain('NO_LIVE_BINDING');
+    expect(error?.textContent).toContain('Start the instance before issuing commands');
+    expect(error?.textContent).not.toContain('NO_LIVE_BINDING');
     expect(error?.textContent).not.toContain('Could not load bot control data');
   });
 
@@ -1737,7 +1738,7 @@ describe('BotControlPageComponent', () => {
     expect(text).not.toContain('Marked poisoned successfully');
   });
 
-  it('renders OUTCOME_UNKNOWN destructive mutation results as an alert', async () => {
+  it('renders outcome-unknown destructive mutation results as operator copy', async () => {
     const setInstanceDesiredState = vi.fn().mockRejectedValue(
       new HttpErrorResponse({
         status: 409,
@@ -1784,7 +1785,8 @@ describe('BotControlPageComponent', () => {
 
     const error = (fixture.nativeElement as HTMLElement).querySelector('.error-banner');
     expect(error?.textContent).toContain('Stop outcome is unknown');
-    expect(error?.textContent).toContain('OUTCOME_UNKNOWN');
+    expect(error?.textContent).toContain('Resolve the blocker');
+    expect(error?.textContent).not.toContain('OUTCOME_UNKNOWN');
     expect(error?.textContent).not.toContain('Stop succeeded');
   });
 

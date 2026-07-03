@@ -1,12 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import type { OperatorNotice, OperatorNoticeAction, OperatorNoticeActionKind } from '../../models/operator-notice';
-
-const CLICKABLE_KINDS: readonly OperatorNoticeActionKind[] = [
-  'open_runbook',
-  'focus_cockpit_action',
-  'renew_control_plane_lease',
-  'redeploy',
-];
+import type { OperatorNotice } from '../../models/operator-notice';
+import { executableOperatorNoticeAction } from '../../models/operator-notice-action-contract';
 
 @Component({
   selector: 'app-operator-notice',
@@ -19,12 +13,12 @@ const CLICKABLE_KINDS: readonly OperatorNoticeActionKind[] = [
 })
 export class OperatorNoticeComponent {
   readonly notice = input.required<OperatorNotice>();
-  readonly actionClicked = output<OperatorNoticeAction>();
+  readonly actionClicked = output<OperatorNotice>();
 
   readonly tier = computed(() => this.notice().tier);
 
   readonly hasClickableAction = computed(() =>
-    CLICKABLE_KINDS.includes(this.notice().action.kind),
+    executableOperatorNoticeAction(this.notice()) !== null,
   );
 
   readonly hasInertActionLabel = computed(() => {
@@ -40,6 +34,6 @@ export class OperatorNoticeComponent {
   );
 
   onActionClick(): void {
-    this.actionClicked.emit(this.notice().action);
+    this.actionClicked.emit(this.notice());
   }
 }
