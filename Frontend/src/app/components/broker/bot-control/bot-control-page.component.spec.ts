@@ -9,7 +9,7 @@ import {
 import { provideHttpClient } from '@angular/common/http';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { TestBed } from '@angular/core/testing';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
 import { of, Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,8 +21,15 @@ import type {
   LiveInstanceStatus,
   OperatorNotice,
   OperatorSurfaceRuntimeFreshness,
+  SetInstanceDesiredStateResponse,
 } from '../../../api/live-instances.types';
-import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
+import type {
+  CommandVerb,
+  CommandWriteResponse,
+  HostRunnerHealth,
+  HostRunnerStartRequest,
+  ReconcileAckResponse,
+} from '../../../api/live-runs.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
@@ -80,6 +87,18 @@ class FakeBrokerHealthService {
   readonly lifecycleAction = signal(null);
   connect = vi.fn().mockResolvedValue(undefined);
   disconnect = vi.fn().mockResolvedValue(undefined);
+}
+
+class FakeLiveRunsService {
+  getInstanceStatus = vi.fn<LiveRunsService['getInstanceStatus']>();
+  getAccountSummary = vi.fn<LiveRunsService['getAccountSummary']>();
+  getLifecycleTimeline = vi.fn<LiveRunsService['getLifecycleTimeline']>();
+  renewControlPlaneLease = vi.fn<LiveRunsService['renewControlPlaneLease']>();
+  startHostRunner = vi.fn<LiveRunsService['startHostRunner']>();
+  setInstanceDesiredState = vi.fn<LiveRunsService['setInstanceDesiredState']>();
+  flattenAndPause = vi.fn<LiveRunsService['flattenAndPause']>();
+  issueInstanceCommand = vi.fn<LiveRunsService['issueInstanceCommand']>();
+  reconcileInstance = vi.fn<LiveRunsService['reconcileInstance']>();
 }
 
 function makeStatus(options: {
@@ -431,6 +450,86 @@ function makeLifecycleTimeline(): LifecycleTimelineResponse {
   };
 }
 
+function makeDesiredStateResponse(): SetInstanceDesiredStateResponse {
+  return {
+    durable: {
+      state: 'PAUSED',
+      updated_at_ms: 1_700_000_001_000,
+      updated_by: 'operator',
+      reason: 'test action accepted',
+      version: 1,
+    },
+    actuation: {
+      actuated: true,
+      run_id: 'run-x',
+      command_seq: 1,
+      detail: 'Command accepted.',
+    },
+  };
+}
+
+function makeCommandWriteResponse(verb: CommandVerb = 'MARK_POISONED'): CommandWriteResponse {
+  return {
+    accepted: true,
+    command: {
+      seq: 1,
+      verb,
+      status: 'queued',
+      reason: null,
+      issued_by: 'operator',
+      queued_at_ms: 1_700_000_001_000,
+      acked_at_ms: null,
+      outcome: null,
+      outcome_detail: null,
+    },
+  };
+}
+
+function makeHostRunnerProcess(): HostRunnerHealth['process'] {
+  return {
+    state: 'running',
+    run_id: 'run-x',
+    pid: 42,
+    started_at_ms: 1_700_000_001_000,
+    ended_at_ms: null,
+    exit_code: null,
+    command: [],
+    log_path: '/tmp/run-x.log',
+    message: 'running',
+  };
+}
+
+function makeHostRunnerHealth(): HostRunnerHealth {
+  return {
+    ok: true,
+    repo_root: '/repo',
+    live_runs_root: '/runs',
+    fetched_at_ms: 1_700_000_001_000,
+    process: makeHostRunnerProcess(),
+  };
+}
+
+function makeReconcileAckResponse(): ReconcileAckResponse {
+  return {
+    request_id: 'reconcile-request-x',
+    accepted_at_ms: 1_700_000_001_000,
+  };
+}
+
+function unexpectedMutation(method: string): Error {
+  return new Error(`${method} was invoked without an explicit Bot Control harness mutation override.`);
+}
+
+function allowFlattenAndPause(status: LiveInstanceStatus): void {
+  status.operator_surface.actions.flatten_and_pause = {
+    enabled: true,
+    effect: 'LIVE_ACTUATION',
+    disabled_reason_code: null,
+    disabled_reasons: [],
+    gate_results: [],
+  };
+}
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -462,6 +561,68 @@ function installLocalStorageStub(): void {
       clear: () => store.clear(),
     },
   });
+}
+
+// Harness convention: use this for ordinary Bot Control page wiring tests so
+// route, status, account-summary, and lifecycle-timeline setup stays shared.
+// Keep direct TestBed setup for sidebar-host integration, route-race subjects,
+// or intentionally bespoke service sequencing. Mutations fail closed by
+// default; action tests must explicitly opt into the command they exercise.
+interface BotControlPageSetupOptions {
+  routeId?: string;
+  routeParamMap?: Subject<ReturnType<typeof convertToParamMap>>;
+  status?: LiveInstanceStatus;
+  accountSummary?: FleetAccountSummary;
+  lifecycleTimeline?: LifecycleTimelineResponse;
+  configureLiveRuns?: (liveRuns: FakeLiveRunsService) => void;
+}
+
+interface BotControlPageHarness {
+  fixture: ComponentFixture<BotControlPageComponent>;
+  component: BotControlPageComponent;
+  element: HTMLElement;
+  liveRuns: FakeLiveRunsService;
+}
+
+async function setupBotControlPage(options: BotControlPageSetupOptions = {}): Promise<BotControlPageHarness> {
+  const routeId = options.routeId ?? 'sid-x';
+  const liveRuns = new FakeLiveRunsService();
+  liveRuns.getInstanceStatus.mockResolvedValue(options.status ?? makeStatus({ id: routeId }));
+  liveRuns.getAccountSummary.mockResolvedValue(options.accountSummary ?? makeAccountSummary());
+  liveRuns.getLifecycleTimeline.mockResolvedValue(options.lifecycleTimeline ?? makeLifecycleTimeline());
+  liveRuns.renewControlPlaneLease.mockRejectedValue(unexpectedMutation('renewControlPlaneLease'));
+  liveRuns.startHostRunner.mockRejectedValue(unexpectedMutation('startHostRunner'));
+  liveRuns.setInstanceDesiredState.mockRejectedValue(unexpectedMutation('setInstanceDesiredState'));
+  liveRuns.flattenAndPause.mockRejectedValue(unexpectedMutation('flattenAndPause'));
+  liveRuns.issueInstanceCommand.mockRejectedValue(unexpectedMutation('issueInstanceCommand'));
+  liveRuns.reconcileInstance.mockRejectedValue(unexpectedMutation('reconcileInstance'));
+  options.configureLiveRuns?.(liveRuns);
+
+  TestBed.configureTestingModule({
+    providers: [
+      provideZonelessChangeDetection(),
+      provideRouter([]),
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          paramMap: options.routeParamMap ?? of(convertToParamMap({ id: routeId })),
+        },
+      },
+      { provide: LiveRunsService, useValue: liveRuns },
+    ],
+  });
+
+  const fixture = TestBed.createComponent(BotControlPageComponent);
+  fixture.detectChanges();
+  await flush(fixture);
+  return {
+    fixture,
+    component: fixture.componentInstance,
+    element: fixture.nativeElement as HTMLElement,
+    liveRuns,
+  };
 }
 
 describe('BotControlPageComponent', () => {
@@ -532,36 +693,8 @@ describe('BotControlPageComponent', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.incident_headline = makeIncidentHeadline();
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(status),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-          },
-        },
-      ],
-    });
+    const { element: el } = await setupBotControlPage({ status });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
-    const el = fixture.nativeElement as HTMLElement;
     const incident = el.querySelector('[data-testid="runtime-banner-incident"]');
     expect(incident).not.toBeNull();
     expect(incident?.textContent).toContain('Flatten timed out');
@@ -574,38 +707,14 @@ describe('BotControlPageComponent', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.runtime_freshness = makeRuntimeFreshnessWithLeaseAction();
-    const renewControlPlaneLease = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(status),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            renewControlPlaneLease,
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-          },
-        },
-      ],
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status,
+      configureLiveRuns: (service) => {
+        service.renewControlPlaneLease.mockResolvedValue(makeHostRunnerHealth());
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
-    const action = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+    const action = element.querySelector<HTMLButtonElement>(
       '[data-testid="operator-notice-action"]',
     );
     expect(action?.textContent).toContain('Renew control-plane lease');
@@ -613,7 +722,7 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
     await flush(fixture);
 
-    expect(renewControlPlaneLease).toHaveBeenCalledTimes(1);
+    expect(liveRuns.renewControlPlaneLease).toHaveBeenCalledTimes(1);
   });
 
   it('opens the attention dropdown on demand with folded why/risk and items', async () => {
@@ -1451,45 +1560,20 @@ describe('BotControlPageComponent', () => {
 
   it('routes the trader guidance reconcile action to the existing instance endpoint', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const reconcileInstance = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-            reconcileInstance,
-          },
-        },
-      ],
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      configureLiveRuns: (service) => {
+        service.reconcileInstance.mockResolvedValue(makeReconcileAckResponse());
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
-    const action = (fixture.nativeElement as HTMLElement).querySelector(
+    const action = element.querySelector(
       '[data-testid="trader-guidance-primary-remediation"]',
     ) as HTMLButtonElement | null;
     expect(action?.textContent).toContain('Reconcile now');
     action?.click();
     await flush(fixture);
 
-    expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
+    expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
   });
 
   it('routes attention-row reconcile actions to the existing instance endpoint', async () => {
@@ -1510,38 +1594,13 @@ describe('BotControlPageComponent', () => {
         },
       },
     ];
-    const reconcileInstance = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(status),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-            reconcileInstance,
-          },
-        },
-      ],
+    const { fixture, element: el, liveRuns } = await setupBotControlPage({
+      status,
+      configureLiveRuns: (service) => {
+        service.reconcileInstance.mockResolvedValue(makeReconcileAckResponse());
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
-    const el = fixture.nativeElement as HTMLElement;
     (el.querySelector('[data-testid="bot-control-attention-toggle"]') as HTMLButtonElement | null)?.click();
     fixture.detectChanges();
 
@@ -1552,7 +1611,7 @@ describe('BotControlPageComponent', () => {
     action?.click();
     await flush(fixture);
 
-    expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
+    expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
   });
 
   it('derives reconcile completion from refreshed backend status', async () => {
@@ -1608,55 +1667,29 @@ describe('BotControlPageComponent', () => {
 
   it('renders backend reconcile precondition details instead of the generic load error', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const reconcileInstance = vi.fn().mockRejectedValue(
-      new HttpErrorResponse({
-        status: 409,
-        error: {
-          detail: {
-            reason_code: 'NO_LIVE_BINDING',
-            message: 'No bot process is running for this instance - reconciliation requires a live engine.',
-          },
+    const reconcileError = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason_code: 'NO_LIVE_BINDING',
+          message: 'No bot process is running for this instance - reconciliation requires a live engine.',
         },
-      }),
-    );
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-            reconcileInstance,
-          },
-        },
-      ],
+      },
+    });
+    const { fixture, element } = await setupBotControlPage({
+      configureLiveRuns: (service) => {
+        service.reconcileInstance.mockRejectedValue(reconcileError);
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
-    const action = (fixture.nativeElement as HTMLElement).querySelector(
+    const action = element.querySelector(
       '[data-testid="trader-guidance-primary-remediation"]',
     ) as HTMLButtonElement | null;
     action?.click();
     await flush(fixture);
     fixture.detectChanges();
 
-    const error = (fixture.nativeElement as HTMLElement).querySelector('.error-banner');
+    const error = element.querySelector('.error-banner');
     expect(error?.textContent).toContain('No bot process is running for this instance');
     expect(error?.textContent).toContain('Start the instance before issuing commands');
     expect(error?.textContent).not.toContain('NO_LIVE_BINDING');
@@ -1665,73 +1698,47 @@ describe('BotControlPageComponent', () => {
 
   it('derives destructive action completion from refreshed backend status', async () => {
     const initial = makeStatus({ markPoisonedEnabled: true });
-    initial.operator_surface.actions.flatten_and_pause = {
-      enabled: true,
-      effect: 'LIVE_ACTUATION',
-      disabled_reason_code: null,
-      disabled_reasons: [],
-      gate_results: [],
-    };
+    allowFlattenAndPause(initial);
     const refreshed = makeStatus({ markPoisonedEnabled: true });
+    allowFlattenAndPause(refreshed);
     refreshed.symbol = 'QQQ';
-    const getInstanceStatus = vi.fn()
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValue(refreshed);
-    const setInstanceDesiredState = vi.fn().mockResolvedValue({});
-    const flattenAndPause = vi.fn().mockResolvedValue({});
-    const issueInstanceCommand = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus,
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState,
-            flattenAndPause,
-            issueInstanceCommand,
-            reconcileInstance: vi.fn(),
-          },
-        },
-      ],
+    const { fixture, component, liveRuns, element } = await setupBotControlPage({
+      configureLiveRuns: (service) => {
+        service.getInstanceStatus.mockReset();
+        service.getInstanceStatus
+          .mockResolvedValueOnce(initial)
+          .mockResolvedValue(refreshed);
+        service.setInstanceDesiredState.mockResolvedValue(makeDesiredStateResponse());
+        service.flattenAndPause.mockResolvedValue(makeDesiredStateResponse());
+        service.issueInstanceCommand.mockResolvedValue(makeCommandWriteResponse());
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
+    component.dispatchOverviewAction('stop');
+    await flush(fixture);
+    component.dispatchOverviewAction('flatten_and_pause');
+    expect(component.flattenConfirmOpen()).toBe(true);
+    await component.confirmFlatten();
+    await flush(fixture);
+    component.dispatchOverviewAction('mark_poisoned');
+    expect(component.typedHaltOpen()).toBe(true);
+    await component.confirmTypedHalt();
     await flush(fixture);
 
-    await fixture.componentInstance.dispatchStop();
-    await flush(fixture);
-    await fixture.componentInstance.dispatchFlattenAndPause();
-    await flush(fixture);
-    fixture.componentInstance.openTypedHalt();
-    await fixture.componentInstance.confirmTypedHalt();
-    await flush(fixture);
-
-    expect(setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
       action: 'stop',
       reason: 'Stop',
       updated_by: 'operator',
     });
-    expect(flattenAndPause).toHaveBeenCalledWith('sid-x', {
+    expect(liveRuns.flattenAndPause).toHaveBeenCalledWith('sid-x', {
       action: 'pause',
       reason: 'Flatten and pause',
       updated_by: 'operator',
     });
-    expect(issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
-    expect(getInstanceStatus).toHaveBeenCalledTimes(4);
+    expect(liveRuns.issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
+    expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(4);
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    const text = element.textContent ?? '';
     expect(text).toContain('QQQ');
     expect(text).not.toContain('Stop succeeded');
     expect(text).not.toContain('Flatten succeeded');
@@ -1739,51 +1746,25 @@ describe('BotControlPageComponent', () => {
   });
 
   it('renders outcome-unknown destructive mutation results as operator copy', async () => {
-    const setInstanceDesiredState = vi.fn().mockRejectedValue(
-      new HttpErrorResponse({
-        status: 409,
-        error: {
-          detail: {
-            reason_code: 'OUTCOME_UNKNOWN',
-            message: 'Stop outcome is unknown. Reconcile before retrying.',
-          },
+    const stopError = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason_code: 'OUTCOME_UNKNOWN',
+          message: 'Stop outcome is unknown. Reconcile before retrying.',
         },
-      }),
-    );
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus()),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState,
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand: vi.fn(),
-            reconcileInstance: vi.fn(),
-          },
-        },
-      ],
+      },
+    });
+    const { fixture, component, element } = await setupBotControlPage({
+      configureLiveRuns: (service) => {
+        service.setInstanceDesiredState.mockRejectedValue(stopError);
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
+    component.dispatchOverviewAction('stop');
     await flush(fixture);
 
-    await fixture.componentInstance.dispatchStop();
-    await flush(fixture);
-
-    const error = (fixture.nativeElement as HTMLElement).querySelector('.error-banner');
+    const error = element.querySelector('.error-banner');
     expect(error?.textContent).toContain('Stop outcome is unknown');
     expect(error?.textContent).toContain('Resolve the blocker');
     expect(error?.textContent).not.toContain('OUTCOME_UNKNOWN');
@@ -1920,7 +1901,7 @@ describe('BotControlPageComponent', () => {
       ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
     if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
     fixture.componentInstance.selectLifecycleNode(recovery);
-    fixture.componentInstance.openTypedHalt();
+    fixture.componentInstance.dispatchOverviewAction('mark_poisoned');
     fixture.detectChanges();
     expect(fixture.componentInstance.selectedLifecycleNodeId()).toBe('recovery');
     expect(fixture.componentInstance.typedHaltOpen()).toBe(true);
@@ -2131,37 +2112,13 @@ describe('BotControlPageComponent', () => {
 
   it('requires typed HALT before marking a run poisoned', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const issueInstanceCommand = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(makeStatus({ markPoisonedEnabled: true })),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause: vi.fn(),
-            issueInstanceCommand,
-          },
-        },
-      ],
+    const { fixture, component, element: el, liveRuns } = await setupBotControlPage({
+      status: makeStatus({ markPoisonedEnabled: true }),
+      configureLiveRuns: (service) => {
+        service.issueInstanceCommand.mockResolvedValue(makeCommandWriteResponse());
+      },
     });
-
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-    const el = fixture.nativeElement as HTMLElement;
-    fixture.componentInstance.openTypedHalt();
+    component.dispatchOverviewAction('mark_poisoned');
     fixture.detectChanges();
 
     const submit = el.querySelector('[data-testid="typed-halt-confirm-submit"]') as HTMLButtonElement;
@@ -2173,57 +2130,28 @@ describe('BotControlPageComponent', () => {
     submit.click();
     await flush(fixture);
 
-    expect(issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
+    expect(liveRuns.issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
   });
 
   it('confirms Flatten & pause through a dialog before calling the mutation', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
-    status.operator_surface.actions.flatten_and_pause = {
-      enabled: true,
-      effect: 'LIVE_ACTUATION',
-      disabled_reason_code: null,
-      disabled_reasons: [],
-      gate_results: [],
-    };
-    const flattenAndPause = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(status),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause,
-            issueInstanceCommand: vi.fn(),
-          },
-        },
-      ],
+    allowFlattenAndPause(status);
+    const { fixture, component, liveRuns } = await setupBotControlPage({
+      status,
+      configureLiveRuns: (service) => {
+        service.flattenAndPause.mockResolvedValue(makeDesiredStateResponse());
+      },
     });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
-    fixture.detectChanges();
-    await flush(fixture);
-
     // Dispatching flatten opens the confirm dialog and does not call the mutation yet.
-    fixture.componentInstance.dispatchOverviewAction('flatten_and_pause');
+    component.dispatchOverviewAction('flatten_and_pause');
     fixture.detectChanges();
-    expect(fixture.componentInstance.flattenConfirmOpen()).toBe(true);
-    expect(flattenAndPause).not.toHaveBeenCalled();
+    expect(component.flattenConfirmOpen()).toBe(true);
+    expect(liveRuns.flattenAndPause).not.toHaveBeenCalled();
 
-    await fixture.componentInstance.confirmFlatten();
-    expect(flattenAndPause).toHaveBeenCalledWith('sid-x', {
+    await component.confirmFlatten();
+    expect(liveRuns.flattenAndPause).toHaveBeenCalledWith('sid-x', {
       action: 'pause',
       reason: 'Flatten and pause',
       updated_by: 'operator',
@@ -2272,46 +2200,12 @@ describe('BotControlPageComponent', () => {
   it('does not flatten when the action became disabled while the confirm dialog was open', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
-    status.operator_surface.actions.flatten_and_pause = {
-      enabled: true,
-      effect: 'LIVE_ACTUATION',
-      disabled_reason_code: null,
-      disabled_reasons: [],
-      gate_results: [],
-    };
-    const flattenAndPause = vi.fn().mockResolvedValue({});
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideRouter([]),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        {
-          provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
-        },
-        {
-          provide: LiveRunsService,
-          useValue: {
-            getInstanceStatus: vi.fn().mockResolvedValue(status),
-            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
-            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
-            startHostRunner: vi.fn(),
-            setInstanceDesiredState: vi.fn(),
-            flattenAndPause,
-            issueInstanceCommand: vi.fn(),
-          },
-        },
-      ],
-    });
+    allowFlattenAndPause(status);
+    const { fixture, component, liveRuns } = await setupBotControlPage({ status });
 
-    const fixture = TestBed.createComponent(BotControlPageComponent);
+    component.dispatchOverviewAction('flatten_and_pause');
     fixture.detectChanges();
-    await flush(fixture);
-
-    fixture.componentInstance.dispatchOverviewAction('flatten_and_pause');
-    fixture.detectChanges();
-    expect(fixture.componentInstance.flattenConfirmOpen()).toBe(true);
+    expect(component.flattenConfirmOpen()).toBe(true);
 
     // A poll disables the action while the dialog is still open.
     const disabled = makeStatus();
@@ -2322,10 +2216,10 @@ describe('BotControlPageComponent', () => {
       disabled_reasons: ['NO_OWNED_POSITIONS'],
       gate_results: [],
     };
-    fixture.componentInstance.status.set(disabled);
+    component.status.set(disabled);
 
-    await fixture.componentInstance.confirmFlatten();
-    expect(flattenAndPause).not.toHaveBeenCalled();
+    await component.confirmFlatten();
+    expect(liveRuns.flattenAndPause).not.toHaveBeenCalled();
   });
 
   it('re-shows a dismissed control-plane banner when its rendered content changes', async () => {
