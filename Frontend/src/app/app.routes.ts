@@ -236,6 +236,13 @@ export const routes: Routes = [
       ).then((m) => m.DesertOasisShowcaseComponent),
   },
   {
+    path: "broker/bot-sprites",
+    loadComponent: () =>
+      import(
+        "./components/broker/bot-sprite-gallery/bot-sprite-gallery.component"
+      ).then((m) => m.BotSpriteGalleryComponent),
+  },
+  {
     path: "broker/bots/:id",
     loadComponent: () =>
       import(

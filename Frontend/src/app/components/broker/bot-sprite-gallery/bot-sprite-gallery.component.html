@@ -1,0 +1,63 @@
+<section class="sprite-page">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Broker bots</p>
+      <h1>Swordsman sprite states</h1>
+      <p class="lede">
+        Craftpix top-down bot avatar sheets, rendered as stepped CSS sprite animations.
+      </p>
+    </div>
+
+    <div class="controls" aria-label="Sprite animation controls">
+      <div class="control-group" aria-label="Level">
+        @for (level of levels; track level) {
+          <button
+            type="button"
+            class="segmented-button"
+            [class.active]="selectedLevel() === level"
+            [attr.aria-pressed]="selectedLevel() === level"
+            (click)="selectLevel(level)"
+          >
+            L{{ level }}
+          </button>
+        }
+      </div>
+
+      <div class="control-group" aria-label="Facing">
+        @for (facing of facings; track facing.id) {
+          <button
+            type="button"
+            class="segmented-button"
+            [class.active]="selectedFacing().id === facing.id"
+            [attr.aria-pressed]="selectedFacing().id === facing.id"
+            (click)="selectFacing(facing)"
+          >
+            {{ facing.label }}
+          </button>
+        }
+      </div>
+    </div>
+  </header>
+
+  <div class="sprite-grid" aria-live="polite">
+    @for (sprite of spriteCards(); track sprite.id) {
+      <article class="sprite-card">
+        <div class="sprite-stage" [attr.aria-label]="sprite.label + ' animation'">
+          <div
+            class="sprite"
+            [style.--sprite-image]="'url(' + sprite.image + ')'"
+            [style.--sheet-width.px]="sprite.sheetWidth"
+            [style.--row-offset.px]="sprite.rowOffset"
+            [style.--frame-count]="sprite.frames"
+            [style.--duration.ms]="sprite.durationMs"
+          ></div>
+        </div>
+
+        <div class="sprite-meta">
+          <h2>{{ sprite.label }}</h2>
+          <span>{{ sprite.frames }} frames</span>
+        </div>
+      </article>
+    }
+  </div>
+</section>
