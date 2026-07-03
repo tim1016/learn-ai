@@ -56,15 +56,14 @@
             aria-label="Lifecycle transitions"
           >
             @for (edge of row.outgoingEdges; track edge.id) {
-              @let visualStatus = visualEdgeStatus(node, edge);
               <div
-                [class]="'flow-connector status-' + visualStatus"
+                [class]="'flow-connector status-' + edge.status"
                 [class.connector-animated]="edge.animated"
-                [style.--edge-color]="edgeColor(visualStatus)"
+                [style.--edge-color]="edgeColor(edge.status)"
               >
                 <span class="connector-line" aria-hidden="true"></span>
                 <span class="connector-copy">
-                  <span class="connector-status">{{ lifecycleStatusLabel(visualStatus) }}</span>
+                  <span class="connector-status">{{ edgeStatusLabel(edge) }}</span>
                   <span class="connector-path">
                     {{ edgeEndpointLabel(edge.source) }} -&gt; {{ edgeEndpointLabel(edge.target) }}
                   </span>

@@ -22,6 +22,7 @@ import type {
   OperatorSurfaceCurrentRisk,
   OperatorSurfaceSubmitReadiness,
   OperatorNotice,
+  OperatorNoticeAction,
   OperatorSurfaceControlPlane,
   RiskPosture,
   TraderPrimaryRemediation,
@@ -44,6 +45,7 @@ import { AttentionDropdownComponent } from './attention-dropdown.component';
 import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
+import { RuntimeBannerComponent } from './runtime-banner/runtime-banner.component';
 import { TraderGuidanceTimelineComponent } from './overview-tab/trader-guidance-timeline.component';
 import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
 
@@ -120,6 +122,7 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     AttentionDropdownComponent,
     TraderGuidanceTimelineComponent,
     NodeInspectorComponent,
+    RuntimeBannerComponent,
     WorkbenchAuditPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -488,6 +491,31 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
+  handleRuntimeNoticeAction(action: OperatorNoticeAction): void {
+    switch (action.kind) {
+      case 'open_runbook':
+        if (action.target) this.onGateOpenRunbook(action.target);
+        break;
+      case 'focus_cockpit_action':
+        if (action.target) this.selectActionTargetNode(action.target);
+        break;
+      case 'redeploy':
+        this.onGateRedeploy();
+        break;
+      case 'renew_control_plane_lease':
+        void this.dispatchRenewControlPlaneLease();
+        break;
+      case 'none':
+      case 'wait':
+      case 'external_manual_check':
+        break;
+      default: {
+        const unreachable: never = action.kind;
+        this.mutationError.set(`Unsupported notice action: ${String(unreachable)}`);
+      }
+    }
+  }
+
   toggleAttention(): void {
     this.attentionOpen.update((open) => !open);
   }
@@ -519,6 +547,21 @@ export class BotControlPageComponent {
     this.mutationError.set(null);
     try {
       await this.liveRuns.reconcileInstance(id);
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  async dispatchRenewControlPlaneLease(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('renew_control_plane_lease');
+    this.mutationError.set(null);
+    try {
+      await this.liveRuns.renewControlPlaneLease();
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.humanError(err));
