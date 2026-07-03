@@ -558,6 +558,8 @@ def test_index_account_instance_bindings_filters_account_and_tie_breaks_by_appen
     }
     assert binding_index.active_by_namespace == {}
     assert binding_index.duplicate_active_namespaces == frozenset()
+    with pytest.raises(TypeError):
+        binding_index.latest_by_instance["mutated"] = active
 
 
 def test_index_account_instance_bindings_groups_duplicate_active_namespace() -> None:

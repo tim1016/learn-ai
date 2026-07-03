@@ -10,6 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -131,9 +132,9 @@ class AccountInstanceBinding(BaseModel):
 class AccountInstanceBindingIndex:
     """Latest-row fold of account instance registry rows."""
 
-    latest_by_instance: dict[str, AccountInstanceBinding]
-    latest_by_namespace: dict[str, AccountInstanceBinding]
-    active_by_namespace: dict[str, tuple[AccountInstanceBinding, ...]]
+    latest_by_instance: Mapping[str, AccountInstanceBinding]
+    latest_by_namespace: Mapping[str, AccountInstanceBinding]
+    active_by_namespace: Mapping[str, tuple[AccountInstanceBinding, ...]]
 
     @property
     def duplicate_active_namespaces(self) -> frozenset[str]:
@@ -556,12 +557,14 @@ def index_account_instance_bindings(
         active_lists_by_namespace.setdefault(binding.bot_order_namespace, []).append(binding)
 
     return AccountInstanceBindingIndex(
-        latest_by_instance=latest_by_instance,
-        latest_by_namespace=latest_by_namespace,
-        active_by_namespace={
-            namespace: tuple(namespace_bindings)
-            for namespace, namespace_bindings in active_lists_by_namespace.items()
-        },
+        latest_by_instance=MappingProxyType(latest_by_instance),
+        latest_by_namespace=MappingProxyType(latest_by_namespace),
+        active_by_namespace=MappingProxyType(
+            {
+                namespace: tuple(namespace_bindings)
+                for namespace, namespace_bindings in active_lists_by_namespace.items()
+            }
+        ),
     )
 
 
@@ -608,10 +611,9 @@ def compute_reconcile_namespaces(
     )
 
     sibling_namespaces = {
-        binding.bot_order_namespace
-        for binding in binding_index.latest_by_instance.values()
-        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
-        and binding.bot_order_namespace != current_namespace
+        namespace
+        for namespace in binding_index.active_by_namespace
+        if namespace != current_namespace
     }
     return frozenset({current_namespace}), frozenset(sibling_namespaces)
 
