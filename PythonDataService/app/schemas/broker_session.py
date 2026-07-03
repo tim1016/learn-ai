@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from app.broker.ibkr.event_codes import (
+    BrokerSessionEventCategory,
+    BrokerSessionEventSeverity,
+)
 
 BrokerSessionIdentityType = Literal[
     "bot",
@@ -97,6 +102,7 @@ class BrokerSessionRosterRow(BaseModel):
     connection_epoch: int | None = Field(default=None, ge=0)
     last_event_ms: int | None = Field(default=None, ge=0)
     as_of_ms: int = Field(ge=0)
+    event_counts: dict[BrokerSessionEventCategory, int] = Field(default_factory=dict)
     attention_codes: list[BrokerSessionAttentionCode] = Field(default_factory=list)
     registry_claim: BrokerSessionRegistryClaim | None = None
 
@@ -112,3 +118,31 @@ class BrokerSessionMirrorSnapshot(BaseModel):
     ghost_detection_status: BrokerSessionGhostDetectionStatus
     rows: list[BrokerSessionRosterRow] = Field(default_factory=list)
     degradation_reasons: list[str] = Field(default_factory=list)
+
+
+class BrokerSessionEvent(BaseModel):
+    """Classified broker event for the session mirror."""
+
+    model_config = ConfigDict(frozen=True)
+
+    seq: int = Field(ge=1)
+    ts_ms: int = Field(ge=0)
+    category: BrokerSessionEventCategory
+    severity: BrokerSessionEventSeverity
+    label: str
+    message: str | None = None
+    raw_event_type: str
+    client_id: int | None = Field(default=None, ge=0)
+    account_id: str | None = None
+    ibkr_code: int | None = None
+    connection_state: str | None = None
+    raw: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class BrokerSessionEventPage(BaseModel):
+    """Page of classified broker-session diagnostic events."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rows: list[BrokerSessionEvent] = Field(default_factory=list)
+    next_seq: int | None = Field(default=None, ge=1)

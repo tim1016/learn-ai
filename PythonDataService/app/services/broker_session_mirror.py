@@ -24,6 +24,10 @@ from app.schemas.broker_session import (
     GatewaySocketsSnapshot,
 )
 from app.schemas.live_runs import HostRunnerInstancesStatus
+from app.services.broker_session_events import (
+    BrokerSessionEventService,
+    get_broker_session_event_service,
+)
 from app.services.broker_session_reconciler import (
     RuntimeIndexEntry,
     reconcile_broker_session_roster,
@@ -35,6 +39,13 @@ logger = logging.getLogger(__name__)
 
 class BrokerSessionMirrorService:
     """Compose the read-only mirror snapshot from host and data-plane facts."""
+
+    def __init__(
+        self,
+        *,
+        event_service: BrokerSessionEventService | None = None,
+    ) -> None:
+        self._event_service = event_service or get_broker_session_event_service()
 
     async def snapshot(self) -> BrokerSessionMirrorSnapshot:
         settings = get_settings()
@@ -75,6 +86,17 @@ class BrokerSessionMirrorService:
             data_plane_health=data_plane_health,
             as_of_ms=as_of_ms,
         )
+        event_counts_by_client_id = self._event_service.counts_by_client_id()
+        rows = [
+            row.model_copy(
+                update={
+                    "event_counts": event_counts_by_client_id.get(row.client_id, {})
+                    if row.client_id is not None
+                    else {}
+                }
+            )
+            for row in rows
+        ]
         observer_status = "online" if socket_snapshot is not None else "degraded"
         ghost_detection_status = "available" if socket_snapshot is not None else "unknown"
         return BrokerSessionMirrorSnapshot(
