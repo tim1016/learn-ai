@@ -1,0 +1,187 @@
+<section class="mirror-page" aria-labelledby="mirror-title">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Broker fleet</p>
+      <h1 id="mirror-title">Session mirror</h1>
+    </div>
+    <button
+      pButton
+      type="button"
+      severity="secondary"
+      icon="pi pi-refresh"
+      [loading]="isRefreshing()"
+      (click)="refresh()"
+    >
+      <span class="p-button-label">Refresh</span>
+    </button>
+  </header>
+
+  <section class="status-strip" aria-label="Mirror status">
+    <div class="metric">
+      <span>Current</span>
+      <strong>{{ formatNumber(summary().current) }}</strong>
+    </div>
+    <div class="metric">
+      <span>Past</span>
+      <strong>{{ formatNumber(summary().past) }}</strong>
+    </div>
+    <div class="metric">
+      <span>Unknown</span>
+      <strong>{{ formatNumber(summary().unknown) }}</strong>
+    </div>
+    <div class="metric attention">
+      <span>Attention</span>
+      <strong>{{ formatNumber(summary().attention) }}</strong>
+    </div>
+    <div class="metric">
+      <span>SSE</span>
+      <strong>{{ streamStatus() }}</strong>
+    </div>
+  </section>
+
+  @if (snapshot(); as mirror) {
+    <section class="observer-band" aria-label="Observer state">
+      <p-tag
+        [severity]="mirror.observer_status === 'online' ? 'success' : 'warn'"
+        [value]="mirror.observer_status === 'online' ? 'Observer online' : 'Observer degraded'"
+      />
+      <p-tag
+        [severity]="mirror.ghost_detection_status === 'available' ? 'success' : 'warn'"
+        [value]="mirror.ghost_detection_status === 'available' ? 'Ghost detection available' : 'Ghost detection unknown'"
+      />
+      <span>Gateway {{ mirror.gateway_port }}</span>
+      <span>As of {{ formatTimestamp(mirror.as_of_ms) }}</span>
+    </section>
+
+    @if (mirror.degradation_reasons.length > 0) {
+      <section class="degradation-list" aria-label="Mirror degradation reasons">
+        @for (reason of mirror.degradation_reasons; track reason) {
+          <p role="status">{{ reason }}</p>
+        }
+      </section>
+    }
+  }
+
+  @if (refreshError(); as message) {
+    <p class="load-error" role="alert">{{ message }}</p>
+  }
+
+  @if (streamError(); as message) {
+    <p class="load-error" role="alert">{{ message }}</p>
+  }
+
+  <div class="table-shell">
+    <p-table
+      styleClass="p-datatable-sm mirror-table"
+      dataKey="row_id"
+      [value]="rows()"
+      [loading]="snapshot() === null && streamStatus() === 'connecting'"
+      [rowHover]="true"
+      [rowTrackBy]="trackByRowId"
+      [tableStyle]="{ 'min-width': '74rem' }"
+    >
+      <ng-template #header>
+        <tr>
+          <th class="col-client">Client</th>
+          <th>Identity</th>
+          <th>Recency</th>
+          <th>Socket</th>
+          <th>PID</th>
+          <th>Broker</th>
+          <th>Last event</th>
+          <th>Attention</th>
+          <th class="action-cell"></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-row>
+        <tr [class.past-row]="row.recency !== 'current'">
+          <td class="client-cell">
+            <strong>{{ row.strategy_instance_id ?? row.command ?? row.row_id }}</strong>
+            <span>{{ row.run_id ?? row.account_id ?? row.remote_host ?? 'Unattributed' }}</span>
+          </td>
+          <td>
+            <p-tag
+              [severity]="identitySeverity(row.identity_type)"
+              [value]="identityLabel(row.identity_type)"
+            />
+          </td>
+          <td>
+            <p-tag
+              [severity]="recencySeverity(row.recency)"
+              [value]="recencyLabel(row.recency)"
+            />
+          </td>
+          <td>
+            @if (row.socket_present) {
+              <span>{{ row.local_port ?? '—' }} → {{ row.remote_port ?? '—' }}</span>
+            } @else {
+              <span>Missing</span>
+            }
+          </td>
+          <td>{{ formatNumber(row.pid) }}</td>
+          <td class="broker-cell">
+            <span>{{ row.connection_state ?? '—' }}</span>
+            <small>client {{ row.client_id ?? '—' }}</small>
+          </td>
+          <td>{{ formatTimestamp(row.last_event_ms) }}</td>
+          <td class="attention-cell">
+            @if (row.attention_codes.length > 0) {
+              @for (code of row.attention_codes; track code) {
+                <p-tag
+                  [severity]="attentionSeverity(code)"
+                  [value]="attentionLabel(code)"
+                />
+              }
+            } @else {
+              <span class="muted">—</span>
+            }
+          </td>
+          <td class="action-cell">
+            <button
+              pButton
+              type="button"
+              severity="secondary"
+              icon="pi pi-external-link"
+              [text]="true"
+              [disabled]="row.strategy_instance_id === null"
+              [attr.aria-label]="'Open bot ' + (row.strategy_instance_id ?? row.row_id)"
+              (click)="openBot(row)"
+            ></button>
+          </td>
+        </tr>
+        <tr class="details-row" [class.past-row]="row.recency !== 'current'">
+          <td colspan="9">
+            <details>
+              <summary>Technical detail</summary>
+              <dl>
+                <div>
+                  <dt>row_id</dt>
+                  <dd>{{ row.row_id }}</dd>
+                </div>
+                <div>
+                  <dt>run_dir</dt>
+                  <dd>{{ row.run_dir ?? '—' }}</dd>
+                </div>
+                <div>
+                  <dt>last_event_ms</dt>
+                  <dd>{{ row.last_event_ms ?? '—' }}</dd>
+                </div>
+                <div>
+                  <dt>registry</dt>
+                  <dd>{{ row.registry_claim?.state ?? '—' }}</dd>
+                </div>
+              </dl>
+            </details>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="9" class="empty-cell">
+            No broker sessions observed.
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</section>
