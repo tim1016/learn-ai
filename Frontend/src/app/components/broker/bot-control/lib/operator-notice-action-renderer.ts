@@ -2,7 +2,7 @@ import type { OperatorNotice } from '../../../../models/operator-notice';
 import { executableOperatorNoticeAction } from '../../../../models/operator-notice-action-contract';
 import type { RenderedAction, RendererDispatch } from './suggested-action-renderer';
 
-export interface OperatorNoticeDispatch extends RendererDispatch {
+export interface OperatorNoticeDispatch extends Pick<RendererDispatch, 'openRunbook' | 'redeploy'> {
   focusTarget(target: string): void;
   renewControlPlaneLease(): void;
 }

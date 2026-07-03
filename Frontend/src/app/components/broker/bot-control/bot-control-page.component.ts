@@ -299,7 +299,8 @@ export class BotControlPageComponent {
   };
 
   private readonly runtimeNoticeDispatch: OperatorNoticeDispatch = {
-    ...this.primaryRemediationDispatch,
+    redeploy: () => this.onGateRedeploy(),
+    openRunbook: (slug) => this.onGateOpenRunbook(slug),
     focusTarget: (target) => this.selectActionTargetNode(target),
     renewControlPlaneLease: () => { void this.dispatchRenewControlPlaneLease(); },
   };
