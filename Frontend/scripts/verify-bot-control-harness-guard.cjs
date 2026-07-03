@@ -95,16 +95,74 @@ function bindingPropertyName(element) {
   return null;
 }
 
-function containsGuardedMutationExpression(node, aliases, source) {
+function createScope(parent = null) {
+  return {
+    parent,
+    symbols: new Map(),
+  };
+}
+
+function declareName(scope, name, kind) {
+  scope.symbols.set(name, kind);
+}
+
+function assignName(scope, name, kind) {
+  for (let current = scope; current !== null; current = current.parent) {
+    if (current.symbols.has(name)) {
+      current.symbols.set(name, kind);
+      return;
+    }
+  }
+  scope.symbols.set(name, kind);
+}
+
+function lookupName(scope, name) {
+  for (let current = scope; current !== null; current = current.parent) {
+    if (current.symbols.has(name)) return current.symbols.get(name);
+  }
+  return null;
+}
+
+function declareBindingNames(scope, bindingName, kind = 'other') {
+  if (ts.isIdentifier(bindingName)) {
+    declareName(scope, bindingName.text, kind);
+    return;
+  }
+  if (!ts.isObjectBindingPattern(bindingName)) return;
+  for (const element of bindingName.elements) {
+    declareBindingNames(scope, element.name, kind);
+  }
+}
+
+function unwrapExpression(node) {
+  let current = node;
+  while (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current)) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isCallToToken(node, tokens) {
+  const current = unwrapExpression(node);
+  if (!ts.isCallExpression(current)) return false;
+  const expression = unwrapExpression(current.expression);
+  return ts.isIdentifier(expression) && tokens.includes(expression.text);
+}
+
+function containsGuardedMutationExpression(node, scope) {
   let found = false;
   function visit(child) {
     if (found) return;
-    if (ts.isIdentifier(child) && aliases.has(child.text)) {
+    if (ts.isFunctionLike(child)) return;
+    if (ts.isIdentifier(child) && lookupName(scope, child.text) === 'mutation') {
       found = true;
       return;
     }
     const name = memberName(child);
-    if (name && mutationMethodSet.has(name)) {
+    const receiver = ts.isPropertyAccessExpression(child) || ts.isElementAccessExpression(child)
+      ? child.expression
+      : null;
+    if (name && receiver && mutationMethodSet.has(name) && expressionNamesLiveRunsObject(receiver, scope)) {
       found = true;
       return;
     }
@@ -114,104 +172,144 @@ function containsGuardedMutationExpression(node, aliases, source) {
   return found;
 }
 
-function addHarnessObjectBindingAliases(bindingName, liveRunsObjectAliases, mutationAliases) {
+function addHarnessObjectBindingAliases(bindingName, scope) {
   if (!ts.isObjectBindingPattern(bindingName)) return;
   for (const element of bindingName.elements) {
     const propertyName = bindingPropertyName(element);
     if (propertyName !== 'liveRuns') continue;
     if (ts.isIdentifier(element.name)) {
-      liveRunsObjectAliases.add(element.name.text);
+      declareName(scope, element.name.text, 'liveRuns');
     } else {
-      addBindingAliases(element.name, mutationAliases);
+      addBindingAliases(element.name, scope);
     }
   }
 }
 
-function addBindingAliases(bindingName, aliases) {
+function addBindingAliases(bindingName, scope) {
   if (ts.isIdentifier(bindingName)) {
-    aliases.add(bindingName.text);
+    declareName(scope, bindingName.text, 'mutation');
     return;
   }
   if (!ts.isObjectBindingPattern(bindingName)) return;
   for (const element of bindingName.elements) {
     const propertyName = bindingPropertyName(element);
     if (!propertyName || !mutationMethodSet.has(propertyName)) continue;
-    addBindingAliases(element.name, aliases);
+    addBindingAliases(element.name, scope);
   }
 }
 
-function expressionNamesHarnessObject(node, harnessObjectAliases, source) {
-  if (ts.isIdentifier(node) && harnessObjectAliases.has(node.text)) return true;
-  const text = node.getText(source);
-  return harnessObjectTokens.some((token) => new RegExp(`\\b${token}\\s*\\(`).test(text));
+function expressionNamesHarnessObject(node, scope) {
+  const current = unwrapExpression(node);
+  if (ts.isIdentifier(current) && lookupName(scope, current.text) === 'harness') return true;
+  return isCallToToken(current, harnessObjectTokens);
 }
 
-function expressionNamesLiveRunsObject(node, liveRunsObjectAliases, harnessObjectAliases, source) {
-  if (ts.isIdentifier(node) && liveRunsObjectAliases.has(node.text)) return true;
-  if (/\bmakeFailClosedLiveRuns\s*\(/.test(node.getText(source))) return true;
-  if (memberName(node) === 'liveRuns') {
-    const receiver = ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)
-      ? node.expression
+function expressionNamesLiveRunsObject(node, scope) {
+  const current = unwrapExpression(node);
+  if (ts.isIdentifier(current) && lookupName(scope, current.text) === 'liveRuns') return true;
+  if (isCallToToken(current, ['makeFailClosedLiveRuns'])) return true;
+  if (memberName(current) === 'liveRuns') {
+    const receiver = ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)
+      ? current.expression
       : null;
-    return receiver ? expressionNamesHarnessObject(receiver, harnessObjectAliases, source) : false;
+    return receiver ? expressionNamesHarnessObject(receiver, scope) : false;
   }
   return false;
 }
 
-function gatherMutationAliases(source) {
-  const aliases = new Set();
-  const liveRunsObjectAliases = new Set(['liveRuns']);
-  const harnessObjectAliases = new Set();
-  function visit(node) {
-    if (ts.isVariableDeclaration(node) && node.initializer) {
-      if (ts.isIdentifier(node.name) && expressionNamesHarnessObject(node.initializer, harnessObjectAliases, source)) {
-        harnessObjectAliases.add(node.name.text);
-      }
-      if (ts.isIdentifier(node.name) && expressionNamesLiveRunsObject(
-        node.initializer,
-        liveRunsObjectAliases,
-        harnessObjectAliases,
-        source,
-      )) {
-        liveRunsObjectAliases.add(node.name.text);
-      }
-      if (ts.isObjectBindingPattern(node.name) && expressionNamesHarnessObject(
-        node.initializer,
-        harnessObjectAliases,
-        source,
-      )) {
-        addHarnessObjectBindingAliases(node.name, liveRunsObjectAliases, aliases);
-      }
-      if (containsGuardedMutationExpression(node.initializer, aliases, source)) {
-        addBindingAliases(node.name, aliases);
-      } else if (ts.isObjectBindingPattern(node.name) && expressionNamesLiveRunsObject(
-        node.initializer,
-        liveRunsObjectAliases,
-        harnessObjectAliases,
-        source,
-      )) {
-        addBindingAliases(node.name, aliases);
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(source);
-  return aliases;
-}
-
 function mutationMockOffenders(content, specPath) {
   const source = ts.createSourceFile(specPath, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const aliases = gatherMutationAliases(source);
   const lines = content.split(/\r?\n/);
   const matches = [];
+  let scope = createScope();
+
+  function withChildScope(callback) {
+    const parent = scope;
+    scope = createScope(parent);
+    try {
+      callback();
+    } finally {
+      scope = parent;
+    }
+  }
+
+  function applyVariableAlias(node) {
+    if (!node.initializer) {
+      declareBindingNames(scope, node.name);
+      return;
+    }
+
+    visit(node.initializer);
+    declareBindingNames(scope, node.name);
+    if (ts.isIdentifier(node.name)) {
+      if (expressionNamesHarnessObject(node.initializer, scope)) {
+        declareName(scope, node.name.text, 'harness');
+      } else if (expressionNamesLiveRunsObject(node.initializer, scope)) {
+        declareName(scope, node.name.text, 'liveRuns');
+      } else if (containsGuardedMutationExpression(node.initializer, scope)) {
+        declareName(scope, node.name.text, 'mutation');
+      }
+      return;
+    }
+
+    if (expressionNamesHarnessObject(node.initializer, scope)) {
+      addHarnessObjectBindingAliases(node.name, scope);
+    } else if (
+      expressionNamesLiveRunsObject(node.initializer, scope)
+      || containsGuardedMutationExpression(node.initializer, scope)
+    ) {
+      addBindingAliases(node.name, scope);
+    }
+  }
+
+  function applyAssignmentAlias(node) {
+    visit(node.right);
+    if (!ts.isIdentifier(node.left)) return;
+    if (expressionNamesHarnessObject(node.right, scope)) {
+      assignName(scope, node.left.text, 'harness');
+    } else if (expressionNamesLiveRunsObject(node.right, scope)) {
+      assignName(scope, node.left.text, 'liveRuns');
+    } else if (containsGuardedMutationExpression(node.right, scope)) {
+      assignName(scope, node.left.text, 'mutation');
+    } else {
+      assignName(scope, node.left.text, 'other');
+    }
+  }
 
   function visit(node) {
+    if (ts.isSourceFile(node)) {
+      withChildScope(() => {
+        for (const statement of node.statements) visit(statement);
+      });
+      return;
+    }
+    if (ts.isBlock(node)) {
+      withChildScope(() => {
+        for (const statement of node.statements) visit(statement);
+      });
+      return;
+    }
+    if (ts.isFunctionLike(node)) {
+      withChildScope(() => {
+        for (const parameter of node.parameters) declareBindingNames(scope, parameter.name);
+        if (node.body) visit(node.body);
+      });
+      return;
+    }
+    if (ts.isVariableDeclaration(node)) {
+      applyVariableAlias(node);
+      return;
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      applyAssignmentAlias(node);
+      return;
+    }
     if (ts.isCallExpression(node)) {
       const name = memberName(node.expression);
       const receiver = ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression)
         ? node.expression.expression
         : null;
-      if (name && receiver && mutationMockNames.has(name) && containsGuardedMutationExpression(receiver, aliases, source)) {
+      if (name && receiver && mutationMockNames.has(name) && containsGuardedMutationExpression(receiver, scope)) {
         const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line;
         matches.push({ line, text: lines[line]?.trim() ?? '' });
       }
@@ -224,17 +322,20 @@ function mutationMockOffenders(content, specPath) {
 }
 
 function assertMutationMockDetectorCatchesBypasses() {
+  const withLiveRuns = (statement) => `const { liveRuns } = await setupBotControlPage();\n${statement}`;
   const bypasses = [
-    'liveRuns.setInstanceDesiredState.mockResolvedValue(response);',
-    'liveRuns.setInstanceDesiredState.mockResolvedValueOnce(response);',
-    'vi.mocked(liveRuns.setInstanceDesiredState).mockResolvedValue(response);',
-    'liveRuns.setInstanceDesiredState\n  .mockResolvedValue(response);',
-    'liveRuns.setInstanceDesiredState.mockReset().mockResolvedValue(response);',
-    "liveRuns['setInstanceDesiredState'].mockResolvedValue(response);",
-    'const setDesiredState = liveRuns.setInstanceDesiredState;\nsetDesiredState.mockResolvedValue(response);',
-    'const { setInstanceDesiredState } = liveRuns;\nsetInstanceDesiredState.mockResolvedValue(response);',
+    withLiveRuns('liveRuns.setInstanceDesiredState.mockResolvedValue(response);'),
+    withLiveRuns('liveRuns.setInstanceDesiredState.mockResolvedValueOnce(response);'),
+    withLiveRuns('vi.mocked(liveRuns.setInstanceDesiredState).mockResolvedValue(response);'),
+    withLiveRuns('liveRuns.setInstanceDesiredState\n  .mockResolvedValue(response);'),
+    withLiveRuns('liveRuns.setInstanceDesiredState.mockReset().mockResolvedValue(response);'),
+    withLiveRuns("liveRuns['setInstanceDesiredState'].mockResolvedValue(response);"),
+    withLiveRuns('const setDesiredState = liveRuns.setInstanceDesiredState;\nsetDesiredState.mockResolvedValue(response);'),
+    withLiveRuns('const { setInstanceDesiredState } = liveRuns;\nsetInstanceDesiredState.mockResolvedValue(response);'),
     'const { liveRuns: runs } = await setupBotControlPage();\nconst { setInstanceDesiredState } = runs;\nsetInstanceDesiredState.mockResolvedValue(response);',
     'const harness = await setupBotControlPage();\nconst runs = harness.liveRuns;\nconst { setInstanceDesiredState } = runs;\nsetInstanceDesiredState.mockResolvedValue(response);',
+    'let runs;\nconst harness = await setupBotControlPage();\nruns = harness.liveRuns;\nconst { setInstanceDesiredState } = runs;\nsetInstanceDesiredState.mockResolvedValue(response);',
+    withLiveRuns('let setDesiredState;\nsetDesiredState = liveRuns.setInstanceDesiredState;\nsetDesiredState.mockResolvedValue(response);'),
     'const { liveRuns: { setInstanceDesiredState } } = await setupBotControlPage();\nsetInstanceDesiredState.mockResolvedValue(response);',
     'const { liveRuns: { setInstanceDesiredState: setDesiredState } } = await setupBotControlPage();\nsetDesiredState.mockResolvedValue(response);',
     'const harness = await setupBotControlPage();\nconst { liveRuns: { setInstanceDesiredState } } = harness;\nsetInstanceDesiredState.mockResolvedValue(response);',
@@ -247,9 +348,23 @@ function assertMutationMockDetectorCatchesBypasses() {
     );
   }
   assert.equal(
-    mutationMockOffenders("liveRuns.issueInstanceCommand('sid-x', { verb: 'MARK_POISONED' });", '<self-test>').length,
+    mutationMockOffenders(withLiveRuns("liveRuns.issueInstanceCommand('sid-x', { verb: 'MARK_POISONED' });"), '<self-test>').length,
     0,
     'Bot Control mutation guard should not flag ordinary mutation assertions/calls.',
+  );
+  assert.equal(
+    mutationMockOffenders(
+      [
+        'const { liveRuns: { setInstanceDesiredState } } = await setupBotControlPage();',
+        "it('uses a local helper', () => {",
+        '  const setInstanceDesiredState = vi.fn();',
+        '  setInstanceDesiredState.mockResolvedValue(response);',
+        '});',
+      ].join('\n'),
+      '<self-test>',
+    ).length,
+    0,
+    'Bot Control mutation guard should not flag a shadowed local mutation-name helper.',
   );
 }
 
