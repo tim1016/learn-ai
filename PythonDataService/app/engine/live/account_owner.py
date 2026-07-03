@@ -17,12 +17,12 @@ from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountOwnerGeneration,
     append_account_event,
-    evaluate_account_instance_binding,
     read_account_events,
     read_account_freeze,
     write_account_owner_generation,
 )
 from app.engine.live.account_classifier import AccountClassifierDecision
+from app.engine.live.account_registry import evaluate_account_instance_binding
 from app.schemas.live_runs import GateResult
 
 AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "frozen"]

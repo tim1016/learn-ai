@@ -810,7 +810,7 @@ class LiveEngine:
         intent_wal_for_portfolio = None
         bot_order_namespace_for_portfolio = ""
         if self._intent_wal_path is not None and self._strategy_instance_id:
-            from app.engine.live.account_artifacts import bot_order_namespace_for_instance
+            from app.engine.live.account_registry import bot_order_namespace_for_instance
             from app.engine.live.intent_wal import IntentWal as _IntentWal
 
             bot_order_namespace_for_portfolio = bot_order_namespace_for_instance(self._strategy_instance_id)
@@ -1552,7 +1552,7 @@ class LiveEngine:
             or not self._strategy_instance_id
         ):
             return None
-        from app.engine.live.account_artifacts import (
+        from app.engine.live.account_registry import (
             bot_order_namespace_for_instance,
             evaluate_account_instance_binding,
         )

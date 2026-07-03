@@ -656,10 +656,12 @@ class RunnerProcessManager:
         if account_id is None or strategy_instance_id is None:
             return None
         from app.engine.live.account_artifacts import (
-            AccountInstanceBinding,
-            bot_order_namespace_for_instance,
             evaluate_restart_intensity,
             read_account_freeze,
+        )
+        from app.engine.live.account_registry import (
+            AccountInstanceBinding,
+            bot_order_namespace_for_instance,
             write_account_instance_binding,
         )
 
@@ -714,7 +716,7 @@ class RunnerProcessManager:
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
             return
-        from app.engine.live.account_artifacts import crash_retired_restart_blocking_binding
+        from app.engine.live.account_registry import crash_retired_restart_blocking_binding
 
         try:
             blocking_binding = crash_retired_restart_blocking_binding(

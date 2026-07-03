@@ -36,8 +36,8 @@ from app.broker.ibkr.models import (
 from app.broker.ibkr.order_cancel_capability import evaluate_order_cancel_capability
 from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import executions_for_reconnect_recovery, list_open_orders
-from app.engine.live.account_artifacts import (
-    AccountArtifactError,
+from app.engine.live.account_artifacts import AccountArtifactError
+from app.engine.live.account_registry import (
     AccountInstanceBinding,
     index_account_instance_bindings,
     read_account_instance_registry,
