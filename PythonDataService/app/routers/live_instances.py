@@ -21,7 +21,6 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 
-import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
@@ -54,6 +53,11 @@ from app.engine.live.fleet import (
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
+from app.engine.live.live_artifact_io import (
+    artifact_exists,
+    read_parquet_rows,
+    read_parquet_tail,
+)
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarCorruptError, LiveStateSidecarRepo
 from app.engine.live.nyse_calendar import nyse_session_state_at_ms
 from app.engine.live.order_identity import mint_intent_id
@@ -70,7 +74,6 @@ from app.routers.live_runs import (
     _desired_state_root,
     _now_ms,
     _read_ledger,
-    _read_parquet_tail,
     _read_sidecar,
     _resolve_desired_state,
     _validate_path_segment,
@@ -512,12 +515,9 @@ def _strategy_state(
         return None, "neutral", []
 
     decisions_path = run_dir / "decisions.parquet"
-    # Guard existence: _read_parquet_tail's except tuple references a pyarrow
-    # symbol absent in this version, so it raises on a missing file rather than
-    # returning []. A run with no decisions yet is normal (pre-warmup).
     rows = (
-        _read_parquet_tail(decisions_path, 1)
-        if _parquet_artifact_exists(decisions_path)
+        read_parquet_tail(decisions_path, 1, on_error="warn_empty")
+        if artifact_exists(decisions_path)
         else []
     )
     latest_decision = rows[0] if rows else None
@@ -2479,20 +2479,10 @@ def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_m
     500-ing the chart — but the warning makes corruption visible during
     incident response (PR #483 review).
     """
-    if not _parquet_artifact_exists(path):
-        return []
-    try:
-        rows = pq.read_table(path).to_pylist()
-    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid) as exc:
-        logger.warning("parquet read failed for %s: %s", path, exc, exc_info=True)
-        return []
+    rows = read_parquet_rows(path, on_error="warn_empty")
     if since_ms is not None:
         rows = [r for r in rows if int(r.get(key, 0)) > since_ms]
     return rows
-
-
-def _parquet_artifact_exists(path: Path) -> bool:
-    return path.is_file() or path.is_dir()
 
 
 def _filter_rows_to_utc_day(rows: list[dict], day: date, key: str = "ts_ms") -> list[dict]:

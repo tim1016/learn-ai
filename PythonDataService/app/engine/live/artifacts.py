@@ -379,6 +379,7 @@ class _ParquetAppendWriter:
         else:
             segment_name = self._next_segment_name()
             _write_parquet_segment_atomic(self._path, segment_name, new_df)
+            self._mark_segment_published(segment_name)
         self._buffer.clear()
 
     def _next_segment_name(self) -> str:
@@ -386,9 +387,17 @@ class _ParquetAppendWriter:
             self._next_segment_index = _max_segment_index(self._path) + 1
         while True:
             segment_name = f"{_SEGMENT_PREFIX}{self._next_segment_index:06d}{_SEGMENT_SUFFIX}"
-            self._next_segment_index += 1
             if not (self._path / segment_name).exists():
                 return segment_name
+            self._next_segment_index += 1
+
+    def _mark_segment_published(self, segment_name: str) -> None:
+        index_text = segment_name[len(_SEGMENT_PREFIX) : -len(_SEGMENT_SUFFIX)]
+        if not index_text.isdecimal():
+            return
+        next_index = int(index_text) + 1
+        if self._next_segment_index is None or self._next_segment_index < next_index:
+            self._next_segment_index = next_index
 
     def close(self) -> None:
         if self._closed:

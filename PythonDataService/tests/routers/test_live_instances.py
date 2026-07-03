@@ -2240,13 +2240,22 @@ async def test_status_includes_backend_authored_latest_signal_tone(
     app, root = app_with_root
     run_dir = root / "run-signal-tone"
     _write_ledger(root, "run-signal-tone", "spy_ema_paper", 100)
-    table = pa.table(
+    decisions_dir = run_dir / "decisions.parquet"
+    decisions_dir.mkdir()
+    first = pa.table(
         {
-            "bar_close_ms": pa.array([1_700_000_000_000, 1_700_000_060_000], type=pa.int64()),
-            "signal": pa.array(["HOLD", "EXIT"], type=pa.string()),
+            "bar_close_ms": pa.array([1_700_000_000_000], type=pa.int64()),
+            "signal": pa.array(["HOLD"], type=pa.string()),
         }
     )
-    pq.write_table(table, run_dir / "decisions.parquet")
+    second = pa.table(
+        {
+            "bar_close_ms": pa.array([1_700_000_060_000], type=pa.int64()),
+            "signal": pa.array(["EXIT"], type=pa.string()),
+        }
+    )
+    pq.write_table(first, decisions_dir / "part-000001.parquet")
+    pq.write_table(second, decisions_dir / "part-000002.parquet")
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

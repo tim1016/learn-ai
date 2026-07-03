@@ -23,7 +23,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.broker.ibkr.config import get_settings
@@ -33,6 +32,14 @@ from app.engine.live.desired_state import (
     DesiredStateCorruptError,
     DesiredStateRepo,
     stable_desired_state_path,
+)
+from app.engine.live.live_artifact_io import (
+    artifact_exists,
+    artifact_mtime_signature,
+    list_run_artifacts,
+    parquet_row_count,
+    read_parquet_rows,
+    read_parquet_tail,
 )
 from app.engine.live.run_ledger import read_ledger
 from app.schemas.live_runs import (
@@ -260,7 +267,7 @@ def _mtime_sig(run_dir: Path) -> tuple:
     ``command_summary``.
     """
     tracked = tuple(
-        (run_dir / f).stat().st_mtime if (run_dir / f).exists() else 0.0 for f in _TRACKED_FILES
+        artifact_mtime_signature(run_dir / f) for f in _TRACKED_FILES
     )
     return (tracked, _desired_state_sig(run_dir), _commands_sig(run_dir))
 
@@ -356,14 +363,6 @@ def _read_flag(path: Path) -> dict | None:
         return None
 
 
-def _parquet_row_count(path: Path) -> int:
-    """O(1) row count from Parquet footer metadata."""
-    try:
-        return pq.ParquetFile(path).metadata.num_rows
-    except (FileNotFoundError, OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
-        return 0
-
-
 def _last_activity_ms(run_dir: Path) -> int:
     """Return max mtime across all files in run_dir (ms UTC)."""
     best: float = 0.0
@@ -398,8 +397,8 @@ def _build_summary(run_dir: Path, now_ms: int) -> LiveRunSummary:
         ended_at_ms=sidecar.ended_at_ms if sidecar is not None else None,
         last_activity_ms=_last_activity_ms(run_dir),
         state=state,
-        decision_count=_parquet_row_count(decisions_path) if decisions_path.exists() else 0,
-        execution_count=_parquet_row_count(executions_path) if executions_path.exists() else 0,
+        decision_count=parquet_row_count(decisions_path, on_error="warn_empty"),
+        execution_count=parquet_row_count(executions_path, on_error="warn_empty"),
         halt_flag_set=(run_dir / "halt.flag").exists(),
         poisoned_flag_set=(run_dir / "poisoned.flag").exists(),
     )
@@ -407,21 +406,14 @@ def _build_summary(run_dir: Path, now_ms: int) -> LiveRunSummary:
 
 def _read_parquet_tail(path: Path, n: int) -> list[dict]:
     """Read the last n rows of a Parquet file as a list of dicts."""
-    try:
-        nrows = pq.ParquetFile(path).metadata.num_rows
-        if nrows == 0:
-            return []
-        table = pq.read_table(path).slice(max(0, nrows - n), n)
-        return table.to_pylist()
-    except (FileNotFoundError, OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
-        return []
+    return read_parquet_tail(path, n, on_error="warn_empty")
 
 
 def _build_decisions_summary(run_dir: Path) -> DecisionsSummary:
     path = run_dir / "decisions.parquet"
-    if not path.exists():
+    if not artifact_exists(path):
         return DecisionsSummary(row_count=0)
-    row_count = _parquet_row_count(path)
+    row_count = parquet_row_count(path, on_error="warn_empty")
     latest: dict | None = None
     if row_count > 0:
         rows = _read_parquet_tail(path, 1)
@@ -431,18 +423,18 @@ def _build_decisions_summary(run_dir: Path) -> DecisionsSummary:
 
 def _build_executions_summary(run_dir: Path) -> ExecutionsSummary:
     path = run_dir / "executions.parquet"
-    if not path.exists():
+    if not artifact_exists(path):
         return ExecutionsSummary(row_count=0)
-    row_count = _parquet_row_count(path)
+    row_count = parquet_row_count(path, on_error="warn_empty")
     last_fills = _read_parquet_tail(path, 5) if row_count > 0 else []
     return ExecutionsSummary(row_count=row_count, last_fills=last_fills)
 
 
 def _build_trades_summary(run_dir: Path) -> TradesSummary:
     path = run_dir / "trades.parquet"
-    if not path.exists():
+    if not artifact_exists(path):
         return TradesSummary(row_count=0)
-    row_count = _parquet_row_count(path)
+    row_count = parquet_row_count(path, on_error="warn_empty")
     open_position: dict | None = None
     if row_count > 0:
         rows = _read_parquet_tail(path, 1)
@@ -458,29 +450,17 @@ def _build_flags_summary(run_dir: Path) -> FlagsSummary:
 
 
 def _build_artifacts_summary(run_dir: Path) -> ArtifactsSummary:
-    files: list[ArtifactFile] = []
-    try:
-        for p in sorted(run_dir.iterdir(), key=lambda x: x.name):
-            if not p.is_file():
-                continue
-            try:
-                st = p.stat()
-                row_count: int | None = None
-                if p.suffix == ".parquet":
-                    row_count = _parquet_row_count(p)
-                files.append(
-                    ArtifactFile(
-                        name=p.name,
-                        size_bytes=st.st_size,
-                        mtime_ms=int(st.st_mtime * 1000),
-                        row_count=row_count,
-                    )
-                )
-            except OSError:
-                pass
-    except OSError:
-        pass
-    return ArtifactsSummary(files=files)
+    return ArtifactsSummary(
+        files=[
+            ArtifactFile(
+                name=artifact.name,
+                size_bytes=artifact.size_bytes,
+                mtime_ms=artifact.mtime_ms,
+                row_count=artifact.row_count,
+            )
+            for artifact in list_run_artifacts(run_dir)
+        ]
+    )
 
 
 def _build_reconcile_summary(run_dir: Path) -> ReconcileSummary:
@@ -730,12 +710,7 @@ async def get_trades(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
     path = _artifact_path(run_dir, "trades.parquet")
-    if not path.exists():
-        return []
-    try:
-        rows = pq.read_table(path).to_pylist()
-    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
-        return []
+    rows = read_parquet_rows(path, on_error="warn_empty")
     if since_ms is not None:
         rows = [r for r in rows if int(r.get("exit_time_ms", 0)) > since_ms]
     if len(rows) > limit:
@@ -765,12 +740,7 @@ async def get_executions(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
     path = _artifact_path(run_dir, "executions.parquet")
-    if not path.exists():
-        return []
-    try:
-        rows = pq.read_table(path).to_pylist()
-    except (OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
-        return []
+    rows = read_parquet_rows(path, on_error="warn_empty")
     if since_ms is not None:
         rows = [r for r in rows if int(r.get("ts_ms", 0)) > since_ms]
     if len(rows) > limit:
