@@ -1416,6 +1416,57 @@ describe('BotControlPageComponent', () => {
     expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
   });
 
+  it('derives reconcile completion from refreshed backend status', async () => {
+    const initial = makeStatus();
+    const refreshed = makeStatus();
+    refreshed.symbol = 'QQQ';
+    const getInstanceStatus = vi.fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(refreshed);
+    const reconcileInstance = vi.fn().mockResolvedValue({});
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: ActivatedRoute,
+          useValue: { paramMap: of(convertToParamMap({ id: 'sid-x' })) },
+        },
+        {
+          provide: LiveRunsService,
+          useValue: {
+            getInstanceStatus,
+            getAccountSummary: vi.fn().mockResolvedValue(makeAccountSummary()),
+            getLifecycleTimeline: vi.fn().mockResolvedValue(makeLifecycleTimeline()),
+            startHostRunner: vi.fn(),
+            setInstanceDesiredState: vi.fn(),
+            flattenAndPause: vi.fn(),
+            issueInstanceCommand: vi.fn(),
+            reconcileInstance,
+          },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(BotControlPageComponent);
+    fixture.detectChanges();
+    await flush(fixture);
+
+    await fixture.componentInstance.dispatchReconcileNow();
+    await flush(fixture);
+    fixture.detectChanges();
+
+    expect(reconcileInstance).toHaveBeenCalledWith('sid-x');
+    expect(getInstanceStatus).toHaveBeenCalledTimes(2);
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('QQQ');
+    expect(text).not.toContain('Reconcile succeeded');
+    expect(text).not.toContain('Reconciled successfully');
+  });
+
   it('renders backend reconcile precondition details instead of the generic load error', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const reconcileInstance = vi.fn().mockRejectedValue(
