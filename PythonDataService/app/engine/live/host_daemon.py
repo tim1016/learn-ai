@@ -714,32 +714,20 @@ class RunnerProcessManager:
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
             return
-        from app.engine.live.account_artifacts import (
-            CRASH_RETIRED_BINDING_SOURCES,
-            has_account_recovery_evidence_after,
-            latest_account_instance_binding,
-            read_account_events,
-            read_account_instance_registry,
-        )
+        from app.engine.live.account_artifacts import crash_retired_restart_blocking_binding
 
         try:
-            bindings = read_account_instance_registry(self.artifacts_root, account_id)
-            events = read_account_events(self.artifacts_root, account_id)
+            blocking_binding = crash_retired_restart_blocking_binding(
+                self.artifacts_root,
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+            )
         except (OSError, ValueError) as exc:
             raise HostRunnerError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 f"could not read account recovery evidence: {exc}",
             ) from exc
-        latest = latest_account_instance_binding(
-            bindings,
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-        )
-        if latest is None:
-            return
-        if latest.lifecycle_state != "RETIRED" or latest.source not in CRASH_RETIRED_BINDING_SOURCES:
-            return
-        if has_account_recovery_evidence_after(events, latest.recorded_at_ms):
+        if blocking_binding is None:
             return
         raise HostRunnerError(
             status.HTTP_409_CONFLICT,
