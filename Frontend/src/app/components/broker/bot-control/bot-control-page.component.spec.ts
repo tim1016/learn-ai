@@ -10,9 +10,6 @@ import type {
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import {
   allowFlattenAndPause,
-  deferred,
-  flush,
-  installBotControlPageTestStubs,
   makeCommandWriteResponse,
   makeDesiredStateResponse,
   makeHostRunnerHealth,
@@ -22,6 +19,11 @@ import {
   makeReconcileAckResponse,
   makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
+} from './bot-control-page.fixtures';
+import {
+  deferred,
+  flush,
+  installBotControlPageTestStubs,
   setupBotControlPage,
   setupBotControlSidebarHost,
 } from './bot-control-page.testing';
