@@ -2,25 +2,41 @@
 //
 // Snapshots captured from the running Python ``/api/live-instances/{id}/status``
 // endpoint via ``PythonDataService/scripts/capture_operator_surface_fixture.py``.
-// The generated TypeScript fixture module validates each payload via
-// ``satisfies DeepReadonly<LiveInstanceStatus>`` so a shape drift (renamed field,
-// dropped block, null/non-null mismatch) becomes a TypeScript build failure, NOT
-// a silent runtime gap.
+// A Python freshness test re-captures the route and compares it to the committed
+// JSON. This Vitest contract then checks those same JSON payloads against the
+// Frontend status type so a shape drift (renamed field, dropped block,
+// null/non-null mismatch) becomes a TypeScript build failure, NOT a silent
+// runtime gap.
 //
 // To refresh: run the Python script after any projection change, then
-// commit both the Python diff and the regenerated JSON/TS fixtures in the same PR.
+// commit both the Python diff and the regenerated JSON fixtures in the same PR.
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  steadyFixture,
-  stoppedFixture,
-} from '../../testing/operator_surface_fixtures/live-instance-status.fixtures';
+import steadyFixture from '../../testing/operator_surface_fixtures/steady.json';
+import stoppedFixture from '../../testing/operator_surface_fixtures/stopped.json';
+import type { LiveInstanceStatus } from './live-instances.types';
 
-const STEADY = steadyFixture;
-const STOPPED = stoppedFixture;
+// TypeScript widens JSON string literals to `string`, so raw JSON cannot
+// satisfy closed string unions directly. The Python freshness test anchors
+// literal values to backend output; this helper keeps the structural and
+// nullability contract checked against the Frontend type.
+type JsonImported<T> = T extends string
+  ? string
+  : T extends number
+    ? number
+    : T extends boolean
+      ? boolean
+      : T extends readonly (infer Item)[]
+        ? JsonImported<Item>[]
+        : T extends object
+          ? { [Key in keyof T]: JsonImported<T[Key]> }
+          : T;
 
-describe('operator_surface wire contract', () => {
+const STEADY = steadyFixture satisfies JsonImported<LiveInstanceStatus>;
+const STOPPED = stoppedFixture satisfies JsonImported<LiveInstanceStatus>;
+
+describe('live instance status fixture wire contract', () => {
   it('STEADY fixture carries every projection block', () => {
     expect(STEADY.operator_surface.schema_version).toBe(1);
     expect(STEADY.operator_surface.host_process.state).toBe('RUNNING');
