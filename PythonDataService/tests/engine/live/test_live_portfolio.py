@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -422,6 +423,49 @@ async def test_submit_pending_orders_blocks_when_account_truth_rejects_unexplain
     assert exc.value.gate_result == gate
     assert gate.gate_id == "account.account_truth"
     assert gate.operator_reason == "ACCOUNT_TRUTH_UNKNOWN_POSITIONS"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_drops_wal_intent_when_account_truth_blocks(tmp_path: Path) -> None:
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.order_identity import build_bot_order_namespace
+
+    broker = FakeBroker()
+    blocker = AccountTruthMessage(
+        code="unknown_positions",
+        severity="critical",
+        title="Unknown current broker positions",
+        message="At least one current IBKR position is not explained by known bot/manual evidence.",
+    )
+    gate = account_truth_gate_result(
+        _account_truth_snapshot(final_verdict="not_proven", blockers=[blocker]),
+        now_ms=_NOW_MS,
+    )
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        broker,
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("account-truth-block-test"),
+        account_truth_gate_provider=lambda: gate,
+    )
+    portfolio.order_sizer = OrderSizer(FixedShares(value=10))
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError):
+        await portfolio.submit_pending_orders()
+
+    events = wal.read_tail()
+    assert [event.event_type for event in events] == [
+        IntentEventType.SIZING_RESOLVED,
+        IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+    ]
+    assert events[1].intent_id == events[0].intent_id
+    assert events[1].drop_reason == "account_truth_block"
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
 

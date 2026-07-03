@@ -41,6 +41,8 @@ from app.engine.execution.order_sizer import (
 )
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+from app.engine.live.intent_events import DropReason
+from app.schemas.live_runs import GateResult
 
 
 def _try_int(value: object) -> int | None:
@@ -120,7 +122,11 @@ class BrokerSafetyVerdictBlockError(RuntimeError):
         self.detail = detail
 
 
-class AccountFreezeBlockError(RuntimeError):
+class SubmitGateBlockError(RuntimeError):
+    """Base class for controlled pre-submit gate refusals."""
+
+
+class AccountFreezeBlockError(SubmitGateBlockError):
     """Raised when account-level freeze evidence blocks order submission."""
 
     def __init__(self, *, evidence: object) -> None:
@@ -129,7 +135,7 @@ class AccountFreezeBlockError(RuntimeError):
         self.evidence = evidence
 
 
-class AccountRegistryBlockError(RuntimeError):
+class AccountRegistryBlockError(SubmitGateBlockError):
     """Raised when the account instance registry blocks order submission."""
 
     def __init__(self, *, gate_result: object) -> None:
@@ -138,13 +144,19 @@ class AccountRegistryBlockError(RuntimeError):
         self.gate_result = gate_result
 
 
-class AccountTruthBlockError(RuntimeError):
+class AccountTruthBlockError(SubmitGateBlockError):
     """Raised when cached Account Truth blocks order submission."""
 
     def __init__(self, *, gate_result: object) -> None:
         reason = getattr(gate_result, "operator_reason", None)
         super().__init__(f"AccountTruthBlockError(reason={reason!r})")
         self.gate_result = gate_result
+
+
+class GateResultProvider(Protocol):
+    """Provider returning a canonical submit gate result."""
+
+    def __call__(self) -> GateResult | None: ...
 
 
 class SubmitUncertainHaltError(RuntimeError):
@@ -417,11 +429,11 @@ class LivePortfolio:
     account_freeze_provider: object = None
     # Account-scoped instance registry provider. When it returns any gate result
     # other than pass, submit is refused before any broker call.
-    account_registry_gate_provider: object = None
+    account_registry_gate_provider: GateResultProvider | None = None
     # Account Truth provider. When it returns any gate result other than pass,
     # submit is refused before any broker call. The provider must read cached
     # Account Truth only; it must not sweep IBKR from the submit path.
-    account_truth_gate_provider: object = None
+    account_truth_gate_provider: GateResultProvider | None = None
     # AccountOwner mode: when set, runner code emits an AccountOwnerSubmitIntent
     # to this callable instead of placing the order through its broker adapter.
     account_owner_submitter: object = None
@@ -484,6 +496,28 @@ class LivePortfolio:
                 "a non-empty bot_order_namespace. Pass "
                 "bot_order_namespace=build_bot_order_namespace(strategy_instance_id)."
             )
+
+    def _drop_pending_intents_before_submit(self, *, drop_reason: DropReason, ts_ms: int) -> None:
+        """Append drop events for WAL-identified pending orders, then clear memory."""
+
+        if self.intent_wal is not None and self.bot_order_namespace:
+            from app.engine.live.intent_events import IntentEventType
+            from app.engine.live.order_identity import build_order_ref
+
+            for order in self.pending_orders:
+                intent_id = self._intent_by_order_id.get(order.order_id)
+                if intent_id is None:
+                    continue
+                self.intent_wal.append(
+                    event_type=IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+                    intent_id=intent_id,
+                    bot_order_namespace=self.bot_order_namespace,
+                    order_ref=build_order_ref(self.bot_order_namespace, intent_id),
+                    drop_reason=drop_reason,
+                    ts_ms=ts_ms,
+                )
+        self.pending_orders.clear()
+        self._intent_by_order_id.clear()
 
     async def refresh_from_broker(self) -> None:
         """Refresh cash, net liquidation, and positions from the broker."""
@@ -784,17 +818,21 @@ class LivePortfolio:
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
 
         if self.account_registry_gate_provider is not None:
-            registry_gate = self.account_registry_gate_provider()  # type: ignore[operator]
+            registry_gate = self.account_registry_gate_provider()
             if registry_gate is not None and getattr(registry_gate, "status", None) != "pass":
                 self.pending_orders.clear()
                 self._intent_by_order_id.clear()
                 raise AccountRegistryBlockError(gate_result=registry_gate)
 
         if self.account_truth_gate_provider is not None:
-            account_truth_gate = self.account_truth_gate_provider()  # type: ignore[operator]
+            account_truth_gate = self.account_truth_gate_provider()
             if account_truth_gate is not None and getattr(account_truth_gate, "status", None) != "pass":
-                self.pending_orders.clear()
-                self._intent_by_order_id.clear()
+                from app.utils.timestamps import now_ms_utc
+
+                self._drop_pending_intents_before_submit(
+                    drop_reason="account_truth_block",
+                    ts_ms=now_ms_utc(),
+                )
                 raise AccountTruthBlockError(gate_result=account_truth_gate)
 
         # Phase 7B / VCR-0010 — broker safety verdict gate. Consulted once at
@@ -807,35 +845,12 @@ class LivePortfolio:
         if self.verdict_provider is not None:
             verdict_value = self.verdict_provider()  # type: ignore[operator]
             if verdict_value is not None and verdict_value != "paper-only":
-                # PR 3 / operator-notice — emit drop events before raising so
-                # the append → fsync → clear ordering is satisfied. Uses
-                # now_ms_utc() because this method doesn't receive a bar
-                # timestamp; the drops are provenance-only.
-                if self.intent_wal is not None and self.bot_order_namespace:
-                    from app.engine.live.intent_events import IntentEventType
-                    from app.engine.live.order_identity import build_order_ref
-                    from app.utils.timestamps import now_ms_utc
+                from app.utils.timestamps import now_ms_utc
 
-                    _ts = now_ms_utc()
-                    for _order in self.pending_orders:
-                        _iid = self._intent_by_order_id.get(_order.order_id)
-                        if _iid is None:
-                            continue
-                        self.intent_wal.append(
-                            event_type=IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
-                            intent_id=_iid,
-                            bot_order_namespace=self.bot_order_namespace,
-                            order_ref=build_order_ref(self.bot_order_namespace, _iid),
-                            drop_reason="broker_safety_halt",
-                            ts_ms=_ts,
-                        )
-                # Reviewer finding 1: clear in-memory queue AFTER the WAL fsyncs
-                # and BEFORE raising, so queue state matches WAL state. If a
-                # caller catches the error and the verdict later passes, the same
-                # orders will NOT be re-submitted (WAL already records them as
-                # dropped). Preserves append → fsync → clear ordering invariant.
-                self.pending_orders.clear()
-                self._intent_by_order_id.clear()
+                self._drop_pending_intents_before_submit(
+                    drop_reason="broker_safety_halt",
+                    ts_ms=now_ms_utc(),
+                )
                 raise BrokerSafetyVerdictBlockError(
                     verdict=str(verdict_value),
                     detail=(

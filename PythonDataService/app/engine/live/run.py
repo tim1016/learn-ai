@@ -1186,6 +1186,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         LiveEngine,
         MaxOrdersPerDayExceeded,
     )
+    from app.engine.live.live_portfolio import SubmitGateBlockError
 
     _AccountIdentityError = (AccountIdentityMismatchError, InvalidAccountIdError)
     from app.engine.live.run_logging import configure_run_logging
@@ -2229,6 +2230,20 @@ def cmd_start(args: argparse.Namespace) -> int:
                             "last_update_ms": now_ms(),
                             "exit_code": 1,
                             "exit_reason": ExitReason.max_orders_exceeded,
+                        }
+                    ),
+                )
+                return 1
+            except SubmitGateBlockError as exc:
+                print(f"[START] HALT — submit gate blocked: {exc}", file=sys.stderr)
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.fatal_halt,
                         }
                     ),
                 )

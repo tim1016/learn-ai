@@ -50,6 +50,10 @@ async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthRes
         get_account_truth_snapshot_provider().remember(truth)
         return truth
     except BrokerError as exc:
+        get_account_truth_snapshot_provider().mark_refresh_failed(
+            health.account_id,
+            detail=str(exc),
+        )
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 

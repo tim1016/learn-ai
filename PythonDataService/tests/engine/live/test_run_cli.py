@@ -1288,6 +1288,91 @@ def test_stateless_strategy_starts_under_require_without_seed_day(tmp_path: Path
     assert receipt["global_sha256"] is None
 
 
+def test_start_submit_gate_block_exits_without_recovery_flatten(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import argparse as _argparse
+    import json as _json
+    from collections.abc import AsyncIterator
+
+    from app.engine.live import live_engine as live_engine_mod
+    from app.engine.live import run as run_mod
+    from app.engine.live.live_portfolio import AccountTruthBlockError
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from app.schemas.live_runs import GateResult
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _GateBlockingEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def run(self, *args: object, **kwargs: object) -> None:
+            raise AccountTruthBlockError(
+                gate_result=GateResult(
+                    gate_id="account.account_truth",
+                    status="block",
+                    source="account_truth_snapshot",
+                    operator_reason="ACCOUNT_TRUTH_NOT_AVAILABLE",
+                    operator_next_step="REFRESH_ACCOUNT_TRUTH",
+                    evidence_at_ms=1_700_000_000_000,
+                )
+            )
+
+    recovery_flatten_called = False
+
+    async def _recovery_flatten_spy(*args: object, **kwargs: object) -> int:
+        nonlocal recovery_flatten_called
+        recovery_flatten_called = True
+        return 0
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-gate-block-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    monkeypatch.setattr(live_engine_mod, "LiveEngine", _GateBlockingEngine)
+    monkeypatch.setattr(run_mod, "_recovery_flatten", _recovery_flatten_spy)
+
+    rc = run_mod.cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="require",
+            artifacts_root=artifacts_root,
+            broker=FakeBroker(),
+            bars=_empty_bars(),
+            client=None,
+        )
+    )
+
+    status = _json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    assert rc == 1
+    assert recovery_flatten_called is False
+    assert status["exit_code"] == 1
+    assert status["exit_reason"] == "fatal_halt"
+
+
 def test_deployment_validation_completes_clean_session_offline(tmp_path: Path) -> None:
     """Engine-correctness receipt: drive deployment_validation through cmd_start
     + the deterministic FakeBroker over a synthetic green-bar session and prove a
