@@ -49,6 +49,7 @@ from app.engine.live.deploy import (
     deploy_run,
     git_head_sha,
 )
+from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.live_runs import (
     AuditCopySizingLookup,
@@ -400,6 +401,10 @@ class RunnerProcessManager:
         processes that race on the same run dir.
         """
         run_dir = self._validate_run_dir(run_id)
+        try:
+            validate_ibkr_host_allowed(request.ibkr_host)
+        except ValueError as exc:
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
 

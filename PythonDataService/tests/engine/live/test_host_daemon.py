@@ -1055,6 +1055,27 @@ def test_build_start_command_omits_sibling_all_in_when_empty(
     assert "--sibling-all-in-symbols" not in command
 
 
+def test_start_rejects_unallowlisted_ibkr_host_at_daemon_boundary(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.host_daemon import HostRunnerError
+    from app.schemas.live_runs import HostRunnerStartRequest
+
+    monkeypatch.delenv("IBKR_HOST", raising=False)
+    monkeypatch.delenv("IBKR_HOST_ALLOWLIST", raising=False)
+    manager, _ = daemon_context
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(
+            RUN_ID,
+            request=HostRunnerStartRequest(ibkr_host="192.168.1.50"),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "host-daemon allow-list" in exc_info.value.detail
+
+
 def test_sibling_all_in_symbols_detects_set_holdings_full(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
