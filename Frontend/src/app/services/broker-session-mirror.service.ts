@@ -4,6 +4,8 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   BrokerSessionEventPage,
+  BrokerSessionEventPurgeRequest,
+  BrokerSessionEventPurgeResult,
   BrokerSessionMirrorSnapshot,
 } from '../api/broker-session-mirror.types';
 
@@ -31,6 +33,17 @@ export class BrokerSessionMirrorService {
       this.http.get<BrokerSessionEventPage>(`${this.base}/events`, {
         params: query,
       }),
+    );
+  }
+
+  purgeEvents(
+    request: BrokerSessionEventPurgeRequest,
+  ): Promise<BrokerSessionEventPurgeResult> {
+    return firstValueFrom(
+      this.http.post<BrokerSessionEventPurgeResult>(
+        `${this.base}/events/purge`,
+        request,
+      ),
     );
   }
 }

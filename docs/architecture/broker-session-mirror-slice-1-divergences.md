@@ -139,3 +139,29 @@ Critical limits:
    runtime row and a socket row with no live PID. Stronger production proof
    should incorporate the bounded session-level history from the later durable
    history slice.
+
+## Slice 5 addendum — diagnostic history purge
+
+Date: 2026-07-03
+
+The stacked slice-5 branch adds a diagnostic-only purge endpoint over
+`_broker/connection_events.jsonl`, an exact confirmation token, client/time
+filters, and a broker-session mirror control that clears the live SSE buffer
+after a successful purge.
+
+Critical limits:
+
+1. **This is not the full session-level history store.**
+   The purge operates on the existing durable API-callback diagnostic log. It
+   does not yet persist socket roster snapshots for ghost/orphan rows that have
+   no API-event content.
+
+2. **The UI time filter is raw `int64 ms UTC`.**
+   That keeps the boundary exact and compliant with timestamp policy, but it is
+   a diagnostic control rather than a polished date/time picker. A later UX
+   pass can add ET date controls while still submitting epoch milliseconds.
+
+3. **Recovery remains deferred.**
+   The robust reconnect state machine is still intentionally outside these
+   read-mostly mirror slices because it rewrites live-trading behavior and
+   needs its own transition-function and ResumeGuard PR stack.

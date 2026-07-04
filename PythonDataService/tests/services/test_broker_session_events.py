@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.schemas.broker_session import BrokerSessionEventPurgeRequest
 from app.services.broker_session_events import (
     BrokerSessionEventService,
     classify_broker_session_event,
@@ -90,6 +91,68 @@ def test_event_service_pages_filters_and_counts_by_client_id(
         "recovery_reconnect": 1,
     }
     assert service.counts_by_client_id()[77] == {"data_farm": 1}
+
+
+def test_event_service_purges_diagnostic_log_without_touching_audit_trail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker_dir = tmp_path / "_broker"
+    broker_dir.mkdir()
+    path = broker_dir / "connection_events.jsonl"
+    audit_path = tmp_path / "run-a" / "intent_events.jsonl"
+    audit_path.parent.mkdir()
+    audit_path.write_text('{"event_type":"PENDING_INTENT"}\n', encoding="utf-8")
+    _write_events(
+        path,
+        [
+            {
+                "event_type": "IBKR_CODE",
+                "ts_ms_utc": 10,
+                "client_id": 42,
+                "ibkr_code": 1100,
+            },
+            {
+                "event_type": "IBKR_CODE",
+                "ts_ms_utc": 20,
+                "client_id": 77,
+                "ibkr_code": 2103,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        BrokerSessionEventService,
+        "event_log_path",
+        staticmethod(lambda: path),
+    )
+    service = BrokerSessionEventService()
+
+    result = service.purge(
+        BrokerSessionEventPurgeRequest(
+            client_id=42,
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
+    )
+
+    assert result.purged_count == 1
+    assert result.remaining_count == 1
+    assert "client_id\": 42" not in path.read_text(encoding="utf-8")
+    assert "client_id\": 77" in path.read_text(encoding="utf-8")
+    assert audit_path.read_text(encoding="utf-8") == '{"event_type":"PENDING_INTENT"}\n'
+
+
+def test_event_purge_request_requires_filter_and_confirm() -> None:
+    with pytest.raises(ValueError):
+        BrokerSessionEventPurgeRequest(
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
+    with pytest.raises(ValueError):
+        BrokerSessionEventPurgeRequest(
+            client_id=42,
+            start_ms=20,
+            end_ms=10,
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
 
 
 def _write_events(path: Path, rows: list[dict[str, object]]) -> None:

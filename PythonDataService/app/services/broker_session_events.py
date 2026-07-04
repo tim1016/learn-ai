@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,12 @@ from app.broker.ibkr.event_codes import (
     BrokerSessionEventCategory,
     BrokerSessionEventSeverity,
 )
-from app.schemas.broker_session import BrokerSessionEvent, BrokerSessionEventPage
+from app.schemas.broker_session import (
+    BrokerSessionEvent,
+    BrokerSessionEventPage,
+    BrokerSessionEventPurgeRequest,
+    BrokerSessionEventPurgeResult,
+)
 
 _EVENT_LOG_RELATIVE = Path("_broker") / "connection_events.jsonl"
 _EVENT_TYPE_MEANINGS: dict[
@@ -64,6 +70,32 @@ class BrokerSessionEventService:
             counts = out.setdefault(event.client_id, {})
             counts[event.category] = counts.get(event.category, 0) + 1
         return out
+
+    def purge(
+        self,
+        request: BrokerSessionEventPurgeRequest,
+    ) -> BrokerSessionEventPurgeResult:
+        path = self.event_log_path()
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return BrokerSessionEventPurgeResult(purged_count=0, remaining_count=0)
+
+        kept: list[str] = []
+        purged_count = 0
+        for index, line in enumerate(lines, start=1):
+            event = _event_from_line(seq=index, line=line)
+            if _matches_purge_filter(event, request):
+                purged_count += 1
+            else:
+                kept.append(line)
+
+        if purged_count > 0:
+            _atomic_write_lines(path, kept)
+        return BrokerSessionEventPurgeResult(
+            purged_count=purged_count,
+            remaining_count=len(kept),
+        )
 
     def _read_all_events(self) -> list[BrokerSessionEvent]:
         path = self.event_log_path()
@@ -157,6 +189,28 @@ def _event_from_line(*, seq: int, line: str) -> BrokerSessionEvent:
             raw={},
         )
     return classify_broker_session_event(seq=seq, payload=payload)
+
+
+def _matches_purge_filter(
+    event: BrokerSessionEvent,
+    request: BrokerSessionEventPurgeRequest,
+) -> bool:
+    if request.client_id is not None and event.client_id != request.client_id:
+        return False
+    if request.start_ms is not None and event.ts_ms < request.start_ms:
+        return False
+    return not (request.end_ms is not None and event.ts_ms > request.end_ms)
+
+
+def _atomic_write_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    payload = "".join(f"{line}\n" for line in lines)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    tmp.replace(path)
 
 
 def _json_safe_dict(payload: dict[str, Any]) -> dict[str, JsonValue]:

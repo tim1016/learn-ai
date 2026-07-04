@@ -9,6 +9,8 @@ from fastapi.responses import StreamingResponse
 
 from app.schemas.broker_session import (
     BrokerSessionEventPage,
+    BrokerSessionEventPurgeRequest,
+    BrokerSessionEventPurgeResult,
     BrokerSessionMirrorSnapshot,
 )
 from app.services.broker_session_events import (
@@ -42,6 +44,16 @@ async def broker_session_events(
     """Return classified broker-session diagnostic events."""
 
     return service.events(client_id=client_id, after_seq=after_seq, limit=limit)
+
+
+@router.post("/events/purge", response_model=BrokerSessionEventPurgeResult)
+async def broker_session_events_purge(
+    request: BrokerSessionEventPurgeRequest,
+    service: BrokerSessionEventService = Depends(get_broker_session_event_service),
+) -> BrokerSessionEventPurgeResult:
+    """Purge broker-session diagnostic events only."""
+
+    return service.purge(request)
 
 
 @router.get("/stream")
