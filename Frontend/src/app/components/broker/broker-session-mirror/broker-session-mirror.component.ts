@@ -21,6 +21,10 @@ import type {
   BrokerSessionRecency,
   BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
+import {
+  BROKER_SESSION_PURGE_CONFIRM,
+  type BrokerSessionEventPurgeRequest,
+} from '../../../api/broker-session-mirror.types';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import { BrokerSessionMirrorService } from '../../../services/broker-session-mirror.service';
 import { fmtInteger, fmtTimestampNy } from '../format';
@@ -72,6 +76,14 @@ export class BrokerSessionMirrorComponent {
   readonly manualSnapshot = signal<BrokerSessionMirrorSnapshot | null>(null);
   readonly isRefreshing = signal<boolean>(false);
   readonly refreshError = signal<string | null>(null);
+  readonly purgeClientIdText = signal<string>('');
+  readonly purgeStartMsText = signal<string>('');
+  readonly purgeEndMsText = signal<string>('');
+  readonly purgeConfirmText = signal<string>('');
+  readonly isPurging = signal<boolean>(false);
+  readonly purgeMessage = signal<string | null>(null);
+  readonly purgeError = signal<string | null>(null);
+  readonly purgeConfirmToken = BROKER_SESSION_PURGE_CONFIRM;
 
   readonly snapshot = computed<BrokerSessionMirrorSnapshot | null>(
     () => this.snapshotStream.latest() ?? this.manualSnapshot(),
@@ -85,6 +97,9 @@ export class BrokerSessionMirrorComponent {
   readonly eventStreamStatus = this.eventStream.status;
   readonly eventStreamError = this.eventStream.lastError;
   readonly events = this.eventStream.data;
+  readonly canPurge = computed<boolean>(
+    () => this.buildPurgeRequest() !== null && !this.isPurging(),
+  );
 
   constructor() {
     void this.refresh();
@@ -105,6 +120,27 @@ export class BrokerSessionMirrorComponent {
   async openBot(row: BrokerSessionRosterRow): Promise<void> {
     if (!row.strategy_instance_id) return;
     await this.router.navigate(['/broker/bots', row.strategy_instance_id]);
+  }
+
+  async purgeEvents(): Promise<void> {
+    const request = this.buildPurgeRequest();
+    if (request === null) return;
+    this.isPurging.set(true);
+    this.purgeError.set(null);
+    this.purgeMessage.set(null);
+    try {
+      const result = await this.mirror.purgeEvents(request);
+      this.purgeConfirmText.set('');
+      this.eventStream.clear();
+      this.purgeMessage.set(
+        `Purged ${this.formatNumber(result.purged_count)} events; ${this.formatNumber(result.remaining_count)} remain.`,
+      );
+      await this.refresh();
+    } catch (err) {
+      this.purgeError.set(humanError(err));
+    } finally {
+      this.isPurging.set(false);
+    }
   }
 
   async runNoticeAction(row: BrokerSessionRosterRow): Promise<void> {
@@ -218,6 +254,24 @@ export class BrokerSessionMirrorComponent {
 
   readonly trackByRowId = (_index: number, row: BrokerSessionRosterRow): string =>
     row.row_id;
+
+  private buildPurgeRequest(): BrokerSessionEventPurgeRequest | null {
+    if (this.purgeConfirmText() !== BROKER_SESSION_PURGE_CONFIRM) return null;
+    const clientId = parseOptionalNonNegativeInt(this.purgeClientIdText());
+    const startMs = parseOptionalNonNegativeInt(this.purgeStartMsText());
+    const endMs = parseOptionalNonNegativeInt(this.purgeEndMsText());
+    if (clientId === undefined || startMs === undefined || endMs === undefined) {
+      return null;
+    }
+    if (clientId === null && startMs === null && endMs === null) return null;
+    if (startMs !== null && endMs !== null && startMs > endMs) return null;
+    return {
+      client_id: clientId,
+      start_ms: startMs,
+      end_ms: endMs,
+      confirm: BROKER_SESSION_PURGE_CONFIRM,
+    };
+  }
 }
 
 function summarizeRows(rows: BrokerSessionRosterRow[]): MirrorSummary {
@@ -236,4 +290,11 @@ function summarizeRows(rows: BrokerSessionRosterRow[]): MirrorSummary {
 function humanError(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   return 'Could not load broker session mirror.';
+}
+
+function parseOptionalNonNegativeInt(value: string): number | null | undefined {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  return Number(trimmed);
 }

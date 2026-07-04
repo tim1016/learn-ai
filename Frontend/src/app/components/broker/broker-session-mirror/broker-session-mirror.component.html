@@ -78,6 +78,70 @@
     <p class="load-error" role="alert">{{ message }}</p>
   }
 
+  <section class="purge-panel" aria-label="Diagnostic history purge">
+    <label>
+      <span>Client id</span>
+      <input
+        type="number"
+        min="0"
+        inputmode="numeric"
+        data-testid="purge-client-id"
+        [value]="purgeClientIdText()"
+        (input)="purgeClientIdText.set($any($event.target).value)"
+      />
+    </label>
+    <label>
+      <span>Start ms UTC</span>
+      <input
+        type="number"
+        min="0"
+        inputmode="numeric"
+        data-testid="purge-start-ms"
+        [value]="purgeStartMsText()"
+        (input)="purgeStartMsText.set($any($event.target).value)"
+      />
+    </label>
+    <label>
+      <span>End ms UTC</span>
+      <input
+        type="number"
+        min="0"
+        inputmode="numeric"
+        data-testid="purge-end-ms"
+        [value]="purgeEndMsText()"
+        (input)="purgeEndMsText.set($any($event.target).value)"
+      />
+    </label>
+    <label class="confirm-field">
+      <span>Confirm {{ purgeConfirmToken }}</span>
+      <input
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        data-testid="purge-confirm"
+        [value]="purgeConfirmText()"
+        (input)="purgeConfirmText.set($any($event.target).value)"
+      />
+    </label>
+    <button
+      pButton
+      type="button"
+      severity="danger"
+      [loading]="isPurging()"
+      [disabled]="!canPurge()"
+      data-testid="purge-submit"
+      (click)="purgeEvents()"
+    >
+      <span class="p-button-label">Purge</span>
+    </button>
+    @if (purgeMessage(); as message) {
+      <span class="purge-status" role="status">{{ message }}</span>
+    }
+    @if (purgeError(); as message) {
+      <span class="purge-error" role="alert">{{ message }}</span>
+    }
+  </section>
+
   <div class="table-shell">
     <p-table
       styleClass="p-datatable-sm mirror-table"

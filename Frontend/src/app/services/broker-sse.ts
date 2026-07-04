@@ -29,6 +29,7 @@ export interface SseStream<T> {
   latest: Signal<T | null>;
   status: Signal<SseStatus>;
   lastError: Signal<string | null>;
+  clear: () => void;
   close: () => void;
 }
 
@@ -105,6 +106,9 @@ export function brokerSse<T>(
     source.close();
     status.set('closed');
   };
+  const clear = () => {
+    data.set([]);
+  };
 
   return {
     data: data.asReadonly(),
@@ -114,6 +118,7 @@ export function brokerSse<T>(
     }),
     status: status.asReadonly(),
     lastError: lastError.asReadonly(),
+    clear,
     close,
   };
 }

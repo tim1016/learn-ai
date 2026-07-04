@@ -100,3 +100,18 @@ export interface BrokerSessionEventPage {
   rows: BrokerSessionEvent[];
   next_seq: number | null;
 }
+
+export const BROKER_SESSION_PURGE_CONFIRM =
+  'PURGE_BROKER_SESSION_DIAGNOSTICS' as const;
+
+export interface BrokerSessionEventPurgeRequest {
+  client_id?: number | null;
+  start_ms?: number | null;
+  end_ms?: number | null;
+  confirm: typeof BROKER_SESSION_PURGE_CONFIRM;
+}
+
+export interface BrokerSessionEventPurgeResult {
+  purged_count: number;
+  remaining_count: number;
+}

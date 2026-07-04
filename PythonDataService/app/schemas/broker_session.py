@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from app.broker.ibkr.event_codes import (
     BrokerSessionEventCategory,
@@ -148,3 +148,38 @@ class BrokerSessionEventPage(BaseModel):
 
     rows: list[BrokerSessionEvent] = Field(default_factory=list)
     next_seq: int | None = Field(default=None, ge=1)
+
+
+BrokerSessionEventPurgeConfirm = Literal["PURGE_BROKER_SESSION_DIAGNOSTICS"]
+
+
+class BrokerSessionEventPurgeRequest(BaseModel):
+    """Request to purge only broker-session diagnostic event history."""
+
+    model_config = ConfigDict(frozen=True)
+
+    client_id: int | None = Field(default=None, ge=0)
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    confirm: BrokerSessionEventPurgeConfirm
+
+    @model_validator(mode="after")
+    def _validate_filter(self) -> BrokerSessionEventPurgeRequest:
+        if self.client_id is None and self.start_ms is None and self.end_ms is None:
+            raise ValueError("at least one purge filter is required")
+        if (
+            self.start_ms is not None
+            and self.end_ms is not None
+            and self.start_ms > self.end_ms
+        ):
+            raise ValueError("start_ms must be <= end_ms")
+        return self
+
+
+class BrokerSessionEventPurgeResult(BaseModel):
+    """Diagnostic event purge result."""
+
+    model_config = ConfigDict(frozen=True)
+
+    purged_count: int = Field(ge=0)
+    remaining_count: int = Field(ge=0)

@@ -6,6 +6,8 @@ from app.main import app
 from app.schemas.broker_session import (
     BrokerSessionEvent,
     BrokerSessionEventPage,
+    BrokerSessionEventPurgeRequest,
+    BrokerSessionEventPurgeResult,
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
 )
@@ -62,6 +64,14 @@ class _FakeBrokerSessionEventService:
             ],
         )
 
+    def purge(
+        self,
+        request: BrokerSessionEventPurgeRequest,
+    ) -> BrokerSessionEventPurgeResult:
+        assert request.client_id == 42
+        assert request.confirm == "PURGE_BROKER_SESSION_DIAGNOSTICS"
+        return BrokerSessionEventPurgeResult(purged_count=3, remaining_count=2)
+
 
 async def test_broker_session_snapshot_endpoint_returns_roster() -> None:
     app.dependency_overrides[get_broker_session_mirror_service] = (
@@ -104,3 +114,26 @@ async def test_broker_session_events_endpoint_returns_classified_rows() -> None:
     body = response.json()
     assert body["rows"][0]["category"] == "link_connectivity"
     assert body["rows"][0]["ibkr_code"] == 1100
+
+
+async def test_broker_session_events_purge_endpoint_returns_result() -> None:
+    app.dependency_overrides[get_broker_session_event_service] = (
+        lambda: _FakeBrokerSessionEventService()
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/api/broker/session-mirror/events/purge",
+                json={
+                    "client_id": 42,
+                    "confirm": "PURGE_BROKER_SESSION_DIAGNOSTICS",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_broker_session_event_service, None)
+
+    assert response.status_code == 200
+    assert response.json() == {"purged_count": 3, "remaining_count": 2}
