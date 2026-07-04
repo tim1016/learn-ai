@@ -33,7 +33,11 @@ function requestQueryParam(req, name) {
 }
 
 function requestControlIntent(req) {
-  return requestHeader(req, DATA_PLANE_CONTROL_INTENT_HEADER)
+  return requestHeader(req, DATA_PLANE_CONTROL_INTENT_HEADER);
+}
+
+function requestProtectedControlReadIntent(req) {
+  return requestControlIntent(req)
     ?? requestQueryParam(req, DATA_PLANE_CONTROL_INTENT_QUERY);
 }
 
@@ -80,8 +84,11 @@ function hasSameOriginFetchMetadata(req) {
 
 function shouldAttachDataPlaneSecret(req) {
   if (!dataPlaneControlSecret || !requiresDataPlaneControlSecret(req)) return false;
+  const intent = isProtectedControlRead(req)
+    ? requestProtectedControlReadIntent(req)
+    : requestControlIntent(req);
   return (
-    requestControlIntent(req) === DATA_PLANE_CONTROL_INTENT_VALUE
+    intent === DATA_PLANE_CONTROL_INTENT_VALUE
     && hasSameOriginFetchMetadata(req)
   );
 }

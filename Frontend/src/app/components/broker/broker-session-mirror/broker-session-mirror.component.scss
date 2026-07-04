@@ -350,8 +350,18 @@
 }
 
 .action-cell {
-  width: 3.25rem;
+  width: 11rem;
   text-align: right;
+}
+
+.notice-action {
+  max-width: 10rem;
+}
+
+:host ::ng-deep .notice-action .p-button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .details-row td {

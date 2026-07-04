@@ -326,21 +326,22 @@ describe('BrokerSessionMirrorComponent', () => {
       }),
     );
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
-    expandRow(fixture);
-    await settle(fixture);
 
-    const text = pageText(fixture);
-    expect(text).toContain('Orphaned broker socket detected');
-    expect(text).toContain('Verify the client session in IBKR');
+    let text = pageText(fixture);
+    expect(text).toContain('Open Bot Cockpit');
+    expect(text).not.toContain('Verify the client session in IBKR');
 
-    const button = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
-    ).find((candidate) => candidate.textContent?.includes('Open Bot Cockpit'));
-    if (button === undefined) throw new Error('Open Bot Cockpit button not found');
-    button.click();
+    buttonByText(fixture, 'Open Bot Cockpit').click();
     await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
+
+    expandRow(fixture);
+    await settle(fixture);
+
+    text = pageText(fixture);
+    expect(text).toContain('Orphaned broker socket detected');
+    expect(text).toContain('Verify the client session in IBKR');
   });
 
   it('navigates to the Bot Cockpit for attributed bot rows', async () => {
@@ -650,6 +651,19 @@ function clickButton(
   if (button === null) throw new Error(`button not found: ${testId}`);
   button.click();
   fixture.detectChanges();
+}
+
+function buttonByText(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  text: string,
+): HTMLButtonElement {
+  const button = Array.from(
+    (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+      'button',
+    ),
+  ).find((candidate) => candidate.textContent?.includes(text));
+  if (button === undefined) throw new Error(`button not found: ${text}`);
+  return button;
 }
 
 function expandRow(

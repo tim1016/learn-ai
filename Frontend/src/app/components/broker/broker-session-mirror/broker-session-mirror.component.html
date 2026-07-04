@@ -339,16 +339,34 @@
             }
           </td>
           <td class="action-cell">
-            <button
-              pButton
-              type="button"
-              severity="secondary"
-              icon="pi pi-external-link"
-              [text]="true"
-              [disabled]="row.strategy_instance_id === null"
-              [attr.aria-label]="'Open bot ' + rowDisplayName(row)"
-              (click)="openBot(row)"
-            ></button>
+            @if (row.notice?.action.label; as noticeActionLabel) {
+              <button
+                pButton
+                type="button"
+                severity="danger"
+                size="small"
+                class="notice-action"
+                [disabled]="noticeActionDisabled(row)"
+                [attr.aria-label]="
+                  'Run notice action for ' + rowDisplayName(row) + ': ' +
+                  noticeActionLabel
+                "
+                (click)="runNoticeAction(row)"
+              >
+                <span class="p-button-label">{{ noticeActionLabel }}</span>
+              </button>
+            } @else {
+              <button
+                pButton
+                type="button"
+                severity="secondary"
+                icon="pi pi-external-link"
+                [text]="true"
+                [disabled]="row.strategy_instance_id === null"
+                [attr.aria-label]="'Open bot ' + rowDisplayName(row)"
+                (click)="openBot(row)"
+              ></button>
+            }
           </td>
         </tr>
       </ng-template>

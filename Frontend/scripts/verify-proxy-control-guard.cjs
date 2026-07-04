@@ -112,6 +112,21 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
 }
 
 {
+  const req = request({
+    method: 'POST',
+    url: '/api/broker/connect',
+    intent: null,
+    queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(isControlMutation(req), true);
+  assert.equal(requiresDataPlaneControlSecret(req), true);
+  assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), false);
+  assert.equal(shouldAttachDataPlaneSecret(req), false);
+}
+
+{
   const req = request({ url: '/api/live-instances/runs/run-abc/start' });
   const proxy = proxyEmitterRecorder();
   const proxyReq = proxyReqRecorder();
