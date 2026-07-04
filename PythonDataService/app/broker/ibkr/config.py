@@ -121,6 +121,11 @@ class IbkrSettings(BaseSettings):
     # parameterise it. Container default: /app/artifacts/live_runs.
     live_runs_root: str = "/app/artifacts/live_runs"
 
+    # Bounded rolling window for broker-session diagnostic callback events.
+    # These rows feed the read-only mirror and purge controls; they are not the
+    # trading audit trail and never replace WAL/receipt/fill retention.
+    broker_session_event_retention_count: int = Field(default=5_000, ge=1)
+
     # Persistent JSONL + Parquet root for live bars (Slice 4). The
     # ``LiveBarAggregator`` writes every emitted bar here and replays
     # today's bars from here on subscribe so a restart hands the chart

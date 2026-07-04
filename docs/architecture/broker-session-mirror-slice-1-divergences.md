@@ -616,3 +616,34 @@ Critical limits:
 2. **Expansion is view-only.**
    The control reads already-retained diagnostic rows. It does not reload,
    mutate, or infer live socket state from history.
+
+## Slice 23 addendum — bounded event-log retention
+
+Date: 2026-07-04
+
+The stacked slice-23 branch closes the remaining append-only behavior in the
+API-event diagnostic spine. Broker-session callback events written to
+`_broker/connection_events.jsonl` now go through the broker-session event
+service, stamp a monotonic diagnostic `broker_session_seq`, and retain only the
+configured rolling window (`IBKR_BROKER_SESSION_EVENT_RETENTION_COUNT`, default
+5000 rows). The stamped sequence keeps `/events/stream` cursors stable when
+legacy line-indexed files are trimmed.
+
+Critical limits:
+
+1. **This is diagnostic retention only.**
+   The cap applies only to broker-session callback events that feed the mirror.
+   It does not alter `intent_events.jsonl`, ledgers, reconciliation receipts,
+   fills, executions, or any trading audit retention.
+
+2. **Retention is row-count based, not time-window based.**
+   The PRD asks for a bounded rolling window. This slice makes the event log
+   bounded by count, matching the existing bounded roster snapshot store's
+   review shape. A future operations pass can tune the default or introduce a
+   time-based policy if overnight storm volume proves the count insufficient.
+
+3. **Existing legacy rows keep line-index fallback sequence.**
+   New writes stamp `broker_session_seq`; older rows without that field still
+   parse using their current file line index. The first retained write after a
+   legacy file assigns the next sequence from the pre-trim line count so live
+   SSE consumers can continue past their old cursor.

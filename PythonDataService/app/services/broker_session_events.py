@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback for local tooling.
+    fcntl = None
 
 from pydantic import JsonValue
 
@@ -25,6 +31,7 @@ from app.schemas.broker_session import (
 )
 
 _EVENT_LOG_RELATIVE = Path("_broker") / "connection_events.jsonl"
+_EVENT_LOG_MAX_EVENTS = 5_000
 _ET = ZoneInfo("America/New_York")
 _RESET_WINDOW_WARNING_CODES = frozenset({1100, 1300, 2110, 2103, 2105})
 _EVENT_TYPE_MEANINGS: dict[
@@ -79,6 +86,35 @@ _EVENT_TYPE_MEANINGS: dict[
 class BrokerSessionEventService:
     """Read and classify broker-session diagnostic events."""
 
+    def __init__(
+        self,
+        *,
+        path: Path | None = None,
+        max_events: int = _EVENT_LOG_MAX_EVENTS,
+    ) -> None:
+        self._path = path
+        self._max_events = max(1, max_events)
+
+    def append_event(self, payload: dict[str, Any]) -> None:
+        """Append one diagnostic event while keeping a bounded rolling window."""
+
+        path = self.event_log_path()
+        with locked_jsonl_file(path):
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:
+                lines = []
+            safe_payload = _json_safe_dict(payload)
+            safe_payload["broker_session_seq"] = _next_event_seq(lines)
+            lines.append(
+                json.dumps(
+                    safe_payload,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+            write_jsonl_lines_atomically(path, lines[-self._max_events :])
+
     def events(
         self,
         *,
@@ -109,22 +145,23 @@ class BrokerSessionEventService:
         request: BrokerSessionEventPurgeRequest,
     ) -> BrokerSessionEventPurgeResult:
         path = self.event_log_path()
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            return BrokerSessionEventPurgeResult(purged_count=0, remaining_count=0)
+        with locked_jsonl_file(path):
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:
+                return BrokerSessionEventPurgeResult(purged_count=0, remaining_count=0)
 
-        kept: list[str] = []
-        purged_count = 0
-        for index, line in enumerate(lines, start=1):
-            event = _event_from_line(seq=index, line=line)
-            if _matches_purge_filter(event, request):
-                purged_count += 1
-            else:
-                kept.append(line)
+            kept: list[str] = []
+            purged_count = 0
+            for index, line in enumerate(lines, start=1):
+                event = _event_from_line(seq=index, line=line)
+                if _matches_purge_filter(event, request):
+                    purged_count += 1
+                else:
+                    kept.append(_line_with_stable_seq(line=line, seq=index))
 
-        if purged_count > 0:
-            write_jsonl_lines_atomically(path, kept)
+            if purged_count > 0:
+                write_jsonl_lines_atomically(path, kept)
         return BrokerSessionEventPurgeResult(
             purged_count=purged_count,
             remaining_count=len(kept),
@@ -145,8 +182,9 @@ class BrokerSessionEventService:
             events.append(_event_from_line(seq=index, line=line))
         return events
 
-    @staticmethod
-    def event_log_path() -> Path:
+    def event_log_path(self) -> Path:
+        if self._path is not None:
+            return self._path
         return Path(get_settings().live_runs_root) / _EVENT_LOG_RELATIVE
 
 
@@ -247,7 +285,8 @@ def _event_from_line(*, seq: int, line: str) -> BrokerSessionEvent:
             raw_event_type="MALFORMED_JSON",
             raw={},
         )
-    return classify_broker_session_event(seq=seq, payload=payload)
+    stable_seq = _int_value(payload.get("broker_session_seq")) or seq
+    return classify_broker_session_event(seq=stable_seq, payload=payload)
 
 
 def _matches_purge_filter(
@@ -270,6 +309,49 @@ def write_jsonl_lines_atomically(path: Path, lines: list[str]) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     tmp.replace(path)
+
+
+@contextmanager
+def locked_jsonl_file(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with open(lock_path, "a", encoding="utf-8") as lock_fh:
+        if fcntl is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _next_event_seq(lines: list[str]) -> int:
+    max_seq = 0
+    for index, line in enumerate(lines, start=1):
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            max_seq = max(max_seq, index)
+            continue
+        if not isinstance(payload, dict):
+            max_seq = max(max_seq, index)
+            continue
+        max_seq = max(max_seq, _int_value(payload.get("broker_session_seq")) or index)
+    return max_seq + 1
+
+
+def _line_with_stable_seq(*, line: str, seq: int) -> str:
+    try:
+        payload = json.loads(line)
+    except ValueError:
+        return line
+    if not isinstance(payload, dict):
+        return line
+    if _int_value(payload.get("broker_session_seq")) is not None:
+        return line
+    payload = _json_safe_dict(payload)
+    payload["broker_session_seq"] = seq
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
 def _json_safe_dict(payload: dict[str, Any]) -> dict[str, JsonValue]:
