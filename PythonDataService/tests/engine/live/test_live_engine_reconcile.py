@@ -35,7 +35,11 @@ from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState
 from app.engine.live.fleet_reset_baseline import baseline_path
-from app.engine.live.live_engine import BrokerRecoveryReconcileBlockedError, LiveEngine
+from app.engine.live.live_engine import (
+    BrokerRecoveryReconcileBlockedError,
+    LiveEngine,
+    ReconnectAccountMismatchHaltError,
+)
 from app.engine.live.reconciliation_classifier import (
     Adopt,
     BrokerSnapshot,
@@ -295,6 +299,78 @@ async def test_broker_recovery_reconcile_releases_barrier_and_bumps_epoch(
     assert engine._connection_epoch == 8
     assert engine._paused is False
     assert not shutdown_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_broker_recovery_reconcile_snapshots_client_reconnect_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Monitor-owned recovery should consume the client reconnect counter so
+    the legacy bar-loop gate does not count the same reconnect again.
+    """
+    harness = _harness(tmp_path)
+    engine = harness.engine
+    engine._connection_epoch = 7
+    engine._last_connectivity_lost_count = 1
+
+    class _Client:
+        connectivity_lost_count = 3
+        connected_account = "DU123"
+
+    engine._client = _Client()  # type: ignore[assignment]
+    shutdown_event = asyncio.Event()
+
+    async def _result(_kwargs: dict) -> ReconciliationResult:
+        return ReconciliationResult(verdict=Continue(), receipt=_make_receipt())
+
+    harness.stub_reconcile(monkeypatch, _result)
+
+    await engine.run_broker_recovery_reconcile(shutdown_event)
+
+    assert engine._connection_epoch == 8
+    assert engine._last_connectivity_lost_count == 3
+    assert not shutdown_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_broker_recovery_reconcile_account_mismatch_halts_before_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reconnect recovery preserves the old account-mismatch halt before
+    probing or adopting broker orders.
+    """
+    harness = _harness(tmp_path)
+    engine = harness.engine
+
+    class _Client:
+        connectivity_lost_count = 4
+        connected_account = "DU999"
+
+    class _Portfolio:
+        pending_orders = [object()]
+
+    engine._client = _Client()  # type: ignore[assignment]
+    engine._run_portfolio = _Portfolio()
+    shutdown_event = asyncio.Event()
+
+    async def _result(_kwargs: dict) -> ReconciliationResult:
+        pytest.fail("account mismatch should halt before reconciliation")
+
+    harness.stub_reconcile(monkeypatch, _result)
+
+    with pytest.raises(ReconnectAccountMismatchHaltError) as raised:
+        await engine.run_broker_recovery_reconcile(shutdown_event)
+
+    assert raised.value.connected_account == "DU999"
+    assert raised.value.connection_epoch == 1
+    assert engine._inhibit_submits is True
+    assert engine._connection_epoch == 1
+    assert engine._last_connectivity_lost_count == 4
+    assert engine._run_portfolio.pending_orders == []  # type: ignore[union-attr]
+    assert shutdown_event.is_set()
+    halt_payload = (tmp_path / "halt.flag").read_text(encoding="utf-8")
+    assert "RECONNECT_ACCOUNT_MISMATCH_HALT" in halt_payload
+    assert "connected_account=DU999" in halt_payload
 
 
 @pytest.mark.asyncio

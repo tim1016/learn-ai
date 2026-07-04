@@ -669,9 +669,9 @@ class LiveEngine:
         # Holds the watchdog instance for the duration of ``run()``; set
         # in the startup block, awaited in the outer finally.
         self._watchdog: object | None = None
-        # Weak reference to the LivePortfolio created in ``run()``.  Set
-        # just before the child watchdog starts so the watchdog adapter
-        # can read live position state.  Cleared in the finally block.
+        # Weak reference to the LivePortfolio created in ``run()``. Set
+        # for the active run so recovery/watchdog adapters can clear pending
+        # orders or read live position state. Cleared in the finally block.
         self._run_portfolio: object | None = None
         # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
         self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
@@ -969,6 +969,8 @@ class LiveEngine:
         await self._probe_and_publish_broker_block()
         await self._publish_initial_bar_loop_block()
 
+        self._run_portfolio = portfolio
+
         # PRD #619-B B5 follow-up — child watchdog. The factory builds
         # a configured ``ChildWatchdog`` from the engine's four side-
         # effect callbacks; the engine owns the lifecycle. When the
@@ -976,9 +978,6 @@ class LiveEngine:
         # flips True (step 1), durable PAUSED + incident lands (step 2),
         # then disconnect + shutdown_event.set() drain the bar loop.
         if self._watchdog_factory is not None and self._runtime_aggregator is not None and shutdown_event is not None:
-            # Expose portfolio to the watchdog adapter before the watchdog
-            # starts so flatten_now can read live position state.
-            self._run_portfolio = portfolio
             self._watchdog = await self._start_child_watchdog(shutdown_event)
 
         # Operator command-channel poll task. Spawned only when a
@@ -1962,6 +1961,11 @@ class LiveEngine:
         """
         request_id = mint_intent_id()
         self._inhibit_submits = True
+        try:
+            self._verify_broker_recovery_account_match()
+        except ReconnectAccountMismatchHaltError:
+            shutdown_event.set()
+            raise
         outcome = await self._run_reconciliation_core(
             shutdown_event=shutdown_event,
             request_id=request_id,
@@ -1969,6 +1973,7 @@ class LiveEngine:
         )
         if outcome.get("verdict") not in {"clean", "adopted"}:
             raise BrokerRecoveryReconcileBlockedError(outcome=outcome)
+        self._mark_reconnect_revalidation_observed()
         return outcome
 
     async def _run_reconciliation_core(
@@ -2104,6 +2109,75 @@ class LiveEngine:
             )
             verdict_payload.update({"verdict": "error", "detail": repr(exc)})
         return verdict_payload
+
+    def _mark_reconnect_revalidation_observed(self) -> None:
+        """Snapshot the client reconnect counter after monitor recovery.
+
+        The legacy bar-loop reconnect gate still reads
+        ``connectivity_lost_count``. Once monitor-owned recovery has already
+        reconciled broker truth for that count, snapshot it here so the next
+        bar does not treat the same reconnect as a fresh legacy event.
+        """
+        client = self._client
+        if client is None:
+            return
+        current_count = getattr(client, "connectivity_lost_count", None)
+        if isinstance(current_count, int) and current_count > self._last_connectivity_lost_count:
+            self._last_connectivity_lost_count = current_count
+
+    def _verify_broker_recovery_account_match(self) -> None:
+        """Preserve reconnect account-identity safety for monitor recovery."""
+        client = self._client
+        if client is None or not self._account_id:
+            return
+        connected_account = getattr(client, "connected_account", None) or ""
+        from app.engine.live.account_identity import (
+            AccountIdentityMismatchError,
+            verify_account_match,
+        )
+
+        try:
+            verify_account_match(
+                ledger_account_id=self._account_id,
+                connected_account=connected_account,
+            )
+        except AccountIdentityMismatchError:
+            current_count = getattr(client, "connectivity_lost_count", None)
+            if isinstance(current_count, int) and current_count > self._last_connectivity_lost_count:
+                self._last_connectivity_lost_count = current_count
+            self._connection_epoch += 1
+            self._raise_reconnect_account_mismatch(
+                connected_account=connected_account,
+                portfolio=self._run_portfolio,
+            )
+
+    def _raise_reconnect_account_mismatch(
+        self,
+        *,
+        connected_account: str,
+        portfolio: object | None,
+    ) -> None:
+        """Clear pending orders, stamp halt evidence, and raise mismatch halt."""
+        pending_orders = getattr(portfolio, "pending_orders", None)
+        if pending_orders is not None:
+            pending_orders.clear()
+        if self._output_dir is not None:
+            try:
+                self._output_dir.mkdir(parents=True, exist_ok=True)
+                (self._output_dir / "halt.flag").write_text(
+                    f"RECONNECT_ACCOUNT_MISMATCH_HALT "
+                    f"ledger_account_id={self._account_id} "
+                    f"connected_account={connected_account} "
+                    f"connection_epoch={self._connection_epoch}\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                logger.exception("halt.flag write failed for reconnect-mismatch halt")
+        raise ReconnectAccountMismatchHaltError(
+            ledger_account_id=self._account_id or "",
+            connected_account=connected_account,
+            connection_epoch=self._connection_epoch,
+        ) from None
 
     def _persist_desired_state(self, state: DesiredState, reason: str) -> None:
         """Best-effort durable write of operator intent (PRD-A §16.4
@@ -2499,24 +2573,10 @@ class LiveEngine:
                 connected_account=connected_account or "",
             )
         except AccountIdentityMismatchError:
-            portfolio.pending_orders.clear()
-            if self._output_dir is not None:
-                try:
-                    self._output_dir.mkdir(parents=True, exist_ok=True)
-                    (self._output_dir / "halt.flag").write_text(
-                        f"RECONNECT_ACCOUNT_MISMATCH_HALT "
-                        f"ledger_account_id={self._account_id} "
-                        f"connected_account={connected_account} "
-                        f"connection_epoch={self._connection_epoch}\n",
-                        encoding="utf-8",
-                    )
-                except OSError:
-                    logger.exception("halt.flag write failed for reconnect-mismatch halt")
-            raise ReconnectAccountMismatchHaltError(
-                ledger_account_id=self._account_id,
+            self._raise_reconnect_account_mismatch(
                 connected_account=connected_account or "",
-                connection_epoch=self._connection_epoch,
-            ) from None
+                portfolio=portfolio,
+            )
         logger.info(
             "Broker reconnect re-validated identity match at epoch=%d (ledger=%s, connected=%s)",
             self._connection_epoch,

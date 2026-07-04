@@ -1653,6 +1653,25 @@ def cmd_start(args: argparse.Namespace) -> int:
         run_dir=args.run_dir,
         now_ms=lambda: int(time.time() * 1000),
     )
+    broker_monitor = None
+    broker_recovery_engine_ref: dict[str, object] = {}
+    broker_recovery_shutdown_event: asyncio.Event | None = None
+    if client is not None:
+        from app.broker.ibkr.auto_reconnect_monitor import AutoReconnectMonitor
+
+        async def _run_broker_recovery_reconcile() -> None:
+            engine_for_recovery = broker_recovery_engine_ref.get("engine")
+            if engine_for_recovery is None or broker_recovery_shutdown_event is None:
+                raise RuntimeError("broker recovery callback invoked before live engine startup")
+            reconcile = getattr(engine_for_recovery, "run_broker_recovery_reconcile", None)
+            if reconcile is None:
+                raise RuntimeError("live engine does not expose broker recovery reconciliation")
+            await reconcile(broker_recovery_shutdown_event)
+
+        broker_monitor = AutoReconnectMonitor(
+            client,
+            recovery_callbacks=[_run_broker_recovery_reconcile],
+        )
 
     account_owner = None
     account_owner_generation = 0
@@ -1755,12 +1774,14 @@ def cmd_start(args: argparse.Namespace) -> int:
         intent_wal_path=args.run_dir / "intent_events.jsonl",
         verdict_provider=verdict_provider,
         runtime_aggregator=_runtime_aggregator,
+        broker_monitor=broker_monitor,
         artifacts_root_for_lease=_artifacts_root,
         watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
         account_owner_submitter=account_owner.submit if account_owner is not None else None,
         owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
     )
+    broker_recovery_engine_ref["engine"] = engine
 
     # PRD #619-A — capture the durable child/run evidence the Resume
     # gate needs to evaluate ``submission_capability``: the declared
@@ -1799,8 +1820,10 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
 
     async def _drive_engine() -> int:
+        nonlocal broker_recovery_shutdown_event
         loop = asyncio.get_running_loop()
         shutdown_event = asyncio.Event()
+        broker_recovery_shutdown_event = shutdown_event
         _install_signal_handlers(loop, shutdown_event)
 
         # Production path: connect the IBKR client before validating
@@ -2172,6 +2195,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                     )
                     await account_truth_refresh_loop.refresh_once()
                     account_truth_refresh_loop.start()
+                if broker_monitor is not None:
+                    broker_monitor.start()
                 await _runtime_publisher.start()
                 await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
                 # Write exit sidecar — use keyboard_interrupt if signal was received
@@ -2356,6 +2381,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                     )
                 return 3
         finally:
+            if broker_monitor is not None:
+                try:
+                    await broker_monitor.stop()
+                except Exception:
+                    logger.exception("broker auto-reconnect monitor stop failed", extra={"step": "8"})
             # PRD #619-B B3 — bounded shutdown of the runtime publisher
             # BEFORE the client disconnect so a final snapshot
             # captures the disconnect-imminent state, not a half-torn

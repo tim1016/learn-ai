@@ -537,3 +537,36 @@ Critical limits:
    monitor callback is wired, that path must be retired or explicitly
    coordinated so reconnect recovery does not double-count epochs or mix two
    recovery authorities.
+
+## Slice 20 addendum — child auto-reconnect monitor wiring
+
+Date: 2026-07-04
+
+The stacked slice-20 branch installs a child-owned `AutoReconnectMonitor` for
+real-client `cmd_start` runs, passes that monitor into `LiveEngine` so
+`engine_runtime.json` can expose monitor recovery overlays, starts it after
+startup gates pass, and stops it before the runtime publisher/client teardown.
+The monitor recovery callback now calls the reusable broker recovery
+reconciliation seam. Clean/adopted recovery snapshots the client's reconnect
+counter so the older bar-loop revalidation does not double-count the same
+restore, while account mismatch still halts before broker reconciliation can
+adopt orders from the wrong account.
+
+Critical limits:
+
+1. **Recovery failure remains fail-closed, not self-healing.**
+   Ambiguous adoption, poison, broker-probe errors, and account mismatch raise
+   through the monitor callback. The monitor marks recovery failed and retries
+   according to its existing state machine; this slice does not add an operator
+   auto-resume path.
+
+2. **ResumeGuard and incident clearing are still manual/operator paths.**
+   The callback can prove broker truth and release the submit barrier on clean
+   recovery, but it does not clear prior watchdog incidents or bypass existing
+   resume gates.
+
+3. **ADR-0011 is coordinated, not fully deleted.**
+   Monitor success consumes the client reconnect counter to avoid duplicate
+   epochs, and non-monitor/test paths still use the legacy bar-loop
+   revalidation. Removing that legacy path entirely remains separate follow-up
+   work once every live child path uses the monitor.
