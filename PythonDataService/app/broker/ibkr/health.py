@@ -26,6 +26,7 @@ from app.broker.ibkr.models import (
     BrokerSafetyVerdict,
     IbkrConnectionHealth,
 )
+from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -62,9 +63,13 @@ def build_broker_health(
         state = "recovering"
     else:
         state = base.connection_state
+    recovery_state = monitor.recovery_state
+    if recovery_state is None:
+        recovery_state = recovery_state_from_connection_state(state)
     return base.model_copy(
         update={
             "connection_state": state,
+            "recovery_state": recovery_state,
             "reconnect_attempt": monitor.current_attempt or None,
             "successful_reconnect_count": monitor.successful_reconnect_count,
             "last_transition_ms": max(
@@ -106,5 +111,6 @@ def synthetic_disconnected_health(
         fetched_at_ms=now_ms,
         safety_verdict=safety_verdict,
         connection_state=state,
+        recovery_state=recovery_state_from_connection_state(state),
         last_transition_ms=now_ms,
     )

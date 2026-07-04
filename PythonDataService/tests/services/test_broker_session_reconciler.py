@@ -218,6 +218,33 @@ def test_reconciler_adds_connected_data_plane_system_row() -> None:
     assert rows[0].recovery_state == "HEALTHY"
 
 
+def test_reconciler_prefers_health_recovery_state_for_data_plane_row() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=42,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            fetched_at_ms=AS_OF_MS,
+            connection_state="connected",
+            recovery_state="RECONNECTING",
+            last_transition_ms=AS_OF_MS - 500,
+        ),
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "system"
+    assert rows[0].connection_state == "connected"
+    assert rows[0].recovery_state == "RECONNECTING"
+
+
 def test_reconciler_projects_runtime_recovery_states() -> None:
     cases = [
         ("soft_lost", "LINK_INTERRUPTED"),

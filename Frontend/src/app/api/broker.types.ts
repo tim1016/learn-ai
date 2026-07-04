@@ -4195,6 +4195,8 @@ export interface components {
             connection_state: "connected" | "soft_lost" | "subscriptions_stale" | "degraded_data_farm" | "reconnecting" | "recovering" | "hard_down" | "disconnected" | "disabled";
             /** Last Transition Ms */
             last_transition_ms: number;
+            /** Recovery State */
+            recovery_state?: "HEALTHY" | "LINK_INTERRUPTED" | "RESTORING" | "SOCKET_DOWN" | "RECONNECTING" | "HARD_DOWN" | null;
             /** Connection Lost */
             connection_lost?: boolean;
             /** Connectivity Lost Count */

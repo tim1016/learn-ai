@@ -78,6 +78,7 @@ def test_error_1101_marks_subscriptions_stale(settings_paper: IbkrSettings) -> N
     assert client.subscriptions_stale is True
     assert client.connection_state == "subscriptions_stale"
     assert client.health().last_ibkr_code == 1101
+    assert client.health().recovery_state == "RESTORING"
     assert client.health().subscriptions_stale is True
 
 
@@ -90,11 +91,13 @@ def test_data_farm_codes_mark_degraded_until_ok(settings_paper: IbkrSettings) ->
     client._on_ib_error(0, 2103, "market data farm disconnected", None)
 
     assert client.connection_state == "degraded_data_farm"
+    assert client.health().recovery_state == "HEALTHY"
     assert client.health().data_farm_degraded is True
 
     client._on_ib_error(0, 2104, "market data farm ok", None)
 
     assert client.connection_state == "connected"
+    assert client.health().recovery_state == "HEALTHY"
     assert client.health().data_farm_degraded is False
 
 
@@ -524,6 +527,7 @@ def test_health_publishes_client_observed_fields_only(
     h = client.health()
 
     assert h.connection_state == "soft_lost"
+    assert h.recovery_state == "LINK_INTERRUPTED"
     assert h.connection_lost is True
     assert h.connectivity_lost_count == 1
     # Monitor-owned fields default — composer fills them in.

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.broker.ibkr.recovery_state_machine import transition_recovery_state
+import pytest
+
+from app.broker.ibkr.recovery_state_machine import (
+    recovery_state_from_connection_state,
+    transition_recovery_state,
+)
 
 
 def test_link_loss_enters_interrupted_without_reconnect_hint() -> None:
@@ -42,3 +47,28 @@ def test_exhausted_reconnect_attempts_are_terminal_hard_down() -> None:
 
     assert transition.state == "HARD_DOWN"
     assert transition.terminal is True
+
+
+@pytest.mark.parametrize(
+    "connection_state,expected_recovery_state",
+    [
+        ("connected", "HEALTHY"),
+        ("degraded_data_farm", "HEALTHY"),
+        ("soft_lost", "LINK_INTERRUPTED"),
+        ("subscriptions_stale", "RESTORING"),
+        ("recovering", "RESTORING"),
+        ("reconnecting", "RECONNECTING"),
+        ("hard_down", "HARD_DOWN"),
+        ("disconnected", "SOCKET_DOWN"),
+        ("disabled", None),
+        (None, None),
+    ],
+)
+def test_projects_connection_state_into_recovery_vocabulary(
+    connection_state: str | None,
+    expected_recovery_state: str | None,
+) -> None:
+    assert (
+        recovery_state_from_connection_state(connection_state)
+        == expected_recovery_state
+    )
