@@ -675,9 +675,9 @@ class LiveEngine:
         self._run_portfolio: object | None = None
         # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
         self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
-        # Phase 3 / VCR-0006 — reconnect re-validation. Each bar iteration
-        # snapshots IbkrClient.connectivity_lost_count; on increment + restored
-        # connection the engine re-runs account_identity.verify_account_match.
+        # Phase 3 / VCR-0006 fallback reconnect re-validation. Monitor-owned
+        # recovery is the ADR-0018 authority when ``_broker_monitor`` is wired;
+        # this bar-loop path remains only for non-monitor/test callers.
         self._last_connectivity_lost_count: int = 0
         self._connection_epoch: int = 0
         self._sizing_surface = sizing_surface
@@ -2554,6 +2554,8 @@ class LiveEngine:
         """
         client = self._client
         if client is None or not self._account_id:
+            return
+        if self._broker_monitor is not None:
             return
         current_count = getattr(client, "connectivity_lost_count", 0)
         if current_count <= self._last_connectivity_lost_count:

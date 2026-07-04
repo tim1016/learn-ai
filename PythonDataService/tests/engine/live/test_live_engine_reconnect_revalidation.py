@@ -71,6 +71,31 @@ class _FakeReconnectClient:
     ib: object = field(default_factory=object)
 
 
+def test_legacy_reconnect_revalidation_stands_down_when_monitor_is_wired(
+    tmp_path: Path,
+) -> None:
+    broker = FakeBroker()
+    client = _FakeReconnectClient(
+        connectivity_lost_count=1,
+        connection_lost=False,
+        connected_account="DU999",
+    )
+    engine = LiveEngine(
+        client,  # type: ignore[arg-type]
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        broker_monitor=object(),
+    )
+
+    engine._check_reconnect_revalidation(object())  # type: ignore[arg-type]
+
+    assert engine._connection_epoch == 0
+    assert engine._last_connectivity_lost_count == 0
+    assert not (tmp_path / "halt.flag").exists()
+
+
 @pytest.mark.asyncio
 async def test_engine_halts_on_reconnect_to_different_account_vcr_0006(
     tmp_path: Path,
