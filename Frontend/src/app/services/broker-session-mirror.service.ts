@@ -7,6 +7,8 @@ import type {
   BrokerSessionEventPurgeRequest,
   BrokerSessionEventPurgeResult,
   BrokerSessionHistoryPage,
+  BrokerSessionHistoryPurgeRequest,
+  BrokerSessionHistoryPurgeResult,
   BrokerSessionMirrorSnapshot,
 } from '../api/broker-session-mirror.types';
 
@@ -26,6 +28,17 @@ export class BrokerSessionMirrorService {
       this.http.get<BrokerSessionHistoryPage>(`${this.base}/history`, {
         params: query,
       }),
+    );
+  }
+
+  purgeHistory(
+    request: BrokerSessionHistoryPurgeRequest,
+  ): Promise<BrokerSessionHistoryPurgeResult> {
+    return firstValueFrom(
+      this.http.post<BrokerSessionHistoryPurgeResult>(
+        `${this.base}/history/purge`,
+        request,
+      ),
     );
   }
 

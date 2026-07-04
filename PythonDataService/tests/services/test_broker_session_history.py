@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from app.schemas.broker_session import (
+    BrokerSessionHistoryPurgeRequest,
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
 )
@@ -47,20 +48,113 @@ def test_history_service_skips_malformed_diagnostic_rows(tmp_path: Path) -> None
     assert page.rows[0].as_of_ms == 10
 
 
-def _snapshot(as_of_ms: int, run_id: str) -> BrokerSessionMirrorSnapshot:
+def test_history_purge_removes_client_rows_without_touching_audit_trail(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "_broker" / "session_roster_history.jsonl"
+    audit_path = tmp_path / "run-a" / "intent_events.jsonl"
+    audit_path.parent.mkdir()
+    audit_path.write_text('{"event_type":"PENDING_INTENT"}\n', encoding="utf-8")
+    service = BrokerSessionHistoryService(path=path)
+    service.append_snapshot(
+        _snapshot(
+            10,
+            "run-a",
+            rows=[
+                _row(10, "run-a", client_id=42),
+                _row(10, "run-b", client_id=77),
+            ],
+        )
+    )
+    service.append_snapshot(_snapshot(20, "run-c", client_id=42))
+
+    result = service.purge(
+        BrokerSessionHistoryPurgeRequest(
+            client_id=42,
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
+    )
+
+    assert result.purged_row_count == 2
+    assert result.purged_snapshot_count == 0
+    assert result.remaining_snapshot_count == 2
+    rows_by_snapshot = [snapshot.rows for snapshot in service.history(limit=10).rows]
+    assert rows_by_snapshot[0] == []
+    assert [row.client_id for row in rows_by_snapshot[1]] == [77]
+    assert audit_path.read_text(encoding="utf-8") == '{"event_type":"PENDING_INTENT"}\n'
+
+
+def test_history_purge_removes_whole_snapshots_by_time_range(tmp_path: Path) -> None:
+    path = tmp_path / "_broker" / "session_roster_history.jsonl"
+    service = BrokerSessionHistoryService(path=path)
+    service.append_snapshot(_snapshot(10, "run-a"))
+    service.append_snapshot(_snapshot(20, "run-b"))
+    service.append_snapshot(_snapshot(30, "run-c"))
+
+    result = service.purge(
+        BrokerSessionHistoryPurgeRequest(
+            start_ms=15,
+            end_ms=25,
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
+    )
+
+    assert result.purged_row_count == 1
+    assert result.purged_snapshot_count == 1
+    assert result.remaining_snapshot_count == 2
+    assert [snapshot.as_of_ms for snapshot in service.history(limit=10).rows] == [30, 10]
+
+
+def test_history_purge_request_requires_filter_and_confirm() -> None:
+    try:
+        BrokerSessionHistoryPurgeRequest(
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
+    except ValueError as exc:
+        assert "at least one purge filter is required" in str(exc)
+    else:
+        raise AssertionError("expected purge request validation to fail")
+
+    try:
+        BrokerSessionHistoryPurgeRequest(
+            start_ms=20,
+            end_ms=10,
+            confirm="PURGE_BROKER_SESSION_DIAGNOSTICS",
+        )
+    except ValueError as exc:
+        assert "start_ms must be <= end_ms" in str(exc)
+    else:
+        raise AssertionError("expected purge request validation to fail")
+
+
+def _snapshot(
+    as_of_ms: int,
+    run_id: str,
+    *,
+    client_id: int | None = None,
+    rows: list[BrokerSessionRosterRow] | None = None,
+) -> BrokerSessionMirrorSnapshot:
     return BrokerSessionMirrorSnapshot(
         as_of_ms=as_of_ms,
         gateway_port=4002,
         observer_status="online",
         ghost_detection_status="available",
-        rows=[
-            BrokerSessionRosterRow(
-                row_id=f"bot:{run_id}",
-                identity_type="bot",
-                recency="current",
-                socket_present=True,
-                run_id=run_id,
-                as_of_ms=as_of_ms,
-            )
-        ],
+        rows=rows if rows is not None else [_row(as_of_ms, run_id, client_id=client_id)],
+    )
+
+
+def _row(
+    as_of_ms: int,
+    run_id: str,
+    *,
+    client_id: int | None = None,
+) -> BrokerSessionRosterRow:
+    return BrokerSessionRosterRow(
+        row_id=f"bot:{run_id}",
+        identity_type="bot",
+        recency="current",
+        socket_present=True,
+        run_id=run_id,
+        client_id=client_id,
+        as_of_ms=as_of_ms,
     )

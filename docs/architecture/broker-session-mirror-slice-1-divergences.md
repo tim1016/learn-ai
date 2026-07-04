@@ -391,3 +391,33 @@ Critical limits:
    This slice makes the evidence durable and readable. Reconstructing closed
    sockets back into the current roster as historical rows should be a smaller
    follow-up once row identity and purge semantics are pinned.
+
+## Slice 15 addendum — roster-history diagnostic purge
+
+Date: 2026-07-04
+
+The stacked slice-15 branch adds diagnostic purge semantics for the roster
+snapshot history introduced in slice 14. `POST
+/api/broker/session-mirror/history/purge` supports the same explicit
+confirmation token and client/time filters as the existing event purge. A
+time-only purge removes matching snapshots; a `client_id` purge removes only
+that client's rows from matching snapshots so unrelated clients' history
+survives.
+
+Critical limits:
+
+1. **There is still no Angular purge control for roster history.**
+   The frontend service and types exist, but the mirror page still exposes the
+   prior event-log purge control only. A UI control should be added with clear
+   copy that roster-history purge never disconnects clients or alters live
+   rows.
+
+2. **Rows without a `client_id` cannot be removed by client filter.**
+   Ghost rows, some system rows, and older child snapshots with unknown
+   `client_id` remain purgeable by time range only. That is deliberate: the
+   purge does not infer identity from PID/run-dir or stale names.
+
+3. **Purge does not rebuild a compacted history index.**
+   The JSONL is rewritten after purge, but no secondary index exists yet. That
+   remains acceptable while retention is bounded and the endpoint is
+   diagnostic-only.
