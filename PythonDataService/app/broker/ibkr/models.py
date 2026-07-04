@@ -23,6 +23,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from app.broker.ibkr.recovery_state_machine import RecoveryState
 from app.broker.safety_verdict import BrokerSafetyVerdict
 
 OptionRight = Literal["C", "P"]
@@ -867,6 +868,10 @@ class IbkrConnectionHealth(BaseModel):
     """Wall-clock when ``connection_state`` last changed (int64 ms UTC).
     Composed by ``build_broker_health`` as the max of the client's own
     event timestamp and the monitor's last attempt-boundary timestamp."""
+    recovery_state: RecoveryState | None = None
+    """ADR 0018 recovery state. Monitor-owned when the auto-reconnect
+    monitor is installed; otherwise projected from ``connection_state`` for
+    compatibility with broker-disabled and unit-test constructors."""
     connection_lost: bool = False
     """Whether IBKR Error 1100 / 504 has fired and not yet been restored.
     The socket may still report ``connected=True`` in this window — the data

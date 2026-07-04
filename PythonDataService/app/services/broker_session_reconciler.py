@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.broker.ibkr.models import IbkrConnectionHealth
+from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
 from app.operator.notices.broker_session import orphaned_socket_notice
 from app.schemas.broker_session import (
     BrokerSessionAttentionCode,
-    BrokerSessionRecoveryState,
     BrokerSessionRegistryClaim,
     BrokerSessionRosterRow,
     GatewaySocketRow,
@@ -122,7 +122,7 @@ def reconcile_broker_session_roster(
                 remote_host=socket.remote_host,
                 remote_port=socket.remote_port,
                 connection_state=runtime.connection_state if runtime else None,
-                recovery_state=_recovery_state_from_connection_state(
+                recovery_state=recovery_state_from_connection_state(
                     runtime.connection_state if runtime else None
                 ),
                 connection_epoch=runtime.connection_epoch if runtime else None,
@@ -179,7 +179,7 @@ def reconcile_broker_session_roster(
                 command=" ".join(process.command) if process.command else None,
                 run_dir=runtime.run_dir,
                 connection_state=runtime.connection_state,
-                recovery_state=_recovery_state_from_connection_state(
+                recovery_state=recovery_state_from_connection_state(
                     runtime.connection_state
                 ),
                 connection_epoch=runtime.connection_epoch,
@@ -278,7 +278,8 @@ def _data_plane_row(
         remote_host=health.host,
         remote_port=health.port,
         connection_state=health.connection_state,
-        recovery_state=_recovery_state_from_connection_state(health.connection_state),
+        recovery_state=health.recovery_state
+        or recovery_state_from_connection_state(health.connection_state),
         last_event_ms=health.last_transition_ms,
         as_of_ms=as_of_ms,
     )
@@ -309,7 +310,7 @@ def _last_known_runtime_rows(
                 pid=runtime.pid,
                 run_dir=runtime.run_dir,
                 connection_state=runtime.connection_state,
-                recovery_state=_recovery_state_from_connection_state(
+                recovery_state=recovery_state_from_connection_state(
                     runtime.connection_state
                 ),
                 connection_epoch=runtime.connection_epoch,
@@ -348,25 +349,6 @@ def _runtime_signal_stale(
         and stale_after_ms >= 0
         and as_of_ms - runtime.last_event_ms > stale_after_ms
     )
-
-
-def _recovery_state_from_connection_state(
-    connection_state: str | None,
-) -> BrokerSessionRecoveryState | None:
-    """Project broker health/runtime state into the ADR 0018 recovery vocabulary."""
-    if connection_state in {"connected", "degraded_data_farm"}:
-        return "HEALTHY"
-    if connection_state == "soft_lost":
-        return "LINK_INTERRUPTED"
-    if connection_state in {"subscriptions_stale", "recovering"}:
-        return "RESTORING"
-    if connection_state == "reconnecting":
-        return "RECONNECTING"
-    if connection_state == "hard_down":
-        return "HARD_DOWN"
-    if connection_state == "disconnected":
-        return "SOCKET_DOWN"
-    return None
 
 
 def _socket_row_id(socket: GatewaySocketRow, index: int) -> str:

@@ -42,6 +42,7 @@ from app.broker.ibkr.event_codes import (
 )
 from app.broker.ibkr.keepalive import apply_tcp_keepalive
 from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
+from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -676,6 +677,7 @@ class IbkrClient:
             server_version=sv,
             fetched_at_ms=now_ms_utc(),
             connection_state=self.connection_state,
+            recovery_state=recovery_state_from_connection_state(self.connection_state),
             connection_lost=self._connection_lost,
             connectivity_lost_count=self._connectivity_lost_count,
             last_ibkr_code=self._last_ibkr_code,

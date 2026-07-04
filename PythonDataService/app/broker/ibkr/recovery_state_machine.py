@@ -76,9 +76,29 @@ def transition_recovery_state(
     return RecoveryTransition(state=current)
 
 
+def recovery_state_from_connection_state(
+    connection_state: str | None,
+) -> RecoveryState | None:
+    """Project broker connection state into the ADR 0018 recovery vocabulary."""
+    if connection_state in {"connected", "degraded_data_farm"}:
+        return "HEALTHY"
+    if connection_state == "soft_lost":
+        return "LINK_INTERRUPTED"
+    if connection_state in {"subscriptions_stale", "recovering"}:
+        return "RESTORING"
+    if connection_state == "reconnecting":
+        return "RECONNECTING"
+    if connection_state == "hard_down":
+        return "HARD_DOWN"
+    if connection_state == "disconnected":
+        return "SOCKET_DOWN"
+    return None
+
+
 __all__ = [
     "RecoverySignal",
     "RecoveryState",
     "RecoveryTransition",
+    "recovery_state_from_connection_state",
     "transition_recovery_state",
 ]
