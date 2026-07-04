@@ -165,3 +165,30 @@ Critical limits:
    The robust reconnect state machine is still intentionally outside these
    read-mostly mirror slices because it rewrites live-trading behavior and
    needs its own transition-function and ResumeGuard PR stack.
+
+## Slice 6 addendum — fail-visible degradation
+
+Date: 2026-07-03
+
+The stacked slice-6 branch adds explicit fail-visible degradation behavior:
+when the socket referee is unavailable, runtime artifacts project bot rows as
+`past_last_known` instead of the table blanking; stale per-client runtime
+signals add a `CLIENT_SIGNAL_STALE` attention marker.
+
+Critical limits:
+
+1. **Last-known rows come from runtime artifacts, not a full roster store.**
+   This satisfies the honest "PAST, not CURRENT" display for known bot
+   runtimes, but it does not reconstruct historical ghost sockets or closed
+   socket rows without runtime artifacts. That still belongs to the future
+   session-level history store.
+
+2. **Staleness uses the mirror's runtime observation age.**
+   A live OS socket remains `current`, but a stale child runtime signal is
+   surfaced as attention. This avoids claiming the socket is dead when the
+   referee can still see it, while still making stale child evidence visible.
+
+3. **Recovery remains the only major PRD area not implemented.**
+   The mirror is now covering roster, events, child client IDs, orphan notice,
+   diagnostic purge, and degradation behavior. The robust reconnect /
+   ResumeGuard state machine still needs a separate live-trading-path stack.
