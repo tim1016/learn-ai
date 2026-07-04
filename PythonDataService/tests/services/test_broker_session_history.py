@@ -48,6 +48,53 @@ def test_history_service_skips_malformed_diagnostic_rows(tmp_path: Path) -> None
     assert page.rows[0].as_of_ms == 10
 
 
+def test_history_service_returns_recent_absent_rows_as_past_closed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "_broker" / "session_roster_history.jsonl"
+    service = BrokerSessionHistoryService(path=path)
+    service.append_snapshot(_snapshot(10, "run-a", client_id=42))
+    service.append_snapshot(_snapshot(20, "run-b", client_id=77))
+    service.append_snapshot(
+        _snapshot(
+            30,
+            "run-c",
+            rows=[
+                _row(
+                    30,
+                    "run-c",
+                    client_id=99,
+                    recency="past_last_known",
+                    socket_present=False,
+                )
+            ],
+        )
+    )
+
+    rows = service.past_closed_rows(
+        current_rows=[
+            _row(40, "run-b", client_id=77),
+        ]
+    )
+
+    assert [row.run_id for row in rows] == ["run-a"]
+    assert rows[0].recency == "past_closed"
+    assert rows[0].socket_present is False
+    assert rows[0].as_of_ms == 10
+
+
+def test_history_service_limits_past_closed_rows_newest_first(tmp_path: Path) -> None:
+    path = tmp_path / "_broker" / "session_roster_history.jsonl"
+    service = BrokerSessionHistoryService(path=path)
+    service.append_snapshot(_snapshot(10, "run-a"))
+    service.append_snapshot(_snapshot(20, "run-b"))
+    service.append_snapshot(_snapshot(30, "run-c"))
+
+    rows = service.past_closed_rows(current_rows=[], limit=2)
+
+    assert [row.run_id for row in rows] == ["run-c", "run-b"]
+
+
 def test_history_purge_removes_client_rows_without_touching_audit_trail(
     tmp_path: Path,
 ) -> None:
@@ -148,12 +195,14 @@ def _row(
     run_id: str,
     *,
     client_id: int | None = None,
+    recency: str = "current",
+    socket_present: bool = True,
 ) -> BrokerSessionRosterRow:
     return BrokerSessionRosterRow(
         row_id=f"bot:{run_id}",
         identity_type="bot",
-        recency="current",
-        socket_present=True,
+        recency=recency,
+        socket_present=socket_present,
         run_id=run_id,
         client_id=client_id,
         as_of_ms=as_of_ms,
