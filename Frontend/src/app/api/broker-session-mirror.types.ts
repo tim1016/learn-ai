@@ -94,6 +94,22 @@ export interface BrokerSessionHistoryPage {
   retained_count: number;
 }
 
+export const BROKER_SESSION_PURGE_CONFIRM =
+  'PURGE_BROKER_SESSION_DIAGNOSTICS' as const;
+
+export interface BrokerSessionHistoryPurgeRequest {
+  client_id?: number | null;
+  start_ms?: number | null;
+  end_ms?: number | null;
+  confirm: typeof BROKER_SESSION_PURGE_CONFIRM;
+}
+
+export interface BrokerSessionHistoryPurgeResult {
+  purged_row_count: number;
+  purged_snapshot_count: number;
+  remaining_snapshot_count: number;
+}
+
 export interface BrokerSessionEvent {
   seq: number;
   ts_ms: number;
@@ -113,9 +129,6 @@ export interface BrokerSessionEventPage {
   rows: BrokerSessionEvent[];
   next_seq: number | null;
 }
-
-export const BROKER_SESSION_PURGE_CONFIRM =
-  'PURGE_BROKER_SESSION_DIAGNOSTICS' as const;
 
 export interface BrokerSessionEventPurgeRequest {
   client_id?: number | null;

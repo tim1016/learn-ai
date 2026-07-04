@@ -12,6 +12,8 @@ from app.schemas.broker_session import (
     BrokerSessionEventPurgeRequest,
     BrokerSessionEventPurgeResult,
     BrokerSessionHistoryPage,
+    BrokerSessionHistoryPurgeRequest,
+    BrokerSessionHistoryPurgeResult,
     BrokerSessionMirrorSnapshot,
 )
 from app.services.broker_session_events import (
@@ -69,6 +71,16 @@ async def broker_session_history(
     """Return recent broker-session roster snapshots."""
 
     return service.history(limit=limit)
+
+
+@router.post("/history/purge", response_model=BrokerSessionHistoryPurgeResult)
+async def broker_session_history_purge(
+    request: BrokerSessionHistoryPurgeRequest,
+    service: BrokerSessionHistoryService = Depends(get_broker_session_history_service),
+) -> BrokerSessionHistoryPurgeResult:
+    """Purge broker-session roster history diagnostics only."""
+
+    return service.purge(request)
 
 
 @router.get("/stream")

@@ -9,6 +9,8 @@ from pathlib import Path
 from app.broker.ibkr.config import get_settings
 from app.schemas.broker_session import (
     BrokerSessionHistoryPage,
+    BrokerSessionHistoryPurgeRequest,
+    BrokerSessionHistoryPurgeResult,
     BrokerSessionMirrorSnapshot,
 )
 from app.services.broker_session_events import write_jsonl_lines_atomically
@@ -34,11 +36,7 @@ class BrokerSessionHistoryService:
     def append_snapshot(self, snapshot: BrokerSessionMirrorSnapshot) -> None:
         """Append a snapshot while keeping the bounded retention window."""
 
-        line = json.dumps(
-            snapshot.model_dump(mode="json"),
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        line = _snapshot_to_line(snapshot)
         path = self.history_log_path()
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -54,6 +52,54 @@ class BrokerSessionHistoryService:
         return BrokerSessionHistoryPage(
             rows=list(reversed(snapshots))[:limit],
             retained_count=len(snapshots),
+        )
+
+    def purge(
+        self,
+        request: BrokerSessionHistoryPurgeRequest,
+    ) -> BrokerSessionHistoryPurgeResult:
+        """Purge diagnostic roster history without touching live state."""
+
+        path = self.history_log_path()
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return BrokerSessionHistoryPurgeResult(
+                purged_row_count=0,
+                purged_snapshot_count=0,
+                remaining_snapshot_count=0,
+            )
+
+        kept_lines: list[str] = []
+        purged_row_count = 0
+        purged_snapshot_count = 0
+        remaining_snapshot_count = 0
+        for line in lines:
+            snapshot = _snapshot_from_line(line)
+            if snapshot is None:
+                kept_lines.append(line)
+                continue
+            if not _snapshot_matches_purge_filter(snapshot, request):
+                kept_lines.append(line)
+                remaining_snapshot_count += 1
+                continue
+            if request.client_id is None:
+                purged_row_count += len(snapshot.rows)
+                purged_snapshot_count += 1
+                continue
+
+            kept_rows = [row for row in snapshot.rows if row.client_id != request.client_id]
+            purged_row_count += len(snapshot.rows) - len(kept_rows)
+            rewritten = snapshot.model_copy(update={"rows": kept_rows})
+            kept_lines.append(_snapshot_to_line(rewritten))
+            remaining_snapshot_count += 1
+
+        if purged_row_count > 0 or purged_snapshot_count > 0:
+            write_jsonl_lines_atomically(path, kept_lines)
+        return BrokerSessionHistoryPurgeResult(
+            purged_row_count=purged_row_count,
+            purged_snapshot_count=purged_snapshot_count,
+            remaining_snapshot_count=remaining_snapshot_count,
         )
 
     def _read_all_snapshots(self) -> list[BrokerSessionMirrorSnapshot]:
@@ -90,6 +136,23 @@ def _snapshot_from_line(line: str) -> BrokerSessionMirrorSnapshot | None:
     except ValueError as exc:
         logger.warning("skipping malformed broker session history row: %s", exc)
         return None
+
+
+def _snapshot_matches_purge_filter(
+    snapshot: BrokerSessionMirrorSnapshot,
+    request: BrokerSessionHistoryPurgeRequest,
+) -> bool:
+    if request.start_ms is not None and snapshot.as_of_ms < request.start_ms:
+        return False
+    return not (request.end_ms is not None and snapshot.as_of_ms > request.end_ms)
+
+
+def _snapshot_to_line(snapshot: BrokerSessionMirrorSnapshot) -> str:
+    return json.dumps(
+        snapshot.model_dump(mode="json"),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 _SERVICE = BrokerSessionHistoryService()

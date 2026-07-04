@@ -197,3 +197,32 @@ class BrokerSessionEventPurgeResult(BaseModel):
 
     purged_count: int = Field(ge=0)
     remaining_count: int = Field(ge=0)
+
+
+class BrokerSessionHistoryPurgeRequest(BaseModel):
+    """Request to purge only broker-session roster history diagnostics."""
+
+    model_config = ConfigDict(frozen=True)
+
+    client_id: int | None = Field(default=None, ge=0)
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    confirm: BrokerSessionEventPurgeConfirm
+
+    @model_validator(mode="after")
+    def _validate_filter(self) -> BrokerSessionHistoryPurgeRequest:
+        if self.client_id is None and self.start_ms is None and self.end_ms is None:
+            raise ValueError("at least one purge filter is required")
+        if self.start_ms is not None and self.end_ms is not None and self.start_ms > self.end_ms:
+            raise ValueError("start_ms must be <= end_ms")
+        return self
+
+
+class BrokerSessionHistoryPurgeResult(BaseModel):
+    """Diagnostic roster-history purge result."""
+
+    model_config = ConfigDict(frozen=True)
+
+    purged_row_count: int = Field(ge=0)
+    purged_snapshot_count: int = Field(ge=0)
+    remaining_snapshot_count: int = Field(ge=0)

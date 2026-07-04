@@ -9,6 +9,8 @@ from app.schemas.broker_session import (
     BrokerSessionEventPurgeRequest,
     BrokerSessionEventPurgeResult,
     BrokerSessionHistoryPage,
+    BrokerSessionHistoryPurgeRequest,
+    BrokerSessionHistoryPurgeResult,
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
 )
@@ -91,6 +93,18 @@ class _FakeBrokerSessionHistoryService:
             ],
         )
 
+    def purge(
+        self,
+        request: BrokerSessionHistoryPurgeRequest,
+    ) -> BrokerSessionHistoryPurgeResult:
+        assert request.client_id == 42
+        assert request.confirm == "PURGE_BROKER_SESSION_DIAGNOSTICS"
+        return BrokerSessionHistoryPurgeResult(
+            purged_row_count=2,
+            purged_snapshot_count=0,
+            remaining_snapshot_count=3,
+        )
+
 
 async def test_broker_session_snapshot_endpoint_returns_roster() -> None:
     app.dependency_overrides[get_broker_session_mirror_service] = lambda: _FakeBrokerSessionMirrorService()
@@ -162,3 +176,28 @@ async def test_broker_session_history_endpoint_returns_recent_snapshots() -> Non
     assert response.status_code == 200
     assert response.json()["retained_count"] == 5
     assert response.json()["rows"][0]["as_of_ms"] == 1_783_120_000_001
+
+
+async def test_broker_session_history_purge_endpoint_returns_result() -> None:
+    app.dependency_overrides[get_broker_session_history_service] = lambda: _FakeBrokerSessionHistoryService()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/api/broker/session-mirror/history/purge",
+                json={
+                    "client_id": 42,
+                    "confirm": "PURGE_BROKER_SESSION_DIAGNOSTICS",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_broker_session_history_service, None)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "purged_row_count": 2,
+        "purged_snapshot_count": 0,
+        "remaining_snapshot_count": 3,
+    }
