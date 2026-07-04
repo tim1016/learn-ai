@@ -48,39 +48,73 @@
     }
 
     <section class="check-groups" aria-label="Global daemon checks">
-      @for (group of globalGroups(); track groupTrack($index, group)) {
-        <section class="check-group">
-          <h3>{{ group.label }}</h3>
-          @for (check of group.checks; track checkTrack($index, check)) {
-            <article class="check-row" [class]="statusClass(check)">
-              <span class="status-dot" aria-hidden="true"></span>
-              <div>
-                <h4>{{ check.title }}</h4>
-                <p>{{ check.summary }}</p>
-                @if (check.remediation) {
-                  <p class="remediation">{{ check.remediation }}</p>
-                }
-                @if (actionIsRunnable(check.action)) {
-                  <button type="button" class="inline-action" (click)="runCheckAction(check)">
-                    {{ actionLabel(check) }}
-                  </button>
-                }
-                @if (check.technical_detail || check.evidence?.redacted) {
-                  <details>
-                    <summary>Technical detail</summary>
-                    @if (check.technical_detail) {
-                      <p>{{ check.technical_detail }}</p>
-                    }
-                    @if (check.evidence?.redacted) {
-                      <p>Paths and sensitive fields were redacted before serialization.</p>
-                    }
-                  </details>
-                }
-              </div>
-            </article>
-          }
-        </section>
-      }
+      <p-accordion
+        class="diagnostic-accordion"
+        [multiple]="true"
+        [value]="globalCheckAccordionValue()"
+        (valueChange)="setGlobalCheckAccordionValue($event)"
+      >
+        @for (group of globalGroups(); track groupTrack($index, group)) {
+          <p-accordion-panel
+            [value]="group.value"
+            [class]="statusClass(group)"
+          >
+            <p-accordion-header [attr.data-testid]="'diagnostic-group-' + group.value">
+              <span class="group-header">
+                <span class="group-title">
+                  <i [class]="statusIcon(group.status)" aria-hidden="true"></i>
+                  <span>{{ group.label }}</span>
+                </span>
+                <span class="group-meta">
+                  <span>{{ groupSummary(group) }}</span>
+                  <strong>{{ statusLabel(group.status) }}</strong>
+                </span>
+              </span>
+            </p-accordion-header>
+            <p-accordion-content>
+              @if (globalCheckPanelOpen(group)) {
+                <div class="check-list">
+                  @for (check of group.checks; track checkTrack($index, check)) {
+                    <article class="check-row" [class]="statusClass(check)">
+                      <i [class]="statusIcon(check.status)" aria-hidden="true"></i>
+                      <div>
+                        <div class="check-heading">
+                          <h4>{{ check.title }}</h4>
+                          <span>{{ statusLabel(check.status) }}</span>
+                        </div>
+                        <p>{{ check.summary }}</p>
+                        @if (check.remediation) {
+                          <p class="remediation">{{ check.remediation }}</p>
+                        }
+                        @if (actionIsRunnable(check.action)) {
+                          <button
+                            type="button"
+                            class="inline-action"
+                            (click)="runCheckAction(check)"
+                          >
+                            {{ actionLabel(check) }}
+                          </button>
+                        }
+                        @if (check.technical_detail || check.evidence?.redacted) {
+                          <details>
+                            <summary>Technical detail</summary>
+                            @if (check.technical_detail) {
+                              <p>{{ check.technical_detail }}</p>
+                            }
+                            @if (check.evidence?.redacted) {
+                              <p>Paths and sensitive fields were redacted before serialization.</p>
+                            }
+                          </details>
+                        }
+                      </div>
+                    </article>
+                  }
+                </div>
+              }
+            </p-accordion-content>
+          </p-accordion-panel>
+        }
+      </p-accordion>
     </section>
 
     @if (instanceReports().length > 0) {
@@ -89,7 +123,7 @@
         @for (instance of instanceReports(); track instance.strategy_instance_id) {
           <article class="instance-report" [class]="statusClass(instance)">
             <header>
-              <span class="status-dot" aria-hidden="true"></span>
+              <i [class]="statusIcon(instance.overall_status)" aria-hidden="true"></i>
               <div>
                 <strong>{{ instance.strategy_instance_id | receiptLabel }}</strong>
                 <p>{{ instance.headline.title }}</p>

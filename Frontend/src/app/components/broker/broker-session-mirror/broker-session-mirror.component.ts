@@ -8,6 +8,12 @@ import {
   signal,
 } from '@angular/core';
 import { Router } from '@angular/router';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionHeader,
+  AccordionPanel,
+} from 'primeng/accordion';
 import { ButtonModule } from 'primeng/button';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
@@ -36,6 +42,7 @@ import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-di
 import { BrokerSessionEventsPanelComponent } from './broker-session-events-panel.component';
 
 type TagSeverity = 'success' | 'info' | 'warn' | 'danger' | 'secondary';
+type AccordionValue = string | number | string[] | number[] | null | undefined;
 
 const EMPTY_MIRROR_SUMMARY: BrokerSessionMirrorSummary = {
   current: 0,
@@ -49,6 +56,10 @@ type PurgeTarget = 'events' | 'history';
 @Component({
   selector: 'app-broker-session-mirror',
   imports: [
+    Accordion,
+    AccordionContent,
+    AccordionHeader,
+    AccordionPanel,
     ButtonModule,
     BrokerSessionEventsPanelComponent,
     DaemonDiagnosticsPanelComponent,
@@ -92,7 +103,7 @@ export class BrokerSessionMirrorComponent {
   readonly purgeEndMsText = signal<string>('');
   readonly purgeConfirmText = signal<string>('');
   readonly purgeTarget = signal<PurgeTarget>('events');
-  readonly expandedHistorySnapshots = signal<ReadonlySet<number>>(new Set());
+  readonly historyAccordionValue = signal<string[]>([]);
   readonly isPurging = signal<boolean>(false);
   readonly purgeMessage = signal<string | null>(null);
   readonly purgeError = signal<string | null>(null);
@@ -391,23 +402,16 @@ export class BrokerSessionMirrorComponent {
     return fmtInteger(value);
   }
 
-  historyRows(snapshot: BrokerSessionMirrorSnapshot): readonly BrokerSessionRosterRow[] {
-    return this.historySnapshotExpanded(snapshot) ? snapshot.rows : snapshot.rows.slice(0, 4);
+  historyPanelValue(snapshot: BrokerSessionMirrorSnapshot): string {
+    return String(snapshot.as_of_ms);
   }
 
-  historyOverflowCount(snapshot: BrokerSessionMirrorSnapshot): number {
-    return Math.max(0, snapshot.rows.length - 4);
+  historySnapshotOpen(snapshot: BrokerSessionMirrorSnapshot): boolean {
+    return this.historyAccordionValue().includes(this.historyPanelValue(snapshot));
   }
 
-  historySnapshotExpanded(snapshot: BrokerSessionMirrorSnapshot): boolean {
-    return this.expandedHistorySnapshots().has(snapshot.as_of_ms);
-  }
-
-  toggleHistorySnapshot(snapshot: BrokerSessionMirrorSnapshot): void {
-    const next = new Set(this.expandedHistorySnapshots());
-    if (next.has(snapshot.as_of_ms)) next.delete(snapshot.as_of_ms);
-    else next.add(snapshot.as_of_ms);
-    this.expandedHistorySnapshots.set(next);
+  setHistoryAccordionValue(value: AccordionValue): void {
+    this.historyAccordionValue.set(coerceAccordionValue(value));
   }
 
   purgeTargetSeverity(target: PurgeTarget): 'secondary' | undefined {
@@ -442,7 +446,7 @@ export class BrokerSessionMirrorComponent {
     };
   }
 
-  private formatCount(value: number, singular: string): string {
+  protected formatCount(value: number, singular: string): string {
     return `${this.formatNumber(value)} ${singular}${value === 1 ? '' : 's'}`;
   }
 }
@@ -468,4 +472,10 @@ function parseOptionalNonNegativeInt(value: string): number | null | undefined {
   if (trimmed === '') return null;
   if (!/^\d+$/.test(trimmed)) return undefined;
   return Number(trimmed);
+}
+
+function coerceAccordionValue(value: AccordionValue): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  if (value === null || value === undefined) return [];
+  return [String(value)];
 }

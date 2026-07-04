@@ -1,4 +1,19 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  input,
+  output,
+  signal,
+  untracked,
+} from '@angular/core';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionHeader,
+  AccordionPanel,
+} from 'primeng/accordion';
 
 import type {
   DaemonDiagnosticAction,
@@ -11,9 +26,13 @@ import type {
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 interface CheckGroup {
+  value: DaemonDiagnosticCategory;
   label: string;
   checks: DaemonDiagnosticCheck[];
+  status: DaemonDiagnosticStatus;
 }
+
+type AccordionValue = string | number | string[] | number[] | null | undefined;
 
 const CATEGORY_LABELS: Record<DaemonDiagnosticCategory, string> = {
   reachability: 'Reachability',
@@ -33,7 +52,13 @@ const CATEGORY_LABELS: Record<DaemonDiagnosticCategory, string> = {
 
 @Component({
   selector: 'app-daemon-diagnostics-panel',
-  imports: [ReceiptLabelPipe],
+  imports: [
+    Accordion,
+    AccordionContent,
+    AccordionHeader,
+    AccordionPanel,
+    ReceiptLabelPipe,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './daemon-diagnostics-panel.component.html',
   styleUrl: './daemon-diagnostics-panel.component.scss',
@@ -49,6 +74,7 @@ export class DaemonDiagnosticsPanelComponent {
   readonly renewLease = output();
   readonly exportReport = output();
   readonly navigateTo = output<string>();
+  readonly globalCheckAccordionValue = signal<string[]>([]);
 
   protected readonly globalGroups = computed<CheckGroup[]>(() =>
     groupChecks(this.report()?.checks ?? []),
@@ -56,6 +82,15 @@ export class DaemonDiagnosticsPanelComponent {
   protected readonly instanceReports = computed(
     () => this.report()?.per_instance ?? [],
   );
+
+  constructor() {
+    effect(() => {
+      const openGroups = this.globalGroups()
+        .filter((group) => groupRequiresAttention(group))
+        .map((group) => group.value);
+      untracked(() => this.globalCheckAccordionValue.set(openGroups));
+    });
+  }
 
   protected refreshClicked(): void {
     this.refresh.emit();
@@ -99,8 +134,55 @@ export class DaemonDiagnosticsPanelComponent {
     }).format(new Date(ms));
   }
 
+  protected formatCount(value: number, singular: string): string {
+    return `${value} ${singular}${value === 1 ? '' : 's'}`;
+  }
+
   protected statusClass(value: { status?: DaemonDiagnosticStatus; overall_status?: DaemonReportStatus }): string {
     return `status-${value.status ?? value.overall_status ?? 'skip'}`;
+  }
+
+  protected statusLabel(status: DaemonDiagnosticStatus | DaemonReportStatus): string {
+    switch (status) {
+      case 'pass':
+        return 'Clear';
+      case 'warn':
+        return 'Needs attention';
+      case 'fail':
+        return 'Error';
+      case 'skip':
+        return 'Skipped';
+    }
+  }
+
+  protected statusIcon(status: DaemonDiagnosticStatus | DaemonReportStatus): string {
+    switch (status) {
+      case 'pass':
+        return 'pi pi-check-circle';
+      case 'warn':
+        return 'pi pi-exclamation-triangle';
+      case 'fail':
+        return 'pi pi-times-circle';
+      case 'skip':
+        return 'pi pi-minus-circle';
+    }
+  }
+
+  protected groupSummary(group: CheckGroup): string {
+    const nonPassCount = group.checks.filter((check) => check.status !== 'pass').length;
+    if (nonPassCount === 0) {
+      return `${this.formatCount(group.checks.length, 'check')} clear`;
+    }
+    const verb = nonPassCount === 1 ? 'needs' : 'need';
+    return `${this.formatCount(nonPassCount, 'check')} ${verb} attention`;
+  }
+
+  protected globalCheckPanelOpen(group: CheckGroup): boolean {
+    return this.globalCheckAccordionValue().includes(group.value);
+  }
+
+  protected setGlobalCheckAccordionValue(value: AccordionValue): void {
+    this.globalCheckAccordionValue.set(coerceAccordionValue(value));
   }
 
   protected groupTrack(_index: number, group: CheckGroup): string {
@@ -120,7 +202,26 @@ function groupChecks(checks: DaemonDiagnosticCheck[]): CheckGroup[] {
     out.set(check.category, existing);
   }
   return Array.from(out.entries()).map(([category, items]) => ({
+    value: category,
     label: CATEGORY_LABELS[category],
     checks: items,
+    status: statusForChecks(items),
   }));
+}
+
+function statusForChecks(checks: readonly DaemonDiagnosticCheck[]): DaemonDiagnosticStatus {
+  if (checks.some((check) => check.status === 'fail')) return 'fail';
+  if (checks.some((check) => check.status === 'warn')) return 'warn';
+  if (checks.some((check) => check.status === 'skip')) return 'skip';
+  return 'pass';
+}
+
+function groupRequiresAttention(group: CheckGroup): boolean {
+  return group.status === 'warn' || group.status === 'fail';
+}
+
+function coerceAccordionValue(value: AccordionValue): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  if (value === null || value === undefined) return [];
+  return [String(value)];
 }

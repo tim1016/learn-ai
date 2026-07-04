@@ -115,62 +115,56 @@
     }
 
     @if (historySnapshots().length > 0) {
-      <div class="history-list">
+      <p-accordion
+        class="history-accordion"
+        [multiple]="true"
+        [value]="historyAccordionValue()"
+        (valueChange)="setHistoryAccordionValue($event)"
+      >
         @for (item of historySnapshots(); track item.as_of_ms) {
-          <article class="history-snapshot">
-            <header>
-              <strong>{{ formatTimestamp(item.as_of_ms) }}</strong>
-              <span>{{ formatNumber(item.rows.length) }} rows</span>
-            </header>
-            @if (item.rows.length > 0) {
-              <div class="history-rows">
-                @for (row of historyRows(item); track row.row_id) {
-                  <div class="history-row">
-                    <p-tag
-                      [severity]="identitySeverity(row.identity_type)"
-                      [value]="identityLabel(row.identity_type)"
-                    />
-                    <p-tag
-                      [severity]="recencySeverity(row.recency)"
-                      [value]="recencyLabel(row.recency)"
-                    />
-                    <span class="history-row-name">
-                      {{ row.strategy_instance_id ?? row.command ?? row.row_id }}
+          <p-accordion-panel [value]="historyPanelValue(item)">
+            <p-accordion-header [attr.data-testid]="'history-panel-header-' + item.as_of_ms">
+              <span class="history-panel-header">
+                <strong>{{ formatTimestamp(item.as_of_ms) }}</strong>
+                <span class="history-panel-meta">
+                  <span>{{ formatCount(item.rows.length, 'row') }}</span>
+                  @if (item.summary.attention > 0) {
+                    <span class="history-attention">
+                      {{ formatCount(item.summary.attention, 'attention row') }}
                     </span>
-                    <span>client {{ row.client_id ?? '—' }}</span>
+                  }
+                </span>
+              </span>
+            </p-accordion-header>
+            <p-accordion-content>
+              @if (historySnapshotOpen(item)) {
+                @if (item.rows.length > 0) {
+                  <div class="history-rows">
+                    @for (row of item.rows; track row.row_id) {
+                      <div class="history-row">
+                        <p-tag
+                          [severity]="identitySeverity(row.identity_type)"
+                          [value]="identityLabel(row.identity_type)"
+                        />
+                        <p-tag
+                          [severity]="recencySeverity(row.recency)"
+                          [value]="recencyLabel(row.recency)"
+                        />
+                        <span class="history-row-name">
+                          {{ row.strategy_instance_id ?? row.command ?? row.row_id }}
+                        </span>
+                        <span>client {{ row.client_id ?? '—' }}</span>
+                      </div>
+                    }
                   </div>
+                } @else {
+                  <span class="history-empty">0 rows</span>
                 }
-                @if (historyOverflowCount(item) > 0) {
-                  <button
-                    pButton
-                    type="button"
-                    severity="secondary"
-                    size="small"
-                    [text]="true"
-                    [attr.aria-label]="
-                      historySnapshotExpanded(item)
-                        ? 'Collapse history snapshot ' + formatTimestamp(item.as_of_ms)
-                        : 'Show all rows for history snapshot ' + formatTimestamp(item.as_of_ms)
-                    "
-                    [attr.data-testid]="'history-toggle-' + item.as_of_ms"
-                    (click)="toggleHistorySnapshot(item)"
-                  >
-                    <span class="p-button-label">
-                      @if (historySnapshotExpanded(item)) {
-                        Show less
-                      } @else {
-                        +{{ formatNumber(historyOverflowCount(item)) }} more
-                      }
-                    </span>
-                  </button>
-                }
-              </div>
-            } @else {
-              <span class="history-empty">0 rows</span>
-            }
-          </article>
+              }
+            </p-accordion-content>
+          </p-accordion-panel>
         }
-      </div>
+      </p-accordion>
     } @else {
       <span class="history-empty">No retained snapshots.</span>
     }
