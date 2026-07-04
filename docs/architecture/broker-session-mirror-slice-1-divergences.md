@@ -295,3 +295,24 @@ Critical limits:
    `engine_runtime.json` files written before this slice have no
    `broker.recovery_state`. The mirror keeps the projection fallback for those
    historical artifacts.
+
+## Slice 11 addendum — reconnect backoff jitter
+
+Date: 2026-07-04
+
+The stacked slice-11 branch adds capped positive jitter to
+`AutoReconnectMonitor`'s exponential reconnect backoff. This closes the PRD's
+`backoff + jitter + max cap` requirement without touching reconnect
+classification, reconciliation, or ResumeGuard behavior in the same review.
+
+Critical limits:
+
+1. **Nightly reset severity is still not window-aware.**
+   The monitor now avoids synchronized retry storms, but the 1100/1101/1102
+   event severity remains driven by the shared event-code table rather than an
+   IBKR reset-window classifier.
+
+2. **Jitter does not install child monitors.**
+   The jittered retry loop applies wherever `AutoReconnectMonitor` is already
+   installed. Child `cmd_start` processes still use their existing recovery
+   wiring until the child-monitor slice.
