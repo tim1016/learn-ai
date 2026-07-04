@@ -647,3 +647,27 @@ Critical limits:
    parse using their current file line index. The first retained write after a
    legacy file assigns the next sequence from the pre-trim line count so live
    SSE consumers can continue past their old cursor.
+
+## Slice 24 addendum — recovery-authority fallback boundary
+
+Date: 2026-07-04
+
+The stacked slice-24 branch makes the older bar-loop reconnect revalidation a
+fallback-only path. When `LiveEngine` has a broker `AutoReconnectMonitor`, the
+legacy `_check_reconnect_revalidation` path now stands down so monitor-owned
+recovery plus `run_broker_recovery_reconcile` is the single connectivity
+authority for that process. Non-monitor/test paths keep the legacy account
+identity revalidation behavior.
+
+Critical limits:
+
+1. **The legacy fallback is not deleted.**
+   It remains active for callers that construct `LiveEngine` without a broker
+   monitor. That preserves existing replay/test seams and avoids claiming every
+   possible live path has been migrated until the remaining entrypoints are
+   audited.
+
+2. **ResumeGuard clearing remains separate.**
+   This slice prevents duplicate connectivity authorities, but it does not add
+   automatic `ResumeGuardState` transitions or incident clearing. Recovered
+   bots still require the existing operator resume path.
