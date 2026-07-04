@@ -230,3 +230,21 @@ Critical changes from the PRD:
    does not yet remove or cross-wire the older `live_engine.py`
    connectivity-count halt path. Running both recovery/halt mechanisms remains
    the critical remaining single-authority problem from ADR 0018.
+
+## Slice 8 addendum — mirror recovery-state visibility
+
+Date: 2026-07-04
+
+The stacked slice-8 branch populates the existing mirror roster
+`recovery_state` field and renders it as a dedicated Recovery column. This makes
+the recovery lifecycle visible in the session mirror without changing any
+trading gate.
+
+Critical limit:
+
+1. **Recovery state is projected from connection state for child rows.**
+   Data-plane and child runtime rows do not yet persist the monitor's exact
+   ADR-0018 state-machine value. Slice 8 maps the existing connection states
+   (`soft_lost`, `subscriptions_stale`, `reconnecting`, `hard_down`, and so on)
+   into the ADR-0018 recovery vocabulary for display. A later recovery-authority
+   slice should publish the monitor-owned state directly from each child.

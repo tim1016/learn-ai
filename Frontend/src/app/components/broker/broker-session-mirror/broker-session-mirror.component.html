@@ -150,7 +150,7 @@
       [loading]="snapshot() === null && streamStatus() === 'connecting'"
       [rowHover]="true"
       [rowTrackBy]="trackByRowId"
-      [tableStyle]="{ 'min-width': '74rem' }"
+      [tableStyle]="{ 'min-width': '80rem' }"
     >
       <ng-template #header>
         <tr>
@@ -160,6 +160,7 @@
           <th>Socket</th>
           <th>PID</th>
           <th>Broker</th>
+          <th>Recovery</th>
           <th>Last event</th>
           <th>Attention</th>
           <th class="action-cell"></th>
@@ -195,6 +196,12 @@
             <span>{{ row.connection_state ?? '—' }}</span>
             <small>client {{ row.client_id ?? '—' }}</small>
           </td>
+          <td>
+            <p-tag
+              [severity]="recoverySeverity(row.recovery_state)"
+              [value]="recoveryLabel(row.recovery_state)"
+            />
+          </td>
           <td>{{ formatTimestamp(row.last_event_ms) }}</td>
           <td class="attention-cell">
             @if (row.attention_codes.length > 0) {
@@ -222,7 +229,7 @@
           </td>
         </tr>
         <tr class="details-row" [class.past-row]="row.recency !== 'current'">
-          <td colspan="9">
+          <td colspan="10">
             @if (row.notice; as notice) {
               <section class="row-notice" role="alert">
                 <div>
@@ -261,6 +268,10 @@
                   <dt>registry</dt>
                   <dd>{{ row.registry_claim?.state ?? '—' }}</dd>
                 </div>
+                <div>
+                  <dt>recovery_state</dt>
+                  <dd>{{ row.recovery_state ?? '—' }}</dd>
+                </div>
               </dl>
               <app-broker-session-events-panel
                 [row]="row"
@@ -272,7 +283,7 @@
       </ng-template>
       <ng-template #emptymessage>
         <tr>
-          <td colspan="9" class="empty-cell">
+          <td colspan="10" class="empty-cell">
             No broker sessions observed.
           </td>
         </tr>

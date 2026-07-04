@@ -66,6 +66,7 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('PrajiTSLADemo');
     expect(text).toContain('Bot');
     expect(text).toContain('CURRENT');
+    expect(text).toContain('Healthy');
     expect(text).toContain('Registry offline; socket live');
   });
 
@@ -100,6 +101,23 @@ describe('BrokerSessionMirrorComponent', () => {
     const text = pageText(fixture);
     expect(text).toContain('PAST');
     expect(text).not.toContain('CURRENT');
+  });
+
+  it('renders recovery states separately from broker connection labels', async () => {
+    const { fixture } = await setup(
+      snapshot({
+        rows: [
+          botSocket({
+            connection_state: 'hard_down',
+            recovery_state: 'HARD_DOWN',
+          }),
+        ],
+      }),
+    );
+
+    const text = pageText(fixture);
+    expect(text).toContain('hard_down');
+    expect(text).toContain('Hard down');
   });
 
   it('surfaces degraded observer and unknown ghost detection states', async () => {
@@ -351,7 +369,7 @@ function botSocket(
     remote_host: '127.0.0.1',
     remote_port: 4002,
     connection_state: 'connected',
-    recovery_state: null,
+    recovery_state: 'HEALTHY',
     connection_epoch: 0,
     last_event_ms: AS_OF_MS - 500,
     as_of_ms: AS_OF_MS,

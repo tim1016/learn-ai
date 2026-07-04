@@ -19,6 +19,7 @@ import type {
   BrokerSessionIdentityType,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRecency,
+  BrokerSessionRecoveryState,
   BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
 import {
@@ -203,6 +204,41 @@ export class BrokerSessionMirrorComponent {
         return 'secondary';
       case 'unknown':
         return 'warn';
+    }
+  }
+
+  recoveryLabel(value: BrokerSessionRecoveryState | null): string {
+    switch (value) {
+      case 'HEALTHY':
+        return 'Healthy';
+      case 'LINK_INTERRUPTED':
+        return 'Link interrupted';
+      case 'RESTORING':
+        return 'Restoring';
+      case 'SOCKET_DOWN':
+        return 'Socket down';
+      case 'RECONNECTING':
+        return 'Reconnecting';
+      case 'HARD_DOWN':
+        return 'Hard down';
+      case null:
+        return 'Unknown';
+    }
+  }
+
+  recoverySeverity(value: BrokerSessionRecoveryState | null): TagSeverity {
+    switch (value) {
+      case 'HEALTHY':
+        return 'success';
+      case 'HARD_DOWN':
+      case 'SOCKET_DOWN':
+        return 'danger';
+      case 'LINK_INTERRUPTED':
+      case 'RESTORING':
+      case 'RECONNECTING':
+        return 'warn';
+      case null:
+        return 'secondary';
     }
   }
 

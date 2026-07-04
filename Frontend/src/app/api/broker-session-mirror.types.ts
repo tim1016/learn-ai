@@ -14,6 +14,13 @@ export type BrokerSessionRecency =
 
 export type BrokerSessionObserverStatus = 'online' | 'degraded';
 export type BrokerSessionGhostDetectionStatus = 'available' | 'unknown';
+export type BrokerSessionRecoveryState =
+  | 'HEALTHY'
+  | 'LINK_INTERRUPTED'
+  | 'RESTORING'
+  | 'SOCKET_DOWN'
+  | 'RECONNECTING'
+  | 'HARD_DOWN';
 
 export type BrokerSessionEventCategory =
   | 'client_lifecycle'
@@ -63,7 +70,7 @@ export interface BrokerSessionRosterRow {
   remote_host: string | null;
   remote_port: number | null;
   connection_state: string | null;
-  recovery_state: string | null;
+  recovery_state: BrokerSessionRecoveryState | null;
   connection_epoch: number | null;
   last_event_ms: number | null;
   as_of_ms: number;
