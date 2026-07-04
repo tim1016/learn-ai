@@ -337,3 +337,23 @@ Critical limits:
 2. **Only the published North America window is encoded.**
    If this deployment uses another IBKR region/window, the helper must be
    extended before those reset events can be demoted.
+
+## Slice 13 addendum — monitor-authored recovery events
+
+Date: 2026-07-04
+
+The stacked slice-13 branch writes `AutoReconnectMonitor` milestones into the
+existing broker-session diagnostic JSONL stream: reconnect attempt, failure,
+success, hard-down, probe-forced reconnect, and link-wait expiry. The mirror
+can now show recovery/reconnect activity sourced from the monitor itself rather
+than only client callback and recovery-completion events.
+
+Critical limits:
+
+1. **Events are diagnostic, not recovery receipts.**
+   These rows explain monitor behavior in the mirror. They do not clear
+   `ResumeGuardState`, prove broker reconciliation, or authorize trading.
+
+2. **Child coverage still depends on child monitor installation.**
+   The event writer is available on `IbkrClient`, but only processes that
+   install `AutoReconnectMonitor` emit these monitor-authored events.
