@@ -212,6 +212,13 @@ export const routes: Routes = [
       ).then((m) => m.BrokerReconciliationComponent),
   },
   {
+    path: "broker/session-mirror",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-session-mirror/broker-session-mirror.component"
+      ).then((m) => m.BrokerSessionMirrorComponent),
+  },
+  {
     path: "broker/paper-run",
     redirectTo: "broker/bots",
     pathMatch: "full",

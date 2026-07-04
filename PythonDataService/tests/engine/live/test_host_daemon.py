@@ -28,6 +28,7 @@ from app.engine.live.account_registry import (
 from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
 from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
+from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerProcessState,
@@ -95,6 +96,41 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     assert body["repo_head_sha"] is None
     assert body["code_stale"] is False
     assert body["commits_behind"] is None
+
+
+async def test_broker_sockets_endpoint_returns_gateway_socket_rows(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    from app.engine.live import broker_socket_probe
+
+    def fake_enumerate(self: object, gateway_port: int) -> list[GatewaySocketRow]:
+        assert gateway_port == 4002
+        return [
+            GatewaySocketRow(
+                pid=21760,
+                command="python",
+                argv=["python", "-m", "app.engine.live.run", "start"],
+                run_dir=str(manager.live_runs_root / RUN_ID),
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ]
+
+    monkeypatch.setattr(broker_socket_probe.LsofSocketEnumerator, "enumerate", fake_enumerate)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.get("/broker/sockets?gateway_port=4002")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["gateway_port"] == 4002
+    assert body["sockets"][0]["pid"] == 21760
+    assert body["sockets"][0]["run_dir"].endswith(RUN_ID)
 
 
 @requires_git

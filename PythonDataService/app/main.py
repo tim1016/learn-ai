@@ -23,6 +23,7 @@ from app.routers import (
     baselines,
     broker,
     broker_account_truth,
+    broker_session,
     chart,
     data_quality,
     dataset,
@@ -373,6 +374,8 @@ app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account-scoped reconciliation and recovery triage endpoints.
 app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# Broker session mirror — read-only roster/SSE observatory.
+app.include_router(broker_session.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
