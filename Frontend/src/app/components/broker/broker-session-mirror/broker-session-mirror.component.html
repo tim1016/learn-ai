@@ -128,7 +128,28 @@
                   </div>
                 }
                 @if (historyOverflowCount(item) > 0) {
-                  <span class="history-more">+{{ formatNumber(historyOverflowCount(item)) }}</span>
+                  <button
+                    pButton
+                    type="button"
+                    severity="secondary"
+                    size="small"
+                    [text]="true"
+                    [attr.aria-label]="
+                      historySnapshotExpanded(item)
+                        ? 'Collapse history snapshot ' + formatTimestamp(item.as_of_ms)
+                        : 'Show all rows for history snapshot ' + formatTimestamp(item.as_of_ms)
+                    "
+                    [attr.data-testid]="'history-toggle-' + item.as_of_ms"
+                    (click)="toggleHistorySnapshot(item)"
+                  >
+                    <span class="p-button-label">
+                      @if (historySnapshotExpanded(item)) {
+                        Show less
+                      } @else {
+                        +{{ formatNumber(historyOverflowCount(item)) }} more
+                      }
+                    </span>
+                  </button>
                 }
               </div>
             } @else {

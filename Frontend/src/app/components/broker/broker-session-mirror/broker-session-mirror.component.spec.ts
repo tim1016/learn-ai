@@ -163,6 +163,44 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('client 88');
   });
 
+  it('expands and collapses retained history snapshot rows', async () => {
+    const snapshotMs = AS_OF_MS - 60_000;
+    const { fixture, service } = await setup(snapshot({ rows: [] }));
+    service.history.mockResolvedValueOnce({
+      retained_count: 1,
+      rows: [
+        snapshot({
+          as_of_ms: snapshotMs,
+          rows: [
+            historyBot('HistoryBot1', 81),
+            historyBot('HistoryBot2', 82),
+            historyBot('HistoryBot3', 83),
+            historyBot('HistoryBot4', 84),
+            historyBot('HistoryBot5', 85),
+          ],
+        }),
+      ],
+    });
+
+    clickButton(fixture, 'history-refresh');
+    await settle(fixture);
+
+    expect(pageText(fixture)).toContain('HistoryBot4');
+    expect(pageText(fixture)).toContain('+1 more');
+    expect(pageText(fixture)).not.toContain('HistoryBot5');
+
+    clickButton(fixture, `history-toggle-${snapshotMs}`);
+    await settle(fixture);
+
+    expect(pageText(fixture)).toContain('HistoryBot5');
+    expect(pageText(fixture)).toContain('Show less');
+
+    clickButton(fixture, `history-toggle-${snapshotMs}`);
+    await settle(fixture);
+
+    expect(pageText(fixture)).not.toContain('HistoryBot5');
+  });
+
   it('surfaces degraded observer and unknown ghost detection states', async () => {
     const { fixture } = await setup(
       snapshot({
@@ -495,6 +533,20 @@ function botSocket(
     notice: null,
     ...overrides,
   };
+}
+
+function historyBot(
+  strategyInstanceId: string,
+  clientId: number,
+): BrokerSessionRosterRow {
+  return botSocket({
+    row_id: `history:${clientId}`,
+    strategy_instance_id: strategyInstanceId,
+    client_id: clientId,
+    recency: 'past_closed',
+    socket_present: false,
+    attention_codes: [],
+  });
 }
 
 function brokerEvent(
