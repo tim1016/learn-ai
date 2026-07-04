@@ -140,6 +140,25 @@ def test_lease_write_error_is_unwritable_not_stale_and_has_no_button() -> None:
     assert lease.action is None
 
 
+def test_zero_lease_threshold_is_not_replaced_with_default() -> None:
+    report = build_daemon_diagnostic_report(
+        daemon_result=DaemonResult.connected(daemon_boot_id="boot-123456789"),
+        health=_health(
+            last_lease_written_at_ms=NOW_MS - 1,
+            lease_threshold_ms=0,
+        ),
+        instances=HostRunnerInstancesStatus(instances=[], fetched_at_ms=NOW_MS),
+        mirror=_mirror(),
+        connectivity=None,
+        fetched_at_ms=NOW_MS,
+    )
+
+    lease = next(check for check in report.checks if check.check_id == "daemon.control_plane_lease")
+    assert report.dominant_condition == DaemonDominantCondition.LEASE_STALE
+    assert lease.evidence is not None
+    assert lease.evidence.facts["lease_threshold_ms"] == 0
+
+
 def test_registry_amnesia_wins_before_never_started() -> None:
     row = BrokerSessionRosterRow(
         row_id="socket:123:51000:4002:0",
@@ -200,6 +219,47 @@ def test_process_exited_uses_daemon_authored_exit_reason() -> None:
     instance = report.per_instance[0]
     assert instance.dominant_condition == DaemonDominantCondition.PROCESS_EXITED
     assert "fatal_halt" in instance.headline.summary
+    assert report.dominant_condition == DaemonDominantCondition.PROCESS_EXITED
+    assert report.headline.title == "Bot process exited"
+
+
+def test_run_directory_invisible_wins_before_process_socket_runtime() -> None:
+    instances = HostRunnerInstancesStatus(
+        fetched_at_ms=NOW_MS,
+        instances=[
+            HostRunnerInstance(
+                strategy_instance_id="SPY_DEMO",
+                run_id="run-spy",
+                run_dir="/host/artifacts/live_runs/run-spy",
+                process=_process(
+                    state=HostRunnerProcessState.running,
+                    run_id="run-spy",
+                    strategy_instance_id="SPY_DEMO",
+                    pid=123,
+                    started_at_ms=NOW_MS - 1_000,
+                ),
+            )
+        ],
+    )
+
+    report = build_daemon_diagnostic_report(
+        daemon_result=DaemonResult.connected(daemon_boot_id="boot-123456789"),
+        health=_health(),
+        instances=instances,
+        mirror=_mirror(),
+        connectivity=None,
+        fetched_at_ms=NOW_MS,
+        run_dir_visibility={"run-spy": False},
+    )
+
+    instance = report.per_instance[0]
+    assert instance.dominant_condition == DaemonDominantCondition.RUN_DIR_INVISIBLE
+    assert instance.headline.title == "Bot run directory is not visible"
+    assert [check.check_id for check in instance.checks][:3] == [
+        "instance.registry_amnesia",
+        "instance.run_directory",
+        "instance.process_state",
+    ]
 
 
 def test_health_redaction_removes_paths_and_argv_before_browser_serialisation() -> None:

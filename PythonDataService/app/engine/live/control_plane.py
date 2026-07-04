@@ -286,7 +286,7 @@ class DaemonLeaseWriter:
         try:
             self._writer(self._artifacts_root, lease)
         except OSError as exc:
-            self._last_write_error = str(exc) or exc.__class__.__name__
+            self._last_write_error = _safe_os_error_summary(exc)
             logger.exception(
                 "daemon_lease.json write failed",
                 extra={
@@ -300,3 +300,9 @@ class DaemonLeaseWriter:
             return
         self._last_written_at_ms = lease.written_at_ms
         self._last_write_error = None
+
+
+def _safe_os_error_summary(exc: OSError) -> str:
+    if exc.errno is None:
+        return exc.__class__.__name__
+    return f"{exc.__class__.__name__}(errno={exc.errno})"

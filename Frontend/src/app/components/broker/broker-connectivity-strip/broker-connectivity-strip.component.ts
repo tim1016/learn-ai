@@ -1,4 +1,11 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { Router } from '@angular/router';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
@@ -15,6 +22,9 @@ import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-di
   selector: 'app-broker-connectivity-strip',
   imports: [DaemonDiagnosticsPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '(document:keydown.escape)': 'closeDiagnosticsIfOpen()',
+  },
   templateUrl: './broker-connectivity-strip.component.html',
   styleUrl: './broker-connectivity-strip.component.scss',
 })
@@ -22,6 +32,8 @@ export class BrokerConnectivityStripComponent {
   protected readonly connectivity = inject(BrokerConnectivityService);
   protected readonly diagnostics = inject(DaemonDiagnosticsStore);
   private readonly router = inject(Router);
+  private readonly diagnosticsTrigger = viewChild<ElementRef<HTMLButtonElement>>('diagnosticsTrigger');
+  private readonly diagnosticsDialog = viewChild<ElementRef<HTMLElement>>('diagnosticsDialog');
   protected readonly copied = signal<boolean>(false);
   protected readonly diagnosticsOpen = signal<boolean>(false);
   protected readonly startCommand =
@@ -37,13 +49,22 @@ export class BrokerConnectivityStripComponent {
 
   protected async openDiagnostics(): Promise<void> {
     this.diagnosticsOpen.set(true);
+    queueMicrotask(() => this.diagnosticsDialog()?.nativeElement.focus());
     if (this.diagnostics.report() === null) {
       await this.refreshDiagnostics();
     }
   }
 
   protected closeDiagnostics(): void {
+    if (!this.diagnosticsOpen()) return;
     this.diagnosticsOpen.set(false);
+    queueMicrotask(() => this.diagnosticsTrigger()?.nativeElement.focus());
+  }
+
+  protected closeDiagnosticsIfOpen(): void {
+    if (this.diagnosticsOpen()) {
+      this.closeDiagnostics();
+    }
   }
 
   protected async refreshDiagnostics(): Promise<void> {

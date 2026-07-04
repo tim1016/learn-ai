@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { MarketHolidayEvent } from '../../models/market-monitor';
 import {
   isMarketHoliday,

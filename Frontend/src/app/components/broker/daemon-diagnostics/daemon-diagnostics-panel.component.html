@@ -91,7 +91,7 @@
             <header>
               <span class="status-dot" aria-hidden="true"></span>
               <div>
-                <strong>{{ instance.strategy_instance_id }}</strong>
+                <strong>{{ instance.strategy_instance_id | receiptLabel }}</strong>
                 <p>{{ instance.headline.title }}</p>
                 <span>{{ instance.headline.summary }}</span>
               </div>

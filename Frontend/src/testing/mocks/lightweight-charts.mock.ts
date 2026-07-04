@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars */
 import { vi } from 'vitest';
 
 const mockTimeScale = {

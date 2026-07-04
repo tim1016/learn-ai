@@ -1,4 +1,3 @@
-<!-- eslint-disable @angular-eslint/template/click-events-have-key-events, @angular-eslint/template/interactive-supports-focus -->
 <div class="transport">
   <div class="transport-left">
     <button type="button" class="tb" (click)="stepBack()"
@@ -69,8 +68,10 @@
   </div>
 </div>
 
-<div class="minimap" #minimap (click)="onMinimapClick($event)"
-  pTooltip="Click anywhere to scrub the playhead there" tooltipPosition="bottom">
+<div class="minimap" #minimap (click)="onMinimapClick($event)" (keydown)="onMinimapKeydown($event)"
+  role="slider" tabindex="0" aria-label="Replay timeline scrubber" aria-valuemin="0" aria-valuemax="100"
+  [attr.aria-valuenow]="cursorPct()"
+  pTooltip="Scrub the playhead" tooltipPosition="bottom">
   <div class="minimap-track"></div>
   <div class="minimap-window"
     [style.left.%]="windowBracket().leftPct"

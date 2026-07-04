@@ -83,7 +83,7 @@ Each row: scenario → operator symptom → repo data source → proposed
 - **G1** Daemon process down / port unbound → deploy/start/stop all fail →
   `DaemonResult` UNREACHABLE (httpx ConnectError) → `UNREACHABLE` → host-guidance.
 - **G2** Reachable but token rejected (stale/rotated `.host-daemon-token`, ADR
-  0007) → 401/403 → `AUTH_REJECTED` → host-guidance (restart both to re-sync).
+  0007) → 401/403 → `AUTH_FAILED` → host-guidance (restart both to re-sync).
 - **G3** Reachable, auth ok, body unparseable / wrong schema (build mismatch) →
   pydantic `ValidationError` → PROTOCOL_ERROR/INCOMPATIBLE_CONTRACT →
   `BUILD_MISMATCH` → host-guidance (restart daemon).
@@ -99,9 +99,9 @@ Each row: scenario → operator symptom → repo data source → proposed
 - **G8** Requested IBKR host not in allowlist → start 400
   (`validate_ibkr_host_allowed`) → host-guidance/config.
 - **G9** `control_plane/` dir unwritable → lease writer fails at startup (logged,
-  tolerated) → presents as G5.
+  tolerated) → `LEASE_UNWRITABLE` → host-guidance; no `renew_lease` button.
 - **G10** `LIVE_RUNS_ROOT`/repo_root misconfig → host-vs-container path mismatch →
-  bound run dir invisible to data plane.
+  bound run dir invisible to data plane → `RUN_DIR_INVISIBLE`.
 
 ### PER-BOT — registry / process (the pinpointing ladder core)
 - **B1** Never started → no managed process; operator intent vs registry gap.

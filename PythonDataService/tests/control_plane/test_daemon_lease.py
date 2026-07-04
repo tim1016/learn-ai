@@ -255,7 +255,7 @@ async def test_writer_oserror_does_not_kill_loop(tmp_path: Path) -> None:
         writer=_flaky,
     )
     await writer.start()
-    assert writer.last_write_error == "disk full"
+    assert writer.last_write_error == "OSError"
     for _ in range(3):
         await asyncio.sleep(0.01)
         now.tick(5)  # type: ignore[attr-defined]

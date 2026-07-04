@@ -8,6 +8,7 @@ import type {
   DaemonDiagnosticStatus,
   DaemonReportStatus,
 } from '../../../api/daemon-diagnostics.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 interface CheckGroup {
   label: string;
@@ -32,6 +33,7 @@ const CATEGORY_LABELS: Record<DaemonDiagnosticCategory, string> = {
 
 @Component({
   selector: 'app-daemon-diagnostics-panel',
+  imports: [ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './daemon-diagnostics-panel.component.html',
   styleUrl: './daemon-diagnostics-panel.component.scss',

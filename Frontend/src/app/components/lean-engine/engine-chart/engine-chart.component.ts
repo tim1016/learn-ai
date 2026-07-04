@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars */
 import {
   Component, signal, computed, input,
   viewChild, ElementRef, AfterViewInit, OnDestroy,

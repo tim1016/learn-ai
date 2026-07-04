@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   Component,
   signal,
@@ -114,10 +113,14 @@ export class DataQualityDocsComponent {
         )
       );
       this.steps.set(res.steps);
-    } catch (e: any) {
-      this.error.set(e?.message || "Failed to load documentation");
+    } catch (e: unknown) {
+      this.error.set(errorMessage(e));
     } finally {
       this.loading.set(false);
     }
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Failed to load documentation";
 }

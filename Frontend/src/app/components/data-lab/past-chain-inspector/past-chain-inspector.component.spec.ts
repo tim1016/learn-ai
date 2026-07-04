@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Migrated from `options-history.component.spec.ts` during R1 of the
  * options-routes cleanup. Asserts the same surface the legacy component

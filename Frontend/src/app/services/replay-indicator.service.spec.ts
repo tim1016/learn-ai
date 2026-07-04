@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { TestBed } from '@angular/core/testing';
 import { ReplayIndicatorService } from './replay-indicator.service';
 import { ReplayEngineService } from './replay-engine.service';

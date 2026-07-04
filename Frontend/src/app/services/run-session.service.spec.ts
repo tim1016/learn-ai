@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion */
 /**
  * RunSessionService — drives the run-card state machine off SSE events
  * routed through the unified JobsService.
