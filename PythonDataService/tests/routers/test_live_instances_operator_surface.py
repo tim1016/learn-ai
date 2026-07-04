@@ -547,6 +547,39 @@ async def test_status_preserves_recovering_runtime_broker_connection(
     assert broker_attention["headline"] == "Broker connection is recovering"
 
 
+async def test_status_projects_hard_down_runtime_broker_connection_as_disconnected(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    now_ms = 1_700_000_000_000
+    _write_ledger(root, "run-hard-down", "spy_ema_paper", 100)
+    _write_runtime_snapshot(
+        root,
+        "run-hard-down",
+        "spy_ema_paper",
+        now_ms,
+        connection_state="hard_down",
+    )
+    _set_daemon(
+        monkeypatch,
+        process={
+            "state": "running",
+            "run_id": "run-hard-down",
+            "pid": 123,
+            "started_at_ms": now_ms,
+        },
+    )
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status")
+
+    assert response.status_code == 200
+    surface = response.json()["operator_surface"]
+    assert surface["broker"]["connection"] == "DISCONNECTED"
+    assert "BROKER_CONNECTION_DISCONNECTED" in surface["submit_readiness"]["blocking_reason_codes"]
+
+
 async def test_status_uses_account_freeze_artifact_to_block_start_and_resume(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -47,6 +47,7 @@ export class BrokerHealthService {
     const h = this.health();
     if (h === null) return null;
     if (h.disabled === true) return 'disabled-host-runner-active';
+    if (h.connection_state === 'hard_down') return 'degraded';
     if (!h.connected) return 'disconnected';
     if (h.connection_state !== 'connected') return 'degraded';
     return h.is_paper ? 'paper' : 'live';

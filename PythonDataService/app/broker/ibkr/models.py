@@ -819,6 +819,7 @@ BrokerConnectionState = Literal[
     "degraded_data_farm",
     "reconnecting",
     "recovering",
+    "hard_down",
     "disconnected",
     "disabled",
 ]

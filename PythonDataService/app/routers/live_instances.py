@@ -729,7 +729,7 @@ def _broker_connection_state_from_engine_runtime(
         return "connected"
     if state in {"soft_lost", "subscriptions_stale", "degraded_data_farm", "reconnecting", "recovering"}:
         return "degraded"
-    if state in {"disconnected", "disabled"}:
+    if state in {"disconnected", "disabled", "hard_down"}:
         return "disconnected"
     return "unknown"
 

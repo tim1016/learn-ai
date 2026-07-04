@@ -52,6 +52,7 @@ def _fake_monitor(
     successful_reconnect_count: int = 0,
     last_transition_ms: int = 0,
     is_recovering: bool = False,
+    is_hard_down: bool = False,
 ) -> MagicMock:
     monitor = MagicMock()
     monitor.is_attempting = is_attempting
@@ -59,6 +60,7 @@ def _fake_monitor(
     monitor.successful_reconnect_count = successful_reconnect_count
     monitor.last_transition_ms = last_transition_ms
     monitor.is_recovering = is_recovering
+    monitor.is_hard_down = is_hard_down
     return monitor
 
 
@@ -117,6 +119,16 @@ def test_build_broker_health_overlays_recovering_after_reconnect() -> None:
     out = build_broker_health(client, monitor)
 
     assert out.connection_state == "recovering"
+
+
+def test_build_broker_health_overlays_hard_down_after_attempts_exhaust() -> None:
+    client = _fake_client(_fake_client_health(connection_state="disconnected"))
+    monitor = _fake_monitor(is_hard_down=True, last_transition_ms=1_700_000_005_000)
+
+    out = build_broker_health(client, monitor)
+
+    assert out.connection_state == "hard_down"
+    assert out.last_transition_ms == 1_700_000_005_000
 
 
 def test_build_broker_health_last_transition_is_max_of_both_sides() -> None:

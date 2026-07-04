@@ -4192,7 +4192,7 @@ export interface components {
              *     synthetic-health factory in ``app.broker.ibkr.health``
              *     stamps it on every wire payload.
              */
-            connection_state: "connected" | "soft_lost" | "subscriptions_stale" | "degraded_data_farm" | "reconnecting" | "recovering" | "disconnected" | "disabled";
+            connection_state: "connected" | "soft_lost" | "subscriptions_stale" | "degraded_data_farm" | "reconnecting" | "recovering" | "hard_down" | "disconnected" | "disabled";
             /** Last Transition Ms */
             last_transition_ms: number;
             /** Connection Lost */

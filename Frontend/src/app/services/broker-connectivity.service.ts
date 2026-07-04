@@ -14,6 +14,7 @@ export type BrokerConnectionState =
   | 'degraded_data_farm'
   | 'reconnecting'
   | 'recovering'
+  | 'hard_down'
   | 'disconnected'
   | 'disabled';
 
@@ -90,6 +91,7 @@ export class BrokerConnectivityService {
     soft_lost: { link: 'warn', baseDetail: 'Connection degraded — feed lost, recovering' },
     subscriptions_stale: { link: 'warn', baseDetail: 'Subscriptions stale — resubscribe required' },
     degraded_data_farm: { link: 'warn', baseDetail: 'IBKR data farm degraded' },
+    hard_down: { link: 'down', baseDetail: 'Recovery exhausted' },
     disabled: { link: 'unknown', baseDetail: 'Disabled' },
     disconnected: { link: 'down', baseDetail: 'Disconnected' },
   };
@@ -200,6 +202,8 @@ export class BrokerConnectivityService {
       out.push('Broker reconnecting — order entry paused until the link is restored.');
     } else if (bs === 'recovering') {
       out.push('Broker recovering streams — order entry paused until subscriptions and probes pass.');
+    } else if (bs === 'hard_down') {
+      out.push('Broker recovery exhausted — manual reconnect or Gateway intervention required.');
     } else if (bs === 'soft_lost') {
       out.push('Broker feed lost — auto-recovery in progress. Hold off on order entry.');
     } else if (bs === 'subscriptions_stale') {

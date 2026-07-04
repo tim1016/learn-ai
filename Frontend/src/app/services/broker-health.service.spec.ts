@@ -63,6 +63,14 @@ describe('BrokerHealthService — bannerState', () => {
     expect(svc.bannerState()).toBe('disconnected');
   });
 
+  it('returns degraded when reconnect recovery exhausts even if connected is false', () => {
+    const { svc } = setup();
+    svc.health.set(
+      makeHealth({ connected: false, is_paper: null, connection_state: 'hard_down' }),
+    );
+    expect(svc.bannerState()).toBe('degraded');
+  });
+
   it('returns paper when connected and is_paper is true', () => {
     const { svc } = setup();
     svc.health.set(makeHealth({ connected: true, is_paper: true }));
