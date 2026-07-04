@@ -78,6 +78,70 @@
     <p class="load-error" role="alert">{{ message }}</p>
   }
 
+  <section class="history-panel" aria-label="Recent broker session history">
+    <header class="history-header">
+      <div>
+        <h2>Recent history</h2>
+        <span>{{ formatNumber(historyPage()?.retained_count ?? 0) }} retained</span>
+      </div>
+      <button
+        pButton
+        type="button"
+        severity="secondary"
+        icon="pi pi-refresh"
+        [loading]="isRefreshingHistory()"
+        data-testid="history-refresh"
+        (click)="refreshHistory()"
+      >
+        <span class="p-button-label">Refresh history</span>
+      </button>
+    </header>
+
+    @if (historyError(); as message) {
+      <p class="load-error" role="alert">{{ message }}</p>
+    }
+
+    @if (historySnapshots().length > 0) {
+      <div class="history-list">
+        @for (item of historySnapshots(); track item.as_of_ms) {
+          <article class="history-snapshot">
+            <header>
+              <strong>{{ formatTimestamp(item.as_of_ms) }}</strong>
+              <span>{{ formatNumber(item.rows.length) }} rows</span>
+            </header>
+            @if (item.rows.length > 0) {
+              <div class="history-rows">
+                @for (row of historyRows(item); track row.row_id) {
+                  <div class="history-row">
+                    <p-tag
+                      [severity]="identitySeverity(row.identity_type)"
+                      [value]="identityLabel(row.identity_type)"
+                    />
+                    <p-tag
+                      [severity]="recencySeverity(row.recency)"
+                      [value]="recencyLabel(row.recency)"
+                    />
+                    <span class="history-row-name">
+                      {{ row.strategy_instance_id ?? row.command ?? row.row_id }}
+                    </span>
+                    <span>client {{ row.client_id ?? '—' }}</span>
+                  </div>
+                }
+                @if (historyOverflowCount(item) > 0) {
+                  <span class="history-more">+{{ formatNumber(historyOverflowCount(item)) }}</span>
+                }
+              </div>
+            } @else {
+              <span class="history-empty">0 rows</span>
+            }
+          </article>
+        }
+      </div>
+    } @else {
+      <span class="history-empty">No retained snapshots.</span>
+    }
+  </section>
+
   <section class="purge-panel" aria-label="Diagnostic history purge">
     <label>
       <span>Client id</span>

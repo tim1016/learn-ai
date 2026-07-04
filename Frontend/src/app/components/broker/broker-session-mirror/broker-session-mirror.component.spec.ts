@@ -7,6 +7,7 @@ import type {
   BrokerSessionEvent,
   BrokerSessionEventPurgeRequest,
   BrokerSessionEventPurgeResult,
+  BrokerSessionHistoryPage,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
@@ -46,6 +47,7 @@ class FakeEventSource {
 
 class FakeBrokerSessionMirrorService {
   snapshot = vi.fn<() => Promise<BrokerSessionMirrorSnapshot>>();
+  history = vi.fn<(params?: { limit?: number }) => Promise<BrokerSessionHistoryPage>>();
   purgeEvents =
     vi.fn<
       (request: BrokerSessionEventPurgeRequest) => Promise<BrokerSessionEventPurgeResult>
@@ -118,6 +120,41 @@ describe('BrokerSessionMirrorComponent', () => {
     const text = pageText(fixture);
     expect(text).toContain('hard_down');
     expect(text).toContain('Hard down');
+  });
+
+  it('renders retained broker-session history snapshots', async () => {
+    const { fixture, service } = await setup(snapshot({ rows: [] }));
+    service.history.mockResolvedValueOnce({
+      retained_count: 1,
+      rows: [
+        snapshot({
+          as_of_ms: AS_OF_MS - 60_000,
+          rows: [
+            botSocket({
+              strategy_instance_id: 'ClosedBot',
+              recency: 'past_closed',
+              socket_present: false,
+              client_id: 88,
+              attention_codes: [],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const button = fixture.nativeElement.querySelector(
+      '[data-testid="history-refresh"]',
+    ) as HTMLButtonElement | null;
+    button?.click();
+    await settle(fixture);
+
+    const text = pageText(fixture);
+    expect(service.history).toHaveBeenCalledWith({ limit: 12 });
+    expect(text).toContain('Recent history');
+    expect(text).toContain('1 retained');
+    expect(text).toContain('ClosedBot');
+    expect(text).toContain('PAST');
+    expect(text).toContain('client 88');
   });
 
   it('surfaces degraded observer and unknown ghost detection states', async () => {
@@ -280,6 +317,7 @@ async function setup(initialSnapshot: BrokerSessionMirrorSnapshot): Promise<{
 }> {
   const service = new FakeBrokerSessionMirrorService();
   service.snapshot.mockResolvedValue(initialSnapshot);
+  service.history.mockResolvedValue({ retained_count: 0, rows: [] });
   service.purgeEvents.mockResolvedValue({ purged_count: 0, remaining_count: 0 });
 
   TestBed.resetTestingModule();
