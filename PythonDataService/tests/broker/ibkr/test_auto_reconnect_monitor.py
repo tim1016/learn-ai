@@ -60,6 +60,7 @@ class _FakeClient:
         self._subscriptions_stale = subscriptions_stale
         self.recovery_succeeded_calls = 0
         self.recovery_failed_calls = 0
+        self.recovery_events: list[tuple[str, dict[str, object]]] = []
 
     def is_connected(self) -> bool:
         return self._is_connected
@@ -85,6 +86,9 @@ class _FakeClient:
 
     def mark_recovery_failed(self, exc: Exception) -> None:
         self.recovery_failed_calls += 1
+
+    def record_recovery_event(self, event_type: str, **fields: object) -> None:
+        self.recovery_events.append((event_type, dict(fields)))
 
     async def connect(self):
         self.connect_calls += 1
@@ -255,6 +259,10 @@ async def test_monitor_reconnects_when_soft_link_wait_expires() -> None:
     assert client.disconnect_calls >= 1, "must drop the soft socket before reconnecting"
     assert client.connect_calls >= 1
     assert monitor.successful_reconnect_count == 1
+    assert any(
+        event_type == "BROKER_RECONNECT_SUCCEEDED"
+        for event_type, _ in client.recovery_events
+    )
     assert monitor.recovery_state == "HEALTHY"
     # Monitor-owned state cleared after a successful recovery.
     assert monitor.is_attempting is False
@@ -377,6 +385,14 @@ async def test_monitor_enters_hard_down_when_reconnect_attempts_exhaust() -> Non
     assert monitor.is_hard_down is True
     assert monitor.is_attempting is False
     assert monitor.current_attempt == 0
+    assert (
+        "BROKER_RECONNECT_HARD_DOWN",
+        {
+            "recovery_state": "HARD_DOWN",
+            "reconnect_attempt": None,
+            "attempts": 2,
+        },
+    ) in client.recovery_events
 
 
 # ──────────────────────────── shared lock ────────────────────────────
