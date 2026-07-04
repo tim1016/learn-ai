@@ -41,6 +41,7 @@ from app.broker.ibkr.recovery_state_machine import RecoveryState
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
 
 ENGINE_RUNTIME_FILENAME = "engine_runtime.json"
+ENGINE_RUNTIME_SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,7 @@ class EngineRuntimeSnapshot(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = Field(default=1, ge=1)
+    schema_version: int = Field(default=ENGINE_RUNTIME_SCHEMA_VERSION, ge=1)
 
     strategy_instance_id: str
     run_id: str

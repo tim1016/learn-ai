@@ -85,6 +85,9 @@ class AutoReconnectMonitor:
     intervals — the IBKR Gateway sometimes takes that long to recover,
     and reconnecting more aggressively only generates rejected attempts."""
 
+    MAX_RECONNECT_ATTEMPTS = 10
+    """Production finite cap before the monitor enters HARD_DOWN."""
+
     def __init__(
         self,
         client: IbkrClient,
@@ -108,8 +111,11 @@ class AutoReconnectMonitor:
         self._probe_interval_s = probe_interval_s
         self._probe_timeout_s = probe_timeout_s
         self._link_interruption_wait_s = max(0.0, link_interruption_wait_s)
-        self._max_reconnect_attempts = (
-            None if max_reconnect_attempts is None else max(1, max_reconnect_attempts)
+        self._max_reconnect_attempts = max(
+            1,
+            self.MAX_RECONNECT_ATTEMPTS
+            if max_reconnect_attempts is None
+            else max_reconnect_attempts,
         )
         self._backoff_jitter_fraction = max(0.0, backoff_jitter_fraction)
         self._backoff_jitter_source = backoff_jitter_source or random.random
@@ -284,7 +290,8 @@ class AutoReconnectMonitor:
         if self._link_interrupted_since_ms is None:
             self._link_interrupted_since_ms = now_ms
             self._advance_recovery("link_lost")
-        wait_ms = int(self._link_interruption_wait_s * 1000)
+        last_ibkr_code = getattr(self._client, "last_ibkr_code", None)
+        wait_ms = 0 if last_ibkr_code == 504 else int(self._link_interruption_wait_s * 1000)
         if now_ms - self._link_interrupted_since_ms < wait_ms:
             return
         logger.warning(
@@ -297,6 +304,7 @@ class AutoReconnectMonitor:
         self._record_recovery_event(
             "BROKER_RECONNECT_LINK_WAIT_EXPIRED",
             link_interruption_wait_s=self._link_interruption_wait_s,
+            last_ibkr_code=last_ibkr_code,
         )
         await self._attempt_reconnect_loop(force=True)
 
@@ -399,7 +407,7 @@ class AutoReconnectMonitor:
                     return
                 if await self._run_one_attempt(attempt):
                     return
-                force = False
+                force = self._recovery_state == "SOCKET_DOWN"
                 if (
                     self._max_reconnect_attempts is not None
                     and attempt >= self._max_reconnect_attempts
@@ -600,4 +608,10 @@ def jittered_backoff_delay(
     fraction = max(0.0, jitter_fraction)
     unit = min(1.0, max(0.0, random_unit))
     max_delay = max(0.0, max_delay_s)
-    return min(max_delay, base + (base * fraction * unit))
+    jitter = base * fraction * unit
+    if base < max_delay:
+        return min(max_delay, base + jitter)
+    if jitter == 0.0 or max_delay == 0.0:
+        return min(base, max_delay)
+    floor = max(0.0, max_delay - (max_delay * fraction))
+    return floor + ((max_delay - floor) * unit)

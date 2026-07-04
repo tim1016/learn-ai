@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -62,13 +63,15 @@ class BrokerSessionMirrorService:
         registry_snapshot: HostRunnerInstancesStatus | None = None
         daemon_url = settings.live_runner_daemon_url.strip()
         if daemon_url:
-            socket_result, socket_snapshot = await host_daemon_client.fetch_gateway_sockets(
-                daemon_url,
-                gateway_port=settings.port,
+            (socket_result, socket_snapshot), (registry_result, registry_payload) = await asyncio.gather(
+                host_daemon_client.fetch_gateway_sockets(
+                    daemon_url,
+                    gateway_port=settings.port,
+                ),
+                host_daemon_client.fetch_instances(daemon_url),
             )
             if socket_snapshot is None:
                 degradation_reasons.append(socket_result.detail or "host daemon socket probe unavailable")
-            registry_result, registry_payload = await host_daemon_client.fetch_instances(daemon_url)
             if registry_payload is not None:
                 try:
                     registry_snapshot = HostRunnerInstancesStatus.model_validate(registry_payload)
@@ -79,7 +82,15 @@ class BrokerSessionMirrorService:
         else:
             degradation_reasons.append("host daemon URL is not configured")
 
-        runtime_index = _build_runtime_index(Path(settings.live_runs_root))
+        try:
+            runtime_index = await asyncio.to_thread(
+                _build_runtime_index,
+                Path(settings.live_runs_root),
+            )
+        except OSError as exc:
+            logger.warning("failed to scan broker session runtime index: %s", exc)
+            degradation_reasons.append(f"runtime index scan failed: {exc}")
+            runtime_index = {}
         data_plane_health = _data_plane_health()
         rows = reconcile_broker_session_roster(
             socket_rows=socket_snapshot.sockets if socket_snapshot is not None else [],
@@ -90,14 +101,25 @@ class BrokerSessionMirrorService:
             socket_probe_available=socket_snapshot is not None,
         )
         if socket_snapshot is not None:
-            rows.extend(self._history_service.past_closed_rows(current_rows=rows))
-        event_counts_by_client_id = self._event_service.counts_by_client_id()
+            rows.extend(
+                await asyncio.to_thread(
+                    self._history_service.past_closed_rows,
+                    current_rows=rows,
+                )
+            )
+        try:
+            event_counts_by_row_id = await asyncio.to_thread(
+                self._event_service.counts_for_rows,
+                rows,
+            )
+        except OSError as exc:
+            logger.warning("failed to read broker session event counts: %s", exc)
+            degradation_reasons.append(f"broker event log unavailable: {exc}")
+            event_counts_by_row_id = {}
         rows = [
             row.model_copy(
                 update={
-                    "event_counts": event_counts_by_client_id.get(row.client_id, {})
-                    if row.client_id is not None
-                    else {}
+                    "event_counts": event_counts_by_row_id.get(row.row_id, {})
                 }
             )
             for row in rows
@@ -113,7 +135,7 @@ class BrokerSessionMirrorService:
             degradation_reasons=degradation_reasons,
         )
         try:
-            self._history_service.append_snapshot(snapshot)
+            await asyncio.to_thread(self._history_service.append_snapshot, snapshot)
         except OSError as exc:
             logger.warning("failed to append broker session history: %s", exc)
         return snapshot

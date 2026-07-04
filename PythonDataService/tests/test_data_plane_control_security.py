@@ -20,6 +20,7 @@ from app.security.data_plane_control import (
     CONTROL_SECRET_HEADER,
     UNSAFE_HTTP_METHODS,
     require_data_plane_control_secret,
+    require_data_plane_control_secret_always,
 )
 
 _CONTROL_SURFACE_MANIFEST = (
@@ -32,6 +33,7 @@ _CONTROL_SURFACE_MANIFEST_PAYLOAD = json.loads(_CONTROL_SURFACE_MANIFEST.read_te
 _CONTROL_SURFACE_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["control_prefixes"])
 _MUTATION_PATH = "/api/broker/orders/what-if"
 _READ_PATH = "/api/broker/health"
+_MIRROR_READ_PATH = "/api/broker/session-mirror"
 
 
 def _path_is_manifest_control_surface(path: str) -> bool:
@@ -55,7 +57,18 @@ def _unsafe_methods(route: APIRoute) -> set[str]:
 
 
 def _has_control_guard(route: APIRoute) -> bool:
-    return any(dependency.call is require_data_plane_control_secret for dependency in route.dependant.dependencies)
+    return any(
+        dependency.call
+        in {require_data_plane_control_secret, require_data_plane_control_secret_always}
+        for dependency in route.dependant.dependencies
+    )
+
+
+def _has_always_control_guard(route: APIRoute) -> bool:
+    return any(
+        dependency.call is require_data_plane_control_secret_always
+        for dependency in route.dependant.dependencies
+    )
 
 
 def _request(method: str) -> Request:
@@ -151,6 +164,45 @@ async def test_control_get_does_not_require_secret_header(monkeypatch) -> None:
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(_READ_PATH)
+
+    assert response.status_code != 403
+    if response.status_code == 503:
+        assert CONTROL_SECRET_ENV_VAR not in response.json()["detail"]
+
+
+def test_broker_session_mirror_routes_declare_always_on_guard() -> None:
+    mirror_routes = [
+        (route.path, sorted(route.methods or set()), _has_always_control_guard(route))
+        for route in _api_routes()
+        if route.path == _MIRROR_READ_PATH or route.path.startswith(f"{_MIRROR_READ_PATH}/")
+    ]
+
+    assert mirror_routes
+    assert all(has_guard for _path, _methods, has_guard in mirror_routes)
+
+
+@pytest.mark.asyncio
+async def test_broker_session_mirror_get_rejects_missing_secret_header(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(_MIRROR_READ_PATH)
+
+    assert response.status_code == 403
+    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_broker_session_mirror_get_accepts_valid_secret_header(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            _MIRROR_READ_PATH,
+            headers={CONTROL_SECRET_HEADER: "test-control-secret"},
+        )
 
     assert response.status_code != 403
     if response.status_code == 503:

@@ -715,3 +715,21 @@ Critical limits:
 2. **Only 507 changes client state.**
    The pacing/order/auth additions are diagnostic classifications. They do not
    introduce new order-control, reconnect, or halt behavior.
+
+## Slice 27 addendum — end-of-stack critical deferred note
+
+Date: 2026-07-04
+
+The stacked slice-27 branch adds
+`docs/architecture/broker-session-mirror-critical-deferred-items-2026-07-04.md`,
+the requested end document for critical PRD items I did not proceed with.
+
+The critical deferred items are:
+
+1. Exact 1:1 data-plane socket de-duplication.
+2. Durable orphaned-socket incident lifecycle.
+3. Strong orphan attribution for sockets with no PID or run-dir evidence.
+4. Automatic ResumeGuard or incident clearing after clean recovery.
+
+Lower-priority UX follow-ups are separated in that document so they do not
+hide the critical safety and authority decisions.

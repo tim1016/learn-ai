@@ -34,7 +34,7 @@ class LsofSocketEnumerator:
                     f"-iTCP:{gateway_port}",
                     "-sTCP:ESTABLISHED",
                     "-F",
-                    "pcnT",
+                    "pcfnT",
                 ],
                 capture_output=True,
                 text=True,
@@ -56,34 +56,50 @@ class LsofSocketEnumerator:
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 f"could not enumerate IBKR gateway sockets: {detail}",
             )
-        return self._parse_lsof(proc.stdout)
+        return [
+            row
+            for row in self._parse_lsof(proc.stdout)
+            if row.remote_port == gateway_port
+        ]
 
     def _parse_lsof(self, output: str) -> list[GatewaySocketRow]:
         rows: list[GatewaySocketRow] = []
-        current: dict[str, object] | None = None
+        process: dict[str, object] = {}
+        current_file: dict[str, object] | None = None
+
+        def flush_file() -> None:
+            nonlocal current_file
+            if current_file is None:
+                return
+            rows.append(self._row_from_record({**process, **current_file}))
+            current_file = None
+
         for raw_line in output.splitlines():
             if not raw_line:
                 continue
             tag = raw_line[0]
             value = raw_line[1:]
             if tag == "p":
-                if current is not None:
-                    rows.append(self._row_from_record(current))
-                current = {"pid": _safe_int(value)}
-                continue
-            if current is None:
+                flush_file()
+                process = {"pid": _safe_int(value)}
                 continue
             if tag == "c":
-                current["command"] = value
+                process["command"] = value
+            elif tag == "f":
+                flush_file()
+                current_file = {}
             elif tag == "n":
+                if current_file is None:
+                    current_file = {}
                 local_port, remote_host, remote_port = _parse_lsof_name(value)
-                current["local_port"] = local_port
-                current["remote_host"] = remote_host
-                current["remote_port"] = remote_port
+                current_file["local_port"] = local_port
+                current_file["remote_host"] = remote_host
+                current_file["remote_port"] = remote_port
             elif tag == "T" and value == "ST=ESTABLISHED":
-                current["state"] = "ESTABLISHED"
-        if current is not None:
-            rows.append(self._row_from_record(current))
+                if current_file is None:
+                    current_file = {}
+                current_file["state"] = "ESTABLISHED"
+        flush_file()
         return rows
 
     def _row_from_record(self, record: dict[str, object]) -> GatewaySocketRow:

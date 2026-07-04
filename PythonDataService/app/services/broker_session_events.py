@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -28,12 +29,15 @@ from app.schemas.broker_session import (
     BrokerSessionEventPage,
     BrokerSessionEventPurgeRequest,
     BrokerSessionEventPurgeResult,
+    BrokerSessionRosterRow,
 )
 
 _EVENT_LOG_RELATIVE = Path("_broker") / "connection_events.jsonl"
 _EVENT_LOG_MAX_EVENTS = 5_000
 _ET = ZoneInfo("America/New_York")
-_RESET_WINDOW_WARNING_CODES = frozenset({1100, 1300, 2110, 2103, 2105})
+_RESET_WINDOW_WARNING_CODES = frozenset({1100, 2110, 2103, 2105})
+
+logger = logging.getLogger(__name__)
 _EVENT_TYPE_MEANINGS: dict[
     str,
     tuple[BrokerSessionEventCategory, BrokerSessionEventSeverity, str],
@@ -140,6 +144,24 @@ class BrokerSessionEventService:
             counts[event.category] = counts.get(event.category, 0) + 1
         return out
 
+    def counts_for_rows(
+        self,
+        rows: list[BrokerSessionRosterRow],
+    ) -> dict[str, dict[BrokerSessionEventCategory, int]]:
+        events = self._read_all_events()
+        out: dict[str, dict[BrokerSessionEventCategory, int]] = {}
+        for row in rows:
+            if row.client_id is None or not _row_can_attach_client_events(row):
+                continue
+            counts: dict[BrokerSessionEventCategory, int] = {}
+            for event in events:
+                if not _event_matches_row(event, row):
+                    continue
+                counts[event.category] = counts.get(event.category, 0) + 1
+            if counts:
+                out[row.row_id] = counts
+        return out
+
     def purge(
         self,
         request: BrokerSessionEventPurgeRequest,
@@ -173,8 +195,9 @@ class BrokerSessionEventService:
             lines = path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             return []
-        except OSError:
-            return []
+        except OSError as exc:
+            logger.warning("failed to read broker session event log: %s", exc)
+            raise
         events: list[BrokerSessionEvent] = []
         for index, line in enumerate(lines, start=1):
             if not line.strip():
@@ -213,7 +236,8 @@ def classify_broker_session_event(
         label=label,
         message=_string_value(payload.get("message"))
         or _string_value(payload.get("probe_error"))
-        or _string_value(payload.get("recovery_error")),
+        or _string_value(payload.get("recovery_error"))
+        or _string_value(payload.get("error")),
         raw_event_type=event_type,
         client_id=_int_value(payload.get("client_id")),
         account_id=_string_value(payload.get("connected_account")),
@@ -236,6 +260,15 @@ def _classify(
                 return meaning.category, "info", f"{meaning.label} during scheduled reset"
             return meaning.category, meaning.severity, meaning.label
         return "unclassified", "warning", "Unclassified IBKR code"
+    if (
+        event_type == "BROKER_RECONNECT_LINK_WAIT_EXPIRED"
+        and is_ibkr_north_america_reset_window(ts_ms)
+    ):
+        return (
+            "recovery_reconnect",
+            "info",
+            "Broker link wait expired during scheduled reset",
+        )
     meaning = _EVENT_TYPE_MEANINGS.get(event_type)
     if meaning is not None:
         return meaning
@@ -298,6 +331,21 @@ def _matches_purge_filter(
     if request.start_ms is not None and event.ts_ms < request.start_ms:
         return False
     return not (request.end_ms is not None and event.ts_ms > request.end_ms)
+
+
+def _row_can_attach_client_events(row: BrokerSessionRosterRow) -> bool:
+    if row.identity_type == "system":
+        return True
+    return row.registry_claim is not None and row.registry_claim.started_at_ms is not None
+
+
+def _event_matches_row(event: BrokerSessionEvent, row: BrokerSessionRosterRow) -> bool:
+    if event.client_id != row.client_id:
+        return False
+    started_at_ms = row.registry_claim.started_at_ms if row.registry_claim is not None else None
+    if started_at_ms is not None and event.ts_ms < started_at_ms:
+        return False
+    return event.ts_ms <= row.as_of_ms
 
 
 def write_jsonl_lines_atomically(path: Path, lines: list[str]) -> None:

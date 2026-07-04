@@ -27,6 +27,12 @@ class _FakeEventService:
     def counts_by_client_id(self) -> dict[int, dict[str, int]]:
         return {}
 
+    def counts_for_rows(
+        self,
+        rows: list[BrokerSessionRosterRow],
+    ) -> dict[str, dict[str, int]]:
+        return {}
+
 
 class _FakeHistoryService:
     def __init__(self, past_rows=None) -> None:

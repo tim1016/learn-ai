@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -47,7 +46,6 @@ type PurgeTarget = 'events' | 'history';
 @Component({
   selector: 'app-broker-session-mirror',
   imports: [
-    CommonModule,
     ButtonModule,
     BrokerSessionEventsPanelComponent,
     TableModule,
@@ -94,9 +92,12 @@ export class BrokerSessionMirrorComponent {
   readonly purgeMessage = signal<string | null>(null);
   readonly purgeError = signal<string | null>(null);
   readonly purgeConfirmToken = BROKER_SESSION_PURGE_CONFIRM;
+  private readonly purgedEventFilters = signal<
+    readonly BrokerSessionEventPurgeRequest[]
+  >([]);
 
   readonly snapshot = computed<BrokerSessionMirrorSnapshot | null>(
-    () => this.snapshotStream.latest() ?? this.manualSnapshot(),
+    () => latestSnapshot(this.snapshotStream.latest(), this.manualSnapshot()),
   );
   readonly rows = computed<BrokerSessionRosterRow[]>(
     () => this.snapshot()?.rows ?? [],
@@ -164,7 +165,7 @@ export class BrokerSessionMirrorComponent {
       if (this.purgeTarget() === 'events') {
         const result = await this.mirror.purgeEvents(request);
         this.purgeConfirmText.set('');
-        this.eventStream.clear();
+        this.purgedEventFilters.update((prev) => [...prev, request]);
         this.purgeMessage.set(
           `Purged ${this.formatCount(result.purged_count, 'event')}; ${this.formatNumber(result.remaining_count)} remain.`,
         );
@@ -324,9 +325,10 @@ export class BrokerSessionMirrorComponent {
   }
 
   eventsForRow(row: BrokerSessionRosterRow): readonly BrokerSessionEvent[] {
-    if (row.client_id === null) return [];
+    if (!rowCanAttachClientEvents(row)) return [];
     return this.events()
-      .filter((event) => event.client_id === row.client_id)
+      .filter((event) => eventMatchesRow(event, row))
+      .filter((event) => !eventWasPurged(event, this.purgedEventFilters()))
       .slice(-10)
       .reverse();
   }
@@ -398,6 +400,52 @@ function summarizeRows(rows: BrokerSessionRosterRow[]): MirrorSummary {
     },
     { current: 0, past: 0, unknown: 0, attention: 0 },
   );
+}
+
+function latestSnapshot(
+  streamSnapshot: BrokerSessionMirrorSnapshot | null,
+  manualSnapshot: BrokerSessionMirrorSnapshot | null,
+): BrokerSessionMirrorSnapshot | null {
+  if (streamSnapshot === null) return manualSnapshot;
+  if (manualSnapshot === null) return streamSnapshot;
+  return manualSnapshot.as_of_ms > streamSnapshot.as_of_ms
+    ? manualSnapshot
+    : streamSnapshot;
+}
+
+function rowCanAttachClientEvents(row: BrokerSessionRosterRow): boolean {
+  return (
+    row.client_id !== null &&
+    (row.identity_type === 'system' ||
+      (row.registry_claim !== null && row.registry_claim.started_at_ms !== null))
+  );
+}
+
+function eventMatchesRow(
+  event: BrokerSessionEvent,
+  row: BrokerSessionRosterRow,
+): boolean {
+  if (event.client_id !== row.client_id || event.ts_ms > row.as_of_ms) return false;
+  const startedAtMs = row.registry_claim?.started_at_ms ?? null;
+  return startedAtMs === null || event.ts_ms >= startedAtMs;
+}
+
+function eventWasPurged(
+  event: BrokerSessionEvent,
+  filters: readonly BrokerSessionEventPurgeRequest[],
+): boolean {
+  return filters.some((filter) => {
+    if (filter.client_id !== null && filter.client_id !== undefined) {
+      if (event.client_id !== filter.client_id) return false;
+    }
+    if (filter.start_ms !== null && filter.start_ms !== undefined) {
+      if (event.ts_ms < filter.start_ms) return false;
+    }
+    if (filter.end_ms !== null && filter.end_ms !== undefined) {
+      if (event.ts_ms > filter.end_ms) return false;
+    }
+    return true;
+  });
 }
 
 function humanError(err: unknown): string {

@@ -55,7 +55,11 @@ def build_broker_health(
     if monitor is None:
         return base.model_copy(update={"safety_verdict": safety_verdict})
 
-    if getattr(monitor, "is_hard_down", False) is True:
+    operator_disconnected = (
+        getattr(client, "desired_connected", True) is False
+        and base.connection_state == "disconnected"
+    )
+    if getattr(monitor, "is_hard_down", False) is True and not operator_disconnected:
         state: BrokerConnectionState = "hard_down"
     elif monitor.is_attempting:
         state: BrokerConnectionState = "reconnecting"
@@ -63,9 +67,15 @@ def build_broker_health(
         state = "recovering"
     else:
         state = base.connection_state
-    recovery_state = monitor.recovery_state
-    if recovery_state is None:
-        recovery_state = recovery_state_from_connection_state(state)
+    derived_recovery_state = recovery_state_from_connection_state(state)
+    monitor_recovery_state = monitor.recovery_state
+    if operator_disconnected or (
+        monitor_recovery_state == "HEALTHY"
+        and derived_recovery_state not in {None, "HEALTHY"}
+    ):
+        recovery_state = derived_recovery_state
+    else:
+        recovery_state = monitor_recovery_state or derived_recovery_state
     return base.model_copy(
         update={
             "connection_state": state,

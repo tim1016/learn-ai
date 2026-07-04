@@ -62,6 +62,7 @@ def reconcile_broker_session_roster(
     """Reconcile intent, registry claim, and OS socket truth into roster rows."""
 
     runtime_by_dir = {_normalise_path(key): value for key, value in runtime_index.items()}
+    runtime_by_run_id = {value.run_id: value for value in runtime_index.values()}
     registry_instances = registry_snapshot.instances if registry_snapshot is not None else []
     registry_by_pid = _registry_by_pid(registry_instances)
     registry_by_dir = _registry_by_run_dir(registry_instances)
@@ -71,7 +72,11 @@ def reconcile_broker_session_roster(
 
     for index, socket in enumerate(socket_rows):
         run_dir_key = _normalise_optional_path(socket.run_dir)
-        runtime = runtime_by_dir.get(run_dir_key) if run_dir_key is not None else None
+        runtime = _runtime_for_socket_run_dir(
+            run_dir_key=run_dir_key,
+            runtime_by_dir=runtime_by_dir,
+            runtime_by_run_id=runtime_by_run_id,
+        )
         registry = _registry_for_socket(socket, registry_by_pid, registry_by_dir, run_dir_key)
         if registry is not None:
             matched_registry_ids.add(_registry_id(registry))
@@ -85,7 +90,7 @@ def reconcile_broker_session_roster(
             if socket.pid is None:
                 identity_type = "orphaned_bot_socket"
                 attention.extend(["SOCKET_WITHOUT_LIVE_PID", "ORPHANED_BOT_SOCKET"])
-            elif not _registry_claims_live_socket(registry, socket):
+            elif registry_snapshot is not None and not _registry_claims_live_socket(registry, socket):
                 attention.append("REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE")
             if _runtime_signal_stale(runtime, as_of_ms, stale_after_ms):
                 attention.append("CLIENT_SIGNAL_STALE")
@@ -192,7 +197,7 @@ def reconcile_broker_session_roster(
             )
         )
 
-    if data_plane_health is not None and data_plane_health.connected:
+    if data_plane_health is not None:
         rows.append(_data_plane_row(data_plane_health, as_of_ms))
 
     return sorted(rows, key=_sort_key)
@@ -222,6 +227,20 @@ def _registry_for_socket(
         if by_pid is not None:
             return by_pid
     return registry_by_dir.get(run_dir_key) if run_dir_key is not None else None
+
+
+def _runtime_for_socket_run_dir(
+    *,
+    run_dir_key: str | None,
+    runtime_by_dir: dict[str, RuntimeIndexEntry],
+    runtime_by_run_id: dict[str, RuntimeIndexEntry],
+) -> RuntimeIndexEntry | None:
+    if run_dir_key is None:
+        return None
+    runtime = runtime_by_dir.get(run_dir_key)
+    if runtime is not None:
+        return runtime
+    return runtime_by_run_id.get(Path(run_dir_key).name)
 
 
 def _registry_claims_live_socket(
@@ -269,7 +288,7 @@ def _data_plane_row(
         row_id=f"system:data-plane:{health.client_id}",
         identity_type="system",
         recency="current",
-        socket_present=True,
+        socket_present=health.connected,
         account_id=health.account_id,
         client_id=health.client_id,
         remote_host=health.host,

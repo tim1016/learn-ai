@@ -630,6 +630,10 @@ class IbkrClient:
         return self._connectivity_lost_count
 
     @property
+    def last_ibkr_code(self) -> int | None:
+        return self._last_ibkr_code
+
+    @property
     def subscriptions_stale(self) -> bool:
         return self._subscriptions_stale
 

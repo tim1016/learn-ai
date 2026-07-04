@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from app.broker.ibkr.config import get_settings
@@ -14,7 +15,10 @@ from app.schemas.broker_session import (
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
 )
-from app.services.broker_session_events import write_jsonl_lines_atomically
+from app.services.broker_session_events import (
+    locked_jsonl_file,
+    write_jsonl_lines_atomically,
+)
 
 _HISTORY_LOG_RELATIVE = Path("_broker") / "session_roster_history.jsonl"
 _HISTORY_MAX_SNAPSHOTS = 500
@@ -35,16 +39,16 @@ class BrokerSessionHistoryService:
         self._max_snapshots = max(1, max_snapshots)
 
     def append_snapshot(self, snapshot: BrokerSessionMirrorSnapshot) -> None:
-        """Append a snapshot while keeping the bounded retention window."""
+        """Append a snapshot; readers apply the bounded retention window."""
 
         line = _snapshot_to_line(snapshot)
         path = self.history_log_path()
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            lines = []
-        lines.append(line)
-        write_jsonl_lines_atomically(path, lines[-self._max_snapshots :])
+        with locked_jsonl_file(path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(f"{line}\n")
+                fh.flush()
+                os.fsync(fh.fileno())
 
     def history(self, *, limit: int = 100) -> BrokerSessionHistoryPage:
         """Return retained snapshots newest first."""
@@ -93,41 +97,42 @@ class BrokerSessionHistoryService:
         """Purge diagnostic roster history without touching live state."""
 
         path = self.history_log_path()
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            return BrokerSessionHistoryPurgeResult(
-                purged_row_count=0,
-                purged_snapshot_count=0,
-                remaining_snapshot_count=0,
-            )
+        with locked_jsonl_file(path):
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:
+                return BrokerSessionHistoryPurgeResult(
+                    purged_row_count=0,
+                    purged_snapshot_count=0,
+                    remaining_snapshot_count=0,
+                )
 
-        kept_lines: list[str] = []
-        purged_row_count = 0
-        purged_snapshot_count = 0
-        remaining_snapshot_count = 0
-        for line in lines:
-            snapshot = _snapshot_from_line(line)
-            if snapshot is None:
-                kept_lines.append(line)
-                continue
-            if not _snapshot_matches_purge_filter(snapshot, request):
-                kept_lines.append(line)
+            kept_lines: list[str] = []
+            purged_row_count = 0
+            purged_snapshot_count = 0
+            remaining_snapshot_count = 0
+            for line in lines:
+                snapshot = _snapshot_from_line(line)
+                if snapshot is None:
+                    kept_lines.append(line)
+                    continue
+                if not _snapshot_matches_purge_filter(snapshot, request):
+                    kept_lines.append(line)
+                    remaining_snapshot_count += 1
+                    continue
+                if request.client_id is None:
+                    purged_row_count += len(snapshot.rows)
+                    purged_snapshot_count += 1
+                    continue
+
+                kept_rows = [row for row in snapshot.rows if row.client_id != request.client_id]
+                purged_row_count += len(snapshot.rows) - len(kept_rows)
+                rewritten = snapshot.model_copy(update={"rows": kept_rows})
+                kept_lines.append(_snapshot_to_line(rewritten))
                 remaining_snapshot_count += 1
-                continue
-            if request.client_id is None:
-                purged_row_count += len(snapshot.rows)
-                purged_snapshot_count += 1
-                continue
 
-            kept_rows = [row for row in snapshot.rows if row.client_id != request.client_id]
-            purged_row_count += len(snapshot.rows) - len(kept_rows)
-            rewritten = snapshot.model_copy(update={"rows": kept_rows})
-            kept_lines.append(_snapshot_to_line(rewritten))
-            remaining_snapshot_count += 1
-
-        if purged_row_count > 0 or purged_snapshot_count > 0:
-            write_jsonl_lines_atomically(path, kept_lines)
+            if purged_row_count > 0 or purged_snapshot_count > 0:
+                write_jsonl_lines_atomically(path, kept_lines[-self._max_snapshots :])
         return BrokerSessionHistoryPurgeResult(
             purged_row_count=purged_row_count,
             purged_snapshot_count=purged_snapshot_count,
@@ -142,8 +147,9 @@ class BrokerSessionHistoryService:
         except OSError as exc:
             logger.warning("failed to read broker session history: %s", exc)
             return []
+        retained_lines = lines[-self._max_snapshots :]
         snapshots: list[BrokerSessionMirrorSnapshot] = []
-        for line in lines:
+        for line in retained_lines:
             snapshot = _snapshot_from_line(line)
             if snapshot is not None:
                 snapshots.append(snapshot)
