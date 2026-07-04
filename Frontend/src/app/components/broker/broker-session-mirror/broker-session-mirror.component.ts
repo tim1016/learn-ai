@@ -89,6 +89,7 @@ export class BrokerSessionMirrorComponent {
   readonly purgeEndMsText = signal<string>('');
   readonly purgeConfirmText = signal<string>('');
   readonly purgeTarget = signal<PurgeTarget>('events');
+  readonly expandedHistorySnapshots = signal<ReadonlySet<number>>(new Set());
   readonly isPurging = signal<boolean>(false);
   readonly purgeMessage = signal<string | null>(null);
   readonly purgeError = signal<string | null>(null);
@@ -331,11 +332,22 @@ export class BrokerSessionMirrorComponent {
   }
 
   historyRows(snapshot: BrokerSessionMirrorSnapshot): readonly BrokerSessionRosterRow[] {
-    return snapshot.rows.slice(0, 4);
+    return this.historySnapshotExpanded(snapshot) ? snapshot.rows : snapshot.rows.slice(0, 4);
   }
 
   historyOverflowCount(snapshot: BrokerSessionMirrorSnapshot): number {
     return Math.max(0, snapshot.rows.length - 4);
+  }
+
+  historySnapshotExpanded(snapshot: BrokerSessionMirrorSnapshot): boolean {
+    return this.expandedHistorySnapshots().has(snapshot.as_of_ms);
+  }
+
+  toggleHistorySnapshot(snapshot: BrokerSessionMirrorSnapshot): void {
+    const next = new Set(this.expandedHistorySnapshots());
+    if (next.has(snapshot.as_of_ms)) next.delete(snapshot.as_of_ms);
+    else next.add(snapshot.as_of_ms);
+    this.expandedHistorySnapshots.set(next);
   }
 
   purgeTargetSeverity(target: PurgeTarget): 'secondary' | undefined {

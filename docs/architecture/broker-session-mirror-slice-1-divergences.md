@@ -595,3 +595,24 @@ Critical limits:
    The UI targets only the event-log and roster-history diagnostic endpoints.
    It still does not and must not offer controls for WAL, ledgers,
    reconciliation receipts, fills, or execution evidence.
+
+## Slice 22 addendum — retained-history snapshot expansion
+
+Date: 2026-07-04
+
+The stacked slice-22 branch lets operators expand an individual retained
+broker-session snapshot from the compact four-row preview to all rows in that
+snapshot, then collapse it again. This keeps the recent-history panel compact
+by default while allowing investigation of a noisy retained snapshot without a
+separate page or API change.
+
+Critical limits:
+
+1. **This is still not a full timeline workspace.**
+   The panel now expands rows within a snapshot, but it still does not filter
+   retained history, compare two snapshots side by side, or drill into
+   historical per-row event streams.
+
+2. **Expansion is view-only.**
+   The control reads already-retained diagnostic rows. It does not reload,
+   mutate, or infer live socket state from history.
