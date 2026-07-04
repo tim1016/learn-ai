@@ -107,6 +107,18 @@ export class BrokerSessionMirrorComponent {
     await this.router.navigate(['/broker/bots', row.strategy_instance_id]);
   }
 
+  async runNoticeAction(row: BrokerSessionRosterRow): Promise<void> {
+    if (row.notice?.action.kind !== 'focus_cockpit_action') return;
+    await this.openBot(row);
+  }
+
+  noticeActionDisabled(row: BrokerSessionRosterRow): boolean {
+    return (
+      row.notice?.action.kind !== 'focus_cockpit_action' ||
+      row.strategy_instance_id === null
+    );
+  }
+
   identityLabel(value: BrokerSessionIdentityType): string {
     switch (value) {
       case 'bot':

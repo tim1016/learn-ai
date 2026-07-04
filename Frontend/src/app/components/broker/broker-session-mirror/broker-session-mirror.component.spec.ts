@@ -144,6 +144,36 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('1100');
   });
 
+  it('renders backend-authored orphan notices and opens the owning cockpit', async () => {
+    const { fixture, router } = await setup(
+      snapshot({
+        rows: [
+          botSocket({
+            identity_type: 'orphaned_bot_socket',
+            pid: null,
+            client_id: 17,
+            attention_codes: ['SOCKET_WITHOUT_LIVE_PID', 'ORPHANED_BOT_SOCKET'],
+            notice: orphanNotice(),
+          }),
+        ],
+      }),
+    );
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    const text = pageText(fixture);
+    expect(text).toContain('Orphaned broker socket detected');
+    expect(text).toContain('Verify the client session in IBKR');
+
+    const button = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
+    ).find((candidate) => candidate.textContent?.includes('Open Bot Cockpit'));
+    expect(button).toBeDefined();
+    (button as HTMLButtonElement | undefined)?.click();
+    await settle(fixture);
+
+    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
+  });
+
   it('navigates to the Bot Cockpit for attributed bot rows', async () => {
     const { fixture, router } = await setup(snapshot({ rows: [botSocket()] }));
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
@@ -254,6 +284,7 @@ function botSocket(
       started_at_ms: AS_OF_MS - 60_000,
       ended_at_ms: AS_OF_MS - 1_000,
     },
+    notice: null,
     ...overrides,
   };
 }
@@ -275,6 +306,30 @@ function brokerEvent(
     connection_state: 'connected',
     raw: {},
     ...overrides,
+  };
+}
+
+function orphanNotice(): BrokerSessionRosterRow['notice'] {
+  return {
+    code: 'broker_session.orphaned_socket',
+    tier: 'critical',
+    title: 'Orphaned broker socket detected',
+    message:
+      'IB Gateway still shows a broker socket for PrajiTSLADemo, but the host process is not live. Verify the client session in IBKR and reconcile broker orders and positions before restarting this bot.',
+    source_codes: ['SOCKET_WITHOUT_LIVE_PID', 'ORPHANED_BOT_SOCKET'],
+    forensic_facts: {
+      strategy_instance_id: 'PrajiTSLADemo',
+      run_id: 'run-a',
+      client_id: 17,
+      observed_at_ms: AS_OF_MS,
+    },
+    action: {
+      kind: 'focus_cockpit_action',
+      label: 'Open Bot Cockpit',
+      target: 'PrajiTSLADemo',
+    },
+    runbook_slug: 'broker-session-orphaned-socket',
+    occurred_at_ms: AS_OF_MS,
   };
 }
 

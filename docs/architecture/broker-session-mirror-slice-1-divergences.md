@@ -111,3 +111,31 @@ Remaining limits:
    The branch only publishes the child id and wires it into mirror attribution.
    Orphaned-socket notice creation and guided remediation remain the next
    review slice.
+
+## Slice 4 addendum — orphaned-socket notice and guidance
+
+Date: 2026-07-03
+
+The stacked slice-4 branch adds a typed ADR 0015 `OperatorNotice` for
+`orphaned_bot_socket` rows, renders the backend-authored notice in the broker
+session mirror, and ships a runbook for the remediation ladder.
+
+Critical limits:
+
+1. **The notice is projected with the mirror row, not persisted as an incident.**
+   ADR 0015 supports both ephemeral projection notices and persisted incidents.
+   This slice uses the projection form because the mirror is already a
+   read-only observability surface and durable incident lifecycle semantics
+   require a session-level store from the history/purge slice.
+
+2. **Guidance remains detect → alert → guide.**
+   The notice links the operator to the owning Bot Cockpit and the runbook
+   explains IBKR/Gateway remediation. It still does not offer a surgical socket
+   close, because the PRD/ADR explicitly reject promising an API action IBKR
+   does not expose.
+
+3. **True orphan proof still depends on history quality.**
+   The current classifier raises the notice when the reconciler has a known
+   runtime row and a socket row with no live PID. Stronger production proof
+   should incorporate the bounded session-level history from the later durable
+   history slice.

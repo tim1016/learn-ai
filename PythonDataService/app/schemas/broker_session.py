@@ -14,6 +14,7 @@ from app.broker.ibkr.event_codes import (
     BrokerSessionEventCategory,
     BrokerSessionEventSeverity,
 )
+from app.operator.notices.schema import OperatorNotice
 
 BrokerSessionIdentityType = Literal[
     "bot",
@@ -105,6 +106,7 @@ class BrokerSessionRosterRow(BaseModel):
     event_counts: dict[BrokerSessionEventCategory, int] = Field(default_factory=dict)
     attention_codes: list[BrokerSessionAttentionCode] = Field(default_factory=list)
     registry_claim: BrokerSessionRegistryClaim | None = None
+    notice: OperatorNotice | None = None
 
 
 class BrokerSessionMirrorSnapshot(BaseModel):

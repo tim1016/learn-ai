@@ -1,3 +1,5 @@
+import type { OperatorNotice } from './live-instances.types';
+
 export type BrokerSessionIdentityType =
   | 'bot'
   | 'system'
@@ -67,6 +69,7 @@ export interface BrokerSessionRosterRow {
   event_counts: Partial<Record<BrokerSessionEventCategory, number>>;
   attention_codes: BrokerSessionAttentionCode[];
   registry_claim: BrokerSessionRegistryClaim | null;
+  notice: OperatorNotice | null;
 }
 
 export interface BrokerSessionMirrorSnapshot {

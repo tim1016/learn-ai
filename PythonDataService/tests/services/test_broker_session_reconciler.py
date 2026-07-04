@@ -115,6 +115,7 @@ def test_reconciler_classifies_known_socket_without_pid_as_orphan() -> None:
                 strategy_instance_id="orphan-demo",
                 run_id="run-c",
                 run_dir=run_dir,
+                client_id=17,
             )
         },
         data_plane_health=None,
@@ -125,6 +126,12 @@ def test_reconciler_classifies_known_socket_without_pid_as_orphan() -> None:
     assert rows[0].identity_type == "orphaned_bot_socket"
     assert rows[0].recency == "current"
     assert rows[0].attention_codes == ["SOCKET_WITHOUT_LIVE_PID", "ORPHANED_BOT_SOCKET"]
+    assert rows[0].notice is not None
+    assert rows[0].notice.code == "broker_session.orphaned_socket"
+    assert rows[0].notice.tier == "critical"
+    assert rows[0].notice.action.kind == "focus_cockpit_action"
+    assert rows[0].notice.action.target == "orphan-demo"
+    assert rows[0].notice.forensic_facts["client_id"] == 17
 
 
 def test_reconciler_classifies_unattributed_socket_as_ghost() -> None:
