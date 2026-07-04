@@ -15,6 +15,9 @@ describe('DaemonDiagnosticsPanelComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Control-plane lease is stale');
     expect(text).toContain('Renew the control-plane lease, then refresh diagnostics.');
+    expect(text).toContain('Code');
+    expect(text).toContain('Clear');
+    expect(text).not.toContain('Live engine is running current code');
     expect(text).not.toContain('daemon.control_plane_lease');
   });
 

@@ -236,12 +236,19 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(service.history).toHaveBeenCalledWith({ limit: 12 });
     expect(text).toContain('Recent history');
     expect(text).toContain('1 retained');
-    expect(text).toContain('ClosedBot');
-    expect(text).toContain('PAST');
-    expect(text).toContain('client 88');
+    expect(text).toContain('1 row');
+    expect(text).not.toContain('ClosedBot');
+
+    clickHistoryHeader(fixture, AS_OF_MS - 60_000);
+    await settle(fixture);
+
+    const openText = pageText(fixture);
+    expect(openText).toContain('ClosedBot');
+    expect(openText).toContain('PAST');
+    expect(openText).toContain('client 88');
   });
 
-  it('expands and collapses retained history snapshot rows', async () => {
+  it('expands and collapses retained history snapshot details', async () => {
     const snapshotMs = AS_OF_MS - 60_000;
     const { fixture, service } = await setup(snapshot({ rows: [] }));
     service.history.mockResolvedValueOnce({
@@ -263,17 +270,16 @@ describe('BrokerSessionMirrorComponent', () => {
     clickButton(fixture, 'history-refresh');
     await settle(fixture);
 
-    expect(pageText(fixture)).toContain('HistoryBot4');
-    expect(pageText(fixture)).toContain('+1 more');
-    expect(pageText(fixture)).not.toContain('HistoryBot5');
+    expect(pageText(fixture)).toContain('5 rows');
+    expect(pageText(fixture)).not.toContain('HistoryBot1');
 
-    clickButton(fixture, `history-toggle-${snapshotMs}`);
+    clickHistoryHeader(fixture, snapshotMs);
     await settle(fixture);
 
+    expect(pageText(fixture)).toContain('HistoryBot1');
     expect(pageText(fixture)).toContain('HistoryBot5');
-    expect(pageText(fixture)).toContain('Show less');
 
-    clickButton(fixture, `history-toggle-${snapshotMs}`);
+    clickHistoryHeader(fixture, snapshotMs);
     await settle(fixture);
 
     expect(pageText(fixture)).not.toContain('HistoryBot5');
@@ -703,6 +709,19 @@ function clickButton(
   ) as HTMLButtonElement | null;
   if (button === null) throw new Error(`button not found: ${testId}`);
   button.click();
+  fixture.detectChanges();
+}
+
+function clickHistoryHeader(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  asOfMs: number,
+): void {
+  const header = fixture.nativeElement.querySelector(
+    `[data-testid="history-panel-header-${asOfMs}"]`,
+  ) as HTMLElement | null;
+  if (header === null) throw new Error(`history header not found: ${asOfMs}`);
+  const trigger = header.querySelector('button') ?? header;
+  trigger.click();
   fixture.detectChanges();
 }
 

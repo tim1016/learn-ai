@@ -106,12 +106,16 @@
   margin: 0;
 }
 
+.degradation-list p {
+  color: var(--text-primary);
+}
+
 .load-error {
   padding: 0.75rem 1rem;
   border: 1px solid var(--bear);
   border-radius: 8px;
   background: var(--bear-soft);
-  color: var(--bear);
+  color: var(--text-primary);
 }
 
 .history-panel {
@@ -139,42 +143,60 @@
 
 .history-header span,
 .history-empty,
-.history-row span,
-.history-more {
+.history-row span {
   color: var(--text-secondary);
   font-size: 0.8125rem;
 }
 
-.history-list {
+:host ::ng-deep .history-accordion.p-accordion {
   display: grid;
-  grid-template-columns: repeat(3, minmax(14rem, 1fr));
-  gap: 0.75rem;
+  gap: 0.6rem;
 }
 
-.history-snapshot {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
-  min-width: 0;
-  padding: 0.75rem;
+:host ::ng-deep .history-accordion .p-accordionpanel {
+  overflow: hidden;
   border: 1px solid var(--border-light);
   border-radius: 8px;
   background: var(--bg-elevated);
 }
 
-.history-snapshot header,
+:host ::ng-deep .history-accordion .p-accordionheader {
+  width: 100%;
+  padding: 0.7rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .history-accordion .p-accordionheader:hover {
+  background: var(--bg-hover);
+}
+
+:host ::ng-deep .history-accordion .p-accordionheader-toggle-icon {
+  color: var(--text-subtle);
+}
+
+:host ::ng-deep .history-accordion .p-accordioncontent-content {
+  padding: 0 0.85rem 0.85rem;
+  border: 0;
+  background: var(--bg-elevated);
+}
+
+.history-panel-header,
+.history-panel-meta,
 .history-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
   min-width: 0;
 }
 
-.history-snapshot header {
+.history-panel-header {
   justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
 }
 
-.history-snapshot strong,
+.history-panel-header strong,
 .history-row-name {
   min-width: 0;
   overflow: hidden;
@@ -182,11 +204,27 @@
   white-space: nowrap;
 }
 
+.history-panel-meta {
+  flex: 0 0 auto;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.history-attention {
+  color: var(--warn);
+  font-weight: 700;
+}
+
 .history-rows {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   min-width: 0;
+}
+
+.history-row {
+  gap: 0.5rem;
 }
 
 .history-row-name {
@@ -405,6 +443,18 @@
   color: var(--text-secondary);
 }
 
+:host ::ng-deep .row-notice .p-button-danger,
+:host ::ng-deep .notice-action.p-button-danger {
+  border-color: var(--bear);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .row-notice .p-button-danger:hover,
+:host ::ng-deep .notice-action.p-button-danger:hover {
+  background: var(--bear-soft);
+}
+
 .row-detail-header {
   display: flex;
   align-items: baseline;
@@ -469,10 +519,6 @@ dd {
   }
 
   .purge-panel {
-    grid-template-columns: 1fr;
-  }
-
-  .history-list {
     grid-template-columns: 1fr;
   }
 

@@ -5,7 +5,7 @@
 .daemon-diagnostics-panel {
   display: grid;
   gap: 1rem;
-  color: #14213d;
+  color: var(--text-primary);
 }
 
 .diagnostic-skeleton {
@@ -16,7 +16,13 @@
     display: block;
     min-height: 1rem;
     border-radius: 6px;
-    background: linear-gradient(90deg, #eef2f7, #f8fafc, #eef2f7);
+    background:
+      linear-gradient(
+        90deg,
+        var(--bg-elevated),
+        var(--bg-hover),
+        var(--bg-elevated)
+      );
   }
 
   span:first-child {
@@ -28,19 +34,18 @@
 .diagnostic-error {
   margin: 0;
   padding: 0.75rem 0.9rem;
-  border: 1px solid #f2b8b5;
+  border: 1px solid var(--bear);
   border-radius: 8px;
-  background: #fff1f2;
-  color: #8a1f2d;
+  background: var(--bear-soft);
+  color: var(--text-primary);
 }
 
 .diagnostic-headline,
-.check-row,
 .instance-report {
-  border: 1px solid #d9e2ec;
-  border-left-width: 4px;
+  border: 1px solid var(--border-light);
+  border-left: 4px solid var(--diagnostic-status, var(--border-strong));
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .diagnostic-headline {
@@ -58,29 +63,35 @@ p {
 }
 
 h2 {
+  color: var(--text-primary);
   font-size: 1.15rem;
   line-height: 1.25;
 }
 
 h3 {
+  color: var(--text-secondary);
   font-size: 0.85rem;
-  color: #52616f;
   text-transform: uppercase;
 }
 
 h4 {
+  color: var(--text-primary);
   font-size: 0.95rem;
+}
+
+p {
+  color: var(--text-secondary);
 }
 
 .remediation {
   margin-top: 0.35rem;
-  color: #34495e;
+  color: var(--text-primary);
 }
 
 .as-of {
   display: inline-block;
   margin-top: 0.45rem;
-  color: #697987;
+  color: var(--text-subtle);
   font-size: 0.82rem;
 }
 
@@ -91,27 +102,128 @@ h4 {
 
   button {
     min-height: 2.25rem;
-    border: 1px solid #bcccdc;
+    padding: 0 0.75rem;
+    border: 1px solid var(--border-light);
     border-radius: 8px;
-    background: #f8fafc;
-    color: #243b53;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
     font-weight: 700;
     cursor: pointer;
+  }
+
+  button:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-hover);
   }
 }
 
 .check-groups,
-.check-group,
 .instance-list {
   display: grid;
   gap: 0.7rem;
 }
 
+:host ::ng-deep .diagnostic-accordion.p-accordion {
+  display: grid;
+  gap: 0.65rem;
+}
+
+:host ::ng-deep .diagnostic-accordion .p-accordionpanel {
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-left: 4px solid var(--diagnostic-status, var(--border-strong));
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .diagnostic-accordion .p-accordionheader {
+  width: 100%;
+  padding: 0.75rem 0.9rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .diagnostic-accordion .p-accordionheader:hover {
+  background: var(--bg-hover);
+}
+
+:host ::ng-deep .diagnostic-accordion .p-accordionheader-toggle-icon {
+  color: var(--text-subtle);
+}
+
+:host ::ng-deep .diagnostic-accordion .p-accordioncontent-content {
+  padding: 0 0.9rem 0.9rem;
+  border: 0;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.group-header,
+.group-title,
+.group-meta,
+.check-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.group-header {
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+}
+
+.group-title {
+  gap: 0.6rem;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.group-title i,
+.check-row > i,
+.instance-report > header > i {
+  color: var(--diagnostic-status, var(--text-subtle));
+}
+
+.group-meta {
+  justify-content: flex-end;
+  gap: 0.5rem;
+  color: var(--text-subtle);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.group-meta strong,
+.check-heading span {
+  color: var(--diagnostic-status, var(--text-secondary));
+  font-weight: 700;
+}
+
+.check-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
 .check-row {
   display: grid;
-  grid-template-columns: 0.7rem minmax(0, 1fr);
+  grid-template-columns: 1rem minmax(0, 1fr);
   gap: 0.65rem;
   padding: 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.check-heading {
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.check-heading span {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
 }
 
 .status-dot {
@@ -119,58 +231,59 @@ h4 {
   height: 0.65rem;
   margin-top: 0.25rem;
   border-radius: 999px;
-  background: #94a3b8;
+  background: var(--diagnostic-status, var(--text-muted));
 }
 
 .status-pass {
-  border-left-color: #2f9e44;
-
-  > .status-dot,
-  header .status-dot {
-    background: #2f9e44;
-  }
+  --diagnostic-status: var(--bull);
+  --diagnostic-status-soft: var(--bull-soft);
 }
 
 .status-warn {
-  border-left-color: #d97706;
-
-  > .status-dot,
-  header .status-dot {
-    background: #d97706;
-  }
+  --diagnostic-status: var(--warn);
+  --diagnostic-status-soft: var(--warn-soft);
 }
 
 .status-fail {
-  border-left-color: #d92d20;
-
-  > .status-dot,
-  header .status-dot {
-    background: #d92d20;
-  }
+  --diagnostic-status: var(--bear);
+  --diagnostic-status-soft: var(--bear-soft);
 }
 
 .status-skip {
-  border-left-color: #94a3b8;
+  --diagnostic-status: var(--text-muted);
+  --diagnostic-status-soft: var(--bg-elevated);
+}
+
+.status-warn,
+.status-fail {
+  background: var(--diagnostic-status-soft);
 }
 
 .inline-action {
   margin-top: 0.55rem;
   min-height: 2rem;
-  border: 1px solid #1f6feb;
+  padding: 0 0.7rem;
+  border: 1px solid var(--accent);
   border-radius: 8px;
-  background: #f0f6ff;
-  color: #174ea6;
+  background: var(--accent-soft);
+  color: var(--text-primary);
   font-weight: 700;
   cursor: pointer;
 }
 
+.inline-action:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
 details {
   margin-top: 0.55rem;
-  color: #52616f;
+  color: var(--text-secondary);
 }
 
 summary {
   cursor: pointer;
+  color: var(--text-primary);
   font-weight: 700;
 }
 
@@ -179,8 +292,16 @@ summary {
 
   header {
     display: grid;
-    grid-template-columns: 0.7rem minmax(0, 1fr);
+    grid-template-columns: 1rem minmax(0, 1fr);
     gap: 0.65rem;
+  }
+
+  strong {
+    color: var(--text-primary);
+  }
+
+  span {
+    color: var(--text-subtle);
   }
 }
 
@@ -189,7 +310,7 @@ summary {
   gap: 0.2rem;
   margin-top: 0.6rem;
   padding-left: 0.65rem;
-  border-left: 3px solid #94a3b8;
+  border-left: 3px solid var(--diagnostic-status, var(--border-strong));
 }
 
 .compact {
@@ -197,5 +318,18 @@ summary {
 
   .check-groups {
     grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .group-header,
+  .check-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .group-meta {
+    justify-content: flex-start;
+    white-space: normal;
   }
 }
