@@ -12,7 +12,7 @@
 > - [`references/quantconnect-precomputed-predictions.md`](references/quantconnect-precomputed-predictions.md) — QC fixture capture reference (Phase 1)
 > - [`references/qc-aapl-phase3-capture-runbook.md`](references/qc-aapl-phase3-capture-runbook.md) — QC fixture capture runbook (Phase 3)
 > - [`references/reconciliations/qc-aapl-phase3.md`](references/reconciliations/qc-aapl-phase3.md) — Phase 3.0 reconciliation report
-> - [`handoffs/2026-05-11-phase3-implementation-summary.md`](handoffs/2026-05-11-phase3-implementation-summary.md) — Phase 3 implementation handoff
+> - Phase 3 implementation handoff — pruned 2026-07-04; see git history
 >
 > **Owner:** the engineer editing `PythonDataService/app/research/ml/*`,
 > `PythonDataService/app/research/parity/*`, or any `PredictionComparison`

@@ -7,7 +7,7 @@
 **Author:** Claude (with Tim) — handoff written at the end of the v0.5 plumbing session
 **Predecessors:**
 - `docs/superpowers/specs/2026-05-09-ml-prediction-as-data-v05-design.md` — the v0.5 plumbing spec (merged in #207, #208, #209)
-- `docs/superpowers/plans/2026-05-09-ml-prediction-as-data-v05.md` — the v0.5 plumbing plan
+- v0.5 plumbing plan — pruned 2026-07-04; see git history
 
 ## Why this study (Tim's belief)
 
@@ -127,7 +127,7 @@ These should be answered (or at least surfaced) before any code is written:
 ## Useful pointers
 
 - v0.5 spec (decisions table): `docs/superpowers/specs/2026-05-09-ml-prediction-as-data-v05-design.md`
-- v0.5 plan (TDD task structure): `docs/superpowers/plans/2026-05-09-ml-prediction-as-data-v05.md`
+- v0.5 plan (TDD task structure): pruned 2026-07-04; see git history
 - v0.5 generator: `PythonDataService/app/research/ml/generate_prediction_set.py`
 - v0.5 generator example: `PythonDataService/app/research/ml/generators/deterministic_rule.py`
 - v0.5 artifact format: `PythonDataService/app/research/ml/artifact.py`

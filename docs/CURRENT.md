@@ -15,9 +15,11 @@ audit, and handoff in the repository.
 - `docs/architecture/engine-authority-map.md` — which engine owns each job.
 - `docs/architecture/numerical-authority-migration-plan.md` — active math-authority migration sequence.
 - `.claude/rules/numerical-rigor.md` — tolerances, golden fixtures, timestamp rules, reconciliation taxonomy.
+- `docs/known-gaps.md` — living open-defect backlog: what is still broken or deferred.
 
 ## Current Cleanup Notes
 
 - Agent-facing rules and skills live under `.claude/`, not `.Codex/`.
 - Generated and runtime-heavy paths are hidden from normal `rg` searches by `.rgignore`.
 - Historical plans and audit findings are useful provenance, but implementation authority should flow through `docs/doc-authority.md`.
+- 2026-07-04: ~150 point-in-time docs (completed plans, session handoffs, shipped-feature PRDs, closed audit findings) were pruned to git history; open defects were consolidated into `docs/known-gaps.md`, and `docs/doc-authority.md` gained an ADR index. New point-in-time docs are pruned to git history, not archived.

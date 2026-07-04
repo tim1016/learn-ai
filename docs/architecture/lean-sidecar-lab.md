@@ -1,6 +1,6 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 5g.3 shipped (2026-06-13) — launcher + cross_runner + cross_reconciler + determinism gate + UI run-history + form rehydration + lean_error_categories + custom-algorithm textarea; reconciliation-grade template + self-reconciler + Phase 1c sandbox + Phase 4a-e UI complete. Current per-phase progress in `docs/architecture/phases/phase-5a.md` through `phase-5g.md`.
+**Status:** Phase 5g.3 shipped (2026-06-13) — launcher + cross_runner + cross_reconciler + determinism gate + UI run-history + form rehydration + lean_error_categories + custom-algorithm textarea; reconciliation-grade template + self-reconciler + Phase 1c sandbox + Phase 4a-e UI complete. Per-phase build notes (Phases 1a–5g.3) were pruned 2026-07-04 once shipped; detail is in git history.
 **Last reviewed:** 2026-06-14
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
@@ -496,32 +496,32 @@ The original plan's six phases are retained, with these adjustments encoded by P
 
 ## Phase progress notes
 
-Per-phase progress notes live in `docs/architecture/phases/`. Each
-Phase X PR adds one new file there rather than appending to this
-ADR — kills the merge-conflict class where every parallel PR wanted
-to insert its section at the same anchor.
+Per-phase progress notes lived under `docs/architecture/phases/` during the
+build (one file per PR, to avoid a shared-anchor merge-conflict class); that
+tree was pruned 2026-07-04 once the work shipped. This document is the current
+authority; the per-phase detail is in git history. The shipped phases:
 
 Phase 1 foundation (in PR order):
 
-- [Phase 1a](phases/phase-1a.md)
-- [Phase 1b](phases/phase-1b.md)
-- [Phase 1c](phases/phase-1c.md)
+- Phase 1a
+- Phase 1b
+- Phase 1c
 
 Phase 5 follow-ups (newest first):
 
-- [Phase 5f](phases/phase-5f.md) — determinism gate + zip mtime fix
-- [Phase 5e](phases/phase-5e.md) — populate `bars_consumed_by_symbol`
-- [Phase 5d](phases/phase-5d.md) — populate `staged_data_window_ms`
-- [Phase 5c](phases/phase-5c.md) — synthetic minute-quote staging
-- [Phase 5b](phases/phase-5b.md) — reconciliation-grade trusted-sample template
-- [Phase 5a](phases/phase-5a.md) — self-reconciler against IBKR commission model
+- Phase 5f — determinism gate + zip mtime fix
+- Phase 5e — populate `bars_consumed_by_symbol`
+- Phase 5d — populate `staged_data_window_ms`
+- Phase 5c — synthetic minute-quote staging
+- Phase 5b — reconciliation-grade trusted-sample template
+- Phase 5a — self-reconciler against IBKR commission model
 
 Phase 4 UI follow-ups (newest first):
 
-- [Phase 4f](phases/phase-4f.md) — lean_error_categories on rehydrated runs
-- [Phase 4e](phases/phase-4e.md) — form rehydration from manifest
-- [Phase 4d](phases/phase-4d.md) — run-history sidebar
-- [Phase 4c](phases/phase-4c.md) — accept arbitrary algorithm source
+- Phase 4f — lean_error_categories on rehydrated runs
+- Phase 4e — form rehydration from manifest
+- Phase 4d — run-history sidebar
+- Phase 4c — accept arbitrary algorithm source
 
 
 ---

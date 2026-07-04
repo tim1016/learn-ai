@@ -4,7 +4,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md`
 
-**Plan:** `docs/superpowers/plans/2026-05-10-quantconnect-precomputed-predictions-parity.md`
+**Plan:** pruned 2026-07-04 (git history); the design spec above is the retained reference.
 
 ## Status
 
