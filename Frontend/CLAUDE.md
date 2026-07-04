@@ -64,6 +64,6 @@ src/app/
 
 ## Gotchas
 
-- `proxy.conf.js` routes `/graphql` to `http://backend:8080` inside the container network. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
+- `proxy.conf.js` routes `/graphql` to `http://backend:8080` inside the container network. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
 - Some components are large (options-strategy-lab, strategy-builder) — consider extracting child components
 - `tsconfig.json` excludes spec files; `tsconfig.spec.json` includes them for test builds

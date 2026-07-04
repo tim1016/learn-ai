@@ -19,6 +19,7 @@ import type {
   BrokerSessionHistoryPurgeRequest,
   BrokerSessionIdentityType,
   BrokerSessionMirrorSnapshot,
+  BrokerSessionMirrorSummary,
   BrokerSessionRecency,
   BrokerSessionRecoveryState,
   BrokerSessionRosterRow,
@@ -34,12 +35,12 @@ import { BrokerSessionEventsPanelComponent } from './broker-session-events-panel
 
 type TagSeverity = 'success' | 'info' | 'warn' | 'danger' | 'secondary';
 
-interface MirrorSummary {
-  current: number;
-  past: number;
-  unknown: number;
-  attention: number;
-}
+const EMPTY_MIRROR_SUMMARY: BrokerSessionMirrorSummary = {
+  current: 0,
+  past: 0,
+  unknown: 0,
+  attention: 0,
+};
 
 type PurgeTarget = 'events' | 'history';
 
@@ -64,7 +65,7 @@ export class BrokerSessionMirrorComponent {
       brokerSse<BrokerSessionMirrorSnapshot>(
         '/api/broker/session-mirror/stream',
         'snapshot',
-        { maxBuffer: 1 },
+        { maxBuffer: 1, dataPlaneControlIntent: true },
       ),
     );
   private readonly eventStream: SseStream<BrokerSessionEvent> =
@@ -72,7 +73,7 @@ export class BrokerSessionMirrorComponent {
       brokerSse<BrokerSessionEvent>(
         '/api/broker/session-mirror/events/stream',
         'broker_event',
-        { maxBuffer: 500 },
+        { maxBuffer: 500, dataPlaneControlIntent: true },
       ),
     );
 
@@ -92,9 +93,6 @@ export class BrokerSessionMirrorComponent {
   readonly purgeMessage = signal<string | null>(null);
   readonly purgeError = signal<string | null>(null);
   readonly purgeConfirmToken = BROKER_SESSION_PURGE_CONFIRM;
-  private readonly purgedEventFilters = signal<
-    readonly BrokerSessionEventPurgeRequest[]
-  >([]);
 
   readonly snapshot = computed<BrokerSessionMirrorSnapshot | null>(
     () => latestSnapshot(this.snapshotStream.latest(), this.manualSnapshot()),
@@ -105,12 +103,13 @@ export class BrokerSessionMirrorComponent {
   readonly historySnapshots = computed<BrokerSessionMirrorSnapshot[]>(
     () => this.historyPage()?.rows ?? [],
   );
-  readonly summary = computed<MirrorSummary>(() => summarizeRows(this.rows()));
+  readonly summary = computed<BrokerSessionMirrorSummary>(
+    () => this.snapshot()?.summary ?? EMPTY_MIRROR_SUMMARY,
+  );
   readonly streamStatus = this.snapshotStream.status;
   readonly streamError = this.snapshotStream.lastError;
   readonly eventStreamStatus = this.eventStream.status;
   readonly eventStreamError = this.eventStream.lastError;
-  readonly events = this.eventStream.data;
   readonly canPurge = computed<boolean>(
     () => this.buildPurgeRequest() !== null && !this.isPurging(),
   );
@@ -165,7 +164,6 @@ export class BrokerSessionMirrorComponent {
       if (this.purgeTarget() === 'events') {
         const result = await this.mirror.purgeEvents(request);
         this.purgeConfirmText.set('');
-        this.purgedEventFilters.update((prev) => [...prev, request]);
         this.purgeMessage.set(
           `Purged ${this.formatCount(result.purged_count, 'event')}; ${this.formatNumber(result.remaining_count)} remain.`,
         );
@@ -195,6 +193,38 @@ export class BrokerSessionMirrorComponent {
       row.notice?.action.kind !== 'focus_cockpit_action' ||
       row.strategy_instance_id === null
     );
+  }
+
+  rowDisplayName(row: BrokerSessionRosterRow): string {
+    return row.strategy_instance_id ?? row.command ?? 'Unattributed session';
+  }
+
+  clientTooltip(row: BrokerSessionRosterRow): string {
+    return [
+      this.rowDisplayName(row),
+      `row_id: ${row.row_id}`,
+      `run_id: ${row.run_id ?? '-'}`,
+      `account: ${row.account_id ?? '-'}`,
+      `run_dir: ${row.run_dir ?? '-'}`,
+    ].join('\n');
+  }
+
+  socketLabel(row: BrokerSessionRosterRow): string {
+    if (!row.socket_present) return 'Missing';
+    return `${row.local_port ?? '-'} -> ${row.remote_port ?? '-'}`;
+  }
+
+  brokerLabel(row: BrokerSessionRosterRow): string {
+    return row.connection_state ?? '-';
+  }
+
+  primaryAttentionCode(row: BrokerSessionRosterRow): BrokerSessionAttentionCode | null {
+    return row.attention_codes[0] ?? null;
+  }
+
+  attentionTooltip(row: BrokerSessionRosterRow): string {
+    if (row.attention_codes.length === 0) return 'No attention codes';
+    return row.attention_codes.map((code) => this.attentionLabel(code)).join('\n');
   }
 
   identityLabel(value: BrokerSessionIdentityType): string {
@@ -324,15 +354,6 @@ export class BrokerSessionMirrorComponent {
     return fmtInteger(value);
   }
 
-  eventsForRow(row: BrokerSessionRosterRow): readonly BrokerSessionEvent[] {
-    if (!rowCanAttachClientEvents(row)) return [];
-    return this.events()
-      .filter((event) => eventMatchesRow(event, row))
-      .filter((event) => !eventWasPurged(event, this.purgedEventFilters()))
-      .slice(-10)
-      .reverse();
-  }
-
   historyRows(snapshot: BrokerSessionMirrorSnapshot): readonly BrokerSessionRosterRow[] {
     return this.historySnapshotExpanded(snapshot) ? snapshot.rows : snapshot.rows.slice(0, 4);
   }
@@ -389,19 +410,6 @@ export class BrokerSessionMirrorComponent {
   }
 }
 
-function summarizeRows(rows: BrokerSessionRosterRow[]): MirrorSummary {
-  return rows.reduce<MirrorSummary>(
-    (summary, row) => {
-      if (row.recency === 'current') summary.current += 1;
-      else if (row.recency === 'unknown') summary.unknown += 1;
-      else summary.past += 1;
-      if (row.attention_codes.length > 0) summary.attention += 1;
-      return summary;
-    },
-    { current: 0, past: 0, unknown: 0, attention: 0 },
-  );
-}
-
 function latestSnapshot(
   streamSnapshot: BrokerSessionMirrorSnapshot | null,
   manualSnapshot: BrokerSessionMirrorSnapshot | null,
@@ -411,41 +419,6 @@ function latestSnapshot(
   return manualSnapshot.as_of_ms > streamSnapshot.as_of_ms
     ? manualSnapshot
     : streamSnapshot;
-}
-
-function rowCanAttachClientEvents(row: BrokerSessionRosterRow): boolean {
-  return (
-    row.client_id !== null &&
-    (row.identity_type === 'system' ||
-      (row.registry_claim !== null && row.registry_claim.started_at_ms !== null))
-  );
-}
-
-function eventMatchesRow(
-  event: BrokerSessionEvent,
-  row: BrokerSessionRosterRow,
-): boolean {
-  if (event.client_id !== row.client_id || event.ts_ms > row.as_of_ms) return false;
-  const startedAtMs = row.registry_claim?.started_at_ms ?? null;
-  return startedAtMs === null || event.ts_ms >= startedAtMs;
-}
-
-function eventWasPurged(
-  event: BrokerSessionEvent,
-  filters: readonly BrokerSessionEventPurgeRequest[],
-): boolean {
-  return filters.some((filter) => {
-    if (filter.client_id !== null && filter.client_id !== undefined) {
-      if (event.client_id !== filter.client_id) return false;
-    }
-    if (filter.start_ms !== null && filter.start_ms !== undefined) {
-      if (event.ts_ms < filter.start_ms) return false;
-    }
-    if (filter.end_ms !== null && filter.end_ms !== undefined) {
-      if (event.ts_ms > filter.end_ms) return false;
-    }
-    return true;
-  });
 }
 
 function humanError(err: unknown): string {

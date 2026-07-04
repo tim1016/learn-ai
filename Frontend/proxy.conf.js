@@ -1,10 +1,13 @@
 const DATA_PLANE_CONTROL_SECRET_HEADER = 'X-Data-Plane-Control-Secret';
 const DATA_PLANE_CONTROL_INTENT_HEADER = 'X-Data-Plane-Control-Intent';
+const DATA_PLANE_CONTROL_INTENT_QUERY = 'control_intent';
 const DATA_PLANE_CONTROL_INTENT_VALUE = 'learn-ai-browser-control';
 const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfaces.json');
 const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const SAFE_READ_METHODS = new Set(['GET', 'HEAD']);
 const CONTROL_PREFIXES = dataPlaneControlSurfaces.control_prefixes;
+const PROTECTED_READ_PREFIXES = dataPlaneControlSurfaces.protected_read_prefixes;
 const LOCAL_DEV_ORIGINS = new Set([
   'http://localhost:4200',
   'http://127.0.0.1:4200',
@@ -21,10 +24,39 @@ function requestPath(req) {
   return path.split('?')[0];
 }
 
+function requestQueryParam(req, name) {
+  const url = req.url ?? '';
+  const queryIndex = url.indexOf('?');
+  if (queryIndex < 0) return undefined;
+  const value = new URLSearchParams(url.slice(queryIndex + 1)).get(name);
+  return value === null ? undefined : value;
+}
+
+function requestControlIntent(req) {
+  return requestHeader(req, DATA_PLANE_CONTROL_INTENT_HEADER);
+}
+
+function requestProtectedControlReadIntent(req) {
+  return requestControlIntent(req)
+    ?? requestQueryParam(req, DATA_PLANE_CONTROL_INTENT_QUERY);
+}
+
+function matchesAnyPrefix(path, prefixes) {
+  return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 function isControlMutation(req) {
   if (!UNSAFE_METHODS.has((req.method ?? '').toUpperCase())) return false;
-  const path = requestPath(req);
-  return CONTROL_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+  return matchesAnyPrefix(requestPath(req), CONTROL_PREFIXES);
+}
+
+function isProtectedControlRead(req) {
+  if (!SAFE_READ_METHODS.has((req.method ?? '').toUpperCase())) return false;
+  return matchesAnyPrefix(requestPath(req), PROTECTED_READ_PREFIXES);
+}
+
+function requiresDataPlaneControlSecret(req) {
+  return isControlMutation(req) || isProtectedControlRead(req);
 }
 
 function isLocalDevUrl(value) {
@@ -51,9 +83,12 @@ function hasSameOriginFetchMetadata(req) {
 }
 
 function shouldAttachDataPlaneSecret(req) {
-  if (!dataPlaneControlSecret || !isControlMutation(req)) return false;
+  if (!dataPlaneControlSecret || !requiresDataPlaneControlSecret(req)) return false;
+  const intent = isProtectedControlRead(req)
+    ? requestProtectedControlReadIntent(req)
+    : requestControlIntent(req);
   return (
-    requestHeader(req, DATA_PLANE_CONTROL_INTENT_HEADER) === DATA_PLANE_CONTROL_INTENT_VALUE
+    intent === DATA_PLANE_CONTROL_INTENT_VALUE
     && hasSameOriginFetchMetadata(req)
   );
 }
@@ -96,11 +131,15 @@ Object.defineProperty(proxyConfig, '__test', {
   value: {
     DATA_PLANE_CONTROL_SECRET_HEADER,
     DATA_PLANE_CONTROL_INTENT_HEADER,
+    DATA_PLANE_CONTROL_INTENT_QUERY,
     DATA_PLANE_CONTROL_INTENT_VALUE,
     CONTROL_PREFIXES,
+    PROTECTED_READ_PREFIXES,
     attachDataPlaneSecret,
     configureDataPlaneProxy,
     isControlMutation,
+    isProtectedControlRead,
+    requiresDataPlaneControlSecret,
     shouldAttachDataPlaneSecret,
   },
 });

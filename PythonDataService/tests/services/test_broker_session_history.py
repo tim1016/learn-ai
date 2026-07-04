@@ -125,9 +125,12 @@ def test_history_purge_removes_client_rows_without_touching_audit_trail(
     assert result.purged_row_count == 2
     assert result.purged_snapshot_count == 0
     assert result.remaining_snapshot_count == 2
-    rows_by_snapshot = [snapshot.rows for snapshot in service.history(limit=10).rows]
+    snapshots = service.history(limit=10).rows
+    rows_by_snapshot = [snapshot.rows for snapshot in snapshots]
     assert rows_by_snapshot[0] == []
+    assert snapshots[0].summary.current == 0
     assert [row.client_id for row in rows_by_snapshot[1]] == [77]
+    assert snapshots[1].summary.current == 1
     assert audit_path.read_text(encoding="utf-8") == '{"event_type":"PENDING_INTENT"}\n'
 
 

@@ -75,9 +75,17 @@ export interface BrokerSessionRosterRow {
   last_event_ms: number | null;
   as_of_ms: number;
   event_counts: Partial<Record<BrokerSessionEventCategory, number>>;
+  events: BrokerSessionEvent[];
   attention_codes: BrokerSessionAttentionCode[];
   registry_claim: BrokerSessionRegistryClaim | null;
   notice: OperatorNotice | null;
+}
+
+export interface BrokerSessionMirrorSummary {
+  current: number;
+  past: number;
+  unknown: number;
+  attention: number;
 }
 
 export interface BrokerSessionMirrorSnapshot {
@@ -86,6 +94,7 @@ export interface BrokerSessionMirrorSnapshot {
   observer_status: BrokerSessionObserverStatus;
   ghost_detection_status: BrokerSessionGhostDetectionStatus;
   rows: BrokerSessionRosterRow[];
+  summary: BrokerSessionMirrorSummary;
   degradation_reasons: string[];
 }
 

@@ -87,6 +87,25 @@ class BrokerSessionRegistryClaim(BaseModel):
     ended_at_ms: int | None = Field(default=None, ge=0)
 
 
+class BrokerSessionEvent(BaseModel):
+    """Classified broker event for the session mirror."""
+
+    model_config = ConfigDict(frozen=True)
+
+    seq: int = Field(ge=1)
+    ts_ms: int = Field(ge=0)
+    category: BrokerSessionEventCategory
+    severity: BrokerSessionEventSeverity
+    label: str
+    message: str | None = None
+    raw_event_type: str
+    client_id: int | None = Field(default=None, ge=0)
+    account_id: str | None = None
+    ibkr_code: int | None = None
+    connection_state: str | None = None
+    raw: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class BrokerSessionRosterRow(BaseModel):
     """One row in the broker session mirror roster."""
 
@@ -113,9 +132,21 @@ class BrokerSessionRosterRow(BaseModel):
     last_event_ms: int | None = Field(default=None, ge=0)
     as_of_ms: int = Field(ge=0)
     event_counts: dict[BrokerSessionEventCategory, int] = Field(default_factory=dict)
+    events: list[BrokerSessionEvent] = Field(default_factory=list)
     attention_codes: list[BrokerSessionAttentionCode] = Field(default_factory=list)
     registry_claim: BrokerSessionRegistryClaim | None = None
     notice: OperatorNotice | None = None
+
+
+class BrokerSessionMirrorSummary(BaseModel):
+    """Backend-authored aggregate counts for the mirror roster."""
+
+    model_config = ConfigDict(frozen=True)
+
+    current: int = Field(default=0, ge=0)
+    past: int = Field(default=0, ge=0)
+    unknown: int = Field(default=0, ge=0)
+    attention: int = Field(default=0, ge=0)
 
 
 class BrokerSessionMirrorSnapshot(BaseModel):
@@ -128,7 +159,18 @@ class BrokerSessionMirrorSnapshot(BaseModel):
     observer_status: BrokerSessionObserverStatus
     ghost_detection_status: BrokerSessionGhostDetectionStatus
     rows: list[BrokerSessionRosterRow] = Field(default_factory=list)
+    summary: BrokerSessionMirrorSummary = Field(default_factory=BrokerSessionMirrorSummary)
     degradation_reasons: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _backfill_legacy_summary(cls, data: object) -> object:
+        if not isinstance(data, dict) or "summary" in data:
+            return data
+        rows = data.get("rows")
+        if not isinstance(rows, list):
+            return data
+        return {**data, "summary": _summary_from_raw_rows(rows)}
 
 
 class BrokerSessionHistoryPage(BaseModel):
@@ -138,25 +180,6 @@ class BrokerSessionHistoryPage(BaseModel):
 
     rows: list[BrokerSessionMirrorSnapshot] = Field(default_factory=list)
     retained_count: int = Field(ge=0)
-
-
-class BrokerSessionEvent(BaseModel):
-    """Classified broker event for the session mirror."""
-
-    model_config = ConfigDict(frozen=True)
-
-    seq: int = Field(ge=1)
-    ts_ms: int = Field(ge=0)
-    category: BrokerSessionEventCategory
-    severity: BrokerSessionEventSeverity
-    label: str
-    message: str | None = None
-    raw_event_type: str
-    client_id: int | None = Field(default=None, ge=0)
-    account_id: str | None = None
-    ibkr_code: int | None = None
-    connection_state: str | None = None
-    raw: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class BrokerSessionEventPage(BaseModel):
@@ -215,3 +238,63 @@ class BrokerSessionHistoryPurgeResult(BaseModel):
     purged_row_count: int = Field(ge=0)
     purged_snapshot_count: int = Field(ge=0)
     remaining_snapshot_count: int = Field(ge=0)
+
+
+def summarize_broker_session_rows(
+    rows: list[BrokerSessionRosterRow],
+) -> BrokerSessionMirrorSummary:
+    current = 0
+    past = 0
+    unknown = 0
+    attention = 0
+    for row in rows:
+        if row.recency == "current":
+            current += 1
+        elif row.recency == "unknown":
+            unknown += 1
+        else:
+            past += 1
+        if row.attention_codes:
+            attention += 1
+    return BrokerSessionMirrorSummary(
+        current=current,
+        past=past,
+        unknown=unknown,
+        attention=attention,
+    )
+
+
+def _summary_from_raw_rows(rows: list[object]) -> dict[str, int]:
+    current = 0
+    past = 0
+    unknown = 0
+    attention = 0
+    for row in rows:
+        if isinstance(row, BrokerSessionRosterRow):
+            if row.recency == "current":
+                current += 1
+            elif row.recency == "unknown":
+                unknown += 1
+            else:
+                past += 1
+            if row.attention_codes:
+                attention += 1
+            continue
+        if not isinstance(row, dict):
+            continue
+        recency = row.get("recency")
+        if recency == "current":
+            current += 1
+        elif recency == "unknown":
+            unknown += 1
+        else:
+            past += 1
+        attention_codes = row.get("attention_codes")
+        if isinstance(attention_codes, list) and attention_codes:
+            attention += 1
+    return {
+        "current": current,
+        "past": past,
+        "unknown": unknown,
+        "attention": attention,
+    }

@@ -14,6 +14,7 @@ from app.schemas.broker_session import (
     BrokerSessionHistoryPurgeResult,
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
+    summarize_broker_session_rows,
 )
 from app.services.broker_session_events import (
     locked_jsonl_file,
@@ -127,7 +128,12 @@ class BrokerSessionHistoryService:
 
                 kept_rows = [row for row in snapshot.rows if row.client_id != request.client_id]
                 purged_row_count += len(snapshot.rows) - len(kept_rows)
-                rewritten = snapshot.model_copy(update={"rows": kept_rows})
+                rewritten = snapshot.model_copy(
+                    update={
+                        "rows": kept_rows,
+                        "summary": summarize_broker_session_rows(kept_rows),
+                    }
+                )
                 kept_lines.append(_snapshot_to_line(rewritten))
                 remaining_snapshot_count += 1
 

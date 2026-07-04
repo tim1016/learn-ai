@@ -7,7 +7,7 @@
   flex-direction: column;
   gap: 1rem;
   padding: 1.5rem;
-  color: var(--text-color, #172033);
+  color: var(--text-primary);
 }
 
 .page-header {
@@ -26,7 +26,7 @@
 
 .eyebrow {
   margin: 0 0 0.25rem;
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0;
@@ -36,10 +36,10 @@
 .status-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(8rem, 1fr));
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--surface-card, #ffffff);
+  background: var(--bg-surface);
 }
 
 .metric {
@@ -48,7 +48,7 @@
   gap: 0.25rem;
   min-width: 0;
   padding: 0.875rem 1rem;
-  border-right: 1px solid var(--surface-border, #d7dde8);
+  border-right: 1px solid var(--border-light);
 }
 
 .metric:last-child {
@@ -56,7 +56,7 @@
 }
 
 .metric span {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -68,7 +68,7 @@
 }
 
 .metric.attention strong {
-  color: #b42318;
+  color: var(--bear);
 }
 
 .observer-band,
@@ -78,20 +78,20 @@
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: var(--surface-ground, #f8fafc);
+  background: var(--bg-elevated);
 }
 
 .observer-band span {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
   font-size: 0.875rem;
 }
 
 .degradation-list {
   align-items: stretch;
-  border-color: #fed7aa;
-  background: #fff7ed;
+  border-color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .degradation-list p,
@@ -101,10 +101,10 @@
 
 .load-error {
   padding: 0.75rem 1rem;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--bear);
   border-radius: 8px;
-  background: #fef2f2;
-  color: #b42318;
+  background: var(--bear-soft);
+  color: var(--bear);
 }
 
 .history-panel {
@@ -112,9 +112,9 @@
   flex-direction: column;
   gap: 0.875rem;
   padding: 0.875rem 1rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: var(--surface-card, #ffffff);
+  background: var(--bg-surface);
 }
 
 .history-header {
@@ -134,7 +134,7 @@
 .history-empty,
 .history-row span,
 .history-more {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
   font-size: 0.8125rem;
 }
 
@@ -150,9 +150,9 @@
   gap: 0.625rem;
   min-width: 0;
   padding: 0.75rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: var(--surface-ground, #f8fafc);
+  background: var(--bg-elevated);
 }
 
 .history-snapshot header,
@@ -193,9 +193,9 @@
   align-items: end;
   gap: 0.75rem;
   padding: 0.875rem 1rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: var(--surface-ground, #f8fafc);
+  background: var(--bg-elevated);
 }
 
 .purge-target {
@@ -213,7 +213,7 @@
 }
 
 .purge-panel label span {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -223,9 +223,9 @@
   min-width: 0;
   height: 2.25rem;
   padding: 0.4rem 0.55rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 6px;
-  background: var(--surface-card, #ffffff);
+  background: var(--bg-sunken);
   color: inherit;
 }
 
@@ -240,60 +240,139 @@
 }
 
 .purge-status {
-  color: #166534;
+  color: var(--bull);
 }
 
 .purge-error {
-  color: #b42318;
+  color: var(--bear);
 }
 
 .table-shell {
   overflow-x: auto;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: var(--surface-card, #ffffff);
+  background: var(--bg-surface);
 }
 
-:host ::ng-deep .mirror-table th,
-:host ::ng-deep .mirror-table td {
-  vertical-align: top;
+:host ::ng-deep .mirror-table .p-datatable-thead > tr > th {
+  border-color: var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
-.client-cell,
-.broker-cell,
+:host ::ng-deep .mirror-table .p-datatable-tbody > tr > td {
+  border-color: var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .mirror-table .p-datatable-tbody > tr:not(.details-row) > td {
+  height: 3.25rem;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+:host ::ng-deep .mirror-table .p-datatable-tbody > tr.past-row > td,
+:host ::ng-deep .mirror-table .p-datatable-tbody > tr.details-row > td {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .mirror-table.p-datatable-hoverable .p-datatable-tbody > tr:not(.details-row):hover > td {
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+}
+
+:host ::ng-deep .mirror-table .p-tag {
+  white-space: nowrap;
+}
+
+:host ::ng-deep .mirror-table .p-tag-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toggle-cell {
+  width: 3rem;
+  text-align: center;
+}
+
+.client-cell {
+  max-width: 26rem;
+}
+
+.broker-cell {
+  max-width: 8rem;
+}
+
 .attention-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  max-width: 18rem;
 }
 
-.client-cell strong {
-  font-size: 0.95rem;
+.cell-primary {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.client-cell span,
-.broker-cell small,
+.broker-cell .cell-primary {
+  font-weight: 500;
+}
+
 .muted {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
 }
 
-.attention-cell {
-  align-items: flex-start;
+.attention-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.attention-compact p-tag {
+  min-width: 0;
+}
+
+.attention-count {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 700;
 }
 
 .action-cell {
-  width: 3.25rem;
+  width: 11rem;
   text-align: right;
 }
 
-.past-row {
-  color: var(--text-color-secondary, #64748b);
-  background: #f8fafc;
+.notice-action {
+  max-width: 10rem;
+}
+
+:host ::ng-deep .notice-action .p-button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .details-row td {
-  padding-top: 0;
+  padding: 0;
   border-top: 0;
+  white-space: normal;
+}
+
+.row-detail {
+  padding: 1rem;
+  color: var(--text-primary);
 }
 
 .row-notice {
@@ -303,10 +382,10 @@
   gap: 1rem;
   margin: 0 0 0.75rem;
   padding: 0.875rem 1rem;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--bear);
   border-radius: 8px;
-  background: #fef2f2;
-  color: #7f1d1d;
+  background: var(--bear-soft);
+  color: var(--text-primary);
 }
 
 .row-notice strong {
@@ -316,38 +395,54 @@
 
 .row-notice p {
   margin: 0;
-  color: #991b1b;
+  color: var(--text-secondary);
 }
 
-details {
-  color: var(--text-color-secondary, #64748b);
+.row-detail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.row-detail-header h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.row-detail-header span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
   font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-summary {
-  cursor: pointer;
-}
-
-dl {
+.detail-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
-  margin: 0.75rem 0 0;
+  margin: 0;
 }
 
 dt {
+  color: var(--text-secondary);
   font-weight: 700;
 }
 
 dd {
   margin: 0.15rem 0 0;
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
 .empty-cell {
   padding: 2rem;
   text-align: center;
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
 }
 
 @media (max-width: 900px) {
@@ -380,10 +475,10 @@ dd {
 
   .metric {
     border-right: 0;
-    border-bottom: 1px solid var(--surface-border, #d7dde8);
+    border-bottom: 1px solid var(--border-light);
   }
 
-  dl {
+  .detail-grid {
     grid-template-columns: 1fr;
   }
 

@@ -78,6 +78,21 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Registry offline; socket live');
   });
 
+  it('keeps technical identifiers out of the main row until expanded', async () => {
+    const row = botSocket({ run_id: 'commit-like-run-hash-123' });
+    const { fixture } = await setup(snapshot({ rows: [row] }));
+
+    expect(pageText(fixture)).toContain('PrajiTSLADemo');
+    expect(pageText(fixture)).not.toContain('commit-like-run-hash-123');
+
+    expandRow(fixture, row.row_id);
+    await settle(fixture);
+
+    expect(pageText(fixture)).toContain('Technical detail');
+    expect(pageText(fixture)).toContain('commit-like-run-hash-123');
+    expect(pageText(fixture)).toContain(row.row_id);
+  });
+
   it('updates rows from the SSE snapshot stream', async () => {
     const { fixture } = await setup(snapshot({ rows: [] }));
 
@@ -91,6 +106,17 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('external');
     expect(text).toContain('Ghost');
     expect(text).toContain('Unattributed socket');
+  });
+
+  it('marks protected SSE streams with the browser control intent query', async () => {
+    await setup(snapshot({ rows: [] }));
+
+    expect(eventSourceFor('/api/broker/session-mirror/stream').url).toContain(
+      'control_intent=learn-ai-browser-control',
+    );
+    expect(
+      eventSourceFor('/api/broker/session-mirror/events/stream').url,
+    ).toContain('control_intent=learn-ai-browser-control');
   });
 
   it('keeps a newer manual refresh when an older SSE snapshot arrives', async () => {
@@ -239,11 +265,17 @@ describe('BrokerSessionMirrorComponent', () => {
       }),
     );
 
-    const text = pageText(fixture);
+    let text = pageText(fixture);
     expect(text).toContain('Observer degraded');
     expect(text).toContain('Ghost detection unknown');
     expect(text).toContain('host daemon socket probe unavailable');
     expect(text).toContain('PAST');
+    expect(text).toContain('+1');
+    expect(text).not.toContain('Client signal stale');
+
+    expandRow(fixture);
+    await settle(fixture);
+    text = pageText(fixture);
     expect(text).toContain('Client signal stale');
   });
 
@@ -254,24 +286,22 @@ describe('BrokerSessionMirrorComponent', () => {
           botSocket({
             client_id: 42,
             event_counts: { link_connectivity: 1 },
+            events: [
+              brokerEvent({
+                client_id: 42,
+                category: 'link_connectivity',
+                severity: 'warning',
+                label: 'IBKR link interrupted',
+                ibkr_code: 1100,
+                message: 'Connectivity between IB and TWS has been lost',
+              }),
+            ],
           }),
         ],
       }),
     );
 
-    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
-      'broker_event',
-      JSON.stringify(
-        brokerEvent({
-          client_id: 42,
-          category: 'link_connectivity',
-          severity: 'warning',
-          label: 'IBKR link interrupted',
-          ibkr_code: 1100,
-          message: 'Connectivity between IB and TWS has been lost',
-        }),
-      ),
-    );
+    expandRow(fixture);
     await settle(fixture);
 
     const text = pageText(fixture);
@@ -297,18 +327,21 @@ describe('BrokerSessionMirrorComponent', () => {
     );
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
-    const text = pageText(fixture);
-    expect(text).toContain('Orphaned broker socket detected');
-    expect(text).toContain('Verify the client session in IBKR');
+    let text = pageText(fixture);
+    expect(text).toContain('Open Bot Cockpit');
+    expect(text).not.toContain('Verify the client session in IBKR');
 
-    const button = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
-    ).find((candidate) => candidate.textContent?.includes('Open Bot Cockpit'));
-    if (button === undefined) throw new Error('Open Bot Cockpit button not found');
-    button.click();
+    buttonByText(fixture, 'Open Bot Cockpit').click();
     await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
+
+    expandRow(fixture);
+    await settle(fixture);
+
+    text = pageText(fixture);
+    expect(text).toContain('Orphaned broker socket detected');
+    expect(text).toContain('Verify the client session in IBKR');
   });
 
   it('navigates to the Bot Cockpit for attributed bot rows', async () => {
@@ -325,57 +358,65 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
   });
 
-  it('purges diagnostic history with typed confirmation and scopes buffered events', async () => {
-    const { fixture, service } = await setup(
-      snapshot({
-        rows: [
-          botSocket({
-            client_id: 42,
-            event_counts: { link_connectivity: 1 },
-          }),
-          botSocket({
-            row_id: 'socket:21761:50124:4002:0',
-            strategy_instance_id: 'OtherBot',
-            run_id: 'run-b',
-            client_id: 77,
-            event_counts: { data_farm: 1 },
-            registry_claim: {
-              state: 'running',
-              run_id: 'run-b',
-              pid: 21761,
-              run_dir: '/runs/run-b',
-              started_at_ms: AS_OF_MS - 60_000,
-              ended_at_ms: null,
-            },
-          }),
-        ],
-      }),
-    );
-    service.purgeEvents.mockResolvedValue({
-      purged_count: 1,
-      remaining_count: 0,
-    });
-    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
-      'broker_event',
-      JSON.stringify(
+  it('purges diagnostic events with typed confirmation and refreshes authored row events', async () => {
+    const firstRow = botSocket({
+      client_id: 42,
+      event_counts: { link_connectivity: 1 },
+      events: [
         brokerEvent({
           client_id: 42,
           category: 'link_connectivity',
           label: 'IBKR link interrupted',
         }),
-      ),
-    );
-    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
-      'broker_event',
-      JSON.stringify(
+      ],
+    });
+    const secondRow = botSocket({
+      row_id: 'socket:21761:50124:4002:0',
+      strategy_instance_id: 'OtherBot',
+      run_id: 'run-b',
+      client_id: 77,
+      event_counts: { data_farm: 1 },
+      events: [
         brokerEvent({
           seq: 2,
           client_id: 77,
           category: 'data_farm',
           label: 'Market data farm degraded',
         }),
-      ),
+      ],
+      registry_claim: {
+        state: 'running',
+        run_id: 'run-b',
+        pid: 21761,
+        run_dir: '/runs/run-b',
+        started_at_ms: AS_OF_MS - 60_000,
+        ended_at_ms: null,
+      },
+    });
+    const { fixture, service } = await setup(
+      snapshot({
+        rows: [firstRow, secondRow],
+      }),
     );
+    service.purgeEvents.mockResolvedValue({
+      purged_count: 1,
+      remaining_count: 0,
+    });
+    service.snapshot.mockResolvedValueOnce(
+      snapshot({
+        rows: [
+          {
+            ...firstRow,
+            event_counts: {},
+            events: [],
+          },
+          secondRow,
+        ],
+      }),
+    );
+    expandRow(fixture, 'socket:21760:50123:4002:0');
+    await settle(fixture);
+    expandRow(fixture, 'socket:21761:50124:4002:0');
     await settle(fixture);
     expect(pageText(fixture)).toContain('IBKR link interrupted');
     expect(pageText(fixture)).toContain('Market data farm degraded');
@@ -387,6 +428,7 @@ describe('BrokerSessionMirrorComponent', () => {
     ) as HTMLButtonElement | null;
     expect(button?.disabled).toBe(false);
     button?.click();
+    await settle(fixture);
     await settle(fixture);
 
     expect(service.purgeEvents).toHaveBeenCalledWith({
@@ -400,7 +442,7 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(pageText(fixture)).toContain('Market data farm degraded');
   });
 
-  it('scopes row detail events to the row session window', async () => {
+  it('renders backend-scoped row detail events without matching buffered stream events', async () => {
     const { fixture } = await setup(
       snapshot({
         rows: [
@@ -408,6 +450,14 @@ describe('BrokerSessionMirrorComponent', () => {
             client_id: 42,
             as_of_ms: AS_OF_MS,
             event_counts: { link_connectivity: 1 },
+            events: [
+              brokerEvent({
+                seq: 2,
+                ts_ms: AS_OF_MS - 50,
+                client_id: 42,
+                label: 'Current link event',
+              }),
+            ],
             registry_claim: {
               state: 'running',
               run_id: 'run-a',
@@ -447,17 +497,6 @@ describe('BrokerSessionMirrorComponent', () => {
       'broker_event',
       JSON.stringify(
         brokerEvent({
-          seq: 2,
-          ts_ms: AS_OF_MS - 50,
-          client_id: 42,
-          label: 'Current link event',
-        }),
-      ),
-    );
-    eventSource.emit(
-      'broker_event',
-      JSON.stringify(
-        brokerEvent({
           seq: 3,
           ts_ms: AS_OF_MS + 50,
           client_id: 42,
@@ -477,6 +516,8 @@ describe('BrokerSessionMirrorComponent', () => {
       ),
     );
     await settle(fixture);
+    expandRow(fixture);
+    await settle(fixture);
 
     const text = pageText(fixture);
     expect(text).toContain('Current link event');
@@ -485,13 +526,20 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).not.toContain('Missing start event');
   });
 
-  it('purges roster history with typed confirmation without clearing buffered events', async () => {
+  it('purges roster history with typed confirmation without clearing authored row events', async () => {
     const { fixture, service } = await setup(
       snapshot({
         rows: [
           botSocket({
             client_id: 42,
             event_counts: { link_connectivity: 1 },
+            events: [
+              brokerEvent({
+                client_id: 42,
+                category: 'link_connectivity',
+                label: 'IBKR link interrupted',
+              }),
+            ],
           }),
         ],
       }),
@@ -501,16 +549,7 @@ describe('BrokerSessionMirrorComponent', () => {
       purged_snapshot_count: 1,
       remaining_snapshot_count: 3,
     });
-    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
-      'broker_event',
-      JSON.stringify(
-        brokerEvent({
-          client_id: 42,
-          category: 'link_connectivity',
-          label: 'IBKR link interrupted',
-        }),
-      ),
-    );
+    expandRow(fixture);
     await settle(fixture);
 
     clickButton(fixture, 'purge-target-history');
@@ -614,18 +653,56 @@ function clickButton(
   fixture.detectChanges();
 }
 
+function buttonByText(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  text: string,
+): HTMLButtonElement {
+  const button = Array.from(
+    (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+      'button',
+    ),
+  ).find((candidate) => candidate.textContent?.includes(text));
+  if (button === undefined) throw new Error(`button not found: ${text}`);
+  return button;
+}
+
+function expandRow(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  rowId = 'socket:21760:50123:4002:0',
+): void {
+  clickButton(fixture, `row-toggle-${rowId}`);
+}
+
 function snapshot(
   overrides: Partial<BrokerSessionMirrorSnapshot> = {},
 ): BrokerSessionMirrorSnapshot {
+  const rows = overrides.rows ?? [];
   return {
     as_of_ms: AS_OF_MS,
     gateway_port: 4002,
     observer_status: 'online',
     ghost_detection_status: 'available',
-    rows: [],
+    rows,
+    summary: summaryForRows(rows),
     degradation_reasons: [],
     ...overrides,
   };
+}
+
+function summaryForRows(
+  rows: readonly BrokerSessionRosterRow[],
+): BrokerSessionMirrorSnapshot['summary'] {
+  return rows.reduce<BrokerSessionMirrorSnapshot['summary']>(
+    (summary, row) => ({
+      current: summary.current + (row.recency === 'current' ? 1 : 0),
+      past:
+        summary.past +
+        (row.recency !== 'current' && row.recency !== 'unknown' ? 1 : 0),
+      unknown: summary.unknown + (row.recency === 'unknown' ? 1 : 0),
+      attention: summary.attention + (row.attention_codes.length > 0 ? 1 : 0),
+    }),
+    { current: 0, past: 0, unknown: 0, attention: 0 },
+  );
 }
 
 function botSocket(
@@ -653,6 +730,7 @@ function botSocket(
     last_event_ms: AS_OF_MS - 500,
     as_of_ms: AS_OF_MS,
     event_counts: {},
+    events: [],
     attention_codes: ['REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE'],
     registry_claim: {
       state: 'exited',
