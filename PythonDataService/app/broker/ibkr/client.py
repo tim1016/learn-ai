@@ -20,7 +20,6 @@ touches it directly.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 
@@ -43,6 +42,7 @@ from app.broker.ibkr.event_codes import (
 from app.broker.ibkr.keepalive import apply_tcp_keepalive
 from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
 from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
+from app.services.broker_session_events import BrokerSessionEventService
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -296,9 +296,10 @@ class IbkrClient:
             **fields,
         }
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload, sort_keys=True) + "\n")
+            BrokerSessionEventService(
+                path=path,
+                max_events=self._settings.broker_session_event_retention_count,
+            ).append_event(payload)
         except OSError as exc:
             # Rate-limit per codex D5: first failure per run logs WARNING
             # (and the classifier catches it as

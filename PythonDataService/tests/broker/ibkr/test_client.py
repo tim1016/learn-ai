@@ -688,3 +688,22 @@ def test_record_recovery_event_appends_diagnostic_jsonl(
     assert payload["connection_state"] == "connected"
     assert payload["recovery_state"] == "RECONNECTING"
     assert payload["attempt"] == 1
+
+
+def test_record_recovery_event_applies_diagnostic_retention_cap(
+    settings_paper: IbkrSettings, tmp_path
+) -> None:
+    settings_paper.live_runs_root = str(tmp_path)
+    settings_paper.broker_session_event_retention_count = 2
+    client = _client_with_fake_ib(settings_paper)
+
+    client.record_recovery_event("BROKER_RECONNECT_ATTEMPT", attempt=1)
+    client.record_recovery_event("BROKER_RECONNECT_ATTEMPT", attempt=2)
+    client.record_recovery_event("BROKER_RECONNECT_ATTEMPT", attempt=3)
+
+    path = tmp_path / "_broker" / "connection_events.jsonl"
+    payloads = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [payload["attempt"] for payload in payloads] == [2, 3]
+    assert [payload["broker_session_seq"] for payload in payloads] == [2, 3]
