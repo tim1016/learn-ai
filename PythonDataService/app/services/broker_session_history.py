@@ -12,6 +12,7 @@ from app.schemas.broker_session import (
     BrokerSessionHistoryPurgeRequest,
     BrokerSessionHistoryPurgeResult,
     BrokerSessionMirrorSnapshot,
+    BrokerSessionRosterRow,
 )
 from app.services.broker_session_events import write_jsonl_lines_atomically
 
@@ -53,6 +54,37 @@ class BrokerSessionHistoryService:
             rows=list(reversed(snapshots))[:limit],
             retained_count=len(snapshots),
         )
+
+    def past_closed_rows(
+        self,
+        *,
+        current_rows: list[BrokerSessionRosterRow],
+        limit: int = 50,
+    ) -> list[BrokerSessionRosterRow]:
+        """Return recent rows that were current before but are absent now."""
+
+        seen_keys = {_history_row_key(row) for row in current_rows}
+        out: list[BrokerSessionRosterRow] = []
+        for snapshot in reversed(self._read_all_snapshots()):
+            for row in snapshot.rows:
+                if row.recency != "current" or not row.socket_present:
+                    continue
+                key = _history_row_key(row)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                out.append(
+                    row.model_copy(
+                        update={
+                            "recency": "past_closed",
+                            "socket_present": False,
+                            "notice": None,
+                        }
+                    )
+                )
+                if len(out) >= limit:
+                    return out
+        return out
 
     def purge(
         self,
@@ -145,6 +177,14 @@ def _snapshot_matches_purge_filter(
     if request.start_ms is not None and snapshot.as_of_ms < request.start_ms:
         return False
     return not (request.end_ms is not None and snapshot.as_of_ms > request.end_ms)
+
+
+def _history_row_key(row: BrokerSessionRosterRow) -> tuple[str, str, str]:
+    if row.strategy_instance_id is not None and row.run_id is not None:
+        return ("run", row.strategy_instance_id, row.run_id)
+    if row.client_id is not None:
+        return ("client", row.identity_type, str(row.client_id))
+    return ("row", row.row_id, "")
 
 
 def _snapshot_to_line(snapshot: BrokerSessionMirrorSnapshot) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.engine.live.engine_runtime import (
     BarLoopBlock,
@@ -10,6 +11,10 @@ from app.engine.live.engine_runtime import (
     ControlPlaneBlock,
     EngineRuntimeSnapshot,
     write_engine_runtime_snapshot,
+)
+from app.schemas.broker_session import (
+    BrokerSessionRosterRow,
+    GatewaySocketsSnapshot,
 )
 from app.services import broker_session_mirror
 from app.services.broker_session_mirror import (
@@ -24,8 +29,14 @@ class _FakeEventService:
 
 
 class _FakeHistoryService:
-    def __init__(self) -> None:
+    def __init__(self, past_rows=None) -> None:
+        self.past_rows = past_rows or []
+        self.current_rows = None
         self.snapshots = []
+
+    def past_closed_rows(self, *, current_rows):
+        self.current_rows = list(current_rows)
+        return self.past_rows
 
     def append_snapshot(self, snapshot) -> None:
         self.snapshots.append(snapshot)
@@ -120,3 +131,70 @@ async def test_mirror_snapshot_records_roster_history(
 
     assert history.snapshots == [snapshot]
     assert snapshot.observer_status == "degraded"
+
+
+async def test_mirror_snapshot_includes_past_closed_history_when_observer_online(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    past_row = BrokerSessionRosterRow(
+        row_id="bot:run-a",
+        identity_type="bot",
+        recency="past_closed",
+        socket_present=False,
+        run_id="run-a",
+        client_id=42,
+        as_of_ms=1_783_120_000_000,
+    )
+    history = _FakeHistoryService(past_rows=[past_row])
+    monkeypatch.setattr(
+        broker_session_mirror,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "live_runner_daemon_url": "http://daemon.test",
+                "live_runs_root": str(tmp_path),
+                "port": 4002,
+            },
+        )(),
+    )
+    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
+
+    async def _fetch_gateway_sockets(_daemon_url, *, gateway_port):
+        return (
+            SimpleNamespace(detail=None),
+            GatewaySocketsSnapshot(
+                fetched_at_ms=1_783_120_000_100,
+                gateway_port=gateway_port,
+                sockets=[],
+            ),
+        )
+
+    async def _fetch_instances(_daemon_url):
+        return (
+            SimpleNamespace(detail=None),
+            {"instances": [], "fetched_at_ms": 1_783_120_000_100},
+        )
+
+    monkeypatch.setattr(
+        broker_session_mirror.host_daemon_client,
+        "fetch_gateway_sockets",
+        _fetch_gateway_sockets,
+    )
+    monkeypatch.setattr(
+        broker_session_mirror.host_daemon_client,
+        "fetch_instances",
+        _fetch_instances,
+    )
+    service = BrokerSessionMirrorService(
+        event_service=_FakeEventService(),
+        history_service=history,
+    )
+
+    snapshot = await service.snapshot()
+
+    assert snapshot.observer_status == "online"
+    assert snapshot.rows == [past_row]
+    assert history.current_rows == []

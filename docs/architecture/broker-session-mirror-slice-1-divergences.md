@@ -421,3 +421,34 @@ Critical limits:
    The JSONL is rewritten after purge, but no secondary index exists yet. That
    remains acceptable while retention is bounded and the endpoint is
    diagnostic-only.
+
+## Slice 16 addendum — history-backed `past_closed` rows
+
+Date: 2026-07-04
+
+The stacked slice-16 branch uses the bounded roster history to replay recently
+closed rows into the live mirror as `recency="past_closed"` and
+`socket_present=false` when the socket observer is online. This closes the
+largest remaining recency-display gap: a socket that was present in recent
+history but is absent from the current host-daemon socket snapshot is now shown
+as PAST rather than disappearing.
+
+Critical limits:
+
+1. **Replay is composed around the reconciler, not inside it.**
+   The PRD describes a pure reconciler that receives event/history evidence.
+   This slice keeps the existing pure socket/registry/runtime reconciler stable
+   and adds bounded history replay in `BrokerSessionMirrorService`. Moving the
+   history input into the pure reconciler can be done later if the current
+   composition becomes hard to test.
+
+2. **`past_closed` replay only runs when the host socket observer is online.**
+   When the observer is degraded, the mirror still uses `past_last_known`
+   runtime rows instead of claiming sockets closed. That preserves the invariant
+   that observer loss must never look like a healthy clean shutdown.
+
+3. **Closed-row identity is best-effort and conservative.**
+   Known bot rows key by `strategy_instance_id` + `run_id`; known client rows
+   key by identity type + `client_id`; rows with no durable identity fall back
+   to their historical row id. The mirror does not infer identity from stale
+   PID/run-dir names.

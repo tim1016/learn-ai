@@ -89,6 +89,8 @@ class BrokerSessionMirrorService:
             as_of_ms=as_of_ms,
             socket_probe_available=socket_snapshot is not None,
         )
+        if socket_snapshot is not None:
+            rows.extend(self._history_service.past_closed_rows(current_rows=rows))
         event_counts_by_client_id = self._event_service.counts_by_client_id()
         rows = [
             row.model_copy(
