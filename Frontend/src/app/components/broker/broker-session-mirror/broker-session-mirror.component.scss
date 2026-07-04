@@ -198,6 +198,13 @@
   background: var(--surface-ground, #f8fafc);
 }
 
+.purge-target {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .purge-panel label {
   display: flex;
   flex-direction: column;

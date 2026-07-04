@@ -572,3 +572,26 @@ Critical limits:
    epochs, and non-monitor/test paths still use the legacy bar-loop
    revalidation. Removing that legacy path entirely remains separate follow-up
    work once every live child path uses the monitor.
+
+## Slice 21 addendum — roster-history purge UI
+
+Date: 2026-07-04
+
+The stacked slice-21 branch closes the roster-history purge UI gap. The broker
+session mirror's diagnostic purge panel now has an explicit target selector for
+`Event log` versus `Roster history`, reuses the same client/time filters and
+typed confirmation token for both diagnostic stores, calls the existing
+`/history/purge` service method for roster history, refreshes retained history
+after a history purge, and leaves the live SSE event buffer untouched when only
+roster snapshots are purged.
+
+Critical limits:
+
+1. **The recent-history panel is still a compact preview.**
+   This slice only exposes purge. It does not add historical filtering,
+   expansion, or side-by-side snapshot comparison.
+
+2. **Diagnostic purge remains separate from trading evidence.**
+   The UI targets only the event-log and roster-history diagnostic endpoints.
+   It still does not and must not offer controls for WAL, ledgers,
+   reconciliation receipts, fills, or execution evidence.

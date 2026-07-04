@@ -17,6 +17,7 @@ import type {
   BrokerSessionAttentionCode,
   BrokerSessionEvent,
   BrokerSessionHistoryPage,
+  BrokerSessionHistoryPurgeRequest,
   BrokerSessionIdentityType,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRecency,
@@ -40,6 +41,8 @@ interface MirrorSummary {
   unknown: number;
   attention: number;
 }
+
+type PurgeTarget = 'events' | 'history';
 
 @Component({
   selector: 'app-broker-session-mirror',
@@ -85,6 +88,7 @@ export class BrokerSessionMirrorComponent {
   readonly purgeStartMsText = signal<string>('');
   readonly purgeEndMsText = signal<string>('');
   readonly purgeConfirmText = signal<string>('');
+  readonly purgeTarget = signal<PurgeTarget>('events');
   readonly isPurging = signal<boolean>(false);
   readonly purgeMessage = signal<string | null>(null);
   readonly purgeError = signal<string | null>(null);
@@ -143,20 +147,35 @@ export class BrokerSessionMirrorComponent {
     await this.router.navigate(['/broker/bots', row.strategy_instance_id]);
   }
 
-  async purgeEvents(): Promise<void> {
+  selectPurgeTarget(target: PurgeTarget): void {
+    this.purgeTarget.set(target);
+    this.purgeMessage.set(null);
+    this.purgeError.set(null);
+  }
+
+  async purgeDiagnostics(): Promise<void> {
     const request = this.buildPurgeRequest();
     if (request === null) return;
     this.isPurging.set(true);
     this.purgeError.set(null);
     this.purgeMessage.set(null);
     try {
-      const result = await this.mirror.purgeEvents(request);
-      this.purgeConfirmText.set('');
-      this.eventStream.clear();
-      this.purgeMessage.set(
-        `Purged ${this.formatNumber(result.purged_count)} events; ${this.formatNumber(result.remaining_count)} remain.`,
-      );
-      await this.refresh();
+      if (this.purgeTarget() === 'events') {
+        const result = await this.mirror.purgeEvents(request);
+        this.purgeConfirmText.set('');
+        this.eventStream.clear();
+        this.purgeMessage.set(
+          `Purged ${this.formatCount(result.purged_count, 'event')}; ${this.formatNumber(result.remaining_count)} remain.`,
+        );
+        await this.refresh();
+      } else {
+        const result = await this.mirror.purgeHistory(request);
+        this.purgeConfirmText.set('');
+        this.purgeMessage.set(
+          `Purged ${this.formatCount(result.purged_row_count, 'history row')}; ${this.formatCount(result.purged_snapshot_count, 'snapshot')} removed; ${this.formatCount(result.remaining_snapshot_count, 'snapshot')} remain.`,
+        );
+        await this.refreshHistory();
+      }
     } catch (err) {
       this.purgeError.set(humanError(err));
     } finally {
@@ -319,10 +338,21 @@ export class BrokerSessionMirrorComponent {
     return Math.max(0, snapshot.rows.length - 4);
   }
 
+  purgeTargetSeverity(target: PurgeTarget): 'secondary' | undefined {
+    return this.purgeTarget() === target ? undefined : 'secondary';
+  }
+
+  purgeButtonLabel(): string {
+    return this.purgeTarget() === 'events' ? 'Purge events' : 'Purge history';
+  }
+
   readonly trackByRowId = (_index: number, row: BrokerSessionRosterRow): string =>
     row.row_id;
 
-  private buildPurgeRequest(): BrokerSessionEventPurgeRequest | null {
+  private buildPurgeRequest():
+    | BrokerSessionEventPurgeRequest
+    | BrokerSessionHistoryPurgeRequest
+    | null {
     if (this.purgeConfirmText() !== BROKER_SESSION_PURGE_CONFIRM) return null;
     const clientId = parseOptionalNonNegativeInt(this.purgeClientIdText());
     const startMs = parseOptionalNonNegativeInt(this.purgeStartMsText());
@@ -338,6 +368,10 @@ export class BrokerSessionMirrorComponent {
       end_ms: endMs,
       confirm: BROKER_SESSION_PURGE_CONFIRM,
     };
+  }
+
+  private formatCount(value: number, singular: string): string {
+    return `${this.formatNumber(value)} ${singular}${value === 1 ? '' : 's'}`;
   }
 }
 

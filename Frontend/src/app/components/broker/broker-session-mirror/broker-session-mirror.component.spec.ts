@@ -8,6 +8,8 @@ import type {
   BrokerSessionEventPurgeRequest,
   BrokerSessionEventPurgeResult,
   BrokerSessionHistoryPage,
+  BrokerSessionHistoryPurgeRequest,
+  BrokerSessionHistoryPurgeResult,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
@@ -48,6 +50,10 @@ class FakeEventSource {
 class FakeBrokerSessionMirrorService {
   snapshot = vi.fn<() => Promise<BrokerSessionMirrorSnapshot>>();
   history = vi.fn<(params?: { limit?: number }) => Promise<BrokerSessionHistoryPage>>();
+  purgeHistory =
+    vi.fn<
+      (request: BrokerSessionHistoryPurgeRequest) => Promise<BrokerSessionHistoryPurgeResult>
+    >();
   purgeEvents =
     vi.fn<
       (request: BrokerSessionEventPurgeRequest) => Promise<BrokerSessionEventPurgeResult>
@@ -305,8 +311,56 @@ describe('BrokerSessionMirrorComponent', () => {
       end_ms: null,
       confirm: BROKER_SESSION_PURGE_CONFIRM,
     });
-    expect(pageText(fixture)).toContain('Purged 1 events; 0 remain.');
+    expect(pageText(fixture)).toContain('Purged 1 event; 0 remain.');
     expect(pageText(fixture)).not.toContain('IBKR link interrupted');
+  });
+
+  it('purges roster history with typed confirmation without clearing buffered events', async () => {
+    const { fixture, service } = await setup(
+      snapshot({
+        rows: [
+          botSocket({
+            client_id: 42,
+            event_counts: { link_connectivity: 1 },
+          }),
+        ],
+      }),
+    );
+    service.purgeHistory.mockResolvedValue({
+      purged_row_count: 2,
+      purged_snapshot_count: 1,
+      remaining_snapshot_count: 3,
+    });
+    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          client_id: 42,
+          category: 'link_connectivity',
+          label: 'IBKR link interrupted',
+        }),
+      ),
+    );
+    await settle(fixture);
+
+    clickButton(fixture, 'purge-target-history');
+    writeInput(fixture, 'purge-client-id', '42');
+    writeInput(fixture, 'purge-confirm', BROKER_SESSION_PURGE_CONFIRM);
+    clickButton(fixture, 'purge-submit');
+    await settle(fixture);
+
+    expect(service.purgeHistory).toHaveBeenCalledWith({
+      client_id: 42,
+      start_ms: null,
+      end_ms: null,
+      confirm: BROKER_SESSION_PURGE_CONFIRM,
+    });
+    expect(service.purgeEvents).not.toHaveBeenCalled();
+    expect(service.history).toHaveBeenLastCalledWith({ limit: 12 });
+    expect(pageText(fixture)).toContain(
+      'Purged 2 history rows; 1 snapshot removed; 3 snapshots remain.',
+    );
+    expect(pageText(fixture)).toContain('IBKR link interrupted');
   });
 });
 
@@ -318,6 +372,11 @@ async function setup(initialSnapshot: BrokerSessionMirrorSnapshot): Promise<{
   const service = new FakeBrokerSessionMirrorService();
   service.snapshot.mockResolvedValue(initialSnapshot);
   service.history.mockResolvedValue({ retained_count: 0, rows: [] });
+  service.purgeHistory.mockResolvedValue({
+    purged_row_count: 0,
+    purged_snapshot_count: 0,
+    remaining_snapshot_count: 0,
+  });
   service.purgeEvents.mockResolvedValue({ purged_count: 0, remaining_count: 0 });
 
   TestBed.resetTestingModule();
@@ -370,6 +429,18 @@ function writeInput(
   if (input === null) throw new Error(`input not found: ${testId}`);
   input.value = value;
   input.dispatchEvent(new Event('input'));
+  fixture.detectChanges();
+}
+
+function clickButton(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  testId: string,
+): void {
+  const button = fixture.nativeElement.querySelector(
+    `[data-testid="${testId}"]`,
+  ) as HTMLButtonElement | null;
+  if (button === null) throw new Error(`button not found: ${testId}`);
+  button.click();
   fixture.detectChanges();
 }
 
