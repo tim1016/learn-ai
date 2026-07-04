@@ -405,6 +405,16 @@ def test_on_ib_error_marks_connection_lost_on_1100(settings_paper: IbkrSettings)
     assert client.connectivity_lost_count == 1
 
 
+def test_on_ib_error_marks_connection_lost_on_507(settings_paper: IbkrSettings) -> None:
+    client = _client_with_fake_ib(settings_paper)
+
+    client._on_ib_error(-1, 507, "Bad Message Length", None)
+
+    assert client.connection_lost is True
+    assert client.connection_state == "soft_lost"
+    assert client.health().last_ibkr_code == 507
+
+
 def test_on_ib_error_clears_connection_lost_on_restore(settings_paper: IbkrSettings) -> None:
     client = _client_with_fake_ib(settings_paper)
     client._on_ib_error(-1, 1100, "lost", None)

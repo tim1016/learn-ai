@@ -93,6 +93,39 @@ def test_classifier_fails_unknown_code_visible_as_unclassified() -> None:
     assert event.raw["ibkr_code"] == 9999
 
 
+@pytest.mark.parametrize(
+    ("code", "category", "severity", "label"),
+    [
+        (100, "pacing_throttling", "warning", "IBKR message rate exceeded"),
+        (101, "pacing_throttling", "warning", "IBKR market data line cap reached"),
+        (201, "order_execution", "critical", "IBKR order rejected"),
+        (202, "order_execution", "info", "IBKR order cancelled"),
+        (326, "auth_session", "critical", "IBKR client id already in use"),
+        (507, "link_connectivity", "warning", "IBKR socket message framing error"),
+        (2102, "order_execution", "warning", "IBKR order still being processed"),
+    ],
+)
+def test_classifier_maps_additional_ibkr_operator_codes(
+    code: int,
+    category: str,
+    severity: str,
+    label: str,
+) -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "IBKR_CODE",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 10, 0),
+            "client_id": 42,
+            "ibkr_code": code,
+        },
+    )
+
+    assert event.category == category
+    assert event.severity == severity
+    assert event.label == label
+
+
 def test_classifier_maps_monitor_reconnect_events() -> None:
     event = classify_broker_session_event(
         seq=1,
