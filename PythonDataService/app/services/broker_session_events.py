@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pydantic import JsonValue
 
@@ -23,6 +25,8 @@ from app.schemas.broker_session import (
 )
 
 _EVENT_LOG_RELATIVE = Path("_broker") / "connection_events.jsonl"
+_ET = ZoneInfo("America/New_York")
+_RESET_WINDOW_WARNING_CODES = frozenset({1100, 1300, 2110, 2103, 2105})
 _EVENT_TYPE_MEANINGS: dict[
     str,
     tuple[BrokerSessionEventCategory, BrokerSessionEventSeverity, str],
@@ -128,10 +132,15 @@ def classify_broker_session_event(
 ) -> BrokerSessionEvent:
     event_type = _string_value(payload.get("event_type")) or "UNKNOWN"
     code = _int_value(payload.get("ibkr_code"))
-    category, severity, label = _classify(event_type=event_type, code=code)
+    ts_ms = _int_value(payload.get("ts_ms_utc")) or 0
+    category, severity, label = _classify(
+        event_type=event_type,
+        code=code,
+        ts_ms=ts_ms,
+    )
     return BrokerSessionEvent(
         seq=seq,
-        ts_ms=_int_value(payload.get("ts_ms_utc")) or 0,
+        ts_ms=ts_ms,
         category=category,
         severity=severity,
         label=label,
@@ -151,16 +160,40 @@ def _classify(
     *,
     event_type: str,
     code: int | None,
+    ts_ms: int,
 ) -> tuple[BrokerSessionEventCategory, BrokerSessionEventSeverity, str]:
     if event_type == "IBKR_CODE" and code is not None:
         meaning = IBKR_CODE_MEANINGS.get(code)
         if meaning is not None:
+            if (
+                code in _RESET_WINDOW_WARNING_CODES
+                and is_ibkr_north_america_reset_window(ts_ms)
+            ):
+                return meaning.category, "info", f"{meaning.label} during scheduled reset"
             return meaning.category, meaning.severity, meaning.label
         return "unclassified", "warning", "Unclassified IBKR code"
     meaning = _EVENT_TYPE_MEANINGS.get(event_type)
     if meaning is not None:
         return meaning
     return "unclassified", "warning", "Unclassified broker event"
+
+
+def is_ibkr_north_america_reset_window(ts_ms: int) -> bool:
+    """Return True during IBKR's published North America reset windows.
+
+    IBKR publishes daily reset windows in Eastern Time. Keep this helper
+    local to event observability: it lowers diagnostic severity for expected
+    reset-window events but does not alter reconnect behavior.
+    """
+    if ts_ms <= 0:
+        return False
+    observed_et = datetime.fromtimestamp(ts_ms / 1000, tz=UTC).astimezone(_ET)
+    minutes = observed_et.hour * 60 + observed_et.minute
+    weekday = observed_et.weekday()
+    if weekday == 5:  # Saturday maintenance: 00:00-02:00 ET.
+        return 0 <= minutes <= 120
+    # Sunday-Friday daily reset: 00:15-01:45 ET.
+    return weekday in {0, 1, 2, 3, 4, 6} and 15 <= minutes <= 105
 
 
 def _event_from_line(*, seq: int, line: str) -> BrokerSessionEvent:

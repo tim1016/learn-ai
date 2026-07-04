@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,6 +11,7 @@ from app.schemas.broker_session import BrokerSessionEventPurgeRequest
 from app.services.broker_session_events import (
     BrokerSessionEventService,
     classify_broker_session_event,
+    is_ibkr_north_america_reset_window,
 )
 
 
@@ -28,6 +31,48 @@ def test_classifier_maps_ibkr_connectivity_code_from_shared_table() -> None:
     assert event.severity == "warning"
     assert event.label == "IBKR link interrupted"
     assert event.ibkr_code == 1100
+
+
+def test_classifier_demotes_reset_window_connectivity_code_to_info() -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "IBKR_CODE",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 0, 30),
+            "client_id": 42,
+            "ibkr_code": 1100,
+            "message": "Connectivity between IB and TWS has been lost",
+        },
+    )
+
+    assert event.category == "link_connectivity"
+    assert event.severity == "info"
+    assert event.label == "IBKR link interrupted during scheduled reset"
+
+
+def test_classifier_keeps_same_code_warning_outside_reset_window() -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "IBKR_CODE",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 10, 0),
+            "client_id": 42,
+            "ibkr_code": 1100,
+            "message": "Connectivity between IB and TWS has been lost",
+        },
+    )
+
+    assert event.severity == "warning"
+    assert event.label == "IBKR link interrupted"
+
+
+def test_reset_window_helper_uses_eastern_weekday_schedule() -> None:
+    assert is_ibkr_north_america_reset_window(_ms_et(2026, 7, 3, 0, 15))
+    assert is_ibkr_north_america_reset_window(_ms_et(2026, 7, 3, 1, 45))
+    assert not is_ibkr_north_america_reset_window(_ms_et(2026, 7, 3, 1, 46))
+    assert is_ibkr_north_america_reset_window(_ms_et(2026, 7, 4, 0, 0))
+    assert is_ibkr_north_america_reset_window(_ms_et(2026, 7, 4, 2, 0))
+    assert not is_ibkr_north_america_reset_window(_ms_et(2026, 7, 4, 2, 1))
 
 
 def test_classifier_fails_unknown_code_visible_as_unclassified() -> None:
@@ -159,4 +204,18 @@ def _write_events(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
+    )
+
+
+def _ms_et(year: int, month: int, day: int, hour: int, minute: int) -> int:
+    return int(
+        datetime(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            tzinfo=ZoneInfo("America/New_York"),
+        ).timestamp()
+        * 1000
     )

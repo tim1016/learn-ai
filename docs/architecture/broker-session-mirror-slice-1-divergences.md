@@ -316,3 +316,24 @@ Critical limits:
    The jittered retry loop applies wherever `AutoReconnectMonitor` is already
    installed. Child `cmd_start` processes still use their existing recovery
    wiring until the child-monitor slice.
+
+## Slice 12 addendum — scheduled reset event severity
+
+Date: 2026-07-04
+
+The stacked slice-12 branch makes broker-session event classification aware of
+IBKR's published North America reset windows: Sunday-Friday 00:15-01:45 ET and
+Saturday 00:00-02:00 ET. Warning-class IBKR connectivity/data-farm reset codes
+that land inside those windows render as `info` diagnostics in the mirror
+instead of operator alarms.
+
+Critical limits:
+
+1. **This is observability-only.**
+   The classifier still records and streams the events. It does not suppress
+   rows, short-circuit recovery, or change `AutoReconnectMonitor` state
+   transitions.
+
+2. **Only the published North America window is encoded.**
+   If this deployment uses another IBKR region/window, the helper must be
+   extended before those reset events can be demoted.
