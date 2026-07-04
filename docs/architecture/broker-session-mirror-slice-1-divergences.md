@@ -547,10 +547,11 @@ real-client `cmd_start` runs, passes that monitor into `LiveEngine` so
 `engine_runtime.json` can expose monitor recovery overlays, starts it after
 startup gates pass, and stops it before the runtime publisher/client teardown.
 The monitor recovery callback now calls the reusable broker recovery
-reconciliation seam. Clean/adopted recovery snapshots the client's reconnect
-counter so the older bar-loop revalidation does not double-count the same
-restore, while account mismatch still halts before broker reconciliation can
-adopt orders from the wrong account.
+reconciliation seam. Recovery first persists PAUSED so reconnect never resumes
+trading by itself; clean/adopted recovery can release the submit barrier and
+snapshot the client's reconnect counter so the older bar-loop revalidation does
+not double-count the same restore, while account mismatch still halts before
+broker reconciliation can adopt orders from the wrong account.
 
 Critical limits:
 
@@ -562,8 +563,9 @@ Critical limits:
 
 2. **ResumeGuard and incident clearing are still manual/operator paths.**
    The callback can prove broker truth and release the submit barrier on clean
-   recovery, but it does not clear prior watchdog incidents or bypass existing
-   resume gates.
+   recovery, but the engine remains PAUSED until the existing operator resume
+   path sets desired_state RUNNING. It does not clear prior watchdog incidents
+   or bypass existing resume gates.
 
 3. **ADR-0011 is coordinated, not fully deleted.**
    Monitor success consumes the client reconnect counter to avoid duplicate

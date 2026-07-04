@@ -1961,6 +1961,11 @@ class LiveEngine:
         """
         request_id = mint_intent_id()
         self._inhibit_submits = True
+        self._paused = True
+        self._persist_desired_state(
+            DesiredState.PAUSED,
+            "broker_recovery:operator_resume_required",
+        )
         try:
             self._verify_broker_recovery_account_match()
         except ReconnectAccountMismatchHaltError:

@@ -280,8 +280,14 @@ async def test_broker_recovery_reconcile_releases_barrier_and_bumps_epoch(
     """Reconnect recovery uses the runtime reconcile core and records a
     successful recovery as a new connection epoch.
     """
+    persisted: list[tuple[DesiredState, str]] = []
+
+    def _writer(state: DesiredState, reason: str) -> None:
+        persisted.append((state, reason))
+
     harness = _harness(tmp_path)
     engine = harness.engine
+    engine._desired_state_writer = _writer
     engine._connection_epoch = 7
     shutdown_event = asyncio.Event()
 
@@ -297,7 +303,10 @@ async def test_broker_recovery_reconcile_releases_barrier_and_bumps_epoch(
     assert outcome["verdict"] == "clean"
     assert engine._inhibit_submits is False
     assert engine._connection_epoch == 8
-    assert engine._paused is False
+    assert engine._paused is True
+    assert persisted == [
+        (DesiredState.PAUSED, "broker_recovery:operator_resume_required"),
+    ]
     assert not shutdown_event.is_set()
 
 
@@ -329,6 +338,7 @@ async def test_broker_recovery_reconcile_snapshots_client_reconnect_count(
 
     assert engine._connection_epoch == 8
     assert engine._last_connectivity_lost_count == 3
+    assert engine._paused is True
     assert not shutdown_event.is_set()
 
 
@@ -463,6 +473,7 @@ async def test_broker_recovery_reconcile_adoption_pause_raises_and_stays_blocked
     assert engine._paused is True
     assert engine._connection_epoch == 3
     assert persisted == [
+        (DesiredState.PAUSED, "broker_recovery:operator_resume_required"),
         (DesiredState.PAUSED, "broker_recovery_reconcile:ambiguous_exposure"),
     ]
     assert not shutdown_event.is_set()
