@@ -37,6 +37,7 @@ class RuntimeIndexEntry:
     pid: int | None = None
     client_id: int | None = None
     connection_state: str | None = None
+    recovery_state: str | None = None
     posture: str | None = None
     connection_epoch: int | None = None
     last_event_ms: int | None = None
@@ -122,9 +123,7 @@ def reconcile_broker_session_roster(
                 remote_host=socket.remote_host,
                 remote_port=socket.remote_port,
                 connection_state=runtime.connection_state if runtime else None,
-                recovery_state=recovery_state_from_connection_state(
-                    runtime.connection_state if runtime else None
-                ),
+                recovery_state=_runtime_recovery_state(runtime),
                 connection_epoch=runtime.connection_epoch if runtime else None,
                 last_event_ms=runtime.last_event_ms if runtime else None,
                 as_of_ms=as_of_ms,
@@ -179,9 +178,7 @@ def reconcile_broker_session_roster(
                 command=" ".join(process.command) if process.command else None,
                 run_dir=runtime.run_dir,
                 connection_state=runtime.connection_state,
-                recovery_state=recovery_state_from_connection_state(
-                    runtime.connection_state
-                ),
+                recovery_state=_runtime_recovery_state(runtime),
                 connection_epoch=runtime.connection_epoch,
                 last_event_ms=runtime.last_event_ms,
                 as_of_ms=as_of_ms,
@@ -310,9 +307,7 @@ def _last_known_runtime_rows(
                 pid=runtime.pid,
                 run_dir=runtime.run_dir,
                 connection_state=runtime.connection_state,
-                recovery_state=recovery_state_from_connection_state(
-                    runtime.connection_state
-                ),
+                recovery_state=_runtime_recovery_state(runtime),
                 connection_epoch=runtime.connection_epoch,
                 last_event_ms=runtime.last_event_ms,
                 as_of_ms=as_of_ms,
@@ -348,6 +343,14 @@ def _runtime_signal_stale(
         runtime.last_event_ms is not None
         and stale_after_ms >= 0
         and as_of_ms - runtime.last_event_ms > stale_after_ms
+    )
+
+
+def _runtime_recovery_state(runtime: RuntimeIndexEntry | None) -> str | None:
+    if runtime is None:
+        return None
+    return runtime.recovery_state or recovery_state_from_connection_state(
+        runtime.connection_state
     )
 
 

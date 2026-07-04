@@ -284,6 +284,37 @@ def test_reconciler_projects_runtime_recovery_states() -> None:
         assert rows[0].recovery_state == expected_recovery_state
 
 
+def test_reconciler_prefers_runtime_recovery_state_for_child_row() -> None:
+    run_dir = "/runs/runtime-recovery"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=21760,
+                command="python",
+                run_dir=run_dir,
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="bot-runtime-recovery",
+                run_id="run-runtime-recovery",
+                run_dir=run_dir,
+                connection_state="connected",
+                recovery_state="RECONNECTING",
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert rows[0].connection_state == "connected"
+    assert rows[0].recovery_state == "RECONNECTING"
+
+
 def _registry(*instances: HostRunnerInstance) -> HostRunnerInstancesStatus:
     return HostRunnerInstancesStatus(instances=list(instances), fetched_at_ms=AS_OF_MS)
 

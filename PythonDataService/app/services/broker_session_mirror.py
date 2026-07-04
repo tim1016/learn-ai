@@ -177,6 +177,7 @@ def _runtime_entry_from_run_dir(run_dir: Path) -> RuntimeIndexEntry | None:
         pid=runtime.pid if runtime is not None else None,
         client_id=_runtime_client_id(runtime),
         connection_state=runtime.broker.connection_state if runtime is not None else None,
+        recovery_state=runtime.broker.recovery_state if runtime is not None else None,
         posture=runtime.broker.effective_posture if runtime is not None else None,
         connection_epoch=runtime.broker.connection_epoch if runtime is not None else None,
         last_event_ms=runtime.broker.observation_at_ms if runtime is not None else None,

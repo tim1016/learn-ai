@@ -46,6 +46,7 @@ def _make_snapshot(
     capability: str = "PAPER_ORDERS_ENABLED",
     posture: str = "PAPER_EXECUTION",
     connection_state: str = "connected",
+    recovery_state: str | None = "HEALTHY",
 ) -> EngineRuntimeSnapshot:
     return EngineRuntimeSnapshot(
         strategy_instance_id="spy_ema_crossover",
@@ -64,6 +65,7 @@ def _make_snapshot(
             submission_capability=capability,  # type: ignore[arg-type]
             effective_posture=posture,  # type: ignore[arg-type]
             connection_state=connection_state,  # type: ignore[arg-type]
+            recovery_state=recovery_state,  # type: ignore[arg-type]
             connection_epoch=1,
             client_id=12,
             connected_account="DU1234567",
@@ -95,6 +97,7 @@ def test_snapshot_round_trips_full_field_set() -> None:
     restored = EngineRuntimeSnapshot.model_validate_json(payload)
     assert restored == snapshot
     assert restored.broker.client_id == 12
+    assert restored.broker.recovery_state == "HEALTHY"
 
 
 def test_snapshot_accepts_legacy_broker_block_without_client_id() -> None:
@@ -104,6 +107,15 @@ def test_snapshot_accepts_legacy_broker_block_without_client_id() -> None:
     restored = EngineRuntimeSnapshot.model_validate(payload)
 
     assert restored.broker.client_id is None
+
+
+def test_snapshot_accepts_legacy_broker_block_without_recovery_state() -> None:
+    payload = json.loads(_make_snapshot().model_dump_json())
+    del payload["broker"]["recovery_state"]
+
+    restored = EngineRuntimeSnapshot.model_validate(payload)
+
+    assert restored.broker.recovery_state is None
 
 
 def test_snapshot_rejects_extra_envelope_fields() -> None:
