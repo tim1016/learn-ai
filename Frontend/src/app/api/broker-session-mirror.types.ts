@@ -34,7 +34,8 @@ export type BrokerSessionAttentionCode =
   | 'SOCKET_WITHOUT_LIVE_PID'
   | 'ORPHANED_BOT_SOCKET'
   | 'GHOST_SOCKET'
-  | 'GHOST_DETECTION_UNAVAILABLE';
+  | 'GHOST_DETECTION_UNAVAILABLE'
+  | 'CLIENT_SIGNAL_STALE';
 
 export interface BrokerSessionRegistryClaim {
   state: string;

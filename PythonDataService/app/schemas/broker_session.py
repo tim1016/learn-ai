@@ -37,6 +37,7 @@ BrokerSessionAttentionCode = Literal[
     "ORPHANED_BOT_SOCKET",
     "GHOST_SOCKET",
     "GHOST_DETECTION_UNAVAILABLE",
+    "CLIENT_SIGNAL_STALE",
 ]
 
 

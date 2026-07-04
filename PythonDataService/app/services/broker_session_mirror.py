@@ -85,6 +85,7 @@ class BrokerSessionMirrorService:
             runtime_index=runtime_index,
             data_plane_health=data_plane_health,
             as_of_ms=as_of_ms,
+            socket_probe_available=socket_snapshot is not None,
         )
         event_counts_by_client_id = self._event_service.counts_by_client_id()
         rows = [

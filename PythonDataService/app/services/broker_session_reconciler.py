@@ -54,6 +54,8 @@ def reconcile_broker_session_roster(
     runtime_index: dict[str, RuntimeIndexEntry],
     data_plane_health: IbkrConnectionHealth | None,
     as_of_ms: int,
+    socket_probe_available: bool = True,
+    stale_after_ms: int = 25_000,
 ) -> list[BrokerSessionRosterRow]:
     """Reconcile intent, registry claim, and OS socket truth into roster rows."""
 
@@ -83,6 +85,8 @@ def reconcile_broker_session_roster(
                 attention.extend(["SOCKET_WITHOUT_LIVE_PID", "ORPHANED_BOT_SOCKET"])
             elif not _registry_claims_live_socket(registry, socket):
                 attention.append("REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE")
+            if _runtime_signal_stale(runtime, as_of_ms, stale_after_ms):
+                attention.append("CLIENT_SIGNAL_STALE")
         else:
             attention.append("GHOST_SOCKET")
         notice = (
@@ -131,8 +135,20 @@ def reconcile_broker_session_roster(
         path for path in (_normalise_optional_path(row.run_dir) for row in socket_rows) if path is not None
     }
 
+    if not socket_probe_available:
+        rows.extend(
+            _last_known_runtime_rows(
+                runtime_by_dir=runtime_by_dir,
+                matched_socket_dirs=matched_socket_dirs,
+                as_of_ms=as_of_ms,
+                stale_after_ms=stale_after_ms,
+            )
+        )
+
     for registry in registry_instances:
         if _registry_id(registry) in matched_registry_ids:
+            continue
+        if not socket_probe_available:
             continue
         process = registry.process
         run_dir_key = _normalise_path(registry.run_dir)
@@ -162,7 +178,12 @@ def reconcile_broker_session_roster(
                 connection_epoch=runtime.connection_epoch,
                 last_event_ms=runtime.last_event_ms,
                 as_of_ms=as_of_ms,
-                attention_codes=["STARTED_BUT_NO_SOCKET"],
+                attention_codes=_append_stale_attention(
+                    ["STARTED_BUT_NO_SOCKET"],
+                    runtime=runtime,
+                    as_of_ms=as_of_ms,
+                    stale_after_ms=stale_after_ms,
+                ),
                 registry_claim=_registry_claim(registry),
             )
         )
@@ -252,6 +273,69 @@ def _data_plane_row(
         connection_state=health.connection_state,
         last_event_ms=health.last_transition_ms,
         as_of_ms=as_of_ms,
+    )
+
+
+def _last_known_runtime_rows(
+    *,
+    runtime_by_dir: dict[str, RuntimeIndexEntry],
+    matched_socket_dirs: set[str],
+    as_of_ms: int,
+    stale_after_ms: int,
+) -> list[BrokerSessionRosterRow]:
+    rows: list[BrokerSessionRosterRow] = []
+    for run_dir_key, runtime in runtime_by_dir.items():
+        if run_dir_key in matched_socket_dirs:
+            continue
+        rows.append(
+            BrokerSessionRosterRow(
+                row_id=f"last-known:{runtime.strategy_instance_id}:{runtime.run_id}",
+                identity_type="bot",
+                recency="past_last_known",
+                socket_present=False,
+                strategy_instance_id=runtime.strategy_instance_id,
+                run_id=runtime.run_id,
+                account_id=runtime.account_id,
+                posture=runtime.posture,
+                client_id=runtime.client_id,
+                pid=runtime.pid,
+                run_dir=runtime.run_dir,
+                connection_state=runtime.connection_state,
+                connection_epoch=runtime.connection_epoch,
+                last_event_ms=runtime.last_event_ms,
+                as_of_ms=as_of_ms,
+                attention_codes=_append_stale_attention(
+                    ["GHOST_DETECTION_UNAVAILABLE"],
+                    runtime=runtime,
+                    as_of_ms=as_of_ms,
+                    stale_after_ms=stale_after_ms,
+                ),
+            )
+        )
+    return rows
+
+
+def _append_stale_attention(
+    codes: list[BrokerSessionAttentionCode],
+    *,
+    runtime: RuntimeIndexEntry,
+    as_of_ms: int,
+    stale_after_ms: int,
+) -> list[BrokerSessionAttentionCode]:
+    if _runtime_signal_stale(runtime, as_of_ms, stale_after_ms):
+        return [*codes, "CLIENT_SIGNAL_STALE"]
+    return codes
+
+
+def _runtime_signal_stale(
+    runtime: RuntimeIndexEntry,
+    as_of_ms: int,
+    stale_after_ms: int,
+) -> bool:
+    return (
+        runtime.last_event_ms is not None
+        and stale_after_ms >= 0
+        and as_of_ms - runtime.last_event_ms > stale_after_ms
     )
 
 

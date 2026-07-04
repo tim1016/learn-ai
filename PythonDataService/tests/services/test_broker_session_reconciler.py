@@ -156,6 +156,39 @@ def test_reconciler_classifies_unattributed_socket_as_ghost() -> None:
     assert rows[0].attention_codes == ["GHOST_SOCKET"]
 
 
+def test_reconciler_surfaces_last_known_rows_when_socket_probe_unavailable() -> None:
+    run_dir = "/runs/run-last-known"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=_registry(),
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="stale-demo",
+                run_id="run-last-known",
+                run_dir=run_dir,
+                account_id="DU123",
+                client_id=17,
+                connection_state="connected",
+                last_event_ms=AS_OF_MS - 30_000,
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+        socket_probe_available=False,
+        stale_after_ms=25_000,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "bot"
+    assert rows[0].recency == "past_last_known"
+    assert rows[0].socket_present is False
+    assert rows[0].client_id == 17
+    assert rows[0].attention_codes == [
+        "GHOST_DETECTION_UNAVAILABLE",
+        "CLIENT_SIGNAL_STALE",
+    ]
+
+
 def test_reconciler_adds_connected_data_plane_system_row() -> None:
     rows = reconcile_broker_session_roster(
         socket_rows=[],
