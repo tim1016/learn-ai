@@ -316,6 +316,14 @@ class IbkrClient:
                     extra={"action": "broker_event_log_write_failed"},
                 )
 
+    def record_recovery_event(self, event_type: str, **fields: object) -> None:
+        """Append a monitor-owned recovery event to the diagnostics JSONL log."""
+        self._record_broker_event(
+            event_type,
+            connection_state=self.connection_state,
+            **fields,
+        )
+
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
         """ib_async errorEvent handler.
 

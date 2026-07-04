@@ -294,6 +294,10 @@ class AutoReconnectMonitor:
         )
         self._link_interrupted_since_ms = None
         self._advance_recovery("wait_expired")
+        self._record_recovery_event(
+            "BROKER_RECONNECT_LINK_WAIT_EXPIRED",
+            link_interruption_wait_s=self._link_interruption_wait_s,
+        )
         await self._attempt_reconnect_loop(force=True)
 
     async def _recover_subscriptions_if_stale(self) -> bool:
@@ -347,13 +351,18 @@ class AutoReconnectMonitor:
             return False
         try:
             await probe(timeout_s=self._probe_timeout_s)
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "IBKR app-level probe failed; forcing reconnect",
                 exc_info=True,
                 extra={"action": "auto_reconnect_probe_fail"},
             )
             self._advance_recovery("probe_failed")
+            self._record_recovery_event(
+                "BROKER_RECONNECT_PROBE_FAILED",
+                probe_timeout_s=self._probe_timeout_s,
+                probe_error=f"{type(exc).__name__}: {exc}",
+            )
             await self._attempt_reconnect_loop(force=True)
             return True
         return False
@@ -422,6 +431,7 @@ class AutoReconnectMonitor:
         """
         self._advance_recovery("reconnect_started")
         self._begin_attempt(attempt)
+        self._record_recovery_event("BROKER_RECONNECT_ATTEMPT", attempt=attempt)
         try:
             await self._client.disconnect()
         except Exception:
@@ -439,6 +449,11 @@ class AutoReconnectMonitor:
         except Exception as exc:
             self._end_attempt(success=False)
             self._advance_recovery("reconnect_failed")
+            self._record_recovery_event(
+                "BROKER_RECONNECT_FAILED",
+                attempt=attempt,
+                error=f"{type(exc).__name__}: {exc}",
+            )
             logger.warning(
                 "Auto-reconnect attempt %d failed: %s",
                 attempt,
@@ -453,6 +468,11 @@ class AutoReconnectMonitor:
             return False
         self._end_attempt(success=True)
         self._advance_recovery("recovery_succeeded")
+        self._record_recovery_event(
+            "BROKER_RECONNECT_SUCCEEDED",
+            attempt=attempt,
+            recovered_count=self._successful_reconnect_count,
+        )
         logger.info(
             "Auto-reconnect attempt %d succeeded",
             attempt,
@@ -506,6 +526,7 @@ class AutoReconnectMonitor:
         self._is_recovering = False
         self._current_attempt = 0
         self._last_transition_ms = now_ms_utc()
+        self._record_recovery_event("BROKER_RECONNECT_HARD_DOWN", attempts=attempts)
         logger.error(
             "IBKR auto-reconnect exhausted %d attempt(s); entering HARD_DOWN",
             attempts,
@@ -529,6 +550,23 @@ class AutoReconnectMonitor:
         if success:
             self._current_attempt = 0
         self._last_transition_ms = now_ms_utc()
+
+    def _record_recovery_event(self, event_type: str, **fields: object) -> None:
+        recorder = getattr(self._client, "record_recovery_event", None)
+        if recorder is None:
+            return
+        try:
+            recorder(
+                event_type,
+                recovery_state=self._recovery_state,
+                reconnect_attempt=self.current_attempt or None,
+                **fields,
+            )
+        except Exception:
+            logger.exception(
+                "Could not append IBKR recovery event",
+                extra={"action": "auto_reconnect_event_write_failed"},
+            )
 
 
 # ── module-level singleton ────────────────────────────────────────────

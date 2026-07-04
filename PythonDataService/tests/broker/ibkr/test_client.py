@@ -7,6 +7,7 @@ that don't have it installed (light-layer-only CI for unrelated work).
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -666,3 +667,24 @@ def test_health_surfaces_broker_event_log_failure_counter_and_timestamp(
     assert h1.broker_event_log_write_failed_count == 2
     assert h1.last_broker_event_log_write_failed_at_ms is not None
     assert h1.last_broker_event_log_write_failed_at_ms >= h0.fetched_at_ms
+
+
+def test_record_recovery_event_appends_diagnostic_jsonl(
+    settings_paper: IbkrSettings, tmp_path
+) -> None:
+    settings_paper.live_runs_root = str(tmp_path)
+    client = _client_with_fake_ib(settings_paper)
+
+    client.record_recovery_event(
+        "BROKER_RECONNECT_ATTEMPT",
+        recovery_state="RECONNECTING",
+        attempt=1,
+    )
+
+    path = tmp_path / "_broker" / "connection_events.jsonl"
+    payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["event_type"] == "BROKER_RECONNECT_ATTEMPT"
+    assert payload["client_id"] == settings_paper.client_id
+    assert payload["connection_state"] == "connected"
+    assert payload["recovery_state"] == "RECONNECTING"
+    assert payload["attempt"] == 1

@@ -43,6 +43,36 @@ _EVENT_TYPE_MEANINGS: dict[
         "warning",
         "Broker recovery failed",
     ),
+    "BROKER_RECONNECT_ATTEMPT": (
+        "recovery_reconnect",
+        "info",
+        "Broker reconnect attempt started",
+    ),
+    "BROKER_RECONNECT_FAILED": (
+        "recovery_reconnect",
+        "warning",
+        "Broker reconnect attempt failed",
+    ),
+    "BROKER_RECONNECT_SUCCEEDED": (
+        "recovery_reconnect",
+        "info",
+        "Broker reconnect succeeded",
+    ),
+    "BROKER_RECONNECT_HARD_DOWN": (
+        "recovery_reconnect",
+        "critical",
+        "Broker reconnect exhausted",
+    ),
+    "BROKER_RECONNECT_LINK_WAIT_EXPIRED": (
+        "recovery_reconnect",
+        "warning",
+        "Broker link wait expired",
+    ),
+    "BROKER_RECONNECT_PROBE_FAILED": (
+        "recovery_reconnect",
+        "warning",
+        "Broker probe forced reconnect",
+    ),
 }
 
 

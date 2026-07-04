@@ -93,6 +93,23 @@ def test_classifier_fails_unknown_code_visible_as_unclassified() -> None:
     assert event.raw["ibkr_code"] == 9999
 
 
+def test_classifier_maps_monitor_reconnect_events() -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "BROKER_RECONNECT_HARD_DOWN",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 10, 0),
+            "client_id": 42,
+            "recovery_state": "HARD_DOWN",
+            "attempts": 3,
+        },
+    )
+
+    assert event.category == "recovery_reconnect"
+    assert event.severity == "critical"
+    assert event.label == "Broker reconnect exhausted"
+
+
 def test_event_service_pages_filters_and_counts_by_client_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
