@@ -591,6 +591,24 @@ def test_on_ib_error_connectivity_lost_logs_at_info_not_warning(
     assert client.connection_lost is True
 
 
+def test_on_ib_error_records_unknown_code_for_mirror_diagnostics(
+    settings_paper: IbkrSettings,
+    tmp_path,
+) -> None:
+    settings_paper.live_runs_root = str(tmp_path)
+    client = _client_with_fake_ib(settings_paper)
+
+    client._on_ib_error(17, 9999, "mystery broker diagnostic", None)
+
+    path = tmp_path / "_broker" / "connection_events.jsonl"
+    payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["event_type"] == "IBKR_CODE"
+    assert payload["ibkr_code"] == 9999
+    assert payload["ibkr_req_id"] == 17
+    assert payload["message"] == "mystery broker diagnostic"
+    assert payload["connection_state"] == "connected"
+
+
 # ---------------------------------------------------------------------------
 # Rate-limit for broker-event-log write failures (codex D5). First
 # failure per run logs WARNING; subsequent failures suppress the log

@@ -344,20 +344,15 @@ class IbkrClient:
           account/order connectivity is gone, so they publish a degraded state
           instead of forcing a disconnect.
         """
-        if errorCode in (
-            _CONNECTIVITY_LOST_CODES
-            | _CONNECTIVITY_RESTORED_CODES
-            | _DATA_FARM_DEGRADED_CODES
-            | _DATA_FARM_OK_CODES
-        ):
-            self._last_ibkr_code = errorCode
-            self._last_ibkr_message = errorString
-            self._record_broker_event(
-                "IBKR_CODE",
-                ibkr_code=errorCode,
-                message=errorString,
-                connection_state=self.connection_state,
-            )
+        self._last_ibkr_code = errorCode
+        self._last_ibkr_message = errorString
+        self._record_broker_event(
+            "IBKR_CODE",
+            ibkr_code=errorCode,
+            ibkr_req_id=reqId,
+            message=errorString,
+            connection_state=self.connection_state,
+        )
         if errorCode == 326:
             self._client_id_in_use_seen = True
             return

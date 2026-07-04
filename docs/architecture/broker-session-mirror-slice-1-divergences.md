@@ -671,3 +671,25 @@ Critical limits:
    This slice prevents duplicate connectivity authorities, but it does not add
    automatic `ResumeGuardState` transitions or incident clearing. Recovered
    bots still require the existing operator resume path.
+
+## Slice 25 addendum — all-IBKR-code diagnostic capture
+
+Date: 2026-07-04
+
+The stacked slice-25 branch records every IBKR `errorEvent` code into
+`_broker/connection_events.jsonl`, not only the connectivity and data-farm
+codes the client state machine reacts to. Known codes still drive the existing
+behavioral branches; unfamiliar codes now reach the mirror classifier and show
+up as `unclassified` diagnostics instead of disappearing.
+
+Critical limits:
+
+1. **Capture breadth is not behavior breadth.**
+   This slice does not add new reconnect, halt, or order-handling reactions for
+   newly captured codes. It only makes the diagnostic stream faithful to the
+   IBKR callback surface.
+
+2. **The shared meaning table is still intentionally small.**
+   Unknown IBKR codes are now visible, but many official message codes still
+   land in the `unclassified` bucket until the shared code table is expanded
+   with reviewed operator labels.
