@@ -65,86 +65,86 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0001 | P1 | **fixed-verified** | inventory | ~~engine/edge subtree unregistered~~ Closed 2026-05-06: 21-row section added. | [findings/F-0001](findings/F-0001-engine-edge-subtree-unregistered.md) |
-| F-0002 | P1 | **fixed-verified** | inventory | ~~research/signal subtree unregistered~~ Closed 2026-05-06: 6-row section added. | [findings/F-0002](findings/F-0002-research-signal-subtree-unregistered.md) |
-| F-0003 | P1 | **fixed-verified** | inventory | ~~`app/research/options/bs_solver.py` cited by engine-authority-map line 27 — file does not exist~~ Closed 2026-05-06: dead reference removed. | [findings/F-0003](findings/F-0003-engine-authority-map-cites-missing-bs-solver.md) |
-| F-0004 | P1 | **fixed-verified** | inventory | ~~strategy_engine.py canonical, no registry row~~ Closed 2026-05-06: row added. | [findings/F-0004](findings/F-0004-strategy-engine-py-no-registry-row.md) |
-| F-0005 | P1 | **fixed-verified** | inventory | ~~engine/options/pricer.py dispatcher~~ Closed 2026-05-06: row added. | [findings/F-0005](findings/F-0005-engine-options-pricer-undocumented.md) |
-| F-0006 | P1 | **fixed-verified** | inventory | ~~Sharpe / max-drawdown / fill-model registry rows point at directory `PythonDataService/app/engine/`~~ Closed 2026-05-06: rows tightened to pinpoint files. (Provenance blocks on those files still owed via F-0027.) | [findings/F-0006](findings/F-0006-results-statistics-vague-canonical-path.md) |
-| F-0007 | P1 | **fixed-verified** | inventory | ~~volatility subtree mostly unregistered~~ Closed 2026-05-06: 9-row "Volatility surface and analytics" section added; **VIX replication needs paper verification (Demeterfi-Derman-Kamal-Zou 1999)**. | [findings/F-0007](findings/F-0007-volatility-subtree-mostly-unregistered.md) |
-| F-0008 | P1 | **fixed-verified** | inventory | ~~research/validation subtree unregistered~~ Closed 2026-05-06: new "Research signal validation primitives" section with 3 rows. | [findings/F-0008](findings/F-0008-research-validation-subtree-unregistered.md) |
-| F-0012 | P2 | **fixed-verified** | inventory | ~~4 Backend transport-only services need rows~~ Closed 2026-05-06: 4 rows added. | [findings/F-0012](findings/F-0012-backend-transport-services-unregistered.md) |
-| F-0013 | P2 | **fixed-verified** | inventory | ~~PortfolioValidationService unclassified~~ Closed 2026-05-06: validation-only row added to engine-authority-map. | [findings/F-0013](findings/F-0013-portfolio-validation-service-unregistered.md) |
-| F-0014 | P2 | **fixed-verified** | inventory | ~~data_quality_service + validation_service unregistered~~ Closed 2026-05-06: 2 rows added. | [findings/F-0014](findings/F-0014-data-quality-validation-services-unregistered.md) |
-| F-0015 | P2 | **fixed-verified** | inventory | ~~research/features unregistered~~ Closed 2026-05-06: 2-row "Research feature engineering" section + RSI row updated to list `ta_features.py::compute_rsi_14` as third pandas-ta consumer. | [findings/F-0015](findings/F-0015-research-features-unregistered.md) |
-| F-0016 | P2 | **fixed-verified** | inventory | ~~spy_strategy_a/b/c unregistered~~ Closed 2026-05-06: 4 rows added (A/B/C + base). | [findings/F-0016](findings/F-0016-spy-strategy-abc-unregistered.md) |
-| F-0017 | P2 | **fixed-verified** | inventory | ~~divergence s1/s2/s3 unclassified~~ Closed 2026-05-06: existing strategy rows updated with `divergence-research-only` parallel notes. | [findings/F-0017](findings/F-0017-divergence-strategies-parallel-implementations.md) |
-| F-0018 | P2 | **fixed-verified** | inventory | ~~Phase 2.3 drift~~ Closed 2026-05-06: registry item 3 rewritten to ✅ CLOSED. | [findings/F-0018](findings/F-0018-migration-plan-vs-registry-phase-2-3-drift.md) |
-| F-0029 | P2 | **fixed-verified** | inventory | ~~Hardcoded `0.043` count drift~~ Closed 2026-05-06: registry item 5 rewritten with all 6 file:line locations. (Code-side migration to FRED still deferred.) | [findings/F-0029](findings/F-0029-hardcoded-risk-free-rate-additional-locations.md) |
+| F-0001 | P1 | **fixed-verified** | inventory | ~~engine/edge subtree unregistered~~ Closed 2026-05-06: 21-row section added. | F-0001 (pruned 2026-07-04; git history) |
+| F-0002 | P1 | **fixed-verified** | inventory | ~~research/signal subtree unregistered~~ Closed 2026-05-06: 6-row section added. | F-0002 (pruned 2026-07-04; git history) |
+| F-0003 | P1 | **fixed-verified** | inventory | ~~`app/research/options/bs_solver.py` cited by engine-authority-map line 27 — file does not exist~~ Closed 2026-05-06: dead reference removed. | F-0003 (pruned 2026-07-04; git history) |
+| F-0004 | P1 | **fixed-verified** | inventory | ~~strategy_engine.py canonical, no registry row~~ Closed 2026-05-06: row added. | F-0004 (pruned 2026-07-04; git history) |
+| F-0005 | P1 | **fixed-verified** | inventory | ~~engine/options/pricer.py dispatcher~~ Closed 2026-05-06: row added. | F-0005 (pruned 2026-07-04; git history) |
+| F-0006 | P1 | **fixed-verified** | inventory | ~~Sharpe / max-drawdown / fill-model registry rows point at directory `PythonDataService/app/engine/`~~ Closed 2026-05-06: rows tightened to pinpoint files. (Provenance blocks on those files still owed via F-0027.) | F-0006 (pruned 2026-07-04; git history) |
+| F-0007 | P1 | **fixed-verified** | inventory | ~~volatility subtree mostly unregistered~~ Closed 2026-05-06: 9-row "Volatility surface and analytics" section added; **VIX replication needs paper verification (Demeterfi-Derman-Kamal-Zou 1999)**. | F-0007 (pruned 2026-07-04; git history) |
+| F-0008 | P1 | **fixed-verified** | inventory | ~~research/validation subtree unregistered~~ Closed 2026-05-06: new "Research signal validation primitives" section with 3 rows. | F-0008 (pruned 2026-07-04; git history) |
+| F-0012 | P2 | **fixed-verified** | inventory | ~~4 Backend transport-only services need rows~~ Closed 2026-05-06: 4 rows added. | F-0012 (pruned 2026-07-04; git history) |
+| F-0013 | P2 | **fixed-verified** | inventory | ~~PortfolioValidationService unclassified~~ Closed 2026-05-06: validation-only row added to engine-authority-map. | F-0013 (pruned 2026-07-04; git history) |
+| F-0014 | P2 | **fixed-verified** | inventory | ~~data_quality_service + validation_service unregistered~~ Closed 2026-05-06: 2 rows added. | F-0014 (pruned 2026-07-04; git history) |
+| F-0015 | P2 | **fixed-verified** | inventory | ~~research/features unregistered~~ Closed 2026-05-06: 2-row "Research feature engineering" section + RSI row updated to list `ta_features.py::compute_rsi_14` as third pandas-ta consumer. | F-0015 (pruned 2026-07-04; git history) |
+| F-0016 | P2 | **fixed-verified** | inventory | ~~spy_strategy_a/b/c unregistered~~ Closed 2026-05-06: 4 rows added (A/B/C + base). | F-0016 (pruned 2026-07-04; git history) |
+| F-0017 | P2 | **fixed-verified** | inventory | ~~divergence s1/s2/s3 unclassified~~ Closed 2026-05-06: existing strategy rows updated with `divergence-research-only` parallel notes. | F-0017 (pruned 2026-07-04; git history) |
+| F-0018 | P2 | **fixed-verified** | inventory | ~~Phase 2.3 drift~~ Closed 2026-05-06: registry item 3 rewritten to ✅ CLOSED. | F-0018 (pruned 2026-07-04; git history) |
+| F-0029 | P2 | **fixed-verified** | inventory | ~~Hardcoded `0.043` count drift~~ Closed 2026-05-06: registry item 5 rewritten with all 6 file:line locations. (Code-side migration to FRED still deferred.) | F-0029 (pruned 2026-07-04; git history) |
 
 ### 3.2 Python math-authority violations
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0010 | P1 | **fixed-verified** | python-authority | ~~PositionEngine FIFO accounting~~ Closed 2026-05-06: classified canonical-in-dotnet-justified; provenance block added; registry row added. | [findings/F-0010](findings/F-0010-position-engine-fifo-accounting-in-dotnet.md) |
-| F-0011 | P1 | **fixed-verified** | python-authority | ~~SnapshotService drawdown duplicate~~ Closed 2026-05-06: scope expanded to all 4 stats; classified legacy-ok-pending-parity; provenance comment added; registry updated. **Parity test still owed.** | [findings/F-0011](findings/F-0011-snapshot-service-drawdown-in-dotnet.md) |
+| F-0010 | P1 | **fixed-verified** | python-authority | ~~PositionEngine FIFO accounting~~ Closed 2026-05-06: classified canonical-in-dotnet-justified; provenance block added; registry row added. | F-0010 (pruned 2026-07-04; git history) |
+| F-0011 | P1 | **fixed-verified** | python-authority | ~~SnapshotService drawdown duplicate~~ Closed 2026-05-06: scope expanded to all 4 stats; classified legacy-ok-pending-parity; provenance comment added; registry updated. **Parity test still owed.** | F-0011 (pruned 2026-07-04; git history) |
 
 ### 3.3 Timestamp boundary violations
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0009 | P1 | awaiting-human | timestamp | `app/services/sanitizer.py:79` emits ISO-Z string at the wire; line 57 silently drops duplicates. Cross-refs prior audit `computational-fidelity-2026-04-22.md` top-10 #1/#2. | [findings/F-0009](findings/F-0009-sanitizer-iso-timestamp-wire.md) |
-| F-0019 | P1 | open | timestamp | `app/services/trade_comparison.py::_parse_ts` accepts 3 naive formats and silently `replace(tzinfo=UTC)`s them — same anti-pattern the .NET ban list calls out | [findings/F-0019](findings/F-0019-trade-comparison-naive-strptime-utc-assumption.md) |
-| F-0020 | P1 | **fixed-verified** | timestamp | ~~Phase 3 rollup~~ Closed 2026-05-06: superseded by per-file findings F-0021/F-0022/F-0023/F-0024/F-0033/F-0034 (all triaged). | [findings/F-0020](findings/F-0020-timestamp-ban-list-rollup.md) |
-| F-0021 | **P0** | open | timestamp | `MarketDataService.cs:451` (aggregate ingestion) + `StudiesApi.cs:294-298` (`ParseUtc`) — banned `AssumeUniversal\|AdjustToUniversal` pattern silently coerces naive strings to UTC | [findings/F-0021](findings/F-0021-dotnet-ingestion-datetime-parse-assumeuniversal.md) |
-| F-0022 | P1 | open | timestamp | `Query.cs` (4 occurrences), `MarketDataService.cs` (date-range params, 6 occurrences), `ResearchService.cs` (2 occurrences) — `DateTime.Parse(fromDate).ToUniversalTime()` silently treats naive input as local time | [findings/F-0022](findings/F-0022-dotnet-query-parameter-datetime-parse.md) |
-| F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` (lines 489-565) silently fills missing minute bars with prev-close + zero-volume. Default `forward_fill=True` at 4 call sites. Direct violation of fail-fast ingestion rule. | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
-| F-0024 | P1 | open | timestamp | More ban-list violations in Python ingestion paths: `polygon_ingest.py:226` ISO-Z emission, `dataset_service.py:851` `datetime.utcfromtimestamp`, `dataset_service.py:939/1139` `datetime.utcnow`, `polygon_client.py:625/628/676` naive `datetime.now()` | [findings/F-0024](findings/F-0024-additional-iso-z-emission-and-banned-utcfromtimestamp.md) |
-| F-0033 | P1 | open | timestamp | Phase 3 Python non-ingestion rollup: 10 files in violation. ISO-Z emissions in `options_companion_service.py`, `validation_study.py`, `engine_runner.py`, `cache.py`. `pd.to_datetime` without `utc=True` in `iv_builder.py:413`, `contract_finder.py:128`. `datetime.utcnow()` in 5 places. Naive `datetime.now()` x4 in `volatility.py` router. | [findings/F-0033](findings/F-0033-python-non-ingestion-banlist-violations.md) |
-| F-0034 | P1 | open | timestamp | Phase 3 TS rollup. 45 candidate files triaged into 5 tiers. Tier 1 P1: ~17 occurrences in engine-replay services treat `bar.timestamp` as a string and parse via `new Date(...)`. If wire is `int64 ms` (the goal), idempotent; if naive ISO (current per F-0009/F-0033), browser-shift bug. Resolves transitively when Step 3.1 wire-format change lands. | [findings/F-0034](findings/F-0034-frontend-naive-date-parse-rollup.md) |
+| F-0009 | P1 | awaiting-human | timestamp | `app/services/sanitizer.py:79` emits ISO-Z string at the wire; line 57 silently drops duplicates. Cross-refs prior audit `computational-fidelity-2026-04-22.md` top-10 #1/#2. | F-0009 (pruned 2026-07-04; git history) |
+| F-0019 | P1 | open | timestamp | `app/services/trade_comparison.py::_parse_ts` accepts 3 naive formats and silently `replace(tzinfo=UTC)`s them — same anti-pattern the .NET ban list calls out | F-0019 (pruned 2026-07-04; git history) |
+| F-0020 | P1 | **fixed-verified** | timestamp | ~~Phase 3 rollup~~ Closed 2026-05-06: superseded by per-file findings F-0021/F-0022/F-0023/F-0024/F-0033/F-0034 (all triaged). | F-0020 (pruned 2026-07-04; git history) |
+| F-0021 | **P0** | open | timestamp | `MarketDataService.cs:451` (aggregate ingestion) + `StudiesApi.cs:294-298` (`ParseUtc`) — banned `AssumeUniversal\|AdjustToUniversal` pattern silently coerces naive strings to UTC | F-0021 (pruned 2026-07-04; git history) |
+| F-0022 | P1 | open | timestamp | `Query.cs` (4 occurrences), `MarketDataService.cs` (date-range params, 6 occurrences), `ResearchService.cs` (2 occurrences) — `DateTime.Parse(fromDate).ToUniversalTime()` silently treats naive input as local time | F-0022 (pruned 2026-07-04; git history) |
+| F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` (lines 489-565) silently fills missing minute bars with prev-close + zero-volume. Default `forward_fill=True` at 4 call sites. Direct violation of fail-fast ingestion rule. | F-0023 (pruned 2026-07-04; git history) |
+| F-0024 | P1 | open | timestamp | More ban-list violations in Python ingestion paths: `polygon_ingest.py:226` ISO-Z emission, `dataset_service.py:851` `datetime.utcfromtimestamp`, `dataset_service.py:939/1139` `datetime.utcnow`, `polygon_client.py:625/628/676` naive `datetime.now()` | F-0024 (pruned 2026-07-04; git history) |
+| F-0033 | P1 | open | timestamp | Phase 3 Python non-ingestion rollup: 10 files in violation. ISO-Z emissions in `options_companion_service.py`, `validation_study.py`, `engine_runner.py`, `cache.py`. `pd.to_datetime` without `utc=True` in `iv_builder.py:413`, `contract_finder.py:128`. `datetime.utcnow()` in 5 places. Naive `datetime.now()` x4 in `volatility.py` router. | F-0033 (pruned 2026-07-04; git history) |
+| F-0034 | P1 | open | timestamp | Phase 3 TS rollup. 45 candidate files triaged into 5 tiers. Tier 1 P1: ~17 occurrences in engine-replay services treat `bar.timestamp` as a string and parse via `new Date(...)`. If wire is `int64 ms` (the goal), idempotent; if naive ISO (current per F-0009/F-0033), browser-shift bug. Resolves transitively when Step 3.1 wire-format change lands. | F-0034 (pruned 2026-07-04; git history) |
 
 ### 3.4 Provenance & reference gaps
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0027 | P1 | open | provenance | 4-field provenance block missing across nearly all canonical math: `app/engine/indicators/` (1 of 7 files have any field), `app/services/` (1 hit only, in `strategies/lean_statistics.py`), `app/volatility/` (0 of 14 files). | [findings/F-0027](findings/F-0027-provenance-block-near-universally-missing.md) |
+| F-0027 | P1 | open | provenance | 4-field provenance block missing across nearly all canonical math: `app/engine/indicators/` (1 of 7 files have any field), `app/services/` (1 hit only, in `strategies/lean_statistics.py`), `app/volatility/` (0 of 14 files). | F-0027 (pruned 2026-07-04; git history) |
 
 ### 3.5 Golden fixture gaps
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0026 | P1 | open | fixture | Only 3 fixture directories on disk (`bs-price-cross-engine`, `iv30`, `portfolio-scenario-3leg`). Most canonical math (SMA, EMA, RSI, all strategies, Sharpe, drawdown) has no fixture. `iv30/` is missing `attribution.md`. | [findings/F-0026](findings/F-0026-fixture-coverage-gap-most-canonicals-have-no-fixture.md) |
+| F-0026 | P1 | open | fixture | Only 3 fixture directories on disk (`bs-price-cross-engine`, `iv30`, `portfolio-scenario-3leg`). Most canonical math (SMA, EMA, RSI, all strategies, Sharpe, drawdown) has no fixture. `iv30/` is missing `attribution.md`. | F-0026 (pruned 2026-07-04; git history) |
 
 ### 3.6 Tolerance hygiene
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0025 | P2 | **fixed-verified** | tolerance | ~~3 minor tolerance items~~ Closed 2026-05-06: explicit atol/rtol added at edge_score.py:82 + test_regime_clustering.py:41,43; precision-4 rationale comment at PositionEngineTests.cs:332. | [findings/F-0025](findings/F-0025-tolerance-hygiene-rollup.md) |
+| F-0025 | P2 | **fixed-verified** | tolerance | ~~3 minor tolerance items~~ Closed 2026-05-06: explicit atol/rtol added at edge_score.py:82 + test_regime_clustering.py:41,43; precision-4 rationale comment at PositionEngineTests.cs:332. | F-0025 (pruned 2026-07-04; git history) |
 
 ### 3.7 Ingestion fidelity
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` silently fabricates missing bars with prev-close + zero-volume. Default-on at 4 call sites. (Cross-listed under §3.3 timestamp because gaps surface as ingestion + boundary issue.) | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
+| F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` silently fabricates missing bars with prev-close + zero-volume. Default-on at 4 call sites. (Cross-listed under §3.3 timestamp because gaps surface as ingestion + boundary issue.) | F-0023 (pruned 2026-07-04; git history) |
 
 ### 3.8 Wire fidelity (Python → Backend → GraphQL → Frontend)
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0032 | P3 | open | wire | **Triage update 2026-05-06:** DTO audit shows `double` properties match Python's `float64` computation precision throughout. Severity dropped P2 → P3. Held open for auditability concern (loose `Dictionary<string, object?>` typing and registry doesn't document the precision contract). | [findings/F-0032](findings/F-0032-decimal-to-double-narrowing-at-wire.md) |
+| F-0032 | P3 | open | wire | **Triage update 2026-05-06:** DTO audit shows `double` properties match Python's `float64` computation precision throughout. Severity dropped P2 → P3. Held open for auditability concern (loose `Dictionary<string, object?>` typing and registry doesn't document the precision contract). | F-0032 (pruned 2026-07-04; git history) |
 
 ### 3.9 Frontend consumption / display-only violations
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0028 | P2 | **fixed-verified** | frontend-consumption | ~~Frontend rollup~~ Closed 2026-05-06: triage of all 8 high-suspicion files complete; all display-only / form-input parsing. No P0/P1 violations found. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
+| F-0028 | P2 | **fixed-verified** | frontend-consumption | ~~Frontend rollup~~ Closed 2026-05-06: triage of all 8 high-suspicion files complete; all display-only / form-input parsing. No P0/P1 violations found. | F-0028 (pruned 2026-07-04; git history) |
 
 ### 3.10 Documentation & auditability polish
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0030 | P2 | open | documentation | Reference notes well-covered for indicators (24 of 24); missing for ~15 strategy/statistic/portfolio rows. Including 3 `(verify)` references that need confirmation or demotion. | [findings/F-0030](findings/F-0030-reference-notes-missing-for-many-registry-cited-references.md) |
-| F-0031 | P3 | **fixed-verified** | documentation | ~~MACD warmup missing~~ Closed 2026-05-06: false positive — `macd.py` documents warmup in "ready" semantics (samples >= N). | [findings/F-0031](findings/F-0031-warmup-docstring-coverage.md) |
+| F-0030 | P2 | open | documentation | Reference notes well-covered for indicators (24 of 24); missing for ~15 strategy/statistic/portfolio rows. Including 3 `(verify)` references that need confirmation or demotion. | F-0030 (pruned 2026-07-04; git history) |
+| F-0031 | P3 | **fixed-verified** | documentation | ~~MACD warmup missing~~ Closed 2026-05-06: false positive — `macd.py` documents warmup in "ready" semantics (samples >= N). | F-0031 (pruned 2026-07-04; git history) |
 
 ## 4. Coverage map
 

@@ -4,6 +4,8 @@
 
 **Agent convention:** Only docs marked `canonical` or `protected-canonical` should be used as implementation authority. `supporting` docs provide context and provenance. `archived` docs in `docs/archive/` carry status banners and must not be treated as authority.
 
+**2026-07-04 prune.** ~150 point-in-time working docs — completed implementation plans (`docs/superpowers/`, `docs/architecture/phases/`), session handoffs (`docs/handoffs/`), shipped-feature PRDs, and closed audit findings (`docs/audits/auto-research/findings/`, `docs/audits/vibe-coded-app-research/`) — were **hard-deleted to git history** rather than archived. Git history is their provenance record. Open defects lifted out of the deleted audit findings live in `docs/known-gaps.md`. Going forward, new point-in-time docs are pruned to git history, not archived; `docs/archive/` retains only the earlier archived set.
+
 **Note on AI rules:** Agent-facing rules live in `.claude/rules/` (Claude Code) — not in `.codex/` (no `.codex/` directory exists in this repo). `AGENTS.md` is the cross-agent entry point.
 
 ---
@@ -23,6 +25,39 @@
 
 ---
 
+## Architecture Decision Records (ADRs) — canonical decisions
+
+`docs/architecture/adrs/` holds the durable "why" behind the platform's
+control-plane, broker-safety, sizing, and operator-surface design. Each ADR is
+canonical for its decision unless a later ADR supersedes it. Load the relevant
+ADR before changing the behavior it governs. Several shipped PRDs pruned on
+2026-07-04 (broker-session-mirror, daemon-diagnostics, trader-activity-deploy)
+have their decision preserved here.
+
+| ADR | Decision |
+|---|---|
+| 0001 | Control-plane substrate: JSON + Parquet, files canonical |
+| 0002 | Shadow-mode enforcement at the adapter level (no submit) |
+| 0003 | Operational topology: host venv |
+| 0004 | Instance-addressed operator control plane (durable desired-state) |
+| 0005 | Engine-authored readiness; two-altitude broker ownership |
+| 0006 | Deploy is a host-daemon control-plane op; content-addressed `run_id` |
+| 0007 | Host-daemon shared-secret auth |
+| 0008 | Durable submit protocol: order identity + recovery |
+| 0009 | Live sizing authority + provenance (the spec is not the live sizing authority) |
+| 0010 | Operator-action contract: flatten / pause / stop |
+| 0011 | Broker safety verdict: fail-closed, halt-on-transition, guarded Resume |
+| 0012 | Strategy as signal generator; action-plan baseline |
+| 0013 | Operator surface: judgment vs evidence (no frontend-derived verdicts) |
+| 0014 | Broker-authored operator view: backend-rendered narratives |
+| 0015 | Operator notice contract |
+| 0016 | Bot-control trader-authored activity + deploy packages |
+| 0017 | Per-bot lifecycle workbench: nodes explain, not gate |
+| 0018 | Broker session mirror: client observatory + recovery |
+| 0019 | Daemon diagnostics: composed control-plane authority |
+
+---
+
 ## Canonical docs (load before editing the domain)
 
 | Doc | Domain | Replaces / supersedes | Last reviewed |
@@ -37,6 +72,8 @@
 | `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
 | `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — PR2) | — |
 | `docs/signal-engine-authority.md` | Signal engine | — | — |
+| `docs/operator-architecture-and-runbook.md` | Single canonical operator / paper-trading manual | `docs/broker-user-manual.html`/`.pdf` (pruned 2026-07-04) | 2026-07-04 |
+| `docs/known-gaps.md` | Living open-defect backlog (what is still broken or deferred) | consolidates the pruned audit-finding trees | 2026-07-04 |
 
 ---
 
@@ -84,7 +121,31 @@
 
 ---
 
+## Active / in-flight design (supporting — pruned once shipped + ADR-captured)
+
+These describe work currently being built. They are design authority *for now*;
+when the feature ships and an ADR or authority doc absorbs the decision, the PRD
+is pruned to git history (as the broker-session-mirror and daemon-diagnostics
+PRDs were on 2026-07-04). Verify status before trusting them as current.
+
+| Doc | Domain |
+|---|---|
+| `docs/bot-lifecycle-workbench-redesign.md` | Per-bot workbench redesign (backs ADR-0017 + bot-lifecycle authority DoD) |
+| `docs/architecture/bot-control-account-triage-reconciliation-prd.md` | Account triage + reconciliation pages (S0/S1 landed; S0 remainder open) |
+| `docs/architecture/bot-control-attention-currentness-prd.md` | Attention currentness + proof alignment (initial slice landed) |
+| `docs/architecture/bot-control-inspector-receipts-prd.md` | Node-scoped trader-friendly receipts rail |
+| `docs/architecture/bot-truth-surface-prd.md` | Backend-authored bot truth surface + receipt rail |
+| `docs/architecture/ibkr-account-truth-cross-bot-validation-prd.md` | IBKR account truth + cross-bot trade validation (MVP in progress) |
+| `docs/architecture/operator-notice-prd.md` | Operator notice contract implementation (ADR-0015) |
+| `docs/architecture/bot-control-critical-requirements-review.md` | Bot-control decisions / requirements review |
+
+---
+
 ## Archive (preserved for provenance — not implementation authority)
+
+Point-in-time working docs are now **pruned to git history**, not archived (see
+the 2026-07-04 prune note above and `docs/archive/README.md`). The `docs/archive/`
+tree below is the earlier archived set, frozen and preserved.
 
 All files under `docs/archive/` carry a status banner. See `docs/archive/README.md` for the convention.
 

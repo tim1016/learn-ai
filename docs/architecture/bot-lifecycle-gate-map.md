@@ -4,7 +4,7 @@
 **Created:** 2026-06-27
 **Deepened codebase review:** 2026-06-28
 **Input:** codebase review plus design notes summarized in "Design Source Summary" below.
-**Related:** `docs/architecture/bot-control-trader-activity-deploy-prd.md`, `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/ibkr-integration-authority.md`
+**Related:** ADR-0016 (bot-control trader-authored activity & deploy packages — supersedes the pruned trader-activity-deploy PRD), `docs/architecture/bot-lifecycle-account-owner-prd.md`, `docs/ibkr-integration-authority.md`
 
 This document makes the bot lifecycle gates visible as a chart and a set of tables.
 For current implementation authority, load

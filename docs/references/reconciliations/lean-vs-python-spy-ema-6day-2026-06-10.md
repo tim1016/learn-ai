@@ -75,7 +75,7 @@ The endpoint is live and the shared-staged-data cross-run path succeeds:
 - `run_engine_lab_on_workspace` ran `SpyEmaCrossoverAlgorithm` against the same staged LEAN minute zips.
 - `compare_cross_engine` returned a versioned report using the eight-category `DivergenceCategory` taxonomy.
 
-The report passes because neither engine emitted fills in this 6-day EMA window. This proves the endpoint plumbing and no-trade decision parity for the known-clean AppleHV baseline, but it does not prove fill-level parity for a window with actual EMA trades. That remains blocked locally by the arm64 wide-window SIGILL and the amd64/Rosetta workload segfault documented in `docs/handoffs/2026-06-09-applehv-sigill-codex-investigation.md`.
+The report passes because neither engine emitted fills in this 6-day EMA window. This proves the endpoint plumbing and no-trade decision parity for the known-clean AppleHV baseline, but it does not prove fill-level parity for a window with actual EMA trades. That remains blocked locally by the arm64 wide-window SIGILL and the amd64/Rosetta workload segfault documented in the 2026-06-09 AppleHV SIGILL investigation handoff (pruned 2026-07-04; git history).
 
 ## Tests
 

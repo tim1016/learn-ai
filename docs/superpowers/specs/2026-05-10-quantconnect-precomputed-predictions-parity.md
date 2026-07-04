@@ -257,4 +257,4 @@ Flexible (decided by the captured fixture):
 
 ## Suggested session opener for the implementation pass
 
-> Read this spec (`docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md`) and its sibling plan (`docs/superpowers/plans/2026-05-10-quantconnect-precomputed-predictions-parity.md`). Implement §A end-to-end (schema extension + importer + synthetic-fixture tests). Stop at the §B gate; do not write the real-fixture parity test until Tim has captured the QC export.
+> Read this spec (`docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md`); its sibling plan was pruned 2026-07-04 (git history). Implement §A end-to-end (schema extension + importer + synthetic-fixture tests). Stop at the §B gate; do not write the real-fixture parity test until Tim has captured the QC export.

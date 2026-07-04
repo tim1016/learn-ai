@@ -4,7 +4,7 @@
 **Scope:** Paper trading only.
 **Audience:** The single developer/operator of this repo.
 
-This is the single canonical manual. It supersedes `docs/broker-user-manual.html` and `docs/broker-user-manual.pdf` (those artifacts will be hard-deleted in a follow-up PR after their unique content is migrated here per PRD §11 manual-migration step).
+This is the single canonical manual. It replaces the legacy `broker-user-manual.html` / `.pdf` artifacts (hard-deleted 2026-07-04; git history retains them if unmigrated content is ever needed).
 
 The manual is written to reflect **shipped behavior**, not aspirational design. Sections that describe in-flight work are explicitly labelled with the VCR finding and/or PRD phase that gates them.
 

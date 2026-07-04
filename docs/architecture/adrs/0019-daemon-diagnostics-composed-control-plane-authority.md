@@ -1,6 +1,6 @@
 # ADR 0019 — Live host-daemon diagnostics are a composed control-plane authority in the data plane, not a daemon-side `/diagnose`
 
-**Status:** Proposed 2026-07-04. Drafted during the 2026-07-04 `grill-with-docs` session ("pinpoint why a specific bot is failing in the live daemon"), with a code-verified Codex second opinion integrated (prompt at `docs/reviews/daemon-diagnostics/codex-second-opinion-prompt.md`). Full design at `docs/architecture/daemon-diagnostics-proposal.md`; vocabulary in `CONTEXT.md` § "Daemon diagnostics — control-plane health".
+**Status:** Proposed 2026-07-04. Drafted during the 2026-07-04 `grill-with-docs` session ("pinpoint why a specific bot is failing in the live daemon"), with a code-verified Codex second opinion integrated (second-opinion prompt and full design proposal, Parts A–I, pruned 2026-07-04 after shipping in PR #910 — git history); vocabulary in `CONTEXT.md` § "Daemon diagnostics — control-plane health".
 
 **Decision drivers:** The host live-run daemon (`app/engine/live/host_daemon.py`) is the sole authority for whether a live bot is running, yet the operator has no structured surface that answers *why a specific bot is failing*. Today's daemon story is a flat `HostRunnerHealth` envelope + a folded `DaemonConnectivityMonitor` state; the only interpreted self-test in the codebase is `/api/broker/diagnose`, which tests the data-plane's *own* IBKR client, not the daemon hop. ADR 0007 explicitly left "a `/diagnose`-style self-test for the daemon hop" as an unbuilt follow-up. Meanwhile the operator's real question — "I started this bot; is it actually running and connected?" — spans three altitudes (operator intent, the process registry's claim, OS/Gateway reality) that drift apart silently (verified 2026-07-03: the registry called three live children `offline` while they held IBKR sockets).
 
@@ -66,8 +66,7 @@ The same authored report is read by its own snapshot endpoint (`GET /api/live-in
 
 ## References
 
-- `docs/architecture/daemon-diagnostics-proposal.md` — full design, Parts A–I (check catalog, models, endpoints, UX, tests, phasing).
-- `docs/reviews/daemon-diagnostics/codex-second-opinion-prompt.md` — the code-verified second-opinion prompt.
+- Full design proposal (Parts A–I) and Codex second-opinion prompt: pruned 2026-07-04 after this ADR shipped (PR #910); see git history. Deferred follow-ups tracked in `docs/known-gaps.md` § 5.
 - `CONTEXT.md` § "Daemon diagnostics — control-plane health" — decision/vocabulary record.
 - `app/engine/live/host_daemon.py`, `host_daemon_client.py`, `daemon_transport.py`, `daemon_connectivity_monitor.py` — the daemon + transport surfaces composed.
 - `app/broker/ibkr/diagnostics.py`, `app/broker/ibkr/models.py` (`DiagnosticCheck`) — the peer self-test and the model this one deliberately does not reuse.

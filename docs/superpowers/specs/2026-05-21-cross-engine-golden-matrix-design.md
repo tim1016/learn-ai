@@ -325,5 +325,5 @@ Items to verify during implementation, before running the regeneration script fo
 - Divergence taxonomy: `.claude/rules/numerical-rigor.md` § "Trade-level reconciliation taxonomy"
 - Precedent fixture pattern: `PythonDataService/tests/fixtures/golden/qc-aapl-phase3/` + `docs/references/reconciliations/qc-aapl-phase3.md`
 - Fill-model parity reference: `docs/references/fill-model-parity-spike-2026-05-19.md`
-- Data lake design: `docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md` (and Slice 1a–1c plans)
+- Data lake design and Slice 1a–1c plans: pruned 2026-07-04; see git history
 - LEAN Sidecar Lab ADR: `docs/architecture/lean-sidecar-lab.md`

@@ -2,6 +2,11 @@
 
 This directory holds documentation that has been superseded, completed, or determined to be ephemeral. Files here are preserved for provenance — not for active reference.
 
+**Frozen as of 2026-07-04.** This tree is the set that was archived *before* the
+2026-07-04 policy change. New point-in-time docs are no longer archived here —
+they are **pruned to git history** (see "What belongs here vs. deletion" below).
+Do not add new files to this directory.
+
 ## Directory layout
 
 | Subdirectory | Contents |
@@ -26,10 +31,17 @@ This convention exists so AI agents loading archived files get an immediate, una
 
 ## What belongs here vs. deletion
 
-- **Archive** (preserve provenance): plans, design docs, phase specs, research notes, session handoffs, LLM prompts
-- **Delete** (no provenance value): raw test runner stdout, generated artifacts with no analytical content
+**Policy change (2026-07-04).** Point-in-time working docs are now **hard-deleted
+to git history**, not archived. Git history is the provenance record; any open
+defects are lifted into `docs/known-gaps.md` before the source files are deleted.
+The older "archive, don't delete" rule was retired because the archive tree grew
+faster than it was read, and git history already preserves every deleted file.
 
-Deleted raw artifacts are listed in `docs/archive/deleted-artifacts.md`.
+- **Prune to git history** (provenance lives in git): completed implementation plans, design specs for shipped features, phase snapshots, session handoffs, LLM prompts, closed audit findings.
+- **Delete outright** (no provenance value at all): raw test-runner stdout, generated artifacts with no analytical content.
+
+Earlier raw-artifact deletions are listed in `docs/archive/deleted-artifacts.md`. The
+2026-07-04 prune is recorded in `docs/doc-authority.md` (see its "2026-07-04 prune" note).
 
 ## Do not edit archived files
 

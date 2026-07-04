@@ -1,7 +1,7 @@
 # PRD: IBKR Account Truth and Cross-Bot Trade Validation
 
 **Surface:** `/broker/account-monitor`, `/broker/reconciliation`, `/broker/orders`, and the per-bot Activity/Audit drill-downs that feed them.
-**Builds on:** ADR 0008, ADR 0014, ADR 0016, `docs/ibkr-integration-authority.md`, `docs/references/ibkr-reconciliation.md`, `docs/runbooks/live-trade-reconciliation.md`, and `docs/audits/auto-research/runs/2026-06-26-ibkr-adapter-matrix.md`.
+**Builds on:** ADR 0008, ADR 0014, ADR 0016, `docs/ibkr-integration-authority.md`, `docs/references/ibkr-reconciliation.md`, `docs/runbooks/live-trade-reconciliation.md`, and the 2026-06-26 IBKR adapter-matrix auto-research run (pruned 2026-07-04; git history).
 **Design source:** Codex IBKR API research on 2026-07-01, focused on TWS/Gateway, Flex Web Service, and Client Portal API trade/account surfaces.
 **Data plane:** Python FastAPI broker adapter via `ib_async` and TWS/Gateway. Angular renders backend-authored verdicts and evidence. No GraphQL is introduced for this surface.
 **Implementation-snapshot DoD:** update `docs/ibkr-integration-authority.md`, `docs/references/ibkr-reconciliation.md`, and `docs/runbooks/live-trade-reconciliation.md` when the shipped behavior changes.
