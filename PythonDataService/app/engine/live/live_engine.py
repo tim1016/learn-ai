@@ -487,6 +487,12 @@ class LiveEngine:
         # the engine only writes into the aggregator. ``None`` keeps
         # replay tests and synthetic-engine callers free of the wire.
         runtime_aggregator: object = None,
+        # ADR 0018 — optional monitor overlay for runtime broker snapshots.
+        # The caller owns monitor lifecycle. When supplied, broker block
+        # publication uses the same health composer as the data-plane API so
+        # runtime artifacts can carry monitor-owned recovery state instead of
+        # projecting from the client's local connection state.
+        broker_monitor: object = None,
         # PRD #619-B B3 — for the control-plane block bootstrap. When
         # set, the engine reads ``<artifacts_root>/control_plane/daemon_lease.json``
         # at startup to seed ``ControlPlaneBlock.observed_daemon_boot_id``.
@@ -629,6 +635,7 @@ class LiveEngine:
         # is owned by the caller (cmd_start); a ``None`` aggregator
         # disables every producer call site.
         self._runtime_aggregator = runtime_aggregator
+        self._broker_monitor = broker_monitor
         self._artifacts_root_for_lease = artifacts_root_for_lease
         self._watchdog_factory = watchdog_factory
         self._account_owner_submitter = account_owner_submitter
@@ -1989,9 +1996,7 @@ class LiveEngine:
                     current_run_id=self._run_id,
                     current_strategy_instance_id=self._strategy_instance_id,
                     current_namespace=bot_order_namespace,
-                    ignore_unknown_namespaces_before_ms=(
-                        baseline.baseline_at_ms if baseline is not None else None
-                    ),
+                    ignore_unknown_namespaces_before_ms=(baseline.baseline_at_ms if baseline is not None else None),
                 )
                 verdict = result.verdict
                 if isinstance(verdict, Continue):
@@ -2542,7 +2547,12 @@ class LiveEngine:
         recovery_state: str | None = None
         if self._client is not None:
             try:
-                health = self._client.health()
+                from app.broker.ibkr.health import build_broker_health
+
+                health = build_broker_health(
+                    self._client,
+                    self._broker_monitor,  # type: ignore[arg-type]
+                )
             except Exception:
                 health = None
             if health is not None:

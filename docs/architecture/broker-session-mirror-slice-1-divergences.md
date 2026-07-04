@@ -478,3 +478,32 @@ Critical limits:
 3. **History load failure does not block the live mirror.**
    The panel has its own loading/error state. The live SSE roster remains the
    primary operational surface when history reads fail.
+
+## Slice 18 addendum — runtime monitor overlay seam
+
+Date: 2026-07-04
+
+The stacked slice-18 branch lets `LiveEngine` compose its
+`engine_runtime.json` broker block through the same monitor-aware
+`build_broker_health(client, monitor)` path used by the data-plane health API
+when the caller injects a broker monitor. This removes the runtime producer's
+projection-only limitation and gives the upcoming child-monitor slice a clean
+way to publish monitor-owned `RECONNECTING`, `RESTORING`, and `HARD_DOWN`
+states.
+
+Critical limits:
+
+1. **This does not install a child `AutoReconnectMonitor`.**
+   The slice is a seam only. Child startup still does not start or stop a
+   monitor, so current production child runtime behavior is unchanged.
+
+2. **No recovery reconciliation or ResumeGuard clearing is added.**
+   Installing the monitor without a submit-inhibit/reconciliation chain would
+   be unsafe: the engine could continue submitting while the reconnect callback
+   is proving broker truth. That remains the next live-trading-path design
+   boundary.
+
+3. **ADR-0011 halt retirement is still open.**
+   The runtime can now publish monitor-owned state when supplied, but the older
+   connectivity-count halt path still runs until the recovery authority is
+   fully migrated.

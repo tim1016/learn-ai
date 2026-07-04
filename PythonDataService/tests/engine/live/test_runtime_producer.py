@@ -300,12 +300,8 @@ async def test_engine_publishes_bar_loop_block_per_bar(tmp_path: Path) -> None:
     assert len(agg.bar_loop_updates) == 6
     assert agg.bar_loop_updates[0].latest_source_bar_ms is None
     # The first bar-driven update (index 1) reflects bar[0]'s end_time.
-    assert agg.bar_loop_updates[1].latest_source_bar_ms == int(
-        bars[0].end_time.timestamp() * 1000
-    )
-    assert agg.bar_loop_updates[-1].latest_source_bar_ms == int(
-        bars[-1].end_time.timestamp() * 1000
-    )
+    assert agg.bar_loop_updates[1].latest_source_bar_ms == int(bars[0].end_time.timestamp() * 1000)
+    assert agg.bar_loop_updates[-1].latest_source_bar_ms == int(bars[-1].end_time.timestamp() * 1000)
 
 
 @pytest.mark.asyncio
@@ -394,10 +390,7 @@ async def test_engine_publishes_initial_control_plane_block_from_lease(
     )
     await engine.run(_NoopStrategy(), _iter_bars([_bar(m) for m in range(2)]))
 
-    assert any(
-        cp.observed_daemon_boot_id == "daemon-from-test"
-        for cp in agg.control_plane_updates
-    )
+    assert any(cp.observed_daemon_boot_id == "daemon-from-test" for cp in agg.control_plane_updates)
 
 
 @pytest.mark.asyncio
@@ -479,6 +472,61 @@ class _StubIbkrClient:
             last_transition_ms=self._now_ms(),
             last_probe_ms=self._last_probe_ms,
         )
+
+
+class _StubReconnectMonitor:
+    is_hard_down = False
+    is_attempting = True
+    is_recovering = False
+    recovery_state = "RECONNECTING"
+    current_attempt = 2
+    successful_reconnect_count = 1
+
+    def __init__(self, *, last_transition_ms: int) -> None:
+        self.last_transition_ms = last_transition_ms
+
+
+@pytest.mark.asyncio
+async def test_engine_broker_block_uses_injected_monitor_overlay(
+    tmp_path: Path,
+) -> None:
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    now_ms = int(time.time() * 1000)
+    client = _StubIbkrClient(now_ms_fn=lambda: now_ms)
+    monitor = _StubReconnectMonitor(last_transition_ms=now_ms + 5)
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        client,  # type: ignore[arg-type]  # stub matches only the methods used
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        run_mode="live_paper",
+        readonly=False,
+        verdict_provider=lambda: "paper-only",
+        runtime_aggregator=agg,
+        broker_monitor=monitor,
+    )
+
+    await engine.run(_NoopStrategy(), _iter_bars([]))
+
+    seed_block = agg.broker_updates[0]
+    assert seed_block.connection_state == "reconnecting"
+    assert seed_block.recovery_state == "RECONNECTING"
+    assert seed_block.reconnect_attempt == 2
 
 
 @pytest.mark.asyncio
@@ -572,9 +620,7 @@ async def test_engine_first_runtime_snapshot_coheres_without_bars(
     )
 
     # The aggregator must have a coherent snapshot to hand the publisher.
-    snapshot = await aggregator.snapshot(
-        snapshot_seq=0, written_at_ms=now_ms
-    )
+    snapshot = await aggregator.snapshot(snapshot_seq=0, written_at_ms=now_ms)
     assert snapshot is not None, (
         "fresh-run snapshot is None; the startup hooks did not populate "
         "all four blocks and the publisher will refuse to write "
@@ -588,10 +634,6 @@ async def test_engine_first_runtime_snapshot_coheres_without_bars(
     # after-hours) must NOT demote posture: bar_loop becomes
     # NOT_APPLICABLE from the calendar, and the other three blocks were
     # freshly seeded above.
-    freshness = evaluate_runtime_freshness(
-        snapshot, now_ms=now_ms, session_state="CLOSED"
-    )
-    assert freshness.posture_demoted is False, (
-        f"fresh-run still demotes posture; reasons={freshness}"
-    )
+    freshness = evaluate_runtime_freshness(snapshot, now_ms=now_ms, session_state="CLOSED")
+    assert freshness.posture_demoted is False, f"fresh-run still demotes posture; reasons={freshness}"
     assert freshness.bar_loop.state == "NOT_APPLICABLE"
