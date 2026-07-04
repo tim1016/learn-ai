@@ -89,6 +89,11 @@ export interface BrokerSessionMirrorSnapshot {
   degradation_reasons: string[];
 }
 
+export interface BrokerSessionHistoryPage {
+  rows: BrokerSessionMirrorSnapshot[];
+  retained_count: number;
+}
+
 export interface BrokerSessionEvent {
   seq: number;
   ts_ms: number;

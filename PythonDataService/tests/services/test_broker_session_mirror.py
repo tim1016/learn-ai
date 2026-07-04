@@ -11,7 +11,24 @@ from app.engine.live.engine_runtime import (
     EngineRuntimeSnapshot,
     write_engine_runtime_snapshot,
 )
-from app.services.broker_session_mirror import _build_runtime_index
+from app.services import broker_session_mirror
+from app.services.broker_session_mirror import (
+    BrokerSessionMirrorService,
+    _build_runtime_index,
+)
+
+
+class _FakeEventService:
+    def counts_by_client_id(self) -> dict[int, dict[str, int]]:
+        return {}
+
+
+class _FakeHistoryService:
+    def __init__(self) -> None:
+        self.snapshots = []
+
+    def append_snapshot(self, snapshot) -> None:
+        self.snapshots.append(snapshot)
 
 
 def test_runtime_index_reads_child_client_id_from_engine_runtime(tmp_path: Path) -> None:
@@ -73,3 +90,33 @@ def test_runtime_index_reads_child_client_id_from_engine_runtime(tmp_path: Path)
     assert entry.strategy_instance_id == "PrajiTSLADemo"
     assert entry.account_id == "DU123"
     assert entry.recovery_state == "RECONNECTING"
+
+
+async def test_mirror_snapshot_records_roster_history(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    history = _FakeHistoryService()
+    monkeypatch.setattr(
+        broker_session_mirror,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "live_runner_daemon_url": "",
+                "live_runs_root": str(tmp_path),
+                "port": 4002,
+            },
+        )(),
+    )
+    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
+    service = BrokerSessionMirrorService(
+        event_service=_FakeEventService(),
+        history_service=history,
+    )
+
+    snapshot = await service.snapshot()
+
+    assert history.snapshots == [snapshot]
+    assert snapshot.observer_status == "degraded"

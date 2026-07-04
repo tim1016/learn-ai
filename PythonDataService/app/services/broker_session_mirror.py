@@ -28,6 +28,10 @@ from app.services.broker_session_events import (
     BrokerSessionEventService,
     get_broker_session_event_service,
 )
+from app.services.broker_session_history import (
+    BrokerSessionHistoryService,
+    get_broker_session_history_service,
+)
 from app.services.broker_session_reconciler import (
     RuntimeIndexEntry,
     reconcile_broker_session_roster,
@@ -44,8 +48,10 @@ class BrokerSessionMirrorService:
         self,
         *,
         event_service: BrokerSessionEventService | None = None,
+        history_service: BrokerSessionHistoryService | None = None,
     ) -> None:
         self._event_service = event_service or get_broker_session_event_service()
+        self._history_service = history_service or get_broker_session_history_service()
 
     async def snapshot(self) -> BrokerSessionMirrorSnapshot:
         settings = get_settings()
@@ -61,9 +67,7 @@ class BrokerSessionMirrorService:
                 gateway_port=settings.port,
             )
             if socket_snapshot is None:
-                degradation_reasons.append(
-                    socket_result.detail or "host daemon socket probe unavailable"
-                )
+                degradation_reasons.append(socket_result.detail or "host daemon socket probe unavailable")
             registry_result, registry_payload = await host_daemon_client.fetch_instances(daemon_url)
             if registry_payload is not None:
                 try:
@@ -71,9 +75,7 @@ class BrokerSessionMirrorService:
                 except ValueError as exc:
                     degradation_reasons.append(f"host daemon registry contract mismatch: {exc}")
             else:
-                degradation_reasons.append(
-                    registry_result.detail or "host daemon process registry unavailable"
-                )
+                degradation_reasons.append(registry_result.detail or "host daemon process registry unavailable")
         else:
             degradation_reasons.append("host daemon URL is not configured")
 
@@ -100,7 +102,7 @@ class BrokerSessionMirrorService:
         ]
         observer_status = "online" if socket_snapshot is not None else "degraded"
         ghost_detection_status = "available" if socket_snapshot is not None else "unknown"
-        return BrokerSessionMirrorSnapshot(
+        snapshot = BrokerSessionMirrorSnapshot(
             as_of_ms=as_of_ms,
             gateway_port=settings.port,
             observer_status=observer_status,
@@ -108,6 +110,11 @@ class BrokerSessionMirrorService:
             rows=rows,
             degradation_reasons=degradation_reasons,
         )
+        try:
+            self._history_service.append_snapshot(snapshot)
+        except OSError as exc:
+            logger.warning("failed to append broker session history: %s", exc)
+        return snapshot
 
 
 def get_broker_session_mirror_service() -> BrokerSessionMirrorService:

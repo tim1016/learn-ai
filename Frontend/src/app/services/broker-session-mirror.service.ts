@@ -6,6 +6,7 @@ import type {
   BrokerSessionEventPage,
   BrokerSessionEventPurgeRequest,
   BrokerSessionEventPurgeResult,
+  BrokerSessionHistoryPage,
   BrokerSessionMirrorSnapshot,
 } from '../api/broker-session-mirror.types';
 
@@ -16,6 +17,16 @@ export class BrokerSessionMirrorService {
 
   snapshot(): Promise<BrokerSessionMirrorSnapshot> {
     return firstValueFrom(this.http.get<BrokerSessionMirrorSnapshot>(this.base));
+  }
+
+  history(params: { limit?: number } = {}): Promise<BrokerSessionHistoryPage> {
+    const query: Record<string, number> = {};
+    if (params.limit !== undefined) query['limit'] = params.limit;
+    return firstValueFrom(
+      this.http.get<BrokerSessionHistoryPage>(`${this.base}/history`, {
+        params: query,
+      }),
+    );
   }
 
   events(params: {

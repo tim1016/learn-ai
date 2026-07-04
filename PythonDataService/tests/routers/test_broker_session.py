@@ -8,10 +8,12 @@ from app.schemas.broker_session import (
     BrokerSessionEventPage,
     BrokerSessionEventPurgeRequest,
     BrokerSessionEventPurgeResult,
+    BrokerSessionHistoryPage,
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
 )
 from app.services.broker_session_events import get_broker_session_event_service
+from app.services.broker_session_history import get_broker_session_history_service
 from app.services.broker_session_mirror import get_broker_session_mirror_service
 
 
@@ -73,10 +75,25 @@ class _FakeBrokerSessionEventService:
         return BrokerSessionEventPurgeResult(purged_count=3, remaining_count=2)
 
 
+class _FakeBrokerSessionHistoryService:
+    def history(self, *, limit: int = 100) -> BrokerSessionHistoryPage:
+        assert limit == 2
+        return BrokerSessionHistoryPage(
+            retained_count=5,
+            rows=[
+                BrokerSessionMirrorSnapshot(
+                    as_of_ms=1_783_120_000_001,
+                    gateway_port=4002,
+                    observer_status="online",
+                    ghost_detection_status="available",
+                    rows=[],
+                )
+            ],
+        )
+
+
 async def test_broker_session_snapshot_endpoint_returns_roster() -> None:
-    app.dependency_overrides[get_broker_session_mirror_service] = (
-        lambda: _FakeBrokerSessionMirrorService()
-    )
+    app.dependency_overrides[get_broker_session_mirror_service] = lambda: _FakeBrokerSessionMirrorService()
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -90,23 +107,17 @@ async def test_broker_session_snapshot_endpoint_returns_roster() -> None:
     body = response.json()
     assert body["observer_status"] == "online"
     assert body["rows"][0]["strategy_instance_id"] == "PrajiTSLADemo"
-    assert body["rows"][0]["attention_codes"] == [
-        "REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE"
-    ]
+    assert body["rows"][0]["attention_codes"] == ["REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE"]
 
 
 async def test_broker_session_events_endpoint_returns_classified_rows() -> None:
-    app.dependency_overrides[get_broker_session_event_service] = (
-        lambda: _FakeBrokerSessionEventService()
-    )
+    app.dependency_overrides[get_broker_session_event_service] = lambda: _FakeBrokerSessionEventService()
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
         ) as client:
-            response = await client.get(
-                "/api/broker/session-mirror/events?client_id=42&limit=10"
-            )
+            response = await client.get("/api/broker/session-mirror/events?client_id=42&limit=10")
     finally:
         app.dependency_overrides.pop(get_broker_session_event_service, None)
 
@@ -117,9 +128,7 @@ async def test_broker_session_events_endpoint_returns_classified_rows() -> None:
 
 
 async def test_broker_session_events_purge_endpoint_returns_result() -> None:
-    app.dependency_overrides[get_broker_session_event_service] = (
-        lambda: _FakeBrokerSessionEventService()
-    )
+    app.dependency_overrides[get_broker_session_event_service] = lambda: _FakeBrokerSessionEventService()
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -137,3 +146,19 @@ async def test_broker_session_events_purge_endpoint_returns_result() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"purged_count": 3, "remaining_count": 2}
+
+
+async def test_broker_session_history_endpoint_returns_recent_snapshots() -> None:
+    app.dependency_overrides[get_broker_session_history_service] = lambda: _FakeBrokerSessionHistoryService()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/api/broker/session-mirror/history?limit=2")
+    finally:
+        app.dependency_overrides.pop(get_broker_session_history_service, None)
+
+    assert response.status_code == 200
+    assert response.json()["retained_count"] == 5
+    assert response.json()["rows"][0]["as_of_ms"] == 1_783_120_000_001
