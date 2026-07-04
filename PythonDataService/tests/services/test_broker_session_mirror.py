@@ -45,6 +45,7 @@ def test_runtime_index_reads_child_client_id_from_engine_runtime(tmp_path: Path)
                 submission_capability="PAPER_ORDERS_ENABLED",
                 effective_posture="PAPER_EXECUTION",
                 connection_state="connected",
+                recovery_state="RECONNECTING",
                 connection_epoch=1,
                 client_id=17,
                 connected_account="DU123",
@@ -71,3 +72,4 @@ def test_runtime_index_reads_child_client_id_from_engine_runtime(tmp_path: Path)
     assert entry.client_id == 17
     assert entry.strategy_instance_id == "PrajiTSLADemo"
     assert entry.account_id == "DU123"
+    assert entry.recovery_state == "RECONNECTING"

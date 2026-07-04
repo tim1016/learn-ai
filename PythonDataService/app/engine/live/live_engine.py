@@ -2539,6 +2539,7 @@ class LiveEngine:
         port_class = "unknown"
         probe_completed_at_ms: int | None = None
         reconnect_attempt = 0
+        recovery_state: str | None = None
         if self._client is not None:
             try:
                 health = self._client.health()
@@ -2546,6 +2547,7 @@ class LiveEngine:
                 health = None
             if health is not None:
                 connection_state = str(health.connection_state)
+                recovery_state = health.recovery_state
                 client_id = int(health.client_id)
                 connected_account = health.account_id
                 probe_completed_at_ms = health.last_probe_ms
@@ -2563,6 +2565,7 @@ class LiveEngine:
             run_mode=self._run_mode,
             readonly=self._readonly,
             connection_state=connection_state,  # type: ignore[arg-type]
+            recovery_state=recovery_state,  # type: ignore[arg-type]
             connection_epoch=self._connection_epoch,
             client_id=client_id,
             connected_account=connected_account,

@@ -272,3 +272,26 @@ Critical limits:
    This slice does not advance `ResumeGuardState` or add reconciliation
    receipts. It only makes the recovery authority visible through the existing
    health and mirror APIs.
+
+## Slice 10 addendum — child runtime recovery-state field
+
+Date: 2026-07-04
+
+The stacked slice-10 branch adds `broker.recovery_state` to
+`engine_runtime.json` and carries that field into the broker-session mirror's
+runtime index. New child runtime snapshots therefore publish the ADR-0018
+recovery vocabulary explicitly instead of requiring the mirror reconciler to
+derive it from `connection_state`.
+
+Critical limits:
+
+1. **The child value is still client-health projected, not monitor-owned.**
+   Child `cmd_start` processes still do not install an `AutoReconnectMonitor`.
+   Their `IbkrClient.health()` snapshot projects the recovery vocabulary from
+   the client-observed connection state. Installing monitor-owned recovery in
+   children remains a separate live-trading-path slice.
+
+2. **Older runtime snapshots stay compatible.**
+   `engine_runtime.json` files written before this slice have no
+   `broker.recovery_state`. The mirror keeps the projection fallback for those
+   historical artifacts.

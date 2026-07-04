@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from app.broker.ibkr.recovery_state_machine import RecoveryState
 from app.engine.live.control_plane import read_daemon_lease
 from app.engine.live.engine_runtime import (
     BarLoopBlock,
@@ -147,6 +148,7 @@ def build_broker_block(
         "disconnected",
         "disabled",
     ],
+    recovery_state: RecoveryState | None,
     connection_epoch: int,
     client_id: int | None,
     connected_account: str | None,
@@ -170,6 +172,7 @@ def build_broker_block(
         submission_capability=capability,
         effective_posture=posture,
         connection_state=connection_state,
+        recovery_state=recovery_state,
         connection_epoch=connection_epoch,
         client_id=client_id,
         connected_account=connected_account,

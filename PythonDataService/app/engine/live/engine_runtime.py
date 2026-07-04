@@ -37,6 +37,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.ibkr.recovery_state_machine import RecoveryState
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
 
 ENGINE_RUNTIME_FILENAME = "engine_runtime.json"
@@ -95,6 +96,7 @@ class BrokerBlock(BaseModel):
         "disconnected",
         "disabled",
     ]
+    recovery_state: RecoveryState | None = None
     connection_epoch: int = Field(ge=0)
     client_id: int | None = Field(default=None, ge=0)
     connected_account: str | None = None

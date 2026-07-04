@@ -133,6 +133,7 @@ def test_build_broker_block_composes_full_axes() -> None:
         run_mode="live_paper",
         readonly=False,
         connection_state="connected",
+        recovery_state="HEALTHY",
         connection_epoch=3,
         client_id=12,
         connected_account="DU0123456",
@@ -145,6 +146,7 @@ def test_build_broker_block_composes_full_axes() -> None:
     assert block.submission_capability == "PAPER_ORDERS_ENABLED"
     assert block.effective_posture == "PAPER_EXECUTION"
     assert block.connection_state == "connected"
+    assert block.recovery_state == "HEALTHY"
     assert block.connection_epoch == 3
     assert block.client_id == 12
     assert block.connected_account == "DU0123456"
@@ -473,6 +475,7 @@ class _StubIbkrClient:
             server_version=178,
             fetched_at_ms=self._now_ms(),
             connection_state="connected",
+            recovery_state="LINK_INTERRUPTED",
             last_transition_ms=self._now_ms(),
             last_probe_ms=self._last_probe_ms,
         )
@@ -578,6 +581,7 @@ async def test_engine_first_runtime_snapshot_coheres_without_bars(
         "engine_runtime.json"
     )
     assert snapshot.broker.client_id == 12
+    assert snapshot.broker.recovery_state == "LINK_INTERRUPTED"
     assert snapshot.broker.probe_completed_at_ms == now_ms
 
     # The freshness evaluator with session_state=CLOSED (pre-market or
