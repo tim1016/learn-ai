@@ -1,15 +1,26 @@
 import { TestBed } from '@angular/core/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { provideRouter } from '@angular/router';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DaemonDiagnosticReport } from '../../../api/daemon-diagnostics.types';
 import { BrokerConnectivityStripComponent } from './broker-connectivity-strip.component';
 import {
   BrokerConnectivityService,
   type ConnectivityLink,
   type DaemonFreshness,
 } from '../../../services/broker-connectivity.service';
+import { LiveRunsService } from '../../../services/live-runs.service';
 
 const UNKNOWN: DaemonFreshness = { state: 'unknown', sha: null, commitsBehind: null };
 
 function renderStrip(
+  links: ConnectivityLink[],
+  blockers: string[] = [],
+  freshness: DaemonFreshness = UNKNOWN,
+) {
+  return setupStrip(links, blockers, freshness).el;
+}
+
+function setupStrip(
   links: ConnectivityLink[],
   blockers: string[] = [],
   freshness: DaemonFreshness = UNKNOWN,
@@ -21,12 +32,37 @@ function renderStrip(
     daemonFreshness: () => freshness,
     reload: () => undefined,
   } as Partial<BrokerConnectivityService>;
+  const liveRuns = {
+    getDaemonDiagnostics: vi.fn().mockResolvedValue(daemonReport()),
+    renewControlPlaneLease: vi.fn().mockResolvedValue(null),
+  };
   TestBed.configureTestingModule({
-    providers: [{ provide: BrokerConnectivityService, useValue: fake }],
+    providers: [
+      provideRouter([]),
+      { provide: BrokerConnectivityService, useValue: fake },
+      { provide: LiveRunsService, useValue: liveRuns },
+    ],
   });
   const fixture = TestBed.createComponent(BrokerConnectivityStripComponent);
   fixture.detectChanges();
-  return fixture.nativeElement as HTMLElement;
+  return { fixture, el: fixture.nativeElement as HTMLElement, liveRuns };
+}
+
+function daemonReport(): DaemonDiagnosticReport {
+  return {
+    overall_status: 'pass',
+    transport: 'CONNECTED',
+    dominant_condition: 'healthy',
+    headline: {
+      title: 'Live engine diagnostics are clear',
+      summary: 'No daemon-control-plane fault was found in this snapshot.',
+      remediation: null,
+    },
+    checks: [],
+    per_instance: [],
+    daemon_boot_id: 'boot-1',
+    fetched_at_ms: 1_783_120_000_000,
+  };
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -131,5 +167,23 @@ describe('BrokerConnectivityStripComponent', () => {
     ]);
 
     expect(el.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('loads the diagnostics report only when the Live engine link is opened', async () => {
+    const { fixture, el, liveRuns } = setupStrip([
+      { key: 'daemon', label: 'Live engine', state: 'ok', detail: 'Running' },
+      { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
+      { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
+    ]);
+
+    expect(liveRuns.getDaemonDiagnostics).not.toHaveBeenCalled();
+
+    el.querySelector<HTMLButtonElement>('.link-button')?.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(liveRuns.getDaemonDiagnostics).toHaveBeenCalledOnce();
+    expect(el.textContent).toContain('Live engine diagnostics are clear');
   });
 });

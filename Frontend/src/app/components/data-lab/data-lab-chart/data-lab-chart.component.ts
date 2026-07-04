@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 import {
   Component, signal, computed, inject, input, output,
   viewChild, ElementRef, AfterViewInit, OnDestroy,

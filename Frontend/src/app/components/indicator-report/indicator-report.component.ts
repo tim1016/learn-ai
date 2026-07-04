@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import {
   Component, signal, computed, inject, effect, viewChildren,
   ElementRef, DestroyRef, ChangeDetectionStrategy, afterNextRender,

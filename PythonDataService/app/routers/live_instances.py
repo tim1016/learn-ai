@@ -81,6 +81,7 @@ from app.routers.live_runs import (
     build_command_timeline,
 )
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
+from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
 from app.schemas.live_runs import (
     ActiveDateEntry,
     ActivityBrokerEventRow,
@@ -166,6 +167,11 @@ from app.services.bot_lifecycle_projection import (
 from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
+from app.services.daemon_diagnostics import (
+    get_daemon_diagnostics_service,
+    project_daemon_diagnostic_report,
+    redact_host_runner_health,
+)
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
@@ -2074,6 +2080,29 @@ async def get_qc_audit_copies() -> QcAuditCopyListing:
         ) from exc
 
 
+@router.get("/daemon-diagnose", response_model=DaemonDiagnosticReport)
+async def get_daemon_diagnostics() -> DaemonDiagnosticReport:
+    """Backend-authored daemon diagnostics report.
+
+    Unlike ``/daemon-health``, this endpoint always returns HTTP 200 with the
+    failure explained inside the report body. It composes a fresh daemon probe,
+    the process registry, the broker session mirror, and the folded connectivity
+    monitor state.
+    """
+    return await get_daemon_diagnostics_service().report()
+
+
+@router.get("/{strategy_instance_id}/daemon-diagnose", response_model=DaemonDiagnosticReport)
+async def get_instance_daemon_diagnostics(
+    strategy_instance_id: str,
+) -> DaemonDiagnosticReport:
+    """Project the daemon diagnostics report to one strategy instance."""
+    report = await get_daemon_diagnostics_service().report(
+        strategy_instance_id=strategy_instance_id
+    )
+    return project_daemon_diagnostic_report(report, strategy_instance_id)
+
+
 @router.get("/daemon-health", response_model=HostRunnerHealth)
 async def get_daemon_health() -> HostRunnerHealth:
     """Authenticated /health probe forwarded from the daemon (PRD #619-C P2).
@@ -2097,7 +2126,7 @@ async def get_daemon_health() -> HostRunnerHealth:
     settings = get_settings()
     result, health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
     if health is not None:
-        return health
+        return redact_host_runner_health(health)
     if result.kind == "AUTH_FAILED":
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -2130,7 +2159,7 @@ async def renew_daemon_lease() -> HostRunnerHealth:
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     try:
-        return HostRunnerHealth.model_validate(result)
+        return redact_host_runner_health(HostRunnerHealth.model_validate(result))
     except ValidationError as exc:
         logger.warning("invalid renew-lease payload from host daemon: %s", exc)
         raise HTTPException(

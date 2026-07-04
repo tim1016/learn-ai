@@ -42,6 +42,8 @@ export type BrokerSessionAttentionCode =
   | 'ORPHANED_BOT_SOCKET'
   | 'GHOST_SOCKET'
   | 'GHOST_DETECTION_UNAVAILABLE'
+  | 'REGISTRY_SNAPSHOT_UNAVAILABLE'
+  | 'SOCKET_ATTRIBUTION_UNAVAILABLE'
   | 'CLIENT_SIGNAL_STALE';
 
 export interface BrokerSessionRegistryClaim {

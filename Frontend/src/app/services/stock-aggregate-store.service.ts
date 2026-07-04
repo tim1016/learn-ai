@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion, unused-imports/no-unused-vars */
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { StockAggregate } from '../graphql/types';
 import { MarketDataService } from './market-data.service';

@@ -23,6 +23,7 @@ import type {
   SizingPolicy,
   SpecStrategyFixture,
 } from '../api/live-runs.types';
+import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type {
   FleetAccountSummary,
   FleetContamination,
@@ -122,6 +123,20 @@ export class LiveRunsService {
   renewControlPlaneLease(): Promise<HostRunnerHealth> {
     return firstValueFrom(
       this.http.post<HostRunnerHealth>(`${this.instancesBase}/daemon-health/renew-lease`, {}),
+    );
+  }
+
+  getDaemonDiagnostics(): Promise<DaemonDiagnosticReport> {
+    return firstValueFrom(
+      this.http.get<DaemonDiagnosticReport>(`${this.instancesBase}/daemon-diagnose`),
+    );
+  }
+
+  getInstanceDaemonDiagnostics(instanceId: string): Promise<DaemonDiagnosticReport> {
+    return firstValueFrom(
+      this.http.get<DaemonDiagnosticReport>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/daemon-diagnose`,
+      ),
     );
   }
 

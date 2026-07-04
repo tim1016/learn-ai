@@ -71,6 +71,13 @@
   color: var(--bear);
 }
 
+.control-plane-header {
+  padding: 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
 .observer-band,
 .degradation-list {
   display: flex;

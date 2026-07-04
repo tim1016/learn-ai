@@ -414,7 +414,7 @@ describe('LeanEngineComponent engine selector', () => {
   // a thin SSE-driven banner check would be redundant with the
   // existing dock tests. ``leanResponse`` is retained for future tests
   // that exercise a LEAN-specific results renderer when one ships.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   void leanResponse;
 });
 

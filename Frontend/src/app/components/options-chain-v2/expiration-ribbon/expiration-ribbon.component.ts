@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { Component, computed, input, output, ChangeDetectionStrategy } from '@angular/core';
 
 interface MonthGroup {

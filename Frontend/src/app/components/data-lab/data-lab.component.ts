@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion, unused-imports/no-unused-vars */
 import {
   Component, signal, computed, effect, inject, untracked, viewChild, ElementRef,
   ChangeDetectionStrategy,

@@ -206,6 +206,7 @@ export interface HostRunnerProcessStatus {
   started_at_ms: number | null;
   ended_at_ms: number | null;
   exit_code: number | null;
+  exit_reason?: string | null;
   command: string[];
   log_path: string | null;
   message: string | null;
@@ -231,7 +232,12 @@ export interface HostRunnerHealth {
   daemon_boot_id?: string | null;
   lease_status?: string | null;
   last_lease_written_at_ms?: number | null;
+  lease_threshold_ms?: number | null;
+  lease_write_error?: string | null;
   orphan_candidates_count?: number;
+  orphan_candidates?: Record<string, unknown>[];
+  platform?: string | null;
+  supervisor?: string | null;
 }
 
 export interface HostRunnerStartRequest {

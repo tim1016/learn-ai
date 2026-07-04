@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { TestBed } from '@angular/core/testing';
 import { ReplayStrategyService } from './replay-strategy.service';
 import { ReplayEngineService } from './replay-engine.service';

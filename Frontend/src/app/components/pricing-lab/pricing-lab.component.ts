@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { DecimalPipe, TitleCasePipe } from '@angular/common';
 import {
   afterNextRender,

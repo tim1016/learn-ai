@@ -1,5 +1,8 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
+import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
+import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
 
 /**
  * Shared connectivity strip (handoff: cross-cuts broker pages). Renders the
@@ -10,13 +13,17 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
  */
 @Component({
   selector: 'app-broker-connectivity-strip',
+  imports: [DaemonDiagnosticsPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './broker-connectivity-strip.component.html',
   styleUrl: './broker-connectivity-strip.component.scss',
 })
 export class BrokerConnectivityStripComponent {
   protected readonly connectivity = inject(BrokerConnectivityService);
+  protected readonly diagnostics = inject(DaemonDiagnosticsStore);
+  private readonly router = inject(Router);
   protected readonly copied = signal<boolean>(false);
+  protected readonly diagnosticsOpen = signal<boolean>(false);
   protected readonly startCommand =
     'PYTHONPATH=PythonDataService PythonDataService/.venv/bin/python -m app.engine.live.host_daemon --repo-root .';
   // Restarting a STALE daemon must first kill the running one — it still owns the
@@ -26,6 +33,46 @@ export class BrokerConnectivityStripComponent {
 
   protected recheck(): void {
     this.connectivity.reload();
+  }
+
+  protected async openDiagnostics(): Promise<void> {
+    this.diagnosticsOpen.set(true);
+    if (this.diagnostics.report() === null) {
+      await this.refreshDiagnostics();
+    }
+  }
+
+  protected closeDiagnostics(): void {
+    this.diagnosticsOpen.set(false);
+  }
+
+  protected async refreshDiagnostics(): Promise<void> {
+    await this.diagnostics.refresh();
+  }
+
+  protected async renewLeaseFromDiagnostics(): Promise<void> {
+    await this.diagnostics.renewLease();
+    this.connectivity.reload();
+  }
+
+  protected exportDiagnostics(): void {
+    const report = this.diagnostics.report();
+    if (report === null || typeof document === 'undefined') return;
+    const blob = new Blob(
+      [JSON.stringify({ note: 'Paths and sensitive fields were redacted before export.', report }, null, 2)],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `daemon-diagnostics-${report.fetched_at_ms}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  protected async navigateFromDiagnostics(path: string): Promise<void> {
+    this.closeDiagnostics();
+    await this.router.navigateByUrl(path);
   }
 
   protected async copyStartCommand(): Promise<void> {

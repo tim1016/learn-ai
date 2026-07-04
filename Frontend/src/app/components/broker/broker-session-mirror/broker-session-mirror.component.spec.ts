@@ -1,8 +1,11 @@
-import { provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type {
+  DaemonDiagnosticReport,
+} from '../../../api/daemon-diagnostics.types';
 import type {
   BrokerSessionEvent,
   BrokerSessionEventPurgeRequest,
@@ -15,6 +18,7 @@ import type {
 } from '../../../api/broker-session-mirror.types';
 import { BROKER_SESSION_PURGE_CONFIRM } from '../../../api/broker-session-mirror.types';
 import { BrokerSessionMirrorService } from '../../../services/broker-session-mirror.service';
+import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
 import { BrokerSessionMirrorComponent } from './broker-session-mirror.component';
 
 const AS_OF_MS = 1_783_120_000_000;
@@ -60,6 +64,22 @@ class FakeBrokerSessionMirrorService {
     >();
 }
 
+class FakeDaemonDiagnosticsStore {
+  private readonly _report = signal<DaemonDiagnosticReport | null>(null);
+  private readonly _loading = signal<boolean>(false);
+  private readonly _error = signal<string | null>(null);
+
+  readonly report = this._report.asReadonly();
+  readonly loading = this._loading.asReadonly();
+  readonly error = this._error.asReadonly();
+  readonly refresh = vi.fn(async () => {
+    this._report.set(daemonDiagnosticsReport());
+  });
+  readonly renewLease = vi.fn(async () => {
+    this._report.set(daemonDiagnosticsReport());
+  });
+}
+
 describe('BrokerSessionMirrorComponent', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -76,6 +96,19 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('CURRENT');
     expect(text).toContain('Healthy');
     expect(text).toContain('Registry offline; socket live');
+  });
+
+  it('embeds the latest daemon diagnostics header without probing on page load', async () => {
+    const { fixture, daemonDiagnostics } = await setup(snapshot({ rows: [] }));
+
+    expect(daemonDiagnostics.refresh).not.toHaveBeenCalled();
+    expect(pageText(fixture)).toContain('No daemon diagnostics snapshot has been loaded.');
+
+    daemonDiagnosticsButtonByText(fixture, 'Refresh').click();
+    await settle(fixture);
+
+    expect(daemonDiagnostics.refresh).toHaveBeenCalledOnce();
+    expect(pageText(fixture)).toContain('Live engine diagnostics are clear');
   });
 
   it('keeps technical identifiers out of the main row until expanded', async () => {
@@ -576,9 +609,11 @@ describe('BrokerSessionMirrorComponent', () => {
 async function setup(initialSnapshot: BrokerSessionMirrorSnapshot): Promise<{
   fixture: ComponentFixture<BrokerSessionMirrorComponent>;
   service: FakeBrokerSessionMirrorService;
+  daemonDiagnostics: FakeDaemonDiagnosticsStore;
   router: Router;
 }> {
   const service = new FakeBrokerSessionMirrorService();
+  const daemonDiagnostics = new FakeDaemonDiagnosticsStore();
   service.snapshot.mockResolvedValue(initialSnapshot);
   service.history.mockResolvedValue({ retained_count: 0, rows: [] });
   service.purgeHistory.mockResolvedValue({
@@ -595,12 +630,30 @@ async function setup(initialSnapshot: BrokerSessionMirrorSnapshot): Promise<{
       provideZonelessChangeDetection(),
       provideRouter([]),
       { provide: BrokerSessionMirrorService, useValue: service },
+      { provide: DaemonDiagnosticsStore, useValue: daemonDiagnostics },
     ],
   }).compileComponents();
 
   const fixture = TestBed.createComponent(BrokerSessionMirrorComponent);
   await settle(fixture);
-  return { fixture, service, router: TestBed.inject(Router) };
+  return { fixture, service, daemonDiagnostics, router: TestBed.inject(Router) };
+}
+
+function daemonDiagnosticsReport(): DaemonDiagnosticReport {
+  return {
+    overall_status: 'pass',
+    transport: 'CONNECTED',
+    dominant_condition: 'healthy',
+    headline: {
+      title: 'Live engine diagnostics are clear',
+      summary: 'No daemon-control-plane fault was found in this snapshot.',
+      remediation: null,
+    },
+    checks: [],
+    per_instance: [],
+    daemon_boot_id: 'boot-1',
+    fetched_at_ms: AS_OF_MS,
+  };
 }
 
 async function settle(
@@ -663,6 +716,22 @@ function buttonByText(
     ),
   ).find((candidate) => candidate.textContent?.includes(text));
   if (button === undefined) throw new Error(`button not found: ${text}`);
+  return button;
+}
+
+function daemonDiagnosticsButtonByText(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  text: string,
+): HTMLButtonElement {
+  const header = (fixture.nativeElement as HTMLElement).querySelector(
+    '.control-plane-header',
+  );
+  const button = Array.from(
+    header?.querySelectorAll<HTMLButtonElement>('button') ?? [],
+  ).find((candidate) => candidate.textContent?.includes(text));
+  if (button === undefined) {
+    throw new Error(`daemon diagnostics button not found: ${text}`);
+  }
   return button;
 }
 

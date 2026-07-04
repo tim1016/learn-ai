@@ -445,6 +445,7 @@ async def test_child_crash_retires_account_registry_binding_when_observed(
     status = manager.process_status(RUN_ID)
 
     assert status.state == HostRunnerProcessState.exited
+    assert status.exit_reason == "exited(-9)"
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.process_crashed"

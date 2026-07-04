@@ -2,10 +2,19 @@
   <ul class="links">
     @for (link of connectivity.links(); track link.key) {
       <li class="link" [class]="'state-' + link.state">
-        <span class="dot" aria-hidden="true"></span>
-        <span class="label">{{ link.label }}</span>
-        <span class="detail">{{ link.detail }}</span>
-        <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
+        @if (link.key === 'daemon') {
+          <button type="button" class="link-button" (click)="openDiagnostics()">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="label">{{ link.label }}</span>
+            <span class="detail">{{ link.detail }}</span>
+            <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
+          </button>
+        } @else {
+          <span class="dot" aria-hidden="true"></span>
+          <span class="label">{{ link.label }}</span>
+          <span class="detail">{{ link.detail }}</span>
+          <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
+        }
       </li>
     }
   </ul>
@@ -86,5 +95,32 @@
         }
       </details>
     </article>
+  }
+
+  @if (diagnosticsOpen()) {
+    <div class="diagnostics-backdrop">
+      <aside
+        class="diagnostics-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="daemon-diagnostics-title"
+      >
+        <header class="drawer-header">
+          <h2 id="daemon-diagnostics-title">Live engine diagnostics</h2>
+          <button type="button" aria-label="Close live engine diagnostics" (click)="closeDiagnostics()">
+            Close
+          </button>
+        </header>
+        <app-daemon-diagnostics-panel
+          [report]="diagnostics.report()"
+          [loading]="diagnostics.loading()"
+          [error]="diagnostics.error()"
+          (refresh)="refreshDiagnostics()"
+          (renewLease)="renewLeaseFromDiagnostics()"
+          (exportReport)="exportDiagnostics()"
+          (navigateTo)="navigateFromDiagnostics($event)"
+        />
+      </aside>
+    </div>
   }
 </section>
