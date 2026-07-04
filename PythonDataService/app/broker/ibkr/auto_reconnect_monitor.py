@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -95,6 +96,8 @@ class AutoReconnectMonitor:
         probe_timeout_s: float = 4.0,
         link_interruption_wait_s: float = 30.0,
         max_reconnect_attempts: int | None = None,
+        backoff_jitter_fraction: float = 0.10,
+        backoff_jitter_source: Callable[[], float] | None = None,
         subscription_recovery_interval_s: float = 10.0,
         recovery_callbacks: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> None:
@@ -108,6 +111,8 @@ class AutoReconnectMonitor:
         self._max_reconnect_attempts = (
             None if max_reconnect_attempts is None else max(1, max_reconnect_attempts)
         )
+        self._backoff_jitter_fraction = max(0.0, backoff_jitter_fraction)
+        self._backoff_jitter_source = backoff_jitter_source or random.random
         self._subscription_recovery_interval_s = subscription_recovery_interval_s
         self._recovery_callbacks = list(recovery_callbacks or [])
         self._task: asyncio.Task[None] | None = None
@@ -173,6 +178,7 @@ class AutoReconnectMonitor:
                 "max_backoff_s": self._max_backoff_s,
                 "link_interruption_wait_s": self._link_interruption_wait_s,
                 "max_reconnect_attempts": self._max_reconnect_attempts,
+                "backoff_jitter_fraction": self._backoff_jitter_fraction,
             },
         )
 
@@ -394,7 +400,13 @@ class AutoReconnectMonitor:
             # Sleep OUTSIDE the lock so an operator can still reconnect
             # manually during the backoff window without queueing behind
             # the monitor's wait.
-            if await self._wait_or_stop(backoff):
+            delay_s = jittered_backoff_delay(
+                backoff,
+                jitter_fraction=self._backoff_jitter_fraction,
+                random_unit=self._backoff_jitter_source(),
+                max_delay_s=self._max_backoff_s,
+            )
+            if await self._wait_or_stop(delay_s):
                 return
             backoff = min(backoff * 2.0, self._max_backoff_s)
 
@@ -536,3 +548,18 @@ def get_monitor() -> AutoReconnectMonitor | None:
 def set_monitor(monitor: AutoReconnectMonitor | None) -> None:
     global _monitor
     _monitor = monitor
+
+
+def jittered_backoff_delay(
+    base_delay_s: float,
+    *,
+    jitter_fraction: float,
+    random_unit: float,
+    max_delay_s: float,
+) -> float:
+    """Return capped positive jitter on top of the exponential base delay."""
+    base = max(0.0, base_delay_s)
+    fraction = max(0.0, jitter_fraction)
+    unit = min(1.0, max(0.0, random_unit))
+    max_delay = max(0.0, max_delay_s)
+    return min(max_delay, base + (base * fraction * unit))
