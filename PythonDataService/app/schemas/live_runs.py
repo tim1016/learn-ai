@@ -1111,6 +1111,19 @@ HostProcessState = Literal[
 PriorRunClassification = Literal["CLEAN", "HALT_TRIGGERED", "EXITED_WITH_ERROR", "UNKNOWN"]
 BrokerSafetyVerdictEnum = Literal["PAPER_ONLY", "UNSAFE", "UNKNOWN"]
 BrokerConnectionState = Literal["CONNECTED", "DISCONNECTED", "DEGRADED", "UNKNOWN"]
+OperatorSurfaceConditionSeverity = Literal["ok", "info", "warning", "critical", "neutral"]
+BrokerConnectionConditionCode = Literal[
+    "BROKER_CONNECTED",
+    "BROKER_DISCONNECTED",
+    "BROKER_DISABLED",
+    "BROKER_LINK_SOFT_LOST",
+    "BROKER_SUBSCRIPTIONS_STALE",
+    "BROKER_DATA_FARM_DEGRADED",
+    "BROKER_RECONNECTING",
+    "BROKER_RECOVERING",
+    "BROKER_HARD_DOWN",
+    "BROKER_CONNECTION_UNKNOWN",
+]
 ExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
@@ -1293,6 +1306,7 @@ class OperatorSurfaceBroker(BaseModel):
 
     safety_verdict: BrokerSafetyVerdictEnum
     connection: BrokerConnectionState
+    connection_condition: OperatorSurfaceNamedCondition
 
 
 class OperatorSurfaceExecution(BaseModel):
@@ -1344,6 +1358,23 @@ class OperatorSurfacePriorRun(BaseModel):
     """
 
     classification: PriorRunClassification
+
+
+class OperatorSurfaceNamedCondition(BaseModel):
+    """Backend-authored condition copy for an operator-facing status fact.
+
+    The coarse enum remains available for compatibility and broad gating;
+    this condition carries the exact trader-facing meaning so Angular does
+    not reverse-map raw transport states into safety copy.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: BrokerConnectionConditionCode
+    severity: OperatorSurfaceConditionSeverity
+    title: str = Field(min_length=1, max_length=160)
+    summary: str = Field(min_length=1, max_length=500)
+    remediation: str | None = Field(default=None, max_length=500)
 
 
 HostProcessStartDisabledReasonCode = Literal[
@@ -1645,6 +1676,52 @@ class OperatorSurfaceTraderGuidance(BaseModel):
         return proof_lines
 
 
+OperatorSurfaceBlockageStageId = Literal[
+    "control_plane",
+    "host_process",
+    "broker",
+    "account_safety",
+    "account_owner",
+    "reconciliation",
+    "preflight",
+    "trading_session",
+    "runtime_freshness",
+]
+OperatorSurfaceBlockageState = Literal["clear", "info", "warning", "danger", "unknown"]
+
+
+class OperatorSurfaceBlockageStage(BaseModel):
+    """One backend-authored rung in the current blockage ladder.
+
+    The ladder is the compact answer to "what is blocking the bot now?"
+    It deliberately uses the same coarse severities as named conditions while
+    keeping trader-facing title/summary copy server-authored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: OperatorSurfaceBlockageStageId
+    label: str
+    state: OperatorSurfaceBlockageState
+    severity: OperatorSurfaceConditionSeverity
+    current: bool = False
+    title: str
+    summary: str
+    next_step: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class OperatorSurfaceBlockageLadder(BaseModel):
+    """Backend-authored lifecycle/blockage overview for the About pane."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    headline: str
+    summary: str
+    current_stage_id: OperatorSurfaceBlockageStageId | None = None
+    stages: list[OperatorSurfaceBlockageStage] = Field(default_factory=list)
+
+
 class OperatorGate(BaseModel):
     """Operator-facing projection of an engine readiness gate (PRD #616).
 
@@ -1886,6 +1963,9 @@ class OperatorSurface(BaseModel):
     account_owner: OperatorSurfaceAccountOwner | None = None
     submit_readiness: OperatorSurfaceSubmitReadiness
     trader_guidance: OperatorSurfaceTraderGuidance
+    # Backend-authored current blockage ladder for the lifecycle/About pane.
+    # Additive field; schema_version remains 1.
+    blockage_ladder: OperatorSurfaceBlockageLadder
     actions: OperatorSurfaceActions
     trading_session: OperatorSurfaceTradingSession
     # PRD #616 — operator-facing projection of the engine readiness

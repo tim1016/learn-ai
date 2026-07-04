@@ -7,21 +7,26 @@ import type {
   DaemonDiagnosticReport,
 } from '../../../api/daemon-diagnostics.types';
 import type {
-  BrokerSessionEvent,
   BrokerSessionEventPurgeRequest,
   BrokerSessionEventPurgeResult,
   BrokerSessionHistoryPage,
   BrokerSessionHistoryPurgeRequest,
   BrokerSessionHistoryPurgeResult,
   BrokerSessionMirrorSnapshot,
-  BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
 import { BROKER_SESSION_PURGE_CONFIRM } from '../../../api/broker-session-mirror.types';
 import { BrokerSessionMirrorService } from '../../../services/broker-session-mirror.service';
 import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
+import {
+  AS_OF_MS,
+  botSocket,
+  brokerEvent,
+  ghostSocket,
+  historyBot,
+  orphanNotice,
+  snapshot,
+} from './broker-session-mirror.fixtures';
 import { BrokerSessionMirrorComponent } from './broker-session-mirror.component';
-
-const AS_OF_MS = 1_783_120_000_000;
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -92,8 +97,8 @@ describe('BrokerSessionMirrorComponent', () => {
 
     const text = pageText(fixture);
     expect(text).toContain('PrajiTSLADemo');
-    expect(text).toContain('Bot');
-    expect(text).toContain('CURRENT');
+    expect(text).toContain('Bot session');
+    expect(text).toContain('Live now');
     expect(text).toContain('Healthy');
     expect(text).toContain('Registry offline; socket live');
   });
@@ -136,9 +141,8 @@ describe('BrokerSessionMirrorComponent', () => {
     await settle(fixture);
 
     const text = pageText(fixture);
-    expect(text).toContain('external');
-    expect(text).toContain('Ghost');
-    expect(text).toContain('Unattributed socket');
+    expect(text).not.toContain('external');
+    expect(text).toContain('Unattributed broker socket');
   });
 
   it('marks protected SSE streams with the browser control intent query', async () => {
@@ -171,7 +175,7 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).not.toContain('external');
   });
 
-  it('renders past rows as PAST and never as CURRENT', async () => {
+  it('renders past rows as last-known and never as live-now', async () => {
     const { fixture } = await setup(
       snapshot({
         rows: [
@@ -185,8 +189,8 @@ describe('BrokerSessionMirrorComponent', () => {
     );
 
     const text = pageText(fixture);
-    expect(text).toContain('PAST');
-    expect(text).not.toContain('CURRENT');
+    expect(text).toContain('Last known');
+    expect(text).not.toContain('Live now');
   });
 
   it('renders recovery states separately from broker connection labels', async () => {
@@ -202,7 +206,7 @@ describe('BrokerSessionMirrorComponent', () => {
     );
 
     const text = pageText(fixture);
-    expect(text).toContain('hard_down');
+    expect(text).toContain('Broker recovery exhausted');
     expect(text).toContain('Hard down');
   });
 
@@ -244,7 +248,7 @@ describe('BrokerSessionMirrorComponent', () => {
 
     const openText = pageText(fixture);
     expect(openText).toContain('ClosedBot');
-    expect(openText).toContain('PAST');
+    expect(openText).toContain('Past session');
     expect(openText).toContain('client 88');
   });
 
@@ -308,7 +312,7 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Observer degraded');
     expect(text).toContain('Ghost detection unknown');
     expect(text).toContain('host daemon socket probe unavailable');
-    expect(text).toContain('PAST');
+    expect(text).toContain('Last known');
     expect(text).toContain('+1');
     expect(text).not.toContain('Client signal stale');
 
@@ -316,6 +320,41 @@ describe('BrokerSessionMirrorComponent', () => {
     await settle(fixture);
     text = pageText(fixture);
     expect(text).toContain('Client signal stale');
+  });
+
+  it('renders global network events outside the broker session roster', async () => {
+    const { fixture } = await setup(
+      snapshot({
+        global_events: [
+          {
+            code: 'GATEWAY_NETWORK_PROXY',
+            label: 'Gateway network proxy',
+            severity: 'info',
+            summary: 'A virtual-machine network proxy is connected to the IBKR gateway port.',
+            current: true,
+            source: 'network',
+            observed_at_ms: AS_OF_MS,
+            client_id: null,
+          },
+          {
+            code: 'DATA_PLANE_BROKER_CLIENT',
+            label: 'Data-plane broker client',
+            severity: 'neutral',
+            summary: 'The data-plane IBKR client is not connected; this global fact is separate from bot-owned sessions.',
+            current: false,
+            source: 'data_plane',
+            observed_at_ms: AS_OF_MS - 500,
+            client_id: 42,
+          },
+        ],
+        rows: [botSocket()],
+      }),
+    );
+
+    const text = pageText(fixture);
+    expect(text).toContain('Gateway network proxy: on');
+    expect(text).toContain('Data-plane broker client: off');
+    expect(text).toContain('PrajiTSLADemo');
   });
 
   it('renders categorized broker events in row detail', async () => {
@@ -759,152 +798,4 @@ function expandRow(
   rowId = 'socket:21760:50123:4002:0',
 ): void {
   clickButton(fixture, `row-toggle-${rowId}`);
-}
-
-function snapshot(
-  overrides: Partial<BrokerSessionMirrorSnapshot> = {},
-): BrokerSessionMirrorSnapshot {
-  const rows = overrides.rows ?? [];
-  return {
-    as_of_ms: AS_OF_MS,
-    gateway_port: 4002,
-    observer_status: 'online',
-    ghost_detection_status: 'available',
-    rows,
-    summary: summaryForRows(rows),
-    degradation_reasons: [],
-    ...overrides,
-  };
-}
-
-function summaryForRows(
-  rows: readonly BrokerSessionRosterRow[],
-): BrokerSessionMirrorSnapshot['summary'] {
-  return rows.reduce<BrokerSessionMirrorSnapshot['summary']>(
-    (summary, row) => ({
-      current: summary.current + (row.recency === 'current' ? 1 : 0),
-      past:
-        summary.past +
-        (row.recency !== 'current' && row.recency !== 'unknown' ? 1 : 0),
-      unknown: summary.unknown + (row.recency === 'unknown' ? 1 : 0),
-      attention: summary.attention + (row.attention_codes.length > 0 ? 1 : 0),
-    }),
-    { current: 0, past: 0, unknown: 0, attention: 0 },
-  );
-}
-
-function botSocket(
-  overrides: Partial<BrokerSessionRosterRow> = {},
-): BrokerSessionRosterRow {
-  return {
-    row_id: 'socket:21760:50123:4002:0',
-    identity_type: 'bot',
-    recency: 'current',
-    socket_present: true,
-    strategy_instance_id: 'PrajiTSLADemo',
-    run_id: 'run-a',
-    account_id: 'DU123',
-    posture: 'PAPER_EXECUTION',
-    client_id: null,
-    pid: 21760,
-    command: 'python',
-    run_dir: '/runs/run-a',
-    local_port: 50123,
-    remote_host: '127.0.0.1',
-    remote_port: 4002,
-    connection_state: 'connected',
-    recovery_state: 'HEALTHY',
-    connection_epoch: 0,
-    last_event_ms: AS_OF_MS - 500,
-    as_of_ms: AS_OF_MS,
-    event_counts: {},
-    events: [],
-    attention_codes: ['REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE'],
-    registry_claim: {
-      state: 'exited',
-      run_id: 'run-a',
-      pid: 21760,
-      run_dir: '/runs/run-a',
-      started_at_ms: AS_OF_MS - 60_000,
-      ended_at_ms: AS_OF_MS - 1_000,
-    },
-    notice: null,
-    ...overrides,
-  };
-}
-
-function historyBot(
-  strategyInstanceId: string,
-  clientId: number,
-): BrokerSessionRosterRow {
-  return botSocket({
-    row_id: `history:${clientId}`,
-    strategy_instance_id: strategyInstanceId,
-    client_id: clientId,
-    recency: 'past_closed',
-    socket_present: false,
-    attention_codes: [],
-  });
-}
-
-function brokerEvent(
-  overrides: Partial<BrokerSessionEvent> = {},
-): BrokerSessionEvent {
-  return {
-    seq: 1,
-    ts_ms: AS_OF_MS,
-    category: 'client_lifecycle',
-    severity: 'info',
-    label: 'Broker probe succeeded',
-    message: null,
-    raw_event_type: 'BROKER_PROBE_OK',
-    client_id: 42,
-    account_id: 'DU123',
-    ibkr_code: null,
-    connection_state: 'connected',
-    raw: {},
-    ...overrides,
-  };
-}
-
-function orphanNotice(): BrokerSessionRosterRow['notice'] {
-  return {
-    code: 'broker_session.orphaned_socket',
-    tier: 'critical',
-    title: 'Orphaned broker socket detected',
-    message:
-      'IB Gateway still shows a broker socket for PrajiTSLADemo, but the host process is not live. Verify the client session in IBKR and reconcile broker orders and positions before restarting this bot.',
-    source_codes: ['SOCKET_WITHOUT_LIVE_PID', 'ORPHANED_BOT_SOCKET'],
-    forensic_facts: {
-      strategy_instance_id: 'PrajiTSLADemo',
-      run_id: 'run-a',
-      client_id: 17,
-      observed_at_ms: AS_OF_MS,
-    },
-    action: {
-      kind: 'focus_cockpit_action',
-      label: 'Open Bot Cockpit',
-      target: 'PrajiTSLADemo',
-    },
-    runbook_slug: 'broker-session-orphaned-socket',
-    occurred_at_ms: AS_OF_MS,
-  };
-}
-
-function ghostSocket(): BrokerSessionRosterRow {
-  return {
-    ...botSocket({
-      row_id: 'socket:999:50126:4002:0',
-      identity_type: 'ghost',
-      strategy_instance_id: null,
-      run_id: null,
-      account_id: null,
-      pid: 999,
-      command: 'external',
-      run_dir: null,
-      connection_state: null,
-      attention_codes: ['GHOST_SOCKET'],
-      registry_claim: null,
-    }),
-  };
 }

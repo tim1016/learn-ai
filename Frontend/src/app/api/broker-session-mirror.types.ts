@@ -21,6 +21,12 @@ export type BrokerSessionRecoveryState =
   | 'SOCKET_DOWN'
   | 'RECONNECTING'
   | 'HARD_DOWN';
+export type BrokerSessionDisplaySeverity =
+  | 'ok'
+  | 'info'
+  | 'warning'
+  | 'critical'
+  | 'neutral';
 
 export type BrokerSessionEventCategory =
   | 'client_lifecycle'
@@ -45,6 +51,37 @@ export type BrokerSessionAttentionCode =
   | 'REGISTRY_SNAPSHOT_UNAVAILABLE'
   | 'SOCKET_ATTRIBUTION_UNAVAILABLE'
   | 'CLIENT_SIGNAL_STALE';
+
+export interface BrokerSessionDisplayLabel {
+  label: string;
+  severity: BrokerSessionDisplaySeverity;
+}
+
+export interface BrokerSessionAttentionItem {
+  code: BrokerSessionAttentionCode;
+  label: string;
+  severity: BrokerSessionDisplaySeverity;
+  summary: string | null;
+}
+
+export interface BrokerSessionRosterPresentation {
+  display_name: string;
+  identity: BrokerSessionDisplayLabel;
+  recency: BrokerSessionDisplayLabel;
+  broker: BrokerSessionDisplayLabel;
+  recovery: BrokerSessionDisplayLabel;
+}
+
+export interface BrokerSessionGlobalEvent {
+  code: string;
+  label: string;
+  severity: BrokerSessionDisplaySeverity;
+  summary: string;
+  current: boolean;
+  source: 'network' | 'data_plane';
+  observed_at_ms: number | null;
+  client_id: number | null;
+}
 
 export interface BrokerSessionRegistryClaim {
   state: string;
@@ -79,6 +116,8 @@ export interface BrokerSessionRosterRow {
   event_counts: Partial<Record<BrokerSessionEventCategory, number>>;
   events: BrokerSessionEvent[];
   attention_codes: BrokerSessionAttentionCode[];
+  attention_items: BrokerSessionAttentionItem[];
+  presentation: BrokerSessionRosterPresentation;
   registry_claim: BrokerSessionRegistryClaim | null;
   notice: OperatorNotice | null;
 }
@@ -95,6 +134,7 @@ export interface BrokerSessionMirrorSnapshot {
   gateway_port: number;
   observer_status: BrokerSessionObserverStatus;
   ghost_detection_status: BrokerSessionGhostDetectionStatus;
+  global_events: BrokerSessionGlobalEvent[];
   rows: BrokerSessionRosterRow[];
   summary: BrokerSessionMirrorSummary;
   degradation_reasons: string[];

@@ -36,7 +36,7 @@ from app.services.broker_session_history import (
 )
 from app.services.broker_session_reconciler import (
     RuntimeIndexEntry,
-    reconcile_broker_session_roster,
+    reconcile_broker_session_snapshot,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -93,7 +93,7 @@ class BrokerSessionMirrorService:
             degradation_reasons.append(f"runtime index scan failed: {exc}")
             runtime_index = {}
         data_plane_health = _data_plane_health()
-        rows = reconcile_broker_session_roster(
+        reconciliation = reconcile_broker_session_snapshot(
             socket_rows=socket_snapshot.sockets if socket_snapshot is not None else [],
             registry_snapshot=registry_snapshot,
             runtime_index=runtime_index,
@@ -101,6 +101,7 @@ class BrokerSessionMirrorService:
             as_of_ms=as_of_ms,
             socket_probe_available=socket_snapshot is not None,
         )
+        rows = reconciliation.rows
         if socket_snapshot is not None:
             rows.extend(
                 await asyncio.to_thread(
@@ -138,6 +139,7 @@ class BrokerSessionMirrorService:
             gateway_port=settings.port,
             observer_status=observer_status,
             ghost_detection_status=ghost_detection_status,
+            global_events=reconciliation.global_events,
             rows=rows,
             summary=summarize_broker_session_rows(rows),
             degradation_reasons=degradation_reasons,

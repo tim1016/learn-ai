@@ -15,6 +15,7 @@ from app.broker.ibkr.recovery_state_machine import recovery_state_from_connectio
 from app.operator.notices.broker_session import orphaned_socket_notice
 from app.schemas.broker_session import (
     BrokerSessionAttentionCode,
+    BrokerSessionGlobalEvent,
     BrokerSessionRegistryClaim,
     BrokerSessionRosterRow,
     GatewaySocketRow,
@@ -43,10 +44,52 @@ class RuntimeIndexEntry:
     last_event_ms: int | None = None
 
 
+@dataclass(frozen=True)
+class BrokerSessionReconciliationResult:
+    """Broker-session mirror rows plus global infrastructure events."""
+
+    rows: list[BrokerSessionRosterRow]
+    global_events: list[BrokerSessionGlobalEvent]
+
+
 _LIVE_REGISTRY_STATES = {
     HostRunnerProcessState.running,
     HostRunnerProcessState.stopping,
 }
+
+
+def reconcile_broker_session_snapshot(
+    *,
+    socket_rows: list[GatewaySocketRow],
+    registry_snapshot: HostRunnerInstancesStatus | None,
+    runtime_index: dict[str, RuntimeIndexEntry],
+    data_plane_health: IbkrConnectionHealth | None,
+    as_of_ms: int,
+    socket_probe_available: bool = True,
+    stale_after_ms: int = 25_000,
+) -> BrokerSessionReconciliationResult:
+    """Reconcile session rows and lift infrastructure into global events."""
+
+    visible_socket_rows: list[GatewaySocketRow] = []
+    global_events: list[BrokerSessionGlobalEvent] = []
+    for socket in socket_rows:
+        if _is_gvproxy_socket(socket):
+            global_events.append(_gvproxy_global_event(socket, as_of_ms))
+        else:
+            visible_socket_rows.append(socket)
+
+    rows = reconcile_broker_session_roster(
+        socket_rows=visible_socket_rows,
+        registry_snapshot=registry_snapshot,
+        runtime_index=runtime_index,
+        data_plane_health=None,
+        as_of_ms=as_of_ms,
+        socket_probe_available=socket_probe_available,
+        stale_after_ms=stale_after_ms,
+    )
+    if data_plane_health is not None:
+        global_events.append(_data_plane_global_event(data_plane_health, as_of_ms))
+    return BrokerSessionReconciliationResult(rows=rows, global_events=global_events)
 
 
 def reconcile_broker_session_roster(
@@ -299,6 +342,66 @@ def _data_plane_row(
         last_event_ms=health.last_transition_ms,
         as_of_ms=as_of_ms,
     )
+
+
+def _data_plane_global_event(
+    health: IbkrConnectionHealth,
+    as_of_ms: int,
+) -> BrokerSessionGlobalEvent:
+    severity = _data_plane_event_severity(health)
+    return BrokerSessionGlobalEvent(
+        code="DATA_PLANE_BROKER_CLIENT",
+        label="Data-plane broker client",
+        severity=severity,
+        summary=_data_plane_event_summary(health),
+        current=health.connected,
+        source="data_plane",
+        observed_at_ms=health.last_transition_ms or health.fetched_at_ms or as_of_ms,
+        client_id=health.client_id,
+    )
+
+
+def _data_plane_event_severity(
+    health: IbkrConnectionHealth,
+) -> str:
+    if health.connected:
+        return "info"
+    if health.connection_state in {"hard_down", "soft_lost", "reconnecting", "recovering"}:
+        return "warning"
+    return "neutral"
+
+
+def _data_plane_event_summary(
+    health: IbkrConnectionHealth,
+) -> str:
+    if health.connected:
+        return "The data-plane IBKR client is connected; this is global infrastructure, not a bot-owned session."
+    if health.disabled:
+        return "The data-plane IBKR client is disabled because live bot sessions are owned by the host runner."
+    return "The data-plane IBKR client is not connected; this global fact is separate from bot-owned sessions."
+
+
+def _gvproxy_global_event(
+    socket: GatewaySocketRow,
+    as_of_ms: int,
+) -> BrokerSessionGlobalEvent:
+    return BrokerSessionGlobalEvent(
+        code="GATEWAY_NETWORK_PROXY",
+        label="Gateway network proxy",
+        severity="info",
+        summary=(
+            "A virtual-machine network proxy is connected to the IBKR gateway port. "
+            "It is infrastructure, not a bot broker session."
+        ),
+        current=True,
+        source="network",
+        observed_at_ms=as_of_ms,
+    )
+
+
+def _is_gvproxy_socket(socket: GatewaySocketRow) -> bool:
+    haystack = " ".join([socket.command, *socket.argv]).lower()
+    return "gvproxy" in haystack
 
 
 def _last_known_runtime_rows(

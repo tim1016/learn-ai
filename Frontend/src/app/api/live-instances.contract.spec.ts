@@ -96,6 +96,7 @@ describe('operator surface fixture wire contract', () => {
       'account_owner',
       'submit_readiness',
       'trader_guidance',
+      'blockage_ladder',
       'actions',
       'trading_session',
       'readiness_gates',

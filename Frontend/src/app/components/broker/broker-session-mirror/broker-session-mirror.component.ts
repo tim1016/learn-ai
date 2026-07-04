@@ -19,15 +19,14 @@ import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
 import type {
-  BrokerSessionAttentionCode,
+  BrokerSessionAttentionItem,
+  BrokerSessionDisplaySeverity,
   BrokerSessionEvent,
+  BrokerSessionGlobalEvent,
   BrokerSessionHistoryPage,
   BrokerSessionHistoryPurgeRequest,
-  BrokerSessionIdentityType,
   BrokerSessionMirrorSnapshot,
   BrokerSessionMirrorSummary,
-  BrokerSessionRecency,
-  BrokerSessionRecoveryState,
   BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
 import {
@@ -38,10 +37,10 @@ import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import { BrokerSessionMirrorService } from '../../../services/broker-session-mirror.service';
 import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
 import { fmtInteger, fmtTimestampNy } from '../format';
+import { operatorTagSeverity, type PrimeTagSeverity } from '../operator-severity';
 import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
 import { BrokerSessionEventsPanelComponent } from './broker-session-events-panel.component';
 
-type TagSeverity = 'success' | 'info' | 'warn' | 'danger' | 'secondary';
 type AccordionValue = string | number | string[] | number[] | null | undefined;
 
 const EMPTY_MIRROR_SUMMARY: BrokerSessionMirrorSummary = {
@@ -114,6 +113,9 @@ export class BrokerSessionMirrorComponent {
   );
   readonly rows = computed<BrokerSessionRosterRow[]>(
     () => this.snapshot()?.rows ?? [],
+  );
+  readonly globalEvents = computed<BrokerSessionGlobalEvent[]>(
+    () => this.snapshot()?.global_events ?? [],
   );
   readonly historySnapshots = computed<BrokerSessionMirrorSnapshot[]>(
     () => this.historyPage()?.rows ?? [],
@@ -238,7 +240,7 @@ export class BrokerSessionMirrorComponent {
   }
 
   rowDisplayName(row: BrokerSessionRosterRow): string {
-    return row.strategy_instance_id ?? row.command ?? 'Unattributed session';
+    return row.presentation.display_name;
   }
 
   clientTooltip(row: BrokerSessionRosterRow): string {
@@ -257,141 +259,22 @@ export class BrokerSessionMirrorComponent {
   }
 
   brokerLabel(row: BrokerSessionRosterRow): string {
-    return row.connection_state ?? '-';
+    return row.presentation.broker.label;
   }
 
-  primaryAttentionCode(row: BrokerSessionRosterRow): BrokerSessionAttentionCode | null {
-    return row.attention_codes[0] ?? null;
+  primaryAttentionItem(row: BrokerSessionRosterRow): BrokerSessionAttentionItem | null {
+    return row.attention_items[0] ?? null;
   }
 
   attentionTooltip(row: BrokerSessionRosterRow): string {
-    if (row.attention_codes.length === 0) return 'No attention codes';
-    return row.attention_codes.map((code) => this.attentionLabel(code)).join('\n');
+    if (row.attention_items.length === 0) return 'No attention codes';
+    return row.attention_items
+      .map((item) => item.summary ? `${item.label}: ${item.summary}` : item.label)
+      .join('\n');
   }
 
-  identityLabel(value: BrokerSessionIdentityType): string {
-    switch (value) {
-      case 'bot':
-        return 'Bot';
-      case 'system':
-        return 'System';
-      case 'orphaned_bot_socket':
-        return 'Orphaned bot socket';
-      case 'ghost':
-        return 'Ghost';
-    }
-  }
-
-  identitySeverity(value: BrokerSessionIdentityType): TagSeverity {
-    switch (value) {
-      case 'bot':
-        return 'success';
-      case 'system':
-        return 'info';
-      case 'orphaned_bot_socket':
-        return 'danger';
-      case 'ghost':
-        return 'warn';
-    }
-  }
-
-  recencyLabel(value: BrokerSessionRecency): string {
-    switch (value) {
-      case 'current':
-        return 'CURRENT';
-      case 'past_closed':
-        return 'PAST';
-      case 'past_last_known':
-        return 'PAST';
-      case 'unknown':
-        return 'UNKNOWN';
-    }
-  }
-
-  recencySeverity(value: BrokerSessionRecency): TagSeverity {
-    switch (value) {
-      case 'current':
-        return 'success';
-      case 'past_closed':
-      case 'past_last_known':
-        return 'secondary';
-      case 'unknown':
-        return 'warn';
-    }
-  }
-
-  recoveryLabel(value: BrokerSessionRecoveryState | null): string {
-    switch (value) {
-      case 'HEALTHY':
-        return 'Healthy';
-      case 'LINK_INTERRUPTED':
-        return 'Link interrupted';
-      case 'RESTORING':
-        return 'Restoring';
-      case 'SOCKET_DOWN':
-        return 'Socket down';
-      case 'RECONNECTING':
-        return 'Reconnecting';
-      case 'HARD_DOWN':
-        return 'Hard down';
-      case null:
-        return 'Unknown';
-    }
-  }
-
-  recoverySeverity(value: BrokerSessionRecoveryState | null): TagSeverity {
-    switch (value) {
-      case 'HEALTHY':
-        return 'success';
-      case 'HARD_DOWN':
-      case 'SOCKET_DOWN':
-        return 'danger';
-      case 'LINK_INTERRUPTED':
-      case 'RESTORING':
-      case 'RECONNECTING':
-        return 'warn';
-      case null:
-        return 'secondary';
-    }
-  }
-
-  attentionLabel(code: BrokerSessionAttentionCode): string {
-    switch (code) {
-      case 'REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE':
-        return 'Registry offline; socket live';
-      case 'STARTED_BUT_NO_SOCKET':
-        return 'Started; no socket';
-      case 'SOCKET_WITHOUT_LIVE_PID':
-        return 'No live PID';
-      case 'ORPHANED_BOT_SOCKET':
-        return 'Orphaned bot socket';
-      case 'GHOST_SOCKET':
-        return 'Unattributed socket';
-      case 'GHOST_DETECTION_UNAVAILABLE':
-        return 'Ghost detection unknown';
-      case 'REGISTRY_SNAPSHOT_UNAVAILABLE':
-        return 'Registry snapshot unavailable';
-      case 'SOCKET_ATTRIBUTION_UNAVAILABLE':
-        return 'Socket attribution unavailable';
-      case 'CLIENT_SIGNAL_STALE':
-        return 'Client signal stale';
-    }
-  }
-
-  attentionSeverity(code: BrokerSessionAttentionCode): TagSeverity {
-    switch (code) {
-      case 'ORPHANED_BOT_SOCKET':
-      case 'SOCKET_WITHOUT_LIVE_PID':
-        return 'danger';
-      case 'REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE':
-      case 'STARTED_BUT_NO_SOCKET':
-      case 'GHOST_SOCKET':
-      case 'GHOST_DETECTION_UNAVAILABLE':
-      case 'REGISTRY_SNAPSHOT_UNAVAILABLE':
-      case 'SOCKET_ATTRIBUTION_UNAVAILABLE':
-      case 'CLIENT_SIGNAL_STALE':
-        return 'warn';
-    }
+  displaySeverity(severity: BrokerSessionDisplaySeverity): PrimeTagSeverity {
+    return operatorTagSeverity(severity);
   }
 
   formatTimestamp(value: number | null): string {

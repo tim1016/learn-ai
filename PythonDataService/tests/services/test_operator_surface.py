@@ -470,22 +470,35 @@ def test_broker_safety_verdict_consumes_reactive_final_verdict(safety_verdict_fi
 
 
 @pytest.mark.parametrize(
-    ("connection_state", "expected_connection"),
+    ("connection_state", "expected_connection", "expected_condition", "expected_severity"),
     [
-        ("connected", "CONNECTED"),
-        ("disconnected", "DISCONNECTED"),
-        ("degraded", "DEGRADED"),
-        ("unknown", "UNKNOWN"),
-        (None, "UNKNOWN"),
+        ("connected", "CONNECTED", "BROKER_CONNECTED", "ok"),
+        ("soft_lost", "DEGRADED", "BROKER_LINK_SOFT_LOST", "warning"),
+        ("subscriptions_stale", "DEGRADED", "BROKER_SUBSCRIPTIONS_STALE", "warning"),
+        ("degraded_data_farm", "DEGRADED", "BROKER_DATA_FARM_DEGRADED", "critical"),
+        ("reconnecting", "DEGRADED", "BROKER_RECONNECTING", "warning"),
+        ("recovering", "DEGRADED", "BROKER_RECOVERING", "warning"),
+        ("hard_down", "DISCONNECTED", "BROKER_HARD_DOWN", "critical"),
+        ("disconnected", "DISCONNECTED", "BROKER_DISCONNECTED", "warning"),
+        ("disabled", "DISCONNECTED", "BROKER_DISABLED", "info"),
+        ("unknown", "UNKNOWN", "BROKER_CONNECTION_UNKNOWN", "warning"),
+        (None, "UNKNOWN", "BROKER_CONNECTION_UNKNOWN", "warning"),
     ],
 )
-def test_broker_connection_independent_of_safety(connection_state, expected_connection) -> None:
+def test_broker_connection_independent_of_safety(
+    connection_state,
+    expected_connection,
+    expected_condition,
+    expected_severity,
+) -> None:
     for safety_verdict_final in ("paper-only", "unsafe", "unknown", None):
         surface = _surface(
             safety_verdict_final=safety_verdict_final,
             broker_connection_state=connection_state,
         )
         assert surface.broker.connection == expected_connection
+        assert surface.broker.connection_condition.code == expected_condition
+        assert surface.broker.connection_condition.severity == expected_severity
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +568,10 @@ def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
         "runtime-freshness",
     ]
     assert proof_lines["broker-proof"].message == "Paper broker is connected."
-    assert proof_lines["broker-proof"].detail == "Paper-only account proof is present. Broker session is connected."
+    assert proof_lines["broker-proof"].detail == (
+        "Paper-only account proof is present. "
+        "The runtime has fresh proof that the IBKR broker session is connected."
+    )
     assert proof_lines["broker-proof"].tone == "ok"
     assert proof_lines["runtime-freshness"].message == "Runtime evidence is fresh."
     assert proof_lines["runtime-freshness"].tone == "ok"
@@ -801,7 +817,7 @@ def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> No
     )
 
     assert surface.submit_readiness.code == "broker_state_unproven"
-    assert "BROKER_CONNECTION_DISCONNECTED" in surface.submit_readiness.blocking_reason_codes
+    assert "BROKER_DISCONNECTED" in surface.submit_readiness.blocking_reason_codes
     assert "RECONCILIATION_NOT_AVAILABLE" in surface.submit_readiness.blocking_reason_codes
     assert surface.trader_guidance.primary_remediation.kind == "open_runbook"
     assert surface.trader_guidance.primary_remediation.slug == "broker-reconnect"
@@ -836,22 +852,99 @@ def test_trader_guidance_broker_connection_unknown_has_no_action_without_live_ru
 def test_trader_guidance_degraded_broker_preserves_recovering_copy() -> None:
     surface = _surface(
         safety_verdict_final="paper-only",
-        broker_connection_state="degraded",
+        broker_connection_state="recovering",
         guard_state=_guard(),
         account_owner=_owner(),
         reconciliation_receipt=None,
     )
 
     assert surface.broker.connection == "DEGRADED"
-    assert "BROKER_CONNECTION_DEGRADED" in surface.submit_readiness.blocking_reason_codes
+    assert "BROKER_RECOVERING" in surface.submit_readiness.blocking_reason_codes
     attention = next(
         group
         for group in surface.trader_guidance.additional_attention_groups
         if group.code == "broker_connection"
     )
-    assert attention.headline == "Broker connection is recovering"
+    assert attention.headline == "Broker recovering streams"
     broker_proof = next(line for line in surface.trader_guidance.proof_lines if line.id == "broker-proof")
-    assert broker_proof.message == "Paper broker is configured, but the session is recovering."
+    assert broker_proof.message == "Paper broker is configured; Broker recovering streams."
+
+
+def test_trader_guidance_data_farm_degraded_is_critical() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="degraded_data_farm",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    assert surface.broker.connection == "DEGRADED"
+    assert surface.broker.connection_condition.code == "BROKER_DATA_FARM_DEGRADED"
+    assert surface.broker.connection_condition.severity == "critical"
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "broker_connection"
+    )
+    assert attention.severity == "critical"
+    assert attention.headline == "IBKR data farm degraded"
+
+
+def test_blockage_ladder_names_the_degraded_broker_contract() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="degraded_data_farm",
+        runtime_freshness=_runtime_freshness(),
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+        now_ms=_RTH_MID,
+    )
+
+    ladder = surface.blockage_ladder
+    assert ladder.current_stage_id == "broker"
+    assert ladder.headline == "IBKR data farm degraded"
+    broker_stage = next(stage for stage in ladder.stages if stage.id == "broker")
+    assert broker_stage.current is True
+    assert broker_stage.severity == "critical"
+    assert broker_stage.reason_codes == ["BROKER_DATA_FARM_DEGRADED"]
+
+
+def test_blockage_ladder_daemon_control_plane_is_warning() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=_runtime_freshness(),
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        control_plane_state=_conn_state("UNREACHABLE", last_success_ms=None, daemon_boot_id=None),
+        now_ms=_RTH_MID,
+    )
+
+    control_plane = next(stage for stage in surface.blockage_ladder.stages if stage.id == "control_plane")
+    assert surface.blockage_ladder.current_stage_id == "control_plane"
+    assert control_plane.severity == "warning"
+    assert control_plane.reason_codes == ["DAEMON_UNREACHABLE"]
+
+
+def test_blockage_ladder_missing_account_truth_is_warning_not_danger() -> None:
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=_runtime_freshness(),
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        account_truth_snapshot=None,
+        now_ms=_RTH_MID,
+    )
+
+    account_safety = next(stage for stage in surface.blockage_ladder.stages if stage.id == "account_safety")
+    assert surface.blockage_ladder.current_stage_id == "account_safety"
+    assert account_safety.severity == "warning"
+    assert account_safety.title == "Account Truth snapshot is unavailable"
 
 
 # ---------------------------------------------------------------------------

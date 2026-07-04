@@ -18,7 +18,17 @@ export function makeOperatorSurfaceFixture(
       },
     },
     prior_run: { classification: 'UNKNOWN' },
-    broker: { safety_verdict: 'PAPER_ONLY', connection: 'CONNECTED' },
+    broker: {
+      safety_verdict: 'PAPER_ONLY',
+      connection: 'CONNECTED',
+      connection_condition: {
+        code: 'BROKER_CONNECTED',
+        severity: 'ok',
+        title: 'Broker session connected',
+        summary: 'The runtime has fresh proof that the IBKR broker session is connected.',
+        remediation: null,
+      },
+    },
     execution: { posture: 'PAPER_EXECUTION' },
     configuration: { verdict: 'READY', reason_codes: [] },
     current_risk: {
@@ -102,6 +112,35 @@ export function makeOperatorSurfaceFixture(
       ],
       template_id: 'operator_surface.trader_guidance.ready_to_submit',
       template_version: 1,
+    },
+    blockage_ladder: {
+      headline: 'Lifecycle is clear',
+      summary: 'No active blockage rung is currently limiting this bot.',
+      current_stage_id: null,
+      stages: [
+        {
+          id: 'control_plane',
+          label: 'Control plane',
+          state: 'clear',
+          severity: 'ok',
+          current: false,
+          title: 'Daemon control plane connected',
+          summary: 'The data plane can reach the host live-runner daemon.',
+          next_step: null,
+          reason_codes: [],
+        },
+        {
+          id: 'broker',
+          label: 'Broker proof',
+          state: 'clear',
+          severity: 'ok',
+          current: false,
+          title: 'Broker proof is clear',
+          summary: 'Broker safety, connection, and submit capability have no active blockage findings.',
+          next_step: null,
+          reason_codes: [],
+        },
+      ],
     },
     actions: {
       resume: {

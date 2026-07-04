@@ -11,6 +11,7 @@ from app.schemas.live_runs import (
 from app.services.broker_session_reconciler import (
     RuntimeIndexEntry,
     reconcile_broker_session_roster,
+    reconcile_broker_session_snapshot,
 )
 
 AS_OF_MS = 1_783_120_000_000
@@ -404,6 +405,70 @@ def test_reconciler_prefers_runtime_recovery_state_for_child_row() -> None:
 
     assert rows[0].connection_state == "connected"
     assert rows[0].recovery_state == "RECONNECTING"
+
+
+def test_snapshot_reconciler_lifts_gvproxy_and_data_plane_to_global_events() -> None:
+    result = reconcile_broker_session_snapshot(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=101,
+                command="gvproxy",
+                argv=["/usr/bin/gvproxy"],
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=42,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            fetched_at_ms=AS_OF_MS,
+            connection_state="connected",
+            last_transition_ms=AS_OF_MS - 500,
+        ),
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert result.rows == []
+    assert [event.code for event in result.global_events] == [
+        "GATEWAY_NETWORK_PROXY",
+        "DATA_PLANE_BROKER_CLIENT",
+    ]
+    assert result.global_events[0].label == "Gateway network proxy"
+    assert result.global_events[0].current is True
+    assert result.global_events[1].label == "Data-plane broker client"
+    assert result.global_events[1].current is True
+
+
+def test_reconciler_authors_row_display_labels() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=999,
+                command="external",
+                local_port=50126,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    row = rows[0]
+    assert row.presentation.identity.label == "Unattributed broker socket"
+    assert row.presentation.identity.severity == "warning"
+    assert row.presentation.recency.label == "Live now"
+    assert row.attention_items[0].label == "Unattributed broker socket"
 
 
 def _registry(*instances: HostRunnerInstance) -> HostRunnerInstancesStatus:

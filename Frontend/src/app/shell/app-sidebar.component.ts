@@ -52,6 +52,8 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-sliders-h',
     items: [
       { label: 'Options Lab', route: '/options-lab' },
+      { label: 'Options Chain (Live)', route: '/broker/options-chain' },
+      { label: 'Options Surface (3D)', route: '/broker/options-surface' },
       { label: 'Pricing Lab', route: '/pricing-lab' },
     ],
   },
@@ -81,8 +83,6 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-link',
     items: [
       { label: 'Broker Status', route: '/broker' },
-      { label: 'Options Chain (Live)', route: '/broker/options-chain' },
-      { label: 'Options Surface (3D)', route: '/broker/options-surface' },
       { label: 'Account Monitor', route: '/broker/account-monitor' },
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },

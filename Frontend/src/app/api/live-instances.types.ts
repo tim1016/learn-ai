@@ -11,6 +11,10 @@ import type {
 import type { DesiredStateView } from './live-runs-controls.types';
 import type { ActionPlan } from './action-plan.types';
 import type { BotLifecycleChartView } from './lifecycle-projection.types';
+import type {
+  OperatorSurfaceBlockageLadder,
+  OperatorSurfaceNamedCondition,
+} from './operator-observability.types';
 
 export type {
   BotLifecycleChartView,
@@ -30,6 +34,15 @@ export type {
   LifecycleSafetyTriageResponse,
   LifecycleTimelineResponse,
 } from './lifecycle-projection.types';
+export type {
+  BrokerConnectionConditionCode,
+  OperatorSurfaceBlockageLadder,
+  OperatorSurfaceBlockageStage,
+  OperatorSurfaceBlockageStageId,
+  OperatorSurfaceBlockageState,
+  OperatorSurfaceConditionSeverity,
+  OperatorSurfaceNamedCondition,
+} from './operator-observability.types';
 
 export type InstanceProcessState =
   | 'running'
@@ -348,6 +361,7 @@ export interface OperatorSurfaceBroker {
    *  ``safety_verdict=PAPER_ONLY`` AND ``connection=DISCONNECTED``;
    *  composing them is forbidden. */
   connection: BrokerConnectionState;
+  connection_condition: OperatorSurfaceNamedCondition;
 }
 
 export interface OperatorSurfaceExecution {
@@ -689,6 +703,8 @@ export interface OperatorSurface {
   submit_readiness: OperatorSurfaceSubmitReadiness;
   /** PRD #718 — backend-authored trader-language right-pane contract. */
   trader_guidance: OperatorSurfaceTraderGuidance;
+  /** Backend-authored lifecycle/current-blockage ladder for the Overview pane. */
+  blockage_ladder: OperatorSurfaceBlockageLadder;
   actions: OperatorSurfaceActions;
   trading_session: OperatorSurfaceTradingSession;
   /** PRD #616 — operator-facing projection of engine readiness gates with

@@ -49,6 +49,25 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('.decision-row')).toBeNull();
   });
 
+  it('renders the backend-authored broker connection condition in the header', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.broker.connection = 'DEGRADED';
+    status.operator_surface.broker.connection_condition = {
+      code: 'BROKER_RECOVERING',
+      severity: 'warning',
+      title: 'Broker recovering streams',
+      summary: 'The broker link is back, but runtime stream recovery is still underway.',
+      remediation: 'Wait for recovery probes and subscriptions to pass before submitting orders.',
+    };
+
+    const { element: el } = await setupBotControlPage({ status });
+
+    const pill = el.querySelector('.connection-pill');
+    expect(pill?.textContent).toContain('Broker recovering streams');
+    expect(pill?.textContent).not.toContain('Degraded');
+  });
+
   it('renders backend-authored runtime incident headlines on the bot control page', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();

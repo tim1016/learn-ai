@@ -70,6 +70,20 @@
       <span>As of {{ formatTimestamp(mirror.as_of_ms) }}</span>
     </section>
 
+    @if (globalEvents().length > 0) {
+      <section class="global-events" aria-label="Global broker network events">
+        @for (event of globalEvents(); track event.code + ':' + event.source) {
+          <div class="global-event" [title]="event.summary">
+            <p-tag
+              [severity]="displaySeverity(event.severity)"
+              [value]="event.label + ': ' + (event.current ? 'on' : 'off')"
+            />
+            <span>{{ event.summary }}</span>
+          </div>
+        }
+      </section>
+    }
+
     @if (mirror.degradation_reasons.length > 0) {
       <section class="degradation-list" aria-label="Mirror degradation reasons">
         @for (reason of mirror.degradation_reasons; track reason) {
@@ -143,15 +157,15 @@
                     @for (row of item.rows; track row.row_id) {
                       <div class="history-row">
                         <p-tag
-                          [severity]="identitySeverity(row.identity_type)"
-                          [value]="identityLabel(row.identity_type)"
+                          [severity]="displaySeverity(row.presentation.identity.severity)"
+                          [value]="row.presentation.identity.label"
                         />
                         <p-tag
-                          [severity]="recencySeverity(row.recency)"
-                          [value]="recencyLabel(row.recency)"
+                          [severity]="displaySeverity(row.presentation.recency.severity)"
+                          [value]="row.presentation.recency.label"
                         />
                         <span class="history-row-name">
-                          {{ row.strategy_instance_id ?? row.command ?? row.row_id }}
+                          {{ row.presentation.display_name }}
                         </span>
                         <span>client {{ row.client_id ?? '—' }}</span>
                       </div>
@@ -304,14 +318,14 @@
           </td>
           <td>
             <p-tag
-              [severity]="identitySeverity(row.identity_type)"
-              [value]="identityLabel(row.identity_type)"
+              [severity]="displaySeverity(row.presentation.identity.severity)"
+              [value]="row.presentation.identity.label"
             />
           </td>
           <td>
             <p-tag
-              [severity]="recencySeverity(row.recency)"
-              [value]="recencyLabel(row.recency)"
+              [severity]="displaySeverity(row.presentation.recency.severity)"
+              [value]="row.presentation.recency.label"
             />
           </td>
           <td>
@@ -323,21 +337,21 @@
           </td>
           <td>
             <p-tag
-              [severity]="recoverySeverity(row.recovery_state)"
-              [value]="recoveryLabel(row.recovery_state)"
+              [severity]="displaySeverity(row.presentation.recovery.severity)"
+              [value]="row.presentation.recovery.label"
             />
           </td>
           <td>{{ formatTimestamp(row.last_event_ms) }}</td>
           <td class="attention-cell">
-            @if (primaryAttentionCode(row); as code) {
+            @if (primaryAttentionItem(row); as item) {
               <span class="attention-compact" [title]="attentionTooltip(row)">
                 <p-tag
-                  [severity]="attentionSeverity(code)"
-                  [value]="attentionLabel(code)"
+                  [severity]="displaySeverity(item.severity)"
+                  [value]="item.label"
                 />
-                @if (row.attention_codes.length > 1) {
+                @if (row.attention_items.length > 1) {
                   <span class="attention-count">
-                    +{{ formatNumber(row.attention_codes.length - 1) }}
+                    +{{ formatNumber(row.attention_items.length - 1) }}
                   </span>
                 }
               </span>

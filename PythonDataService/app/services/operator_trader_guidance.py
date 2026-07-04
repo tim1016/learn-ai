@@ -17,6 +17,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceDailyOrderCap,
     OperatorSurfaceEvidenceFact,
     OperatorSurfaceHostProcess,
+    OperatorSurfaceNamedCondition,
     OperatorSurfaceProofLine,
     OperatorSurfaceReconciliation,
     OperatorSurfaceRuntimeFreshness,
@@ -303,11 +304,7 @@ def build_submit_readiness_findings(
             )
         )
     if broker.connection != "CONNECTED":
-        connection_headline = (
-            "Broker connection is recovering"
-            if broker.connection == "DEGRADED"
-            else "Broker disconnected or unknown"
-        )
+        condition = broker.connection_condition
         connection_remediation: TraderPrimaryRemediation = (
             OpenRunbookAction(kind="open_runbook", slug="broker-reconnect")
             if host_process.state == "RUNNING"
@@ -316,14 +313,15 @@ def build_submit_readiness_findings(
         findings.append(
             _finding(
                 "broker_state_unproven",
-                f"BROKER_CONNECTION_{broker.connection}",
+                condition.code,
                 "broker_connection",
-                "warning",
-                connection_headline,
-                _broker_connection_detail(broker.connection, host_process.state),
+                _attention_severity_from_condition(condition),
+                condition.title,
+                _broker_connection_detail(condition, host_process.state),
                 (
-                    "Reconnect the broker session, then refresh broker evidence."
+                    condition.remediation
                     if host_process.state == "RUNNING"
+                    and condition.remediation is not None
                     else "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound."
                 ),
                 connection_remediation,
@@ -491,12 +489,15 @@ def _account_truth_findings(assessment: AccountTruthAssessment) -> list[SubmitRe
     if assessment.can_submit:
         return []
 
+    severity: TraderAttentionSeverity = (
+        "critical" if "ACCOUNT_TRUTH_NOT_PROVEN" in assessment.reason_codes else "warning"
+    )
     return [
         _finding(
             "broker_state_unproven",
             reason_code,
             "account_truth",
-            "critical",
+            severity,
             assessment.headline,
             assessment.explanation,
             assessment.operator_next_step
@@ -583,23 +584,17 @@ def _broker_proof_line(broker: OperatorSurfaceBroker) -> OperatorSurfaceProofLin
     if broker.safety_verdict == "PAPER_ONLY" and broker.connection == "CONNECTED":
         message = "Paper broker is connected."
         tone: Literal["neutral", "ok", "attention"] = "ok"
-    elif broker.safety_verdict == "PAPER_ONLY" and broker.connection == "DISCONNECTED":
-        message = "Paper broker is configured, but the session is disconnected."
-        tone = "attention"
-    elif broker.safety_verdict == "PAPER_ONLY" and broker.connection == "DEGRADED":
-        message = "Paper broker is configured, but the session is recovering."
+    elif broker.safety_verdict == "PAPER_ONLY" and broker.connection in {"DISCONNECTED", "DEGRADED"}:
+        message = f"Paper broker is configured; {broker.connection_condition.title}."
         tone = "attention"
     elif broker.safety_verdict == "PAPER_ONLY":
-        message = "Paper broker proof is available; connection is still unknown."
+        message = "Paper broker proof is available; broker connection remains unproven."
         tone = "attention"
     elif broker.connection == "CONNECTED":
         message = "Broker is connected, but paper-only proof is missing."
         tone = "attention"
-    elif broker.connection == "DISCONNECTED":
-        message = "Broker session is disconnected."
-        tone = "attention"
-    elif broker.connection == "DEGRADED":
-        message = "Broker connection is recovering."
+    elif broker.connection in {"DISCONNECTED", "DEGRADED"}:
+        message = broker.connection_condition.title
         tone = "attention"
     else:
         message = "Broker proof is not available yet."
@@ -608,7 +603,7 @@ def _broker_proof_line(broker: OperatorSurfaceBroker) -> OperatorSurfaceProofLin
         "broker-proof",
         "Broker",
         message,
-        f"{_broker_safety_detail(broker.safety_verdict)} {_broker_connection_detail(broker.connection)}",
+        f"{_broker_safety_detail(broker.safety_verdict)} {_broker_connection_detail(broker.connection_condition)}",
         tone,
     )
 
@@ -734,16 +729,23 @@ def _broker_safety_detail(safety_verdict: str) -> str:
     return "Account safety proof is not recorded."
 
 
-def _broker_connection_detail(connection: str, host_state: str = "RUNNING") -> str:
-    if host_state != "RUNNING" and connection == "UNKNOWN":
+def _attention_severity_from_condition(
+    condition: OperatorSurfaceNamedCondition,
+) -> TraderAttentionSeverity:
+    if condition.severity == "critical":
+        return "critical"
+    if condition.severity == "warning":
+        return "warning"
+    return "info"
+
+
+def _broker_connection_detail(
+    condition: OperatorSurfaceNamedCondition,
+    host_state: str = "RUNNING",
+) -> str:
+    if host_state != "RUNNING" and condition.code == "BROKER_CONNECTION_UNKNOWN":
         return "Broker connection has not been proven because no live runtime is currently bound."
-    if connection == "CONNECTED":
-        return "Broker session is connected."
-    if connection == "DISCONNECTED":
-        return "Broker session is disconnected."
-    if connection == "DEGRADED":
-        return "Broker session is reconnecting or partially degraded."
-    return "Broker connection has not been proven."
+    return condition.summary
 
 
 def _owner_phase_label(phase: str) -> str:

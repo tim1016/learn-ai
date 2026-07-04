@@ -45,6 +45,7 @@ import {
   type OperatorNoticeDispatch,
 } from './lib/operator-notice-action-renderer';
 import { toOperationError, type OperationKind } from '../operation-error';
+import { operatorPillTone, type OperatorPillTone } from '../operator-severity';
 import { AttentionDropdownComponent } from './attention-dropdown.component';
 import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
@@ -75,7 +76,7 @@ interface PosturePill {
 interface ConnectionPill {
   readonly symbol: string | null;
   readonly state: string;
-  readonly tone: 'ok' | 'attention' | 'muted';
+  readonly tone: OperatorPillTone;
 }
 
 interface ControlPlaneBanner {
@@ -248,11 +249,11 @@ export class BotControlPageComponent {
   readonly connectionPill = computed<ConnectionPill | null>(() => {
     const status = this.status();
     if (!status) return null;
-    const connection = status.operator_surface.broker.connection;
+    const condition = status.operator_surface.broker.connection_condition;
     return {
       symbol: status.symbol,
-      state: formatReceiptLabel(connection),
-      tone: connection === 'CONNECTED' ? 'ok' : connection === 'UNKNOWN' ? 'muted' : 'attention',
+      state: condition.title,
+      tone: operatorPillTone(condition.severity),
     };
   });
 

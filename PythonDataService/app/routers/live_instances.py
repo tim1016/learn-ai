@@ -719,7 +719,18 @@ def _safety_verdict_final_from_engine_runtime(
 
 def _broker_connection_state_from_engine_runtime(
     snapshot: EngineRuntimeSnapshot | None,
-) -> Literal["connected", "disconnected", "degraded", "unknown"] | None:
+) -> Literal[
+    "connected",
+    "soft_lost",
+    "subscriptions_stale",
+    "degraded_data_farm",
+    "reconnecting",
+    "recovering",
+    "hard_down",
+    "disconnected",
+    "disabled",
+    "unknown",
+] | None:
     """Resolve broker connection from fresh child-authored runtime evidence.
 
     Readiness is still the engine's readiness-gate contract, but it can be
@@ -731,12 +742,18 @@ def _broker_connection_state_from_engine_runtime(
     if snapshot is None:
         return None
     state = snapshot.broker.connection_state
-    if state == "connected":
-        return "connected"
-    if state in {"soft_lost", "subscriptions_stale", "degraded_data_farm", "reconnecting", "recovering"}:
-        return "degraded"
-    if state in {"disconnected", "disabled", "hard_down"}:
-        return "disconnected"
+    if state in {
+        "connected",
+        "soft_lost",
+        "subscriptions_stale",
+        "degraded_data_farm",
+        "reconnecting",
+        "recovering",
+        "hard_down",
+        "disconnected",
+        "disabled",
+    }:
+        return state
     return "unknown"
 
 
@@ -2480,14 +2497,14 @@ def _raise_outcome_unknown(
 
 def _broker_connection_state_from_readiness(
     readiness: ReadinessVector | None,
-) -> Literal["connected", "disconnected", "degraded", "unknown"] | None:
+) -> Literal["connected", "disconnected", "unknown"] | None:
     """Collapse the live readiness ``broker_connection`` gate into the
     operator-surface broker-connection-state enum.
 
     The live readiness vector today only emits pass/fail on
     ``broker_connection`` (see ``app/engine/live/readiness.py``).  When a
     richer ``BrokerConnectionState`` channel lands on the wire, this
-    helper grows to read it; ``DEGRADED`` is unreachable from the
+    helper grows to read it; degraded transport states are unreachable from the
     current pass/fail signal, which is the honest answer.
     """
     if readiness is None:
