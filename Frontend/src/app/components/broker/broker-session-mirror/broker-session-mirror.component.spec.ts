@@ -4,6 +4,7 @@ import { provideRouter, Router } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  BrokerSessionEvent,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRosterRow,
 } from '../../../api/broker-session-mirror.types';
@@ -64,7 +65,7 @@ describe('BrokerSessionMirrorComponent', () => {
   it('updates rows from the SSE snapshot stream', async () => {
     const { fixture } = await setup(snapshot({ rows: [] }));
 
-    FakeEventSource.instances[0].emit(
+    eventSourceFor('/api/broker/session-mirror/stream').emit(
       'snapshot',
       JSON.stringify(snapshot({ rows: [ghostSocket()] })),
     );
@@ -107,6 +108,40 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Observer degraded');
     expect(text).toContain('Ghost detection unknown');
     expect(text).toContain('host daemon socket probe unavailable');
+  });
+
+  it('renders categorized broker events in row detail', async () => {
+    const { fixture } = await setup(
+      snapshot({
+        rows: [
+          botSocket({
+            client_id: 42,
+            event_counts: { link_connectivity: 1 },
+          }),
+        ],
+      }),
+    );
+
+    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          client_id: 42,
+          category: 'link_connectivity',
+          severity: 'warning',
+          label: 'IBKR link interrupted',
+          ibkr_code: 1100,
+          message: 'Connectivity between IB and TWS has been lost',
+        }),
+      ),
+    );
+    await settle(fixture);
+
+    const text = pageText(fixture);
+    expect(text).toContain('Link connectivity');
+    expect(text).toContain('IBKR link interrupted');
+    expect(text).toContain('Connectivity between IB and TWS has been lost');
+    expect(text).toContain('1100');
   });
 
   it('navigates to the Bot Cockpit for attributed bot rows', async () => {
@@ -161,6 +196,16 @@ function pageText(
   return (fixture.nativeElement as HTMLElement).textContent ?? '';
 }
 
+function eventSourceFor(url: string): FakeEventSource {
+  const source = FakeEventSource.instances.find((candidate) =>
+    candidate.url.includes(url),
+  );
+  if (source === undefined) {
+    throw new Error(`EventSource not opened for ${url}`);
+  }
+  return source;
+}
+
 function snapshot(
   overrides: Partial<BrokerSessionMirrorSnapshot> = {},
 ): BrokerSessionMirrorSnapshot {
@@ -199,6 +244,7 @@ function botSocket(
     connection_epoch: 0,
     last_event_ms: AS_OF_MS - 500,
     as_of_ms: AS_OF_MS,
+    event_counts: {},
     attention_codes: ['REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE'],
     registry_claim: {
       state: 'exited',
@@ -208,6 +254,26 @@ function botSocket(
       started_at_ms: AS_OF_MS - 60_000,
       ended_at_ms: AS_OF_MS - 1_000,
     },
+    ...overrides,
+  };
+}
+
+function brokerEvent(
+  overrides: Partial<BrokerSessionEvent> = {},
+): BrokerSessionEvent {
+  return {
+    seq: 1,
+    ts_ms: AS_OF_MS,
+    category: 'client_lifecycle',
+    severity: 'info',
+    label: 'Broker probe succeeded',
+    message: null,
+    raw_event_type: 'BROKER_PROBE_OK',
+    client_id: 42,
+    account_id: 'DU123',
+    ibkr_code: null,
+    connection_state: 'connected',
+    raw: {},
     ...overrides,
   };
 }

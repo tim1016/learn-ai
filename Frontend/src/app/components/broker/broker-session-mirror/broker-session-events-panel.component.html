@@ -1,0 +1,63 @@
+<section class="event-panel" aria-label="Broker event history">
+  @if (row().client_id === null) {
+    <p class="empty-note">
+      No client id has been published for this session yet.
+    </p>
+  } @else {
+    <div class="count-strip" aria-label="Event counts by category">
+      @if (eventCounts().length > 0) {
+        @for (entry of eventCounts(); track trackByCategory($index, entry)) {
+          <span>
+            {{ categoryLabel(entry.category) }}
+            <strong>{{ entry.count }}</strong>
+          </span>
+        }
+      } @else {
+        <span>No categorized events yet</span>
+      }
+    </div>
+
+    @if (events().length > 0) {
+      <ol class="event-list">
+        @for (event of events(); track trackByEventSeq($index, event)) {
+          <li>
+            <div class="event-head">
+              <p-tag
+                [severity]="severityTag(event.severity)"
+                [value]="categoryLabel(event.category)"
+              />
+              <strong>{{ event.label }}</strong>
+              <span>{{ formatTimestamp(event.ts_ms) }}</span>
+            </div>
+            @if (event.message) {
+              <p>{{ event.message }}</p>
+            }
+            <details>
+              <summary>Raw IBKR detail</summary>
+              <dl>
+                <div>
+                  <dt>seq</dt>
+                  <dd>{{ event.seq }}</dd>
+                </div>
+                <div>
+                  <dt>raw_event_type</dt>
+                  <dd>{{ event.raw_event_type }}</dd>
+                </div>
+                <div>
+                  <dt>ibkr_code</dt>
+                  <dd>{{ event.ibkr_code ?? '—' }}</dd>
+                </div>
+                <div>
+                  <dt>ts_ms</dt>
+                  <dd>{{ event.ts_ms }}</dd>
+                </div>
+              </dl>
+            </details>
+          </li>
+        }
+      </ol>
+    } @else {
+      <p class="empty-note">No broker events observed for this client.</p>
+    }
+  }
+</section>

@@ -37,6 +37,10 @@
       <span>SSE</span>
       <strong>{{ streamStatus() }}</strong>
     </div>
+    <div class="metric">
+      <span>Events</span>
+      <strong>{{ eventStreamStatus() }}</strong>
+    </div>
   </section>
 
   @if (snapshot(); as mirror) {
@@ -67,6 +71,10 @@
   }
 
   @if (streamError(); as message) {
+    <p class="load-error" role="alert">{{ message }}</p>
+  }
+
+  @if (eventStreamError(); as message) {
     <p class="load-error" role="alert">{{ message }}</p>
   }
 
@@ -171,6 +179,10 @@
                   <dd>{{ row.registry_claim?.state ?? '—' }}</dd>
                 </div>
               </dl>
+              <app-broker-session-events-panel
+                [row]="row"
+                [events]="eventsForRow(row)"
+              />
             </details>
           </td>
         </tr>

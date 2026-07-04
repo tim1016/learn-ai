@@ -25,24 +25,26 @@ import logging
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
+from app.broker.ibkr.event_codes import (
+    CONNECTIVITY_LOST_CODES as _CONNECTIVITY_LOST_CODES,
+)
+from app.broker.ibkr.event_codes import (
+    CONNECTIVITY_RESTORED_CODES as _CONNECTIVITY_RESTORED_CODES,
+)
+from app.broker.ibkr.event_codes import (
+    DATA_FARM_DEGRADED_CODES as _DATA_FARM_DEGRADED_CODES,
+)
+from app.broker.ibkr.event_codes import (
+    DATA_FARM_OK_CODES as _DATA_FARM_OK_CODES,
+)
+from app.broker.ibkr.event_codes import (
+    SUBSCRIPTIONS_STALE_CODES as _SUBSCRIPTIONS_STALE_CODES,
+)
 from app.broker.ibkr.keepalive import apply_tcp_keepalive
 from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-
-# TWS/IB connectivity error codes that the ``errorEvent`` handler reacts to.
-# 1100 = "Connectivity between IB and TWS has been lost"; 504 = "Not
-# connected". Both mean the data feed is dead even though the API socket to
-# TWS may still report ``isConnected() == True``. 1101 = connectivity restored
-# (data maintained); 1102 = connectivity restored (data lost). See
-# https://interactivebrokers.github.io/tws-api/message_codes.html.
-_CONNECTIVITY_LOST_CODES = frozenset({1100, 1300, 2110, 504})
-_CONNECTIVITY_RESTORED_CODES = frozenset({1101, 1102})
-_SUBSCRIPTIONS_STALE_CODES = frozenset({1101})
-_DATA_FARM_DEGRADED_CODES = frozenset({2103, 2105})
-_DATA_FARM_OK_CODES = frozenset({2104, 2106})
 
 
 # Sentinel value for ``IBKR_HOST`` that triggers host auto-resolution.
