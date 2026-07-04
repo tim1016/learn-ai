@@ -35,7 +35,7 @@ from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState
 from app.engine.live.fleet_reset_baseline import baseline_path
-from app.engine.live.live_engine import LiveEngine
+from app.engine.live.live_engine import BrokerRecoveryReconcileBlockedError, LiveEngine
 from app.engine.live.reconciliation_classifier import (
     Adopt,
     BrokerSnapshot,
@@ -270,6 +270,34 @@ async def test_reconcile_inhibits_submits_until_clean_verdict(
 
 
 @pytest.mark.asyncio
+async def test_broker_recovery_reconcile_releases_barrier_and_bumps_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reconnect recovery uses the runtime reconcile core and records a
+    successful recovery as a new connection epoch.
+    """
+    harness = _harness(tmp_path)
+    engine = harness.engine
+    engine._connection_epoch = 7
+    shutdown_event = asyncio.Event()
+
+    async def _result(_kwargs: dict) -> ReconciliationResult:
+        assert engine._inhibit_submits is True
+        return ReconciliationResult(verdict=Continue(), receipt=_make_receipt())
+
+    harness.stub_reconcile(monkeypatch, _result)
+
+    outcome = await engine.run_broker_recovery_reconcile(shutdown_event)
+
+    assert outcome["status"] == "completed"
+    assert outcome["verdict"] == "clean"
+    assert engine._inhibit_submits is False
+    assert engine._connection_epoch == 8
+    assert engine._paused is False
+    assert not shutdown_event.is_set()
+
+
+@pytest.mark.asyncio
 async def test_reconcile_adoption_with_active_exposure_stays_paused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -314,6 +342,54 @@ async def test_reconcile_adoption_with_active_exposure_stays_paused(
     assert persisted == [
         (DesiredState.PAUSED, "runtime_reconcile:ambiguous_exposure"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_broker_recovery_reconcile_adoption_pause_raises_and_stays_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-recovery must fail closed when reconciliation adopts ambiguous
+    active exposure.
+    """
+    persisted: list[tuple[DesiredState, str]] = []
+
+    def _writer(state: DesiredState, reason: str) -> None:
+        persisted.append((state, reason))
+
+    harness = _harness(tmp_path)
+    engine = harness.engine
+    engine._desired_state_writer = _writer
+    engine._connection_epoch = 3
+    shutdown_event = asyncio.Event()
+
+    orphan = OwnedOrphan(
+        order_ref="learn-ai/spy_ema_paper/v1:iid-1",
+        intent_id="iid-1",
+        perm_id=7,
+        order_id=42,
+        active=True,
+        source="broker_open_order",
+    )
+
+    async def _result(_kwargs: dict) -> ReconciliationResult:
+        return ReconciliationResult(
+            verdict=Adopt(orphans=(orphan,), pause=True, pause_reason="active_exposure"),
+            receipt=_make_receipt(outcome="adopted"),
+        )
+
+    harness.stub_reconcile(monkeypatch, _result)
+
+    with pytest.raises(BrokerRecoveryReconcileBlockedError) as raised:
+        await engine.run_broker_recovery_reconcile(shutdown_event)
+
+    assert raised.value.outcome["verdict"] == "adopted_paused"
+    assert engine._inhibit_submits is True
+    assert engine._paused is True
+    assert engine._connection_epoch == 3
+    assert persisted == [
+        (DesiredState.PAUSED, "broker_recovery_reconcile:ambiguous_exposure"),
+    ]
+    assert not shutdown_event.is_set()
 
 
 @pytest.mark.asyncio

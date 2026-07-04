@@ -259,6 +259,23 @@ class ReconnectAccountMismatchHaltError(RuntimeError):
         self.connection_epoch = connection_epoch
 
 
+class BrokerRecoveryReconcileBlockedError(RuntimeError):
+    """Raised when reconnect recovery reconciliation cannot safely resume.
+
+    ``AutoReconnectMonitor`` treats recovery callbacks that raise as failed
+    recovery attempts, so this exception deliberately carries the same
+    verdict payload the operator-facing runtime RECONCILE ack would have
+    written.
+    """
+
+    def __init__(self, *, outcome: dict[str, object]) -> None:
+        super().__init__(
+            "broker recovery reconciliation did not clear the submit barrier: "
+            f"{outcome!r}"
+        )
+        self.outcome = outcome
+
+
 class BrokerSafetyVerdictTransitionHaltError(ControlledLiveHaltError):
     """Phase 7B / VCR-0010 — broker safety verdict left ``paper-only``.
 
@@ -1904,31 +1921,65 @@ class LiveEngine:
         shutdown_event: asyncio.Event,
         request_id: str,
     ) -> None:
-        """Async control task for runtime RECONCILE.
+        """Async control task for operator-issued runtime RECONCILE.
 
-        Acquires ``self._submit_lock`` (waiting for any in-flight submit or
-        flatten), builds a fresh ``BrokerSnapshot`` from the broker, runs
-        the cold-start orchestrator, and writes the completion outcome to
-        the command ack file via ``ack_completion``. The verdict drives the
-        engine's post-condition:
-
-        - Continue → release the submit barrier (``_inhibit_submits = False``).
-        - Adopt without active exposure → release the barrier; ledger now
-          contains the adopted orders.
-        - Adopt with active exposure → leave the barrier set + persist
-          ``desired_state = PAUSED`` + flip ``self._paused`` so the next
-          bar refuses to re-enter even when the operator resumes the
-          submit pipeline.
-        - Poison → leave the barrier set + set ``shutdown_event`` (the
-          orchestrator already wrote ``poisoned.flag`` + a failed receipt).
-
-        Any unexpected exception (broker.list_open_orders raised, the
-        orchestrator blew up before writing its receipt) is logged and
-        translated into a ``status="completed", verdict="error"`` ack +
-        leaves the barrier set fail-closed. The next bar won't submit;
-        the operator must investigate.
+        Keeps the existing two-phase command behavior: the dispatcher writes
+        an accepted ack immediately, then this task overwrites it with the
+        completion verdict once the shared reconciliation core lands.
         """
-        verdict_payload: dict = {"status": "completed", "request_id": request_id}
+        verdict_payload: dict[str, object] = {"status": "completed", "request_id": request_id}
+        try:
+            verdict_payload = await self._run_reconciliation_core(
+                shutdown_event=shutdown_event,
+                request_id=request_id,
+                source="operator",
+            )
+        finally:
+            # Always overwrite the ack with the completion outcome so the
+            # cockpit sees the transition out of IN_PROGRESS — even on the
+            # error path. ``ack_completion`` is best-effort: a write
+            # failure here cannot fix a broken disk, and the next /status
+            # poll will re-derive state from the receipt.
+            if self._command_channel is not None:
+                try:
+                    self._command_channel.ack_completion(cmd, outcome=verdict_payload)
+                except Exception:
+                    logger.exception(
+                        "ack_completion failed for runtime reconcile request_id=%s",
+                        request_id,
+                    )
+
+    async def run_broker_recovery_reconcile(
+        self,
+        shutdown_event: asyncio.Event,
+    ) -> dict[str, object]:
+        """Run reconnect recovery reconciliation under the submit barrier.
+
+        This is intentionally stricter than operator RECONCILE: a clean/adopted
+        no-pause verdict releases the barrier and bumps ``connection_epoch``;
+        every ambiguous, poison, or error outcome leaves the barrier set and
+        raises so ``AutoReconnectMonitor`` can mark recovery failed.
+        """
+        request_id = mint_intent_id()
+        self._inhibit_submits = True
+        outcome = await self._run_reconciliation_core(
+            shutdown_event=shutdown_event,
+            request_id=request_id,
+            source="broker_recovery",
+        )
+        if outcome.get("verdict") not in {"clean", "adopted"}:
+            raise BrokerRecoveryReconcileBlockedError(outcome=outcome)
+        return outcome
+
+    async def _run_reconciliation_core(
+        self,
+        *,
+        shutdown_event: asyncio.Event,
+        request_id: str,
+        source: str,
+    ) -> dict[str, object]:
+        """Run broker reconciliation and apply the engine post-condition."""
+        verdict_payload: dict[str, object] = {"status": "completed", "request_id": request_id}
         try:
             from app.engine.live import reconciliation_orchestrator
             from app.engine.live.account_registry import compute_reconcile_namespaces
@@ -1961,7 +2012,7 @@ class LiveEngine:
                         ),
                     }
                 )
-                return
+                return verdict_payload
 
             bot_order_namespace = f"learn-ai/{self._strategy_instance_id}/v1"
             sidecar_repo = LiveStateSidecarRepo(
@@ -2001,9 +2052,13 @@ class LiveEngine:
                 verdict = result.verdict
                 if isinstance(verdict, Continue):
                     self._inhibit_submits = False
+                    if source == "broker_recovery":
+                        self._connection_epoch += 1
                     verdict_payload.update({"verdict": "clean"})
                 elif isinstance(verdict, Adopt) and not verdict.pause:
                     self._inhibit_submits = False
+                    if source == "broker_recovery":
+                        self._connection_epoch += 1
                     verdict_payload.update(
                         {
                             "verdict": "adopted",
@@ -2017,7 +2072,11 @@ class LiveEngine:
                     self._paused = True
                     self._persist_desired_state(
                         DesiredState.PAUSED,
-                        "runtime_reconcile:ambiguous_exposure",
+                        (
+                            "broker_recovery_reconcile:ambiguous_exposure"
+                            if source == "broker_recovery"
+                            else "runtime_reconcile:ambiguous_exposure"
+                        ),
                     )
                     verdict_payload.update(
                         {
@@ -2038,22 +2097,13 @@ class LiveEngine:
                         }
                     )
         except Exception as exc:
-            logger.exception("runtime reconcile task failed for request_id=%s", request_id)
+            logger.exception(
+                "%s reconcile task failed for request_id=%s",
+                source,
+                request_id,
+            )
             verdict_payload.update({"verdict": "error", "detail": repr(exc)})
-        finally:
-            # Always overwrite the ack with the completion outcome so the
-            # cockpit sees the transition out of IN_PROGRESS — even on the
-            # error path. ``ack_completion`` is best-effort: a write
-            # failure here cannot fix a broken disk, and the next /status
-            # poll will re-derive state from the receipt.
-            if self._command_channel is not None:
-                try:
-                    self._command_channel.ack_completion(cmd, outcome=verdict_payload)
-                except Exception:
-                    logger.exception(
-                        "ack_completion failed for runtime reconcile request_id=%s",
-                        request_id,
-                    )
+        return verdict_payload
 
     def _persist_desired_state(self, state: DesiredState, reason: str) -> None:
         """Best-effort durable write of operator intent (PRD-A §16.4
