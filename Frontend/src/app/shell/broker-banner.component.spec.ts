@@ -114,6 +114,16 @@ describe('BrokerBannerComponent', () => {
     expect(toggle(fixture)).toBeNull();
   });
 
+  it('renders hard-down recovery as a degraded broker state', () => {
+    const { fixture, brokerHealth } = setup();
+    brokerHealth.bannerState.set('degraded');
+    brokerHealth.health.set(health({ connected: false, connection_state: 'hard_down' }));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Degraded');
+    expect(fixture.nativeElement.textContent).toContain('recovery exhausted');
+  });
+
   it('renders active bot host-runner warning above the IBKR banner', () => {
     const { fixture, brokerHealth, activeBotNotice } = setup();
     activeBotNotice.setNotice({

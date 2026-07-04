@@ -5,7 +5,7 @@ tests drive it via a fake ``IbkrClient`` so no real IBKR connection is
 needed. Each test pins one observable contract:
 
 * hard-disconnect (``not is_connected()``) triggers a reconnect attempt,
-* soft-loss (``connection_lost``) triggers a reconnect attempt,
+* soft-loss (``connection_lost``) waits briefly for IBKR 1101/1102,
 * exponential backoff doubles each failed attempt up to the cap,
 * the lifecycle lock is shared with the operator router, so a manual
   reconnect mid-attempt is serialised correctly,
@@ -211,19 +211,38 @@ async def test_monitor_runs_recovery_callbacks_when_subscriptions_stale() -> Non
 
 
 @pytest.mark.asyncio
-async def test_monitor_reconnects_when_connection_lost_flag_set() -> None:
+async def test_monitor_waits_for_ibkr_restore_when_connection_lost_flag_set() -> None:
     """TWS Error 1100 path — socket is open but feed is dead. The monitor
-    must observe ``connection_lost`` and reconnect even though
-    ``is_connected()`` is True."""
+    must not churn the clientId until the bounded 1101/1102 wait expires."""
     client = _FakeClient(is_connected=True, connection_lost=True)
     monitor = AutoReconnectMonitor(
         client,
         poll_interval_s=0.01,
         initial_backoff_s=0.01,
+        link_interruption_wait_s=1.0,
     )
     monitor.start()
-    # Wait for at least one attempt to land. The monitor sleeps poll_interval
-    # before the first tick, then runs disconnect+connect.
+    await asyncio.sleep(0.05)
+    await monitor.stop()
+
+    assert client.disconnect_calls == 0
+    assert client.connect_calls == 0
+    assert monitor.recovery_state == "LINK_INTERRUPTED"
+    assert monitor.successful_reconnect_count == 0
+    assert monitor.is_attempting is False
+    assert monitor.current_attempt == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_reconnects_when_soft_link_wait_expires() -> None:
+    client = _FakeClient(is_connected=True, connection_lost=True)
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.01,
+        initial_backoff_s=0.01,
+        link_interruption_wait_s=0.0,
+    )
+    monitor.start()
     for _ in range(50):
         if monitor.successful_reconnect_count >= 1:
             break
@@ -233,6 +252,7 @@ async def test_monitor_reconnects_when_connection_lost_flag_set() -> None:
     assert client.disconnect_calls >= 1, "must drop the soft socket before reconnecting"
     assert client.connect_calls >= 1
     assert monitor.successful_reconnect_count == 1
+    assert monitor.recovery_state == "HEALTHY"
     # Monitor-owned state cleared after a successful recovery.
     assert monitor.is_attempting is False
     assert monitor.current_attempt == 0
@@ -289,6 +309,33 @@ async def test_monitor_doubles_backoff_on_repeated_failure() -> None:
 
     assert client.connect_calls == 3
     assert monitor.successful_reconnect_count == 1
+    assert monitor.is_attempting is False
+    assert monitor.current_attempt == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_enters_hard_down_when_reconnect_attempts_exhaust() -> None:
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom, boom],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=2,
+    )
+    monitor.start()
+    for _ in range(100):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.connect_calls == 2
+    assert monitor.recovery_state == "HARD_DOWN"
+    assert monitor.is_hard_down is True
     assert monitor.is_attempting is False
     assert monitor.current_attempt == 0
 

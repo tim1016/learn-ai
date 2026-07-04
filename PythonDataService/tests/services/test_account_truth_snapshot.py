@@ -100,6 +100,23 @@ def _health(
     )
 
 
+@pytest.mark.parametrize(
+    "connection_state,connected",
+    [
+        ("disconnected", False),
+        ("hard_down", False),
+        ("reconnecting", False),
+        ("soft_lost", True),
+    ],
+)
+def test_account_truth_refresh_unavailable_states(
+    connection_state: str, connected: bool
+) -> None:
+    health = _health(connection_state=connection_state, connected=connected)
+
+    assert account_truth_refresh.account_truth_refresh_session_unavailable(health) is True
+
+
 class _FakeClient:
     def __init__(self, *health_results: IbkrConnectionHealth | Exception) -> None:
         self._health_results = list(health_results)

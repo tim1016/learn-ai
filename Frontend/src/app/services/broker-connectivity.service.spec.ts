@@ -207,6 +207,21 @@ describe('BrokerConnectivityService broker state (auto-reconnect)', () => {
     expect(brokerLink(service)?.detail).toBe('Disconnected');
   });
 
+  it('renders HARD_DOWN when auto-recovery exhausts reconnect attempts', async () => {
+    const service = setup({
+      instances: [],
+      brokerHealth: { connected: false, connection_state: 'hard_down' },
+    });
+    await flush();
+
+    expect(service.brokerState()).toBe('down');
+    expect(service.brokerConnectionState()).toBe('hard_down');
+    expect(brokerLink(service)?.detail).toBe('Recovery exhausted');
+    expect(service.blockers()).toContain(
+      'Broker recovery exhausted — manual reconnect or Gateway intervention required.',
+    );
+  });
+
   it('renders DISABLED (unknown / grey) using the backend reason when the broker is intentionally off', async () => {
     const service = setup({
       instances: [],

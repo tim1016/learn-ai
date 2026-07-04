@@ -205,6 +205,8 @@ export class BrokerBannerComponent {
         return 'reconnecting';
       case 'recovering':
         return 'recovering subscriptions';
+      case 'hard_down':
+        return 'recovery exhausted';
       case 'subscriptions_stale':
         return 'subscriptions stale';
       case 'degraded_data_farm':

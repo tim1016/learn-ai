@@ -35,6 +35,7 @@ _ACCOUNT_TRUTH_REFRESH_UNAVAILABLE_STATES = frozenset(
     {
         "disabled",
         "disconnected",
+        "hard_down",
         "reconnecting",
         "soft_lost",
     }
