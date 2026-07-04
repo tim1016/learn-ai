@@ -131,6 +131,15 @@ class BrokerSessionMirrorSnapshot(BaseModel):
     degradation_reasons: list[str] = Field(default_factory=list)
 
 
+class BrokerSessionHistoryPage(BaseModel):
+    """Recent broker-session roster snapshots, newest first."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rows: list[BrokerSessionMirrorSnapshot] = Field(default_factory=list)
+    retained_count: int = Field(ge=0)
+
+
 class BrokerSessionEvent(BaseModel):
     """Classified broker event for the session mirror."""
 
@@ -176,11 +185,7 @@ class BrokerSessionEventPurgeRequest(BaseModel):
     def _validate_filter(self) -> BrokerSessionEventPurgeRequest:
         if self.client_id is None and self.start_ms is None and self.end_ms is None:
             raise ValueError("at least one purge filter is required")
-        if (
-            self.start_ms is not None
-            and self.end_ms is not None
-            and self.start_ms > self.end_ms
-        ):
+        if self.start_ms is not None and self.end_ms is not None and self.start_ms > self.end_ms:
             raise ValueError("start_ms must be <= end_ms")
         return self
 

@@ -357,3 +357,37 @@ Critical limits:
 2. **Child coverage still depends on child monitor installation.**
    The event writer is available on `IbkrClient`, but only processes that
    install `AutoReconnectMonitor` emit these monitor-authored events.
+
+## Slice 14 addendum — bounded roster snapshot history
+
+Date: 2026-07-04
+
+The stacked slice-14 branch adds the PRD's missing session-level history
+substrate for roster facts. Each composed broker-session mirror snapshot is
+written to `_broker/session_roster_history.jsonl` with bounded retention, and
+`GET /api/broker/session-mirror/history` returns recent snapshots newest-first
+for later timeline/drill-down work. This complements, rather than replaces,
+the classified API callback stream in `_broker/connection_events.jsonl`.
+
+Critical limits:
+
+1. **History is stored and readable, but not yet rendered as a timeline.**
+   Angular has the typed service method for the endpoint, but the mirror page
+   still renders the live SSE roster and event drill-down only. A future UI
+   slice should add a dedicated recent-history view without client-side broker
+   inference.
+
+2. **The new roster store is bounded, not an audit ledger.**
+   It is diagnostic evidence for recent investigation. It does not alter
+   `intent_events.jsonl`, reconciliation receipts, fills, executions, or any
+   trading verdict.
+
+3. **Per-client roster-history purge remains separate.**
+   Existing purge still applies to classified event diagnostics. Purging rows
+   inside multi-client roster snapshots needs exact row-level semantics, so it
+   remains a follow-up rather than being hidden in the event purge endpoint.
+
+4. **The live roster does not yet replay `past_closed` rows from history.**
+   This slice makes the evidence durable and readable. Reconstructing closed
+   sockets back into the current roster as historical rows should be a smaller
+   follow-up once row identity and purge semantics are pinned.

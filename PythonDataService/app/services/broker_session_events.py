@@ -89,8 +89,7 @@ class BrokerSessionEventService:
         rows = [
             event
             for event in self._read_all_events()
-            if event.seq > after_seq
-            and (client_id is None or event.client_id == client_id)
+            if event.seq > after_seq and (client_id is None or event.client_id == client_id)
         ]
         page = rows[:limit]
         next_seq = page[-1].seq if len(rows) > len(page) and page else None
@@ -125,7 +124,7 @@ class BrokerSessionEventService:
                 kept.append(line)
 
         if purged_count > 0:
-            _atomic_write_lines(path, kept)
+            write_jsonl_lines_atomically(path, kept)
         return BrokerSessionEventPurgeResult(
             purged_count=purged_count,
             remaining_count=len(kept),
@@ -195,10 +194,7 @@ def _classify(
     if event_type == "IBKR_CODE" and code is not None:
         meaning = IBKR_CODE_MEANINGS.get(code)
         if meaning is not None:
-            if (
-                code in _RESET_WINDOW_WARNING_CODES
-                and is_ibkr_north_america_reset_window(ts_ms)
-            ):
+            if code in _RESET_WINDOW_WARNING_CODES and is_ibkr_north_america_reset_window(ts_ms):
                 return meaning.category, "info", f"{meaning.label} during scheduled reset"
             return meaning.category, meaning.severity, meaning.label
         return "unclassified", "warning", "Unclassified IBKR code"
@@ -265,7 +261,7 @@ def _matches_purge_filter(
     return not (request.end_ms is not None and event.ts_ms > request.end_ms)
 
 
-def _atomic_write_lines(path: Path, lines: list[str]) -> None:
+def write_jsonl_lines_atomically(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     payload = "".join(f"{line}\n" for line in lines)
