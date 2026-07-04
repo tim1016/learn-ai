@@ -20,7 +20,10 @@ import asyncio
 
 import pytest
 
-from app.broker.ibkr.auto_reconnect_monitor import AutoReconnectMonitor
+from app.broker.ibkr.auto_reconnect_monitor import (
+    AutoReconnectMonitor,
+    jittered_backoff_delay,
+)
 from app.broker.ibkr.client import get_client_lifecycle_lock
 
 
@@ -282,6 +285,42 @@ async def test_monitor_reconnects_when_socket_is_closed() -> None:
 
 
 # ──────────────────────────── backoff ────────────────────────────────
+
+
+def test_jittered_backoff_delay_adds_bounded_positive_jitter() -> None:
+    assert (
+        jittered_backoff_delay(
+            10.0,
+            jitter_fraction=0.20,
+            random_unit=0.50,
+            max_delay_s=60.0,
+        )
+        == 11.0
+    )
+
+
+def test_jittered_backoff_delay_clamps_random_unit_and_max_delay() -> None:
+    assert (
+        jittered_backoff_delay(
+            10.0,
+            jitter_fraction=0.50,
+            random_unit=99.0,
+            max_delay_s=12.0,
+        )
+        == 12.0
+    )
+
+
+def test_jittered_backoff_delay_accepts_zero_jitter() -> None:
+    assert (
+        jittered_backoff_delay(
+            10.0,
+            jitter_fraction=0.0,
+            random_unit=0.75,
+            max_delay_s=60.0,
+        )
+        == 10.0
+    )
 
 
 @pytest.mark.asyncio
