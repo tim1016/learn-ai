@@ -693,3 +693,25 @@ Critical limits:
    Unknown IBKR codes are now visible, but many official message codes still
    land in the `unclassified` bucket until the shared code table is expanded
    with reviewed operator labels.
+
+## Slice 26 addendum — expanded IBKR code meanings
+
+Date: 2026-07-04
+
+The stacked slice-26 branch expands the shared IBKR code table for common
+operator-facing diagnostics: pacing limits (`100`, `101`), order/execution
+states (`201`, `202`, `2102`), auth/session collision (`326`), and the PRD's
+socket-down framing code (`507`). The classifier now routes those rows into
+the existing closed categories instead of `unclassified`; `507` also joins the
+client's connectivity-lost set so runtime health and monitor recovery see it
+as a broker connectivity loss.
+
+Critical limits:
+
+1. **The table is broader, not exhaustive.**
+   Many IBKR message codes still intentionally fall through to `unclassified`
+   until each one has a reviewed category, severity, and operator label.
+
+2. **Only 507 changes client state.**
+   The pacing/order/auth additions are diagnostic classifications. They do not
+   introduce new order-control, reconnect, or halt behavior.
