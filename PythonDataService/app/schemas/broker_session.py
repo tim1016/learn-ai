@@ -6,7 +6,7 @@ these DTOs carry observation facts and reconciliation labels only.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -171,8 +171,8 @@ class BrokerSessionEventPage(BaseModel):
 BrokerSessionEventPurgeConfirm = Literal["PURGE_BROKER_SESSION_DIAGNOSTICS"]
 
 
-class BrokerSessionEventPurgeRequest(BaseModel):
-    """Request to purge only broker-session diagnostic event history."""
+class _BrokerSessionPurgeFilterRequest(BaseModel):
+    """Shared request guard for destructive broker-session diagnostic purges."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -182,12 +182,16 @@ class BrokerSessionEventPurgeRequest(BaseModel):
     confirm: BrokerSessionEventPurgeConfirm
 
     @model_validator(mode="after")
-    def _validate_filter(self) -> BrokerSessionEventPurgeRequest:
+    def _validate_filter(self) -> Self:
         if self.client_id is None and self.start_ms is None and self.end_ms is None:
             raise ValueError("at least one purge filter is required")
         if self.start_ms is not None and self.end_ms is not None and self.start_ms > self.end_ms:
             raise ValueError("start_ms must be <= end_ms")
         return self
+
+
+class BrokerSessionEventPurgeRequest(_BrokerSessionPurgeFilterRequest):
+    """Request to purge only broker-session diagnostic event history."""
 
 
 class BrokerSessionEventPurgeResult(BaseModel):
@@ -199,23 +203,8 @@ class BrokerSessionEventPurgeResult(BaseModel):
     remaining_count: int = Field(ge=0)
 
 
-class BrokerSessionHistoryPurgeRequest(BaseModel):
+class BrokerSessionHistoryPurgeRequest(_BrokerSessionPurgeFilterRequest):
     """Request to purge only broker-session roster history diagnostics."""
-
-    model_config = ConfigDict(frozen=True)
-
-    client_id: int | None = Field(default=None, ge=0)
-    start_ms: int | None = Field(default=None, ge=0)
-    end_ms: int | None = Field(default=None, ge=0)
-    confirm: BrokerSessionEventPurgeConfirm
-
-    @model_validator(mode="after")
-    def _validate_filter(self) -> BrokerSessionHistoryPurgeRequest:
-        if self.client_id is None and self.start_ms is None and self.end_ms is None:
-            raise ValueError("at least one purge filter is required")
-        if self.start_ms is not None and self.end_ms is not None and self.start_ms > self.end_ms:
-            raise ValueError("start_ms must be <= end_ms")
-        return self
 
 
 class BrokerSessionHistoryPurgeResult(BaseModel):

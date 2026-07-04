@@ -93,6 +93,25 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Unattributed socket');
   });
 
+  it('keeps a newer manual refresh when an older SSE snapshot arrives', async () => {
+    const { fixture } = await setup(snapshot({ rows: [botSocket()] }));
+
+    eventSourceFor('/api/broker/session-mirror/stream').emit(
+      'snapshot',
+      JSON.stringify(
+        snapshot({
+          as_of_ms: AS_OF_MS - 1_000,
+          rows: [ghostSocket()],
+        }),
+      ),
+    );
+    await settle(fixture);
+
+    const text = pageText(fixture);
+    expect(text).toContain('PrajiTSLADemo');
+    expect(text).not.toContain('external');
+  });
+
   it('renders past rows as PAST and never as CURRENT', async () => {
     const { fixture } = await setup(
       snapshot({
@@ -285,8 +304,8 @@ describe('BrokerSessionMirrorComponent', () => {
     const button = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
     ).find((candidate) => candidate.textContent?.includes('Open Bot Cockpit'));
-    expect(button).toBeDefined();
-    (button as HTMLButtonElement | undefined)?.click();
+    if (button === undefined) throw new Error('Open Bot Cockpit button not found');
+    button.click();
     await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
@@ -299,20 +318,35 @@ describe('BrokerSessionMirrorComponent', () => {
     const button = fixture.nativeElement.querySelector(
       '[aria-label="Open bot PrajiTSLADemo"]',
     ) as HTMLButtonElement | null;
-    expect(button).toBeDefined();
+    expect(button).not.toBeNull();
     button?.click();
     await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
   });
 
-  it('purges diagnostic history with typed confirmation and clears buffered events', async () => {
+  it('purges diagnostic history with typed confirmation and scopes buffered events', async () => {
     const { fixture, service } = await setup(
       snapshot({
         rows: [
           botSocket({
             client_id: 42,
             event_counts: { link_connectivity: 1 },
+          }),
+          botSocket({
+            row_id: 'socket:21761:50124:4002:0',
+            strategy_instance_id: 'OtherBot',
+            run_id: 'run-b',
+            client_id: 77,
+            event_counts: { data_farm: 1 },
+            registry_claim: {
+              state: 'running',
+              run_id: 'run-b',
+              pid: 21761,
+              run_dir: '/runs/run-b',
+              started_at_ms: AS_OF_MS - 60_000,
+              ended_at_ms: null,
+            },
           }),
         ],
       }),
@@ -331,8 +365,20 @@ describe('BrokerSessionMirrorComponent', () => {
         }),
       ),
     );
+    eventSourceFor('/api/broker/session-mirror/events/stream').emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          seq: 2,
+          client_id: 77,
+          category: 'data_farm',
+          label: 'Market data farm degraded',
+        }),
+      ),
+    );
     await settle(fixture);
     expect(pageText(fixture)).toContain('IBKR link interrupted');
+    expect(pageText(fixture)).toContain('Market data farm degraded');
 
     writeInput(fixture, 'purge-client-id', '42');
     writeInput(fixture, 'purge-confirm', BROKER_SESSION_PURGE_CONFIRM);
@@ -351,6 +397,92 @@ describe('BrokerSessionMirrorComponent', () => {
     });
     expect(pageText(fixture)).toContain('Purged 1 event; 0 remain.');
     expect(pageText(fixture)).not.toContain('IBKR link interrupted');
+    expect(pageText(fixture)).toContain('Market data farm degraded');
+  });
+
+  it('scopes row detail events to the row session window', async () => {
+    const { fixture } = await setup(
+      snapshot({
+        rows: [
+          botSocket({
+            client_id: 42,
+            as_of_ms: AS_OF_MS,
+            event_counts: { link_connectivity: 1 },
+            registry_claim: {
+              state: 'running',
+              run_id: 'run-a',
+              pid: 21760,
+              run_dir: '/runs/run-a',
+              started_at_ms: AS_OF_MS - 100,
+              ended_at_ms: null,
+            },
+          }),
+          botSocket({
+            row_id: 'socket:21761:50124:4002:0',
+            strategy_instance_id: 'MissingStart',
+            run_id: 'run-missing-start',
+            client_id: 77,
+            event_counts: { link_connectivity: 1 },
+            registry_claim: null,
+          }),
+        ],
+      }),
+    );
+
+    const eventSource = eventSourceFor(
+      '/api/broker/session-mirror/events/stream',
+    );
+    eventSource.emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          seq: 1,
+          ts_ms: AS_OF_MS - 200,
+          client_id: 42,
+          label: 'Old link event',
+        }),
+      ),
+    );
+    eventSource.emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          seq: 2,
+          ts_ms: AS_OF_MS - 50,
+          client_id: 42,
+          label: 'Current link event',
+        }),
+      ),
+    );
+    eventSource.emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          seq: 3,
+          ts_ms: AS_OF_MS + 50,
+          client_id: 42,
+          label: 'Future link event',
+        }),
+      ),
+    );
+    eventSource.emit(
+      'broker_event',
+      JSON.stringify(
+        brokerEvent({
+          seq: 4,
+          ts_ms: AS_OF_MS - 50,
+          client_id: 77,
+          label: 'Missing start event',
+        }),
+      ),
+    );
+    await settle(fixture);
+
+    const text = pageText(fixture);
+    expect(text).toContain('Current link event');
+    expect(text).not.toContain('Old link event');
+    expect(text).not.toContain('Future link event');
+    expect(text).not.toContain('Missing start event');
   });
 
   it('purges roster history with typed confirmation without clearing buffered events', async () => {

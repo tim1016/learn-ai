@@ -64,7 +64,10 @@ from app.routers import (
 from app.routers import (
     live_runs as live_runs_router,
 )
-from app.security.data_plane_control import require_data_plane_control_secret
+from app.security.data_plane_control import (
+    require_data_plane_control_secret,
+    require_data_plane_control_secret_always,
+)
 from app.services.account_truth_refresh import AccountTruthRefreshLoop
 from app.utils.error_handlers import polygon_exception_handler
 
@@ -281,6 +284,7 @@ app.add_middleware(
 
 # Include routers
 DATA_PLANE_CONTROL_DEPENDENCIES = [Depends(require_data_plane_control_secret)]
+BROKER_SESSION_MIRROR_DEPENDENCIES = [Depends(require_data_plane_control_secret_always)]
 
 app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
 app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
@@ -374,8 +378,8 @@ app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account-scoped reconciliation and recovery triage endpoints.
 app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# Broker session mirror — read-only roster/SSE observatory.
-app.include_router(broker_session.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
+app.include_router(broker_session.router, dependencies=BROKER_SESSION_MIRROR_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

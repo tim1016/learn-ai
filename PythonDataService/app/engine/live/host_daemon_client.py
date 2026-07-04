@@ -35,6 +35,10 @@ from app.schemas.live_runs import HostRunnerHealth
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(2.0)
+# The host-daemon socket route shells out to lsof (5s cap) and may then inspect
+# owning processes. Keep this read bounded, but do not force false degradation
+# with the generic low-latency health timeout.
+_SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
@@ -359,6 +363,7 @@ async def fetch_gateway_sockets(
     result, response = await _classify_http(
         f"{base_url.rstrip('/')}/broker/sockets?gateway_port={gateway_port}",
         method="GET",
+        timeout=_SOCKET_PROBE_TIMEOUT,
     )
     if response is None:
         return result, None

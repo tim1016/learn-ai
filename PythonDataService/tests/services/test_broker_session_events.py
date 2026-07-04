@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.schemas.broker_session import BrokerSessionEventPurgeRequest
+from app.schemas.broker_session import (
+    BrokerSessionEventPurgeRequest,
+    BrokerSessionRegistryClaim,
+    BrokerSessionRosterRow,
+)
 from app.services.broker_session_events import (
     BrokerSessionEventService,
     classify_broker_session_event,
@@ -64,6 +68,23 @@ def test_classifier_keeps_same_code_warning_outside_reset_window() -> None:
 
     assert event.severity == "warning"
     assert event.label == "IBKR link interrupted"
+
+
+def test_classifier_keeps_port_reset_warning_during_reset_window() -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "IBKR_CODE",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 0, 30),
+            "client_id": 42,
+            "ibkr_code": 1300,
+            "message": "TWS socket port has been reset",
+        },
+    )
+
+    assert event.category == "link_connectivity"
+    assert event.severity == "warning"
+    assert event.label == "IBKR socket port reset"
 
 
 def test_reset_window_helper_uses_eastern_weekday_schedule() -> None:
@@ -143,6 +164,37 @@ def test_classifier_maps_monitor_reconnect_events() -> None:
     assert event.label == "Broker reconnect exhausted"
 
 
+def test_classifier_surfaces_reconnect_error_field_as_message() -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "BROKER_RECONNECT_FAILED",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 10, 0),
+            "client_id": 42,
+            "error": "TimeoutError: connect timed out",
+        },
+    )
+
+    assert event.category == "recovery_reconnect"
+    assert event.severity == "warning"
+    assert event.message == "TimeoutError: connect timed out"
+
+
+def test_classifier_demotes_link_wait_expired_during_reset_window() -> None:
+    event = classify_broker_session_event(
+        seq=1,
+        payload={
+            "event_type": "BROKER_RECONNECT_LINK_WAIT_EXPIRED",
+            "ts_ms_utc": _ms_et(2026, 7, 3, 0, 30),
+            "client_id": 42,
+        },
+    )
+
+    assert event.category == "recovery_reconnect"
+    assert event.severity == "info"
+    assert event.label == "Broker link wait expired during scheduled reset"
+
+
 def test_event_service_pages_filters_and_counts_by_client_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -186,6 +238,73 @@ def test_event_service_pages_filters_and_counts_by_client_id(
         "recovery_reconnect": 1,
     }
     assert service.counts_by_client_id()[77] == {"data_farm": 1}
+
+
+def test_event_service_counts_are_scoped_to_row_session_window(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "connection_events.jsonl"
+    _write_events(
+        path,
+        [
+            {
+                "event_type": "IBKR_CODE",
+                "ts_ms_utc": 50,
+                "client_id": 42,
+                "ibkr_code": 1100,
+            },
+            {
+                "event_type": "IBKR_CODE",
+                "ts_ms_utc": 150,
+                "client_id": 42,
+                "ibkr_code": 1100,
+            },
+            {
+                "event_type": "IBKR_CODE",
+                "ts_ms_utc": 250,
+                "client_id": 42,
+                "ibkr_code": 1100,
+            },
+        ],
+    )
+    service = BrokerSessionEventService(path=path)
+
+    counts = service.counts_for_rows(
+        [
+            _roster_row(
+                row_id="bot:run-a",
+                client_id=42,
+                as_of_ms=200,
+                started_at_ms=100,
+            ),
+            _roster_row(
+                row_id="bot:missing-start",
+                client_id=42,
+                as_of_ms=300,
+                started_at_ms=None,
+            ),
+            _roster_row(
+                row_id="system:data-plane:42",
+                client_id=42,
+                as_of_ms=300,
+                started_at_ms=None,
+                identity_type="system",
+            ),
+        ]
+    )
+
+    assert counts["bot:run-a"] == {"link_connectivity": 1}
+    assert "bot:missing-start" not in counts
+    assert counts["system:data-plane:42"] == {"link_connectivity": 3}
+
+
+def test_event_service_raises_non_missing_read_errors(tmp_path: Path) -> None:
+    path = tmp_path / "connection_events.jsonl"
+    path.mkdir()
+    service = BrokerSessionEventService(path=path)
+
+    with pytest.raises(OSError):
+        service.events(limit=10)
 
 
 def test_event_service_appends_with_bounded_retention_and_stable_cursor(
@@ -299,6 +418,33 @@ def _write_events(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
+    )
+
+
+def _roster_row(
+    *,
+    row_id: str,
+    client_id: int,
+    as_of_ms: int,
+    started_at_ms: int | None,
+    identity_type: str = "bot",
+) -> BrokerSessionRosterRow:
+    return BrokerSessionRosterRow(
+        row_id=row_id,
+        identity_type=identity_type,  # type: ignore[arg-type]
+        recency="current",
+        socket_present=True,
+        client_id=client_id,
+        as_of_ms=as_of_ms,
+        registry_claim=(
+            BrokerSessionRegistryClaim(
+                state="running",
+                run_id="run-a",
+                started_at_ms=started_at_ms,
+            )
+            if started_at_ms is not None
+            else None
+        ),
     )
 
 

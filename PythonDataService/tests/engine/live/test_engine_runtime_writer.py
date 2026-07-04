@@ -27,6 +27,7 @@ import pytest
 
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
+    ENGINE_RUNTIME_SCHEMA_VERSION,
     BarLoopBlock,
     BrokerBlock,
     CommandLoopBlock,
@@ -96,12 +97,14 @@ def test_snapshot_round_trips_full_field_set() -> None:
     payload = snapshot.model_dump_json()
     restored = EngineRuntimeSnapshot.model_validate_json(payload)
     assert restored == snapshot
+    assert restored.schema_version == ENGINE_RUNTIME_SCHEMA_VERSION
     assert restored.broker.client_id == 12
     assert restored.broker.recovery_state == "HEALTHY"
 
 
 def test_snapshot_accepts_legacy_broker_block_without_client_id() -> None:
     payload = json.loads(_make_snapshot().model_dump_json())
+    payload["schema_version"] = 1
     del payload["broker"]["client_id"]
 
     restored = EngineRuntimeSnapshot.model_validate(payload)

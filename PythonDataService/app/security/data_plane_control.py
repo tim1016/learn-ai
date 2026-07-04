@@ -23,13 +23,31 @@ async def require_data_plane_control_secret(
     if request.method.upper() not in UNSAFE_HTTP_METHODS:
         return
 
+    _require_configured_control_secret(
+        supplied=supplied,
+        missing_detail=f"{CONTROL_SECRET_ENV_VAR} is required for data-plane control mutations",
+    )
+
+
+async def require_data_plane_control_secret_always(
+    supplied: str | None = Header(default=None, alias=CONTROL_SECRET_HEADER),
+) -> None:
+    """Require the local shared secret for sensitive read-only observability routes."""
+
+    _require_configured_control_secret(
+        supplied=supplied,
+        missing_detail=f"{CONTROL_SECRET_ENV_VAR} is required for broker session mirror routes",
+    )
+
+
+def _require_configured_control_secret(*, supplied: str | None, missing_detail: str) -> None:
     expected = settings.DATA_PLANE_CONTROL_SECRET.strip()
     if not expected:
         if settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL:
             return
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"{CONTROL_SECRET_ENV_VAR} is required for data-plane control mutations",
+            detail=missing_detail,
         )
 
     if not hmac.compare_digest((supplied or "").encode("utf-8"), expected.encode("utf-8")):
@@ -45,4 +63,5 @@ __all__ = [
     "CONTROL_SECRET_HEADER",
     "UNSAFE_HTTP_METHODS",
     "require_data_plane_control_secret",
+    "require_data_plane_control_secret_always",
 ]

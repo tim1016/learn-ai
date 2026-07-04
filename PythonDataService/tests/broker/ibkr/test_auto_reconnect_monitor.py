@@ -42,6 +42,7 @@ class _FakeClient:
         desired_connected: bool = True,
         probe_outcomes: list[bool | Exception] | None = None,
         subscriptions_stale: bool = False,
+        last_ibkr_code: int | None = None,
     ) -> None:
         self._is_connected = is_connected
         self._connection_lost = connection_lost
@@ -58,6 +59,7 @@ class _FakeClient:
         # short-circuit on intentional disconnects.
         self._desired_connected = desired_connected
         self._subscriptions_stale = subscriptions_stale
+        self._last_ibkr_code = last_ibkr_code
         self.recovery_succeeded_calls = 0
         self.recovery_failed_calls = 0
         self.recovery_events: list[tuple[str, dict[str, object]]] = []
@@ -76,6 +78,10 @@ class _FakeClient:
     @property
     def subscriptions_stale(self) -> bool:
         return self._subscriptions_stale
+
+    @property
+    def last_ibkr_code(self) -> int | None:
+        return self._last_ibkr_code
 
     def set_desired_connected(self, value: bool) -> None:
         self._desired_connected = value
@@ -269,6 +275,31 @@ async def test_monitor_reconnects_when_soft_link_wait_expires() -> None:
     assert monitor.current_attempt == 0
 
 
+@pytest.mark.asyncio
+async def test_monitor_reconnects_immediately_after_ibkr_code_504() -> None:
+    client = _FakeClient(
+        is_connected=True,
+        connection_lost=True,
+        last_ibkr_code=504,
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.01,
+        initial_backoff_s=0.01,
+        link_interruption_wait_s=30.0,
+    )
+    monitor.start()
+    for _ in range(50):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.disconnect_calls >= 1
+    assert client.connect_calls >= 1
+    assert monitor.successful_reconnect_count == 1
+
+
 # ──────────────────────────── hard disconnect ────────────────────────
 
 
@@ -329,6 +360,15 @@ def test_jittered_backoff_delay_accepts_zero_jitter() -> None:
         )
         == 10.0
     )
+
+
+def test_jittered_backoff_delay_varies_when_base_is_capped() -> None:
+    assert jittered_backoff_delay(
+        60.0,
+        jitter_fraction=0.10,
+        random_unit=0.50,
+        max_delay_s=60.0,
+    ) == 57.0
 
 
 @pytest.mark.asyncio
@@ -393,6 +433,64 @@ async def test_monitor_enters_hard_down_when_reconnect_attempts_exhaust() -> Non
             "attempts": 2,
         },
     ) in client.recovery_events
+
+
+@pytest.mark.asyncio
+async def test_monitor_uses_finite_default_attempt_cap() -> None:
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom] * (AutoReconnectMonitor.MAX_RECONNECT_ATTEMPTS + 1),
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.001,
+        initial_backoff_s=0.0001,
+        max_backoff_s=0.0001,
+    )
+    monitor.start()
+    for _ in range(100):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.001)
+    await monitor.stop()
+
+    assert client.connect_calls == AutoReconnectMonitor.MAX_RECONNECT_ATTEMPTS
+    assert monitor.recovery_state == "HARD_DOWN"
+
+
+@pytest.mark.asyncio
+async def test_monitor_retries_when_post_reconnect_recovery_fails() -> None:
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[True, True],
+    )
+    callback_calls = 0
+
+    async def flaky_resubscribe() -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+        if callback_calls == 1:
+            raise RuntimeError("subscriptions still stale")
+
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        recovery_callbacks=[flaky_resubscribe],
+    )
+    monitor.start()
+    for _ in range(100):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert callback_calls == 2
+    assert client.connect_calls == 2
+    assert client.recovery_failed_calls == 1
+    assert client.recovery_succeeded_calls == 1
+    assert monitor.recovery_state == "HEALTHY"
 
 
 # ──────────────────────────── shared lock ────────────────────────────

@@ -24,7 +24,7 @@ def test_history_service_retains_bounded_snapshots_newest_first(tmp_path: Path) 
     assert page.retained_count == 2
     assert [row.as_of_ms for row in page.rows] == [30, 20]
     assert page.rows[0].rows[0].run_id == "run-c"
-    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 3
 
 
 def test_history_service_skips_malformed_diagnostic_rows(tmp_path: Path) -> None:

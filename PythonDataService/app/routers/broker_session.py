@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -30,6 +31,7 @@ from app.services.broker_session_mirror import (
 )
 
 router = APIRouter(prefix="/api/broker/session-mirror", tags=["broker-session-mirror"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=BrokerSessionMirrorSnapshot)
@@ -93,8 +95,13 @@ async def broker_session_stream(
     async def event_source():
         try:
             while True:
-                snapshot = await service.snapshot()
-                yield f"event: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+                try:
+                    snapshot = await service.snapshot()
+                except Exception:
+                    logger.exception("broker session snapshot stream failed")
+                    yield "event: error\ndata: {}\n\n"
+                else:
+                    yield f"event: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
                 await asyncio.sleep(interval_ms / 1000)
         except asyncio.CancelledError:
             raise
@@ -119,14 +126,22 @@ async def broker_session_events_stream(
         last_seq = since_seq
         try:
             while True:
-                page = service.events(
-                    client_id=client_id,
-                    after_seq=last_seq,
-                    limit=500,
-                )
+                try:
+                    page = service.events(
+                        client_id=client_id,
+                        after_seq=last_seq,
+                        limit=500,
+                    )
+                except Exception:
+                    logger.exception("broker session event stream failed")
+                    yield "event: error\ndata: {}\n\n"
+                    await asyncio.sleep(poll_ms / 1000)
+                    continue
                 for row in page.rows:
                     yield f"event: broker_event\ndata: {row.model_dump_json()}\n\n"
                     last_seq = row.seq
+                if page.next_seq is not None:
+                    continue
                 await asyncio.sleep(poll_ms / 1000)
         except asyncio.CancelledError:
             raise

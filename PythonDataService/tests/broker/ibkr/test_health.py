@@ -123,6 +123,18 @@ def test_build_broker_health_preserves_client_state_when_monitor_idle() -> None:
     assert out.successful_reconnect_count == 4
 
 
+def test_build_broker_health_does_not_let_monitor_healthy_hide_stale_client() -> None:
+    client = _fake_client(
+        _fake_client_health(connection_state="subscriptions_stale")
+    )
+    monitor = _fake_monitor(recovery_state="HEALTHY")
+
+    out = build_broker_health(client, monitor)
+
+    assert out.connection_state == "subscriptions_stale"
+    assert out.recovery_state == "RESTORING"
+
+
 def test_build_broker_health_overlays_recovering_after_reconnect() -> None:
     client = _fake_client(_fake_client_health(connection_state="connected"))
     monitor = _fake_monitor(
@@ -150,6 +162,30 @@ def test_build_broker_health_overlays_hard_down_after_attempts_exhaust() -> None
     assert out.connection_state == "hard_down"
     assert out.recovery_state == "HARD_DOWN"
     assert out.last_transition_ms == 1_700_000_005_000
+
+
+def test_build_broker_health_suppresses_hard_down_after_operator_disconnect() -> None:
+    client = _fake_client(
+        _fake_client_health(
+            connected=False,
+            account_id=None,
+            is_paper=None,
+            server_version=None,
+            connection_state="disconnected",
+            recovery_state="SOCKET_DOWN",
+        )
+    )
+    client.desired_connected = False
+    monitor = _fake_monitor(
+        is_hard_down=True,
+        last_transition_ms=1_700_000_005_000,
+        recovery_state="HARD_DOWN",
+    )
+
+    out = build_broker_health(client, monitor)
+
+    assert out.connection_state == "disconnected"
+    assert out.recovery_state == "SOCKET_DOWN"
 
 
 def test_build_broker_health_last_transition_is_max_of_both_sides() -> None:

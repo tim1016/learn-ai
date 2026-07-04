@@ -63,6 +63,69 @@ def test_reconciler_surfaces_registry_offline_socket_live() -> None:
     assert rows[0].attention_codes == ["REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE"]
 
 
+def test_reconciler_does_not_claim_registry_offline_when_registry_unavailable() -> None:
+    run_dir = "/runs/run-a"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=21760,
+                command="python",
+                run_dir=run_dir,
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=None,
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="PrajiTSLADemo",
+                run_id="run-a",
+                run_dir=run_dir,
+                account_id="DU123",
+                connection_state="connected",
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert rows[0].identity_type == "bot"
+    assert rows[0].attention_codes == []
+
+
+def test_reconciler_matches_container_runtime_by_run_id_when_socket_path_is_host_path() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=21760,
+                command="python",
+                run_dir="/Users/inkant/learn-ai/live_runs/run-a",
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=None,
+        runtime_index={
+            "/app/live_runs/run-a": RuntimeIndexEntry(
+                strategy_instance_id="PrajiTSLADemo",
+                run_id="run-a",
+                run_dir="/app/live_runs/run-a",
+                account_id="DU123",
+                client_id=42,
+                connection_state="connected",
+            )
+        },
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert rows[0].identity_type == "bot"
+    assert rows[0].strategy_instance_id == "PrajiTSLADemo"
+    assert rows[0].client_id == 42
+
+
 def test_reconciler_surfaces_started_but_no_socket() -> None:
     run_dir = "/runs/run-b"
     rows = reconcile_broker_session_roster(
@@ -216,6 +279,34 @@ def test_reconciler_adds_connected_data_plane_system_row() -> None:
     assert rows[0].account_id == "DU123"
     assert rows[0].recency == "current"
     assert rows[0].recovery_state == "HEALTHY"
+
+
+def test_reconciler_adds_disconnected_data_plane_system_row() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=42,
+            connected=False,
+            account_id=None,
+            is_paper=None,
+            fetched_at_ms=AS_OF_MS,
+            connection_state="hard_down",
+            recovery_state="HARD_DOWN",
+            last_transition_ms=AS_OF_MS - 500,
+        ),
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "system"
+    assert rows[0].socket_present is False
+    assert rows[0].connection_state == "hard_down"
+    assert rows[0].recovery_state == "HARD_DOWN"
 
 
 def test_reconciler_prefers_health_recovery_state_for_data_plane_row() -> None:
