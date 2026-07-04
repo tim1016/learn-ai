@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from app.schemas.broker_session import (
 
 _EVENT_LOG_RELATIVE = Path("_broker") / "connection_events.jsonl"
 _EVENT_LOG_MAX_EVENTS = 5_000
+_ROW_EVENT_DETAIL_LIMIT = 10
 _ET = ZoneInfo("America/New_York")
 _RESET_WINDOW_WARNING_CODES = frozenset({1100, 2110, 2103, 2105})
 
@@ -85,6 +87,14 @@ _EVENT_TYPE_MEANINGS: dict[
         "Broker probe forced reconnect",
     ),
 }
+
+
+@dataclass(frozen=True)
+class BrokerSessionRowEventAttachment:
+    """Backend-authored event detail and counts for one roster row."""
+
+    events: list[BrokerSessionEvent]
+    event_counts: dict[BrokerSessionEventCategory, int]
 
 
 class BrokerSessionEventService:
@@ -148,18 +158,31 @@ class BrokerSessionEventService:
         self,
         rows: list[BrokerSessionRosterRow],
     ) -> dict[str, dict[BrokerSessionEventCategory, int]]:
+        return {
+            row_id: attachment.event_counts
+            for row_id, attachment in self.events_for_rows(rows).items()
+        }
+
+    def events_for_rows(
+        self,
+        rows: list[BrokerSessionRosterRow],
+        *,
+        limit_per_row: int = _ROW_EVENT_DETAIL_LIMIT,
+    ) -> dict[str, BrokerSessionRowEventAttachment]:
         events = self._read_all_events()
-        out: dict[str, dict[BrokerSessionEventCategory, int]] = {}
+        out: dict[str, BrokerSessionRowEventAttachment] = {}
+        limit = max(1, limit_per_row)
         for row in rows:
             if row.client_id is None or not _row_can_attach_client_events(row):
                 continue
-            counts: dict[BrokerSessionEventCategory, int] = {}
-            for event in events:
-                if not _event_matches_row(event, row):
-                    continue
-                counts[event.category] = counts.get(event.category, 0) + 1
-            if counts:
-                out[row.row_id] = counts
+            row_events = [
+                event for event in events if _event_matches_row(event, row)
+            ]
+            if row_events:
+                out[row.row_id] = BrokerSessionRowEventAttachment(
+                    events=list(reversed(row_events[-limit:])),
+                    event_counts=_event_counts(row_events),
+                )
         return out
 
     def purge(
@@ -337,6 +360,15 @@ def _row_can_attach_client_events(row: BrokerSessionRosterRow) -> bool:
     if row.identity_type == "system":
         return True
     return row.registry_claim is not None and row.registry_claim.started_at_ms is not None
+
+
+def _event_counts(
+    events: list[BrokerSessionEvent],
+) -> dict[BrokerSessionEventCategory, int]:
+    counts: dict[BrokerSessionEventCategory, int] = {}
+    for event in events:
+        counts[event.category] = counts.get(event.category, 0) + 1
+    return counts
 
 
 def _event_matches_row(event: BrokerSessionEvent, row: BrokerSessionRosterRow) -> bool:

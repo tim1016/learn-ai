@@ -268,34 +268,41 @@ def test_event_service_counts_are_scoped_to_row_session_window(
         ],
     )
     service = BrokerSessionEventService(path=path)
+    rows = [
+        _roster_row(
+            row_id="bot:run-a",
+            client_id=42,
+            as_of_ms=200,
+            started_at_ms=100,
+        ),
+        _roster_row(
+            row_id="bot:missing-start",
+            client_id=42,
+            as_of_ms=300,
+            started_at_ms=None,
+        ),
+        _roster_row(
+            row_id="system:data-plane:42",
+            client_id=42,
+            as_of_ms=300,
+            started_at_ms=None,
+            identity_type="system",
+        ),
+    ]
 
-    counts = service.counts_for_rows(
-        [
-            _roster_row(
-                row_id="bot:run-a",
-                client_id=42,
-                as_of_ms=200,
-                started_at_ms=100,
-            ),
-            _roster_row(
-                row_id="bot:missing-start",
-                client_id=42,
-                as_of_ms=300,
-                started_at_ms=None,
-            ),
-            _roster_row(
-                row_id="system:data-plane:42",
-                client_id=42,
-                as_of_ms=300,
-                started_at_ms=None,
-                identity_type="system",
-            ),
-        ]
-    )
+    counts = service.counts_for_rows(rows)
+    attachments = service.events_for_rows(rows)
 
     assert counts["bot:run-a"] == {"link_connectivity": 1}
     assert "bot:missing-start" not in counts
     assert counts["system:data-plane:42"] == {"link_connectivity": 3}
+    assert [event.ts_ms for event in attachments["bot:run-a"].events] == [150]
+    assert "bot:missing-start" not in attachments
+    assert [event.ts_ms for event in attachments["system:data-plane:42"].events] == [
+        250,
+        150,
+        50,
+    ]
 
 
 def test_event_service_raises_non_missing_read_errors(tmp_path: Path) -> None:

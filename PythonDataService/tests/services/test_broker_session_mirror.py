@@ -13,6 +13,7 @@ from app.engine.live.engine_runtime import (
     write_engine_runtime_snapshot,
 )
 from app.schemas.broker_session import (
+    BrokerSessionEvent,
     BrokerSessionRosterRow,
     GatewaySocketsSnapshot,
 )
@@ -24,14 +25,16 @@ from app.services.broker_session_mirror import (
 
 
 class _FakeEventService:
-    def counts_by_client_id(self) -> dict[int, dict[str, int]]:
-        return {}
+    def __init__(self, attachments=None) -> None:
+        self.attachments = attachments or {}
+        self.rows = None
 
-    def counts_for_rows(
+    def events_for_rows(
         self,
         rows: list[BrokerSessionRosterRow],
-    ) -> dict[str, dict[str, int]]:
-        return {}
+    ):
+        self.rows = list(rows)
+        return self.attachments
 
 
 class _FakeHistoryService:
@@ -152,6 +155,24 @@ async def test_mirror_snapshot_includes_past_closed_history_when_observer_online
         client_id=42,
         as_of_ms=1_783_120_000_000,
     )
+    event = BrokerSessionEvent(
+        seq=1,
+        ts_ms=1_783_120_000_000,
+        category="link_connectivity",
+        severity="warning",
+        label="IBKR link interrupted",
+        raw_event_type="IBKR_CODE",
+        client_id=42,
+        ibkr_code=1100,
+    )
+    event_service = _FakeEventService(
+        attachments={
+            past_row.row_id: SimpleNamespace(
+                events=[event],
+                event_counts={"link_connectivity": 1},
+            )
+        }
+    )
     history = _FakeHistoryService(past_rows=[past_row])
     monkeypatch.setattr(
         broker_session_mirror,
@@ -195,12 +216,17 @@ async def test_mirror_snapshot_includes_past_closed_history_when_observer_online
         _fetch_instances,
     )
     service = BrokerSessionMirrorService(
-        event_service=_FakeEventService(),
+        event_service=event_service,
         history_service=history,
     )
 
     snapshot = await service.snapshot()
 
     assert snapshot.observer_status == "online"
-    assert snapshot.rows == [past_row]
+    assert snapshot.rows[0].event_counts == {"link_connectivity": 1}
+    assert snapshot.rows[0].events == [event]
+    assert snapshot.summary.current == 0
+    assert snapshot.summary.past == 1
+    assert snapshot.summary.unknown == 0
+    assert snapshot.summary.attention == 0
     assert history.current_rows == []

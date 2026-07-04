@@ -23,6 +23,7 @@ from app.routers.broker_dependencies import is_broker_disabled
 from app.schemas.broker_session import (
     BrokerSessionMirrorSnapshot,
     GatewaySocketsSnapshot,
+    summarize_broker_session_rows,
 )
 from app.schemas.live_runs import HostRunnerInstancesStatus
 from app.services.broker_session_events import (
@@ -108,22 +109,28 @@ class BrokerSessionMirrorService:
                 )
             )
         try:
-            event_counts_by_row_id = await asyncio.to_thread(
-                self._event_service.counts_for_rows,
+            event_attachments_by_row_id = await asyncio.to_thread(
+                self._event_service.events_for_rows,
                 rows,
             )
         except OSError as exc:
-            logger.warning("failed to read broker session event counts: %s", exc)
+            logger.warning("failed to read broker session event attachments: %s", exc)
             degradation_reasons.append(f"broker event log unavailable: {exc}")
-            event_counts_by_row_id = {}
-        rows = [
-            row.model_copy(
-                update={
-                    "event_counts": event_counts_by_row_id.get(row.row_id, {})
-                }
+            event_attachments_by_row_id = {}
+        enriched_rows = []
+        for row in rows:
+            attachment = event_attachments_by_row_id.get(row.row_id)
+            enriched_rows.append(
+                row.model_copy(
+                    update={
+                        "event_counts": attachment.event_counts
+                        if attachment is not None
+                        else {},
+                        "events": attachment.events if attachment is not None else [],
+                    }
+                )
             )
-            for row in rows
-        ]
+        rows = enriched_rows
         observer_status = "online" if socket_snapshot is not None else "degraded"
         ghost_detection_status = "available" if socket_snapshot is not None else "unknown"
         snapshot = BrokerSessionMirrorSnapshot(
@@ -132,6 +139,7 @@ class BrokerSessionMirrorService:
             observer_status=observer_status,
             ghost_detection_status=ghost_detection_status,
             rows=rows,
+            summary=summarize_broker_session_rows(rows),
             degradation_reasons=degradation_reasons,
         )
         try:

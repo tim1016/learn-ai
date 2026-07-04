@@ -120,7 +120,14 @@ async def test_broker_session_snapshot_endpoint_returns_roster() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["observer_status"] == "online"
+    assert body["summary"] == {
+        "current": 1,
+        "past": 0,
+        "unknown": 0,
+        "attention": 1,
+    }
     assert body["rows"][0]["strategy_instance_id"] == "PrajiTSLADemo"
+    assert body["rows"][0]["events"] == []
     assert body["rows"][0]["attention_codes"] == ["REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE"]
 
 
