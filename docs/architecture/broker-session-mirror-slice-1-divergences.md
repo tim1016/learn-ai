@@ -248,3 +248,27 @@ Critical limit:
    (`soft_lost`, `subscriptions_stale`, `reconnecting`, `hard_down`, and so on)
    into the ADR-0018 recovery vocabulary for display. A later recovery-authority
    slice should publish the monitor-owned state directly from each child.
+
+## Slice 9 addendum — broker-health recovery-state contract
+
+Date: 2026-07-04
+
+The stacked slice-9 branch publishes ADR-0018 `recovery_state` on
+`IbkrConnectionHealth`. When the FastAPI data plane has an
+`AutoReconnectMonitor`, broker health now carries the monitor-owned recovery
+state and the broker-session mirror uses that value for the data-plane system
+row instead of recalculating it from `connection_state`.
+
+Critical limits:
+
+1. **Child rows still project recovery state.**
+   Child runtime artifacts do not yet publish the monitor-owned ADR-0018 state,
+   so bot rows continue to map their existing `connection_state` into the
+   recovery vocabulary. Publishing exact child recovery state should be a later
+   slice that updates the live child runtime payload without changing submit
+   behavior in the same PR.
+
+2. **Health remains a visibility contract, not ResumeGuard clearing.**
+   This slice does not advance `ResumeGuardState` or add reconciliation
+   receipts. It only makes the recovery authority visible through the existing
+   health and mirror APIs.
