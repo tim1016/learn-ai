@@ -59,6 +59,7 @@ def test_reconciler_surfaces_registry_offline_socket_live() -> None:
     assert rows[0].recency == "current"
     assert rows[0].socket_present is True
     assert rows[0].strategy_instance_id == "PrajiTSLADemo"
+    assert rows[0].recovery_state == "HEALTHY"
     assert rows[0].attention_codes == ["REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE"]
 
 
@@ -214,6 +215,46 @@ def test_reconciler_adds_connected_data_plane_system_row() -> None:
     assert rows[0].client_id == 42
     assert rows[0].account_id == "DU123"
     assert rows[0].recency == "current"
+    assert rows[0].recovery_state == "HEALTHY"
+
+
+def test_reconciler_projects_runtime_recovery_states() -> None:
+    cases = [
+        ("soft_lost", "LINK_INTERRUPTED"),
+        ("subscriptions_stale", "RESTORING"),
+        ("recovering", "RESTORING"),
+        ("reconnecting", "RECONNECTING"),
+        ("hard_down", "HARD_DOWN"),
+        ("disconnected", "SOCKET_DOWN"),
+    ]
+
+    for connection_state, expected_recovery_state in cases:
+        run_dir = f"/runs/{connection_state}"
+        rows = reconcile_broker_session_roster(
+            socket_rows=[
+                GatewaySocketRow(
+                    pid=21760,
+                    command="python",
+                    run_dir=run_dir,
+                    local_port=50123,
+                    remote_host="127.0.0.1",
+                    remote_port=4002,
+                )
+            ],
+            registry_snapshot=_registry(),
+            runtime_index={
+                run_dir: RuntimeIndexEntry(
+                    strategy_instance_id=f"bot-{connection_state}",
+                    run_id=f"run-{connection_state}",
+                    run_dir=run_dir,
+                    connection_state=connection_state,
+                )
+            },
+            data_plane_health=None,
+            as_of_ms=AS_OF_MS,
+        )
+
+        assert rows[0].recovery_state == expected_recovery_state
 
 
 def _registry(*instances: HostRunnerInstance) -> HostRunnerInstancesStatus:

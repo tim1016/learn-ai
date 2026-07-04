@@ -30,6 +30,14 @@ BrokerSessionRecency = Literal[
 ]
 BrokerSessionObserverStatus = Literal["online", "degraded"]
 BrokerSessionGhostDetectionStatus = Literal["available", "unknown"]
+BrokerSessionRecoveryState = Literal[
+    "HEALTHY",
+    "LINK_INTERRUPTED",
+    "RESTORING",
+    "SOCKET_DOWN",
+    "RECONNECTING",
+    "HARD_DOWN",
+]
 BrokerSessionAttentionCode = Literal[
     "REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE",
     "STARTED_BUT_NO_SOCKET",
@@ -100,7 +108,7 @@ class BrokerSessionRosterRow(BaseModel):
     remote_host: str | None = None
     remote_port: int | None = Field(default=None, ge=0, le=65535)
     connection_state: str | None = None
-    recovery_state: str | None = None
+    recovery_state: BrokerSessionRecoveryState | None = None
     connection_epoch: int | None = Field(default=None, ge=0)
     last_event_ms: int | None = Field(default=None, ge=0)
     as_of_ms: int = Field(ge=0)
