@@ -1,5 +1,10 @@
 import { DestroyRef, Signal, computed, inject, signal } from '@angular/core';
 
+import {
+  DATA_PLANE_CONTROL_INTENT_QUERY,
+  DATA_PLANE_CONTROL_INTENT_VALUE,
+} from '../security/data-plane-control-intent.interceptor';
+
 /**
  * Reactive wrapper over an SSE ``EventSource`` for the IBKR broker
  * streams.
@@ -36,6 +41,8 @@ export interface SseStream<T> {
 export interface BrokerSseOptions {
   /** Maximum number of payloads to retain. Older entries are dropped FIFO. Default 1000. */
   maxBuffer?: number;
+  /** Marks native EventSource requests that must receive the private data-plane secret at the dev proxy. */
+  dataPlaneControlIntent?: boolean;
 }
 
 const DEFAULT_MAX_BUFFER = 1000;
@@ -50,7 +57,9 @@ export function brokerSse<T>(
   const lastError = signal<string | null>(null);
   const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
 
-  const source = new EventSource(url);
+  const source = new EventSource(
+    options.dataPlaneControlIntent ? withDataPlaneControlIntent(url) : url,
+  );
 
   source.addEventListener('open', () => {
     status.set('open');
@@ -121,4 +130,12 @@ export function brokerSse<T>(
     clear,
     close,
   };
+}
+
+export function withDataPlaneControlIntent(url: string): string {
+  const hashIndex = url.indexOf('#');
+  const base = hashIndex < 0 ? url : url.slice(0, hashIndex);
+  const hash = hashIndex < 0 ? '' : url.slice(hashIndex);
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}${encodeURIComponent(DATA_PLANE_CONTROL_INTENT_QUERY)}=${encodeURIComponent(DATA_PLANE_CONTROL_INTENT_VALUE)}${hash}`;
 }

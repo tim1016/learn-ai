@@ -78,6 +78,21 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Registry offline; socket live');
   });
 
+  it('keeps technical identifiers out of the main row until expanded', async () => {
+    const row = botSocket({ run_id: 'commit-like-run-hash-123' });
+    const { fixture } = await setup(snapshot({ rows: [row] }));
+
+    expect(pageText(fixture)).toContain('PrajiTSLADemo');
+    expect(pageText(fixture)).not.toContain('commit-like-run-hash-123');
+
+    expandRow(fixture, row.row_id);
+    await settle(fixture);
+
+    expect(pageText(fixture)).toContain('Technical detail');
+    expect(pageText(fixture)).toContain('commit-like-run-hash-123');
+    expect(pageText(fixture)).toContain(row.row_id);
+  });
+
   it('updates rows from the SSE snapshot stream', async () => {
     const { fixture } = await setup(snapshot({ rows: [] }));
 
@@ -91,6 +106,17 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('external');
     expect(text).toContain('Ghost');
     expect(text).toContain('Unattributed socket');
+  });
+
+  it('marks protected SSE streams with the browser control intent query', async () => {
+    await setup(snapshot({ rows: [] }));
+
+    expect(eventSourceFor('/api/broker/session-mirror/stream').url).toContain(
+      'control_intent=learn-ai-browser-control',
+    );
+    expect(
+      eventSourceFor('/api/broker/session-mirror/events/stream').url,
+    ).toContain('control_intent=learn-ai-browser-control');
   });
 
   it('keeps a newer manual refresh when an older SSE snapshot arrives', async () => {
@@ -239,11 +265,17 @@ describe('BrokerSessionMirrorComponent', () => {
       }),
     );
 
-    const text = pageText(fixture);
+    let text = pageText(fixture);
     expect(text).toContain('Observer degraded');
     expect(text).toContain('Ghost detection unknown');
     expect(text).toContain('host daemon socket probe unavailable');
     expect(text).toContain('PAST');
+    expect(text).toContain('+1');
+    expect(text).not.toContain('Client signal stale');
+
+    expandRow(fixture);
+    await settle(fixture);
+    text = pageText(fixture);
     expect(text).toContain('Client signal stale');
   });
 
@@ -273,6 +305,8 @@ describe('BrokerSessionMirrorComponent', () => {
       ),
     );
     await settle(fixture);
+    expandRow(fixture);
+    await settle(fixture);
 
     const text = pageText(fixture);
     expect(text).toContain('Link connectivity');
@@ -296,6 +330,8 @@ describe('BrokerSessionMirrorComponent', () => {
       }),
     );
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    expandRow(fixture);
+    await settle(fixture);
 
     const text = pageText(fixture);
     expect(text).toContain('Orphaned broker socket detected');
@@ -376,6 +412,10 @@ describe('BrokerSessionMirrorComponent', () => {
         }),
       ),
     );
+    await settle(fixture);
+    expandRow(fixture, 'socket:21760:50123:4002:0');
+    await settle(fixture);
+    expandRow(fixture, 'socket:21761:50124:4002:0');
     await settle(fixture);
     expect(pageText(fixture)).toContain('IBKR link interrupted');
     expect(pageText(fixture)).toContain('Market data farm degraded');
@@ -477,6 +517,8 @@ describe('BrokerSessionMirrorComponent', () => {
       ),
     );
     await settle(fixture);
+    expandRow(fixture);
+    await settle(fixture);
 
     const text = pageText(fixture);
     expect(text).toContain('Current link event');
@@ -511,6 +553,8 @@ describe('BrokerSessionMirrorComponent', () => {
         }),
       ),
     );
+    await settle(fixture);
+    expandRow(fixture);
     await settle(fixture);
 
     clickButton(fixture, 'purge-target-history');
@@ -612,6 +656,13 @@ function clickButton(
   if (button === null) throw new Error(`button not found: ${testId}`);
   button.click();
   fixture.detectChanges();
+}
+
+function expandRow(
+  fixture: ComponentFixture<BrokerSessionMirrorComponent>,
+  rowId = 'socket:21760:50123:4002:0',
+): void {
+  clickButton(fixture, `row-toggle-${rowId}`);
 }
 
 function snapshot(

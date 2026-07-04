@@ -4,11 +4,15 @@ const proxyConfig = require('../proxy.conf.js');
 const {
   DATA_PLANE_CONTROL_SECRET_HEADER,
   DATA_PLANE_CONTROL_INTENT_HEADER,
+  DATA_PLANE_CONTROL_INTENT_QUERY,
   DATA_PLANE_CONTROL_INTENT_VALUE,
   CONTROL_PREFIXES,
+  PROTECTED_READ_PREFIXES,
   attachDataPlaneSecret,
   configureDataPlaneProxy,
   isControlMutation,
+  isProtectedControlRead,
+  requiresDataPlaneControlSecret,
   shouldAttachDataPlaneSecret,
 } = proxyConfig.__test;
 
@@ -20,6 +24,7 @@ function request({
   referer = 'http://localhost:4200/broker',
   secFetchSite = 'same-origin',
   callerSecret = null,
+  queryIntent = null,
 } = {}) {
   const headers = {};
   if (intent !== null) headers[DATA_PLANE_CONTROL_INTENT_HEADER.toLowerCase()] = intent;
@@ -27,7 +32,14 @@ function request({
   if (referer !== null) headers.referer = referer;
   if (secFetchSite !== null) headers['sec-fetch-site'] = secFetchSite;
   if (callerSecret !== null) headers[DATA_PLANE_CONTROL_SECRET_HEADER.toLowerCase()] = callerSecret;
-  return { method, url, headers };
+  const separator = url.includes('?') ? '&' : '?';
+  return {
+    method,
+    url: queryIntent === null
+      ? url
+      : `${url}${separator}${DATA_PLANE_CONTROL_INTENT_QUERY}=${encodeURIComponent(queryIntent)}`,
+    headers,
+  };
 }
 
 function proxyReqRecorder(initialHeaders = {}) {
@@ -71,6 +83,32 @@ for (const prefix of CONTROL_PREFIXES) {
   attachDataPlaneSecret(proxyReq, req);
   assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
   assert.equal(isControlMutation(req), true);
+  assert.equal(requiresDataPlaneControlSecret(req), true);
+}
+
+for (const prefix of PROTECTED_READ_PREFIXES) {
+  const req = request({
+    method: 'GET',
+    url: `${prefix}/__probe`,
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(isProtectedControlRead(req), true);
+  assert.equal(requiresDataPlaneControlSecret(req), true);
+}
+
+for (const prefix of PROTECTED_READ_PREFIXES) {
+  const req = request({
+    method: 'GET',
+    url: `${prefix}/stream`,
+    intent: null,
+    queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(isProtectedControlRead(req), true);
 }
 
 {
@@ -137,6 +175,23 @@ for (const prefix of CONTROL_PREFIXES) {
 
 {
   const req = request({ method: 'GET', url: '/api/broker/health' });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), false);
+  assert.equal(shouldAttachDataPlaneSecret(req), false);
+  assert.equal(requiresDataPlaneControlSecret(req), false);
+}
+
+{
+  const req = request({
+    method: 'GET',
+    url: '/api/broker/session-mirror',
+    intent: null,
+    queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
+    origin: null,
+    referer: null,
+    secFetchSite: null,
+  });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
   assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), false);

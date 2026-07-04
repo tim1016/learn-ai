@@ -64,7 +64,7 @@ export class BrokerSessionMirrorComponent {
       brokerSse<BrokerSessionMirrorSnapshot>(
         '/api/broker/session-mirror/stream',
         'snapshot',
-        { maxBuffer: 1 },
+        { maxBuffer: 1, dataPlaneControlIntent: true },
       ),
     );
   private readonly eventStream: SseStream<BrokerSessionEvent> =
@@ -72,7 +72,7 @@ export class BrokerSessionMirrorComponent {
       brokerSse<BrokerSessionEvent>(
         '/api/broker/session-mirror/events/stream',
         'broker_event',
-        { maxBuffer: 500 },
+        { maxBuffer: 500, dataPlaneControlIntent: true },
       ),
     );
 
@@ -195,6 +195,38 @@ export class BrokerSessionMirrorComponent {
       row.notice?.action.kind !== 'focus_cockpit_action' ||
       row.strategy_instance_id === null
     );
+  }
+
+  rowDisplayName(row: BrokerSessionRosterRow): string {
+    return row.strategy_instance_id ?? row.command ?? 'Unattributed session';
+  }
+
+  clientTooltip(row: BrokerSessionRosterRow): string {
+    return [
+      this.rowDisplayName(row),
+      `row_id: ${row.row_id}`,
+      `run_id: ${row.run_id ?? '-'}`,
+      `account: ${row.account_id ?? '-'}`,
+      `run_dir: ${row.run_dir ?? '-'}`,
+    ].join('\n');
+  }
+
+  socketLabel(row: BrokerSessionRosterRow): string {
+    if (!row.socket_present) return 'Missing';
+    return `${row.local_port ?? '-'} -> ${row.remote_port ?? '-'}`;
+  }
+
+  brokerLabel(row: BrokerSessionRosterRow): string {
+    return row.connection_state ?? '-';
+  }
+
+  primaryAttentionCode(row: BrokerSessionRosterRow): BrokerSessionAttentionCode | null {
+    return row.attention_codes[0] ?? null;
+  }
+
+  attentionTooltip(row: BrokerSessionRosterRow): string {
+    if (row.attention_codes.length === 0) return 'No attention codes';
+    return row.attention_codes.map((code) => this.attentionLabel(code)).join('\n');
   }
 
   identityLabel(value: BrokerSessionIdentityType): string {

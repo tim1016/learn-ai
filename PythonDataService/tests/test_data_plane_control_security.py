@@ -31,6 +31,7 @@ _CONTROL_SURFACE_MANIFEST = (
 _CONTROL_SURFACE_SCHEMA = _CONTROL_SURFACE_MANIFEST.with_suffix(".schema.json")
 _CONTROL_SURFACE_MANIFEST_PAYLOAD = json.loads(_CONTROL_SURFACE_MANIFEST.read_text())
 _CONTROL_SURFACE_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["control_prefixes"])
+_PROTECTED_READ_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["protected_read_prefixes"])
 _MUTATION_PATH = "/api/broker/orders/what-if"
 _READ_PATH = "/api/broker/health"
 _MIRROR_READ_PATH = "/api/broker/session-mirror"
@@ -82,6 +83,9 @@ def test_data_plane_control_surface_manifest_matches_schema() -> None:
     assert tuple(sorted(_CONTROL_SURFACE_PREFIXES)) == _CONTROL_SURFACE_PREFIXES
     assert all(prefix.startswith("/api/") for prefix in _CONTROL_SURFACE_PREFIXES)
     assert all(not prefix.endswith("/") for prefix in _CONTROL_SURFACE_PREFIXES)
+    assert tuple(sorted(_PROTECTED_READ_PREFIXES)) == _PROTECTED_READ_PREFIXES
+    assert all(prefix.startswith("/api/") for prefix in _PROTECTED_READ_PREFIXES)
+    assert all(not prefix.endswith("/") for prefix in _PROTECTED_READ_PREFIXES)
 
 
 def test_unsafe_control_routes_declare_data_plane_guard_dependency() -> None:
@@ -179,6 +183,10 @@ def test_broker_session_mirror_routes_declare_always_on_guard() -> None:
 
     assert mirror_routes
     assert all(has_guard for _path, _methods, has_guard in mirror_routes)
+
+
+def test_broker_session_mirror_protected_reads_are_declared_in_shared_manifest() -> None:
+    assert _MIRROR_READ_PATH in _PROTECTED_READ_PREFIXES
 
 
 @pytest.mark.asyncio

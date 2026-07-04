@@ -20,15 +20,15 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0.25rem 0.5rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 6px;
-  background: var(--surface-card, #ffffff);
-  color: var(--text-color-secondary, #64748b);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   font-size: 0.75rem;
 }
 
 .count-strip strong {
-  color: var(--text-color, #172033);
+  color: var(--text-primary);
 }
 
 .event-list {
@@ -42,9 +42,9 @@
 
 .event-list li {
   padding: 0.75rem;
-  border: 1px solid var(--surface-border, #d7dde8);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: var(--surface-card, #ffffff);
+  background: var(--bg-surface);
 }
 
 .event-list p,
@@ -53,7 +53,7 @@
 }
 
 .empty-note {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
 }
 
 .event-head {
@@ -64,7 +64,7 @@
 }
 
 .event-head span {
-  color: var(--text-color-secondary, #64748b);
+  color: var(--text-secondary);
 }
 
 details {

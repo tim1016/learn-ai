@@ -255,10 +255,11 @@
       [loading]="snapshot() === null && streamStatus() === 'connecting'"
       [rowHover]="true"
       [rowTrackBy]="trackByRowId"
-      [tableStyle]="{ 'min-width': '80rem' }"
+      [tableStyle]="{ 'min-width': '92rem' }"
     >
       <ng-template #header>
         <tr>
+          <th class="toggle-cell" aria-label="Details"></th>
           <th class="col-client">Client</th>
           <th>Identity</th>
           <th>Recency</th>
@@ -271,11 +272,28 @@
           <th class="action-cell"></th>
         </tr>
       </ng-template>
-      <ng-template #body let-row>
+      <ng-template #body let-row let-expanded="expanded">
         <tr [class.past-row]="row.recency !== 'current'">
+          <td class="toggle-cell">
+            <button
+              pButton
+              type="button"
+              severity="secondary"
+              [text]="true"
+              [rounded]="true"
+              [pRowToggler]="row"
+              [icon]="expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'"
+              [attr.aria-label]="
+                (expanded ? 'Hide details for ' : 'Show details for ') +
+                rowDisplayName(row)
+              "
+              [attr.data-testid]="'row-toggle-' + row.row_id"
+            ></button>
+          </td>
           <td class="client-cell">
-            <strong>{{ row.strategy_instance_id ?? row.command ?? row.row_id }}</strong>
-            <span>{{ row.run_id ?? row.account_id ?? row.remote_host ?? 'Unattributed' }}</span>
+            <span class="cell-primary" [title]="clientTooltip(row)">
+              {{ rowDisplayName(row) }}
+            </span>
           </td>
           <td>
             <p-tag
@@ -290,16 +308,11 @@
             />
           </td>
           <td>
-            @if (row.socket_present) {
-              <span>{{ row.local_port ?? '—' }} → {{ row.remote_port ?? '—' }}</span>
-            } @else {
-              <span>Missing</span>
-            }
+            <span class="cell-primary">{{ socketLabel(row) }}</span>
           </td>
           <td>{{ formatNumber(row.pid) }}</td>
           <td class="broker-cell">
-            <span>{{ row.connection_state ?? '—' }}</span>
-            <small>client {{ row.client_id ?? '—' }}</small>
+            <span class="cell-primary">{{ brokerLabel(row) }}</span>
           </td>
           <td>
             <p-tag
@@ -309,13 +322,18 @@
           </td>
           <td>{{ formatTimestamp(row.last_event_ms) }}</td>
           <td class="attention-cell">
-            @if (row.attention_codes.length > 0) {
-              @for (code of row.attention_codes; track code) {
+            @if (primaryAttentionCode(row); as code) {
+              <span class="attention-compact" [title]="attentionTooltip(row)">
                 <p-tag
                   [severity]="attentionSeverity(code)"
                   [value]="attentionLabel(code)"
                 />
-              }
+                @if (row.attention_codes.length > 1) {
+                  <span class="attention-count">
+                    +{{ formatNumber(row.attention_codes.length - 1) }}
+                  </span>
+                }
+              </span>
             } @else {
               <span class="muted">—</span>
             }
@@ -328,38 +346,60 @@
               icon="pi pi-external-link"
               [text]="true"
               [disabled]="row.strategy_instance_id === null"
-              [attr.aria-label]="'Open bot ' + (row.strategy_instance_id ?? row.row_id)"
+              [attr.aria-label]="'Open bot ' + rowDisplayName(row)"
               (click)="openBot(row)"
             ></button>
           </td>
         </tr>
+      </ng-template>
+      <ng-template #expandedrow let-row>
         <tr class="details-row" [class.past-row]="row.recency !== 'current'">
-          <td colspan="10">
-            @if (row.notice; as notice) {
-              <section class="row-notice" role="alert">
-                <div>
-                  <strong>{{ notice.title }}</strong>
-                  <p>{{ notice.message }}</p>
-                </div>
-                @if (notice.action.label !== null) {
-                  <button
-                    pButton
-                    type="button"
-                    severity="danger"
-                    [disabled]="noticeActionDisabled(row)"
-                    (click)="runNoticeAction(row)"
-                  >
-                    <span class="p-button-label">{{ notice.action.label }}</span>
-                  </button>
-                }
-              </section>
-            }
-            <details>
-              <summary>Technical detail</summary>
-              <dl>
+          <td colspan="11">
+            <section
+              class="row-detail"
+              [attr.aria-label]="'Technical detail for ' + rowDisplayName(row)"
+            >
+              @if (row.notice; as notice) {
+                <section class="row-notice" role="alert">
+                  <div>
+                    <strong>{{ notice.title }}</strong>
+                    <p>{{ notice.message }}</p>
+                  </div>
+                  @if (notice.action.label !== null) {
+                    <button
+                      pButton
+                      type="button"
+                      severity="danger"
+                      [disabled]="noticeActionDisabled(row)"
+                      (click)="runNoticeAction(row)"
+                    >
+                      <span class="p-button-label">{{ notice.action.label }}</span>
+                    </button>
+                  }
+                </section>
+              }
+
+              <header class="row-detail-header">
+                <h2>Technical detail</h2>
+                <span>{{ rowDisplayName(row) }}</span>
+              </header>
+
+              <dl class="detail-grid">
                 <div>
                   <dt>row_id</dt>
                   <dd>{{ row.row_id }}</dd>
+                </div>
+                <div>
+                  <dt>run_id</dt>
+                  <dd>{{ row.run_id ?? '—' }}</dd>
+                </div>
+                <div>
+                  <dt>account_id</dt>
+                  <dd>{{ row.account_id ?? '—' }}</dd>
+                </div>
+                <div>
+                  <dt>client_id</dt>
+                  <dd>{{ row.client_id ?? '—' }}</dd>
                 </div>
                 <div>
                   <dt>run_dir</dt>
@@ -377,18 +417,26 @@
                   <dt>recovery_state</dt>
                   <dd>{{ row.recovery_state ?? '—' }}</dd>
                 </div>
+                <div>
+                  <dt>connection_epoch</dt>
+                  <dd>{{ row.connection_epoch ?? '—' }}</dd>
+                </div>
+                <div>
+                  <dt>attention_codes</dt>
+                  <dd>{{ attentionTooltip(row) }}</dd>
+                </div>
               </dl>
               <app-broker-session-events-panel
                 [row]="row"
                 [events]="eventsForRow(row)"
               />
-            </details>
+            </section>
           </td>
         </tr>
       </ng-template>
       <ng-template #emptymessage>
         <tr>
-          <td colspan="10" class="empty-cell">
+          <td colspan="11" class="empty-cell">
             No broker sessions observed.
           </td>
         </tr>

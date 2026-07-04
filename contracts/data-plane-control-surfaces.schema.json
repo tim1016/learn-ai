@@ -3,11 +3,19 @@
   "title": "Data Plane Control Surfaces",
   "type": "object",
   "additionalProperties": false,
-  "required": ["control_prefixes"],
+  "required": ["control_prefixes", "protected_read_prefixes"],
   "properties": {
     "control_prefixes": {
       "type": "array",
       "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^/api/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$"
+      }
+    },
+    "protected_read_prefixes": {
+      "type": "array",
       "uniqueItems": true,
       "items": {
         "type": "string",
