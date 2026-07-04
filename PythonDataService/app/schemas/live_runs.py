@@ -268,6 +268,7 @@ class HostRunnerProcessStatus(BaseModel):
     started_at_ms: int | None = None
     ended_at_ms: int | None = None
     exit_code: int | None = None
+    exit_reason: str | None = None
     command: list[str] = Field(default_factory=list)
     log_path: str | None = None
     message: str | None = None
@@ -305,7 +306,12 @@ class HostRunnerHealth(BaseModel):
     daemon_boot_id: str | None = None
     lease_status: str | None = None
     last_lease_written_at_ms: int | None = None
+    lease_threshold_ms: int | None = None
+    lease_write_error: str | None = None
     orphan_candidates_count: int = 0
+    orphan_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    platform: str | None = None
+    supervisor: str | None = None
 
 
 class EmergencyFlattenRequest(BaseModel):

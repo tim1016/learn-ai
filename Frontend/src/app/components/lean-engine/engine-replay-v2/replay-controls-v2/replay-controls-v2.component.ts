@@ -109,7 +109,36 @@ export class ReplayControlsV2Component {
     this.svc.seekToPercent(pct);
   }
 
+  onMinimapKeydown(evt: KeyboardEvent): void {
+    const current = this.svc.progress();
+    const next = this.nextMinimapPercent(evt.key, current);
+    if (next === null) return;
+    evt.preventDefault();
+    this.svc.seekToPercent(Math.max(0, Math.min(1, next)));
+  }
+
   directionLabel(d: Direction): string {
     return d === 'forward' ? '▶' : '◀';
+  }
+
+  private nextMinimapPercent(key: string, current: number): number | null {
+    switch (key) {
+      case 'ArrowLeft':
+      case 'ArrowDown':
+        return current - 0.01;
+      case 'ArrowRight':
+      case 'ArrowUp':
+        return current + 0.01;
+      case 'PageDown':
+        return current - 0.1;
+      case 'PageUp':
+        return current + 0.1;
+      case 'Home':
+        return 0;
+      case 'End':
+        return 1;
+      default:
+        return null;
+    }
   }
 }

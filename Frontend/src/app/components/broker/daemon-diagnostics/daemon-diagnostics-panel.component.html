@@ -1,0 +1,113 @@
+<section class="daemon-diagnostics-panel" [class.compact]="compact()" aria-label="Live engine diagnostics">
+  @if (loading()) {
+    <div class="diagnostic-skeleton" role="status">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+  }
+
+  @if (error(); as message) {
+    <p class="diagnostic-error" role="alert">{{ message }}</p>
+  }
+
+  @if (!loading() && !error() && !report()) {
+    <header class="diagnostic-headline status-skip">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div>
+        <h2>Live engine diagnostics</h2>
+        <p>No daemon diagnostics snapshot has been loaded.</p>
+      </div>
+    </header>
+
+    @if (controls()) {
+      <div class="diagnostic-actions" aria-label="Diagnostics actions">
+        <button type="button" (click)="refreshClicked()">Refresh</button>
+      </div>
+    }
+  }
+
+  @if (report(); as diagnostic) {
+    <header class="diagnostic-headline" [class]="statusClass(diagnostic)">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div>
+        <h2>{{ diagnostic.headline.title }}</h2>
+        <p>{{ diagnostic.headline.summary }}</p>
+        @if (diagnostic.headline.remediation) {
+          <p class="remediation">{{ diagnostic.headline.remediation }}</p>
+        }
+        <span class="as-of">As of {{ formatTimestamp(diagnostic.fetched_at_ms) }}</span>
+      </div>
+    </header>
+
+    @if (controls()) {
+      <div class="diagnostic-actions" aria-label="Diagnostics actions">
+        <button type="button" (click)="refreshClicked()">Refresh</button>
+        <button type="button" (click)="exportClicked()">Export report</button>
+      </div>
+    }
+
+    <section class="check-groups" aria-label="Global daemon checks">
+      @for (group of globalGroups(); track groupTrack($index, group)) {
+        <section class="check-group">
+          <h3>{{ group.label }}</h3>
+          @for (check of group.checks; track checkTrack($index, check)) {
+            <article class="check-row" [class]="statusClass(check)">
+              <span class="status-dot" aria-hidden="true"></span>
+              <div>
+                <h4>{{ check.title }}</h4>
+                <p>{{ check.summary }}</p>
+                @if (check.remediation) {
+                  <p class="remediation">{{ check.remediation }}</p>
+                }
+                @if (actionIsRunnable(check.action)) {
+                  <button type="button" class="inline-action" (click)="runCheckAction(check)">
+                    {{ actionLabel(check) }}
+                  </button>
+                }
+                @if (check.technical_detail || check.evidence?.redacted) {
+                  <details>
+                    <summary>Technical detail</summary>
+                    @if (check.technical_detail) {
+                      <p>{{ check.technical_detail }}</p>
+                    }
+                    @if (check.evidence?.redacted) {
+                      <p>Paths and sensitive fields were redacted before serialization.</p>
+                    }
+                  </details>
+                }
+              </div>
+            </article>
+          }
+        </section>
+      }
+    </section>
+
+    @if (instanceReports().length > 0) {
+      <section class="instance-list" aria-label="Per-bot diagnostics">
+        <h3>Per-bot diagnosis</h3>
+        @for (instance of instanceReports(); track instance.strategy_instance_id) {
+          <article class="instance-report" [class]="statusClass(instance)">
+            <header>
+              <span class="status-dot" aria-hidden="true"></span>
+              <div>
+                <strong>{{ instance.strategy_instance_id | receiptLabel }}</strong>
+                <p>{{ instance.headline.title }}</p>
+                <span>{{ instance.headline.summary }}</span>
+              </div>
+            </header>
+            <details>
+              <summary>Rungs</summary>
+              @for (check of instance.checks; track checkTrack($index, check)) {
+                <div class="instance-check" [class]="statusClass(check)">
+                  <strong>{{ check.title }}</strong>
+                  <span>{{ check.summary }}</span>
+                </div>
+              }
+            </details>
+          </article>
+        }
+      </section>
+    }
+  }
+</section>

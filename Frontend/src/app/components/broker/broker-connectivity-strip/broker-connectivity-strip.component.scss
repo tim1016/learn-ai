@@ -24,6 +24,25 @@
   font-size: 0.85rem;
 }
 
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 1.75rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid #79b8ff;
+    outline-offset: 2px;
+  }
+}
+
 .label {
   font-weight: 600;
 }
@@ -156,6 +175,48 @@
     background: rgba(255, 255, 255, 0.08);
     color: inherit;
     font: inherit;
+    cursor: pointer;
+  }
+}
+
+.diagnostics-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.diagnostics-drawer {
+  width: min(42rem, 100vw);
+  height: 100vh;
+  overflow-y: auto;
+  padding: 1rem;
+  background: #f8fafc;
+  color: #14213d;
+  box-shadow: -18px 0 40px rgba(15, 23, 42, 0.28);
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1.15rem;
+  }
+
+  button {
+    min-height: 2.25rem;
+    border: 1px solid #bcccdc;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #243b53;
+    font-weight: 700;
     cursor: pointer;
   }
 }

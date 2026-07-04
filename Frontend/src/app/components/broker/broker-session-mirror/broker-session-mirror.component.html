@@ -43,6 +43,19 @@
     </div>
   </section>
 
+  <section class="control-plane-header" aria-label="Live engine control-plane diagnostics">
+    <app-daemon-diagnostics-panel
+      [report]="daemonDiagnostics.report()"
+      [loading]="daemonDiagnostics.loading()"
+      [error]="daemonDiagnostics.error()"
+      [compact]="true"
+      (refresh)="refreshDaemonDiagnostics()"
+      (renewLease)="renewDaemonLeaseFromDiagnostics()"
+      (exportReport)="exportDaemonDiagnostics()"
+      (navigateTo)="navigateFromDaemonDiagnostics($event)"
+    />
+  </section>
+
   @if (snapshot(); as mirror) {
     <section class="observer-band" aria-label="Observer state">
       <p-tag

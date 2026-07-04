@@ -1,4 +1,12 @@
-<div class="modal-backdrop" (click)="onBackdrop($event)">
+<div
+  class="modal-backdrop"
+  role="button"
+  tabindex="0"
+  aria-label="Close data quality report"
+  (click)="onBackdrop($event)"
+  (keydown.enter)="onBackdropKeydown($event)"
+  (keydown.space)="onBackdropKeydown($event)"
+>
   <div class="modal-panel">
     <!-- Header -->
     <div class="modal-header">

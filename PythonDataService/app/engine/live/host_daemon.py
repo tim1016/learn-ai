@@ -78,6 +78,61 @@ _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 
 
+def _host_platform() -> str:
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "darwin"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return sys.platform or "unknown"
+
+
+def _host_supervisor() -> str:
+    configured = os.environ.get("LIVE_RUNNER_SUPERVISOR")
+    if configured:
+        return configured.strip().lower()
+    if sys.platform.startswith("win"):
+        return "nssm"
+    if sys.platform == "darwin":
+        return "launchd"
+    if sys.platform.startswith("linux"):
+        return "systemd"
+    return "manual"
+
+
+def _orphan_candidate_payload(candidate: object) -> dict[str, object]:
+    run_dir = getattr(candidate, "run_dir", None)
+    sidecar = getattr(candidate, "sidecar", None)
+    return {
+        "run_id": getattr(candidate, "run_id", None),
+        "run_dir": _redacted_daemon_path(run_dir),
+        "state": getattr(candidate, "state", None),
+        "sidecar_age_ms": getattr(candidate, "sidecar_age_ms", None),
+        "reason": getattr(candidate, "reason", None),
+        "pid": getattr(sidecar, "pid", None) if sidecar is not None else None,
+        "process_start_identity": (
+            getattr(sidecar, "process_start_identity", None)
+            if sidecar is not None
+            else None
+        ),
+    }
+
+
+def _redacted_daemon_path(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).replace("\\", "/")
+    parts = [part for part in text.split("/") if part]
+    if "PythonDataService" in parts:
+        idx = parts.index("PythonDataService")
+        return "/".join(parts[idx:])
+    if "artifacts" in parts:
+        idx = parts.index("artifacts")
+        return "/".join(parts[idx:])
+    return Path(text).name or None
+
+
 def _exit_reason_from_code(returncode: int | None) -> str:
     """VCR-0018-B / Phase 6B — best-effort exit-reason classifier.
 
@@ -214,9 +269,13 @@ class RunnerProcessManager:
         # and the report degrades to "no lease yet" gracefully.
         lease_status: str | None = None
         last_written_at_ms: int | None = None
+        lease_threshold_ms: int | None = None
+        lease_write_error: str | None = None
         if self._lease_writer is not None:
             lease_status = getattr(self._lease_writer, "status", None)
             last_written_at_ms = getattr(self._lease_writer, "last_written_at_ms", None)
+            lease_threshold_ms = getattr(self._lease_writer, "lease_threshold_ms", None)
+            lease_write_error = getattr(self._lease_writer, "last_write_error", None)
         return HostRunnerHealth(
             ok=True,
             repo_root=str(self.repo_root),
@@ -230,7 +289,15 @@ class RunnerProcessManager:
             daemon_boot_id=self.boot_id,
             lease_status=lease_status,
             last_lease_written_at_ms=last_written_at_ms,
+            lease_threshold_ms=lease_threshold_ms,
+            lease_write_error=lease_write_error,
             orphan_candidates_count=len(self._orphan_candidates),
+            orphan_candidates=[
+                _orphan_candidate_payload(candidate)
+                for candidate in self._orphan_candidates
+            ],
+            platform=_host_platform(),
+            supervisor=_host_supervisor(),
         )
 
     def renew_control_plane_lease(self) -> HostRunnerHealth:
@@ -357,6 +424,7 @@ class RunnerProcessManager:
             started_at_ms=managed.started_at_ms,
             ended_at_ms=managed.ended_at_ms,
             exit_code=exit_code,
+            exit_reason=_exit_reason_from_code(exit_code),
             command=managed.command,
             log_path=str(managed.log_path),
             message=f"Host runner process exited with code {exit_code}.",

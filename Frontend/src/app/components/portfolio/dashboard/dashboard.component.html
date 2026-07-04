@@ -72,27 +72,27 @@
       <h4>Record Trade</h4>
       <div class="trade-form">
         <div class="form-group">
-          <label>Symbol</label>
-          <input type="text" [ngModel]="tradeSymbol()" (ngModelChange)="tradeSymbol.set($event)" placeholder="e.g. AAPL" />
+          <label for="portfolio-trade-symbol">Symbol</label>
+          <input id="portfolio-trade-symbol" type="text" [ngModel]="tradeSymbol()" (ngModelChange)="tradeSymbol.set($event)" placeholder="e.g. AAPL" />
         </div>
         <div class="form-group">
-          <label>Side</label>
-          <select [ngModel]="tradeSide()" (ngModelChange)="tradeSide.set($event)">
+          <label for="portfolio-trade-side">Side</label>
+          <select id="portfolio-trade-side" [ngModel]="tradeSide()" (ngModelChange)="tradeSide.set($event)">
             <option value="Buy">Buy</option>
             <option value="Sell">Sell</option>
           </select>
         </div>
         <div class="form-group">
-          <label>Quantity</label>
-          <input type="number" [ngModel]="tradeQty()" (ngModelChange)="tradeQty.set($event)" />
+          <label for="portfolio-trade-quantity">Quantity</label>
+          <input id="portfolio-trade-quantity" type="number" [ngModel]="tradeQty()" (ngModelChange)="tradeQty.set($event)" />
         </div>
         <div class="form-group">
-          <label>Price</label>
-          <input type="number" step="0.01" [ngModel]="tradePrice()" (ngModelChange)="tradePrice.set($event)" />
+          <label for="portfolio-trade-price">Price</label>
+          <input id="portfolio-trade-price" type="number" step="0.01" [ngModel]="tradePrice()" (ngModelChange)="tradePrice.set($event)" />
         </div>
         <div class="form-group">
-          <label>Fees</label>
-          <input type="number" step="0.01" [ngModel]="tradeFees()" (ngModelChange)="tradeFees.set($event)" />
+          <label for="portfolio-trade-fees">Fees</label>
+          <input id="portfolio-trade-fees" type="number" step="0.01" [ngModel]="tradeFees()" (ngModelChange)="tradeFees.set($event)" />
         </div>
         <button class="btn btn-primary" [disabled]="recording() || !tradeSymbol() || !tradePrice()" (click)="recordTrade()">
           {{ recording() ? 'Recording...' : 'Record Trade' }}

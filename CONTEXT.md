@@ -886,3 +886,117 @@ there are never two halt-on-transition mechanisms.
 - **The broker session mirror stays read-only.** It *visualizes* the reconnect
   and gate-cleared events (and may deep-link to the Bot Cockpit) but carries **no
   Resume control** — the resume action's render site remains the Bot Cockpit.
+
+## Daemon diagnostics — control-plane health (resolved 2026-07-04)
+
+A read-only, backend-authored self-test of the **host-daemon plumbing altitude**,
+the peer of `/api/broker/diagnose` (which self-tests the data-plane's *own* IBKR
+client). Its subject is the control plane, not the broker session.
+
+- **Daemon diagnostics (control-plane health)** — the plumbing-altitude report:
+  the daemon hop (reachable / auth / protocol-contract), daemon boot identity,
+  code freshness (running SHA vs on-disk HEAD), control-plane lease freshness,
+  process-registry integrity, and orphan-candidate presence. It is a **distinct
+  altitude** from the **broker session mirror** (socket roster, client identity,
+  recovery), which remains the single authority for session/socket facts. See
+  "Broker session mirror — client-connection observability".
+- **Composed authority** — one backend builder is the single brain. It *authors*
+  the plumbing checks (facts only the data plane can see — reachability, auth,
+  code/lease freshness, registry integrity, orphan presence) and *embeds by
+  reference* the mirror's already-authored socket-reconciliation attention codes
+  (`REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE`, `ORPHANED_BOT_SOCKET`, …). It **never
+  re-runs lsof and never re-classifies a client** — single authority per fact is
+  preserved even inside the superset.
+- **Two presentation surfaces, one report** — the same authored artifact is read
+  by its own snapshot endpoint (the full diagnostics panel) *and* embedded as a
+  control-plane header inside the broker session mirror page. "Available from both
+  places" is achieved by composition, never by mounting one handler at two routes
+  or fusing the snapshot self-test into the mirror's streaming/paginated payload.
+- **No bare "degraded."** The word "degraded" as a catch-all bucket does not
+  exist in this surface. Every distinct cause — daemon-down, auth-rejected,
+  stale-code, stale-lease, orphans-present, registry-amnesia, socket-probe-
+  unavailable — is its **own named check** with its own status, trader title,
+  cause, and remediation. The report never collapses distinct failures into one
+  amber word.
+- **Dominant condition** — the specific, closed-enum cause the report elevates to
+  its headline (e.g. `STALE_CODE`, `LEASE_STALE`, `UNREACHABLE`, `AUTH_REJECTED`,
+  `ORPHANS_PRESENT`, `REGISTRY_AMNESIA`, `SOCKET_PROBE_UNAVAILABLE`, `HEALTHY`).
+  Paired with backend-authored trader **headline** copy (`title` / `summary` /
+  `remediation`) — the frontend renders the copy and keys off the enum, exactly
+  as it does for reason codes and the event-narrative registry. `pass|warn|fail`
+  survives only as the severity colour, never rendered as a standalone word.
+- **Always 200.** The diagnose endpoint returns HTTP 200 with a full report even
+  when the daemon is down; the failure lives in the checks, never in the HTTP
+  status (contrast `/daemon-health`, which maps failures to 502/503 and returns
+  no body). A top-level `transport` field mirrors `DaemonResult.kind` so the
+  banner binds directly without scanning the checks list.
+- **Container-actuatable gate** — a diagnostic fix becomes an invocable *button*
+  only if the data plane can actually cause it from inside the container (the
+  daemon executes it in-process on an authenticated forward). v1's only such
+  action is `renew_lease`. Host-level fixes (start / restart the daemon) require
+  host process control the container does not have, so they are **structurally
+  never buttons** — only honest guidance. A diagnostics surface must **never
+  render a control it cannot actuate.** The action model forbids attaching a
+  `RECOVERY_MUTATION` to a host-only fix; those carry authored guidance instead.
+- **Platform-aware host guidance** — the daemon is a host process that ports
+  across Windows / Mac / Linux, so host-level remediation is authored per the
+  daemon's **reported OS/supervisor** (`systemctl restart …` on Linux,
+  `launchctl kickstart …` on Mac, the NSSM restart on Windows) — never one
+  generic "restart the daemon" string that is wrong on two of three platforms.
+  The daemon reports its platform/supervisor as an additive health fact.
+- **Backend-authored redaction** — the backend is the **sole** redaction
+  authority; nothing unsafe ever reaches the browser and the frontend never
+  decides what is safe. Host-absolute paths are reduced to repo-relative or
+  basename with the **home/user prefix and hostname stripped**
+  (`/Users/inkant/learn-ai/…/live_runs/<run_id>` → `artifacts/live_runs/<run_id>`);
+  raw tokens, connection strings, and full `sys.executable` argv are never
+  emitted. **Operator handles pass through** (`run_id`, `strategy_instance_id`,
+  short `boot_id`, `commits_behind`). There is **no per-check frontend exposure
+  gate** — a gate would make the frontend a redaction authority; instead reduced
+  fields carry an informational `redacted` marker, and export is just a
+  serialization of the already-redacted report. The pre-existing `HostRunnerHealth`
+  path/argv leak (`repo_root`, `live_runs_root`, `process.log_path`,
+  `process.command` shipped raw to the browser) is tightened in the same effort.
+- **Primary job — pinpoint why a *specific bot* is failing in the live daemon.**
+  The north star is not a flat global "is the daemon healthy" report; it is a
+  per-`strategy_instance_id` **diagnostic ladder** that walks: daemon reachable →
+  bot has a managed process → process alive vs exited-and-why → registry-consistent
+  (not amnesia) → has an IBKR socket → socket attributable/healthy (not
+  orphan/ghost/collision) → child runtime fresh → code/artifacts visible — and
+  surfaces the **first failing rung** as that instance's `dominant_condition`. The
+  broker session mirror owns the socket rungs (embedded by reference); daemon
+  diagnostics owns the process / registry / code / lease / runtime rungs. A global
+  report still exists for control-plane-wide faults that hit every bot at once
+  (unreachable, auth, stale code, stale lease); the per-instance ladder is the
+  primary operator-facing view.
+- **Fact sources (second-opinion-hardened 2026-07-04)** — the builder reads three
+  existing daemon-adjacent sources: `fetch_health` (code / lease / boot /
+  orphan-count), **`fetch_instances`** (the process registry — *required*, because
+  the mirror omits idle/exited bots with no socket row, so process rungs are blind
+  without it), and the mirror snapshot (socket reconciliation, embedded by
+  reference). Registry-read-unavailable is its **own** condition
+  (`REGISTRY_SNAPSHOT_UNAVAILABLE`), distinct from socket-probe-unavailable.
+  Additive `HostRunnerHealth` facts this requires: OS/supervisor (platform-aware
+  guidance), `lease_threshold_ms` + `lease_write_error` (split stale-lease from
+  unwritable `control_plane/`), per-orphan candidate **detail** (not just the
+  count), and `exit_reason` on the process status (single mapping authority —
+  `_exit_reason_from_code` on the daemon, not a data-plane re-implementation).
+- **One report, per-instance subreports** — a single global report carries
+  `per_instance` subreports from **one consistent snapshot** (one lsof pass, no
+  N+1); an optional per-sid projection route calls the same builder and projects
+  one instance. The mirror header embeds the global header from that same report.
+- **Linked authorities, not owned** — diagnostics never re-authors readiness or
+  runtime-freshness thresholds (it calls `evaluate_runtime_freshness` and treats
+  cockpit readiness/action gates as *linked* authorities), never uses the
+  data-plane `IbkrConnectionHealth` as **per-bot** truth (that is the
+  singleton/system client; per-bot broker state comes from the mirror row + child
+  runtime snapshot), and reuses `DaemonResult.kind` **verbatim** as the transport
+  field (`AUTH_FAILED`, not a renamed enum). Malformed-body (`PROTOCOL_ERROR`) and
+  schema-mismatch (`INCOMPATIBLE_CONTRACT`) stay distinct conditions — different
+  remediation.
+- **Reachability sourcing** — an explicit diagnose/refresh does a **fresh probe**
+  (current facts); the connectivity monitor's **folded state** refines the
+  reachability rung (`RETRYING` → warn "reconnecting" vs terminal `UNREACHABLE` →
+  fail "down") and is the only source that can prove `BOOT_CHANGED`. The
+  always-visible mirror header binds to the folded state alone, so passively
+  rendering it never probes the daemon.

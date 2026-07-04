@@ -14,8 +14,8 @@
   <div class="import-section">
     <h5>Import Backtest Trades</h5>
     <div class="import-form">
-      <label>Strategy Execution ID:</label>
-      <input type="number" [ngModel]="importStrategyId()" (ngModelChange)="importStrategyId.set($event)" placeholder="e.g. 1" />
+      <label for="strategy-attribution-import-id">Strategy Execution ID:</label>
+      <input id="strategy-attribution-import-id" type="number" [ngModel]="importStrategyId()" (ngModelChange)="importStrategyId.set($event)" placeholder="e.g. 1" />
       <button class="btn btn-primary btn-sm" [disabled]="importing() || !importStrategyId()" (click)="importTrades()">
         {{ importing() ? 'Importing...' : 'Import' }}
       </button>

@@ -73,4 +73,10 @@ export class QualityModalComponent {
       this.close();
     }
   }
+
+  onBackdropKeydown(event: Event): void {
+    if (!(event.target as HTMLElement).classList.contains('modal-backdrop')) return;
+    event.preventDefault();
+    this.close();
+  }
 }

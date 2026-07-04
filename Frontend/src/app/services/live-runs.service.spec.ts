@@ -4,6 +4,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LiveRunsService } from './live-runs.service';
+import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
 import type { LifecycleSafetyTriageResponse, LifecycleTimelineResponse } from '../api/live-instances.types';
 
@@ -214,4 +215,45 @@ describe('LiveRunsService start/stop proxy', () => {
 
     await expect(promise).resolves.toEqual(health);
   });
+
+  it('getDaemonDiagnostics reads the always-200 data-plane report', async () => {
+    const report: DaemonDiagnosticReport = daemonReport();
+    const promise = service.getDaemonDiagnostics();
+
+    const req = httpMock.expectOne('/api/live-instances/daemon-diagnose');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.url.startsWith('http')).toBe(false);
+    req.flush(report);
+
+    await expect(promise).resolves.toEqual(report);
+  });
+
+  it('getInstanceDaemonDiagnostics encodes the strategy instance id', async () => {
+    const report: DaemonDiagnosticReport = daemonReport();
+    const promise = service.getInstanceDaemonDiagnostics('bot/with space');
+
+    const req = httpMock.expectOne('/api/live-instances/bot%2Fwith%20space/daemon-diagnose');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.url.startsWith('http')).toBe(false);
+    req.flush(report);
+
+    await expect(promise).resolves.toEqual(report);
+  });
 });
+
+function daemonReport(): DaemonDiagnosticReport {
+  return {
+    overall_status: 'fail',
+    transport: 'UNREACHABLE',
+    dominant_condition: 'unreachable',
+    headline: {
+      title: 'Live engine is not answering',
+      summary: 'The data plane could not reach the host live engine.',
+      remediation: 'Start the host live engine on this machine, then refresh diagnostics.',
+    },
+    checks: [],
+    per_instance: [],
+    daemon_boot_id: null,
+    fetched_at_ms: 1_700_000_000_000,
+  };
+}

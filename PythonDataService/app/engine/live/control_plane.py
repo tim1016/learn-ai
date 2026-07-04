@@ -184,6 +184,7 @@ class DaemonLeaseWriter:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._status: Literal["CONNECTED", "DRAINING"] = "CONNECTED"
         self._last_written_at_ms: int | None = None
+        self._last_write_error: str | None = None
 
     @property
     def boot_id(self) -> str:
@@ -196,6 +197,14 @@ class DaemonLeaseWriter:
     @property
     def last_written_at_ms(self) -> int | None:
         return self._last_written_at_ms
+
+    @property
+    def lease_threshold_ms(self) -> int:
+        return self._threshold_ms
+
+    @property
+    def last_write_error(self) -> str | None:
+        return self._last_write_error
 
     def set_draining(self) -> None:
         """Switch the lease to ``DRAINING`` and schedule an immediate flush.
@@ -276,7 +285,8 @@ class DaemonLeaseWriter:
         )
         try:
             self._writer(self._artifacts_root, lease)
-        except OSError:
+        except OSError as exc:
+            self._last_write_error = _safe_os_error_summary(exc)
             logger.exception(
                 "daemon_lease.json write failed",
                 extra={
@@ -289,3 +299,10 @@ class DaemonLeaseWriter:
                 raise
             return
         self._last_written_at_ms = lease.written_at_ms
+        self._last_write_error = None
+
+
+def _safe_os_error_summary(exc: OSError) -> str:
+    if exc.errno is None:
+        return exc.__class__.__name__
+    return f"{exc.__class__.__name__}(errno={exc.errno})"

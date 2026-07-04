@@ -99,7 +99,7 @@
     <div class="test-list">
       @for (test of r.tests; track test.testNumber) {
         <div class="test-card" [class.test-pass]="test.passed" [class.test-fail]="!test.passed">
-          <div class="test-header" (click)="toggleTest(test.testNumber)">
+          <button type="button" class="test-header" (click)="toggleTest(test.testNumber)">
             <div class="test-status">
               @if (test.passed) {
                 <i class="pi pi-check-circle pass-icon"></i>
@@ -122,7 +122,7 @@
               <i class="pi" [class.pi-chevron-down]="!isExpanded(test.testNumber)"
                  [class.pi-chevron-up]="isExpanded(test.testNumber)"></i>
             </div>
-          </div>
+          </button>
 
           @if (isExpanded(test.testNumber)) {
             <div class="test-detail">

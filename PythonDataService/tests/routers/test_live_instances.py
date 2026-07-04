@@ -2817,6 +2817,81 @@ async def test_daemon_health_unreachable_surfaces_as_503(app_with_root, monkeypa
     assert response.status_code == 503
 
 
+async def test_daemon_diagnose_always_200_and_instance_route_projects_report(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.schemas.daemon_diagnostics import (
+        DaemonDiagnosticHeadline,
+        DaemonDiagnosticReport,
+        DaemonInstanceDiagnostic,
+    )
+
+    app, _ = app_with_root
+    instance_a = DaemonInstanceDiagnostic(
+        strategy_instance_id="BOT_A",
+        overall_status="fail",
+        dominant_condition="not_started",
+        headline=DaemonDiagnosticHeadline(
+            title="Bot has not been started in the live engine",
+            summary="The daemon registry has no managed process for this strategy instance.",
+        ),
+        checks=[],
+    )
+    instance_b = instance_a.model_copy(
+        update={
+            "strategy_instance_id": "BOT_B",
+            "dominant_condition": "instance_healthy",
+            "overall_status": "pass",
+        }
+    )
+    report = DaemonDiagnosticReport(
+        overall_status="fail",
+        transport="UNREACHABLE",
+        dominant_condition="unreachable",
+        headline=DaemonDiagnosticHeadline(
+            title="Live engine is not answering",
+            summary="The data plane could not reach the host live engine.",
+        ),
+        checks=[],
+        per_instance=[instance_a, instance_b],
+        fetched_at_ms=1_700_000_000_000,
+    )
+
+    class FakeDiagnosticsService:
+        async def report(self, *, strategy_instance_id: str | None = None):
+            if strategy_instance_id:
+                return report.model_copy(
+                    update={
+                        "per_instance": [
+                            item
+                            for item in report.per_instance
+                            if item.strategy_instance_id == strategy_instance_id
+                        ]
+                    }
+                )
+            return report
+
+    monkeypatch.setattr(
+        live_instances,
+        "get_daemon_diagnostics_service",
+        lambda: FakeDiagnosticsService(),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        global_response = await client.get("/api/live-instances/daemon-diagnose")
+        instance_response = await client.get("/api/live-instances/BOT_A/daemon-diagnose")
+
+    assert global_response.status_code == 200
+    assert global_response.json()["transport"] == "UNREACHABLE"
+    assert [item["strategy_instance_id"] for item in global_response.json()["per_instance"]] == [
+        "BOT_A",
+        "BOT_B",
+    ]
+    assert instance_response.status_code == 200
+    assert instance_response.json()["per_instance"] == [instance_a.model_dump(mode="json")]
+
+
 async def test_renew_daemon_lease_forwards_to_host_daemon(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     payload = {
