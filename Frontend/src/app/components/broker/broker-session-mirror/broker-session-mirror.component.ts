@@ -16,6 +16,7 @@ import { TagModule } from 'primeng/tag';
 import type {
   BrokerSessionAttentionCode,
   BrokerSessionEvent,
+  BrokerSessionHistoryPage,
   BrokerSessionIdentityType,
   BrokerSessionMirrorSnapshot,
   BrokerSessionRecency,
@@ -75,8 +76,11 @@ export class BrokerSessionMirrorComponent {
     );
 
   readonly manualSnapshot = signal<BrokerSessionMirrorSnapshot | null>(null);
+  readonly historyPage = signal<BrokerSessionHistoryPage | null>(null);
   readonly isRefreshing = signal<boolean>(false);
+  readonly isRefreshingHistory = signal<boolean>(false);
   readonly refreshError = signal<string | null>(null);
+  readonly historyError = signal<string | null>(null);
   readonly purgeClientIdText = signal<string>('');
   readonly purgeStartMsText = signal<string>('');
   readonly purgeEndMsText = signal<string>('');
@@ -92,6 +96,9 @@ export class BrokerSessionMirrorComponent {
   readonly rows = computed<BrokerSessionRosterRow[]>(
     () => this.snapshot()?.rows ?? [],
   );
+  readonly historySnapshots = computed<BrokerSessionMirrorSnapshot[]>(
+    () => this.historyPage()?.rows ?? [],
+  );
   readonly summary = computed<MirrorSummary>(() => summarizeRows(this.rows()));
   readonly streamStatus = this.snapshotStream.status;
   readonly streamError = this.snapshotStream.lastError;
@@ -104,6 +111,7 @@ export class BrokerSessionMirrorComponent {
 
   constructor() {
     void this.refresh();
+    void this.refreshHistory();
   }
 
   async refresh(): Promise<void> {
@@ -115,6 +123,18 @@ export class BrokerSessionMirrorComponent {
       this.refreshError.set(humanError(err));
     } finally {
       this.isRefreshing.set(false);
+    }
+  }
+
+  async refreshHistory(): Promise<void> {
+    this.isRefreshingHistory.set(true);
+    this.historyError.set(null);
+    try {
+      this.historyPage.set(await this.mirror.history({ limit: 12 }));
+    } catch (err) {
+      this.historyError.set(humanError(err));
+    } finally {
+      this.isRefreshingHistory.set(false);
     }
   }
 
@@ -289,6 +309,14 @@ export class BrokerSessionMirrorComponent {
       .filter((event) => event.client_id === row.client_id)
       .slice(-10)
       .reverse();
+  }
+
+  historyRows(snapshot: BrokerSessionMirrorSnapshot): readonly BrokerSessionRosterRow[] {
+    return snapshot.rows.slice(0, 4);
+  }
+
+  historyOverflowCount(snapshot: BrokerSessionMirrorSnapshot): number {
+    return Math.max(0, snapshot.rows.length - 4);
   }
 
   readonly trackByRowId = (_index: number, row: BrokerSessionRosterRow): string =>

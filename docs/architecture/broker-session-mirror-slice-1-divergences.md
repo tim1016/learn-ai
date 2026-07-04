@@ -452,3 +452,29 @@ Critical limits:
    key by identity type + `client_id`; rows with no durable identity fall back
    to their historical row id. The mirror does not infer identity from stale
    PID/run-dir names.
+
+## Slice 17 addendum — recent-history UI
+
+Date: 2026-07-04
+
+The stacked slice-17 branch surfaces the roster-history endpoint in the broker
+session mirror page. Operators can refresh a recent-history panel that shows
+retained snapshots newest-first, snapshot row counts, and a bounded preview of
+each snapshot's rows using the same backend-authored identity and recency
+labels as the live roster.
+
+Critical limits:
+
+1. **This is a compact preview, not a full timeline workspace.**
+   The panel shows recent snapshots and up to four rows per snapshot. It does
+   not yet provide filtering, row expansion, or side-by-side comparison between
+   historical snapshots.
+
+2. **Roster-history purge remains API/service-only.**
+   Slice 15 added the endpoint and frontend service method, but this UI slice
+   does not expose a roster-history purge control. The existing visible purge
+   control still clears classified event diagnostics only.
+
+3. **History load failure does not block the live mirror.**
+   The panel has its own loading/error state. The live SSE roster remains the
+   primary operational surface when history reads fail.
