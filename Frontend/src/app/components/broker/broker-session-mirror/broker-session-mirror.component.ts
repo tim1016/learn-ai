@@ -220,6 +220,8 @@ export class BrokerSessionMirrorComponent {
         return 'Unattributed socket';
       case 'GHOST_DETECTION_UNAVAILABLE':
         return 'Ghost detection unknown';
+      case 'CLIENT_SIGNAL_STALE':
+        return 'Client signal stale';
     }
   }
 
@@ -232,6 +234,7 @@ export class BrokerSessionMirrorComponent {
       case 'STARTED_BUT_NO_SOCKET':
       case 'GHOST_SOCKET':
       case 'GHOST_DETECTION_UNAVAILABLE':
+      case 'CLIENT_SIGNAL_STALE':
         return 'warn';
     }
   }

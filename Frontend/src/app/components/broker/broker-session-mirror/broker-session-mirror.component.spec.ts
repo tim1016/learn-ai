@@ -108,6 +108,16 @@ describe('BrokerSessionMirrorComponent', () => {
         observer_status: 'degraded',
         ghost_detection_status: 'unknown',
         degradation_reasons: ['host daemon socket probe unavailable'],
+        rows: [
+          botSocket({
+            recency: 'past_last_known',
+            socket_present: false,
+            attention_codes: [
+              'GHOST_DETECTION_UNAVAILABLE',
+              'CLIENT_SIGNAL_STALE',
+            ],
+          }),
+        ],
       }),
     );
 
@@ -115,6 +125,8 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Observer degraded');
     expect(text).toContain('Ghost detection unknown');
     expect(text).toContain('host daemon socket probe unavailable');
+    expect(text).toContain('PAST');
+    expect(text).toContain('Client signal stale');
   });
 
   it('renders categorized broker events in row detail', async () => {
