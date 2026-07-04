@@ -192,3 +192,41 @@ Critical limits:
    The mirror is now covering roster, events, child client IDs, orphan notice,
    diagnostic purge, and degradation behavior. The robust reconnect /
    ResumeGuard state machine still needs a separate live-trading-path stack.
+
+## Slice 7 addendum — recovery core state machine
+
+Date: 2026-07-04
+
+The stacked slice-7 branch starts the live-trading-path recovery rebuild with a
+pure IBKR recovery transition table and monitor integration. The monitor now
+treats a soft IBKR link interruption (`connection_lost` while the API socket is
+still open) differently from a hard socket close: it waits for IBKR's own
+1101/1102 restore signal before tearing down the socket, and it can surface a
+terminal `hard_down` state when reconnect attempts are exhausted.
+
+Critical changes from the PRD:
+
+1. **This is the recovery core, not the full ResumeGuard integration.**
+   The branch implements the transition vocabulary, bounded 1100 wait, 1101
+   subscription recovery path, max-attempt `hard_down`, broker-health overlay,
+   and frontend rendering. It does not yet write reconciliation receipts or
+   wire `ResumeGuardState` from `BLOCKED` to `CLEARABLE`.
+
+2. **Reconnect backoff still has no jitter.**
+   The existing monitor already had exponential backoff with a cap. Slice 7
+   adds a max-attempt terminal state but does not add jitter because that
+   changes retry timing across live child processes and deserves its own small
+   review.
+
+3. **The 1101 recovery callback remains market-data focused.**
+   ADR 0018 says 1101 should re-request market data plus open orders,
+   executions, and positions, then run the owned-orphan/outside-mutation
+   ladder. This branch keeps the existing recovery-callback hook and preserves
+   the current market-data resubscribe behavior. The order/execution/position
+   reconciliation ladder is still the next recovery slice.
+
+4. **ADR-0011 connectivity halt retirement is not complete.**
+   This branch makes the monitor a clearer connectivity state authority, but it
+   does not yet remove or cross-wire the older `live_engine.py`
+   connectivity-count halt path. Running both recovery/halt mechanisms remains
+   the critical remaining single-authority problem from ADR 0018.
