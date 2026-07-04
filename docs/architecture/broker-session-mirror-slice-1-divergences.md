@@ -507,3 +507,33 @@ Critical limits:
    The runtime can now publish monitor-owned state when supplied, but the older
    connectivity-count halt path still runs until the recovery authority is
    fully migrated.
+
+## Slice 19 addendum — broker recovery reconciliation seam
+
+Date: 2026-07-04
+
+The stacked slice-19 branch extracts the `LiveEngine` runtime RECONCILE core
+behind a reusable `run_broker_recovery_reconcile` entrypoint. Recovery now has
+a fail-closed callback target: it sets the submit barrier before broker truth
+is probed, reuses the same snapshot and reconciliation-orchestrator path as
+operator RECONCILE, releases the barrier and bumps `connection_epoch` only on
+clean/adopted-without-pause verdicts, and raises
+`BrokerRecoveryReconcileBlockedError` while leaving the barrier set on
+ambiguous, poison, or error outcomes.
+
+Critical limits:
+
+1. **This still does not install a child `AutoReconnectMonitor`.**
+   The seam is safe to call, but child startup/shutdown behavior is unchanged.
+   Wiring the monitor is intentionally left for a follow-up that can review the
+   full callback lifecycle in one PR.
+
+2. **No automatic ResumeGuard clearing or operator resume is added.**
+   Ambiguous adoption persists PAUSED and fails recovery closed. The operator
+   must still investigate and resume through the existing control path.
+
+3. **ADR-0011 halt retirement remains coordinated follow-up work.**
+   The legacy connectivity-count reconnect revalidation still exists. When the
+   monitor callback is wired, that path must be retired or explicitly
+   coordinated so reconnect recovery does not double-count epochs or mix two
+   recovery authorities.
