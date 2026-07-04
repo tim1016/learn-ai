@@ -65,6 +65,7 @@ def _make_snapshot(
             effective_posture=posture,  # type: ignore[arg-type]
             connection_state=connection_state,  # type: ignore[arg-type]
             connection_epoch=1,
+            client_id=12,
             connected_account="DU1234567",
             port_class="paper_port",
             observation_at_ms=written_at_ms,
@@ -93,6 +94,16 @@ def test_snapshot_round_trips_full_field_set() -> None:
     payload = snapshot.model_dump_json()
     restored = EngineRuntimeSnapshot.model_validate_json(payload)
     assert restored == snapshot
+    assert restored.broker.client_id == 12
+
+
+def test_snapshot_accepts_legacy_broker_block_without_client_id() -> None:
+    payload = json.loads(_make_snapshot().model_dump_json())
+    del payload["broker"]["client_id"]
+
+    restored = EngineRuntimeSnapshot.model_validate(payload)
+
+    assert restored.broker.client_id is None
 
 
 def test_snapshot_rejects_extra_envelope_fields() -> None:

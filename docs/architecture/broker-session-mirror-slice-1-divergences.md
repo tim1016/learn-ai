@@ -81,3 +81,33 @@ Additional divergences / limits:
    mirror. Unknown `IBKR_CODE` values are visibly classified as `unclassified`.
    Order/execution, pacing, and auth/session categories exist in the wire
    vocabulary but need additional capture sites before they can be populated.
+
+## Slice 3 addendum — child client id publishing
+
+Date: 2026-07-03
+
+The stacked slice-3 branch intentionally pulls the PRD's slice 4 forward:
+child runtime snapshots now publish `broker.client_id`, and the mirror runtime
+index uses it to attach per-child event counts and drill-down rows to bot
+sockets.
+
+Critical change from the PRD order:
+
+1. **Child `client_id` publishing precedes orphan-notice work.**
+   The PRD lists orphaned-socket notices before child `client_id` publication,
+   but precise orphan attribution and per-client event history both need the
+   child client id. Implementing the schema/wiring first keeps the next
+   orphan-notice slice from relying on PID/run-dir guesses alone.
+
+Remaining limits:
+
+1. **Existing historical `engine_runtime.json` files remain client-id unknown.**
+   The schema is backward compatible, so older artifacts parse with
+   `broker.client_id = null`. They cannot retroactively populate event
+   drill-down unless a later bounded history/index maps the old PID or run dir
+   to the client id.
+
+2. **This does not yet create ADR 0015 notices.**
+   The branch only publishes the child id and wires it into mirror attribution.
+   Orphaned-socket notice creation and guided remediation remain the next
+   review slice.

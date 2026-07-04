@@ -2534,6 +2534,7 @@ class LiveEngine:
         verdict_str = verdict_value if isinstance(verdict_value, str) else None
         now_ms = int(time.time() * 1000)
         connection_state: str = "disabled"
+        client_id: int | None = None
         connected_account: str | None = None
         port_class = "unknown"
         probe_completed_at_ms: int | None = None
@@ -2545,6 +2546,7 @@ class LiveEngine:
                 health = None
             if health is not None:
                 connection_state = str(health.connection_state)
+                client_id = int(health.client_id)
                 connected_account = health.account_id
                 probe_completed_at_ms = health.last_probe_ms
                 # port_class is derived from settings.port
@@ -2552,12 +2554,17 @@ class LiveEngine:
 
                 port_class = classify_port(self._client.settings.port)
                 reconnect_attempt = health.reconnect_attempt or 0
+            else:
+                raw_client_id = getattr(self._client.settings, "client_id", None)
+                if raw_client_id is not None:
+                    client_id = int(raw_client_id)
         block = build_broker_block(
             verdict_value=verdict_str,
             run_mode=self._run_mode,
             readonly=self._readonly,
             connection_state=connection_state,  # type: ignore[arg-type]
             connection_epoch=self._connection_epoch,
+            client_id=client_id,
             connected_account=connected_account,
             port_class=port_class,  # type: ignore[arg-type]
             observation_at_ms=now_ms,
