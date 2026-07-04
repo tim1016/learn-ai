@@ -552,7 +552,9 @@ export type OperatorNoticeCode =
   | 'activity.dropped_paused_intent'
   // PR 6 — reconciliation (reserved).
   | 'reconciliation.required_after_uncertain_flatten'
-  | 'reconciliation.discovered_execution_not_in_engine_state';
+  | 'reconciliation.discovered_execution_not_in_engine_state'
+  // Broker session mirror — ADR 0018 orphaned-socket observability.
+  | 'broker_session.orphaned_socket';
 
 export type OperatorNoticeActionKind =
   | 'none'

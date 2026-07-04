@@ -93,6 +93,11 @@ def test_code_literal_declares_pr6_reconciliation_slots():
     assert reconciliation_slots <= codes
 
 
+def test_code_literal_declares_broker_session_slots():
+    codes = set(get_literal_args(OperatorNoticeCode))
+    assert "broker_session.orphaned_socket" in codes
+
+
 def test_runtime_freshness_reason_code_literal_has_eleven_members():
     codes = set(get_literal_args(RuntimeFreshnessReasonCode))
     assert codes == {

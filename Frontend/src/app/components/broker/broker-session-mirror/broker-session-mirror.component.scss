@@ -156,6 +156,29 @@
   border-top: 0;
 }
 
+.row-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.75rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #7f1d1d;
+}
+
+.row-notice strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.row-notice p {
+  margin: 0;
+  color: #991b1b;
+}
+
 details {
   color: var(--text-color-secondary, #64748b);
   font-size: 0.8125rem;
@@ -209,5 +232,9 @@ dd {
 
   dl {
     grid-template-columns: 1fr;
+  }
+
+  .row-notice {
+    flex-direction: column;
   }
 }

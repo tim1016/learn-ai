@@ -159,6 +159,25 @@
         </tr>
         <tr class="details-row" [class.past-row]="row.recency !== 'current'">
           <td colspan="9">
+            @if (row.notice; as notice) {
+              <section class="row-notice" role="alert">
+                <div>
+                  <strong>{{ notice.title }}</strong>
+                  <p>{{ notice.message }}</p>
+                </div>
+                @if (notice.action.label !== null) {
+                  <button
+                    pButton
+                    type="button"
+                    severity="danger"
+                    [disabled]="noticeActionDisabled(row)"
+                    (click)="runNoticeAction(row)"
+                  >
+                    <span class="p-button-label">{{ notice.action.label }}</span>
+                  </button>
+                }
+              </section>
+            }
             <details>
               <summary>Technical detail</summary>
               <dl>

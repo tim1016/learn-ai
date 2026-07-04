@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 OperatorNoticeTier = Literal["info", "warning", "critical"]
 
 # ---------------------------------------------------------------------------
-# Codes — all 22 PR-1-through-PR-6 slots declared upfront.
+# Codes — PR-1-through-PR-6 slots plus later ADR-backed notice families.
 # Frontend type generation is stable across the initiative.
 # ---------------------------------------------------------------------------
 
@@ -42,6 +42,8 @@ OperatorNoticeCode = Literal[
     # PR 6 — reconciliation (reserved).
     "reconciliation.required_after_uncertain_flatten",
     "reconciliation.discovered_execution_not_in_engine_state",
+    # Broker session mirror — ADR 0018 orphaned-socket observability.
+    "broker_session.orphaned_socket",
 ]
 
 # ---------------------------------------------------------------------------

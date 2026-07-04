@@ -21,7 +21,8 @@
     "activity.source_blind_to_bot_orders",
     "activity.dropped_paused_intent",
     "reconciliation.required_after_uncertain_flatten",
-    "reconciliation.discovered_execution_not_in_engine_state"
+    "reconciliation.discovered_execution_not_in_engine_state",
+    "broker_session.orphaned_socket"
   ],
   "schema_version": 1
 }

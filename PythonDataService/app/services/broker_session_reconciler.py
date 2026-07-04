@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.broker.ibkr.models import IbkrConnectionHealth
+from app.operator.notices.broker_session import orphaned_socket_notice
 from app.schemas.broker_session import (
     BrokerSessionAttentionCode,
     BrokerSessionRegistryClaim,
@@ -84,6 +85,19 @@ def reconcile_broker_session_roster(
                 attention.append("REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE")
         else:
             attention.append("GHOST_SOCKET")
+        notice = (
+            orphaned_socket_notice(
+                strategy_instance_id=runtime.strategy_instance_id,
+                run_id=runtime.run_id,
+                client_id=runtime.client_id,
+                local_port=socket.local_port,
+                remote_port=socket.remote_port,
+                run_dir=runtime.run_dir,
+                observed_at_ms=as_of_ms,
+            )
+            if runtime is not None and identity_type == "orphaned_bot_socket"
+            else None
+        )
 
         rows.append(
             BrokerSessionRosterRow(
@@ -108,6 +122,7 @@ def reconcile_broker_session_roster(
                 as_of_ms=as_of_ms,
                 attention_codes=attention,
                 registry_claim=_registry_claim(registry),
+                notice=notice,
             )
         )
 
