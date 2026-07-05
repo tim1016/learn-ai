@@ -687,7 +687,7 @@ describe('BrokerDeployFormComponent', () => {
     changeSelect(fixture, 'Strategy', 'deployment_validation');
     await flush();
     fixture.detectChanges();
-    changeSelect(fixture, 'Signal stream', 'SPY');
+    typeText(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'deployment-validation-paper');
     await flush();
     fixture.detectChanges();
@@ -759,7 +759,7 @@ describe('BrokerDeployFormComponent', () => {
     changeSelect(fixture, 'Strategy', 'deployment_validation');
     await flush();
     fixture.detectChanges();
-    changeSelect(fixture, 'Signal stream', 'SPY');
+    typeText(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'june25');
     await flush();
     fixture.detectChanges();
@@ -828,7 +828,7 @@ describe('BrokerDeployFormComponent', () => {
     const { svc, component, fixture } = setup();
     await flush();
     fillRequired(component);
-    changeSelect(fixture, 'Signal stream', 'SPY');
+    typeText(fixture, 'Signal stream', 'SPY');
     component.actionPlan.set({
       on_enter: [
         {
@@ -898,7 +898,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.resolvedSignalStream()).toBe('');
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Signal stream');
 
-    changeSelect(fixture, 'Signal stream', 'QQQ');
+    typeText(fixture, 'Signal stream', 'QQQ');
     fixture.detectChanges();
 
     expect(component.resolvedSignalStream()).toBe('QQQ');

@@ -135,27 +135,18 @@
         <h2 id="signal-section">Signal stream</h2>
         <label class="field" for="signal-stream">
           <span>Signal stream</span>
-          @if (fixtureSymbols().length > 0) {
-            <select id="signal-stream" data-deploy-field="signalStream" [value]="signalStream()" (change)="setSignalStream($event)" required>
-              <option value="" disabled>Select signal stream…</option>
-              @for (symbol of fixtureSymbols(); track symbol) {
-                <option [value]="symbol">{{ symbol }}</option>
-              }
-            </select>
-          } @else {
-            <input
-              data-deploy-field="signalStream"
-              id="signal-stream"
-              type="text"
-              [value]="signalStream()"
-              (input)="setSignalStream($event)"
-              required
-              placeholder="SPY"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          }
-          <small>Feeds strategy data via <code>live_config.symbol</code>. Validation case and traded legs stay separate.</small>
+          <input
+            data-deploy-field="signalStream"
+            id="signal-stream"
+            type="text"
+            [value]="signalStream()"
+            (input)="setSignalStream($event)"
+            required
+            placeholder="SPY"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <small>Feeds strategy data via <code>live_config.symbol</code>. Validation case, settings symbols, and traded legs stay separate.</small>
         </label>
       </section>
 

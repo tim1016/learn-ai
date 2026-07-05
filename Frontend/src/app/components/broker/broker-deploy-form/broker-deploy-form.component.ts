@@ -221,10 +221,7 @@ export class BrokerDeployFormComponent {
   );
 
   readonly resolvedSignalStream = computed<string>(() => {
-    const explicit = normalizedSymbol(this.signalStream());
-    const fixtures = this.fixtureSymbols();
-    if (fixtures.length === 0) return explicit;
-    return fixtures.includes(explicit) ? explicit : '';
+    return normalizedSymbol(this.signalStream());
   });
 
   /** ADR 0009 § 6 — the strategy's sizing surface. `"explicit"` (e.g.
