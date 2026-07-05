@@ -34,6 +34,29 @@
   <!-- ── CONTROLS TOOLBAR ── -->
   @if (status(); as s) {
     <div class="controls-toolbar">
+      @if (s.operator_surface.run_signal; as bot) {
+        <div
+          class="bot-run-signal"
+          [class.tone-on]="bot.tone === 'on'"
+          [class.tone-off]="bot.tone === 'off'"
+          [class.tone-transition]="bot.tone === 'transition'"
+          [class.tone-attention]="bot.tone === 'attention'"
+          role="status"
+          data-testid="bot-run-signal"
+          [attr.aria-label]="'Bot ' + bot.state_label + '. ' + bot.title + '. ' + bot.detail"
+          [attr.title]="bot.detail"
+        >
+          <span class="bot-run-switch" aria-hidden="true">
+            <span class="bot-run-thumb"></span>
+          </span>
+          <span class="bot-run-copy">
+            <span class="bot-run-kicker">Bot</span>
+            <strong>{{ bot.state_label }}</strong>
+            <span data-trader-copy>{{ bot.title }}</span>
+          </span>
+        </div>
+      }
+
       <app-overview-actions
         class="top-action-banner"
         [actions]="s.lifecycle_chart.actions"
@@ -96,6 +119,7 @@
               type="button"
               class="slim-dismiss"
               aria-label="Dismiss broker evidence warning"
+              title="Dismiss broker evidence warning"
               (click)="dismissBrokerEvidenceBanner()"
             >
               <i class="pi pi-times" aria-hidden="true"></i>
@@ -131,6 +155,7 @@
               type="button"
               class="slim-dismiss"
               aria-label="Dismiss control plane warning"
+              title="Dismiss control plane warning"
               (click)="dismissControlPlaneBanner()"
             >
               <i class="pi pi-times" aria-hidden="true"></i>

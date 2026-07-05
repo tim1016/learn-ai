@@ -207,6 +207,12 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
       },
     ],
   },
+  run_signal: {
+    state_label: 'Off',
+    tone: 'off',
+    title: 'Bot process is not running',
+    detail: 'Host process is IDLE; live-only commands cannot execute until a bot process is started.',
+  },
   actions: {
     resume: _capability(true, 'DURABLE_ONLY'),
     pause: _capability(true, 'DURABLE_ONLY'),

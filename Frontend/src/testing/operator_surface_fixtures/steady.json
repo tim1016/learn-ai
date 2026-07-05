@@ -395,6 +395,12 @@
     "sidecar_wal_seq": null,
     "state": "NOT_AVAILABLE"
   },
+  "run_signal": {
+    "detail": "The host daemon reports this bot process is running.",
+    "state_label": "On",
+    "title": "Bot process is running",
+    "tone": "on"
+  },
   "runtime_freshness": {
     "additional_reasons": [],
     "bar_loop": {

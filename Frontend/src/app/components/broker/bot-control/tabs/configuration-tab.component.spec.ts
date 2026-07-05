@@ -179,6 +179,12 @@ function status(): LiveInstanceStatus {
           },
         ],
       },
+      run_signal: {
+        state_label: 'Off',
+        tone: 'off',
+        title: 'Bot process is not running',
+        detail: 'Host process state is IDLE.',
+      },
       actions: {
         resume: {
           enabled: false,

@@ -349,6 +349,12 @@
     "sidecar_wal_seq": null,
     "state": "NOT_AVAILABLE"
   },
+  "run_signal": {
+    "detail": "The host is reachable but this bot has no active process. Start it to resume trading.",
+    "state_label": "Off",
+    "title": "Bot process is not running",
+    "tone": "off"
+  },
   "runtime_freshness": null,
   "schema_version": 1,
   "submit_readiness": {

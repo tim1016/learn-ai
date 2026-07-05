@@ -20,12 +20,14 @@ export function makeStatus(options: {
   id?: string;
   hostState?: HostProcessState;
   hostNotice?: string;
+  runSignal?: LiveInstanceStatus['operator_surface']['run_signal'];
   startCapabilityEnabled?: boolean;
   startRunId?: string;
   startRequest?: HostRunnerStartRequest;
   markPoisonedEnabled?: boolean;
 } = {}): LiveInstanceStatus {
   const hostState = options.hostState ?? 'UNREACHABLE';
+  const hostNotice = options.hostNotice ?? 'Start the host runner before trading this bot.';
   const startRequest: HostRunnerStartRequest = options.startRequest ?? {
     readonly: false,
     hydrate_policy: 'require',
@@ -68,7 +70,7 @@ export function makeStatus(options: {
       schema_version: 1,
       host_process: {
         state: hostState,
-        notice: options.hostNotice ?? 'Start the host runner before trading this bot.',
+        notice: hostNotice,
         copyable_command: hostState === 'UNREACHABLE' ? 'make broker-runner' : null,
         start_capability: options.startCapabilityEnabled
           ? {
@@ -218,6 +220,12 @@ export function makeStatus(options: {
             reason_codes: ['BROKER_DISCONNECTED'],
           },
         ],
+      },
+      run_signal: options.runSignal ?? {
+        state_label: 'Unknown',
+        tone: 'attention',
+        title: 'Host process',
+        detail: hostNotice,
       },
       actions: {
         resume: {

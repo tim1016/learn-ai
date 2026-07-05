@@ -136,7 +136,7 @@ describe('OverviewTabComponent', () => {
     );
   });
 
-  it('renders the backend-authored current blockage ladder', () => {
+  it('renders the backend-authored lifecycle signals as a compact strip', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
@@ -179,11 +179,12 @@ describe('OverviewTabComponent', () => {
     fixture.detectChanges();
 
     const text = renderedText(fixture);
-    expect(text).toContain('Current blockage');
+    expect(text).toContain('Signals');
     expect(text).toContain('IBKR data farm degraded');
     expect(text).toContain('Broker proof');
     const current = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.blockage-step.current');
     expect(current?.textContent).toContain('Broker proof');
+    expect(current?.textContent).toContain('IBKR data farm degraded');
     expect(current?.classList.contains('severity-critical')).toBe(true);
   });
 

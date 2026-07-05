@@ -44,6 +44,11 @@ describe('BotControlPageComponent', () => {
     expect(runbookLinks).toContain('/broker/account-monitor');
     expect(runbookLinks).toContain('/broker');
     expect(runbookLinks).not.toContain('/data-lab');
+    const dismissButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.slim-dismiss'));
+    expect(dismissButtons.map((button) => button.getAttribute('title'))).toEqual([
+      'Dismiss broker evidence warning',
+      'Dismiss control plane warning',
+    ]);
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
     expect(el.querySelector('.decision-row')).toBeNull();
@@ -152,7 +157,17 @@ describe('BotControlPageComponent', () => {
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { fixture, component, element: el } = await setupBotControlPage();
+    const status = makeStatus({
+      runSignal: {
+        state_label: 'Off',
+        tone: 'off',
+        title: 'Bot process is not running',
+        detail: 'Start the host runner before trading this bot.',
+      },
+    });
+    const { fixture, component, element: el } = await setupBotControlPage({ status });
+    expect(el.querySelector('[data-testid="bot-run-signal"]')?.textContent)
+      .toContain('Off');
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Controls');
     const startAction = el.querySelector(
       '.top-action-banner .chart-action[aria-label="Start bot process"]',
@@ -196,6 +211,62 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
   });
 
+  it('renders bot runtime as compact on/off signals beside one-click controls', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const stopped = makeStatus({
+      hostState: 'IDLE',
+      runSignal: {
+        state_label: 'Off',
+        tone: 'off',
+        title: 'Bot process is not running',
+        detail: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+      },
+    });
+    stopped.operator_surface.blockage_ladder = {
+      headline: 'Bot process is not running',
+      summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+      current_stage_id: 'host_process',
+      stages: [
+        {
+          id: 'host_process',
+          label: 'Host process',
+          state: 'warning',
+          severity: 'warning',
+          current: true,
+          title: 'Bot process is not running',
+          summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+          next_step: null,
+          reason_codes: ['HOST_PROCESS_IDLE'],
+        },
+      ],
+    };
+    const { fixture, component, element } = await setupBotControlPage({ status: stopped });
+
+    const offSignal = element.querySelector('[data-testid="bot-run-signal"]');
+    expect(offSignal?.textContent).toContain('Bot');
+    expect(offSignal?.textContent).toContain('Off');
+    expect(offSignal?.textContent).toContain('Bot process is not running');
+    expect(offSignal?.classList.contains('tone-off')).toBe(true);
+    expect(element.querySelector('.chart-action[aria-label="Start bot process"]')).not.toBeNull();
+
+    const running = makeStatus({
+      hostState: 'RUNNING',
+      runSignal: {
+        state_label: 'On',
+        tone: 'on',
+        title: 'Bot process is running',
+        detail: 'The host daemon reports this bot process is running.',
+      },
+    });
+    component.status.set(running);
+    fixture.detectChanges();
+
+    const onSignal = element.querySelector('[data-testid="bot-run-signal"]');
+    expect(onSignal?.textContent).toContain('On');
+    expect(onSignal?.textContent).toContain('Bot process is running');
+    expect(onSignal?.classList.contains('tone-on')).toBe(true);
+  });
+
   it('renders human-labelled posture pills in the header and omits the execution pill', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
@@ -217,7 +288,7 @@ describe('BotControlPageComponent', () => {
     expect(header?.textContent).not.toContain('FLAT');
   });
 
-  it('renders backend-authored disabled action prose only in the disabled tooltip', async () => {
+  it('renders backend-authored disabled action prose in the action tooltip', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.lifecycle_chart.actions = [
@@ -282,7 +353,7 @@ describe('BotControlPageComponent', () => {
 
     const pause = element.querySelector<HTMLButtonElement>('.chart-action[aria-label="Pause"]');
     expect(pause?.getAttribute('aria-disabled')).toBe('false');
-    expect(pause?.getAttribute('title')).toBeNull();
+    expect(pause?.getAttribute('title')).toContain('Pause On. Available');
     expect(pause?.textContent?.trim()).toBe('');
   });
 

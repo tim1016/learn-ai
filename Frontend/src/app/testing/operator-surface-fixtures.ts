@@ -142,6 +142,12 @@ export function makeOperatorSurfaceFixture(
         },
       ],
     },
+    run_signal: {
+      state_label: 'On',
+      tone: 'on',
+      title: 'Bot process is running',
+      detail: 'The host daemon reports this bot process is running.',
+    },
     actions: {
       resume: {
         enabled: true,

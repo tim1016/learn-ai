@@ -43,6 +43,8 @@ describe('operator surface fixture wire contract', () => {
     expect(STEADY.host_process.state).toBe('RUNNING');
     expect(STEADY.host_process.notice).toBeNull();
     expect(STEADY.host_process.copyable_command).toBeNull();
+    expect(STEADY.run_signal.state_label).toBe('On');
+    expect(STEADY.run_signal.tone).toBe('on');
     expect(STEADY.actions.resume.enabled).toBe(false);
     expect(STEADY.actions.pause.enabled).toBe(true);
     expect(STEADY.actions.resume.disabled_reason_code).toBe(
@@ -66,6 +68,8 @@ describe('operator surface fixture wire contract', () => {
     // case.  PRD #616 left this enum unchanged.
     expect(STOPPED.host_process.state).toBe('IDLE');
     expect(STOPPED.host_process.notice).toMatch(/no active process/i);
+    expect(STOPPED.run_signal.state_label).toBe('Off');
+    expect(STOPPED.run_signal.tone).toBe('off');
     // flatten-and-pause requires a binding -> disabled with reason code.
     expect(STOPPED.actions.flatten_and_pause.enabled).toBe(false);
     expect(STOPPED.actions.flatten_and_pause.disabled_reason_code).toBe(
@@ -97,6 +101,7 @@ describe('operator surface fixture wire contract', () => {
       'submit_readiness',
       'trader_guidance',
       'blockage_ladder',
+      'run_signal',
       'actions',
       'trading_session',
       'readiness_gates',

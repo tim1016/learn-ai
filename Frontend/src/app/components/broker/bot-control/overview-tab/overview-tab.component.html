@@ -14,10 +14,10 @@
     }
   </header>
 
-  <section class="blockage-ladder" aria-label="Current blockage ladder">
+  <section class="blockage-ladder" aria-label="Lifecycle signals">
     <header class="blockage-header">
       <div>
-        <p class="eyebrow">Current blockage</p>
+        <p class="eyebrow">Signals</p>
         <h3>{{ blockageLadder().headline }}</h3>
         <p>{{ blockageLadder().summary }}</p>
       </div>
@@ -27,15 +27,16 @@
         </span>
       }
     </header>
-    <div class="blockage-steps">
+    <div class="blockage-steps" aria-label="Readiness signal states">
       @for (stage of blockageLadder().stages; track stage.id) {
         <article
           [class]="'blockage-step severity-' + stage.severity"
           [class.current]="stage.current"
           [attr.aria-label]="blockageStageAria(stage)"
+          [attr.title]="stage.summary"
         >
           <span class="step-index" aria-hidden="true"></span>
-          <div>
+          <div class="step-copy">
             <strong>{{ stage.label }}</strong>
             <span>{{ stage.title }}</span>
           </div>

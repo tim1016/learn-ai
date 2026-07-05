@@ -308,6 +308,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "submit_readiness",
         "trader_guidance",
         "blockage_ladder",
+        "run_signal",
         "control_plane",
         "action_plan",
         "actions",
@@ -327,6 +328,12 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
+    assert surface["run_signal"] == {
+        "state_label": "On",
+        "tone": "on",
+        "title": "Bot process is running",
+        "detail": "The host daemon reports this bot process is running.",
+    }
     assert surface["prior_run"]["classification"] == "UNKNOWN"
     # Two independent enums now.
     assert surface["broker"]["safety_verdict"] in {"PAPER_ONLY", "UNSAFE", "UNKNOWN"}

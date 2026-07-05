@@ -148,7 +148,7 @@ export class OverviewTabComponent {
   }
 
   blockageStageAria(stage: OperatorSurfaceBlockageStage): string {
-    const current = stage.current ? ' Current blockage.' : '';
+    const current = stage.current ? ' Current signal.' : '';
     return `${stage.label}. ${stage.title}. ${stage.summary}${current}`;
   }
 

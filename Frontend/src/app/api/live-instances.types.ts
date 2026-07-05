@@ -490,6 +490,15 @@ export interface OperatorSurfaceProofLine {
   tone: 'neutral' | 'ok' | 'attention';
 }
 
+export type OperatorSurfaceRunSignalTone = 'on' | 'off' | 'transition' | 'attention';
+
+export interface OperatorSurfaceRunSignal {
+  state_label: string;
+  tone: OperatorSurfaceRunSignalTone;
+  title: string;
+  detail: string;
+}
+
 export interface OperatorSurfaceSubmitReadiness {
   code: SubmitReadinessCode;
   label: string;
@@ -705,6 +714,8 @@ export interface OperatorSurface {
   trader_guidance: OperatorSurfaceTraderGuidance;
   /** Backend-authored lifecycle/current-blockage ladder for the Overview pane. */
   blockage_ladder: OperatorSurfaceBlockageLadder;
+  /** Backend-authored compact process signal rendered beside one-click lifecycle controls. */
+  run_signal: OperatorSurfaceRunSignal;
   actions: OperatorSurfaceActions;
   trading_session: OperatorSurfaceTradingSession;
   /** PRD #616 — operator-facing projection of engine readiness gates with

@@ -178,11 +178,37 @@ def test_host_process_base_state_mapping(daemon_state: str, expected: str, expec
     assert surface.host_process.copyable_command is None
 
 
+@pytest.mark.parametrize(
+    ("daemon_state", "expected_label", "expected_tone"),
+    [
+        ("running", "On", "on"),
+        ("stopping", "Stopping", "transition"),
+        ("idle", "Off", "off"),
+        ("exited", "Off", "off"),
+        ("unreachable", "Unknown", "attention"),
+    ],
+)
+def test_run_signal_is_backend_authored_from_resolved_host_state(
+    daemon_state: str,
+    expected_label: str,
+    expected_tone: str,
+) -> None:
+    surface = _surface(process=InstanceProcessView(state=daemon_state))
+
+    assert surface.run_signal.state_label == expected_label
+    assert surface.run_signal.tone == expected_tone
+    assert surface.run_signal.title
+    assert surface.run_signal.detail
+
+
 def test_host_process_idle_plus_desired_running_becomes_waiting_for_host() -> None:
     surface = _surface(process=_IDLE_PROC, desired_state=_desired("RUNNING"))
     assert surface.host_process.state == "WAITING_FOR_HOST"
     assert surface.host_process.notice is not None
     assert "Trading was requested" in surface.host_process.notice
+    assert surface.run_signal.state_label == "Off"
+    assert surface.run_signal.tone == "off"
+    assert surface.run_signal.title == "Bot process is not running"
 
 
 def test_host_process_idle_without_desired_running_stays_idle() -> None:
