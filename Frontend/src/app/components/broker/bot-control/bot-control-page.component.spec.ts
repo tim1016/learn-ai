@@ -44,6 +44,11 @@ describe('BotControlPageComponent', () => {
     expect(runbookLinks).toContain('/broker/account-monitor');
     expect(runbookLinks).toContain('/broker');
     expect(runbookLinks).not.toContain('/data-lab');
+    const dismissButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.slim-dismiss'));
+    expect(dismissButtons.map((button) => button.getAttribute('title'))).toEqual([
+      'Dismiss broker evidence warning',
+      'Dismiss control plane warning',
+    ]);
     expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
     expect(el.querySelector('.decision-row')).toBeNull();
@@ -259,7 +264,7 @@ describe('BotControlPageComponent', () => {
     expect(header?.textContent).not.toContain('FLAT');
   });
 
-  it('renders backend-authored disabled action prose only in the disabled tooltip', async () => {
+  it('renders backend-authored disabled action prose in the action tooltip', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.lifecycle_chart.actions = [
@@ -324,7 +329,7 @@ describe('BotControlPageComponent', () => {
 
     const pause = element.querySelector<HTMLButtonElement>('.chart-action[aria-label="Pause"]');
     expect(pause?.getAttribute('aria-disabled')).toBe('false');
-    expect(pause?.getAttribute('title')).toBeNull();
+    expect(pause?.getAttribute('title')).toContain('Pause On. Available');
     expect(pause?.textContent?.trim()).toBe('');
   });
 

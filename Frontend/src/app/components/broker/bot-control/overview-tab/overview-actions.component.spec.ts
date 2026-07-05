@@ -45,10 +45,16 @@ describe('OverviewActionsComponent', () => {
     expect(el.querySelector('[aria-label="Stop"]')).not.toBeNull();
     expect(el.querySelector('[aria-label="Fresh run"]')).not.toBeNull();
     expect(el.querySelector('[aria-label="Mark poisoned"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Pause"]')?.getAttribute('title')).toBeNull();
+    for (const button of Array.from(el.querySelectorAll<HTMLButtonElement>('.chart-action'))) {
+      expect(button.getAttribute('title')).toBeTruthy();
+      expect(button.classList.contains('is-on')).toBe(true);
+      expect(button.classList.contains('is-off')).toBe(false);
+    }
+    expect(el.querySelector('[aria-label="Pause"]')?.getAttribute('title'))
+      .toContain('Pause On. Available');
   });
 
-  it('shows backend action prose in the tooltip only when disabled', () => {
+  it('shows backend action prose in the tooltip and off state when disabled', () => {
     TestBed.configureTestingModule({
       providers: [provideZonelessChangeDetection()],
     });
@@ -70,6 +76,9 @@ describe('OverviewActionsComponent', () => {
       '[aria-label="Flatten and pause"]',
     );
     expect(button?.getAttribute('aria-disabled')).toBe('true');
+    expect(button?.classList.contains('is-off')).toBe(true);
+    expect(button?.classList.contains('is-on')).toBe(false);
+    expect(button?.getAttribute('title')).toContain('Flatten and pause Off');
     expect(button?.getAttribute('title')).toContain('No live binding');
     expect(button?.getAttribute('title')).toContain('runner is not bound');
     expect(button?.getAttribute('title')).not.toContain('NO_LIVE_BINDING');

@@ -44,13 +44,16 @@ export class LifecycleActionButtonComponent {
     this.isInteractionLocked() ? null : this.action().reason_detail,
   );
   readonly displayLabel = computed(() => ACTION_LABEL[this.action().id] ?? this.action().label);
+  readonly actionStateLabel = computed(() => this.isDisabled() ? 'Off' : 'On');
+  readonly isOn = computed(() => !this.isDisabled());
+  readonly isOff = computed(() => this.isDisabled());
   readonly iconClass = computed(() =>
     this.busyAction() === this.action().id ? 'pi pi-spinner pi-spin' : ACTION_ICON[this.action().id],
   );
-  readonly disabledTooltip = computed(() => {
-    if (!this.isDisabled()) return null;
+  readonly tooltip = computed(() => {
     const detail = this.statusDetail();
-    return detail ? `${this.statusHeadline()}. ${detail}` : this.statusHeadline();
+    const status = detail ? `${this.statusHeadline()}. ${detail}` : this.statusHeadline();
+    return `${this.displayLabel()} ${this.actionStateLabel()}. ${status}`;
   });
 
   activateAction(): void {
