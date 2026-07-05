@@ -1000,3 +1000,86 @@ client). Its subject is the control plane, not the broker session.
   fail "down") and is the only source that can prove `BOOT_CHANGED`. The
   always-visible mirror header binds to the folded state alone, so passively
   rendering it never probes the daemon.
+
+## Strategy validation & signal stream (sharpened 2026-07-05)
+
+Sharpens the **Validated strategy package** entry above for the Deploy-a-strategy
+redesign. Draws the line between what the *validated strategy* carries and what
+the *deployment* binds.
+
+- **Validated strategy** — a binary, **strategy-level** property (not per-symbol):
+  our LEAN-engine port is proven numerically equivalent to a QuantConnect backtest.
+  Validation is a **one-step** act performed against a single **validation-case
+  symbol** (e.g. SPY) that serves as the strategy's **golden fixture**. Once the
+  strategy is validated, it is validated *as a whole* — we do **not** re-validate
+  per symbol. The validation carries: the strategy's settings file, its QC backtest
+  ID, its saved QC algorithm source (the exact QuantConnect-equivalent code, under
+  `references/qc-shadow/`), and the port-vs-QC reconciliation verdict. Selecting a
+  strategy **auto-populates** all of these — the trader never types a settings-file
+  path or a backtest ID.
+- **Validation-case symbol (golden fixture)** — the single symbol the strategy was
+  validated against (SPY). It is **provenance only**: it does not default,
+  constrain, or warn the deployed signal stream, and the UI may or may not surface
+  it. Its job was to prove the port; that job is done once.
+- **Signal stream** — the symbol a deployed bot reads to compute buy/sell signals,
+  bound via `live_config.symbol`. It is **completely independent of the strategy
+  and of the validation-case symbol** — a free deploy-time choice. Distinct again
+  from the **traded instrument**, which the Action plan controls: signal stream is
+  *what the strategy watches*, the action-plan legs are *what it trades*. All three
+  (validation symbol, signal stream, traded legs) may differ.
+- **Strategy Validation page** — the standalone surface that owns a strategy
+  *becoming* validated and that displays the equivalence evidence. It is a
+  **master-detail list** (a row per validated strategy, click through to detail),
+  a sibling in spirit to the Golden Fixtures surface. The detail shows the
+  strategy's brief metadata, the **validation diagnostics** (QC backtest ID,
+  validation-case symbol, trades-matched / trades-validated counts, P&L-matched
+  magnitude, and the `DivergenceCategory` taxonomy from `qc_reconciler.py`), and
+  the **QuantConnect reference code** rendered inline. It never renders our
+  internal LEAN/engine port source — sovereignty means the reference is shown for
+  audit, the port is not.
+- **Authoring-boundary supersession** — this **supersedes** the earlier
+  "The Deploy a strategy page owns creating or selecting this package" clause in
+  **Validated strategy package** (above). Authoring now splits: the **Strategy
+  Validation page** owns *making a strategy validated*; the **Deploy a strategy
+  page** only *selects* an already-validated strategy. Engine Lab remains a
+  non-authoring surface for this workflow.
+- **Strategy catalog & validation state** — the Strategy Validation surface is a
+  catalog of **all** strategies carrying a validation state, not a list of only
+  the good ones. A strategy is **validated** (has a QC backtest ID + saved audit
+  copy + passing port-vs-QC reconciliation → deployable) or **unvalidated** (shown
+  as "needs validation" → not deployable). **Validation is the gate to
+  deployability**: only validated strategies appear in the Deploy flow's strategy
+  dropdown; adding validation to an unvalidated strategy flips it deployable. The
+  validation binding is **backend-owned and stored** (already present today as the
+  `qc_cloud_backtest_id` + `qc_audit_copy_path`/`sha` + `strategy_spec_path`/`sha`
+  chain in each `run_ledger.json`, plus the qc-shadow attribution and the
+  `docs/references/reconciliations/` reports) — the surface consolidates it, it is
+  not re-typed.
+- **Deployment binding surface** — the Deploy-a-strategy flow selects one validated
+  strategy (auto-populating its validation evidence: settings file, QC backtest ID,
+  audit copy, reconciliation verdict — none typed) and binds the independent,
+  per-deployment inputs: signal stream, position sizing, action-plan legs, launch
+  options, deployment name, and the read-only connected account.
+- **Actionable readiness gate** — a deploy readiness fact (Engine / Broker /
+  Account / Fleet) rendered at **trader altitude** (a backend-authored named
+  condition via `receiptLabel`, drill-down to its full page; never raw socket rows
+  inline). A blocking gate carries a **server-authored action envelope** (the same
+  `kind: recovery_mutation | navigation` model as daemon diagnostics). The strip
+  renders a **"clear this gate" button only when the backend attaches an actuatable
+  `recovery_mutation`** — reusing the **canonical existing mutation** (Account
+  `NOT_PROVEN` → `reconcileAccount` / `POST /api/accounts/{id}/reconciliation`;
+  daemon lease-stale → `renew_lease`), never a forked one. Non-actuatable, host-
+  level fixes (start the daemon, broker `HARD_DOWN`) stay **guidance / deep-link,
+  never buttons**. On success the gate **re-evaluates server-side**; a cleared gate
+  unblocks deploy/start. The strip surfaces only **pre-deploy gate-clearing**
+  actions; **bot lifecycle actions (RESUME/FLATTEN/STOP/PAUSE) keep their canonical
+  render site in the Bot Cockpit** and are not rendered here (see "Destructive-
+  action canonical render site").
+- **Launch-default posture (deploy)** — the deploy flow defaults to **paper orders
+  enabled**, **start-immediately on (rendered *loud*)**, and a **daily order limit
+  of 2000** (a practically-unthrottled ceiling). This inverts the earlier
+  read-only-first default and is safe **only** while three guardrails stay hard:
+  Safe-canary 1-share sizing remains the default, `UNSAFE`/live-identity is a hard
+  block, and account readiness gates the *start*. The standalone paper-confirm
+  modal is replaced by the loud start treatment; a hard confirm/block is reserved
+  for elevated conditions (live identity, account `NOT_PROVEN`).
