@@ -16,7 +16,7 @@ for the operator-surface inclusion boundary.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time
 from typing import Literal, assert_never
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
+from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
 from app.operator.notices.schema import OperatorNotice
@@ -530,12 +531,6 @@ def _project_configuration(
 
 _NY = ZoneInfo("America/New_York")
 
-# Default RTH window when a strategy has not declared its own session
-# policy.  Per the cockpit-revision contract, this default lives
-# server-side; Angular MUST NOT hard-code it.  When per-strategy
-# session policies ship, this helper grows to read them.
-_RTH_OPEN = time(9, 30)
-_RTH_CLOSE = time(16, 0)
 _PRE_OPEN = time(4, 0)
 _POST_CLOSE = time(20, 0)
 
@@ -552,17 +547,11 @@ def _ms_utc(dt: datetime) -> int:
     return int(dt.astimezone(UTC).timestamp() * 1000)
 
 
-def _next_weekday_open(now_ny: datetime) -> int:
-    """Return the next weekday's 04:00 NY pre-open as int64 ms UTC."""
-    day = now_ny.date()
-    delta = 1
-    while True:
-        candidate = day + timedelta(days=delta)
-        # weekday: 0=Mon ... 6=Sun
-        if candidate.weekday() < 5:
-            target = datetime.combine(candidate, _PRE_OPEN, tzinfo=_NY)
-            return _ms_utc(target)
-        delta += 1
+def _next_session_pre_open(now_ny: datetime) -> int:
+    """Return the next NYSE session's 04:00 NY pre-open as int64 ms UTC."""
+    candidate = next_trading_day(now_ny.date())
+    target = datetime.combine(candidate, _PRE_OPEN, tzinfo=_NY)
+    return _ms_utc(target)
 
 
 def _project_trading_session(
@@ -579,39 +568,44 @@ def _project_trading_session(
     field on the wire; until then the policy defaults to RTH-only.
     """
     now_ny = _ny_dt(now_ms)
-    wall = now_ny.time()
-    weekday = now_ny.weekday()  # 0=Mon ... 6=Sun
 
     phase: str
     permits: bool | None
     next_transition_ms: int | None
 
-    if weekday >= 5:
-        # Weekend → CLOSED until Monday 04:00 ET.
+    try:
+        session_window = session_window_for_date(now_ny.date())
+    except LookupError:
         phase = "CLOSED"
         permits = False
-        next_transition_ms = _next_weekday_open(now_ny)
-    elif wall < _PRE_OPEN:
-        phase = "CLOSED"
-        permits = False
-        next_transition_ms = _ms_utc(_at(now_ny, _PRE_OPEN))
-    elif wall < _RTH_OPEN:
-        phase = "PRE"
-        permits = False
-        next_transition_ms = _ms_utc(_at(now_ny, _RTH_OPEN))
-    elif wall < _RTH_CLOSE:
-        phase = "RTH"
-        permits = True
-        next_transition_ms = _ms_utc(_at(now_ny, _RTH_CLOSE))
-    elif wall < _POST_CLOSE:
-        phase = "POST"
-        permits = False
-        next_transition_ms = _ms_utc(_at(now_ny, _POST_CLOSE))
+        next_transition_ms = _next_session_pre_open(now_ny)
     else:
-        # After 20:00 ET on a weekday → CLOSED until tomorrow's 04:00 ET.
-        phase = "CLOSED"
-        permits = False
-        next_transition_ms = _next_weekday_open(now_ny)
+        session_open_ny = _ny_dt(session_window.open_ms_utc)
+        session_close_ny = _ny_dt(session_window.close_ms_utc)
+        pre_open_ny = _at(now_ny, _PRE_OPEN)
+        post_close_ny = _at(now_ny, _POST_CLOSE)
+
+        if now_ny < pre_open_ny:
+            phase = "CLOSED"
+            permits = False
+            next_transition_ms = _ms_utc(pre_open_ny)
+        elif now_ny < session_open_ny:
+            phase = "PRE"
+            permits = False
+            next_transition_ms = session_window.open_ms_utc
+        elif now_ny < session_close_ny:
+            phase = "RTH"
+            permits = True
+            next_transition_ms = session_window.close_ms_utc
+        elif now_ny < post_close_ny:
+            phase = "POST"
+            permits = False
+            next_transition_ms = _ms_utc(post_close_ny)
+        else:
+            # After 20:00 ET on a session day → CLOSED until the next session's 04:00 ET.
+            phase = "CLOSED"
+            permits = False
+            next_transition_ms = _next_session_pre_open(now_ny)
 
     if strategy_session_policy is None:
         # Default policy = RTH-only.

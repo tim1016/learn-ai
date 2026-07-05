@@ -246,7 +246,7 @@ public class ResearchExperimentDto
     public bool PassedValidation { get; set; }
     public double MonotonicityRatio { get; set; }
     public bool IsMonotonic { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public long CreatedAt { get; set; }
 }
 
 #endregion

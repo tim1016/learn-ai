@@ -179,11 +179,11 @@
         <dd><code>{{ shortHash(data.config.parent_trade_log_hash, 32) }}…</code></dd>
 
         <dt>Created</dt>
-        <dd>{{ data.config.created_at_ms | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+        <dd>{{ data.config.created_at_ms | timestampDisplay: 'local' : 'datetime' }}</dd>
 
         @if (data.result.completed_at_ms; as completedMs) {
           <dt>Completed</dt>
-          <dd>{{ completedMs | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+          <dd>{{ completedMs | timestampDisplay: 'local' : 'datetime' }}</dd>
         }
       </dl>
     </section>

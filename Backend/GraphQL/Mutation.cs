@@ -4,6 +4,7 @@ using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
+using Backend.Temporal;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 
@@ -201,8 +202,8 @@ public class Mutation
                 Trades = execution.Trades.Select(t => new BacktestTradeType
                 {
                     TradeType = t.TradeType,
-                    EntryTimestamp = t.EntryTimestamp.ToString("o"),
-                    ExitTimestamp = t.ExitTimestamp.ToString("o"),
+                    EntryTimestamp = UnixMs.FromUtc(t.EntryTimestamp),
+                    ExitTimestamp = UnixMs.FromUtc(t.ExitTimestamp),
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
                     PnL = t.PnL,
@@ -320,8 +321,8 @@ public class Mutation
                 Trades = trades.Select(t => new BacktestTradeType
                 {
                     TradeType = t.TradeType,
-                    EntryTimestamp = t.EntryTimestamp.ToString("o"),
-                    ExitTimestamp = t.ExitTimestamp.ToString("o"),
+                    EntryTimestamp = UnixMs.FromUtc(t.EntryTimestamp),
+                    ExitTimestamp = UnixMs.FromUtc(t.ExitTimestamp),
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
                     PnL = t.PnL,
@@ -604,8 +605,8 @@ public class Mutation
                 {
                     TradeNumber = t.TradeNumber,
                     TradeType = t.TradeType ?? "Buy",
-                    EntryTimestamp = t.EntryTimestamp ?? "",
-                    ExitTimestamp = t.ExitTimestamp ?? "",
+                    EntryTimestamp = t.EntryTimestamp,
+                    ExitTimestamp = t.ExitTimestamp,
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
                     Pnl = t.Pnl,
@@ -657,8 +658,8 @@ public class BacktestResultType
 public class BacktestTradeType
 {
     public string TradeType { get; set; } = "";
-    public string EntryTimestamp { get; set; } = "";
-    public string ExitTimestamp { get; set; } = "";
+    public long EntryTimestamp { get; set; }
+    public long ExitTimestamp { get; set; }
     public decimal EntryPrice { get; set; }
     public decimal ExitPrice { get; set; }
     [GraphQLName("pnl")]
@@ -737,8 +738,8 @@ public class RuleBasedTradeType
 {
     public int TradeNumber { get; set; }
     public string TradeType { get; set; } = "Buy";
-    public string EntryTimestamp { get; set; } = "";
-    public string ExitTimestamp { get; set; } = "";
+    public long EntryTimestamp { get; set; }
+    public long ExitTimestamp { get; set; }
     public double EntryPrice { get; set; }
     public double ExitPrice { get; set; }
     [GraphQLName("pnl")]
@@ -782,8 +783,8 @@ internal class RuleBasedPythonTrade
 {
     public int TradeNumber { get; set; }
     public string? TradeType { get; set; }
-    public string? EntryTimestamp { get; set; }
-    public string? ExitTimestamp { get; set; }
+    public long EntryTimestamp { get; set; }
+    public long ExitTimestamp { get; set; }
     public double EntryPrice { get; set; }
     public double ExitPrice { get; set; }
     public double Pnl { get; set; }

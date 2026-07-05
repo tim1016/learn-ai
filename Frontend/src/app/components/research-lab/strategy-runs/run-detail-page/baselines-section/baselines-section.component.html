@@ -72,7 +72,7 @@
       </ng-template>
       <ng-template #body let-bl>
         <tr class="bl-row" (click)="open(bl)">
-          <td>{{ bl.created_at_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+          <td>{{ bl.created_at_ms | timestampDisplay: 'local' : 'datetime' }}</td>
           <td>
             <p-tag
               [value]="bl.method"

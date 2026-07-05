@@ -16,7 +16,7 @@ morning.
 
 **Modules:**
 - `indicator_state.py` — envelope, payload, policy enum, repo, validation ladder, hydrate() and maybe_write()
-- `nyse_calendar.py` — previous-completed-session lookup (staleness check)
+- `app.lean_sidecar.trading_calendar` — canonical scheduled-session lookup (staleness check)
 
 **Policy tri-state on `start`:**
 - `require` (default) — exit 4 on any validation failure
@@ -28,4 +28,3 @@ morning.
 - Graceful-shutdown `finally` — "newer" check refuses to overwrite force-flat with earlier-Ctrl-C state
 
 **Design doc:** `docs/superpowers/specs/2026-05-15-spy-ema-paper-dry-run-design.md`
-

@@ -47,18 +47,26 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
+
 Session = Literal["ETH", "RTH"]
 
 
 def _et_session_mask(index: pd.DatetimeIndex, session: Session) -> np.ndarray:
     """Boolean array — True for bars whose ET timestamp falls in the chosen session."""
     et = index.tz_convert("America/New_York")
-    hour = np.asarray(et.hour)
-    minute = np.asarray(et.minute)
     if session == "RTH":
-        # 09:30 inclusive → 16:00 exclusive
-        return ((hour > 9) | ((hour == 9) & (minute >= 30))) & (hour < 16)
+        dates = np.asarray(et.date)
+        if dates.size == 0:
+            return np.array([], dtype=bool)
+        epoch = pd.Timestamp("1970-01-01", tz="UTC")
+        ts_ms = ((index.tz_convert("UTC") - epoch) // pd.Timedelta(milliseconds=1)).to_numpy(dtype="int64")
+        mask = np.zeros(len(index), dtype=bool)
+        for window in session_windows_ms_utc(dates.min(), dates.max()):
+            mask |= (window.open_ms_utc <= ts_ms) & (ts_ms < window.close_ms_utc)
+        return mask
     if session == "ETH":
+        hour = np.asarray(et.hour)
         # 04:00 inclusive → 20:00 exclusive
         return (hour >= 4) & (hour < 20)
     raise ValueError(f"session must be 'RTH' or 'ETH', got {session!r}")

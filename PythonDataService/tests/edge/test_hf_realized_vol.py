@@ -11,6 +11,7 @@ from app.engine.edge.features_realtime.hf_realized_vol import (
     hf_realized_vol_trd252,
 )
 from app.engine.edge.labels_oracle.hf_forward_rv import hf_forward_rv_trd252
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 
 
 def _make_bars(
@@ -22,7 +23,6 @@ def _make_bars(
     seed: int = 7,
     overnight_factor: float = 1.0,
     s0: float = 100.0,
-    skip_weekends: bool = True,
 ) -> pd.DataFrame:
     """Build a synthetic 15-min bar DataFrame at given annualized vol.
 
@@ -37,12 +37,9 @@ def _make_bars(
     rows = []
     cur_price = s0
     last_close_per_day: float | None = None
-    cur_date = pd.Timestamp("2024-03-04", tz="America/New_York")
-    days_added = 0
-    while days_added < n_days:
-        if skip_weekends and cur_date.weekday() >= 5:
-            cur_date = cur_date + pd.Timedelta(days=1)
-            continue
+    windows = session_windows_ms_utc("2024-03-04", "2024-12-31")[:n_days]
+    for window in windows:
+        cur_date = pd.Timestamp(window.session_date, tz="America/New_York")
         # overnight return (skip on day 0)
         if last_close_per_day is not None:
             r_overnight = rng.normal(0.0, per_step_std_overnight)
@@ -63,8 +60,6 @@ def _make_bars(
             )
             cur_price = new_price
         last_close_per_day = cur_price
-        cur_date = cur_date + pd.Timedelta(days=1)
-        days_added += 1
     df = pd.DataFrame(rows).set_index("ts")
     return df
 

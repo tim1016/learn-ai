@@ -6,6 +6,7 @@ using Backend.Models.MarketData;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
+using Backend.Temporal;
 using HotChocolate;
 using HotChocolate.Data;
 using Microsoft.EntityFrameworkCore;
@@ -131,7 +132,7 @@ public class Query
             Close = a.Close,
             Volume = a.Volume,
             VolumeWeightedAveragePrice = a.VolumeWeightedAveragePrice,
-            Timestamp = a.Timestamp,
+            Timestamp = UnixMs.FromUtc(a.Timestamp),
             Timespan = a.Timespan,
             Multiplier = a.Multiplier,
             TransactionCount = a.TransactionCount

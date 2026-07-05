@@ -59,9 +59,9 @@ export interface LeanStatistics {
 
 export interface EngineTrade {
   trade_number: number;
-  entry_time: string;
+  entry_time: number;
   entry_price: number;
-  exit_time: string;
+  exit_time: number;
   exit_price: number;
   indicators: Record<string, number>;
   pnl_pts: number;
@@ -265,10 +265,10 @@ export class EngineResultsComponent {
     return value.toFixed(places);
   }
 
-  formatTradeTime(iso: string): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
+  formatTradeTime(ms: number): string {
+    if (!Number.isFinite(ms)) return '';
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return '';
     const zone = this.selectedTimezone();
     if (zone === 'UTC') return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 

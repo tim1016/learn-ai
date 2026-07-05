@@ -63,17 +63,17 @@ describe('TickerService', () => {
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: {
           stockAggregates: [
-            { timestamp: '2026-01-01T00:00:00Z' },
-            { timestamp: '2026-01-02T00:00:00Z' },
-            { timestamp: '2026-01-03T00:00:00Z' },
+            { timestamp: Date.UTC(2026, 0, 1) },
+            { timestamp: Date.UTC(2026, 0, 2) },
+            { timestamp: Date.UTC(2026, 0, 3) },
           ],
         },
       });
 
       const stats = await promise;
       expect(stats.count).toBe(3);
-      expect(stats.earliest).toBe('2026-01-01T00:00:00Z');
-      expect(stats.latest).toBe('2026-01-03T00:00:00Z');
+      expect(stats.earliest).toBe(Date.UTC(2026, 0, 1));
+      expect(stats.latest).toBe(Date.UTC(2026, 0, 3));
     });
 
     it('should return nulls for empty response', async () => {

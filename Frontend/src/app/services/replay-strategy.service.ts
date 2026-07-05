@@ -15,10 +15,10 @@ export class ReplayStrategyService {
     const currentBar = this.replayEngine.currentBar();
     if (!currentBar || trades.length === 0) return [];
 
-    const currentTimestampMs = new Date(currentBar.timestamp).getTime();
+    const currentTimestampMs = currentBar.timestamp;
 
     return trades.filter(
-      t => new Date(t.entryTimestamp).getTime() <= currentTimestampMs
+      t => t.entryTimestamp <= currentTimestampMs
     );
   });
 
@@ -27,10 +27,10 @@ export class ReplayStrategyService {
     const currentBar = this.replayEngine.currentBar();
     if (!currentBar || trades.length === 0) return [];
 
-    const currentTimestampMs = new Date(currentBar.timestamp).getTime();
+    const currentTimestampMs = currentBar.timestamp;
 
     return trades.filter(
-      t => new Date(t.exitTimestamp).getTime() <= currentTimestampMs
+      t => t.exitTimestamp <= currentTimestampMs
     );
   });
 
@@ -39,12 +39,12 @@ export class ReplayStrategyService {
     const currentBar = this.replayEngine.currentBar();
     if (!currentBar || trades.length === 0) return null;
 
-    const currentTimestampMs = new Date(currentBar.timestamp).getTime();
+    const currentTimestampMs = currentBar.timestamp;
 
     return trades.find(
       t =>
-        new Date(t.entryTimestamp).getTime() <= currentTimestampMs &&
-        new Date(t.exitTimestamp).getTime() > currentTimestampMs
+        t.entryTimestamp <= currentTimestampMs &&
+        t.exitTimestamp > currentTimestampMs
     ) ?? null;
   });
 

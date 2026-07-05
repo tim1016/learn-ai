@@ -1,7 +1,7 @@
 import {
   Component, ChangeDetectionStrategy, inject, input, signal, computed, effect,
 } from '@angular/core';
-import { DatePipe, DecimalPipe } from '@angular/common';
+import { DecimalPipe } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Observable, forkJoin, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
@@ -13,11 +13,12 @@ import { ReplayChartV2Component } from './replay-chart-v2/replay-chart-v2.compon
 import { ReplayControlsV2Component } from './replay-controls-v2/replay-controls-v2.component';
 import { SignalStripComponent } from './signal-strip/signal-strip.component';
 import { TradeFlashComponent } from './trade-flash/trade-flash.component';
+import { TimestampDisplayPipe } from '../../../shared/timestamp';
 
 interface StudyDetailTrade {
   tradeType: string;
-  entryTimestamp: string;
-  exitTimestamp: string;
+  entryTimestamp: number;
+  exitTimestamp: number;
   entryPrice: number;
   exitPrice: number;
   // Minimal API's default camelCase policy lowercases only the first char,
@@ -36,7 +37,7 @@ interface StudyDetailResponse {
   selector: 'app-engine-replay-v2',
   standalone: true,
   imports: [
-    DatePipe, DecimalPipe,
+    DecimalPipe, TimestampDisplayPipe,
     ReplayChartV2Component, ReplayControlsV2Component,
     SignalStripComponent, TradeFlashComponent,
   ],
@@ -115,14 +116,13 @@ export class EngineReplayV2Component {
     return /short/i.test(tradeType);
   }
 
-  onRowClick(entryTs: string): void {
-    const entryMs = new Date(entryTs).getTime();
+  onRowClick(entryMs: number): void {
     const bars = this.svc.bars();
     // Binary-search the first bar whose ts >= entryMs
     let lo = 0, hi = bars.length - 1, result = 0;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (new Date(bars[mid].timestamp).getTime() >= entryMs) {
+      if (bars[mid].timestamp >= entryMs) {
         result = mid;
         hi = mid - 1;
       } else {

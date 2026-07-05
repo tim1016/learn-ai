@@ -4,6 +4,7 @@ using Backend.Data;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
+using Backend.Temporal;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.Services.Implementation;
@@ -134,7 +135,7 @@ public class ResearchService : IResearchService
                 PassedValidation = e.PassedValidation,
                 MonotonicityRatio = (double)e.MonotonicityRatio,
                 IsMonotonic = e.IsMonotonic,
-                CreatedAt = e.CreatedAt,
+                CreatedAt = UnixMs.FromUtc(e.CreatedAt),
             })
             .ToListAsync(cancellationToken);
 
@@ -166,7 +167,7 @@ public class ResearchService : IResearchService
                 PassedValidation = e.PassedValidation,
                 MonotonicityRatio = (double)e.MonotonicityRatio,
                 IsMonotonic = e.IsMonotonic,
-                CreatedAt = e.CreatedAt,
+                CreatedAt = UnixMs.FromUtc(e.CreatedAt),
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -277,7 +278,7 @@ public class ResearchService : IResearchService
                 BestCostBps = (double)e.BestCostBps,
                 FlipSign = e.FlipSign,
                 RegimeGateEnabled = e.RegimeGateEnabled,
-                CreatedAt = e.CreatedAt,
+                CreatedAt = UnixMs.FromUtc(e.CreatedAt),
             })
             .ToListAsync(cancellationToken);
     }

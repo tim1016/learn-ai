@@ -18,6 +18,29 @@ import { JobsService, JobState } from "../../../services/jobs.service";
 const fakeJobsSignal = signal<JobState[]>([]);
 const jobsServiceMock = { jobs: () => fakeJobsSignal() };
 
+function installLocalStorage(): void {
+  const store = new Map<string, string>();
+  const storage = {
+    get length() {
+      return store.size;
+    },
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => store.delete(key),
+    setItem: (key: string, value: string) => store.set(key, String(value)),
+  } as Storage;
+  vi.stubGlobal("localStorage", storage);
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+}
+
+beforeEach(() => {
+  installLocalStorage();
+});
+
 function makeJob(over: Partial<JobState>): JobState {
   return {
     id: "job-1",
@@ -31,7 +54,7 @@ function makeJob(over: Partial<JobState>): JobState {
 
 function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
   return {
-    id: "30",
+    id: 30,
     source: "engine",
     engine: "PYTHON",
     strategyName: "sma_crossover",
@@ -39,7 +62,7 @@ function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
     parameters: '{"symbol":"AAPL","starting_cash":100000}',
     startDate: "2025-01-06",
     endDate: "2025-01-10",
-    executedAt: "2026-05-19T08:00:00Z",
+    executedAt: Date.UTC(2026, 4, 19, 8, 0),
     totalTrades: 3,
     totalPnL: 42.0,
     commissionPerOrder: 1.0,
@@ -64,14 +87,14 @@ function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
 }
 
 const FAKE_NODES: BacktestRunNode[] = [
-  baseNode({ id: "30", strategyName: "sma_crossover" }),
+  baseNode({ id: 30, strategyName: "sma_crossover" }),
   baseNode({
-    id: "31",
+    id: 31,
     strategyName: "rsi_mean_reversion",
     engine: "LEAN",
     source: "lean-sidecar",
     endDate: "2025-01-06",
-    executedAt: "2026-05-19T08:05:00Z",
+    executedAt: Date.UTC(2026, 4, 19, 8, 5),
     totalTrades: 1,
     totalPnL: -5.0,
     trades: [{ isSyntheticExit: true }],
@@ -117,6 +140,7 @@ async function setup(
 
 describe("EngineLabRunHistoryComponent", () => {
   beforeEach(() => {
+    installLocalStorage();
     localStorage.clear();
     fakeJobsSignal.set([]);
   });
@@ -183,11 +207,11 @@ describe("EngineLabRunHistoryComponent", () => {
   it("extracts null symbol when parameters is null", async () => {
     const nodes: BacktestRunNode[] = [
       baseNode({
-        id: "40",
+        id: 40,
         strategyName: "no_params",
         parameters: null,
         endDate: "2025-01-10",
-        executedAt: "2026-05-19T09:00:00Z",
+        executedAt: Date.UTC(2026, 4, 19, 9, 0),
         totalTrades: 0,
         totalPnL: 0,
         trades: [],
@@ -306,6 +330,7 @@ describe("EngineLabRunHistoryComponent — CSV export (PR B.3)", () => {
 
 describe("EngineLabRunHistoryComponent — auto-refresh on job.completed (#468)", () => {
   beforeEach(() => {
+    installLocalStorage();
     localStorage.clear();
     fakeJobsSignal.set([]);
   });

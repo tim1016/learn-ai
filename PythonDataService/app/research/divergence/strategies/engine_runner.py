@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import logging
 import zipfile
-from datetime import date, time
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
+from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 from app.research.divergence.indicators.engine_adapter import (
     compute_engine_ema_batch,
     compute_engine_rsi_batch,
@@ -41,7 +42,6 @@ LEAN_CACHE_SPY = Path(
 )
 PRICE_SCALE = 10000  # LEAN deci-cent encoding
 EASTERN = "America/New_York"
-RTH_OPEN, RTH_CLOSE = time(9, 30), time(16, 0)
 
 
 def _load_lean_day(zip_path: Path, trading_date: date) -> pd.DataFrame:
@@ -120,8 +120,8 @@ def build_vd_15m_with_engine_indicators(
     # Now filter to RTH bars for trade execution (indicator state is preserved
     # because we computed sequentially through ALL bars).
     bars_all["et"] = bars_all["time_utc"].dt.tz_convert(EASTERN)
-    et_t = bars_all["et"].dt.time
-    rth_mask = (et_t >= RTH_OPEN) & (et_t < RTH_CLOSE)
+    ts_ms = (bars_all["time_utc"].astype("int64") // 1_000_000).astype("int64")
+    rth_mask = ts_ms.map(lambda ts: is_regular_session_ms_utc(int(ts)))
     rth = bars_all[rth_mask].reset_index(drop=True)
     # Rename close so strategy code can use close_pg as the canonical column
     rth = rth.rename(columns={"close": "close_pg"})

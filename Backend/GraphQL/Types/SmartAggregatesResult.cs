@@ -34,7 +34,7 @@ public class AggregateBar
     public decimal Close { get; set; }
     public decimal Volume { get; set; }
     public decimal? VolumeWeightedAveragePrice { get; set; }
-    public DateTime Timestamp { get; set; }
+    public long Timestamp { get; set; }
     public string Timespan { get; set; } = "";
     public int Multiplier { get; set; }
     public long? TransactionCount { get; set; }

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -147,7 +147,7 @@ def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) 
     global _rate_cache, _cache_timestamp
 
     if observation_date is None:
-        observation_date = datetime.now().strftime("%Y-%m-%d")
+        observation_date = datetime.now(UTC).date().isoformat()
 
     # Check cache
     if _is_cache_valid() and observation_date in _rate_cache:

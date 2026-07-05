@@ -24,15 +24,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import time
 from pathlib import Path
 
 import pandas as pd
 
+from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc, session_windows_ms_utc
+
 logger = logging.getLogger(__name__)
 
-_RTH_OPEN = time(9, 30)
-_RTH_CLOSE = time(16, 0)
 _PERIOD_MINUTES = {"5m": 5, "15m": 15, "1h": 60}
 
 
@@ -49,6 +48,22 @@ class PolygonIngestManifest:
     first_bar_utc: str
     last_bar_utc: str
     rth_only: bool
+
+
+def _filter_to_rth(df: pd.DataFrame, ts_col: str = "unix_ts") -> pd.DataFrame:
+    mask = df[ts_col].astype("int64").map(lambda ts: is_regular_session_ms_utc(int(ts)))
+    return df[mask].copy()
+
+
+def _session_open_minutes_by_date(dates: pd.Series) -> dict[object, int]:
+    unique_dates = sorted(set(dates.dropna()))
+    if not unique_dates:
+        return {}
+    out: dict[object, int] = {}
+    for window in session_windows_ms_utc(unique_dates[0], unique_dates[-1]):
+        open_et = pd.Timestamp(window.open_ms_utc, unit="ms", tz="UTC").tz_convert("America/New_York")
+        out[window.session_date] = open_et.hour * 60 + open_et.minute
+    return out
 
 
 def resample_ohlcv(
@@ -80,15 +95,18 @@ def resample_ohlcv(
     df = df_1min.copy()
     df["time_utc"] = pd.to_datetime(df["iso_time"], utc=True)
     df["et"] = df["time_utc"].dt.tz_convert("America/New_York")
+    if "unix_ts" not in df.columns:
+        df["unix_ts"] = (df["time_utc"].astype("int64") // 1_000_000).astype("Int64")
 
     if rth_only:
-        et_time = df["et"].dt.time
-        df = df[(et_time >= _RTH_OPEN) & (et_time < _RTH_CLOSE)].copy()
+        df = _filter_to_rth(df)
 
-    # Bucket index = (minutes since 09:30 ET) // window
-    df["minutes_from_open"] = (df["et"].dt.hour - 9) * 60 + (df["et"].dt.minute - 30)
-    df["bucket"] = df["minutes_from_open"] // minutes
     df["et_date"] = df["et"].dt.date
+    open_minutes = _session_open_minutes_by_date(df["et_date"])
+    df = df[df["et_date"].isin(open_minutes)].copy()
+    minute_of_day = df["et"].dt.hour * 60 + df["et"].dt.minute
+    df["minutes_from_open"] = minute_of_day - df["et_date"].map(open_minutes)
+    df["bucket"] = df["minutes_from_open"] // minutes
 
     grouped = df.groupby(["et_date", "bucket"], sort=True)
 
@@ -228,8 +246,7 @@ def ingest_polygon_aggregates(  # pragma: no cover — live API path
     df["et"] = df["time_utc"].dt.tz_convert("America/New_York")
 
     if rth_only:
-        et_time = df["et"].dt.time
-        df = df[(et_time >= _RTH_OPEN) & (et_time < _RTH_CLOSE)].reset_index(drop=True)
+        df = _filter_to_rth(df).reset_index(drop=True)
 
     cols = ["unix_ts", "iso_time", "time_utc", "et", "open", "high", "low", "close", "volume"]
     if "vwap" in df.columns:

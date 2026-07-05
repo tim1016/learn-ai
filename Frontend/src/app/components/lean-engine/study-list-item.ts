@@ -37,6 +37,6 @@ export interface StudyListItem {
   finalEquity: number;
   parameters: string;
   notes: string | null;
-  executedAt: string;
+  executedAt: number;
   durationMs: number;
 }

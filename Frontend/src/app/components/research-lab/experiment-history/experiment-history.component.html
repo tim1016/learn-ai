@@ -129,7 +129,7 @@
               <p-tag [severity]="validationSeverity(exp.passedValidation)" [value]="validationLabel(exp.passedValidation)" />
             </td>
             <td class="cell-period">{{ exp.startDate }} — {{ exp.endDate }}</td>
-            <td class="cell-mono cell-dim">{{ exp.createdAt | date: 'short' }}</td>
+            <td class="cell-mono cell-dim">{{ exp.createdAt | timestampDisplay: 'local' : 'datetime' }}</td>
           </tr>
         </ng-template>
         <ng-template #emptymessage>

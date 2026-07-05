@@ -47,7 +47,7 @@ export interface HiddenSummary {
 export interface PositionState {
   side: 'long' | 'short' | 'flat';
   entryPrice: number | null;
-  entryTime: string | null;
+  entryTime: number | null;
   barsHeld: number;
   floatingPnl: number | null;
   floatingPnlPct: number | null;
@@ -95,7 +95,7 @@ export class ReplayEngineV2Service {
 
   readonly currentMs = computed(() => {
     const b = this.currentBar();
-    return b ? new Date(b.timestamp).getTime() : 0;
+    return b ? b.timestamp : 0;
   });
 
   readonly progress = computed(() => {
@@ -145,8 +145,8 @@ export class ReplayEngineV2Service {
     const win = this.renderWindow();
     const trades = this._trades();
     if (win.bars.length === 0) return [];
-    const leftMs = new Date(win.bars[0].timestamp).getTime();
-    const rightMs = new Date(win.bars[win.bars.length - 1].timestamp).getTime();
+    const leftMs = win.bars[0].timestamp;
+    const rightMs = win.bars[win.bars.length - 1].timestamp;
     const nowMs = this.currentMs();
     return trades.filter(t => {
       const entryInside = t.entryMs >= leftMs && t.entryMs <= rightMs;
@@ -163,8 +163,8 @@ export class ReplayEngineV2Service {
     if (win.bars.length === 0) {
       return { leftCount: 0, leftCumPnl: 0, rightCount: 0, rightCumPnl: 0 };
     }
-    const leftMs = new Date(win.bars[0].timestamp).getTime();
-    const rightMs = new Date(win.bars[win.bars.length - 1].timestamp).getTime();
+    const leftMs = win.bars[0].timestamp;
+    const rightMs = win.bars[win.bars.length - 1].timestamp;
 
     let leftCount = 0, leftCumPnl = 0;
     let rightCount = 0, rightCumPnl = 0;
@@ -200,7 +200,7 @@ export class ReplayEngineV2Service {
     // Count bars from entry timestamp to current
     let barsHeld = 0;
     for (let i = idx; i >= 0; i--) {
-      if (new Date(bars[i].timestamp).getTime() < trade.entryMs) break;
+      if (bars[i].timestamp < trade.entryMs) break;
       barsHeld++;
     }
     const side: 'long' | 'short' = /short/i.test(trade.tradeType) ? 'short' : 'long';
@@ -223,7 +223,7 @@ export class ReplayEngineV2Service {
     const series = this._indicators();
     const nowMs = this.currentMs();
     if (!nowMs || win.bars.length === 0) return [];
-    const leftMs = new Date(win.bars[0].timestamp).getTime();
+    const leftMs = win.bars[0].timestamp;
     return series.map(s => ({
       name: s.name,
       window: s.window,
@@ -274,15 +274,15 @@ export class ReplayEngineV2Service {
     this.clearInterval();
     this.clearFlash();
     const sortedBars = [...payload.bars].sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      (a, b) => a.timestamp - b.timestamp
     );
     const numberedTrades: TradeWithNumber[] = [...payload.trades]
-      .sort((a, b) => new Date(a.entryTimestamp).getTime() - new Date(b.entryTimestamp).getTime())
+      .sort((a, b) => a.entryTimestamp - b.entryTimestamp)
       .map((t, i) => ({
         ...t,
         tradeNumber: i + 1,
-        entryMs: new Date(t.entryTimestamp).getTime(),
-        exitMs: new Date(t.exitTimestamp).getTime(),
+        entryMs: t.entryTimestamp,
+        exitMs: t.exitTimestamp,
       }));
     this._bars.set(sortedBars);
     this._trades.set(numberedTrades);
@@ -390,8 +390,8 @@ export class ReplayEngineV2Service {
     const prevBar = bars[prevIdx];
     const nextBar = bars[nextIdx];
     if (!prevBar || !nextBar) return;
-    const prevMs = new Date(prevBar.timestamp).getTime();
-    const nextMs = new Date(nextBar.timestamp).getTime();
+    const prevMs = prevBar.timestamp;
+    const nextMs = nextBar.timestamp;
     const lo = Math.min(prevMs, nextMs);
     const hi = Math.max(prevMs, nextMs);
     const forward = nextIdx > prevIdx;

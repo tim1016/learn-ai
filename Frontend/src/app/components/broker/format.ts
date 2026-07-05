@@ -5,6 +5,7 @@
  * Pydantic models — see `app.broker.ibkr.models`. UI-side, render with
  * Intl so locale grouping is consistent across pages.
  */
+import { formatTimestampDisplay } from '../../shared/timestamp';
 
 const CURRENCY = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -94,46 +95,17 @@ export function fmtNumber(
 
 /** Format an `int64 ms UTC` timestamp in the viewer's browser-local timezone. */
 export function fmtTimestampLocal(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return '—';
-  const formatter = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-    timeZoneName: 'short',
-  });
-  return formatter.format(new Date(ms));
+  return formatTimestampDisplay(ms, { mode: 'local' });
 }
 
 /** Format an `int64 ms UTC` timestamp as a New York wall-clock string for display. */
 export function fmtTimestampNy(ms: number | null | undefined): string {
-  if (ms == null) return '—';
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  return formatter.format(new Date(ms)) + ' ET';
+  return formatTimestampDisplay(ms, { mode: 'et' });
 }
 
 /** Same as ``fmtTimestampNy`` but date-only (used for option expiries). */
 export function fmtDateNy(ms: number | null | undefined): string {
-  if (ms == null) return '—';
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return formatter.format(new Date(ms));
+  return formatTimestampDisplay(ms, { mode: 'date-et' });
 }
 
 /**

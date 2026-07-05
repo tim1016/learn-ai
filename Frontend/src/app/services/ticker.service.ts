@@ -58,9 +58,9 @@ export class TickerService {
       );
   }
 
-  getAggregateStats(symbol: string): Observable<{ count: number; earliest: string | null; latest: string | null }> {
+  getAggregateStats(symbol: string): Observable<{ count: number; earliest: number | null; latest: number | null }> {
     return this.http
-      .post<GraphQLResponse<{ stockAggregates: { timestamp: string }[] }>>(GRAPHQL_URL, {
+      .post<GraphQLResponse<{ stockAggregates: { timestamp: number }[] }>>(GRAPHQL_URL, {
         query: GET_TICKER_STATS_QUERY,
         variables: { symbol }
       })

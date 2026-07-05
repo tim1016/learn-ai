@@ -1,4 +1,4 @@
-import { DatePipe, DecimalPipe } from '@angular/common';
+import { DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -14,6 +14,7 @@ import type {
   SymbolMatch,
 } from '../../../../../api/broker-models';
 import { BrokerService } from '../../../../../services/broker.service';
+import { TimestampDisplayPipe } from '../../../../../shared/timestamp';
 
 /**
  * Drill-down option-leg picker (Slice 1F).
@@ -35,7 +36,7 @@ import { BrokerService } from '../../../../../services/broker.service';
 @Component({
   selector: 'app-option-leg-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, DecimalPipe],
+  imports: [DecimalPipe, TimestampDisplayPipe],
   templateUrl: './option-leg-picker.component.html',
   styleUrl: './option-leg-picker.component.scss',
 })

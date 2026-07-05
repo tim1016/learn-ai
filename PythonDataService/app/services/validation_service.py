@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -202,7 +202,7 @@ def _build_markdown(
     tv_cols: list[str],
 ) -> str:
     """Build the full markdown validation report."""
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     lines = [
         f"# Validation Report — {ticker}",

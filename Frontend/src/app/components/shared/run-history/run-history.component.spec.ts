@@ -13,7 +13,7 @@ function row(over: Partial<RunHistoryRow> = {}): RunHistoryRow {
     symbol: "SPY",
     startDate: "2025-01-06",
     endDate: "2025-01-10",
-    executedAt: "2026-05-19T02:49:00Z",
+    executedAt: Date.UTC(2026, 4, 19, 2, 49),
     totalTrades: 1,
     totalPnl: 9.0,
     hasSyntheticExit: false,

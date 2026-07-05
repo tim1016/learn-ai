@@ -10,9 +10,9 @@ recursions.
 Bar semantics:
 
 - **Daily-resolution CSV** (``time`` column is ``YYYY-MM-DD``): ``time`` is
-  anchored to the NYSE session open (``09:30 America/New_York``) and
-  ``end_time`` to the close (``16:00 America/New_York``). Mirrors LEAN's
-  daily-bar convention; matches what ``NEXT_BAR_OPEN`` keys off.
+  anchored to the scheduled NYSE session open and ``end_time`` to the
+  scheduled close. Mirrors LEAN's daily-bar convention; matches what
+  ``NEXT_BAR_OPEN`` keys off.
 - **Minute-resolution CSV** (``time`` column is ``YYYY-MM-DD HH:MM:SS``):
   ``time`` is the literal minute start, ``end_time = time + 1 minute``.
   The captured times are NY-local (QC's convention); we attach the
@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date as Date
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,10 +35,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from app.engine.data.trade_bar import TradeBar
+from app.lean_sidecar.trading_calendar import session_window_for_date
 
 _NY = ZoneInfo("America/New_York")
-_SESSION_OPEN = time(hour=9, minute=30)
-_SESSION_CLOSE = time(hour=16, minute=0)
+_UTC = ZoneInfo("UTC")
 
 
 @dataclass(frozen=True)
@@ -121,8 +121,12 @@ class FixtureDataReader:
                 bar_start = row.time_dt.to_pydatetime().replace(tzinfo=_NY)
                 bar_end = bar_start + timedelta(minutes=1)
             else:
-                bar_start = datetime.combine(row.date, _SESSION_OPEN, tzinfo=_NY)
-                bar_end = datetime.combine(row.date, _SESSION_CLOSE, tzinfo=_NY)
+                try:
+                    window = session_window_for_date(row.date)
+                except LookupError as exc:
+                    raise ValueError(f"daily fixture row {row.date} is not a scheduled NYSE session") from exc
+                bar_start = datetime.fromtimestamp(window.open_ms_utc / 1000, tz=_UTC).astimezone(_NY)
+                bar_end = datetime.fromtimestamp(window.close_ms_utc / 1000, tz=_UTC).astimezone(_NY)
             bars.append(
                 TradeBar(
                     symbol=symbol,

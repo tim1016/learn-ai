@@ -152,7 +152,7 @@ def build_daily_equity(
     # Index trades by exit date
     trade_pnl_by_date: dict[str, float] = {}
     for t in trades:
-        exit_date = t.exit_timestamp[:10]  # "YYYY-MM-DD"
+        exit_date = datetime.fromtimestamp(t.exit_timestamp / 1000, tz=UTC).strftime("%Y-%m-%d")
         trade_pnl_by_date.setdefault(exit_date, 0.0)
         trade_pnl_by_date[exit_date] += t.pnl_pct * start_capital
 
@@ -500,7 +500,9 @@ def compute_lean_statistics(
         ts.max_consecutive_losing_trades = max_consec_l
 
         # Average trade durations (TS.cs 394, 318, 356)
-        def _parse_ts(s: str) -> datetime:
+        def _parse_ts(s: int | str) -> datetime:
+            if isinstance(s, int):
+                return datetime.fromtimestamp(s / 1000, tz=UTC)
             for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"):
                 try:
                     return datetime.strptime(s, fmt)

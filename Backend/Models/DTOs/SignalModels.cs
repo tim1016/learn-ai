@@ -33,7 +33,7 @@ public class SignalExperimentDto
     public double BestCostBps { get; set; }
     public bool FlipSign { get; set; }
     public bool RegimeGateEnabled { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public long CreatedAt { get; set; }
 }
 
 #endregion

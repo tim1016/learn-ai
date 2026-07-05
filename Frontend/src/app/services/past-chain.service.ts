@@ -150,7 +150,7 @@ export class PastChainService {
 
     // Step 6 — batch-fetch daily aggregates over a 2-day window (analysis day + prev close).
     const prevDayIso = prevBars.length > 0
-      ? new Date(prevBars[prevBars.length - 1].timestamp).toISOString().slice(0, 10)
+      ? ymdEt(prevBars[prevBars.length - 1].timestamp)
       : prevTo;
 
     const ohlcResults: { aggregates?: StockAggregate[] | null }[] = [];
@@ -173,7 +173,7 @@ export class PastChainService {
       let analysisDayBar: StockAggregate | null = null;
       let prevDayBar: StockAggregate | null = null;
       for (const bar of bars) {
-        const barDate = bar.timestamp.slice(0, 10);
+        const barDate = ymdEt(bar.timestamp);
         if (barDate === date) analysisDayBar = bar;
         else if (barDate < date) prevDayBar = bar;
       }
@@ -251,4 +251,15 @@ export class PastChainService {
     d.setDate(d.getDate() - days);
     return d.toISOString().slice(0, 10);
   }
+}
+
+function ymdEt(ms: number): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const lookup = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  return `${lookup['year']}-${lookup['month']}-${lookup['day']}`;
 }

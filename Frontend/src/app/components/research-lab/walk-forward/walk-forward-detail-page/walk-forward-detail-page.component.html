@@ -14,8 +14,8 @@
         <span><strong>Resolution:</strong> {{ data.config.resolution_minutes }}m</span>
         <span>
           <strong>Window:</strong>
-          {{ data.config.start_ms | date: 'yyyy-MM-dd' }} →
-          {{ data.config.end_ms | date: 'yyyy-MM-dd' }}
+          {{ data.config.start_ms | timestampDisplay: 'date-et' }} →
+          {{ data.config.end_ms | timestampDisplay: 'date-et' }}
         </span>
         <span><strong>Split:</strong> {{ splitSummary(data.config.split_policy) }}</span>
         <span><strong>WF ID:</strong> <code>{{ data.config.walk_forward_id }}</code></span>
@@ -154,12 +154,12 @@
               />
             </td>
             <td class="wfd-window-cell">
-              {{ fold.train_start_ms | date: 'yyyy-MM-dd' }} →
-              {{ fold.train_end_ms | date: 'yyyy-MM-dd' }}
+              {{ fold.train_start_ms | timestampDisplay: 'date-et' }} →
+              {{ fold.train_end_ms | timestampDisplay: 'date-et' }}
             </td>
             <td class="wfd-window-cell">
-              {{ fold.test_start_ms | date: 'yyyy-MM-dd' }} →
-              {{ fold.test_end_ms | date: 'yyyy-MM-dd' }}
+              {{ fold.test_start_ms | timestampDisplay: 'date-et' }} →
+              {{ fold.test_end_ms | timestampDisplay: 'date-et' }}
             </td>
             <td>{{ fold.test_metrics.total_trades }}</td>
             <td>{{ fold.test_metrics.total_return_pct | percent: '1.2-2' }}</td>

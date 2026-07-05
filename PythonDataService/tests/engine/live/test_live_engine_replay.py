@@ -38,7 +38,7 @@ def _ms_utc(value: datetime) -> int:
 def _expected_nyse_sessions(start: date, end: date) -> set[date]:
     """Authoritative NYSE trading days in ``[start, end]`` (holidays/early
     closes honored by pandas_market_calendars — the same source the runtime
-    uses, see ``app/engine/live/nyse_calendar.py``)."""
+    uses, see ``app.lean_sidecar.trading_calendar``)."""
     schedule = mcal.get_calendar("NYSE").schedule(start_date=start, end_date=end)
     return {ts.date() for ts in schedule.index}
 

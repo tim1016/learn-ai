@@ -13,8 +13,8 @@ import pandas as pd
 class TradeRecord:
     trade_number: int
     trade_type: str  # "Buy" or "Sell"
-    entry_timestamp: str
-    exit_timestamp: str
+    entry_timestamp: int
+    exit_timestamp: int
     entry_price: float
     exit_price: float
     pnl: float
@@ -112,21 +112,20 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
     return max_dd
 
 
-def format_timestamp(ts) -> str:
-    """Convert a timestamp (ms epoch or datetime) to unambiguous ISO 8601 UTC.
-
-    Uses 'T' separator and 'Z' suffix so browser `new Date(str)` parses as UTC.
-    The previous format '%Y-%m-%d %H:%M' (space, no tz) parsed as local time in
-    Chrome/Safari — 5-hour shift in ET browsers.
-    """
+def format_timestamp(ts) -> int:
+    """Convert a timestamp-like value to canonical int64 ms UTC."""
     if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return int(ts)
     if isinstance(ts, datetime):
-        dt = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
-        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if ts.tzinfo is None:
+            raise ValueError("trade timestamp must be timezone-aware")
+        return int(ts.astimezone(UTC).timestamp() * 1000)
     if isinstance(ts, str):
-        return ts
-    return str(ts)
+        parsed = pd.Timestamp(ts)
+        if parsed.tzinfo is None:
+            raise ValueError(f"trade timestamp string must include a timezone: {ts!r}")
+        return int(parsed.tz_convert("UTC").value // 1_000_000)
+    raise TypeError(f"unsupported timestamp type: {type(ts).__name__}")
 
 
 def make_trade(

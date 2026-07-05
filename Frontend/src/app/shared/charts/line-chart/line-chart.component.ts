@@ -91,7 +91,7 @@ export class LineChartComponent implements AfterViewInit, OnDestroy {
 
     const lineData: LineData[] = data
       .map(agg => ({
-        time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
+        time: (agg.timestamp / 1000) as UTCTimestamp,
         value: agg.close
       }))
       .sort((a, b) => (a.time as number) - (b.time as number));

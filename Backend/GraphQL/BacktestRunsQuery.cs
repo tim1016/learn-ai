@@ -1,6 +1,7 @@
 using Backend.Data;
 using Backend.GraphQL.Types;
 using Backend.Models.MarketData;
+using Backend.Temporal;
 using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.EntityFrameworkCore;
@@ -27,7 +28,7 @@ public class BacktestRunsQuery
     /// </remarks>
     [GraphQLName("backtestRuns")]
     [UsePaging(MaxPageSize = 100, DefaultPageSize = 25)]
-    public IQueryable<StrategyExecution> GetBacktestRuns(
+    public IEnumerable<BacktestRunNodeType> GetBacktestRuns(
         AppDbContext context,
         Engine? engine = null,
         string? symbol = null)
@@ -61,6 +62,58 @@ public class BacktestRunsQuery
             query = query.Where(s => s.Parameters != null && s.Parameters.Contains(jsonFragment));
         }
 
-        return query.OrderByDescending(s => s.ExecutedAt);
+        return query
+            .OrderByDescending(s => s.ExecutedAt)
+            .AsEnumerable()
+            .Select(BacktestRunNodeType.FromExecution);
     }
+}
+
+public sealed record BacktestRunNodeType
+{
+    public int Id { get; init; }
+    public string Source { get; init; } = "";
+    public Engine Engine { get; init; }
+    public string StrategyName { get; init; } = "";
+    public string? LeanRunId { get; init; }
+    public string? Parameters { get; init; }
+    public string StartDate { get; init; } = "";
+    public string EndDate { get; init; } = "";
+    public long ExecutedAt { get; init; }
+    public int TotalTrades { get; init; }
+    [GraphQLName("totalPnL")]
+    public decimal TotalPnL { get; init; }
+    public decimal? CommissionPerOrder { get; init; }
+    public string? BrokeragePolicy { get; init; }
+    public string? Notes { get; init; }
+    public DataPolicyType? DataPolicy { get; init; }
+    public IReadOnlyList<BacktestRunTradeSummaryType> Trades { get; init; } = [];
+
+    public static BacktestRunNodeType FromExecution(StrategyExecution execution) => new()
+    {
+        Id = execution.Id,
+        Source = execution.Source,
+        Engine = EngineExtensions.FromSource(execution.Source),
+        StrategyName = execution.StrategyName,
+        LeanRunId = execution.LeanRunId,
+        Parameters = execution.Parameters,
+        StartDate = execution.StartDate,
+        EndDate = execution.EndDate,
+        ExecutedAt = UnixMs.FromUtc(execution.ExecutedAt),
+        TotalTrades = execution.TotalTrades,
+        TotalPnL = execution.TotalPnL,
+        CommissionPerOrder = execution.CommissionPerOrder,
+        BrokeragePolicy = execution.BrokeragePolicy,
+        Notes = execution.Notes,
+        DataPolicy = DataPolicyType.TryParse(execution.DataPolicyJson),
+        Trades = execution.Trades.Select(t => new BacktestRunTradeSummaryType
+        {
+            IsSyntheticExit = t.IsSyntheticExit,
+        }).ToList(),
+    };
+}
+
+public sealed record BacktestRunTradeSummaryType
+{
+    public bool IsSyntheticExit { get; init; }
 }

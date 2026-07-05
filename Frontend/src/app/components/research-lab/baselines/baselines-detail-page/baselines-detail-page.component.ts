@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
+import { CommonModule, DecimalPipe, PercentPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -19,6 +19,7 @@ import type {
   BaselineStatus,
   NullDistribution,
 } from '../../../../services/baselines.types';
+import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 
 interface NullSummary {
   metric_name: string;
@@ -39,9 +40,9 @@ interface NullSummary {
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
     DecimalPipe,
     PercentPipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './baselines-detail-page.component.html',
   styleUrls: ['./baselines-detail-page.component.scss'],

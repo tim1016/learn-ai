@@ -8,7 +8,7 @@ import {
 function makeBars(n: number, startMs = Date.UTC(2024, 0, 2, 14, 30)): StockAggregate[] {
   const bars: StockAggregate[] = [];
   for (let i = 0; i < n; i++) {
-    const ts = new Date(startMs + i * 60_000).toISOString();
+    const ts = startMs + i * 60_000;
     bars.push({
       id: i,
       timestamp: ts,
@@ -47,7 +47,7 @@ function makeIndicator(name: string, window: number, bars: StockAggregate[]): In
     name,
     window,
     data: bars.map((b, i) => ({
-      timestamp: new Date(b.timestamp).getTime(),
+      timestamp: b.timestamp,
       value: 50 + Math.sin(i / 5) * 10,
     })),
   } as IndicatorSeries;
@@ -75,7 +75,7 @@ describe('ReplayEngineV2Service', () => {
       const numbered = svc.trades();
       expect(numbered.length).toBe(2);
       expect(numbered[0].tradeNumber).toBe(1);
-      expect(numbered[0].entryMs).toBe(new Date(bars[1].timestamp).getTime());
+      expect(numbered[0].entryMs).toBe(bars[1].timestamp);
       expect(numbered[1].tradeNumber).toBe(2);
     });
   });

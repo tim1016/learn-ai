@@ -97,7 +97,7 @@ export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDe
 
     const candlestickData: CandlestickData[] = this.data
       .map(agg => ({
-        time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
+        time: (agg.timestamp / 1000) as UTCTimestamp,
         open: agg.open,
         high: agg.high,
         low: agg.low,

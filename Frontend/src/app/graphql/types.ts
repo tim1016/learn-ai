@@ -7,7 +7,7 @@ export interface StockAggregate {
   close: number;
   volume: number;
   volumeWeightedAveragePrice: number | null;
-  timestamp: string;
+  timestamp: number;
   timespan: string;
   multiplier: number;
   transactionCount: number | null;
@@ -67,8 +67,8 @@ export interface Ticker {
   type: string | null;
   active: boolean;
   currencySymbol: string | null;
-  createdAt: string;
-  updatedAt: string | null;
+  createdAt: number;
+  updatedAt: number | null;
   sanitizationSummary: string | null;
 }
 
@@ -308,8 +308,8 @@ export interface RelatedTickersResult {
 // Backtest types
 export interface BacktestTrade {
   tradeType: string;
-  entryTimestamp: string;
-  exitTimestamp: string;
+  entryTimestamp: number;
+  exitTimestamp: number;
   entryPrice: number;
   exitPrice: number;
   pnl: number;
@@ -588,8 +588,8 @@ export interface RuleBasedBacktestResult {
 export interface RuleBasedTrade {
   tradeNumber: number;
   tradeType: string;
-  entryTimestamp: string;
-  exitTimestamp: string;
+  entryTimestamp: number;
+  exitTimestamp: number;
   entryPrice: number;
   exitPrice: number;
   pnl: number;
