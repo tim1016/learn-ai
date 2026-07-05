@@ -34,6 +34,29 @@
   <!-- ── CONTROLS TOOLBAR ── -->
   @if (status(); as s) {
     <div class="controls-toolbar">
+      @if (botRunSignal(); as bot) {
+        <div
+          class="bot-run-signal"
+          [class.tone-on]="bot.tone === 'on'"
+          [class.tone-off]="bot.tone === 'off'"
+          [class.tone-transition]="bot.tone === 'transition'"
+          [class.tone-attention]="bot.tone === 'attention'"
+          role="status"
+          data-testid="bot-run-signal"
+          [attr.aria-label]="bot.ariaLabel"
+          [attr.title]="bot.detail"
+        >
+          <span class="bot-run-switch" aria-hidden="true">
+            <span class="bot-run-thumb"></span>
+          </span>
+          <span class="bot-run-copy">
+            <span class="bot-run-kicker">Bot</span>
+            <strong>{{ bot.stateLabel }}</strong>
+            <span data-trader-copy>{{ bot.title }}</span>
+          </span>
+        </div>
+      }
+
       <app-overview-actions
         class="top-action-banner"
         [actions]="s.lifecycle_chart.actions"

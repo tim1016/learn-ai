@@ -43,8 +43,8 @@
 
 .blockage-ladder {
   display: grid;
-  gap: 0.8rem;
-  padding: 1rem;
+  gap: 0.65rem;
+  padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg-canvas);
 }
@@ -77,40 +77,43 @@
 
 .current-chip {
   flex: 0 0 auto;
-  max-width: 12rem;
-  padding: 0.25rem 0.55rem;
+  min-width: 4.4rem;
+  padding: 0.22rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+  border-radius: 6px;
   background: var(--bg-surface);
   color: var(--text-secondary);
   font-size: var(--fs-xs);
   font-weight: 800;
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .blockage-steps {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr));
-  gap: 0.5rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 .blockage-step {
-  display: grid;
-  grid-template-columns: 0.65rem minmax(0, 1fr);
+  display: inline-grid;
+  grid-template-columns: 0.55rem auto auto;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.38rem;
   min-width: 0;
-  min-height: 3.75rem;
-  padding: 0.55rem 0.65rem;
+  min-height: 2rem;
+  padding: 0.28rem 0.55rem;
   border: 1px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   background: var(--bg-surface);
   color: var(--text-primary);
 
   &.current {
-    border-width: 2px;
+    border-width: 1px;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
   }
 
   strong,
@@ -127,16 +130,20 @@
     line-height: 1.2;
   }
 
-  div > span {
-    margin-top: 0.18rem;
+  .step-copy {
+    display: contents;
+  }
+
+  .step-copy > span {
     color: var(--text-secondary);
-    font-size: 0.7rem;
+    font-size: var(--fs-xs);
+    font-weight: 800;
   }
 }
 
 .step-index {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.5rem;
+  height: 0.5rem;
   border-radius: 999px;
   background: var(--text-muted);
 }
@@ -147,6 +154,12 @@
   .step-index {
     background: var(--bull);
   }
+
+  &.current,
+  &.current-chip {
+    background: var(--bull-soft);
+    color: var(--bull);
+  }
 }
 
 .severity-info {
@@ -154,6 +167,12 @@
 
   .step-index {
     background: var(--info);
+  }
+
+  &.current,
+  &.current-chip {
+    background: var(--info-soft);
+    color: var(--info);
   }
 }
 
@@ -163,6 +182,12 @@
   .step-index {
     background: var(--warn);
   }
+
+  &.current,
+  &.current-chip {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
 }
 
 .severity-critical {
@@ -170,6 +195,12 @@
 
   .step-index {
     background: var(--bear);
+  }
+
+  &.current,
+  &.current-chip {
+    background: var(--bear-soft);
+    color: var(--bear);
   }
 }
 

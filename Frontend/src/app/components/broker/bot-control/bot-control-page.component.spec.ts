@@ -153,6 +153,8 @@ describe('BotControlPageComponent', () => {
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { fixture, component, element: el } = await setupBotControlPage();
+    expect(el.querySelector('[data-testid="bot-run-signal"]')?.textContent)
+      .toContain('Off');
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Controls');
     const startAction = el.querySelector(
       '.top-action-banner .chart-action[aria-label="Start bot process"]',
@@ -194,6 +196,46 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
     expect(el.textContent).toContain('Operator action is required for this lifecycle step.');
     expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
+  });
+
+  it('renders bot runtime as compact on/off signals beside one-click controls', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const stopped = makeStatus({ hostState: 'IDLE' });
+    stopped.operator_surface.blockage_ladder = {
+      headline: 'Bot process is not running',
+      summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+      current_stage_id: 'host_process',
+      stages: [
+        {
+          id: 'host_process',
+          label: 'Host process',
+          state: 'warning',
+          severity: 'warning',
+          current: true,
+          title: 'Bot process is not running',
+          summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+          next_step: null,
+          reason_codes: ['HOST_PROCESS_IDLE'],
+        },
+      ],
+    };
+    const { fixture, component, element } = await setupBotControlPage({ status: stopped });
+
+    const offSignal = element.querySelector('[data-testid="bot-run-signal"]');
+    expect(offSignal?.textContent).toContain('Bot');
+    expect(offSignal?.textContent).toContain('Off');
+    expect(offSignal?.textContent).toContain('Bot process is not running');
+    expect(offSignal?.classList.contains('tone-off')).toBe(true);
+    expect(element.querySelector('.chart-action[aria-label="Start bot process"]')).not.toBeNull();
+
+    const running = makeStatus({ hostState: 'RUNNING' });
+    component.status.set(running);
+    fixture.detectChanges();
+
+    const onSignal = element.querySelector('[data-testid="bot-run-signal"]');
+    expect(onSignal?.textContent).toContain('On');
+    expect(onSignal?.textContent).toContain('Bot process is running');
+    expect(onSignal?.classList.contains('tone-on')).toBe(true);
   });
 
   it('renders human-labelled posture pills in the header and omits the execution pill', async () => {
