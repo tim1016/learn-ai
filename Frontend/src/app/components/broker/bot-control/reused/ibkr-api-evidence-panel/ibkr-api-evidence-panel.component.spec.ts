@@ -174,7 +174,7 @@ describe('IbkrApiEvidencePanelComponent', () => {
     return fixture;
   }
 
-  it('loads data-plane health, broker health, diagnose, evidence backfill, and opens the evidence stream', async () => {
+  it('loads polygon data engine health, broker health, diagnose, evidence backfill, and opens the evidence stream', async () => {
     const fixture = await render();
     const text = fixture.nativeElement.textContent as string;
 
@@ -187,6 +187,7 @@ describe('IbkrApiEvidencePanelComponent', () => {
     );
     expect(text).toContain('8398d285978a');
     expect(text).toContain('watchfiles-polling');
+    expect(text).toContain('Polygon Data Engine');
     expect(text).toContain('DU1234567');
     expect(text).toContain('IB Gateway');
     expect(text).toContain('reqPositionsAsync');

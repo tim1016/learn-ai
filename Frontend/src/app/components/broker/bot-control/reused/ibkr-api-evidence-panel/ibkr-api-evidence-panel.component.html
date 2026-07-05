@@ -13,21 +13,7 @@
   }
 
   <div class="health-grid" data-testid="broker-diagnostics-summary">
-    <section class="health-block">
-      <h4>Data plane</h4>
-      @if (dataPlane(); as dp) {
-        <dl>
-          <dt>revision</dt>
-          <dd><code>{{ dp.code_revision.slice(0, 12) }}</code></dd>
-          <dt>started</dt>
-          <dd>{{ fmtTimestampNy(dp.process_start_ms) }}</dd>
-          <dt>reload</dt>
-          <dd><code>{{ dp.reload }}</code></dd>
-        </dl>
-      } @else {
-        <p class="empty">{{ loading() ? 'Loading data-plane health…' : 'Unavailable' }}</p>
-      }
-    </section>
+    <app-polygon-data-engine-card [health]="dataPlane()" [loading]="loading()" />
 
     <section class="health-block">
       <h4>Broker link</h4>

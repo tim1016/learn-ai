@@ -20,6 +20,7 @@ import { brokerSse, type SseStream } from '../../../../../services/broker-sse';
 import { BrokerService } from '../../../../../services/broker.service';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import { fmtTimestampNy } from '../../../format';
+import { PolygonDataEngineCardComponent } from '../polygon-data-engine-card/polygon-data-engine-card.component';
 
 const MAX_EVENTS = 120;
 
@@ -31,7 +32,7 @@ interface EvidenceLine extends IbkrApiEvidenceEvent {
 
 @Component({
   selector: 'app-ibkr-api-evidence-panel',
-  imports: [AssetIdentityComponent],
+  imports: [AssetIdentityComponent, PolygonDataEngineCardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './ibkr-api-evidence-panel.component.html',
   styleUrl: './ibkr-api-evidence-panel.component.scss',
@@ -48,7 +49,6 @@ export class IbkrApiEvidencePanelComponent {
   readonly dataPlane = signal<DataPlaneHealth | null>(null);
   readonly connectionHealth = signal<IbkrConnectionHealth | null>(null);
   readonly diagnostic = signal<DiagnosticReport | null>(null);
-  readonly fmtTimestampNy = fmtTimestampNy;
   readonly sseStatus = computed(() => this.stream()?.status() ?? 'idle');
   readonly sseError = computed(() => this.stream()?.lastError() ?? null);
   readonly diagnosticChecks = computed(() => {
