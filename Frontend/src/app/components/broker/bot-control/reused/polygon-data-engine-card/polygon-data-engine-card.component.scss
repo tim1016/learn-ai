@@ -1,0 +1,208 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.polygon-data-engine {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 8rem) minmax(0, 1fr);
+  gap: 0.7rem;
+  min-height: 100%;
+  padding: 0.6rem 0.65rem;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(6, 182, 212, 0.1), transparent 40%),
+    var(--bg-canvas-alt, #f9fafb);
+}
+
+.engine-visual {
+  align-self: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  min-width: 0;
+}
+
+svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.engine-copy {
+  min-width: 0;
+}
+
+.engine-eyebrow,
+h4,
+.engine-summary,
+.empty {
+  margin: 0;
+}
+
+.engine-eyebrow {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary, #6b7280);
+  font: 0.66rem ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+h4 {
+  margin-top: 0.12rem;
+  color: var(--text-primary, #111827);
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.engine-summary {
+  margin-top: 0.25rem;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.22rem 0.5rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.76rem;
+}
+
+dt {
+  color: var(--text-secondary, #6b7280);
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary, #111827);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.empty {
+  margin-top: 0.5rem;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.82rem;
+}
+
+.gear-main,
+.gear-small,
+.database-top-layer,
+.engine-light {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.gear-main {
+  animation: spin-clockwise 14s linear infinite;
+}
+
+.gear-small {
+  animation: spin-counter 9s linear infinite;
+}
+
+.data-stream {
+  animation: stream-dash 1.15s linear infinite;
+}
+
+.data-stream--bottom {
+  animation-delay: -0.45s;
+}
+
+.database-top-layer {
+  animation: engine-breathe 3.6s ease-in-out infinite;
+}
+
+.engine-light {
+  color: #34d399;
+  animation: status-pulse 2.4s ease-in-out infinite;
+}
+
+.engine-light--two {
+  animation-delay: 0.35s;
+}
+
+.engine-light--three {
+  animation-delay: 0.7s;
+}
+
+.engine-light--warn {
+  color: #f59e0b;
+  animation-delay: 0.95s;
+}
+
+.engine-light--dim {
+  animation-duration: 3s;
+}
+
+.speed-lines {
+  animation: speed-lines 3.2s ease-in-out infinite;
+}
+
+@keyframes spin-clockwise {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes spin-counter {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes stream-dash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+@keyframes engine-breathe {
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 1;
+    transform: scale(1.55);
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+}
+
+@keyframes speed-lines {
+  50% {
+    opacity: 0.55;
+    transform: translateX(8px);
+  }
+}
+
+@media (max-width: 560px) {
+  .polygon-data-engine {
+    grid-template-columns: 1fr;
+  }
+
+  .engine-visual {
+    max-width: 12rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gear-main,
+  .gear-small,
+  .data-stream,
+  .database-top-layer,
+  .engine-light,
+  .speed-lines {
+    animation: none;
+  }
+}
