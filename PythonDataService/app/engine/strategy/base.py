@@ -182,9 +182,9 @@ class StrategyContext:
         fixed-quantity reference). Delegates to the portfolio's
         ``submit_market_order``.
 
-        Passes ``explicit_call=True`` so the portfolio's order-surface
-        guard can refuse a policy-registered strategy that reaches the
-        explicit surface (ADR 0009 § 6 reverse direction / VCR-P3-F).
+        The live context passes its own explicit-call marker for the
+        order-surface guard. The offline portfolio has no such guard and
+        accepts only the pure backtest order shape.
         """
         assert self.current_time is not None
         self.portfolio.submit_market_order(
@@ -192,7 +192,6 @@ class StrategyContext:
             quantity,
             self.current_time,
             tag,
-            explicit_call=True,
         )
 
     def emit_insight(self, insight: Insight) -> None:

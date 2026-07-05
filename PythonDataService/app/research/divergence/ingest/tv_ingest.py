@@ -115,8 +115,8 @@ def _assert_monotonic_unique(df: pd.DataFrame) -> None:
         raise IngestValidationError("Timestamps are not strictly increasing")
 
 
-def _assert_rth_only(df: pd.DataFrame, et_col: str = "et") -> int:
-    ts_ms = (df[et_col].dt.tz_convert("UTC").astype("int64") // 1_000_000).astype("int64")
+def _assert_rth_only(df: pd.DataFrame) -> int:
+    ts_ms = (df["time"].astype("int64") * 1000).astype("int64")
     return int((~ts_ms.map(lambda ts: is_regular_session_ms_utc(int(ts)))).sum())
 
 
