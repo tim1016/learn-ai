@@ -64,7 +64,7 @@
                 <h3>Divergence categories</h3>
                 <ul class="sv-divergences">
                   @for (entry of divergenceEntries(selected); track entry[0]) {
-                    <li><code>{{ entry[0] }}</code><span>{{ entry[1] }}</span></li>
+                    <li><code>{{ entry[0] | receiptLabel }}</code><span>{{ entry[1] }}</span></li>
                   }
                 </ul>
               </section>

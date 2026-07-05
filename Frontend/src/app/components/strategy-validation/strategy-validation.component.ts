@@ -12,9 +12,11 @@ import type {
   StrategyValidationDetail,
   StrategyValidationSummary,
 } from '../../services/strategy-validation.types';
+import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 
 @Component({
   selector: 'app-strategy-validation',
+  imports: [ReceiptLabelPipe],
   templateUrl: './strategy-validation.component.html',
   styleUrl: './strategy-validation.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

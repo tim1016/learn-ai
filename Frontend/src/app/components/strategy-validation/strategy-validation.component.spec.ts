@@ -27,7 +27,7 @@ const DEPLOYMENT_DETAIL: StrategyValidationDetail = {
     trades_matched: 56,
     trades_validated: 56,
     pnl_max_abs_diff: '0.00',
-    divergence_counts: {},
+    divergence_counts: { fill_price_drift: 2 },
     notes: ['QC receipt stored.'],
   },
   reference_code: {
@@ -90,6 +90,8 @@ describe('StrategyValidationComponent', () => {
     expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByText('56 trades matched')).toBeTruthy();
     expect(screen.getByText('56 trades validated')).toBeTruthy();
+    expect(screen.getByText('Fill Price Drift')).toBeTruthy();
+    expect(screen.queryByText('fill_price_drift')).toBeNull();
     expect(screen.getByText(/class DeploymentValidationAlgorithm/)).toBeTruthy();
     expect(screen.queryByText(/DeploymentValidationConsecutiveGreen/)).toBeNull();
   });

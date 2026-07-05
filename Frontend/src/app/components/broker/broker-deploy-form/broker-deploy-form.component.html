@@ -103,7 +103,7 @@
           <dl class="validation-summary">
             <div>
               <dt>Status</dt>
-              <dd>{{ validation.reconciliation_status ?? validation.validation_state }}</dd>
+              <dd>{{ (validation.reconciliation_status ?? validation.validation_state) | receiptLabel }}</dd>
             </div>
             <div>
               <dt>Validation case</dt>
@@ -341,7 +341,7 @@
         </ul>
       </section>
 
-      <button type="submit" class="primary" [disabled]="!canSubmit()" (click)="submit()">
+      <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
         {{ startNow() ? 'Deploy & start' : 'Deploy' }}
       </button>
       @let reason = blockedReason();

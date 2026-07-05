@@ -28,9 +28,15 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationSummary } from '../../../services/strategy-validation.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { type OperationError, toOperationError } from '../operation-error';
+import {
+  buildDeployChecks,
+  buildDeployReadinessFacts,
+  buildNowChecks,
+} from './deploy-readiness';
 
 // Kept in lockstep with the backend guard `identity._INSTANCE_ID_RE`
 // (and `live_instances._INSTANCE_ID_RE`): a deployment name the operate
@@ -39,22 +45,12 @@ import { type OperationError, toOperationError } from '../operation-error';
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 type DeployTabKey = 'strategy' | 'signal' | 'sizing' | 'legs' | 'launch';
-type DeployReadinessState = 'ok' | 'warn' | 'down' | 'unknown';
 
 interface DeployTab {
   key: DeployTabKey;
   label: string;
   target: string;
   complete: boolean;
-}
-
-interface DeployReadinessFact {
-  key: 'engine' | 'broker' | 'account' | 'fleet';
-  label: string;
-  condition: string;
-  detail: string;
-  state: DeployReadinessState;
-  link: string;
 }
 
 // ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
@@ -80,6 +76,7 @@ function normalizedSymbol(value: string | null | undefined): string {
     BrokerOperationResultComponent,
     ActionPlanPickerComponent,
     InputTextModule,
+    ReceiptLabelPipe,
   ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
@@ -296,12 +293,18 @@ export class BrokerDeployFormComponent {
     },
   ]);
 
-  readonly deployReadinessFacts = computed<DeployReadinessFact[]>(() => [
-    this.engineReadinessFact(),
-    this.brokerReadinessFact(),
-    this.accountReadinessFact(),
-    this.fleetReadinessFact(),
-  ]);
+  readonly deployReadinessFacts = computed(() =>
+    buildDeployReadinessFacts({
+      daemonState: this.connectivity.daemonState(),
+      daemonFreshness: this.connectivity.daemonFreshness(),
+      brokerState: this.connectivity.brokerState(),
+      brokerDetail: this.connectivity.brokerDetail(),
+      accountTruth: this.accountTruth.value(),
+      brokerAccountAvailable: this.brokerAccountAvailable(),
+      fleetState: this.connectivity.fleetState(),
+      nothingDeployed: this.connectivity.nothingDeployed(),
+    }),
+  );
 
   /** True when the typed deployment name already has a live host runner. A
    * start-immediately deploy onto it would hit the daemon's 409 "Host runner
@@ -335,68 +338,17 @@ export class BrokerDeployFormComponent {
     return missing;
   });
 
-  readonly nowChecks = computed(() => [
-    {
-      key: 'engine',
-      label: 'Engine up',
-      state: this.connectivity.daemonState(),
-      detail:
-        this.connectivity.daemonState() === 'ok'
-          ? 'Ready'
-          : this.connectivity.daemonState() === 'unknown'
-            ? 'Checking'
-            : 'Start it, then recheck',
-    },
-    {
-      key: 'broker',
-      label: 'Broker',
-      state: this.connectivity.brokerState(),
-      detail:
-        this.connectivity.brokerState() === 'ok'
-          ? 'Connected'
-          : this.connectivity.brokerState() === 'unknown'
-            ? 'Checking'
-            : 'Disconnected',
-    },
-    {
-      key: 'fields',
-      label: 'Fields',
-      state: this.fieldsReady() ? 'ok' : 'warn',
-      detail: this.fieldsReady() ? 'Complete' : 'Required fields missing',
-    },
-    {
-      key: 'fleet',
-      label: 'Fleet clear',
-      state: this.connectivity.fleetState(),
-      detail:
-        this.connectivity.fleetState() === 'warn'
-          ? 'Starts blocked'
-          : this.connectivity.fleetState() === 'unknown'
-            ? this.connectivity.nothingDeployed()
-              ? 'Nothing deployed'
-              : 'Checking'
-            : 'Clear',
-    },
-  ]);
+  readonly nowChecks = computed(() =>
+    buildNowChecks({
+      daemonState: this.connectivity.daemonState(),
+      brokerState: this.connectivity.brokerState(),
+      fieldsReady: this.fieldsReady(),
+      fleetState: this.connectivity.fleetState(),
+      nothingDeployed: this.connectivity.nothingDeployed(),
+    }),
+  );
 
-  readonly deployChecks = computed(() => [
-    {
-      key: 'tree',
-      label: 'Working tree clean',
-      state: this.error()?.status === 409 ? 'down' : 'pending',
-      detail: this.error()?.status === 409
-        ? 'Commit or stash the listed files'
-        : 'Checked when you deploy',
-    },
-    {
-      key: 'spec',
-      label: 'Spec matches strategy',
-      state: this.error()?.status === 400 ? 'down' : 'pending',
-      detail: this.error()?.status === 400
-        ? 'Pick the matching spec'
-        : 'Checked when you deploy',
-    },
-  ]);
+  readonly deployChecks = computed(() => buildDeployChecks(this.error()?.status));
 
   constructor() {
     // Re-deploy prefill: query params seed operator/runtime fields from the
@@ -846,150 +798,4 @@ export class BrokerDeployFormComponent {
     return symbol || null;
   }
 
-  private engineReadinessFact(): DeployReadinessFact {
-    const state = this.connectivity.daemonState();
-    const freshness = this.connectivity.daemonFreshness();
-    if (state === 'down') {
-      return {
-        key: 'engine',
-        label: 'Engine',
-        condition: 'Unreachable',
-        detail: 'Start the local daemon, then recheck.',
-        state: 'down',
-        link: '/engine',
-      };
-    }
-    if (freshness.state === 'stale') {
-      return {
-        key: 'engine',
-        label: 'Engine',
-        condition: 'Stale code',
-        detail: 'Restart the daemon to apply the current repo.',
-        state: 'warn',
-        link: '/engine',
-      };
-    }
-    if (state === 'ok') {
-      return {
-        key: 'engine',
-        label: 'Engine',
-        condition: 'Healthy',
-        detail: freshness.sha ? `Running ${freshness.sha}` : 'Daemon reachable.',
-        state: 'ok',
-        link: '/engine',
-      };
-    }
-    return {
-      key: 'engine',
-      label: 'Engine',
-      condition: 'Checking',
-      detail: 'Waiting for daemon health.',
-      state: 'unknown',
-      link: '/engine',
-    };
-  }
-
-  private brokerReadinessFact(): DeployReadinessFact {
-    const state = this.connectivity.brokerState();
-    const condition =
-      state === 'ok'
-        ? 'Linked'
-        : state === 'down'
-          ? 'Hard down'
-          : state === 'warn'
-            ? 'Reconnecting'
-            : 'Checking';
-    return {
-      key: 'broker',
-      label: 'Broker',
-      condition,
-      detail: this.connectivity.brokerDetail(),
-      state,
-      link: '/broker/session-mirror',
-    };
-  }
-
-  private accountReadinessFact(): DeployReadinessFact {
-    const truth = this.accountTruth.value();
-    if (!this.brokerAccountAvailable()) {
-      return {
-        key: 'account',
-        label: 'Account',
-        condition: 'Not proven',
-        detail: 'Broker account identity is unavailable.',
-        state: 'down',
-        link: '/broker/account-monitor',
-      };
-    }
-    if (truth?.final_verdict === 'not_proven') {
-      return {
-        key: 'account',
-        label: 'Account',
-        condition: 'Not proven',
-        detail: truth.status_detail,
-        state: 'warn',
-        link: '/broker/account-monitor',
-      };
-    }
-    if (truth?.final_verdict === 'clean') {
-      return {
-        key: 'account',
-        label: 'Account',
-        condition: 'Clean',
-        detail: truth.status_detail,
-        state: 'ok',
-        link: '/broker/account-monitor',
-      };
-    }
-    return {
-      key: 'account',
-      label: 'Account',
-      condition: 'Checking',
-      detail: 'Waiting for account-truth proof.',
-      state: 'unknown',
-      link: '/broker/account-monitor',
-    };
-  }
-
-  private fleetReadinessFact(): DeployReadinessFact {
-    const state = this.connectivity.fleetState();
-    if (this.connectivity.nothingDeployed()) {
-      return {
-        key: 'fleet',
-        label: 'Fleet',
-        condition: 'Empty',
-        detail: 'No deployed bots on this account.',
-        state: 'unknown',
-        link: '/broker/bots',
-      };
-    }
-    if (state === 'warn') {
-      return {
-        key: 'fleet',
-        label: 'Fleet',
-        condition: 'Contaminated',
-        detail: 'New starts are blocked until account state clears.',
-        state: 'warn',
-        link: '/broker/reconciliation',
-      };
-    }
-    if (state === 'ok') {
-      return {
-        key: 'fleet',
-        label: 'Fleet',
-        condition: 'Clear',
-        detail: 'No fleet policy blocks.',
-        state: 'ok',
-        link: '/broker/bots',
-      };
-    }
-    return {
-      key: 'fleet',
-      label: 'Fleet',
-      condition: 'Checking',
-      detail: 'Waiting for fleet policy.',
-      state: 'unknown',
-      link: '/broker/bots',
-    };
-  }
 }

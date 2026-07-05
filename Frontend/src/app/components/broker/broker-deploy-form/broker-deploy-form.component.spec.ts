@@ -223,7 +223,7 @@ function fillRequired(component: BrokerDeployFormComponent) {
 }
 
 function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement {
-  const el = fixture.nativeElement.querySelector('button[type="submit"]');
+  const el = fixture.nativeElement.querySelector('button.primary');
   if (!(el instanceof HTMLButtonElement)) throw new Error('no submit button');
   return el;
 }
