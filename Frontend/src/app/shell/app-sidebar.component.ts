@@ -100,16 +100,16 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    id: 'portfolio',
-    title: 'Portfolio',
+    id: 'strategy-lab',
+    title: 'Strategy Lab',
     icon: 'pi pi-briefcase',
     items: [
-      { label: 'Dashboard', route: '/portfolio' },
+      { label: 'Strategy Validation', route: '/strategy-validation' },
+      { label: 'Deploy', route: '/broker/deploy' },
       // PR B.5 (2026-05-19) — Engine Lab subsumes the standalone
       // LEAN Lab via the Engine dropdown; /lean-lab redirects here.
-      { label: 'Engine Lab', route: '/engine' },
       { label: 'Strategy Spec', route: '/spec-strategy' },
-      { label: 'Tracked Instruments', route: '/tracked-instruments' },
+      { label: 'Engine Lab', route: '/engine' },
     ],
   },
   {

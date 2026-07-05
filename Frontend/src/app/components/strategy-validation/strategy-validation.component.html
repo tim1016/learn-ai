@@ -1,0 +1,87 @@
+<main class="strategy-validation">
+  <header class="sv-header">
+    <div>
+      <h1>Strategy Validation</h1>
+      <p>Validated strategy evidence for deployable paper bots.</p>
+    </div>
+    <dl class="sv-counts" aria-label="Strategy validation counts">
+      <div><dt>Total</dt><dd>{{ strategies().length }}</dd></div>
+      <div><dt>Validated</dt><dd>{{ validatedCount() }}</dd></div>
+    </dl>
+  </header>
+
+  @if (catalog.isLoading()) {
+    <p class="sv-message" aria-live="polite">Loading strategies...</p>
+  } @else if (catalog.error()) {
+    <p class="sv-error" role="alert">Strategy validation catalog could not be loaded.</p>
+  } @else {
+    <section class="sv-workbench" aria-label="Strategy validation catalog">
+      <div class="sv-list" aria-label="Strategies">
+        @for (strategy of strategies(); track strategy.strategy_key) {
+          <button type="button" class="sv-row" [class.selected]="isSelected(strategy)" (click)="selectStrategy(strategy)">
+            <span class="sv-row-main">
+              <span class="sv-row-name">{{ strategy.display_name }}</span>
+              <span class="sv-row-key">{{ strategy.strategy_key }}</span>
+            </span>
+            <span class="sv-badge" [class.validated]="strategy.validation_state === 'validated'" [class.needs-validation]="strategy.validation_state !== 'validated'">
+              {{ stateLabel(strategy) }}
+            </span>
+          </button>
+        }
+      </div>
+
+      <article class="sv-detail">
+        @if (detail.isLoading()) {
+          <p class="sv-message" aria-live="polite">Loading validation evidence...</p>
+        } @else if (detail.value(); as selected) {
+          <header class="sv-detail-header">
+            <div>
+              <h2>{{ selected.display_name }}</h2>
+              <p>{{ selected.description }}</p>
+            </div>
+            <span class="sv-badge" [class.validated]="selected.validation_state === 'validated'" [class.needs-validation]="selected.validation_state !== 'validated'">
+              {{ stateLabel(selected) }}
+            </span>
+          </header>
+
+          @if (selected.deployable && selected.diagnostics) {
+            <dl class="sv-evidence">
+              <div><dt>QC backtest</dt><dd>{{ selected.qc_cloud_backtest_id }}</dd></div>
+              <div><dt>Validation case</dt><dd>{{ selected.validation_case_symbol }}</dd></div>
+              <div><dt>Matched</dt><dd>{{ selected.diagnostics.trades_matched }} trades matched</dd></div>
+              <div><dt>Validated</dt><dd>{{ selected.diagnostics.trades_validated }} trades validated</dd></div>
+              <div><dt>P&amp;L delta</dt><dd>{{ selected.diagnostics.pnl_max_abs_diff }}</dd></div>
+            </dl>
+
+            <section class="sv-provenance" aria-label="Validation provenance">
+              <p><span>Settings</span>{{ selected.settings_file_ref }}</p>
+              <p><span>Audit copy</span>{{ selected.audit_copy_ref }}</p>
+              <p><span>Reconciliation</span>{{ selected.reconciliation_ref }}</p>
+            </section>
+
+            @if (divergenceEntries(selected).length > 0) {
+              <section>
+                <h3>Divergence categories</h3>
+                <ul class="sv-divergences">
+                  @for (entry of divergenceEntries(selected); track entry[0]) {
+                    <li><code>{{ entry[0] }}</code><span>{{ entry[1] }}</span></li>
+                  }
+                </ul>
+              </section>
+            }
+
+            @if (selected.reference_code; as code) {
+              <section class="sv-code">
+                <h3>QuantConnect reference code</h3>
+                <p>{{ code.path }}</p>
+                <pre><code>{{ code.source }}</code></pre>
+              </section>
+            }
+          } @else {
+            <p class="sv-empty">Validation evidence has not been registered yet.</p>
+          }
+        }
+      </article>
+    </section>
+  }
+</main>
