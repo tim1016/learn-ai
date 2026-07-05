@@ -17,6 +17,7 @@ import {
   gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
+import { formatTimestampIsoInZone } from '../../../shared/timestamp';
 
 // ── Shared types (mirrored from lean-engine) ──────────────────
 export interface LeanPortfolioStats {
@@ -266,23 +267,7 @@ export class EngineResultsComponent {
   }
 
   formatTradeTime(ms: number): string {
-    if (!Number.isFinite(ms)) return '';
-    const d = new Date(ms);
-    if (Number.isNaN(d.getTime())) return '';
-    const zone = this.selectedTimezone();
-    if (zone === 'UTC') return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: zone, hour12: false,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    }).formatToParts(d).reduce<Record<string, string>>((acc, p) => {
-      if (p.type !== 'literal') acc[p.type] = p.value;
-      return acc;
-    }, {});
-
-    const hh = parts['hour'] === '24' ? '00' : parts['hour'];
-    return `${parts['year']}-${parts['month']}-${parts['day']}T${hh}:${parts['minute']}:${parts['second']}`;
+    return formatTimestampIsoInZone(ms, this.selectedTimezone());
   }
 
   tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {

@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc, session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc, session_windows_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class PolygonIngestManifest:
 
 
 def _filter_to_rth(df: pd.DataFrame, ts_col: str = "unix_ts") -> pd.DataFrame:
-    mask = df[ts_col].astype("int64").map(lambda ts: is_regular_session_ms_utc(int(ts)))
+    mask = regular_session_mask_ms_utc(df[ts_col])
     return df[mask].copy()
 
 
@@ -96,7 +96,7 @@ def resample_ohlcv(
     df["time_utc"] = pd.to_datetime(df["iso_time"], utc=True)
     df["et"] = df["time_utc"].dt.tz_convert("America/New_York")
     if "unix_ts" not in df.columns:
-        df["unix_ts"] = (df["time_utc"].astype("int64") // 1_000_000).astype("Int64")
+        df["unix_ts"] = df["time_utc"].dt.as_unit("ms").astype("int64").astype("Int64")
 
     if rth_only:
         df = _filter_to_rth(df)
@@ -139,7 +139,7 @@ def resample_ohlcv(
         out["vwap"] = vwap_series.values
 
     # Add unix_ts (ms) for parity with the source CSV format
-    out["unix_ts"] = (out["time_utc"].astype("int64") // 1_000_000).astype("Int64")
+    out["unix_ts"] = out["time_utc"].dt.as_unit("ms").astype("int64").astype("Int64")
 
     # Reorder for consistency with downstream code
     cols = ["unix_ts", "iso_time", "time_utc", "et", "open", "high", "low", "close", "volume"]

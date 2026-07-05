@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
+from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def _assert_monotonic_unique(df: pd.DataFrame) -> None:
 
 def _assert_rth_only(df: pd.DataFrame) -> int:
     ts_ms = (df["time"].astype("int64") * 1000).astype("int64")
-    return int((~ts_ms.map(lambda ts: is_regular_session_ms_utc(int(ts)))).sum())
+    return int((~regular_session_mask_ms_utc(ts_ms)).sum())
 
 
 def _assert_bar_counts(df: pd.DataFrame, timeframe: str) -> tuple[int, int]:

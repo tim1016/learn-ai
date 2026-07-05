@@ -35,13 +35,6 @@ const PERCENT = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
 });
 
-const UTC_DATE_MARKER = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'UTC',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
 export function fmtCurrency(value: number | null | undefined): string {
   return value == null ? '—' : CURRENCY.format(value);
 }
@@ -117,8 +110,7 @@ export function fmtDateNy(ms: number | null | undefined): string {
 
 /** Format broker expiry markers that encode IBKR ``YYYYMMDD`` as midnight UTC. */
 export function fmtBrokerExpiryDate(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms)) return '—';
-  return UTC_DATE_MARKER.format(new Date(ms));
+  return formatTimestampDisplay(ms, { mode: 'date-utc' });
 }
 
 /**

@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
+from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
 from app.research.divergence.indicators.engine_adapter import (
     compute_engine_ema_batch,
     compute_engine_rsi_batch,
@@ -120,8 +120,8 @@ def build_vd_15m_with_engine_indicators(
     # Now filter to RTH bars for trade execution (indicator state is preserved
     # because we computed sequentially through ALL bars).
     bars_all["et"] = bars_all["time_utc"].dt.tz_convert(EASTERN)
-    ts_ms = (bars_all["time_utc"].astype("int64") // 1_000_000).astype("int64")
-    rth_mask = ts_ms.map(lambda ts: is_regular_session_ms_utc(int(ts)))
+    ts_ms = bars_all["time_utc"].dt.as_unit("ms").astype("int64")
+    rth_mask = regular_session_mask_ms_utc(ts_ms)
     rth = bars_all[rth_mask].reset_index(drop=True)
     # Rename close so strategy code can use close_pg as the canonical column
     rth = rth.rename(columns={"close": "close_pg"})

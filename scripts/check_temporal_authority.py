@@ -115,6 +115,7 @@ def check_calendar_constructor() -> list[Violation]:
     checks = [
         ("calendar-constructor", re.compile(r"\bmcal\.get_calendar\b")),
         ("calendar-import", re.compile(r"\bimport\s+pandas_market_calendars\b")),
+        ("calendar-import", re.compile(r"\bfrom\s+pandas_market_calendars\s+import\b")),
     ]
     violations: list[Violation] = []
     files = iter_files([ROOT / "PythonDataService/app", *ROOT.glob("PythonDataService/*.py")], (".py",))

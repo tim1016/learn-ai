@@ -1,4 +1,4 @@
-export type TimestampDisplayMode = 'local' | 'et' | 'date-et';
+export type TimestampDisplayMode = 'local' | 'et' | 'date-et' | 'date-utc';
 export type TimestampGranularity = 'date' | 'time' | 'datetime';
 
 export interface TimestampDisplayOptions {
@@ -18,6 +18,7 @@ interface WallClockParts {
 }
 
 const ET_ZONE = 'America/New_York';
+const UTC_ZONE = 'UTC';
 const DEFAULT_FALLBACK = '—';
 const PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
   year: 'numeric',
@@ -65,10 +66,42 @@ export function formatTimestampDisplay(
   if (!isFiniteMs(value)) return fallback;
 
   const mode = options.mode ?? 'local';
-  const granularity: TimestampGranularity = mode === 'date-et'
+  const granularity: TimestampGranularity = mode === 'date-et' || mode === 'date-utc'
     ? 'date'
     : (options.granularity ?? 'datetime');
-  const timeZone = mode === 'local' ? options.localTimeZone : ET_ZONE;
+  const timeZone = mode === 'local'
+    ? options.localTimeZone
+    : mode === 'date-utc'
+      ? UTC_ZONE
+      : ET_ZONE;
   const text = joinParts(getParts(value, timeZone), granularity);
-  return mode === 'et' && granularity !== 'date' ? `${text} ET` : text;
+  return mode === 'et' ? `${text} ET` : text;
+}
+
+export function formatTimestampIsoInZone(
+  value: number | null | undefined,
+  timeZone: string,
+): string {
+  if (!isFiniteMs(value)) return '';
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return '';
+  if (timeZone === UTC_ZONE) return instant.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+  const parts = getParts(value, timeZone);
+  const hour = parts.hour === '24' ? '00' : parts.hour;
+  const local = `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}`;
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  const offsetMinutes = Math.round((asUtc - instant.getTime()) / 60000);
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMinutes);
+  const offH = String(Math.floor(abs / 60)).padStart(2, '0');
+  const offM = String(abs % 60).padStart(2, '0');
+  return `${local}${sign}${offH}:${offM}`;
 }

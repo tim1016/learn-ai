@@ -40,6 +40,7 @@ import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
+import { formatTimestampIsoInZone } from "../../shared/timestamp";
 import { EngineRunDockSource } from "./engine-run-dock-source";
 import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
 import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
@@ -1226,52 +1227,7 @@ export class LeanEngineComponent implements OnInit {
    * stay in lockstep regardless of which zone is picked.
    */
   formatTradeTime(ms: number): string {
-    if (!Number.isFinite(ms)) return "";
-    const d = new Date(ms);
-    if (Number.isNaN(d.getTime())) return "";
-
-    const zone = this.selectedTimezone();
-    if (zone === "UTC") {
-      return d.toISOString().replace(/\.\d{3}Z$/, "Z");
-    }
-
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: zone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    })
-      .formatToParts(d)
-      .reduce<Record<string, string>>((acc, p) => {
-        if (p.type !== "literal") acc[p.type] = p.value;
-        return acc;
-      }, {});
-
-    // Some engines emit '24' for midnight — normalize to '00'.
-    const hh = parts["hour"] === "24" ? "00" : parts["hour"];
-    const local = `${parts["year"]}-${parts["month"]}-${parts["day"]}T${hh}:${parts["minute"]}:${parts["second"]}`;
-
-    // Signed offset in minutes for this zone at this specific instant
-    // (correctly handles DST transitions per-trade).
-    const asUtc = Date.UTC(
-      Number(parts["year"]),
-      Number(parts["month"]) - 1,
-      Number(parts["day"]),
-      Number(hh),
-      Number(parts["minute"]),
-      Number(parts["second"]),
-    );
-    const offsetMinutes = Math.round((asUtc - d.getTime()) / 60000);
-    const sign = offsetMinutes >= 0 ? "+" : "-";
-    const abs = Math.abs(offsetMinutes);
-    const offH = String(Math.floor(abs / 60)).padStart(2, "0");
-    const offM = String(abs % 60).padStart(2, "0");
-
-    return `${local}${sign}${offH}:${offM}`;
+    return formatTimestampIsoInZone(ms, this.selectedTimezone());
   }
 
   tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {

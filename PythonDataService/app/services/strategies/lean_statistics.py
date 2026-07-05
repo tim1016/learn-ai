@@ -500,27 +500,17 @@ def compute_lean_statistics(
         ts.max_consecutive_losing_trades = max_consec_l
 
         # Average trade durations (TS.cs 394, 318, 356)
-        def _parse_ts(s: int | str) -> datetime:
-            if isinstance(s, int):
-                return datetime.fromtimestamp(s / 1000, tz=UTC)
-            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"):
-                try:
-                    return datetime.strptime(s, fmt)
-                except ValueError:
-                    continue
-            return datetime.fromisoformat(s.replace("Z", "+00:00").replace("+00:00", ""))
+        def _parse_ts(s: int) -> datetime:
+            return datetime.fromtimestamp(s / 1000, tz=UTC)
 
         def _avg_duration(trade_list: list[TradeRecord]) -> str:
             if not trade_list:
                 return "0:00:00"
             durations = []
             for t in trade_list:
-                try:
-                    entry = _parse_ts(t.entry_timestamp)
-                    exit_ = _parse_ts(t.exit_timestamp)
-                    durations.append((exit_ - entry).total_seconds())
-                except Exception:
-                    pass
+                entry = _parse_ts(t.entry_timestamp)
+                exit_ = _parse_ts(t.exit_timestamp)
+                durations.append((exit_ - entry).total_seconds())
             if not durations:
                 return "0:00:00"
             avg_secs = mean(durations)

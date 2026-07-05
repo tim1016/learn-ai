@@ -260,10 +260,10 @@ def _format_timestamp(ts) -> int:
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
             raise ValueError("rule-based trade timestamp must be timezone-aware")
-        return int(ts.astimezone(UTC).timestamp() * 1000)
+        return round(ts.astimezone(UTC).timestamp() * 1000)
     if isinstance(ts, str):
         parsed = pd.Timestamp(ts)
         if parsed.tzinfo is None:
             raise ValueError(f"rule-based trade timestamp string must include a timezone: {ts!r}")
-        return int(parsed.tz_convert("UTC").value // 1_000_000)
+        return round(parsed.tz_convert("UTC").timestamp() * 1000)
     raise TypeError(f"unsupported timestamp type: {type(ts).__name__}")

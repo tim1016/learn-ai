@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from datetime import time as time_of_day
 from decimal import Decimal
 from pathlib import Path
@@ -69,7 +69,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.services.strategies.common import TradeRecord
+from app.services.strategies.common import TradeRecord, format_timestamp
 from app.services.strategies.lean_statistics import compute_lean_statistics
 
 router = APIRouter()
@@ -2180,7 +2180,7 @@ def execute_engine_backtest(
     # ── Serialize consolidated bars for charting ──
     chart_bars_dicts = [
         {
-            "t": int(b.time.timestamp() * 1000),
+            "t": _to_ms_utc(b.time),
             "o": float(b.open),
             "h": float(b.high),
             "l": float(b.low),
@@ -2244,9 +2244,10 @@ def execute_engine_backtest(
 # ---------------------------------------------------------------------------
 def _to_ms_utc(dt: datetime) -> int:
     """Convert a datetime to canonical int64 ms UTC for API payloads."""
-    if dt.tzinfo is None:
-        raise ValueError("engine timestamp must be timezone-aware before serialization")
-    return int(dt.astimezone(UTC).timestamp() * 1000)
+    try:
+        return format_timestamp(dt)
+    except ValueError as exc:
+        raise ValueError("engine timestamp must be timezone-aware before serialization") from exc
 
 
 # ---------------------------------------------------------------------------

@@ -170,6 +170,20 @@ def is_regular_session_ms_utc(ts_ms: int) -> bool:
     return session_state_at_ms(ts_ms) == "RTH_OPEN"
 
 
+def regular_session_mask_ms_utc(ts_ms: pd.Series) -> pd.Series:
+    """Vectorized regular-session mask for canonical ``int64 ms UTC`` values."""
+    values = ts_ms.astype("int64")
+    if values.empty:
+        return pd.Series([], index=ts_ms.index, dtype=bool)
+
+    et_dates = pd.to_datetime(values, unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date
+    windows = {window.session_date: window for window in session_windows_ms_utc(et_dates.min(), et_dates.max())}
+    open_ms = et_dates.map({d: window.open_ms_utc for d, window in windows.items()}).astype("Int64")
+    close_ms = et_dates.map({d: window.close_ms_utc for d, window in windows.items()}).astype("Int64")
+    mask = open_ms.notna() & close_ms.notna() & values.ge(open_ms) & values.lt(close_ms)
+    return mask.fillna(False).astype(bool)
+
+
 def expected_sessions(start: date, end: date) -> list[date]:
     """Return every NYSE session date in ``[start, end]`` (inclusive).
 
@@ -220,7 +234,12 @@ def holiday_names_in_range(start: date, end: date) -> dict[date, str]:
         pd.Timestamp(end),
         return_name=True,
     )
-    return {ts.date(): str(name) for ts, name in series.items()}
+    out = {ts.date(): str(name) for ts, name in series.items()}
+    for raw in _CALENDAR.holidays().calendar.holidays:
+        d = pd.Timestamp(raw).date()
+        if start <= d <= end:
+            out.setdefault(d, "NYSE ad-hoc closure")
+    return out
 
 
 def session_state_at_ms(now_ms: int) -> NyseSessionState:

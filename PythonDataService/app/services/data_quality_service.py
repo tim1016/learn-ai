@@ -112,7 +112,8 @@ def step1_session_filter(df: pd.DataFrame, from_date: str, to_date: str) -> tupl
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     # Round to minute to match calendar
     dt_rounded = dt_utc.dt.floor("min")
-    dt_rounded_ms = (dt_rounded.astype("int64") // 1_000_000).astype("int64")
+    epoch = pd.Timestamp("1970-01-01", tz="UTC")
+    dt_rounded_ms = ((dt_rounded - epoch) // pd.Timedelta(milliseconds=1)).astype("int64")
     mask = dt_rounded_ms.isin(valid_minutes)
     df = df[mask].reset_index(drop=True)
 

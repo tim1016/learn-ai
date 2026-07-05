@@ -63,6 +63,10 @@ public class BacktestRunsQuery
 
         return query
             .OrderByDescending(s => s.ExecutedAt)
+            // Keep this SQL-translatable projection aligned with
+            // BacktestRunNodeType.FromExecution below. The materialized path can
+            // call EngineExtensions.FromSource; this projection keeps the same
+            // source mapping inline so EF can translate it.
             .Select(s => new BacktestRunNodeType
             {
                 Id = s.Id,
@@ -112,6 +116,7 @@ public sealed record BacktestRunNodeType
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
     public IReadOnlyList<BacktestRunTradeSummaryType> Trades { get; init; } = [];
 
+    // Keep this materialized mapping aligned with GetBacktestRuns' projection.
     public static BacktestRunNodeType FromExecution(StrategyExecution execution) => new()
     {
         Id = execution.Id,

@@ -17,6 +17,7 @@ import { Injectable, inject } from '@angular/core';
 import { catchError, firstValueFrom, forkJoin, of } from 'rxjs';
 import { MarketDataService } from './market-data.service';
 import { StockAggregate } from '../graphql/types';
+import { formatTimestampDisplay } from '../shared/timestamp';
 import { formatOcc } from '../utils/occ-ticker';
 
 export interface PastChainContractRow {
@@ -254,12 +255,5 @@ export class PastChainService {
 }
 
 function ymdEt(ms: number): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date(ms));
-  const lookup = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
-  return `${lookup['year']}-${lookup['month']}-${lookup['day']}`;
+  return formatTimestampDisplay(ms, { mode: 'date-et' });
 }

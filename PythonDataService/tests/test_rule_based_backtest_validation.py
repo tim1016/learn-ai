@@ -607,6 +607,11 @@ class TestFormatTimestampRegression:
         # 2024-01-01T00:00:00Z == 1704067200000 ms
         assert _format_timestamp(1704067200000) == 1704067200000
 
+    def test_iso_string_with_timezone_emits_int64_ms_utc(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        assert _format_timestamp("2024-01-01T00:00:00Z") == 1704067200000
+
     def test_timestamp_format_does_not_emit_a_display_string(self):
         from app.services.rule_based_backtest import _format_timestamp
 

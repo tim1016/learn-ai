@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { TimestampDisplayComponent } from './timestamp-display.component';
-import { formatTimestampDisplay } from './timestamp-display';
+import { formatTimestampDisplay, formatTimestampIsoInZone } from './timestamp-display';
 import { TimestampDisplayPipe } from './timestamp-display.pipe';
 
 // 2026-06-19 16:00 America/New_York = 2026-06-19 20:00 UTC.
@@ -29,6 +29,19 @@ describe('formatTimestampDisplay', () => {
     })).toBe('2026-06-19');
   });
 
+  it('preserves the ET marker when ET mode is date-only', () => {
+    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
+      mode: 'et',
+      granularity: 'date',
+    })).toBe('2026-06-19 ET');
+  });
+
+  it('formats broker UTC date markers without shifting calendar day', () => {
+    expect(formatTimestampDisplay(Date.UTC(2025, 11, 19, 0, 0, 0), {
+      mode: 'date-utc',
+    })).toBe('2025-12-19');
+  });
+
   it('uses 00 rather than 24 at midnight', () => {
     expect(formatTimestampDisplay(Date.UTC(2026, 0, 1, 0, 0, 0), {
       mode: 'local',
@@ -38,6 +51,18 @@ describe('formatTimestampDisplay', () => {
 
   it('returns the fallback for absent values', () => {
     expect(formatTimestampDisplay(null, { mode: 'et' })).toBe('—');
+  });
+});
+
+describe('formatTimestampIsoInZone', () => {
+  it('formats UTC with a Z suffix', () => {
+    expect(formatTimestampIsoInZone(EXPIRY_ANCHOR_MS, 'UTC')).toBe('2026-06-19T20:00:00Z');
+  });
+
+  it('formats exchange-local ISO with the instant-specific offset', () => {
+    expect(formatTimestampIsoInZone(EXPIRY_ANCHOR_MS, 'America/New_York')).toBe(
+      '2026-06-19T16:00:00-04:00',
+    );
   });
 });
 

@@ -69,7 +69,7 @@ public class ResearchService : IResearchService
 
         // Step 2: Convert to OHLCV bars for Python
         var bars = aggregates.Select(a => new OhlcvBarDto(
-            new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+            UnixMs.FromUtc(a.Timestamp),
             a.Open, a.High, a.Low, a.Close, a.Volume
         )).ToList();
 
@@ -211,7 +211,7 @@ public class ResearchService : IResearchService
             aggregates.Count, ticker);
 
         var bars = aggregates.Select(a => new OhlcvBarDto(
-            new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+            UnixMs.FromUtc(a.Timestamp),
             a.Open, a.High, a.Low, a.Close, a.Volume
         )).ToList();
 
@@ -436,7 +436,7 @@ public class ResearchService : IResearchService
 
         var dailyBars = stockFetchResult.Aggregates
             .Select(a => new OhlcvBarDto(
-                new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                UnixMs.FromUtc(a.Timestamp),
                 a.Open, a.High, a.Low, a.Close, a.Volume))
             .ToList();
 

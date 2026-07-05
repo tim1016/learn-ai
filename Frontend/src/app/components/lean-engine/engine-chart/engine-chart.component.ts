@@ -322,7 +322,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     const data: AreaData[] = [];
     for (let i = 0; i < curve.length; i += step) {
       const pt = curve[i];
-      const ts = pt.timestamp / 1000;
+      const ts = Math.floor(pt.timestamp / 1000);
       if (!isNaN(ts)) {
         data.push({ time: ts as UTCTimestamp, value: pt.equity });
       }
@@ -330,7 +330,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     // Always include last point
     if (step > 1 && curve.length > 0) {
       const last = curve[curve.length - 1];
-      const ts = last.timestamp / 1000;
+      const ts = Math.floor(last.timestamp / 1000);
       if (!isNaN(ts)) {
         data.push({ time: ts as UTCTimestamp, value: last.equity });
       }
