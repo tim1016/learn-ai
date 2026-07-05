@@ -1688,6 +1688,7 @@ OperatorSurfaceBlockageStageId = Literal[
     "runtime_freshness",
 ]
 OperatorSurfaceBlockageState = Literal["clear", "info", "warning", "danger", "unknown"]
+OperatorSurfaceRunSignalTone = Literal["on", "off", "transition", "attention"]
 
 
 class OperatorSurfaceBlockageStage(BaseModel):
@@ -1720,6 +1721,23 @@ class OperatorSurfaceBlockageLadder(BaseModel):
     summary: str
     current_stage_id: OperatorSurfaceBlockageStageId | None = None
     stages: list[OperatorSurfaceBlockageStage] = Field(default_factory=list)
+
+
+class OperatorSurfaceRunSignal(BaseModel):
+    """Backend-authored compact run-state signal for Bot Control.
+
+    This is the one-line answer to "is this bot process on?"  The
+    title/detail fields are operator-facing prose and must remain
+    backend-authored; the cockpit renders them without deriving copy from
+    raw process enums.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    state_label: str
+    tone: OperatorSurfaceRunSignalTone
+    title: str
+    detail: str
 
 
 class OperatorGate(BaseModel):
@@ -1966,6 +1984,9 @@ class OperatorSurface(BaseModel):
     # Backend-authored current blockage ladder for the lifecycle/About pane.
     # Additive field; schema_version remains 1.
     blockage_ladder: OperatorSurfaceBlockageLadder
+    # Backend-authored compact process signal rendered beside one-click
+    # lifecycle controls. Additive field; schema_version remains 1.
+    run_signal: OperatorSurfaceRunSignal
     actions: OperatorSurfaceActions
     trading_session: OperatorSurfaceTradingSession
     # PRD #616 — operator-facing projection of the engine readiness

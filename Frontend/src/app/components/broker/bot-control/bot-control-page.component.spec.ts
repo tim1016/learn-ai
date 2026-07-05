@@ -157,7 +157,15 @@ describe('BotControlPageComponent', () => {
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { fixture, component, element: el } = await setupBotControlPage();
+    const status = makeStatus({
+      runSignal: {
+        state_label: 'Off',
+        tone: 'off',
+        title: 'Bot process is not running',
+        detail: 'Start the host runner before trading this bot.',
+      },
+    });
+    const { fixture, component, element: el } = await setupBotControlPage({ status });
     expect(el.querySelector('[data-testid="bot-run-signal"]')?.textContent)
       .toContain('Off');
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Controls');
@@ -205,7 +213,15 @@ describe('BotControlPageComponent', () => {
 
   it('renders bot runtime as compact on/off signals beside one-click controls', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const stopped = makeStatus({ hostState: 'IDLE' });
+    const stopped = makeStatus({
+      hostState: 'IDLE',
+      runSignal: {
+        state_label: 'Off',
+        tone: 'off',
+        title: 'Bot process is not running',
+        detail: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+      },
+    });
     stopped.operator_surface.blockage_ladder = {
       headline: 'Bot process is not running',
       summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
@@ -233,7 +249,15 @@ describe('BotControlPageComponent', () => {
     expect(offSignal?.classList.contains('tone-off')).toBe(true);
     expect(element.querySelector('.chart-action[aria-label="Start bot process"]')).not.toBeNull();
 
-    const running = makeStatus({ hostState: 'RUNNING' });
+    const running = makeStatus({
+      hostState: 'RUNNING',
+      runSignal: {
+        state_label: 'On',
+        tone: 'on',
+        title: 'Bot process is running',
+        detail: 'The host daemon reports this bot process is running.',
+      },
+    });
     component.status.set(running);
     fixture.detectChanges();
 

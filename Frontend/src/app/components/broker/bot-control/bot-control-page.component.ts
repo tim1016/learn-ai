@@ -66,7 +66,6 @@ const TIMELINE_PROJECTION_UNAVAILABLE =
 type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
 type WorkbenchTab = 'activity' | 'audit';
 type PosturePillTone = 'ok' | 'attention' | 'warn' | 'neutral' | 'muted';
-type BotRunSignalTone = 'on' | 'off' | 'transition' | 'attention';
 
 interface PosturePill {
   readonly label: string;
@@ -78,14 +77,6 @@ interface ConnectionPill {
   readonly symbol: string | null;
   readonly state: string;
   readonly tone: OperatorPillTone;
-}
-
-interface BotRunSignal {
-  readonly stateLabel: string;
-  readonly title: string;
-  readonly detail: string;
-  readonly tone: BotRunSignalTone;
-  readonly ariaLabel: string;
 }
 
 interface ControlPlaneBanner {
@@ -264,12 +255,6 @@ export class BotControlPageComponent {
       state: condition.title,
       tone: operatorPillTone(condition.severity),
     };
-  });
-
-  readonly botRunSignal = computed<BotRunSignal | null>(() => {
-    const status = this.status();
-    if (!status) return null;
-    return this.toBotRunSignal(status);
   });
 
   readonly rightPaneNode = computed<LifecycleChartNode | null>(() => {
@@ -607,71 +592,6 @@ export class BotControlPageComponent {
     const tone: PosturePillTone =
       posture === 'UNKNOWN' ? 'muted' : posture === 'MIXED' ? 'warn' : 'neutral';
     return { label: 'Exposure', value: formatReceiptLabel(posture), tone };
-  }
-
-  private toBotRunSignal(status: LiveInstanceStatus): BotRunSignal {
-    const hostProcess = status.operator_surface.host_process;
-    const hostStage = status.operator_surface.blockage_ladder.stages
-      .find((stage) => stage.id === 'host_process');
-    const title = hostStage?.title
-      ?? this.hostProcessTitle(hostProcess.state, status.process.state);
-    const processDetail = this.processStateDetail(status.process.state);
-    const detail = hostStage?.summary
-      ?? (hostProcess.state === 'RUNNING' ? processDetail : hostProcess.notice ?? processDetail);
-    const stateLabel = this.botRunStateLabel(hostProcess.state, status.process.state);
-    const tone = this.botRunTone(hostProcess.state, status.process.state);
-    return {
-      stateLabel,
-      title,
-      detail,
-      tone,
-      ariaLabel: `Bot ${stateLabel}. ${title}. ${detail}`,
-    };
-  }
-
-  private botRunStateLabel(
-    hostState: LiveInstanceStatus['operator_surface']['host_process']['state'],
-    processState: LiveInstanceStatus['process']['state'],
-  ): string {
-    if (hostState === 'RUNNING' || processState === 'running') return 'On';
-    if (hostState === 'STOPPING' || processState === 'stopping') return 'Stopping';
-    return 'Off';
-  }
-
-  private botRunTone(
-    hostState: LiveInstanceStatus['operator_surface']['host_process']['state'],
-    processState: LiveInstanceStatus['process']['state'],
-  ): BotRunSignalTone {
-    if (hostState === 'RUNNING' || processState === 'running') return 'on';
-    if (hostState === 'STOPPING' || processState === 'stopping') return 'transition';
-    if (hostState === 'UNREACHABLE' || processState === 'unreachable') return 'attention';
-    return 'off';
-  }
-
-  private hostProcessTitle(
-    hostState: LiveInstanceStatus['operator_surface']['host_process']['state'],
-    processState: LiveInstanceStatus['process']['state'],
-  ): string {
-    if (hostState === 'RUNNING' || processState === 'running') return 'Bot process is running';
-    if (hostState === 'STOPPING' || processState === 'stopping') return 'Bot process is stopping';
-    if (hostState === 'UNREACHABLE' || processState === 'unreachable') return 'Host runner is unreachable';
-    if (hostState === 'WAITING_FOR_HOST') return 'Waiting for host process';
-    return 'Bot process is not running';
-  }
-
-  private processStateDetail(processState: LiveInstanceStatus['process']['state']): string {
-    switch (processState) {
-      case 'running':
-        return 'The live bot process is active.';
-      case 'stopping':
-        return 'A stop request is in progress.';
-      case 'idle':
-        return 'The bot has no active process.';
-      case 'exited':
-        return 'The last bot process exited.';
-      case 'unreachable':
-        return 'The data plane cannot reach the bot process.';
-    }
   }
 
   private targetNodeForAction(actionId: string): string | null {

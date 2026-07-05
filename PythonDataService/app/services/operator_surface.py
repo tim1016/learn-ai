@@ -17,7 +17,7 @@ for the operator-surface inclusion boundary.
 from __future__ import annotations
 
 from datetime import UTC, datetime, time, timedelta
-from typing import Literal
+from typing import Literal, assert_never
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -51,6 +51,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceAccountOwner,
     OperatorSurfaceActionPlan,
     OperatorSurfaceActions,
+    OperatorSurfaceBlockageLadder,
     OperatorSurfaceConfiguration,
     OperatorSurfaceControlPlane,
     OperatorSurfaceCurrentRisk,
@@ -60,6 +61,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceHostProcess,
     OperatorSurfacePriorRun,
     OperatorSurfaceReconciliation,
+    OperatorSurfaceRunSignal,
     OperatorSurfaceRuntimeFreshness,
     OperatorSurfaceTradingSession,
     ReadinessGate,
@@ -261,6 +263,43 @@ def _project_host_process(
         notice=notice,
         copyable_command=copyable_command,
         start_capability=start_capability,
+    )
+
+
+def _project_run_signal(
+    host_process: OperatorSurfaceHostProcess,
+    blockage_ladder: OperatorSurfaceBlockageLadder,
+) -> OperatorSurfaceRunSignal:
+    host_stage = next(
+        (stage for stage in blockage_ladder.stages if stage.id == "host_process"),
+        None,
+    )
+    title = host_stage.title if host_stage is not None else "Host process"
+    detail = (
+        host_stage.summary
+        if host_stage is not None
+        else host_process.notice or "Host-process status is unavailable."
+    )
+    match host_process.state:
+        case "RUNNING":
+            state_label = "On"
+            tone = "on"
+        case "STOPPING":
+            state_label = "Stopping"
+            tone = "transition"
+        case "UNREACHABLE":
+            state_label = "Unknown"
+            tone = "attention"
+        case "EXITED" | "IDLE" | "WAITING_FOR_HOST":
+            state_label = "Off"
+            tone = "off"
+        case _:
+            assert_never(host_process.state)
+    return OperatorSurfaceRunSignal(
+        state_label=state_label,
+        tone=tone,
+        title=title,
+        detail=detail,
     )
 
 
@@ -1038,6 +1077,7 @@ def compute_operator_surface(
         submit_readiness=submit_readiness,
         trader_guidance=trader_guidance,
         blockage_ladder=blockage_ladder,
+        run_signal=_project_run_signal(host_process, blockage_ladder),
         actions=actions,
         trading_session=trading_session,
         readiness_gates=readiness_gates,

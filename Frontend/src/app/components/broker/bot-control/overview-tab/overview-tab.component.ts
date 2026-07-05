@@ -149,27 +149,7 @@ export class OverviewTabComponent {
 
   blockageStageAria(stage: OperatorSurfaceBlockageStage): string {
     const current = stage.current ? ' Current signal.' : '';
-    return `${stage.label}. Signal: ${this.stageSignalLabel(stage)}. ${stage.title}. ${stage.summary}${current}`;
-  }
-
-  stageSignalLabel(stage: OperatorSurfaceBlockageStage): string {
-    if (stage.id === 'host_process') {
-      if (stage.state === 'clear') return 'On';
-      if (stage.state === 'unknown') return 'Unknown';
-      return 'Off';
-    }
-    switch (stage.state) {
-      case 'clear':
-        return 'OK';
-      case 'info':
-        return 'Info';
-      case 'warning':
-        return 'Check';
-      case 'danger':
-        return 'Block';
-      case 'unknown':
-        return 'Unknown';
-    }
+    return `${stage.label}. ${stage.title}. ${stage.summary}${current}`;
   }
 
   lifecycleStatusLabel(status: LifecycleChartStatus): string {

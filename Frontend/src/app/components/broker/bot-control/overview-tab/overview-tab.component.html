@@ -23,7 +23,7 @@
       </div>
       @if (currentBlockage(); as current) {
         <span [class]="'current-chip severity-' + current.severity">
-          {{ stageSignalLabel(current) }}
+          {{ current.label }}
         </span>
       }
     </header>
@@ -38,7 +38,7 @@
           <span class="step-index" aria-hidden="true"></span>
           <div class="step-copy">
             <strong>{{ stage.label }}</strong>
-            <span>{{ stageSignalLabel(stage) }}</span>
+            <span>{{ stage.title }}</span>
           </div>
         </article>
       }

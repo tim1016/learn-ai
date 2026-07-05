@@ -34,7 +34,7 @@
   <!-- ── CONTROLS TOOLBAR ── -->
   @if (status(); as s) {
     <div class="controls-toolbar">
-      @if (botRunSignal(); as bot) {
+      @if (s.operator_surface.run_signal; as bot) {
         <div
           class="bot-run-signal"
           [class.tone-on]="bot.tone === 'on'"
@@ -43,7 +43,7 @@
           [class.tone-attention]="bot.tone === 'attention'"
           role="status"
           data-testid="bot-run-signal"
-          [attr.aria-label]="bot.ariaLabel"
+          [attr.aria-label]="'Bot ' + bot.state_label + '. ' + bot.title + '. ' + bot.detail"
           [attr.title]="bot.detail"
         >
           <span class="bot-run-switch" aria-hidden="true">
@@ -51,7 +51,7 @@
           </span>
           <span class="bot-run-copy">
             <span class="bot-run-kicker">Bot</span>
-            <strong>{{ bot.stateLabel }}</strong>
+            <strong>{{ bot.state_label }}</strong>
             <span data-trader-copy>{{ bot.title }}</span>
           </span>
         </div>

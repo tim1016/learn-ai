@@ -182,10 +182,9 @@ describe('OverviewTabComponent', () => {
     expect(text).toContain('Signals');
     expect(text).toContain('IBKR data farm degraded');
     expect(text).toContain('Broker proof');
-    expect(text).toContain('Block');
     const current = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.blockage-step.current');
     expect(current?.textContent).toContain('Broker proof');
-    expect(current?.textContent).toContain('Block');
+    expect(current?.textContent).toContain('IBKR data farm degraded');
     expect(current?.classList.contains('severity-critical')).toBe(true);
   });
 
