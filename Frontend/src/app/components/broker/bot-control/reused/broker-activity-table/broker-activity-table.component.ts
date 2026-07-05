@@ -8,6 +8,7 @@ import {
 import { TagModule } from 'primeng/tag';
 
 import type { BrokerActivityHealth } from '../../../../../api/live-instances.types';
+import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import { fmtCurrency, fmtNumber, fmtTimestampLocal } from '../../../format';
 import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 
@@ -47,7 +48,12 @@ interface GroupedRows {
 @Component({
   selector: 'app-broker-activity-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BrokerActivityRowDetailComponent, OperatorNoticeComponent, TagModule],
+  imports: [
+    AssetIdentityComponent,
+    BrokerActivityRowDetailComponent,
+    OperatorNoticeComponent,
+    TagModule,
+  ],
   templateUrl: './broker-activity-table.component.html',
   styleUrl: './broker-activity-table.component.scss',
 })

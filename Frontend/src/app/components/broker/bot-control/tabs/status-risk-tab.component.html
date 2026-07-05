@@ -106,7 +106,14 @@
             none
           } @else {
             @for (entry of br.owned_positions | keyvalue; track entry.key) {
-              <span class="position-chip">{{ entry.key }}&nbsp;{{ entry.value }}</span>
+              <span class="position-chip">
+                <app-asset-identity
+                  class="position-asset"
+                  [symbol]="entry.key"
+                  size="sm"
+                />
+                <span>{{ entry.value }}</span>
+              </span>
             }
           }
         </dd>

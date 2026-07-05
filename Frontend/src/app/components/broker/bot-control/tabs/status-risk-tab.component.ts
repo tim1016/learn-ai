@@ -19,11 +19,12 @@ import type {
 } from '../../../../api/live-instances.types';
 import type { InnerTab } from '../lib/instance-tab-state';
 import { renderGateSuggestedAction } from '../lib/suggested-action-renderer';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 
 @Component({
   selector: 'app-status-risk-tab',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, AssetIdentityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './status-risk-tab.component.html',
   styleUrl: './status-risk-tab.component.scss',

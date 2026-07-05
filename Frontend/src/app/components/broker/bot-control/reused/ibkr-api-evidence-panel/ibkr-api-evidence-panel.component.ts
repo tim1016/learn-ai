@@ -18,6 +18,7 @@ import type {
 } from '../../../../../api/broker-models';
 import { brokerSse, type SseStream } from '../../../../../services/broker-sse';
 import { BrokerService } from '../../../../../services/broker.service';
+import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import { fmtTimestampNy } from '../../../format';
 
 const MAX_EVENTS = 120;
@@ -30,6 +31,7 @@ interface EvidenceLine extends IbkrApiEvidenceEvent {
 
 @Component({
   selector: 'app-ibkr-api-evidence-panel',
+  imports: [AssetIdentityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './ibkr-api-evidence-panel.component.html',
   styleUrl: './ibkr-api-evidence-panel.component.scss',

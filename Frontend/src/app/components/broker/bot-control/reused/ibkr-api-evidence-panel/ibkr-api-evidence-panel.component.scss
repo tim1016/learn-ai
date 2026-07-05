@@ -152,6 +152,11 @@
   background: var(--bg-canvas-alt, #f3f4f6);
 }
 
+.symbol {
+  --asset-identity-symbol-color: var(--text-primary);
+  --asset-identity-symbol-max-width: 10ch;
+}
+
 .serializer-warnings {
   display: flex;
   flex-direction: column;

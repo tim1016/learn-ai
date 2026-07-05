@@ -91,7 +91,13 @@
                 }
               </td>
               <td>{{ row.source_label }}</td>
-              <td>{{ row.symbol ?? '—' }}</td>
+              <td>
+                @if (row.symbol) {
+                  <app-asset-identity class="table-asset" [symbol]="row.symbol" size="sm" />
+                } @else {
+                  —
+                }
+              </td>
               <td>{{ row.side ?? '—' }}</td>
               <td class="num">
                 @if (row.quantity !== null) {
@@ -205,7 +211,7 @@
                 tabindex="0"
               >
                 <td class="ts">{{ fmtTimestampLocal(row.ts_ms) }}</td>
-                <td>{{ row.symbol }}</td>
+                <td><app-asset-identity class="table-asset" [symbol]="row.symbol" size="sm" /></td>
                 <td>{{ row.side }}</td>
                 <td class="num">{{ fmtNumber(row.quantity, 0) }}</td>
                 <td class="num">{{ fmtCurrency(row.price) }}</td>

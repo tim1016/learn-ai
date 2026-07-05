@@ -170,11 +170,18 @@
   }
 
   .position-chip {
-    display: inline-block;
-    padding: 0.05rem 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.05rem 0.4rem 0.05rem 0.15rem;
     background: rgba(255, 255, 255, 0.06);
     border-radius: 2px;
     margin-right: 0.25rem;
+  }
+
+  .position-asset {
+    --asset-identity-symbol-color: var(--text-primary);
+    --asset-identity-symbol-max-width: 10ch;
   }
 }
 
