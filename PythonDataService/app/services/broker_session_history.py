@@ -14,6 +14,7 @@ from app.schemas.broker_session import (
     BrokerSessionHistoryPurgeResult,
     BrokerSessionMirrorSnapshot,
     BrokerSessionRosterRow,
+    broker_session_row_presentation,
     summarize_broker_session_rows,
 )
 from app.services.broker_session_events import (
@@ -78,15 +79,7 @@ class BrokerSessionHistoryService:
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                out.append(
-                    row.model_copy(
-                        update={
-                            "recency": "past_closed",
-                            "socket_present": False,
-                            "notice": None,
-                        }
-                    )
-                )
+                out.append(_past_closed_row(row))
                 if len(out) >= limit:
                     return out
         return out
@@ -197,6 +190,19 @@ def _history_row_key(row: BrokerSessionRosterRow) -> tuple[str, str, str]:
     if row.client_id is not None:
         return ("client", row.identity_type, str(row.client_id))
     return ("row", row.row_id, "")
+
+
+def _past_closed_row(row: BrokerSessionRosterRow) -> BrokerSessionRosterRow:
+    updated = row.model_copy(
+        update={
+            "recency": "past_closed",
+            "socket_present": False,
+            "notice": None,
+        }
+    )
+    return updated.model_copy(
+        update={"presentation": broker_session_row_presentation(updated)}
+    )
 
 
 def _snapshot_to_line(snapshot: BrokerSessionMirrorSnapshot) -> str:

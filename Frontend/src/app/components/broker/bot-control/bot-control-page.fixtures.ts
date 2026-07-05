@@ -87,7 +87,17 @@ export function makeStatus(options: {
             },
       },
       prior_run: { classification: 'UNKNOWN' },
-      broker: { safety_verdict: 'UNKNOWN', connection: 'DISCONNECTED' },
+      broker: {
+        safety_verdict: 'UNKNOWN',
+        connection: 'DISCONNECTED',
+        connection_condition: {
+          code: 'BROKER_DISCONNECTED',
+          severity: 'warning',
+          title: 'Broker session disconnected',
+          summary: 'The runtime cannot prove an active IBKR broker session.',
+          remediation: 'Reconnect the broker session, then refresh broker evidence.',
+        },
+      },
       configuration: { verdict: 'UNKNOWN', reason_codes: [] },
       current_risk: {
         posture: 'UNKNOWN',
@@ -179,6 +189,35 @@ export function makeStatus(options: {
         ],
         template_id: 'operator_surface.trader_guidance.broker_state_unproven',
         template_version: 1,
+      },
+      blockage_ladder: {
+        headline: 'Broker session disconnected',
+        summary: 'The broker connection evidence is not connected.',
+        current_stage_id: 'broker',
+        stages: [
+          {
+            id: 'control_plane',
+            label: 'Control plane',
+            state: 'warning',
+            severity: 'warning',
+            current: false,
+            title: 'Daemon control plane needs attention',
+            summary: 'Host daemon is unreachable.',
+            next_step: null,
+            reason_codes: ['DAEMON_UNREACHABLE'],
+          },
+          {
+            id: 'broker',
+            label: 'Broker proof',
+            state: 'warning',
+            severity: 'warning',
+            current: true,
+            title: 'Broker session disconnected',
+            summary: 'The broker connection evidence is not connected.',
+            next_step: 'Reconnect the broker session, then refresh broker evidence.',
+            reason_codes: ['BROKER_DISCONNECTED'],
+          },
+        ],
       },
       actions: {
         resume: {

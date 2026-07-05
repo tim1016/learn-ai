@@ -136,6 +136,57 @@ describe('OverviewTabComponent', () => {
     );
   });
 
+  it('renders the backend-authored current blockage ladder', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    const status = makeStatus();
+    status.operator_surface = makeOperatorSurfaceFixture({
+      blockage_ladder: {
+        headline: 'IBKR data farm degraded',
+        summary: 'The live broker data farm is degraded while this bot depends on broker market data.',
+        current_stage_id: 'broker',
+        stages: [
+          {
+            id: 'control_plane',
+            label: 'Control plane',
+            state: 'clear',
+            severity: 'ok',
+            current: false,
+            title: 'Daemon control plane connected',
+            summary: 'The data plane can reach the host live-runner daemon.',
+            next_step: null,
+            reason_codes: [],
+          },
+          {
+            id: 'broker',
+            label: 'Broker proof',
+            state: 'danger',
+            severity: 'critical',
+            current: true,
+            title: 'IBKR data farm degraded',
+            summary: 'The live broker data farm is degraded while this bot depends on broker market data.',
+            next_step: 'Do not submit new orders until IBKR market-data evidence is healthy again.',
+            reason_codes: ['BROKER_DATA_FARM_DEGRADED'],
+          },
+        ],
+      },
+    });
+    fixture.componentRef.setInput('status', status);
+    fixture.detectChanges();
+
+    const text = renderedText(fixture);
+    expect(text).toContain('Current blockage');
+    expect(text).toContain('IBKR data farm degraded');
+    expect(text).toContain('Broker proof');
+    const current = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.blockage-step.current');
+    expect(current?.textContent).toContain('Broker proof');
+    expect(current?.classList.contains('severity-critical')).toBe(true);
+  });
+
   it('expands an expandable backend-authored subgraph and collapses to global', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],

@@ -14,6 +14,36 @@
     }
   </header>
 
+  <section class="blockage-ladder" aria-label="Current blockage ladder">
+    <header class="blockage-header">
+      <div>
+        <p class="eyebrow">Current blockage</p>
+        <h3>{{ blockageLadder().headline }}</h3>
+        <p>{{ blockageLadder().summary }}</p>
+      </div>
+      @if (currentBlockage(); as current) {
+        <span [class]="'current-chip severity-' + current.severity">
+          {{ current.label }}
+        </span>
+      }
+    </header>
+    <div class="blockage-steps">
+      @for (stage of blockageLadder().stages; track stage.id) {
+        <article
+          [class]="'blockage-step severity-' + stage.severity"
+          [class.current]="stage.current"
+          [attr.aria-label]="blockageStageAria(stage)"
+        >
+          <span class="step-index" aria-hidden="true"></span>
+          <div>
+            <strong>{{ stage.label }}</strong>
+            <span>{{ stage.title }}</span>
+          </div>
+        </article>
+      }
+    </div>
+  </section>
+
   <section class="flow-panel" aria-label="Lifecycle gates">
     <div class="gate-flow">
       @for (row of lifecycleFlowRows(); track row.node.id) {

@@ -33,6 +33,27 @@ describe('AppSidebarComponent', () => {
 
     expect(link?.getAttribute('href')).toBe('/broker/session-mirror');
   });
+
+  it('surfaces live options visualizations in the Options menu', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Options');
+
+    const links = navLinks(fixture);
+    expect(links.get('Options Chain (Live)')).toBe('/broker/options-chain');
+    expect(links.get('Options Surface (3D)')).toBe('/broker/options-surface');
+  });
+
+  it('keeps live options visualizations out of the Broker menu', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Broker');
+
+    const labels = Array.from(navLinks(fixture).keys());
+    expect(labels).toContain('Session Mirror');
+    expect(labels).not.toContain('Options Chain (Live)');
+    expect(labels).not.toContain('Options Surface (3D)');
+  });
 });
 
 function setup(): ComponentFixture<AppSidebarComponent> {
@@ -61,4 +82,18 @@ function clickGroup(
   if (button === undefined) throw new Error(`menu group not found: ${label}`);
   button.click();
   fixture.detectChanges();
+}
+
+function navLinks(fixture: ComponentFixture<AppSidebarComponent>): Map<string, string> {
+  const links = Array.from(
+    (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>(
+      'a.nav-link',
+    ),
+  );
+  return new Map(
+    links.map((link) => [
+      link.textContent?.trim().replace(/\s+/g, ' ') ?? '',
+      link.getAttribute('href') ?? '',
+    ]),
+  );
 }

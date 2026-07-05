@@ -51,7 +51,6 @@ from app.schemas.live_runs import (
     OperatorSurfaceAccountOwner,
     OperatorSurfaceActionPlan,
     OperatorSurfaceActions,
-    OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
     OperatorSurfaceControlPlane,
     OperatorSurfaceCurrentRisk,
@@ -72,6 +71,8 @@ from app.schemas.live_runs import (
 from app.services.account_truth_snapshot import AccountTruthReadinessEvidence, assess_account_truth
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.mutation_attempt import MutationAttempt
+from app.services.operator_blockage_ladder import author_blockage_ladder
+from app.services.operator_broker_projection import BrokerConnectionStateInput, project_broker
 from app.services.operator_capability import evaluate_all_actions
 from app.services.operator_trader_guidance import author_submit_readiness, author_trader_guidance
 from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
@@ -82,11 +83,6 @@ from app.services.runtime_freshness import (
     runtime_freshness_reason_codes,
 )
 
-# Server-side canonical input for the broker connection layer.  The
-# router collapses the readiness ``broker_connection`` gate plus (when
-# available) the broker monitor's recovery overlay into one of these
-# tokens; the projection maps them to the wire-facing enums.
-BrokerConnectionStateInput = Literal["connected", "disconnected", "degraded", "unknown"]
 TraderExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 
 
@@ -283,51 +279,6 @@ def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePri
     if last_exit.exit_code is not None and last_exit.exit_code != 0:
         return OperatorSurfacePriorRun(classification="EXITED_WITH_ERROR")
     return OperatorSurfacePriorRun(classification="UNKNOWN")
-
-
-# ---------------------------------------------------------------------------
-# broker — connection + safety_verdict (two independent enums)
-# ---------------------------------------------------------------------------
-
-# PRD #616 — map ADR-0011's reactive ``final_verdict`` directly.  The
-# previous implementation derived safety from ``configured_mode``
-# alone, which ignored every runtime gate ADR-0011 introduced (port,
-# account prefix, readonly flag).
-_BROKER_FINAL_VERDICT_TO_SAFETY: dict[str, str] = {
-    "paper-only": "PAPER_ONLY",
-    "unsafe": "UNSAFE",
-    "unknown": "UNKNOWN",
-}
-
-
-def _project_broker(
-    safety_verdict_final: Literal["paper-only", "unsafe", "unknown"] | None,
-    connection_state: BrokerConnectionStateInput | None,
-) -> OperatorSurfaceBroker:
-    # ``connection`` is whether the broker session is up; ``safety_verdict``
-    # is whether we're allowed to trade.  They are independent and must
-    # not be composed.  ``safety_verdict_final`` is ADR-0011's reactive
-    # ``BrokerSafetyVerdict.final_verdict``; the cockpit's SAFETY pill
-    # changes when runtime conditions change, not only on configured
-    # mode reconnect.
-    if connection_state == "connected":
-        connection = "CONNECTED"
-    elif connection_state == "disconnected":
-        connection = "DISCONNECTED"
-    elif connection_state == "degraded":
-        connection = "DEGRADED"
-    else:
-        connection = "UNKNOWN"
-
-    if safety_verdict_final is None:
-        safety_verdict = "UNKNOWN"
-    else:
-        safety_verdict = _BROKER_FINAL_VERDICT_TO_SAFETY.get(safety_verdict_final, "UNKNOWN")
-
-    return OperatorSurfaceBroker(
-        safety_verdict=safety_verdict,  # type: ignore[arg-type]
-        connection=connection,  # type: ignore[arg-type]
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1004,7 +955,7 @@ def compute_operator_surface(
         now_ms=now_ms,
         account_freeze=account_freeze,
     )
-    broker_projection = _project_broker(safety_verdict_final, broker_connection_state)
+    broker_projection = project_broker(safety_verdict_final, broker_connection_state)
     daily_order_cap = _project_daily_order_cap(readiness)
     actions = _attach_action_gate_results(
         evaluate_all_actions(
@@ -1033,6 +984,7 @@ def compute_operator_surface(
         now_ms=now_ms,
     )
     runtime_freshness_projection = _project_runtime_freshness(runtime_freshness)
+    control_plane_projection = _project_control_plane(control_plane_state)
     account_truth_assessment = assess_account_truth(account_truth_snapshot, now_ms=now_ms)
     submit_readiness = author_submit_readiness(
         host_process=host_process,
@@ -1059,6 +1011,19 @@ def compute_operator_surface(
         daily_order_cap=daily_order_cap,
         account_truth=account_truth_assessment,
     )
+    blockage_ladder = author_blockage_ladder(
+        host_process=host_process,
+        broker=broker_projection,
+        trading_session=trading_session,
+        account_owner=account_owner,
+        account_freeze=account_freeze,
+        guard_state=resolved_guards,
+        reconciliation=reconciliation_projection,
+        runtime_freshness=runtime_freshness_projection,
+        readiness_gates=readiness_gates,
+        account_truth=account_truth_assessment,
+        control_plane=control_plane_projection,
+    )
 
     return OperatorSurface(
         host_process=host_process,
@@ -1072,11 +1037,12 @@ def compute_operator_surface(
         account_owner=account_owner,
         submit_readiness=submit_readiness,
         trader_guidance=trader_guidance,
+        blockage_ladder=blockage_ladder,
         actions=actions,
         trading_session=trading_session,
         readiness_gates=readiness_gates,
         runtime_freshness=runtime_freshness_projection,
-        control_plane=_project_control_plane(control_plane_state),
+        control_plane=control_plane_projection,
         broker_observation_consistency=broker_observation_consistency,
         reconciliation=reconciliation_projection,
         incident_headline=incident_headline_notice,

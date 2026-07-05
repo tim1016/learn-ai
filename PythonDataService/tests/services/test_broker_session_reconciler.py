@@ -11,6 +11,7 @@ from app.schemas.live_runs import (
 from app.services.broker_session_reconciler import (
     RuntimeIndexEntry,
     reconcile_broker_session_roster,
+    reconcile_broker_session_snapshot,
 )
 
 AS_OF_MS = 1_783_120_000_000
@@ -50,7 +51,6 @@ def test_reconciler_surfaces_registry_offline_socket_live() -> None:
                 connection_state="connected",
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
@@ -86,7 +86,6 @@ def test_reconciler_does_not_claim_registry_offline_when_registry_unavailable() 
                 connection_state="connected",
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
@@ -117,7 +116,6 @@ def test_reconciler_matches_container_runtime_by_run_id_when_socket_path_is_host
                 connection_state="connected",
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
@@ -149,7 +147,6 @@ def test_reconciler_surfaces_started_but_no_socket() -> None:
                 run_dir=run_dir,
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
@@ -182,7 +179,6 @@ def test_reconciler_classifies_known_socket_without_pid_as_orphan() -> None:
                 client_id=17,
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
@@ -211,7 +207,6 @@ def test_reconciler_classifies_unattributed_socket_as_ghost() -> None:
         ],
         registry_snapshot=_registry(),
         runtime_index={},
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
@@ -236,7 +231,6 @@ def test_reconciler_surfaces_last_known_rows_when_socket_probe_unavailable() -> 
                 last_event_ms=AS_OF_MS - 30_000,
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
         socket_probe_available=False,
         stale_after_ms=25_000,
@@ -253,8 +247,8 @@ def test_reconciler_surfaces_last_known_rows_when_socket_probe_unavailable() -> 
     ]
 
 
-def test_reconciler_adds_connected_data_plane_system_row() -> None:
-    rows = reconcile_broker_session_roster(
+def test_snapshot_reconciler_preserves_connected_degraded_data_plane_state() -> None:
+    result = reconcile_broker_session_snapshot(
         socket_rows=[],
         registry_snapshot=_registry(),
         runtime_index={},
@@ -267,73 +261,22 @@ def test_reconciler_adds_connected_data_plane_system_row() -> None:
             account_id="DU123",
             is_paper=True,
             fetched_at_ms=AS_OF_MS,
-            connection_state="connected",
+            connection_state="degraded_data_farm",
             last_transition_ms=AS_OF_MS - 500,
         ),
         as_of_ms=AS_OF_MS,
     )
 
-    assert len(rows) == 1
-    assert rows[0].identity_type == "system"
-    assert rows[0].client_id == 42
-    assert rows[0].account_id == "DU123"
-    assert rows[0].recency == "current"
-    assert rows[0].recovery_state == "HEALTHY"
-
-
-def test_reconciler_adds_disconnected_data_plane_system_row() -> None:
-    rows = reconcile_broker_session_roster(
-        socket_rows=[],
-        registry_snapshot=_registry(),
-        runtime_index={},
-        data_plane_health=IbkrConnectionHealth(
-            mode="paper",
-            host="127.0.0.1",
-            port=4002,
-            client_id=42,
-            connected=False,
-            account_id=None,
-            is_paper=None,
-            fetched_at_ms=AS_OF_MS,
-            connection_state="hard_down",
-            recovery_state="HARD_DOWN",
-            last_transition_ms=AS_OF_MS - 500,
-        ),
-        as_of_ms=AS_OF_MS,
+    assert result.rows == []
+    assert len(result.global_events) == 1
+    event = result.global_events[0]
+    assert event.code == "DATA_PLANE_BROKER_CLIENT"
+    assert event.current is True
+    assert event.severity == "critical"
+    assert (
+        event.summary
+        == "The data-plane IBKR client is socket-connected, but IBKR data-farm evidence is degraded."
     )
-
-    assert len(rows) == 1
-    assert rows[0].identity_type == "system"
-    assert rows[0].socket_present is False
-    assert rows[0].connection_state == "hard_down"
-    assert rows[0].recovery_state == "HARD_DOWN"
-
-
-def test_reconciler_prefers_health_recovery_state_for_data_plane_row() -> None:
-    rows = reconcile_broker_session_roster(
-        socket_rows=[],
-        registry_snapshot=_registry(),
-        runtime_index={},
-        data_plane_health=IbkrConnectionHealth(
-            mode="paper",
-            host="127.0.0.1",
-            port=4002,
-            client_id=42,
-            connected=True,
-            account_id="DU123",
-            is_paper=True,
-            fetched_at_ms=AS_OF_MS,
-            connection_state="connected",
-            recovery_state="RECONNECTING",
-            last_transition_ms=AS_OF_MS - 500,
-        ),
-        as_of_ms=AS_OF_MS,
-    )
-
-    assert len(rows) == 1
-    assert rows[0].identity_type == "system"
-    assert rows[0].connection_state == "connected"
-    assert rows[0].recovery_state == "RECONNECTING"
 
 
 def test_reconciler_projects_runtime_recovery_states() -> None:
@@ -368,7 +311,6 @@ def test_reconciler_projects_runtime_recovery_states() -> None:
                     connection_state=connection_state,
                 )
             },
-            data_plane_health=None,
             as_of_ms=AS_OF_MS,
         )
 
@@ -398,12 +340,82 @@ def test_reconciler_prefers_runtime_recovery_state_for_child_row() -> None:
                 recovery_state="RECONNECTING",
             )
         },
-        data_plane_health=None,
         as_of_ms=AS_OF_MS,
     )
 
     assert rows[0].connection_state == "connected"
     assert rows[0].recovery_state == "RECONNECTING"
+
+
+def test_snapshot_reconciler_lifts_gvproxy_and_data_plane_to_global_events() -> None:
+    result = reconcile_broker_session_snapshot(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=101,
+                command="gvproxy",
+                argv=["/usr/bin/gvproxy"],
+                local_port=50123,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            ),
+            GatewaySocketRow(
+                pid=102,
+                command="/Applications/Docker.app/Contents/MacOS/gvproxy",
+                local_port=50124,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            ),
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=42,
+            connected=True,
+            account_id="DU123",
+            is_paper=True,
+            fetched_at_ms=AS_OF_MS,
+            connection_state="connected",
+            last_transition_ms=AS_OF_MS - 500,
+        ),
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert result.rows == []
+    assert [event.code for event in result.global_events] == [
+        "GATEWAY_NETWORK_PROXY",
+        "DATA_PLANE_BROKER_CLIENT",
+    ]
+    assert result.global_events[0].label == "Gateway network proxy"
+    assert result.global_events[0].current is True
+    assert "2 virtual-machine network proxy sockets" in result.global_events[0].summary
+    assert result.global_events[1].label == "Data-plane broker client"
+    assert result.global_events[1].current is True
+
+
+def test_reconciler_authors_row_display_labels() -> None:
+    rows = reconcile_broker_session_roster(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=999,
+                command="external",
+                local_port=50126,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        as_of_ms=AS_OF_MS,
+    )
+
+    row = rows[0]
+    assert row.presentation.identity.label == "Unattributed broker socket"
+    assert row.presentation.identity.severity == "warning"
+    assert row.presentation.recency.label == "Live now"
+    assert row.attention_items[0].label == "Unattributed broker socket"
 
 
 def _registry(*instances: HostRunnerInstance) -> HostRunnerInstancesStatus:

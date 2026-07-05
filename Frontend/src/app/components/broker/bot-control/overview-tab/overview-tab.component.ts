@@ -6,6 +6,7 @@ import type {
   LifecycleChartNode,
   LifecycleChartStatus,
   LiveInstanceStatus,
+  OperatorSurfaceBlockageStage,
 } from '../../../../api/live-instances.types';
 
 interface ExpandedGraphSelection {
@@ -50,6 +51,11 @@ export class OverviewTabComponent {
   readonly activeNode = computed(() => {
     const graph = this.currentGraph();
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
+  });
+  readonly blockageLadder = computed(() => this.status().operator_surface.blockage_ladder);
+  readonly currentBlockage = computed<OperatorSurfaceBlockageStage | null>(() => {
+    const ladder = this.blockageLadder();
+    return ladder.stages.find((stage) => stage.current) ?? null;
   });
   readonly lifecycleNodes = computed(() => this.currentGraph().nodes);
   readonly lifecycleEdges = computed(() => this.currentGraph().edges);
@@ -139,6 +145,11 @@ export class OverviewTabComponent {
 
   edgeStatusLabel(edge: LifecycleChartEdge): string {
     return this.lifecycleStatusLabel(edge.status);
+  }
+
+  blockageStageAria(stage: OperatorSurfaceBlockageStage): string {
+    const current = stage.current ? ' Current blockage.' : '';
+    return `${stage.label}. ${stage.title}. ${stage.summary}${current}`;
   }
 
   lifecycleStatusLabel(status: LifecycleChartStatus): string {

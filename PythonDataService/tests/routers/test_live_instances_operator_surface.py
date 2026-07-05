@@ -307,6 +307,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "account_owner",
         "submit_readiness",
         "trader_guidance",
+        "blockage_ladder",
         "control_plane",
         "action_plan",
         "actions",
@@ -537,14 +538,15 @@ async def test_status_preserves_recovering_runtime_broker_connection(
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
     assert surface["broker"]["connection"] == "DEGRADED"
-    assert "BROKER_CONNECTION_DEGRADED" in surface["submit_readiness"]["blocking_reason_codes"]
+    assert surface["broker"]["connection_condition"]["code"] == "BROKER_RECOVERING"
+    assert "BROKER_RECOVERING" in surface["submit_readiness"]["blocking_reason_codes"]
     assert "BROKER_CONNECTION_DISCONNECTED" not in surface["submit_readiness"]["blocking_reason_codes"]
     broker_attention = next(
         group
         for group in surface["trader_guidance"]["additional_attention_groups"]
         if group["code"] == "broker_connection"
     )
-    assert broker_attention["headline"] == "Broker connection is recovering"
+    assert broker_attention["headline"] == "Broker recovering streams"
 
 
 async def test_status_projects_hard_down_runtime_broker_connection_as_disconnected(
@@ -577,7 +579,7 @@ async def test_status_projects_hard_down_runtime_broker_connection_as_disconnect
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
     assert surface["broker"]["connection"] == "DISCONNECTED"
-    assert "BROKER_CONNECTION_DISCONNECTED" in surface["submit_readiness"]["blocking_reason_codes"]
+    assert "BROKER_HARD_DOWN" in surface["submit_readiness"]["blocking_reason_codes"]
 
 
 async def test_status_uses_account_freeze_artifact_to_block_start_and_resume(

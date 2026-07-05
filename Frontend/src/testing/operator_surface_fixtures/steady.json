@@ -90,8 +90,137 @@
       ]
     }
   },
+  "blockage_ladder": {
+    "current_stage_id": "broker",
+    "headline": "Broker safety is not paper-only",
+    "stages": [
+      {
+        "current": false,
+        "id": "control_plane",
+        "label": "Control plane",
+        "next_step": null,
+        "reason_codes": [],
+        "severity": "neutral",
+        "state": "unknown",
+        "summary": "No live-runner daemon URL is configured for this data plane.",
+        "title": "Daemon control plane is not configured"
+      },
+      {
+        "current": false,
+        "id": "host_process",
+        "label": "Host process",
+        "next_step": null,
+        "reason_codes": [],
+        "severity": "ok",
+        "state": "clear",
+        "summary": "The host daemon reports this bot process is running.",
+        "title": "Bot process is running"
+      },
+      {
+        "current": true,
+        "id": "broker",
+        "label": "Broker proof",
+        "next_step": "Inspect broker/account safety evidence before any trading action.",
+        "reason_codes": [
+          "BROKER_SAFETY_UNKNOWN",
+          "BROKER_CONNECTION_UNKNOWN",
+          "SUBMISSION_CAPABILITY_UNKNOWN"
+        ],
+        "severity": "critical",
+        "state": "danger",
+        "summary": "Safety verdict is UNKNOWN.",
+        "title": "Broker safety is not paper-only"
+      },
+      {
+        "current": false,
+        "id": "account_safety",
+        "label": "Account safety",
+        "next_step": "Refresh Account Truth from broker evidence before treating submit readiness as safe.",
+        "reason_codes": [
+          "ACCOUNT_TRUTH_NOT_AVAILABLE"
+        ],
+        "severity": "warning",
+        "state": "warning",
+        "summary": "No cached Account Truth projection is available for this account.",
+        "title": "Account Truth snapshot is unavailable"
+      },
+      {
+        "current": false,
+        "id": "account_owner",
+        "label": "Account owner",
+        "next_step": "Wait for AccountOwner accepting/generation proof before expecting submit readiness to clear.",
+        "reason_codes": [
+          "ACCOUNT_OWNER_GENERATION_UNPROVEN"
+        ],
+        "severity": "warning",
+        "state": "warning",
+        "summary": "AccountOwner phase is unknown.",
+        "title": "AccountOwner not proven accepting"
+      },
+      {
+        "current": false,
+        "id": "reconciliation",
+        "label": "Reconciliation",
+        "next_step": "Run reconciliation and wait for a clean or adopted receipt.",
+        "reason_codes": [
+          "RECONCILIATION_NOT_AVAILABLE"
+        ],
+        "severity": "warning",
+        "state": "warning",
+        "summary": "Reconciliation state is NOT_AVAILABLE.",
+        "title": "Reconciliation is not fresh-clean"
+      },
+      {
+        "current": false,
+        "id": "preflight",
+        "label": "Pre-flight gates",
+        "next_step": "no durable intent recorded",
+        "reason_codes": [
+          "READINESS_GATE_desired_state"
+        ],
+        "severity": "warning",
+        "state": "warning",
+        "summary": "no durable intent recorded",
+        "title": "Desired state"
+      },
+      {
+        "current": false,
+        "id": "trading_session",
+        "label": "Trading session",
+        "next_step": "Wait for the strategy session window before expecting submit readiness to clear.",
+        "reason_codes": [
+          "TRADING_SESSION_CLOSED"
+        ],
+        "severity": "info",
+        "state": "info",
+        "summary": "CLOSED",
+        "title": "Trading session not accepting strategy activity"
+      },
+      {
+        "current": false,
+        "id": "runtime_freshness",
+        "label": "Runtime evidence",
+        "next_step": null,
+        "reason_codes": [
+          "ENGINE_RUNTIME_MISSING"
+        ],
+        "severity": "critical",
+        "state": "danger",
+        "summary": "The engine runtime version is incompatible with the cockpit. The bot will not start trading. Redeploy with a matching runtime.",
+        "title": "Engine runtime is incompatible"
+      }
+    ],
+    "summary": "Safety verdict is UNKNOWN."
+  },
   "broker": {
     "connection": "UNKNOWN",
+    "connection_condition": {
+      "code": "BROKER_CONNECTION_UNKNOWN",
+      "remediation": "Start or refresh the live runtime so broker proof can be recorded.",
+      "severity": "warning",
+      "summary": "The backend does not have enough runtime evidence to prove the broker connection state.",
+      "title": "Broker connection unproven"
+    },
     "safety_verdict": "UNKNOWN"
   },
   "broker_activity_health": {
@@ -352,9 +481,9 @@
       },
       {
         "code": "broker_connection",
-        "explanation": "Broker connection has not been proven.",
-        "headline": "Broker disconnected or unknown",
-        "operator_next_step": "Reconnect the broker session, then refresh broker evidence.",
+        "explanation": "The backend does not have enough runtime evidence to prove the broker connection state.",
+        "headline": "Broker connection unproven",
+        "operator_next_step": "Start or refresh the live runtime so broker proof can be recorded.",
         "remediation": {
           "kind": "open_runbook",
           "slug": "broker-reconnect"
@@ -405,7 +534,7 @@
           "kind": "open_runbook",
           "slug": "broker-instance-operator-surface"
         },
-        "severity": "critical"
+        "severity": "warning"
       },
       {
         "code": "readiness.desired_state",
@@ -512,7 +641,7 @@
     },
     "proof_lines": [
       {
-        "detail": "Account safety proof is not recorded. Broker connection has not been proven.",
+        "detail": "Account safety proof is not recorded. The backend does not have enough runtime evidence to prove the broker connection state.",
         "id": "broker-proof",
         "label": "Broker",
         "message": "Broker proof is not available yet.",

@@ -41,6 +41,142 @@
   color: var(--text-secondary);
 }
 
+.blockage-ladder {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-canvas);
+}
+
+.blockage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+
+  h3,
+  p {
+    margin: 0;
+  }
+
+  h3 {
+    font-size: 0.98rem;
+    line-height: 1.25;
+    letter-spacing: 0;
+  }
+
+  p {
+    margin-top: 0.25rem;
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    line-height: 1.4;
+  }
+}
+
+.current-chip {
+  flex: 0 0 auto;
+  max-width: 12rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blockage-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr));
+  gap: 0.5rem;
+}
+
+.blockage-step {
+  display: grid;
+  grid-template-columns: 0.65rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  min-height: 3.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+
+  &.current {
+    border-width: 2px;
+  }
+
+  strong,
+  span {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    font-size: var(--fs-xs);
+    line-height: 1.2;
+  }
+
+  div > span {
+    margin-top: 0.18rem;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+  }
+}
+
+.step-index {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--text-muted);
+}
+
+.severity-ok {
+  border-color: var(--bull);
+
+  .step-index {
+    background: var(--bull);
+  }
+}
+
+.severity-info {
+  border-color: var(--info);
+
+  .step-index {
+    background: var(--info);
+  }
+}
+
+.severity-warning {
+  border-color: var(--warn);
+
+  .step-index {
+    background: var(--warn);
+  }
+}
+
+.severity-critical {
+  border-color: var(--bear);
+
+  .step-index {
+    background: var(--bear);
+  }
+}
+
+.severity-neutral {
+  border-color: var(--border-light);
+}
+
 .collapse-button {
   min-height: 34px;
   padding: 0 0.75rem;
