@@ -28,6 +28,7 @@ import type {
 } from '../../../api/broker-models';
 import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
 import {
+  fmtBrokerExpiryDate,
   fmtCurrency,
   fmtDateNy,
   fmtSignedCurrency,
@@ -148,6 +149,7 @@ export class BrokerAccountMonitorComponent {
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly fmtSignedNumber = fmtSignedNumber;
   readonly fmtDateNy = fmtDateNy;
+  readonly fmtBrokerExpiryDate = fmtBrokerExpiryDate;
 
   constructor() {
     void this.refresh();

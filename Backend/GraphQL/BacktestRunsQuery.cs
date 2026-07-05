@@ -28,13 +28,12 @@ public class BacktestRunsQuery
     /// </remarks>
     [GraphQLName("backtestRuns")]
     [UsePaging(MaxPageSize = 100, DefaultPageSize = 25)]
-    public IEnumerable<BacktestRunNodeType> GetBacktestRuns(
+    public IQueryable<BacktestRunNodeType> GetBacktestRuns(
         AppDbContext context,
         Engine? engine = null,
         string? symbol = null)
     {
         var query = context.StrategyExecutions
-            .Include(s => s.Trades)
             .AsNoTracking()
             .AsQueryable();
 
@@ -64,8 +63,28 @@ public class BacktestRunsQuery
 
         return query
             .OrderByDescending(s => s.ExecutedAt)
-            .AsEnumerable()
-            .Select(BacktestRunNodeType.FromExecution);
+            .Select(s => new BacktestRunNodeType
+            {
+                Id = s.Id,
+                Source = s.Source,
+                Engine = s.Source == "lean-sidecar" ? Engine.LEAN : Engine.PYTHON,
+                StrategyName = s.StrategyName,
+                LeanRunId = s.LeanRunId,
+                Parameters = s.Parameters,
+                StartDate = s.StartDate,
+                EndDate = s.EndDate,
+                ExecutedAtUtc = s.ExecutedAt,
+                TotalTrades = s.TotalTrades,
+                TotalPnL = s.TotalPnL,
+                CommissionPerOrder = s.CommissionPerOrder,
+                BrokeragePolicy = s.BrokeragePolicy,
+                Notes = s.Notes,
+                DataPolicyJson = s.DataPolicyJson,
+                Trades = s.Trades.Select(t => new BacktestRunTradeSummaryType
+                {
+                    IsSyntheticExit = t.IsSyntheticExit,
+                }).ToList(),
+            });
     }
 }
 
@@ -79,14 +98,18 @@ public sealed record BacktestRunNodeType
     public string? Parameters { get; init; }
     public string StartDate { get; init; } = "";
     public string EndDate { get; init; } = "";
-    public long ExecutedAt { get; init; }
+    [GraphQLIgnore]
+    public DateTime ExecutedAtUtc { get; init; }
+    public long ExecutedAt => UnixMs.FromUtc(ExecutedAtUtc);
     public int TotalTrades { get; init; }
     [GraphQLName("totalPnL")]
     public decimal TotalPnL { get; init; }
     public decimal? CommissionPerOrder { get; init; }
     public string? BrokeragePolicy { get; init; }
     public string? Notes { get; init; }
-    public DataPolicyType? DataPolicy { get; init; }
+    [GraphQLIgnore]
+    public string? DataPolicyJson { get; init; }
+    public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
     public IReadOnlyList<BacktestRunTradeSummaryType> Trades { get; init; } = [];
 
     public static BacktestRunNodeType FromExecution(StrategyExecution execution) => new()
@@ -99,13 +122,13 @@ public sealed record BacktestRunNodeType
         Parameters = execution.Parameters,
         StartDate = execution.StartDate,
         EndDate = execution.EndDate,
-        ExecutedAt = UnixMs.FromUtc(execution.ExecutedAt),
+        ExecutedAtUtc = execution.ExecutedAt,
         TotalTrades = execution.TotalTrades,
         TotalPnL = execution.TotalPnL,
         CommissionPerOrder = execution.CommissionPerOrder,
         BrokeragePolicy = execution.BrokeragePolicy,
         Notes = execution.Notes,
-        DataPolicy = DataPolicyType.TryParse(execution.DataPolicyJson),
+        DataPolicyJson = execution.DataPolicyJson,
         Trades = execution.Trades.Select(t => new BacktestRunTradeSummaryType
         {
             IsSyntheticExit = t.IsSyntheticExit,

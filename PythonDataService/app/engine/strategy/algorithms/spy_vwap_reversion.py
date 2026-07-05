@@ -20,7 +20,7 @@ docs/references/spy-vwap-reversion-port.md.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
@@ -51,6 +51,7 @@ class SpyVwapReversionAlgorithm(Strategy):
         self._vwap = SessionAnchoredVwap()
         self._sigma = RollingDistanceSigma(self.LOOKBACK)
         self._session_date = None
+        self._session_bounds_by_date: dict[date, tuple[int, int] | None] = {}
         self._trades_today = 0
         self._in_position = False
 
@@ -89,7 +90,13 @@ class SpyVwapReversionAlgorithm(Strategy):
         minutes = t.hour * 60 + t.minute
         return minutes >= session_close_min - self.SKIP_CLOSE_MIN
 
-    def _session_bounds_minutes_et(self, d) -> tuple[int, int] | None:
+    def _session_bounds_minutes_et(self, d: date) -> tuple[int, int] | None:
+        if d not in self._session_bounds_by_date:
+            self._session_bounds_by_date[d] = self._load_session_bounds_minutes_et(d)
+        return self._session_bounds_by_date[d]
+
+    @staticmethod
+    def _load_session_bounds_minutes_et(d: date) -> tuple[int, int] | None:
         try:
             window = session_window_for_date(d)
         except LookupError:

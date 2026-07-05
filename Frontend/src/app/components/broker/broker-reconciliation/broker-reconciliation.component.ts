@@ -24,8 +24,8 @@ import type {
 } from '../../../api/broker-models';
 import {
   diffBps,
+  fmtBrokerExpiryDate,
   fmtCurrency,
-  fmtDateNy,
   fmtNumber,
   fmtSignedCurrency,
   toleranceBand,
@@ -153,7 +153,7 @@ export class BrokerReconciliationComponent implements OnDestroy {
   readonly fmtCurrency = fmtCurrency;
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly fmtNumber = fmtNumber;
-  readonly fmtDateNy = fmtDateNy;
+  readonly fmtBrokerExpiryDate = fmtBrokerExpiryDate;
 
   constructor() {
     void this.refresh();

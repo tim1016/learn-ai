@@ -1654,6 +1654,23 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
     )
 
 
+def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> TradeRecord:
+    raw_indicators = getattr(trade, "indicators", None) or {}
+    return TradeRecord(
+        trade_number=index,
+        trade_type="Buy",  # engine strategies are long-only for now
+        entry_timestamp=_to_ms_utc(trade.entry_time),
+        exit_timestamp=_to_ms_utc(trade.exit_time),
+        entry_price=float(trade.entry_price),
+        exit_price=float(trade.exit_price),
+        pnl=float(trade.pnl_pts),
+        pnl_pct=float(trade.pnl_pct),
+        cumulative_pnl_pct=cumulative_pnl_pct,
+        signal_reason=getattr(trade, "signal_reason", "") or "",
+        indicator_snapshot={k: float(v) for k, v in raw_indicators.items()},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -2124,21 +2141,7 @@ def execute_engine_backtest(
             trade_records: list[TradeRecord] = []
             for i, t in enumerate(trades):
                 cum_pnl += float(t.pnl_pct)
-                trade_records.append(
-                    TradeRecord(
-                        trade_number=i + 1,
-                        trade_type="Buy",  # engine strategies are long-only for now
-                        entry_timestamp=t.entry_time.strftime("%Y-%m-%d %H:%M"),
-                        exit_timestamp=t.exit_time.strftime("%Y-%m-%d %H:%M"),
-                        entry_price=float(t.entry_price),
-                        exit_price=float(t.exit_price),
-                        pnl=float(t.pnl_pts),
-                        pnl_pct=float(t.pnl_pct),
-                        cumulative_pnl_pct=cum_pnl,
-                        signal_reason=getattr(t, "signal_reason", "") or "",
-                        indicator_snapshot={k: float(v) for k, v in (getattr(t, "indicators", None) or {}).items()},
-                    )
-                )
+                trade_records.append(_format_trade_record(i + 1, t, cum_pnl))
 
             lean_stats = compute_lean_statistics(
                 df=df,

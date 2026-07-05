@@ -118,6 +118,17 @@ public class BacktestRunsQueryTests
     }
 
     [Fact]
+    public async Task GetBacktestRuns_ReturnsQueryableForDatabasePaging()
+    {
+        var (query, db) = await BuildAsync();
+
+        var result = query.GetBacktestRuns(db);
+
+        Assert.IsAssignableFrom<IQueryable<BacktestRunNodeType>>(result);
+        Assert.Single(result.Take(1));
+    }
+
+    [Fact]
     public async Task GetBacktestRuns_FilterBySymbol_ReturnsMatchingRows()
     {
         var (query, db) = await BuildAsync();

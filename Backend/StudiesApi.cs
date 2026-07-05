@@ -29,6 +29,10 @@ public static class StudiesApi
         AppDbContext db,
         CancellationToken ct)
     {
+        var tradeTimestampError = ValidateSaveStudyTradeTimestamps(request);
+        if (tradeTimestampError is not null)
+            return Results.BadRequest(new { error = tradeTimestampError });
+
         // Resolve or create the Ticker entity
         var ticker = await db.Tickers
             .FirstOrDefaultAsync(t => t.Symbol == request.Symbol.ToUpper(), ct);
@@ -95,8 +99,8 @@ public static class StudiesApi
                 execution.Trades.Add(new BacktestTrade
                 {
                     TradeType = t.TradeType ?? "Buy",
-                    EntryTimestamp = UnixMs.ToUtcDateTime(t.EntryTimestamp),
-                    ExitTimestamp = UnixMs.ToUtcDateTime(t.ExitTimestamp),
+                    EntryTimestamp = UnixMs.ToUtcDateTime(t.EntryTimestamp!.Value),
+                    ExitTimestamp = UnixMs.ToUtcDateTime(t.ExitTimestamp!.Value),
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
                     Quantity = t.Quantity ?? 1m,
@@ -111,6 +115,23 @@ public static class StudiesApi
         await db.SaveChangesAsync(ct);
 
         return Results.Created($"/api/studies/{execution.Id}", new { id = execution.Id });
+    }
+
+    internal static string? ValidateSaveStudyTradeTimestamps(SaveStudyRequest request)
+    {
+        if (request.Trades is not { Count: > 0 })
+            return null;
+
+        for (var i = 0; i < request.Trades.Count; i++)
+        {
+            var trade = request.Trades[i];
+            if (trade.EntryTimestamp is null or <= 0)
+                return $"trades[{i}].entryTimestamp is required and must be a positive int64 ms UTC timestamp.";
+            if (trade.ExitTimestamp is null or <= 0)
+                return $"trades[{i}].exitTimestamp is required and must be a positive int64 ms UTC timestamp.";
+        }
+
+        return null;
     }
 
     // ── GET /api/studies — list studies with sorting ──────────────
@@ -388,8 +409,8 @@ public record SaveStudyRequest
 public record SaveStudyTrade
 {
     public string? TradeType { get; init; }
-    public long EntryTimestamp { get; init; }
-    public long ExitTimestamp { get; init; }
+    public long? EntryTimestamp { get; init; }
+    public long? ExitTimestamp { get; init; }
     public decimal EntryPrice { get; init; }
     public decimal ExitPrice { get; init; }
     // Nullable so callers that haven't been updated still validate; missing
